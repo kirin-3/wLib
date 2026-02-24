@@ -1,10 +1,14 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'wlib.db')
+DATA_DIR = os.path.expanduser("~/.local/share/wLib")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, 'wlib.db')
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
 def init_db():
     conn = get_connection()

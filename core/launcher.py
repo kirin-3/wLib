@@ -13,7 +13,7 @@ class Launcher:
         """
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
-            return False
+            return {"success": False, "error": f"Executable not found at {exe_path}"}
 
         proton_path = get_setting("proton_path")
         wine_prefix = get_setting("wine_prefix_path")
@@ -83,7 +83,7 @@ class Launcher:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-            return True
+            return {"success": True}
         except Exception as e:
             print(f"Error launching game: {e}")
-            return False
+            return {"success": False, "error": str(e)}

@@ -18,7 +18,7 @@ done
 
 if [ -z "$PYTHON" ]; then
     echo "❌ Error: No Python 3 installation found."
-    echo "   Please install Python 3.11+ (e.g., sudo apt install python3 python3-venv)"
+    echo "   Please install Python 3.11+ and the venv module using your system package manager."
     exit 1
 fi
 

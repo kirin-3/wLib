@@ -235,8 +235,8 @@ class Api:
         Uses the Launcher class to execute the game via Proton/Wine.
         """
         print(f"Launching {exe_path}")
-        success = self.launcher.launch(exe_path)
-        return {"success": success}
+        result = self.launcher.launch(exe_path)
+        return result
 
     def install_rpgmaker_dependencies(self):
         """
@@ -337,7 +337,7 @@ class Api:
                 if not os.path.exists(download_path):
                     try:
                         req = urllib.request.Request(rtp["url"], headers={'User-Agent': 'Mozilla/5.0'})
-                        with urllib.request.urlopen(req, context=ctx) as response, open(download_path, 'wb') as out_file:
+                        with urllib.request.urlopen(req, context=ctx, timeout=30) as response, open(download_path, 'wb') as out_file:
                             shutil.copyfileobj(response, out_file)
                     except Exception as e:
                         print(f"Failed to download {rtp['name']} RTP: {e}")
@@ -402,7 +402,7 @@ class Api:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             
-            with urllib.request.urlopen(req, context=ctx) as response:
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
                 data = json.loads(response.read().decode())
                 
             download_url = None
@@ -425,7 +425,7 @@ class Api:
             # because urlretrieve doesn't easily accept a custom SSL context.
             import shutil
             download_req = urllib.request.Request(download_url, headers={'User-Agent': 'wLib'})
-            with urllib.request.urlopen(download_req, context=ctx) as response, open(tar_path, 'wb') as out_file:
+            with urllib.request.urlopen(download_req, context=ctx, timeout=30) as response, open(tar_path, 'wb') as out_file:
                 shutil.copyfileobj(response, out_file)
             
             print(f"Extracting {tar_path}...")

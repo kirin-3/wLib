@@ -158,7 +158,14 @@ const handleGameDeleted = async () => {
 
 const launchFromModal = async (exePath, args) => {
     if (!exePath) return;
-    await api.launchGame(exePath)
+    try {
+        const result = await api.launchGame(exePath)
+        if (result && !result.success) {
+            alert("Failed to launch game:\n\n" + (result.error || "Unknown error"))
+        }
+    } catch (e) {
+        alert("Failed to launch game:\n\n" + e)
+    }
 }
 
 const updatingId = ref(null)

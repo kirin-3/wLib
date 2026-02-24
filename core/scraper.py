@@ -7,8 +7,8 @@ class Scraper:
     def __init__(self):
         self.playwright = None
         self.context = None
-        # Store browser session in the wLib project root so login persists
-        self.user_data_dir = os.path.join(os.path.dirname(__file__), '..', 'browser_session')
+        # Store browser session in the user's data dir so login persists across installations
+        self.user_data_dir = os.path.expanduser("~/.local/share/wLib/browser_session")
 
     def start_browser(self, headless=True):
         if self.playwright is None:
