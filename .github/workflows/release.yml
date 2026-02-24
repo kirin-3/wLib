@@ -1,0 +1,97 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Linux Packages
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2
+
+      - name: Build packages
+        run: |
+          chmod +x scripts/build.sh
+          bash scripts/build.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wLib-${{ steps.version.outputs.version }}-linux
+          path: dist/*
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: wLib ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.AppImage
+          body: |
+            ## 📦 Downloads
+
+            | File | Description |
+            |------|-------------|
+            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.AppImage` | **Recommended** — Portable, just download and run |
+            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz` | Extract and run `./wlib.sh` |
+
+            ### Quick Start
+            ```bash
+            # AppImage (easiest)
+            chmod +x wLib-*.AppImage
+            ./wLib-*.AppImage
+
+            # Or tar.gz
+            tar xzf wLib-*.tar.gz
+            cd wLib-*/
+            ./wlib.sh
+            ```
+
+            ### Requirements
+            - Python 3.11+ (auto-detected)
+            - Node.js 18+ (only if frontend needs rebuilding)
+            - A WebKit2GTK-compatible display (most Linux desktops)

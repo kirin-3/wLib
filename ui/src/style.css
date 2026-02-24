@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #3b82f6; /* Example primary color, adjust later */
+  --color-surface-base: #101014;
+  --color-surface-raised: #18181c;
+}
+
+:root {
+  color-scheme: dark;
+  background-color: var(--color-surface-base);
+  color: #e2e8f0;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, sans-serif;
+  background-color: var(--color-surface-base);
+}

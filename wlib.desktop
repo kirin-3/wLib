@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=wLib
+Comment=Linux Game Manager for F95Zone
+Exec=wlib
+Icon=wlib
+Terminal=false
+Type=Application
+Categories=Game;Utility;
+Keywords=games;library;manager;f95zone;wine;proton;

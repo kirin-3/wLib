@@ -1,0 +1,73 @@
+*.pyc
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+pnpm-debug.log*
+lerna-debug.log*
+browser_session/
+wlib.db
+wlib.png
+example_extensions/
+
+# Miscellaneous
+plans/
+
+# Dependency directories
+node_modules/
+.pnp/
+.pnp.js
+venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.cursor/
+.roo/
+.agent/
+.kilocode/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+*.code-workspace
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Task files
+tasks.json
+tasks/
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.cache/
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
+.temp/
+.tmp/
+.idea
