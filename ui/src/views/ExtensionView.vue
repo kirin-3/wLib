@@ -117,7 +117,7 @@ onUnmounted(() => {
             <li>Open <code class="ext-code text-blue-400">chrome://extensions</code> in your browser</li>
             <li>Enable <span class="font-medium" style="color: var(--text-primary)">Developer mode</span> (toggle in the top-right corner)</li>
             <li>Click <span class="font-medium" style="color: var(--text-primary)">Load unpacked</span></li>
-            <li>Select the <code class="ext-code text-blue-400">extension/</code> folder from the wLib directory</li>
+            <li>Select the <code class="ext-code text-blue-400">extension/chrome/</code> folder from the wLib directory</li>
             <li>The wLib extension icon should appear in your toolbar</li>
           </ol>
         </div>
@@ -130,7 +130,7 @@ onUnmounted(() => {
           <ol class="space-y-2 text-sm list-decimal list-inside" style="color: var(--text-secondary)">
             <li>Open <code class="ext-code text-orange-400">about:debugging#/runtime/this-firefox</code> in Firefox</li>
             <li>Click <span class="font-medium" style="color: var(--text-primary)">Load Temporary Add-on</span></li>
-            <li>Navigate to the <code class="ext-code text-orange-400">extension/</code> folder and select <code class="ext-code text-orange-400">manifest.json</code></li>
+            <li>Navigate to the <code class="ext-code text-orange-400">extension/firefox/</code> folder and select <code class="ext-code text-orange-400">wLib.xpi</code></li>
             <li>The extension will remain active until Firefox is restarted</li>
           </ol>
           <p class="text-xs mt-3 italic" style="color: var(--text-muted)">Note: Firefox requires the extension to be reloaded each time the browser restarts (temporary add-on limitation).</p>

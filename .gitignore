@@ -71,3 +71,5 @@ coverage/
 .temp/
 .tmp/
 .idea
+.ruff_cache
+__pycache__/
