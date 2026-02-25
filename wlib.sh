@@ -44,7 +44,17 @@ source "$VENV_DIR/bin/activate"
 if [ ! -f "$VENV_DIR/.deps_installed" ] || [ requirements.txt -nt "$VENV_DIR/.deps_installed" ]; then
     echo "📥 Installing dependencies..."
     pip install --quiet --upgrade pip
-    pip install --quiet -r requirements.txt
+    if ! pip install --quiet -r requirements.txt; then
+        echo "❌ Error: Failed to install Python dependencies."
+        echo "   If PyGObject or PyQt failed to build, you may be missing system UI headers."
+        echo "   Please install them via your distribution's package manager:"
+        echo ""
+        echo "   Ubuntu/Debian: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pyqt6"
+        echo "   Fedora/RHEL:   sudo dnf install python3-gobject gtk3 python3-qt6"
+        echo "   Arch/Manjaro:  sudo pacman -S python-gobject gtk3 python-pyqt6"
+        echo ""
+        exit 1
+    fi
 
     # Install Playwright browsers if not present
     if ! python -c "from playwright.sync_api import sync_playwright" 2>/dev/null; then
