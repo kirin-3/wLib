@@ -203,7 +203,7 @@ const handleAddGame = async (gameData) => {
             gameData.developer || '',
             gameData.engine || ''
         )
-        if (result && result.success) {
+        if (result && result.id) {
             showAddModal.value = false
             router.replace({ path: '/', query: {} })
             await loadGames()
