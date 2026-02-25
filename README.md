@@ -23,8 +23,9 @@ wLib is a native Linux desktop application for managing, launching, and updating
 
 - **Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status
 - **Wine / Proton Launcher** — Launch `.exe` games via Wine, Proton-GE, or run native Linux binaries, shell scripts, and `.jar` files
+- **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines
+- **Dependency Installers** — One-click installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RTPs
 - **F95Zone Update Checker** — Automatically checks for new game versions by scraping F95Zone threads via Playwright
-- **RPGMaker Support** — One-click installer for all common RPGMaker runtime dependencies (DirectX, VCRedist, fonts) and RTPs
 - **Japanese Locale Mode** — Run games with `ja_JP.UTF-8` locale for untranslated Japanese titles
 - **Cheat Engine Injection** — Auto-download and inject Lunar Engine (a Cheat Engine fork) into running games
 - **Browser Extension** — A Chromium extension that adds "Add to wLib" buttons directly on F95Zone thread pages
