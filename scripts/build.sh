@@ -47,10 +47,16 @@ pyinstaller --noconfirm --onedir \
     main.py
 
 # Clean up system libraries bundled by PyInstaller that break host graphics drivers (e.g. Vulkan/OpenGL)
+# These MUST use the host's native versions to work with the host's GPU drivers.
 echo "🧹 Removing conflicting bundled system libraries..."
 find dist/wlib-bin -name "libstdc++.so.6" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgcc_s.so.1" -exec rm -f {} + || true
 find dist/wlib-bin -name "libxcb*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libEGL*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libGLESv2*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libvulkan*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libdrm*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgbm*" -exec rm -f {} + || true
 
 # Move the built binary to the package folder
 cp -r dist/wlib-bin/* "$BUILD_DIR/$PACKAGE_NAME/"
@@ -102,6 +108,16 @@ cd "$SELF_DIR/usr/bin"
 
 # Fallback to X11 if Wayland EGL initialization fails
 export QT_QPA_PLATFORM="xcb;wayland"
+
+# Force Qt Quick scene graph to use software rendering so compositing
+# does not depend on the host having a working Vulkan/OpenGL stack.
+# The WebEngine content (the actual Vue UI) still uses Chromium's own
+# GPU process with the host's native drivers, so performance is unaffected.
+export QT_QUICK_BACKEND=software
+
+# Ensure the bundled Qt does not shadow the host's native GPU libraries.
+# LD_LIBRARY_PATH is intentionally NOT set to $SELF_DIR/usr/bin/_internal
+# so that libEGL, libvulkan, libdrm, etc. resolve from the host system.
 
 # Install playwright browsers if not present.
 # Playwright uses its own cache logic.

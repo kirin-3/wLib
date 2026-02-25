@@ -159,7 +159,12 @@ def main():
     global window_ref, DEV_MODE
     api = Api()
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # Resolve base path for bundled assets (PyInstaller vs dev source)
+    if getattr(sys, "frozen", False):
+        script_dir = sys._MEIPASS
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
     url = os.path.join(script_dir, "ui", "dist", "index.html")
     vite_process = None
 

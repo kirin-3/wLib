@@ -20,9 +20,12 @@ class Api:
         import subprocess, shutil, json
 
         # Source: bundled extension inside the AppImage / dev source
-        bundled_ext_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
-        )
+        if getattr(sys, "frozen", False):
+            bundled_ext_dir = os.path.join(sys._MEIPASS, "extension")
+        else:
+            bundled_ext_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
+            )
         # Target: persistent location in user data dir
         persistent_ext_dir = os.path.expanduser("~/.local/share/wLib/extension")
 
