@@ -16,16 +16,49 @@ class Api:
         self.window = window
 
     def open_extension_folder(self):
-        import subprocess, shutil
-        ext_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'extension')
-        # Try multiple openers for cross-distro compatibility
+        import subprocess, shutil, json
+        # Source: bundled extension inside the AppImage / dev source
+        bundled_ext_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'extension')
+        # Target: persistent location in user data dir
+        persistent_ext_dir = os.path.expanduser("~/.local/share/wLib/extension")
+
+        # Copy or update extension to persistent location
+        try:
+            needs_copy = False
+            if not os.path.isdir(persistent_ext_dir):
+                needs_copy = True
+            else:
+                # Compare manifest.json versions to detect updates
+                bundled_manifest = os.path.join(bundled_ext_dir, 'manifest.json')
+                installed_manifest = os.path.join(persistent_ext_dir, 'manifest.json')
+                if os.path.isfile(bundled_manifest) and os.path.isfile(installed_manifest):
+                    with open(bundled_manifest) as f:
+                        bundled_ver = json.load(f).get('version', '0')
+                    with open(installed_manifest) as f:
+                        installed_ver = json.load(f).get('version', '0')
+                    if bundled_ver != installed_ver:
+                        needs_copy = True
+                elif os.path.isfile(bundled_manifest):
+                    needs_copy = True
+
+            if needs_copy and os.path.isdir(bundled_ext_dir):
+                if os.path.exists(persistent_ext_dir):
+                    shutil.rmtree(persistent_ext_dir)
+                shutil.copytree(bundled_ext_dir, persistent_ext_dir)
+        except Exception as e:
+            print(f"[wLib] Failed to sync extension: {e}")
+            # Fall back to bundled dir if copy fails
+            if not os.path.isdir(persistent_ext_dir):
+                persistent_ext_dir = bundled_ext_dir
+
+        # Open the persistent extension folder
         for cmd in ['xdg-open', 'gio', 'kde-open5', 'gnome-open']:
             binary = shutil.which(cmd)
             if binary:
                 if cmd == 'gio':
-                    subprocess.Popen([binary, 'open', ext_dir])
+                    subprocess.Popen([binary, 'open', persistent_ext_dir])
                 else:
-                    subprocess.Popen([binary, ext_dir])
+                    subprocess.Popen([binary, persistent_ext_dir])
                 return {"success": True}
         return {"success": False, "error": "No file manager opener found"}
 

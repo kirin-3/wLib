@@ -16,6 +16,7 @@ example_extensions/
 plans/
 colors.md
 GITHUB_WORKFLOW.md
+AGENTS.md
 
 # Dependency directories
 node_modules/

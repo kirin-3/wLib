@@ -91,7 +91,7 @@ onUnmounted(() => {
           Extension Files
         </h3>
         
-        <p class="text-sm mb-4" style="color: var(--text-secondary)">The browser extension is bundled with wLib in the <code class="ext-code" style="color: var(--brand)">extension/</code> directory.</p>
+        <p class="text-sm mb-4" style="color: var(--text-secondary)">The browser extension is synced to <code class="ext-code" style="color: var(--brand)">~/.local/share/wLib/extension/</code> and auto-updates when wLib is updated.</p>
         
         <button @click="openExtensionFolder"
           class="text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
@@ -159,6 +159,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* Make all text in the extension view selectable for copying URLs/paths */
+:deep(*) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .ext-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);

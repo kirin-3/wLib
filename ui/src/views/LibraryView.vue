@@ -193,7 +193,16 @@ watch(() => route.query, async (q) => {
 
 const handleAddGame = async (gameData) => {
     try {
-        const result = await api.addGame(gameData)
+        const result = await api.addGame(
+            gameData.title,
+            gameData.exe_path,
+            gameData.f95_url || '',
+            gameData.cover_image || '',
+            gameData.tags || '',
+            gameData.rating || '',
+            gameData.developer || '',
+            gameData.engine || ''
+        )
         if (result && result.success) {
             showAddModal.value = false
             router.replace({ path: '/', query: {} })
