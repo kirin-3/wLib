@@ -4,6 +4,8 @@ from core.launcher import Launcher
 import sys
 import os
 
+APP_VERSION = "0.2.7"
+
 
 class Api:
     def __init__(self):
@@ -109,6 +111,7 @@ class Api:
         title,
         exe_path,
         f95_url="",
+        version="",
         cover_image="",
         tags="",
         rating="",
@@ -124,6 +127,7 @@ class Api:
             title,
             exe_path,
             f95_url,
+            version=version,
             cover_image=cover_image,
             tags=tags,
             rating=rating,
@@ -1033,9 +1037,14 @@ class Api:
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.status == 200:
                     data = json.loads(response.read().decode("utf-8"))
+                    latest_tag = data.get("tag_name", "")
+                    latest_tag = (
+                        latest_tag if latest_tag.startswith("v") else f"v{latest_tag}"
+                    )
                     return {
                         "success": True,
-                        "version": data.get("tag_name", ""),
+                        "version": latest_tag,
+                        "current_version": f"v{APP_VERSION}",
                         "changelog": data.get("body", ""),
                         "url": data.get("html_url", ""),
                         "assets": [
@@ -1049,6 +1058,10 @@ class Api:
         except Exception as e:
             logging.error(f"Failed to check app updates: {e}")
             return {"success": False, "error": str(e)}
+
+    def get_app_version(self):
+        """Returns the current app version."""
+        return {"version": f"v{APP_VERSION}"}
 
     # ==========================
     # Cheat Engine API

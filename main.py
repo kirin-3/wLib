@@ -5,7 +5,9 @@ import threading
 import subprocess
 import time
 
-# To allow dev server testing, we can point URL to Vite dev server, or local built assets.
+PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
+
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
 
@@ -140,23 +142,36 @@ def start_vite_dev_server():
     return None
 
 
+def ensure_playwright_browsers():
+    """Ensure Playwright chromium browser is installed."""
+    chromium_path = os.path.join(PLAYWRIGHT_BROWSERS_PATH, "chromium-*")
+    import glob
+
+    if glob.glob(chromium_path):
+        return True
+
+    print("Installing Playwright chromium browser...")
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            p.chromium.install()
+        print("Playwright chromium installed successfully.")
+        return True
+    except Exception as e:
+        print(f"Failed to install Playwright chromium: {e}")
+        return False
+
+
 def main():
     if "--install-playwright-if-needed" in sys.argv:
-        try:
-            import playwright._impl._driver
-
-            driver_executable, driver_cli = (
-                playwright._impl._driver.compute_driver_executable()
-            )
-            subprocess.run(
-                [driver_executable, driver_cli, "install", "chromium"], check=True
-            )
-            print("Playwright chromium installed successfully.")
-        except Exception as e:
-            print(f"Failed to install playwright chromium: {e}")
+        ensure_playwright_browsers()
         sys.exit(0)
 
     global window_ref, DEV_MODE
+
+    ensure_playwright_browsers()
+
     api = Api()
 
     # Resolve base path for bundled assets (PyInstaller vs dev source)

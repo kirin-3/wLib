@@ -19,6 +19,18 @@
 
 wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a beautiful Vue 3 frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates by scraping F95Zone thread pages.
 
+## 🐧 Why wLib?
+
+wLib was inspired by tools like **xLibrary** and other game managers. However, wLib is built from the ground up to be:
+
+| | |
+|:--|:--|
+| 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable |
+| 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight PyWebView shell |
+| 🍷 **First-class Wine & Proton** | Built-in support for Wine, Proton-GE, and native Linux runtimes out of the box |
+
+If you've been looking for a game manager that truly belongs on Linux, wLib is for you.
+
 ## ✨ Features
 
 - **Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status

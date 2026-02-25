@@ -53,6 +53,23 @@ def test_add_and_get_game():
     assert games[0]["tags"] == "visual novel, rpg"
 
 
+def test_add_game_with_version():
+    """Test that version is stored when provided at creation time."""
+    game_id = add_game(
+        title="Versioned Game",
+        exe_path="/tmp/versioned.exe",
+        f95_url="https://f95zone.to/threads/test.12345/",
+        version="1.07",
+        developer="Test Dev",
+    )
+    assert game_id is not None
+
+    games = get_all_games()
+    game = next(g for g in games if g["id"] == game_id)
+    assert game["version"] == "1.07"
+    assert game["developer"] == "Test Dev"
+
+
 def test_update_game_fields():
     """Test updating arbitrary fields of a game."""
     game_id = add_game(title="Test Game 2", exe_path="/tmp/game2.exe")

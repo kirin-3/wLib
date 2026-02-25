@@ -91,6 +91,7 @@ def add_game(
     title,
     exe_path,
     f95_url="",
+    version="",
     cover_image="",
     tags="",
     rating="",
@@ -108,11 +109,12 @@ def add_game(
         tags = ", ".join(tags)
 
     cursor.execute(
-        "INSERT INTO games (title, exe_path, f95_url, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             title,
             exe_path,
             f95_url,
+            version,
             cover_image,
             tags,
             rating,

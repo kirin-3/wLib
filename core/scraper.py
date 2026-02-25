@@ -12,14 +12,14 @@ class Scraper:
         # Multi-pass version extraction from F95Zone titles
         # Pass 1: Bracketed version [v1.0], [1.0.2], [Version 2.1]
         match = re.search(
-            r"\[(?:v|version\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)\]",
+            r"\[(?:v|version\s*)?((\d+[\d.]*[a-zA-Z]?)(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)\]",
             title,
             re.I,
         )
         if not match:
             # Pass 2: Chapter/Episode/Season formats [Ch.3], [Ep.5], [S2 E3], [Part 3]
             match = re.search(
-                r"\[(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)\]",
+                r"\[(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)??\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)\]",
                 title,
                 re.I,
             )
@@ -30,6 +30,89 @@ class Scraper:
         if match:
             return next((g for g in match.groups() if g is not None), "Unknown")
         return "Unknown"
+
+    def _extract_version_from_post(self, page):
+        """
+        Fallback: extract version from the first post body.
+        Looks for patterns like <b>Version</b>: 1.07 or plain text "Version: 1.07".
+        """
+        try:
+            first_post = page.query_selector(".message-body .bbWrapper")
+            if not first_post:
+                return "Unknown"
+
+            # Try innerHTML first for <b>Version</b>: value patterns
+            html_content = first_post.inner_html()
+            html_patterns = [
+                r"<b>\s*(?:Current\s+)?Version\s*</b>\s*:?\s*v?([^<\n]+)",
+                r"<b>\s*Ver(?:\.|sion)?\s*</b>\s*:?\s*v?([^<\n]+)",
+            ]
+            for pattern in html_patterns:
+                m = re.search(pattern, html_content, re.I)
+                if m:
+                    version = m.group(1).strip().split()[0]
+                    if version and re.match(r"^\d", version):
+                        return version
+
+            # Fallback: plain text search
+            text_content = first_post.text_content()
+            text_patterns = [
+                r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
+                r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
+                r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
+            ]
+            for pattern in text_patterns:
+                m = re.search(pattern, text_content, re.I)
+                if m:
+                    version = m.group(1).strip()
+                    if version and re.match(r"^\d", version):
+                        return version
+        except Exception as e:
+            print(f"[wLib] Failed to extract version from post body: {e}")
+
+        return "Unknown"
+
+    def _extract_title_text_from_page(self, page):
+        """
+        Extract the clean title text from the h1.p-title-value DOM element,
+        stripping out label/badge links (engine tags, status tags).
+        Falls back to page.title() if the element is not found.
+        """
+        try:
+            h1 = page.query_selector("h1.p-title-value")
+            if h1:
+                # Remove label links and label-append spans via JS to get clean text
+                clean_text = page.evaluate(
+                    """
+                    (el) => {
+                        const clone = el.cloneNode(true);
+                        clone.querySelectorAll('a.labelLink, span.label-append').forEach(e => e.remove());
+                        return clone.textContent.trim();
+                    }
+                """,
+                    h1,
+                )
+                if clean_text:
+                    return clean_text
+        except Exception as e:
+            print(f"[wLib] Failed to extract title from h1 element: {e}")
+
+        # Fallback to page title
+        return page.title()
+
+    def _extract_version_from_page(self, page):
+        """
+        Full version extraction pipeline:
+        1. Try extracting from the h1.p-title-value element text
+        2. Fall back to first post body (Version: X.X)
+        """
+        title_text = self._extract_title_text_from_page(page)
+        version = self._extract_version_from_title(title_text)
+
+        if version == "Unknown":
+            version = self._extract_version_from_post(page)
+
+        return title_text, version
 
     def get_thread_version(self, url: str, headless=False):
         """
@@ -53,8 +136,7 @@ class Scraper:
                         "Could not find thread title. We might be blocked by Cloudflare or Login."
                     )
 
-                title = page.title()
-                version = self._extract_version_from_title(title)
+                title, version = self._extract_version_from_page(page)
 
                 page.close()
                 context.close()
@@ -87,8 +169,7 @@ class Scraper:
                         except Exception:
                             pass
 
-                        title = page.title()
-                        version = self._extract_version_from_title(title)
+                        title, version = self._extract_version_from_page(page)
 
                         result = {"success": True, "title": title, "version": version}
                     except Exception as e:

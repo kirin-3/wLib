@@ -119,9 +119,8 @@ export QT_QUICK_BACKEND=software
 # LD_LIBRARY_PATH is intentionally NOT set to $SELF_DIR/usr/bin/_internal
 # so that libEGL, libvulkan, libdrm, etc. resolve from the host system.
 
-# Install playwright browsers if not present.
-# Playwright uses its own cache logic.
-./wlib-bin --install-playwright-if-needed || true
+# Playwright browsers are installed to ~/.cache/ms-playwright at first run.
+# This is handled automatically by the app.
 
 exec ./wlib-bin "$@"
 APPRUN_EOF
