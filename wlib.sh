@@ -34,7 +34,7 @@ echo "   Using Python: $PYTHON"
 # Create venv if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
     echo "📦 Creating virtual environment..."
-    "$PYTHON" -m venv "$VENV_DIR"
+    "$PYTHON" -m venv --system-site-packages "$VENV_DIR"
 fi
 
 # Activate venv
