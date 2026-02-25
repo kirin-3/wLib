@@ -1,8 +1,10 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { api, onWebviewReady } from './services/api'
 
 const router = useRouter()
+const hasAppUpdate = ref(false)
 
 const handleExtensionAdd = (event) => {
     const data = event.detail
@@ -41,6 +43,20 @@ const handleExtensionOpen = (event) => {
 onMounted(() => {
     window.addEventListener('wlib-extension-add', handleExtensionAdd)
     window.addEventListener('wlib-extension-open', handleExtensionOpen)
+    
+    // Check for App Updates on Startup
+    onWebviewReady(async () => {
+        try {
+            const release = await api.check_app_updates()
+            if (release && release.success && release.version) {
+                if (release.version !== 'v0.1') {
+                    hasAppUpdate.value = true
+                }
+            }
+        } catch (e) {
+            console.error('Failed to check for app updates globally', e)
+        }
+    })
 })
 
 onUnmounted(() => {
@@ -56,9 +72,12 @@ onUnmounted(() => {
     <aside class="w-64 bg-[#18181c] border-r border-[#2d2d34] flex flex-col justify-between">
       <div>
         <div class="px-6 py-8">
-          <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500">
-            wLib
-          </h1>
+          <div class="flex items-center gap-3">
+            <img src="/icon.svg" alt="wLib Logo" class="w-8 h-8 drop-shadow-lg" />
+            <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500">
+              wLib
+            </h1>
+          </div>
           <p class="text-xs text-gray-500 mt-1 uppercase tracking-wider font-semibold">Game Manager</p>
         </div>
 
@@ -96,9 +115,19 @@ onUnmounted(() => {
           </router-link>
         </nav>
       </div>
-    </aside>
-
-    <!-- Main Content Area -->
+      
+      <!-- Footer: Version & Repo -->
+      <div class="p-6 border-t border-[#2d2d34] flex items-center justify-between opacity-60 hover:opacity-100 transition-opacity">
+        <router-link to="/updates" v-if="hasAppUpdate" class="text-xs font-mono font-semibold bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/30 animate-pulse transition-all hover:bg-indigo-500/30 w-fit" title="wLib Update Available!">v0.1 ✨</router-link>
+        <span v-else class="text-xs font-mono font-semibold text-gray-400">v0.1</span>
+        <a href="https://github.com/kirin-3/wLib" target="_blank" rel="noopener noreferrer" 
+           class="text-gray-400 hover:text-white transition-colors" title="View Source on GitHub">
+          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.379.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.161 22 16.416 22 12c0-5.523-4.477-10-10-10z"/>
+          </svg>
+        </a>
+      </div>
+    </aside>    <!-- Main Content Area -->
     <main class="flex-1 overflow-y-auto relative">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">

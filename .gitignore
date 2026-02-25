@@ -11,6 +11,7 @@ lerna-debug.log*
 browser_session/
 wlib.db
 wlib.png
+colors.md
 example_extensions/
 
 # Miscellaneous
@@ -35,8 +36,6 @@ venv/
 *.njsproj
 *.sln
 *.sw?
-.cursor/
-.roo/
 .agent/
 .kilocode/
 *.sublime-project

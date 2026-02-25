@@ -4,49 +4,71 @@
     top: 20px;
     right: 20px;
     z-index: 999999;
-    background-color: #1a1a1f;
-    border: 1px solid #3f3f46;
-    border-radius: 8px;
-    padding: 12px 16px;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+    background-color: #1e2530;
+    border: 1px solid #5a3968;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 0 15px rgba(209, 82, 209, 0.2);
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
     color: #fff;
     font-family: system-ui, -apple-system, sans-serif;
-    min-width: 200px;
-    transition: all 0.2s ease-in-out;
+    min-width: 240px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    backdrop-filter: blur(8px);
+}
+
+.wlib-header-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid rgba(90, 57, 104, 0.5);
+    padding-bottom: 8px;
+}
+
+.wlib-logo {
+    width: 24px;
+    height: 24px;
+    filter: drop-shadow(0 0 4px rgba(209, 82, 209, 0.5));
 }
 
 .wlib-add-container .wlib-title {
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 700;
     margin: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 250px;
+    max-width: 300px;
+    color: #f3f4f6;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .wlib-add-btn {
-    background-color: #2563eb;
+    background: linear-gradient(135deg, #d152d1 0%, #a83aa8 100%);
     color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 13px;
-    font-weight: 500;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s;
+    transition: all 0.2s ease;
     text-align: center;
+    box-shadow: 0 4px 6px -1px rgba(209, 82, 209, 0.2);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
 }
 
 .wlib-add-btn:hover {
-    background-color: #1d4ed8;
+    background: linear-gradient(135deg, #e26be2 0%, #be4bbe 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 8px -1px rgba(209, 82, 209, 0.3);
 }
 
 .wlib-add-btn:active {
-    background-color: #1e40af;
+    transform: translateY(1px);
+    box-shadow: 0 2px 4px -1px rgba(209, 82, 209, 0.2);
 }
 
 .wlib-add-btn:disabled {
@@ -56,7 +78,7 @@
 
 .wlib-status {
     font-size: 12px;
-    color: #9ca3af;
+    color: #cbd5e1;
     text-align: center;
-    margin-top: 4px;
+    margin-top: 2px;
 }

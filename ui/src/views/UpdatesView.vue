@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api, onWebviewReady } from '../services/api'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 const games = ref([])
 const status = ref({ running: false, total: 0, checked: 0, current: '', results: [] })
@@ -8,6 +10,10 @@ const lastCheckTime = ref('')
 const autoCheckFreq = ref('weekly')
 const lastAutoCheck = ref('')
 let pollInterval = null
+
+// App Update State
+const appUpdate = ref(null)
+const appUpdateLoading = ref(true)
 
 const loadGames = async () => {
     try {
@@ -112,6 +118,28 @@ const formatLastCheck = computed(() => {
 
 onMounted(() => {
     onWebviewReady(async () => {
+        // Fetch App Update (GitHub)
+        try {
+            appUpdateLoading.value = true
+            const release = await api.check_app_updates()
+            if (release && release.success && release.version) {
+                // Determine if newer (simple string compare for now since we use v0.1 format)
+                const currentVersion = 'v0.1' // In a real app, this should be fetched from backend or package.json
+                if (release.version !== currentVersion) {
+                    appUpdate.value = {
+                        version: release.version,
+                        changelogHtml: DOMPurify.sanitize(marked.parse(release.changelog || 'No changelog provided.')),
+                        url: release.url,
+                        assets: release.assets || []
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to check app updates', e)
+        } finally {
+            appUpdateLoading.value = false
+        }
+
         await loadGames()
         await loadAutoCheckSetting()
         // Check if an update was already running
@@ -148,7 +176,43 @@ onUnmounted(() => {
 
     <div class="space-y-6">
 
-      <!-- Auto-Check Setting -->
+      <!-- App Update Available (GitHub) -->
+      <section v-if="appUpdate" class="bg-gradient-to-br from-[#1c1c24] to-[#15151a] rounded-xl border border-indigo-500/30 p-6 shadow-lg shadow-indigo-900/10 relative overflow-hidden">
+        <div class="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none"></div>
+        
+        <div class="flex items-start justify-between mb-4 relative z-10">
+          <div>
+            <h3 class="text-xl font-bold text-white flex items-center gap-2 mb-1">
+              <svg class="w-6 h-6 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+              wLib Update Available
+            </h3>
+            <div class="flex items-center gap-3">
+              <span class="text-xs font-mono bg-black/40 text-gray-400 px-2 py-0.5 rounded-md border border-gray-700">Current: v0.1</span>
+              <span class="text-xs text-gray-500">→</span>
+              <span class="text-xs font-mono bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-md border border-indigo-500/30 font-bold animate-pulse">New: {{ appUpdate.version }}</span>
+            </div>
+          </div>
+          
+          <div class="flex gap-2 shrink-0">
+             <button @click="openInBrowser(appUpdate.url)" class="bg-[#25252e] hover:bg-[#2d2d34] text-white px-4 py-2 rounded-lg text-xs font-medium border border-[#33333d] transition-colors flex items-center gap-1.5 shadow-sm">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                Release Notes
+             </button>
+             <!-- Provide direct download links if assets exist -->
+             <button v-for="asset in appUpdate.assets.filter(a => a.name.endsWith('.AppImage') || a.name.endsWith('.tar.gz'))" :key="asset.name"
+                     @click="openInBrowser(asset.url)" 
+                     class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all shadow-lg shadow-indigo-900/20 flex items-center gap-1.5 shrink-0">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                {{ asset.name.endsWith('.AppImage') ? '.AppImage' : '.tar.gz' }}
+             </button>
+          </div>
+        </div>
+        
+        <!-- Markdown Changelog Rendered Output -->
+        <div class="bg-black/40 rounded-lg p-5 border border-[#2d2d34]/60 text-sm text-gray-300 relative z-10 max-h-64 overflow-y-auto wlib-changelog" v-html="appUpdate.changelogHtml"></div>
+      </section>
+
+      <!-- F95Zone Game Auto-Check Setting -->
       <section class="bg-[#1a1a20] rounded-xl border border-[#2d2d34] p-6">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-lg font-semibold text-white flex items-center gap-2">
@@ -299,4 +363,21 @@ onUnmounted(() => {
 .list-leave-active {
   position: absolute;
 }
+
+/* Markdown styling for the changelog injector */
+:deep(.wlib-changelog h1), :deep(.wlib-changelog h2), :deep(.wlib-changelog h3) {
+  color: #fff;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+:deep(.wlib-changelog h2) { font-size: 1.1rem; border-bottom: 1px solid #333; padding-bottom: 0.25rem; }
+:deep(.wlib-changelog p) { margin-bottom: 0.75rem; line-height: 1.5; }
+:deep(.wlib-changelog ul) { list-style-type: disc; margin-left: 1.5rem; margin-bottom: 1rem; }
+:deep(.wlib-changelog li) { margin-bottom: 0.25rem; }
+:deep(.wlib-changelog a) { color: #818cf8; text-decoration: underline; text-underline-offset: 2px; }
+:deep(.wlib-changelog a:hover) { color: #a5b4fc; }
+:deep(.wlib-changelog code) { background: #1a1a20; padding: 0.1rem 0.3rem; border-radius: 4px; font-family: monospace; font-size: 0.85em; }
+:deep(.wlib-changelog pre) { background: #111; padding: 1rem; border-radius: 8px; overflow-x: auto; margin-bottom: 1rem; border: 1px solid #333; }
+:deep(.wlib-changelog pre code) { background: transparent; padding: 0; }
 </style>

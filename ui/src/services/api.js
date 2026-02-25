@@ -106,6 +106,10 @@ class ApiService {
         return this.invoke('open_dev_tools');
     }
 
+    async check_app_updates() {
+        return this.invoke('check_app_updates');
+    }
+
     // Fallback mocks
     _mockResponse(method, args) {
         switch (method) {

@@ -504,3 +504,27 @@ class Api:
     def open_dev_tools(self):
         if self.window:
             self.window.toggle_inspect()
+
+    def check_app_updates(self):
+        """Fetches the latest release from the kirin-3/wLib GitHub repository."""
+        import urllib.request
+        import json
+        import logging
+        try:
+            req = urllib.request.Request(
+                'https://api.github.com/repos/kirin-3/wLib/releases/latest',
+                headers={'User-Agent': 'wLib-AppUpdater'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    return {
+                        'success': True,
+                        'version': data.get('tag_name', ''),
+                        'changelog': data.get('body', ''),
+                        'url': data.get('html_url', ''),
+                        'assets': [{'name': a.get('name'), 'url': a.get('browser_download_url')} for a in data.get('assets', [])]
+                    }
+        except Exception as e:
+            logging.error(f"Failed to check app updates: {e}")
+            return {'success': False, 'error': str(e)}
