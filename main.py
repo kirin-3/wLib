@@ -180,7 +180,7 @@ def main():
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wlib.png')
-    webview.start(debug=False, icon=icon_path if os.path.exists(icon_path) else None)
+    webview.start(debug=False, http_server=True, icon=icon_path if os.path.exists(icon_path) else None)
     
     # Cleanup Vite server when window closes
     if vite_process:
