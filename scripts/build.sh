@@ -46,6 +46,12 @@ pyinstaller --noconfirm --onedir \
     --hidden-import "webview.platforms.qt" \
     main.py
 
+# Clean up system libraries bundled by PyInstaller that break host graphics drivers (e.g. Vulkan/OpenGL)
+echo "🧹 Removing conflicting bundled system libraries..."
+find dist/wlib-bin -name "libstdc++.so.6" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgcc_s.so.1" -exec rm -f {} + || true
+find dist/wlib-bin -name "libxcb*" -exec rm -f {} + || true
+
 # Move the built binary to the package folder
 cp -r dist/wlib-bin/* "$BUILD_DIR/$PACKAGE_NAME/"
 
@@ -93,6 +99,9 @@ cat > "$APPDIR/AppRun" << 'APPRUN_EOF'
 SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export PATH="$SELF_DIR/usr/bin:$PATH"
 cd "$SELF_DIR/usr/bin"
+
+# Fallback to X11 if Wayland EGL initialization fails
+export QT_QPA_PLATFORM="xcb;wayland"
 
 # Install playwright browsers if not present.
 # Playwright uses its own cache logic.
