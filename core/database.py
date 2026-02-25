@@ -59,6 +59,8 @@ def init_db():
         ("rating_gameplay", "REAL DEFAULT 0"),
         ("engine", "TEXT DEFAULT ''"),
         ("latest_version", "TEXT DEFAULT ''"),
+        ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
+        ("run_wayland", "BOOLEAN DEFAULT 0"),
     ]
     for col_name, col_type in new_columns:
         try:
@@ -70,7 +72,7 @@ def init_db():
     conn.close()
 
 # CRUD Operations for Games
-def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine=''):
+def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False, run_wayland=False):
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -79,8 +81,8 @@ def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', de
         tags = ", ".join(tags)
 
     cursor.execute(
-        "INSERT INTO games (title, exe_path, f95_url, cover_image_path, tags, rating, developer, engine) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (title, exe_path, f95_url, cover_image, tags, rating, developer, engine)
+        "INSERT INTO games (title, exe_path, f95_url, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (title, exe_path, f95_url, cover_image, tags, rating, developer, engine, run_japanese_locale, run_wayland)
     )
     game_id = cursor.lastrowid
     conn.commit()
@@ -118,7 +120,7 @@ def update_game(game_id, fields):
         'title', 'exe_path', 'f95_url', 'version', 'progress', 'developer',
         'cover_image_path', 'tags', 'rating', 'command_line_args', 'status',
         'rating_graphics', 'rating_story', 'rating_fappability', 'rating_gameplay',
-        'engine', 'latest_version'
+        'engine', 'latest_version', 'run_japanese_locale', 'run_wayland'
     }
     # Only allow known columns
     safe_fields = {k: v for k, v in fields.items() if k in allowed}

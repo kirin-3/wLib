@@ -125,7 +125,7 @@ def start_vite_dev_server():
     return None
 
 def main():
-    global window_ref
+    global window_ref, DEV_MODE
     api = Api()
     
     url = "ui/dist/index.html"

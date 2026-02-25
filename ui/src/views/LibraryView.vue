@@ -18,6 +18,7 @@ const filterStatuses = ref([])
 const filterEngines = ref([])
 const filterTags = ref([])
 const showFilters = ref(false)
+const layoutMode = ref('grid') // 'grid' or 'list'
 const sortBy = ref('title')
 const sortDir = ref('asc')
 
@@ -156,10 +157,22 @@ const handleGameDeleted = async () => {
     await loadGames()
 }
 
-const launchFromModal = async (exePath, args) => {
+const launchFromModal = async (exePath, args, runJapaneseLocale, runWayland) => {
     if (!exePath) return;
     try {
-        const result = await api.launchGame(exePath)
+        const result = await api.launchGame(exePath, args, runJapaneseLocale, runWayland)
+        if (result && !result.success) {
+            alert("Failed to launch game:\n\n" + (result.error || "Unknown error"))
+        }
+    } catch (e) {
+        alert("Failed to launch game:\n\n" + e)
+    }
+}
+
+const launchGameFast = async (game) => {
+    if (!game.exe_path) return;
+    try {
+        const result = await api.launchGame(game.exe_path, game.command_line_args, game.run_japanese_locale, game.run_wayland)
         if (result && !result.success) {
             alert("Failed to launch game:\n\n" + (result.error || "Unknown error"))
         }
@@ -264,7 +277,19 @@ onMounted(() => {
           Clear all
         </button>
         
-        <span class="text-xs text-gray-600 ml-auto">{{ filteredGames.length }} game{{ filteredGames.length !== 1 ? 's' : '' }}</span>
+        <div class="ml-auto flex items-center gap-4">
+          <span class="text-xs text-gray-600">{{ filteredGames.length }} game{{ filteredGames.length !== 1 ? 's' : '' }}</span>
+          
+          <!-- Layout Toggle -->
+          <div class="flex items-center bg-[#1a1a20] rounded-lg border border-[#2d2d34] p-1">
+            <button @click="layoutMode = 'grid'" :class="['p-1.5 rounded-md transition-all', layoutMode === 'grid' ? 'bg-[#2d2d34] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300']" title="Grid View">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            </button>
+            <button @click="layoutMode = 'list'" :class="['p-1.5 rounded-md transition-all', layoutMode === 'list' ? 'bg-[#2d2d34] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300']" title="List View">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+            </button>
+          </div>
+        </div>
       </div>
       
       <!-- Filter Pills (collapsible) -->
@@ -298,16 +323,17 @@ onMounted(() => {
       </div>
     </div>
 
-    <TransitionGroup name="list" tag="div" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-12">
+    <TransitionGroup name="list" tag="div" :class="['grid gap-4 md:gap-6 pb-12', layoutMode === 'grid' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1']">
       <!-- Game Cards Grid -->
       <div v-for="game in filteredGames" :key="game.id" @click="openDetail(game)"
-           class="list-item group bg-[#1a1a20] rounded-xl overflow-hidden border border-[#2d2d34] hover:border-blue-500/50 transition-all duration-300 shadow-xl cursor-pointer hover:-translate-y-1">
+           :class="['group bg-[#1a1a20] rounded-xl overflow-hidden border border-[#2d2d34] hover:border-blue-500/50 transition-all duration-300 shadow-xl cursor-pointer hover:-translate-y-1',
+                    layoutMode === 'grid' ? 'flex flex-col lg:flex-row w-full h-auto min-h-[14rem] lg:h-56' : 'flex flex-row items-center w-full h-24 md:h-32 pr-2 md:pr-4']">
         
         <!-- Cover Image -->
-        <div class="h-48 bg-gradient-to-br from-[#202028] to-[#15151a] flex items-center justify-center relative shadow-inner overflow-hidden">
+        <div :class="[layoutMode === 'grid' ? 'w-full lg:flex-1 h-56 lg:h-full' : 'w-24 md:w-36 lg:w-48 h-full', 'bg-gradient-to-br from-[#202028] to-[#15151a] flex items-center justify-center relative shadow-inner overflow-hidden shrink-0']">
           <!-- Actual cover image if available -->
           <img v-if="game.cover_image_path" :src="game.cover_image_path" :alt="game.title"
-            class="absolute inset-0 w-full h-full object-cover" />
+            class="absolute inset-0 w-full h-full object-cover object-top" />
           <!-- Fallback placeholder icon -->
           <svg v-else class="w-12 h-12 text-[#2d2d34] group-hover:text-blue-500/20 transition-colors" xmlns="http://www.w3.org/-2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><line x1="3" x2="21" y1="9" y2="9"/><path d="M9 21V9"/></svg>
           
@@ -331,26 +357,41 @@ onMounted(() => {
           </button>
         </div>
 
-        <div class="p-5">
-          <h3 class="font-bold text-gray-100 text-lg truncate mb-1" :title="game.title">{{ game.title }}</h3>
-          <p v-if="game.developer" class="text-xs text-gray-500 truncate mb-2">by {{ game.developer }}</p>
-          
-          <div class="flex items-center justify-between mt-3 text-xs">
-            <div class="flex items-center gap-1.5">
-              <div class="flex items-center gap-1.5 px-2 py-1 bg-[#25252e] rounded-md border border-[#33333d]">
-                <span class="text-blue-400 font-mono font-bold">{{ game.version || 'Unknown' }}</span>
+        <!-- Text Details Area -->
+        <div :class="['p-4 md:p-5 flex shrink-0 min-w-0', layoutMode === 'grid' ? 'flex-col justify-between w-full lg:w-72 xl:w-80 h-full' : 'flex-1 flex-row items-center justify-between gap-4 h-full']">
+
+          <!-- Left/Top Section (Text & Tags) -->
+          <div :class="['min-w-0 flex flex-col', layoutMode === 'grid' ? '' : 'justify-center h-full']">
+            <h3 :class="['font-bold text-gray-100 truncate mb-1', layoutMode === 'grid' ? 'text-lg md:text-xl lg:text-2xl' : 'text-base md:text-xl']" :title="game.title">{{ game.title }}</h3>
+            <p v-if="game.developer" :class="['text-gray-500 truncate mb-2 md:mb-3', layoutMode === 'grid' ? 'text-xs md:text-sm' : 'text-[10px] md:text-xs']">by {{ game.developer }}</p>
+            
+            <div :class="['flex items-center gap-1.5', layoutMode === 'grid' ? 'mt-2' : '']">
+              <div class="flex items-center gap-1.5 px-2 py-0.5 md:py-1 bg-[#25252e] rounded-md border border-[#33333d]">
+                <span class="text-blue-400 font-mono text-[10px] md:text-xs font-bold">{{ game.version || 'Unknown' }}</span>
               </div>
               <div v-if="game.latest_version && game.latest_version !== game.version" 
-                class="flex items-center gap-1 px-2 py-1 bg-green-600/15 rounded-md border border-green-500/30 text-green-400 font-mono font-bold animate-pulse">
+                class="flex items-center gap-1 px-2 py-0.5 md:py-1 bg-green-600/15 rounded-md border border-green-500/30 text-green-400 font-mono text-[10px] md:text-xs font-bold animate-pulse">
                 ⬆ {{ game.latest_version }}
               </div>
             </div>
+          </div>
             
-            <div class="text-gray-500 font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[50%]" :title="game.status">
+          <!-- Right/Bottom Section (Play Button) -->
+          <div :class="['flex items-center shrink-0', layoutMode === 'grid' ? 'pt-4 justify-between mt-auto' : 'gap-4 md:gap-6']">
+            <div v-if="layoutMode === 'grid'" class="text-gray-500 text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[50%]" :title="game.status">
+               {{ game.status === 'completed' ? '✅ Done' : game.status === 'in_progress' ? '🎮 Playing' : game.status === 'replaying' ? '🔄 Replay' : game.status === 'waiting_update' ? '⏳ Waiting' : game.status === 'abandoned' ? '🚫' : 'Not Started' }}
+            </div>
+            <button @click.stop="launchGameFast(game)" 
+              class="bg-blue-600 hover:bg-blue-500 text-white px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold shadow-lg shadow-blue-900/20 flex items-center gap-2 transition-transform active:scale-95 shrink-0">
+              <svg class="w-3 h-3 md:w-4 md:h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"/></svg>
+              <span class="hidden md:inline">Play</span>
+            </button>
+            <div v-if="layoutMode === 'list'" class="hidden sm:block w-24 text-right text-gray-500 text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis" :title="game.status">
                {{ game.status === 'completed' ? '✅ Done' : game.status === 'in_progress' ? '🎮 Playing' : game.status === 'replaying' ? '🔄 Replay' : game.status === 'waiting_update' ? '⏳ Waiting' : game.status === 'abandoned' ? '🚫' : 'Not Started' }}
             </div>
           </div>
         </div>
+
       </div>
     </TransitionGroup>
     

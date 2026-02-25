@@ -21,6 +21,8 @@ const tags = ref([])
 const engine = ref('')
 const newTag = ref('')
 const latestVersion = ref('')
+const runJapaneseLocale = ref(false)
+const runWayland = ref(false)
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref('')
@@ -65,6 +67,8 @@ watch(() => props.game, (g) => {
         coverImage.value = g.cover_image_path || ''
         status.value = g.status || ''
         engine.value = g.engine || ''
+        runJapaneseLocale.value = g.run_japanese_locale ? true : false
+        runWayland.value = g.run_wayland ? true : false
         // Parse tags: could be comma-separated string or already an array
         if (typeof g.tags === 'string' && g.tags) {
             tags.value = g.tags.split(',').map(t => t.trim()).filter(Boolean)
@@ -106,6 +110,8 @@ const save = async () => {
             status: status.value,
             tags: tags.value.join(', '),
             engine: engine.value,
+            run_japanese_locale: runJapaneseLocale.value,
+            run_wayland: runWayland.value,
             latest_version: latestVersion.value,
             rating_graphics: ratingGraphics.value,
             rating_story: ratingStory.value,
@@ -137,7 +143,7 @@ const deleteGame = async () => {
 
 const launchGame = () => {
     if (props.game) {
-        emit('launch', props.game.exe_path, commandLineArgs.value)
+        emit('launch', props.game.exe_path, commandLineArgs.value, runJapaneseLocale.value, runWayland.value)
     }
 }
 
@@ -248,6 +254,28 @@ const openInBrowser = async () => {
           <div class="col-span-2">
             <label class="block text-xs font-medium text-gray-400 mb-1">Command Line Arguments</label>
             <input v-model="commandLineArgs" type="text" placeholder="--fullscreen --no-intro" class="w-full bg-[#202028] border border-[#33333d] rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-all" />
+          </div>
+
+          <div class="col-span-2 flex items-center justify-between bg-[#202028] p-3 rounded-lg border border-[#33333d]">
+            <div>
+              <p class="text-sm font-medium text-white">Run with Japanese Locale</p>
+              <p class="text-xs text-gray-500">Enable this if the game has unreadable text (Mojibake) or crashes due to missing Japanese fonts (Wolf RPG, older engines).</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="runJapaneseLocale" class="sr-only peer">
+              <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
+          <div class="col-span-2 flex items-center justify-between bg-[#202028] p-3 rounded-lg border border-[#33333d]">
+            <div>
+              <p class="text-sm font-medium text-white">Run in Wayland Compatibility Mode</p>
+              <p class="text-xs text-gray-500">Enable this if your system uses Wayland and the game crashes or freezes on launch (sets specific SDL and Vulkan flags).</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="runWayland" class="sr-only peer">
+              <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
           </div>
           
           <div class="col-span-2">

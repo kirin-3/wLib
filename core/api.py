@@ -36,9 +36,9 @@ class Api:
         from core.database import get_all_games
         return get_all_games()
 
-    def add_game(self, title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine=''):
+    def add_game(self, title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False):
         from core.database import add_game
-        game_id = add_game(title, exe_path, f95_url, cover_image=cover_image, tags=tags, rating=rating, developer=developer, engine=engine)
+        game_id = add_game(title, exe_path, f95_url, cover_image=cover_image, tags=tags, rating=rating, developer=developer, engine=engine, run_japanese_locale=run_japanese_locale)
         return {"id": game_id, "title": title}
 
     def delete_game(self, game_id):
@@ -230,12 +230,12 @@ class Api:
         return {"triggered": False, "reason": f"Last checked: {last_check_str}"}
     # Launcher API
     # ==========================
-    def launch_game(self, exe_path):
+    def launch_game(self, exe_path, command_line_args="", run_japanese_locale=False, run_wayland=False):
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
-        print(f"Launching {exe_path}")
-        result = self.launcher.launch(exe_path)
+        print(f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland})")
+        result = self.launcher.launch(exe_path, command_line_args, run_japanese_locale, run_wayland)
         return result
 
     def install_rpgmaker_dependencies(self):
@@ -263,20 +263,37 @@ class Api:
         else:
             env["WINEPREFIX"] = wine_prefix
             
-        verbs = ["corefonts", "d3dcompiler_43", "d3dcompiler_47", "d3dx9", "quartz", "directshow", "wmp9"]
+        verbs = [
+            "corefonts", "d3dcompiler_42", "d3dcompiler_43", "d3dcompiler_47", "d3dx9", "d3dx11_42", "d3dx11_43",
+            "quartz", "directshow", "wmp9", "dotnetdesktop8", "vcrun2013", "vcrun2022",
+            "dotnet40", "dotnet45", "dotnet46", "dotnet461", "dotnet462", "dotnet472",
+            "allfonts", "cjkfonts", "consolas", "unifont", "vcrun6", "vcrun2010", 
+            "dotnetcoredesktop3"
+        ]
         command = ["winetricks", "-q"] + verbs
         print(f"Running winetricks command in {env.get('WINEPREFIX')}: {' '.join(command)}")
         
-        try:
-            subprocess.Popen(
-                command, 
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            return {"success": True}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        # We run this in a background thread so we don't block the UI returning 'success' immediately
+        # (Winetricks downloads huge MS packages that take longer than the IPC timeout)
+        def _install_deps():
+            try:
+                print(f"Starting background winetricks installation...")
+                subprocess.run(
+                    command, 
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True
+                )
+                print("Finished installing winetricks dependencies.")
+            except subprocess.CalledProcessError as e:
+                print(f"Winetricks failed with exit code {e.returncode}")
+            except Exception as e:
+                print(f"Winetricks encountered an error: {e}")
+                
+        import threading
+        threading.Thread(target=_install_deps, daemon=True).start()
+        return {"success": True}
 
     def install_rpgmaker_rtp(self):
         """
@@ -371,12 +388,14 @@ class Api:
                             env=env,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            timeout=120
+                            timeout=120,
+                            check=True
                         )
                         print(f"Finished installing {rtp['name']} RTP.")
                     except Exception as e:
                         print(f"Wine failed to run {rtp['name']} setup: {e}")
                         
+        import threading
         threading.Thread(target=_download_and_install, daemon=True).start()
         return {"success": True}
 
