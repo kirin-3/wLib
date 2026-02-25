@@ -131,7 +131,7 @@ onUnmounted(() => {
       <!-- Footer: Version, Theme Toggle & Repo -->
       <div class="p-5 flex items-center justify-between" style="border-top: 1px solid var(--border)">
         <router-link to="/updates" v-if="hasAppUpdate" class="text-xs font-mono font-bold px-2 py-0.5 rounded-md animate-pulse" style="background: var(--brand-glow-strong); color: var(--brand); border: 1px solid var(--brand-deep)">v0.1.8 ✨</router-link>
-        <span v-else class="text-xs font-mono font-semibold" style="color: var(--text-muted)">v0.2.2</span>
+        <span v-else class="text-xs font-mono font-semibold" style="color: var(--text-muted)">v0.2.4</span>
         
         <div class="flex items-center gap-2">
           <!-- Theme Toggle -->

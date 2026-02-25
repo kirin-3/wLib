@@ -223,40 +223,59 @@ class Api:
         conn.close()
 
         def run_checks():
-            import time as _time
+            urls = [game["f95_url"] for game in games_with_url]
 
-            for i, game in enumerate(games_with_url):
+            def check_callback(url, result):
                 if not self._update_running:
-                    break  # cancelled
+                    return False  # Stop checking
+
+                game = next((g for g in games_with_url if g["f95_url"] == url), None)
+                if not game:
+                    return True
+
                 self._update_current = game.get("title", "Unknown")
-                self._update_checked = i
-                try:
-                    result = self.check_for_updates(game["f95_url"])
-                    has_update = result.get("has_update", False)
-                    self._update_results.append(
-                        {
-                            "id": game["id"],
-                            "title": game.get("title", ""),
-                            "current_version": game.get("version", ""),
-                            "latest_version": result.get("version", ""),
-                            "has_update": has_update,
-                            "error": result.get("error", None),
-                        }
+
+                has_update = False
+                if result.get("success") and result.get("version"):
+                    remote_version = result["version"]
+                    from core.database import get_connection
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE games SET latest_version = ? WHERE f95_url = ?",
+                        (remote_version, url),
                     )
-                except Exception as e:
-                    self._update_results.append(
-                        {
-                            "id": game["id"],
-                            "title": game.get("title", ""),
-                            "current_version": game.get("version", ""),
-                            "latest_version": "",
-                            "has_update": False,
-                            "error": str(e),
-                        }
+                    cursor.execute(
+                        "SELECT version FROM games WHERE f95_url = ?", (url,)
                     )
-                # Rate limit: 15s between checks (skip delay after last)
-                if i < len(games_with_url) - 1:
-                    _time.sleep(15)
+                    row = cursor.fetchone()
+                    current_version = row[0] if row else ""
+                    conn.commit()
+                    conn.close()
+                    has_update = bool(
+                        current_version
+                        and remote_version
+                        and current_version.strip() != remote_version.strip()
+                    )
+
+                self._update_results.append(
+                    {
+                        "id": game["id"],
+                        "title": game.get("title", ""),
+                        "current_version": game.get("version", ""),
+                        "latest_version": result.get("version", ""),
+                        "has_update": has_update,
+                        "error": result.get("error", None),
+                    }
+                )
+                self._update_checked += 1
+                return True
+
+            self.scraper.get_multiple_thread_versions(
+                urls, headless=True, delay=15, callback=check_callback
+            )
+
             self._update_checked = self._update_total
             self._update_current = ""
             self._update_running = False

@@ -73,3 +73,5 @@ coverage/
 .idea
 .ruff_cache
 __pycache__/
+test_venv/
+.pytest_cache/

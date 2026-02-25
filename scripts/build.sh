@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wLib Build Script — produces tar.gz and AppImage packages
+# wLib Build Script — produces tar.gz and AppImage packages using PyInstaller
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,33 +25,39 @@ npm ci --silent
 npm run build
 cd "$PROJECT_DIR"
 
+# ── Ensure PyInstaller & deps are available ──
+echo "📦 Installing Python dependencies for build..."
+pip install -r requirements.txt
+
+# ── Build Python Backend with PyInstaller ──
+echo "🐍 Building Python binary with PyInstaller..."
+# We use pywebview, which requires its own assets depending on the engine.
+# We explicitly bundle core module and ui/dist.
+pyinstaller --noconfirm --onedir \
+    --name "wlib-bin" \
+    --add-data "core:core" \
+    --add-data "ui/dist:ui/dist" \
+    --add-data "extension:extension" \
+    --add-data "wlib.png:." \
+    --hidden-import "core" \
+    --hidden-import "playwright" \
+    --hidden-import "pywebview" \
+    --hidden-import "PyQt6" \
+    --hidden-import "webview.platforms.qt" \
+    main.py
+
+# Move the built binary to the package folder
+cp -r dist/wlib-bin/* "$BUILD_DIR/$PACKAGE_NAME/"
+
 # ── Assemble Package ──
 echo "📋 Assembling package..."
 
-# Core Python application
-cp main.py "$BUILD_DIR/$PACKAGE_NAME/"
-cp requirements.txt "$BUILD_DIR/$PACKAGE_NAME/"
-cp wlib.sh "$BUILD_DIR/$PACKAGE_NAME/"
+# Desktop file + icon
 cp wlib.desktop "$BUILD_DIR/$PACKAGE_NAME/"
 if [ -f "wlib.png" ]; then cp wlib.png "$BUILD_DIR/$PACKAGE_NAME/"; fi
-chmod +x "$BUILD_DIR/$PACKAGE_NAME/wlib.sh"
 
-# Core modules
-cp -r core "$BUILD_DIR/$PACKAGE_NAME/"
-
-# Built frontend
-cp -r ui/dist "$BUILD_DIR/$PACKAGE_NAME/ui_dist"
-# Also include ui/package.json etc. so the launcher knows it's pre-built
-mkdir -p "$BUILD_DIR/$PACKAGE_NAME/ui"
-cp -r ui/dist "$BUILD_DIR/$PACKAGE_NAME/ui/dist"
-
-# Browser extension
-cp -r extension "$BUILD_DIR/$PACKAGE_NAME/"
-
-# Remove any __pycache__
-find "$BUILD_DIR/$PACKAGE_NAME" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-# Remove any .pyc files
-find "$BUILD_DIR/$PACKAGE_NAME" -name "*.pyc" -delete 2>/dev/null || true
+# Clean up pyinstaller temp files
+rm -rf build/wlib-bin dist/wlib-bin wlib-bin.spec
 
 # ── Create tar.gz ──
 echo "📦 Creating tar.gz..."
@@ -87,7 +93,12 @@ cat > "$APPDIR/AppRun" << 'APPRUN_EOF'
 SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export PATH="$SELF_DIR/usr/bin:$PATH"
 cd "$SELF_DIR/usr/bin"
-exec bash wlib.sh "$@"
+
+# Install playwright browsers if not present.
+# Playwright uses its own cache logic.
+./wlib-bin --install-playwright-if-needed || true
+
+exec ./wlib-bin "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"
 
