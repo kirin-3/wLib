@@ -11,11 +11,11 @@ lerna-debug.log*
 browser_session/
 wlib.db
 wlib.png
-colors.md
 example_extensions/
 
 # Miscellaneous
 plans/
+colors.md
 
 # Dependency directories
 node_modules/
