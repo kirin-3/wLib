@@ -1,23 +1,27 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { api, onWebviewReady } from '../services/api.js'
 
 const protonPath = ref('')
 const prefixPath = ref('')
 const enableLogging = ref(false)
-const saving = ref(false)
 const installingDeps = ref(false)
-const installSuccess = ref(false)
 const installError = ref('')
 const downloadingProton = ref(false)
 const protonError = ref('')
 const installingRtps = ref(false)
-const rtpSuccess = ref(false)
 const rtpError = ref('')
 const ceInstalled = ref(false)
 const cePath = ref('')
 const installingCe = ref(false)
 const ceError = ref('')
+const dllsInstalled = ref(false)
+const rtpsInstalled = ref(false)
+const depsProgress = ref({ done: 0, total: 0, current: '' })
+const rtpProgress = ref({ done: 0, total: 0, current: '' })
+const systemDeps = ref(null)
+const copiedCommand = ref(false)
+let pollTimer = null
 
 const loadSettings = async () => {
     try {
@@ -31,9 +35,32 @@ const loadSettings = async () => {
         const ceCheck = await api.isCheatEngineInstalled()
         ceInstalled.value = !!ceCheck?.installed
         cePath.value = ceCheck?.path || ''
+        
+        await pollInstallStatus()
+        
+        const sysDeps = await api.getSystemDepsCommand()
+        if (sysDeps) systemDeps.value = sysDeps
     } catch (e) {
         console.error("Failed to load settings", e)
     }
+}
+
+const pollInstallStatus = async () => {
+    try {
+        const s = await api.getInstallStatus()
+        if (s) {
+            dllsInstalled.value = !!s.dlls_installed
+            rtpsInstalled.value = !!s.rtps_installed
+            if (s.deps) {
+                depsProgress.value = s.deps
+                installingDeps.value = !!s.deps.running
+            }
+            if (s.rtps) {
+                rtpProgress.value = s.rtps
+                installingRtps.value = !!s.rtps.running
+            }
+        }
+    } catch (e) {}
 }
 
 const browseProton = async () => {
@@ -53,7 +80,7 @@ const downloadProton = async () => {
         const result = await api.downloadProtonGe()
         if (result && result.success && result.path) {
             protonPath.value = result.path
-            await saveSettings() // auto save settings since proton changed
+            await saveSettings()
         } else {
             protonError.value = result?.error || "Failed to download Proton."
         }
@@ -66,40 +93,49 @@ const downloadProton = async () => {
 
 const installRtps = async () => {
     installingRtps.value = true
-    rtpSuccess.value = false
     rtpError.value = ''
     try {
         const result = await api.installRpgmakerRtp()
         if (result && result.success) {
-            rtpSuccess.value = true
-            setTimeout(() => rtpSuccess.value = false, 5000)
+            startPolling()
         } else {
             rtpError.value = result?.error || "Unknown error occurred"
+            installingRtps.value = false
         }
     } catch (e) {
         rtpError.value = e.toString()
-    } finally {
         installingRtps.value = false
     }
 }
 
 const installDeps = async () => {
     installingDeps.value = true
-    installSuccess.value = false
     installError.value = ''
     try {
         const result = await api.installRpgmakerDependencies()
         if (result && result.success) {
-            installSuccess.value = true
-            setTimeout(() => installSuccess.value = false, 5000)
+            startPolling()
         } else {
             installError.value = result?.error || "Unknown error occurred"
+            installingDeps.value = false
         }
     } catch (e) {
         installError.value = e.toString()
-    } finally {
         installingDeps.value = false
     }
+}
+
+const startPolling = () => {
+    if (pollTimer) return
+    const tick = async () => {
+        await pollInstallStatus()
+        if (installingDeps.value || installingRtps.value) {
+            pollTimer = setTimeout(tick, 2000)
+        } else {
+            pollTimer = null
+        }
+    }
+    pollTimer = setTimeout(tick, 2000)
 }
 
 const downloadCe = async () => {
@@ -120,12 +156,35 @@ const downloadCe = async () => {
     }
 }
 
+const copyDepsCommand = () => {
+    if (!systemDeps.value) return
+    const text = systemDeps.value.command
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    copiedCommand.value = true
+    setTimeout(() => copiedCommand.value = false, 2000)
+}
+
 onMounted(() => {
     onWebviewReady(() => {
         loadSettings()
     })
 })
 
+onUnmounted(() => {
+    if (pollTimer) {
+        clearTimeout(pollTimer)
+        pollTimer = null
+    }
+})
+
+const saving = ref(false)
 const saveSettings = async () => {
     saving.value = true
     try {
@@ -146,25 +205,25 @@ const saveSettings = async () => {
   <div class="p-8 max-w-4xl pb-12">
     
     <header class="mb-10">
-      <h2 class="text-3xl font-bold text-white mb-2 tracking-tight">Settings</h2>
-      <p class="text-gray-400 text-sm border-l-2 border-blue-500 pl-3">Configure launch paths and application behavior.</p>
+      <h2 class="text-3xl font-bold mb-2 tracking-tight" style="color: var(--text-primary)">Settings</h2>
+      <p class="text-sm pl-3" style="color: var(--text-secondary); border-left: 2px solid var(--brand)">Configure launch paths and application behavior.</p>
     </header>
 
-    <div class="bg-[#1a1a20] rounded-xl border border-[#2d2d34] shadow-lg overflow-hidden">
+    <div class="settings-card rounded-xl shadow-lg overflow-hidden">
       <div class="p-8 space-y-8">
         
         <!-- Environment Settings -->
         <section>
-          <h3 class="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-            <svg class="w-5 h-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>
+          <h3 class="text-lg font-semibold mb-4 flex items-center gap-2" style="color: var(--text-primary)">
+            <svg class="w-5 h-5" style="color: var(--brand)" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>
             Proton & Wine Environment
           </h3>
           
           <div class="space-y-5">
             <div>
-              <label class="block text-sm font-medium text-gray-300 mb-1.5 flex justify-between items-center">
+              <label class="block text-sm font-medium mb-1.5 flex justify-between items-center" style="color: var(--text-secondary)">
                 <span>Proton / Wine Executable Path</span>
-                <button @click="downloadProton" :disabled="downloadingProton" class="text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center gap-1 disabled:opacity-50">
+                <button @click="downloadProton" :disabled="downloadingProton" class="text-xs font-medium flex items-center gap-1 disabled:opacity-50" style="color: var(--brand)">
                   <svg v-if="downloadingProton" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
                   <svg v-else class="w-3 h-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
                   {{ downloadingProton ? 'Downloading (Check terminal)...' : 'Auto Download Latest GE-Proton' }}
@@ -172,74 +231,97 @@ const saveSettings = async () => {
               </label>
               <div class="flex gap-3">
                 <input v-model="protonPath" type="text" placeholder="/usr/bin/wine or /path/to/GE-Proton/proton" 
-                  class="flex-1 bg-[#25252e] border border-[#33333d] rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-shadow" />
-                <button @click="browseProton" class="bg-[#2d2d34] hover:bg-[#33333d] text-white px-4 rounded-lg border border-[#3f3f4a] transition-colors text-sm font-medium">Browse</button>
+                  class="settings-input flex-1" />
+                <button @click="browseProton" class="settings-btn">Browse</button>
               </div>
-              <p class="text-xs text-gray-500 mt-2">Leave empty to use the system default `wine` command.</p>
+              <p class="text-xs mt-2" style="color: var(--text-muted)">Leave empty to use the system default `wine` command.</p>
               <p v-if="protonError" class="text-xs text-red-400 mt-1">{{ protonError }}</p>
             </div>
 
             <div>
-              <label class="block text-sm font-medium text-gray-300 mb-1.5">Default Wine Prefix Path (WINEPREFIX)</label>
+              <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">Default Wine Prefix Path (WINEPREFIX)</label>
               <div class="flex gap-3">
                 <input v-model="prefixPath" type="text" placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty" 
-                  class="flex-1 bg-[#25252e] border border-[#33333d] rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-shadow" />
-                <button @click="browsePrefix" class="bg-[#2d2d34] hover:bg-[#33333d] text-white px-4 rounded-lg border border-[#3f3f4a] transition-colors text-sm font-medium">Browse</button>
+                  class="settings-input flex-1" />
+                <button @click="browsePrefix" class="settings-btn">Browse</button>
               </div>
-              <p class="text-xs text-gray-500 mt-2">The location where game dependencies and save files will be isolated.</p>
+              <p class="text-xs mt-2" style="color: var(--text-muted)">The location where game dependencies and save files will be isolated.</p>
             </div>
             
-            <div class="flex items-center justify-between mt-6 bg-[#1a1a20] p-4 rounded-lg border border-[#2d2d34]">
+            <div class="flex items-center justify-between mt-6 p-4 rounded-lg" style="background: var(--bg-raised); border: 1px solid var(--border)">
               <div>
-                <h4 class="text-sm font-medium text-gray-200">Enable Debug Logging</h4>
-                <p class="text-xs text-gray-500 mt-1">Saves Wine/Proton launch output to a .log file next to the game executable to help troubleshoot black screens.</p>
+                <h4 class="text-sm font-medium" style="color: var(--text-primary)">Enable Debug Logging</h4>
+                <p class="text-xs mt-1" style="color: var(--text-muted)">Saves Wine/Proton launch output to a .log file next to the game executable to help troubleshoot black screens.</p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input type="checkbox" v-model="enableLogging" class="sr-only peer">
-                <div class="w-11 h-6 bg-[#2d2d34] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                <div class="settings-toggle peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"></div>
               </label>
             </div>
             
-            <hr class="border-[#2d2d34] my-4" />
+            <hr style="border-color: var(--border)" class="my-4" />
             
             <div>
-              <h4 class="text-sm font-bold text-gray-200 mb-2">Advanced Tools</h4>
-              <p class="text-xs text-gray-400 mb-4">Run these tools to fix common issues with certain game engines.</p>
+              <h4 class="text-sm font-bold mb-2" style="color: var(--text-primary)">Advanced Tools</h4>
+              <p class="text-xs mb-4" style="color: var(--text-secondary)">Run these tools to fix common issues with certain game engines.</p>
               
               <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between bg-[#1a1a20] p-4 rounded-lg border border-[#2d2d34]">
-                  <div>
-                    <h5 class="text-sm font-medium text-gray-200">RPGMaker / Unity Fix (Winetricks)</h5>
-                    <p class="text-xs text-gray-500 mt-1">Installs corefonts, d3d, quartz, wmp9, directshow. Fixes video decoding black screens.</p>
+                <!-- DLL Install Card -->
+                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
+                  <div class="absolute inset-y-0 left-0 w-1" :class="dllsInstalled ? 'bg-green-500' : ''" :style="!dllsInstalled ? 'background: var(--text-muted)' : ''"></div>
+                  <div class="flex items-center justify-between">
+                    <div class="pl-3">
+                      <h5 class="text-sm font-medium" style="color: var(--text-primary)">RPGMaker / Unity Fix (Winetricks)</h5>
+                      <p v-if="!dllsInstalled && !installingDeps" class="text-xs mt-1" style="color: var(--text-muted)">Installs corefonts, d3d, quartz, wmp9, directshow. Fixes video decoding black screens.</p>
+                      <p v-if="installingDeps" class="text-xs text-yellow-400 mt-1 font-mono">Installing {{ depsProgress.current }} ({{ depsProgress.done }}/{{ depsProgress.total }})... This may take 30+ minutes.</p>
+                      <p v-if="dllsInstalled && !installingDeps" class="text-xs text-green-400 mt-1 font-mono">Installed</p>
+                    </div>
+                    <button @click="installDeps" :disabled="installingDeps || dllsInstalled"
+                      class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50">
+                      <svg v-if="installingDeps" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                      {{ dllsInstalled ? 'Installed' : (installingDeps ? 'Installing...' : 'Install DLLs') }}
+                    </button>
                   </div>
-                  <button @click="installDeps" :disabled="installingDeps"
-                    class="bg-[#25252e] hover:bg-[#2d2d34] text-white px-4 py-2 rounded border border-[#33333d] transition-colors text-xs font-semibold disabled:opacity-50 flex items-center gap-2">
-                    <svg v-if="installingDeps" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                    {{ installingDeps ? 'Installing...' : 'Install DLLs' }}
-                  </button>
+                  <div v-if="installingDeps && depsProgress.total > 0" class="mt-3 ml-3">
+                    <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-raised)">
+                      <div class="h-1.5 rounded-full transition-all duration-500" style="background: var(--brand)" :style="{ width: (depsProgress.done / depsProgress.total * 100) + '%' }"></div>
+                    </div>
+                  </div>
                 </div>
                 
-                <div class="flex items-center justify-between bg-[#1a1a20] p-4 rounded-lg border border-[#2d2d34]">
-                  <div>
-                    <h5 class="text-sm font-medium text-gray-200">RPGMaker XP / VX Ace RTP</h5>
-                    <p class="text-xs text-gray-500 mt-1">Downloads official RGSS-RTP missing files (rgss104e, rgss3a) into your prefix.</p>
+                <!-- RTP Install Card -->
+                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
+                  <div class="absolute inset-y-0 left-0 w-1" :class="rtpsInstalled ? 'bg-green-500' : ''" :style="!rtpsInstalled ? 'background: var(--text-muted)' : ''"></div>
+                  <div class="flex items-center justify-between">
+                    <div class="pl-3">
+                      <h5 class="text-sm font-medium" style="color: var(--text-primary)">RPGMaker XP / VX Ace RTP</h5>
+                      <p v-if="!rtpsInstalled && !installingRtps" class="text-xs mt-1" style="color: var(--text-muted)">Downloads official RGSS-RTP missing files (rgss104e, rgss3a) into your prefix.</p>
+                      <p v-if="installingRtps" class="text-xs text-yellow-400 mt-1 font-mono">Installing {{ rtpProgress.current }} ({{ rtpProgress.done }}/{{ rtpProgress.total }})...</p>
+                      <p v-if="rtpsInstalled && !installingRtps" class="text-xs text-green-400 mt-1 font-mono">Installed</p>
+                    </div>
+                    <button @click="installRtps" :disabled="installingRtps || rtpsInstalled"
+                      class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50">
+                      <svg v-if="installingRtps" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                      {{ rtpsInstalled ? 'Installed' : (installingRtps ? 'Processing...' : 'Install RTPs') }}
+                    </button>
                   </div>
-                  <button @click="installRtps" :disabled="installingRtps"
-                    class="bg-[#25252e] hover:bg-[#2d2d34] text-white px-4 py-2 rounded border border-[#33333d] transition-colors text-xs font-semibold disabled:opacity-50 flex items-center gap-2">
-                    <svg v-if="installingRtps" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
-                    {{ installingRtps ? 'Processing...' : 'Install RTPs' }}
-                  </button>
+                  <div v-if="installingRtps && rtpProgress.total > 0" class="mt-3 ml-3">
+                    <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-raised)">
+                      <div class="h-1.5 rounded-full transition-all duration-500" style="background: var(--brand)" :style="{ width: (rtpProgress.done / rtpProgress.total * 100) + '%' }"></div>
+                    </div>
+                  </div>
                 </div>
 
-                <div class="flex items-center justify-between bg-[#1a1a20] p-4 rounded-lg border border-[#2d2d34] relative overflow-hidden">
-                  <div class="absolute inset-y-0 left-0 w-1" :class="ceInstalled ? 'bg-green-500' : 'bg-gray-600'"></div>
+                <!-- Cheat Engine Card -->
+                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
+                  <div class="absolute inset-y-0 left-0 w-1" :class="ceInstalled ? 'bg-green-500' : ''" :style="!ceInstalled ? 'background: var(--text-muted)' : ''"></div>
                   <div class="pl-3">
-                    <h5 class="text-sm font-medium text-gray-200">Cheat Engine (Lunar Engine)</h5>
-                    <p class="text-xs text-gray-500 mt-1" v-if="!ceInstalled">Provides the ability to auto-inject CE when launching games to modify values.</p>
+                    <h5 class="text-sm font-medium" style="color: var(--text-primary)">Cheat Engine (Lunar Engine)</h5>
+                    <p class="text-xs mt-1" style="color: var(--text-muted)" v-if="!ceInstalled">Provides the ability to auto-inject CE when launching games to modify values.</p>
                     <p class="text-xs text-green-400 mt-1 font-mono" v-else>Installed</p>
                   </div>
                   <button @click="downloadCe" :disabled="installingCe || ceInstalled"
-                    class="bg-[#25252e] hover:bg-[#2d2d34] text-white px-4 py-2 rounded border border-[#33333d] transition-colors text-xs font-semibold disabled:opacity-50 flex items-center gap-2">
+                    class="settings-btn flex items-center gap-2 absolute right-4 top-1/2 -translate-y-1/2 disabled:opacity-50">
                     <svg v-if="installingCe" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
                     {{ ceInstalled ? 'Installed' : (installingCe ? 'Downloading...' : 'Install CE') }}
                   </button>
@@ -248,9 +330,7 @@ const saveSettings = async () => {
 
               <div class="mt-2 space-y-1">
                 <p v-if="installError" class="text-xs text-red-400">{{ installError }}</p>
-                <p v-if="installSuccess" class="text-xs text-green-400">DLL Installation started in the terminal!</p>
                 <p v-if="rtpError" class="text-xs text-red-400">{{ rtpError }}</p>
-                <p v-if="rtpSuccess" class="text-xs text-green-400">RTP Installation started in the background! (This may take a minute)</p>
                 <p v-if="ceError" class="text-xs text-red-400">{{ ceError }}</p>
               </div>
             </div>
@@ -259,11 +339,63 @@ const saveSettings = async () => {
 
       </div>
       
-      <div class="bg-[#15151a] px-8 py-5 flex justify-end gap-3 border-t border-[#2d2d34]">
-        <button class="text-gray-400 hover:text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">Reset</button>
-        <button @click="saveSettings" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-blue-900/20">Save Changes</button>
+      <div class="px-8 py-5 flex justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
+        <button class="px-4 py-2 rounded-lg text-sm font-medium transition-colors" style="color: var(--text-secondary)">Reset</button>
+        <button @click="saveSettings" class="text-white px-6 py-2 rounded-lg text-sm font-medium transition-all"
+          style="background: var(--brand); box-shadow: var(--shadow-brand)">Save Changes</button>
       </div>
     </div>
     
   </div>
 </template>
+
+<style scoped>
+.settings-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+}
+
+.settings-input {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+.settings-input::placeholder {
+  color: var(--text-muted);
+}
+.settings-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-glow);
+}
+
+.settings-btn {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-hover);
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+.settings-btn:hover {
+  background: var(--border-hover);
+}
+
+.settings-toggle {
+  width: 2.75rem;
+  height: 1.5rem;
+  background: var(--bg-overlay);
+  border-radius: 9999px;
+}
+
+.tool-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+</style>

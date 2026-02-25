@@ -64,12 +64,33 @@ function extractGameInfo() {
             // Remove the prefixes like [HTML] or [RPGM] at the start
             fullTitleText = fullTitleText.replace(/^\[[^\]]+\]\s*/, '');
 
-            // Try to extract version e.g. [v1.0]
-            const versionMatch = fullTitleText.match(/\[v?([^\]]+)\]/i);
-            if (versionMatch) {
-                info.version = versionMatch[1].trim();
-                // Remove version tag from title
-                fullTitleText = fullTitleText.replace(versionMatch[0], '');
+            // Try to extract version from bracketed tags
+            // Pass 1: Look for version-like tags in brackets — [v1.0], [1.0.2], [v0.5a], [Ver 2.1]
+            const bracketedVersions = [...fullTitleText.matchAll(/\[([^\]]*)\]/g)];
+            for (const m of bracketedVersions) {
+                const inner = m[1].trim();
+                // Match: v1.0, 1.0.2, v0.5a, Ver 2.1, Version 1.0
+                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$/i.test(inner)) {
+                    info.version = inner.replace(/^v(?:er(?:sion)?\.?\s*)?/i, '').trim();
+                    fullTitleText = fullTitleText.replace(m[0], '');
+                    break;
+                }
+                // Match: Ch. 3, Ch 3 v0.5, Chapter 3, Ep. 5, Episode 5, S2 E3, S2E3, Part 3
+                const chapterMatch = inner.match(/^(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)/i);
+                if (chapterMatch) {
+                    info.version = inner.trim();
+                    fullTitleText = fullTitleText.replace(m[0], '');
+                    break;
+                }
+            }
+
+            // Pass 2: Bare version not in brackets — "Game Name v1.0.2 [Dev]"
+            if (!info.version) {
+                const bareVersionMatch = fullTitleText.match(/\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)/i);
+                if (bareVersionMatch) {
+                    info.version = bareVersionMatch[1].trim();
+                    fullTitleText = fullTitleText.replace(bareVersionMatch[0], bareVersionMatch[0].endsWith('[') ? '[' : ' ');
+                }
             }
 
             // Extract developer e.g. [Developer Name]
@@ -90,16 +111,34 @@ function extractGameInfo() {
             const firstPost = document.querySelector('.message-body .bbWrapper');
             if (firstPost) {
                 // Try innerHTML first: handles <b>Version</b>\n: 1.0.7 pattern
-                const htmlMatch = firstPost.innerHTML.match(/<b>\s*Version\s*<\/b>\s*:?\s*v?([^<\n]+)/i);
-                if (htmlMatch) {
-                    // Clean up: take first word-like token (e.g. "1.0.7" from "1.0.7 (fan translated)")
-                    info.version = htmlMatch[1].trim().split(/\s/)[0];
-                } else {
-                    // Fallback: plain text search
+                const htmlPatterns = [
+                    /<b>\s*(?:Current\s+)?Version\s*<\/b>\s*:?\s*v?([^<\n]+)/i,
+                    /<b>\s*Ver(?:\.|sion)?\s*<\/b>\s*:?\s*v?([^<\n]+)/i,
+                ];
+                let found = false;
+                for (const pattern of htmlPatterns) {
+                    const htmlMatch = firstPost.innerHTML.match(pattern);
+                    if (htmlMatch) {
+                        info.version = htmlMatch[1].trim().split(/\s/)[0];
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    // Fallback: plain text search with multiple patterns
                     const postText = firstPost.textContent;
-                    const bodyVersionMatch = postText.match(/Version\s*:?\s*v?([^\s,;\n]+)/i);
-                    if (bodyVersionMatch) {
-                        info.version = bodyVersionMatch[1].trim();
+                    const textPatterns = [
+                        /(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)/i,
+                        /Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)/i,
+                        /Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)/i,
+                    ];
+                    for (const pattern of textPatterns) {
+                        const bodyMatch = postText.match(pattern);
+                        if (bodyMatch) {
+                            info.version = bodyMatch[1].trim();
+                            break;
+                        }
                     }
                 }
             }

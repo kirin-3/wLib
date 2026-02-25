@@ -10,7 +10,6 @@ pnpm-debug.log*
 lerna-debug.log*
 browser_session/
 wlib.db
-wlib.png
 example_extensions/
 
 # Miscellaneous

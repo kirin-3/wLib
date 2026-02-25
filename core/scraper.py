@@ -56,12 +56,18 @@ class Scraper:
             title = page.title()
             print(f"Scraped Page Title: {title}")
             
-            # Example regex extraction F95Zone thread titles typically have tags like [v1.2.3]
-            match = re.search(r'\[v([0-9\.]+[a-zA-Z]*)\]|\[([vV]ersion [^\]]+)\]|\[(v\d+[^\]]*)\]', title)
+            # Multi-pass version extraction from F95Zone titles
+            # Pass 1: Bracketed version [v1.0], [1.0.2], [Version 2.1]
+            match = re.search(r'\[v?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)\]', title, re.I)
+            if not match:
+                # Pass 2: Chapter/Episode/Season formats [Ch.3], [Ep.5], [S2 E3], [Part 3]
+                match = re.search(r'\[(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)\]', title, re.I)
+            if not match:
+                # Pass 3: Bare version not in brackets "Game Name v1.0.2"
+                match = re.search(r'\bv(\d+[\d.]*[a-zA-Z]?)\b', title, re.I)
             
             version = None
             if match:
-                # Get whichever group matched
                 version = next((g for g in match.groups() if g is not None), "Unknown")
             else:
                 version = "Unknown"

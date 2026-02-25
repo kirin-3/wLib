@@ -32,7 +32,6 @@ watch(() => [props.modelValue, route.query], ([isOpen, query]) => {
 }, { immediate: true })
 
 const close = () => {
-    // Clear query params so normal opens don't auto-fill
     if (route.query.action === 'import') {
         router.replace({ query: {} })
     }
@@ -74,11 +73,11 @@ const save = () => {
     <div class="absolute inset-0 bg-black/70 backdrop-blur-sm transition-opacity" @click="close"></div>
     
     <!-- Modal Content -->
-    <div class="bg-[#15151a] w-full max-w-lg rounded-2xl border border-[#2d2d34] shadow-2xl relative overflow-hidden transform transition-all flex flex-col max-h-screen">
+    <div class="modal-content w-full max-w-lg rounded-2xl shadow-2xl relative overflow-hidden transform transition-all flex flex-col max-h-screen">
       
-      <div class="px-6 py-5 border-b border-[#2d2d34] flex items-center justify-between bg-[#18181c]">
-        <h3 class="text-xl font-bold text-white">Add New Game</h3>
-        <button @click="close" class="text-gray-400 hover:text-white transition-colors">
+      <div class="px-6 py-5 flex items-center justify-between" style="border-bottom: 1px solid var(--border); background: var(--bg-surface)">
+        <h3 class="text-xl font-bold" style="color: var(--text-primary)">Add New Game</h3>
+        <button @click="close" class="transition-colors" style="color: var(--text-muted)" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">
           <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
@@ -87,37 +86,38 @@ const save = () => {
 
       <div class="p-6 overflow-y-auto space-y-5 flex-1">
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5 flex justify-between">
+          <label class="block text-sm font-medium mb-1.5 flex justify-between" style="color: var(--text-secondary)">
             Game Title <span class="text-red-400 text-xs">*</span>
           </label>
           <input v-model="title" type="text" placeholder="e.g. My Awesome RPG" 
-            class="w-full bg-[#202028] border border-[#33333d] rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all font-medium" />
+            class="modal-input w-full !py-3 font-medium" />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5 flex justify-between">
+          <label class="block text-sm font-medium mb-1.5 flex justify-between" style="color: var(--text-secondary)">
             Path to Executable <span class="text-red-400 text-xs">*</span>
           </label>
           <div class="flex gap-2">
             <input v-model="exePath" type="text" placeholder="/path/to/game.exe" 
-              class="flex-1 bg-[#202028] border border-[#33333d] rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all font-mono" />
-            <button @click="browseExe" class="bg-[#2d2d34] hover:bg-[#33333d] text-white px-4 rounded-lg border border-[#3f3f4a] transition-colors text-sm font-medium">Browse</button>
+              class="modal-input flex-1 !py-3 text-sm font-mono" />
+            <button @click="browseExe" class="modal-btn !py-3">Browse</button>
           </div>
-          <p class="text-xs text-gray-500 mt-2">The .exe or .sh file that launches the game.</p>
+          <p class="text-xs mt-2" style="color: var(--text-muted)">The .exe or .sh file that launches the game.</p>
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5">F95Zone Thread URL</label>
+          <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">F95Zone Thread URL</label>
           <input v-model="f95Url" type="text" placeholder="https://f95zone.to/threads/..." 
-            class="w-full bg-[#202028] border border-[#33333d] rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-blue-400" />
-          <p class="text-xs text-gray-500 mt-2">Required for checking game updates automatically.</p>
+            class="modal-input w-full !py-3 text-sm" style="color: var(--brand)" />
+          <p class="text-xs mt-2" style="color: var(--text-muted)">Required for checking game updates automatically.</p>
         </div>
       </div>
 
-      <div class="px-6 py-5 border-t border-[#2d2d34] bg-[#101014] flex justify-end gap-3">
-        <button @click="close" class="text-gray-400 hover:text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+      <div class="px-6 py-5 flex justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
+        <button @click="close" class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors" style="color: var(--text-secondary)">Cancel</button>
         <button @click="save" :disabled="!title || !exePath"
-          class="bg-blue-600 border border-blue-500 hover:bg-blue-500 text-white px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/20">
+          class="text-white px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          style="background: var(--brand); box-shadow: var(--shadow-brand)">
           Save to Library
         </button>
       </div>
@@ -125,3 +125,42 @@ const save = () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-modal);
+}
+
+.modal-input {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+.modal-input::placeholder {
+  color: var(--text-muted);
+}
+.modal-input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-glow);
+}
+
+.modal-btn {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-hover);
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.modal-btn:hover {
+  background: var(--border-hover);
+}
+</style>

@@ -6,7 +6,7 @@ class Launcher:
     def __init__(self):
         pass
 
-    def launch(self, exe_path: str, command_line_args: str = "", run_japanese_locale: bool = False, run_wayland: bool = False):
+    def launch(self, exe_path: str, command_line_args: str = "", run_japanese_locale: bool = False, run_wayland: bool = False, auto_inject_ce: bool = False):
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
         Otherwise, launches using the configured Proton/Wine path.
@@ -136,13 +136,15 @@ class Launcher:
         # Auto-detect engines for specific launcher arguments
         # RPGMaker MV / MZ (NW.js Chromium)
         if os.path.exists(os.path.join(game_dir, "nw.dll")) and os.path.exists(os.path.join(game_dir, "www")):
-            print("Detected RPGMaker MV/MZ. Applying libglesv2 and winegstreamer overrides...")
+            print("Detected RPGMaker MV/MZ. Applying winegstreamer override and NW.js flags...")
             existing_overrides = env.get("WINEDLLOVERRIDES", "")
-            additional_overrides = "libglesv2=d;libegl=d;winegstreamer=d"
+            additional_overrides = "winegstreamer=d"
             if existing_overrides:
                 env["WINEDLLOVERRIDES"] = f"{existing_overrides};{additional_overrides}"
             else:
                 env["WINEDLLOVERRIDES"] = additional_overrides
+            # Add NW.js/Chromium flags for better Wine compatibility
+            command.extend(["--disable-gpu-sandbox", "--no-sandbox"])
         
         # Proton and Wine prefix handling
         if is_proton:

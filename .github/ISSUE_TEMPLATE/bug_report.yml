@@ -1,0 +1,94 @@
+name: 🐛 Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below to help us understand and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Open wLib
+        2. Go to '...'
+        3. Click on '...'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Linux Distribution
+      description: Your distro and version
+      placeholder: "e.g., Ubuntu 24.04, Arch Linux, Fedora 40"
+    validations:
+      required: true
+
+  - type: input
+    id: wine-version
+    attributes:
+      label: Wine / Proton Version
+      description: If the issue is game-launch related
+      placeholder: "e.g., Wine 9.0, Proton-GE 9-7"
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: Output of `python3 --version`
+      placeholder: "e.g., Python 3.12.3"
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Installation Method
+      options:
+        - AppImage
+        - tar.gz archive
+        - Running from source (git clone)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Any relevant terminal output or logs (enable Debug Logging in Settings if needed)
+      render: shell
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain the problem.

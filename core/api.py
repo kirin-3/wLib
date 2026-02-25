@@ -274,22 +274,31 @@ class Api:
         command = ["winetricks", "-q"] + verbs
         print(f"Running winetricks command in {env.get('WINEPREFIX')}: {' '.join(command)}")
         
+        self._deps_install_status = {'running': True, 'done': 0, 'total': len(verbs), 'current': verbs[0], 'error': ''}
+        
         # We run this in a background thread so we don't block the UI returning 'success' immediately
         # (Winetricks downloads huge MS packages that take longer than the IPC timeout)
         def _install_deps():
             try:
-                print(f"Starting background winetricks installation...")
-                subprocess.run(
-                    command, 
-                    env=env,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True
-                )
+                for i, verb in enumerate(verbs):
+                    self._deps_install_status['done'] = i
+                    self._deps_install_status['current'] = verb
+                    print(f"Installing winetricks verb {i+1}/{len(verbs)}: {verb}")
+                    subprocess.run(
+                        ["winetricks", "-q", verb],
+                        env=env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                self._deps_install_status['done'] = len(verbs)
+                self._deps_install_status['current'] = ''
+                self._deps_install_status['running'] = False
+                from core.database import update_setting
+                update_setting('dlls_installed', 'true')
                 print("Finished installing winetricks dependencies.")
-            except subprocess.CalledProcessError as e:
-                print(f"Winetricks failed with exit code {e.returncode}")
             except Exception as e:
+                self._deps_install_status['running'] = False
+                self._deps_install_status['error'] = str(e)
                 print(f"Winetricks encountered an error: {e}")
                 
         import threading
@@ -347,7 +356,9 @@ class Api:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-            for rtp in rtps:
+            for i, rtp in enumerate(rtps):
+                self._rtp_install_status['done'] = i
+                self._rtp_install_status['current'] = rtp['name']
                 download_path = os.path.join(rtp_dir, rtp["filename"])
                 extract_path = os.path.join(rtp_dir, rtp["name"].replace(" ", "_"))
                 
@@ -395,10 +406,71 @@ class Api:
                         print(f"Finished installing {rtp['name']} RTP.")
                     except Exception as e:
                         print(f"Wine failed to run {rtp['name']} setup: {e}")
+
+            self._rtp_install_status['done'] = len(rtps)
+            self._rtp_install_status['current'] = ''
+            self._rtp_install_status['running'] = False
+            from core.database import update_setting
+            update_setting('rtps_installed', 'true')
+            print("All RTPs installed successfully.")
                         
+        self._rtp_install_status = {'running': True, 'done': 0, 'total': len(rtps), 'current': rtps[0]['name'], 'error': ''}
         import threading
         threading.Thread(target=_download_and_install, daemon=True).start()
         return {"success": True}
+
+    def get_install_status(self):
+        """Returns the current status of background DLL and RTP installs, plus whether they've previously completed."""
+        from core.database import get_setting
+        return {
+            'deps': getattr(self, '_deps_install_status', {'running': False, 'done': 0, 'total': 0, 'current': '', 'error': ''}),
+            'rtps': getattr(self, '_rtp_install_status', {'running': False, 'done': 0, 'total': 0, 'current': '', 'error': ''}),
+            'dlls_installed': get_setting('dlls_installed') == 'true',
+            'rtps_installed': get_setting('rtps_installed') == 'true',
+        }
+
+    def get_system_deps_command(self):
+        """Detects the system package manager and returns the command to install 32-bit GStreamer/multimedia dependencies."""
+        import shutil
+        
+        commands = {
+            'dnf': {
+                'name': 'Fedora / RHEL',
+                'command': 'sudo dnf install -y gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686 gstreamer1.i686 libvpx.i686 opus.i686 libvorbis.i686 libtheora.i686 libogg.i686 flac-libs.i686 speex.i686 libjpeg-turbo.i686 libsndfile.i686 libwebp.i686'
+            },
+            'apt': {
+                'name': 'Debian / Ubuntu',
+                'command': 'sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install -y libgstreamer1.0-0:i386 gstreamer1.0-plugins-base:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-plugins-bad:i386 libvpx-dev:i386 libopus0:i386 libvorbis0a:i386 libtheora0:i386 libogg0:i386 libflac8:i386 libspeex1:i386 libjpeg62-turbo:i386 libsndfile1:i386 libwebp-dev:i386'
+            },
+            'pacman': {
+                'name': 'Arch Linux',
+                'command': 'sudo pacman -S --noconfirm lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-plugins-bad-libs lib32-libvpx lib32-opus lib32-libvorbis lib32-libtheora lib32-libogg lib32-flac lib32-speex lib32-libjpeg-turbo lib32-libsndfile lib32-libwebp'
+            },
+            'zypper': {
+                'name': 'openSUSE',
+                'command': 'sudo zypper install -y gstreamer-plugins-base-32bit gstreamer-plugins-good-32bit gstreamer-plugins-bad-32bit libvpx-32bit libopus0-32bit libvorbis-32bit libtheora-32bit libogg-32bit libFLAC8-32bit speex-32bit libjpeg62-32bit libsndfile1-32bit libwebp-32bit'
+            },
+            'xbps-install': {
+                'name': 'Void Linux',
+                'command': 'sudo xbps-install -y gst-plugins-base1-32bit gst-plugins-good1-32bit gst-plugins-bad1-32bit libvpx-32bit libopus-32bit libvorbis-32bit libtheora-32bit libogg-32bit libflac-32bit speex-32bit libjpeg-turbo-32bit libsndfile-32bit libwebp-32bit'
+            }
+        }
+        
+        for pkg_mgr, info in commands.items():
+            if shutil.which(pkg_mgr):
+                return {
+                    'detected': True,
+                    'package_manager': pkg_mgr,
+                    'distro': info['name'],
+                    'command': info['command']
+                }
+        
+        return {
+            'detected': False,
+            'package_manager': 'unknown',
+            'distro': 'Unknown',
+            'command': '# Could not detect your package manager. Please install 32-bit GStreamer plugins manually.'
+        }
 
     # ==========================
     # Settings & Utils API
@@ -501,6 +573,156 @@ class Api:
             if result and len(result) > 0:
                 return result[0]
         return ""
+
+    def find_save_files(self, exe_path, title='', engine=''):
+        """
+        Searches common save file locations for a game.
+        Returns a list of {path, type, description} for each found location.
+        """
+        import os
+        import glob
+        from core.database import get_setting
+
+        results = []
+        game_dir = os.path.dirname(exe_path) if exe_path else ''
+        game_name = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ''
+        title_clean = title.strip() if title else game_name
+
+        # ── 1. Check game directory for common save folders/files ──
+        if game_dir and os.path.isdir(game_dir):
+            save_patterns = ['save', 'saves', 'Save', 'Saves', 'SaveData', 'savedata']
+            for pattern in save_patterns:
+                candidate = os.path.join(game_dir, pattern)
+                if os.path.isdir(candidate):
+                    results.append({
+                        'path': candidate,
+                        'type': 'Game Folder',
+                        'description': f'Found "{pattern}/" folder next to executable'
+                    })
+
+            # RPGMaker MV/MZ: www/save/
+            www_save = os.path.join(game_dir, 'www', 'save')
+            if os.path.isdir(www_save):
+                results.append({
+                    'path': www_save,
+                    'type': 'RPGMaker MV/MZ',
+                    'description': 'RPGMaker MV/MZ web save folder'
+                })
+
+            # Check for loose save files
+            save_extensions = ['*.sav', '*.rpgsave', '*.save', '*.dat']
+            for ext in save_extensions:
+                found = glob.glob(os.path.join(game_dir, ext))
+                if found:
+                    results.append({
+                        'path': game_dir,
+                        'type': 'Game Folder',
+                        'description': f'Found {len(found)} {ext} file(s) in game directory'
+                    })
+                    break  # Don't duplicate the game_dir
+
+        # ── 2. Check Ren'Py native save path (~/.renpy/) ──
+        renpy_base = os.path.expanduser('~/.renpy')
+        if os.path.isdir(renpy_base):
+            # Try to match by game name or title
+            for entry in os.listdir(renpy_base):
+                entry_lower = entry.lower()
+                if (title_clean and title_clean.lower().replace(' ', '').replace("'", '') in entry_lower.replace('-', '').replace('_', '')) or \
+                   (game_name and game_name.lower() in entry_lower):
+                    candidate = os.path.join(renpy_base, entry)
+                    if os.path.isdir(candidate):
+                        results.append({
+                            'path': candidate,
+                            'type': "Ren'Py",
+                            'description': f'Ren\'Py native save folder: ~/.renpy/{entry}'
+                        })
+
+        # ── 3. Check Wine prefix AppData folders ──
+        wine_prefix = get_setting('wine_prefix_path')
+        if not wine_prefix:
+            wine_prefix = os.path.expanduser('~/.local/share/wLib/prefix')
+
+        proton_path = get_setting('proton_path')
+        is_proton = proton_path and 'proton' in os.path.basename(proton_path).lower()
+
+        if is_proton:
+            pfx_path = os.path.join(wine_prefix, 'pfx')
+            actual_prefix = pfx_path if os.path.exists(pfx_path) else wine_prefix
+        else:
+            actual_prefix = wine_prefix
+
+        # Search through all user folders in the prefix
+        users_dir = os.path.join(actual_prefix, 'drive_c', 'users')
+        if os.path.isdir(users_dir):
+            appdata_variants = [
+                ('AppData/Roaming', 'AppData Roaming'),
+                ('AppData/Local', 'AppData Local'),
+                ('AppData/LocalLow', 'AppData LocalLow'),
+                ('My Documents', 'My Documents'),
+                ('Documents', 'Documents'),
+                ('Saved Games', 'Saved Games'),
+            ]
+            for user_folder in os.listdir(users_dir):
+                user_path = os.path.join(users_dir, user_folder)
+                if not os.path.isdir(user_path) or user_folder in ('Public',):
+                    continue
+
+                for sub_path, label in appdata_variants:
+                    appdata_dir = os.path.join(user_path, sub_path)
+                    if not os.path.isdir(appdata_dir):
+                        continue
+
+                    # Search for folders that fuzzy-match the game title or exe name
+                    try:
+                        for entry in os.listdir(appdata_dir):
+                            entry_lower = entry.lower()
+                            title_words = title_clean.lower().split() if title_clean else []
+                            game_name_lower = game_name.lower() if game_name else ''
+
+                            # Match if any significant title word (3+ chars) appears in folder name
+                            matched = False
+                            if game_name_lower and game_name_lower in entry_lower:
+                                matched = True
+                            elif title_words:
+                                significant_words = [w for w in title_words if len(w) >= 3]
+                                if significant_words and any(w in entry_lower for w in significant_words):
+                                    matched = True
+
+                            if matched:
+                                candidate = os.path.join(appdata_dir, entry)
+                                if os.path.isdir(candidate):
+                                    results.append({
+                                        'path': candidate,
+                                        'type': f'Wine Prefix ({label})',
+                                        'description': f'{label}/{entry}'
+                                    })
+                    except PermissionError:
+                        continue
+
+        # Deduplicate by path
+        seen = set()
+        unique_results = []
+        for r in results:
+            if r['path'] not in seen:
+                seen.add(r['path'])
+                unique_results.append(r)
+
+        return unique_results
+
+    def open_folder(self, path):
+        """Opens a folder in the system file manager."""
+        import subprocess, shutil, os
+        if not os.path.exists(path):
+            return {"success": False, "error": f"Path does not exist: {path}"}
+        for cmd in ['xdg-open', 'gio', 'kde-open5', 'gnome-open']:
+            binary = shutil.which(cmd)
+            if binary:
+                if cmd == 'gio':
+                    subprocess.Popen([binary, 'open', path])
+                else:
+                    subprocess.Popen([binary, path])
+                return {"success": True}
+        return {"success": False, "error": "No file manager opener found"}
 
     def open_dev_tools(self):
         if self.window:

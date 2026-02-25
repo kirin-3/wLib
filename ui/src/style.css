@@ -1,20 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #3b82f6; /* Example primary color, adjust later */
-  --color-surface-base: #101014;
-  --color-surface-raised: #18181c;
+  --color-brand: #d152d1;
+  --color-brand-deep: #5a3968;
 }
 
+/* ========== DARK THEME (Default) ========== */
 :root {
   color-scheme: dark;
-  background-color: var(--color-surface-base);
-  color: #e2e8f0;
+
+  --brand: #d152d1;
+  --brand-deep: #5a3968;
+  --brand-glow: rgba(209, 82, 209, 0.15);
+  --brand-glow-strong: rgba(209, 82, 209, 0.3);
+
+  --bg-base: #0f0f14;
+  --bg-surface: #1a1a22;
+  --bg-raised: #24242e;
+  --bg-overlay: #2d2d38;
+  --bg-inset: #121218;
+
+  --border: #2a2a34;
+  --border-hover: #3a3a48;
+  --border-active: #d152d1;
+
+  --text-primary: #e8ecf0;
+  --text-secondary: #9ca3af;
+  --text-muted: #555566;
+  --text-inverse: #0f0f14;
+
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-brand: 0 4px 16px rgba(209, 82, 209, 0.2);
+
+  --scrollbar-track: #15151c;
+  --scrollbar-thumb: #2d2d38;
+}
+
+/* ========== LIGHT THEME ========== */
+.light {
+  color-scheme: light;
+
+  --brand: #c040c0;
+  --brand-deep: #7a4f8a;
+  --brand-glow: rgba(192, 64, 192, 0.1);
+  --brand-glow-strong: rgba(192, 64, 192, 0.2);
+
+  --bg-base: #f3f4f6;
+  --bg-surface: #ffffff;
+  --bg-raised: #f0f0f5;
+  --bg-overlay: #e4e4ec;
+  --bg-inset: #e8e8f0;
+
+  --border: #dcdce4;
+  --border-hover: #c4c4d0;
+  --border-active: #c040c0;
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-inverse: #ffffff;
+
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-brand: 0 4px 16px rgba(192, 64, 192, 0.12);
+
+  --scrollbar-track: #f0f0f4;
+  --scrollbar-thumb: #c8c8d4;
+}
+
+/* ========== GLOBAL STYLES ========== */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease, box-shadow 0.2s ease;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: system-ui, -apple-system, sans-serif;
-  background-color: var(--color-surface-base);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* Selection */
+::selection {
+  background: var(--brand-glow-strong);
+  color: var(--text-primary);
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }

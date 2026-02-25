@@ -118,6 +118,22 @@ class ApiService {
         return this.invoke('download_cheat_engine');
     }
 
+    async getInstallStatus() {
+        return this.invoke('get_install_status');
+    }
+
+    async findSaveFiles(exe_path, title = '', engine = '') {
+        return this.invoke('find_save_files', exe_path, title, engine);
+    }
+
+    async openFolder(path) {
+        return this.invoke('open_folder', path);
+    }
+
+    async getSystemDepsCommand() {
+        return this.invoke('get_system_deps_command');
+    }
+
     // Fallback mocks
     _mockResponse(method, args) {
         switch (method) {
