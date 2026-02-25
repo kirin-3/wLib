@@ -61,6 +61,7 @@ def init_db():
         ("latest_version", "TEXT DEFAULT ''"),
         ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
         ("run_wayland", "BOOLEAN DEFAULT 0"),
+        ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
     ]
     for col_name, col_type in new_columns:
         try:
@@ -72,7 +73,7 @@ def init_db():
     conn.close()
 
 # CRUD Operations for Games
-def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False, run_wayland=False):
+def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False, run_wayland=False, auto_inject_ce=False):
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -81,8 +82,8 @@ def add_game(title, exe_path, f95_url='', cover_image='', tags='', rating='', de
         tags = ", ".join(tags)
 
     cursor.execute(
-        "INSERT INTO games (title, exe_path, f95_url, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (title, exe_path, f95_url, cover_image, tags, rating, developer, engine, run_japanese_locale, run_wayland)
+        "INSERT INTO games (title, exe_path, f95_url, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (title, exe_path, f95_url, cover_image, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce)
     )
     game_id = cursor.lastrowid
     conn.commit()
@@ -120,7 +121,7 @@ def update_game(game_id, fields):
         'title', 'exe_path', 'f95_url', 'version', 'progress', 'developer',
         'cover_image_path', 'tags', 'rating', 'command_line_args', 'status',
         'rating_graphics', 'rating_story', 'rating_fappability', 'rating_gameplay',
-        'engine', 'latest_version', 'run_japanese_locale', 'run_wayland'
+        'engine', 'latest_version', 'run_japanese_locale', 'run_wayland', 'auto_inject_ce'
     }
     # Only allow known columns
     safe_fields = {k: v for k, v in fields.items() if k in allowed}

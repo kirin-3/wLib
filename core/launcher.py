@@ -37,15 +37,51 @@ class Launcher:
         game_dir = os.path.dirname(exe_path)
 
         # Helper for common subprocess execution
-        def execute_process(cmd, env_vars):
+        def execute_process(cmd, env_vars, is_wine_executable=False, run_ce=False, game_exe=""):
             try:
                 if enable_logging:
                     log_path = os.path.splitext(exe_path)[0] + "_wlib.log"
                     print(f"Debug logging enabled. Outputting to {log_path}")
                     log_file = open(log_path, "w")
-                    subprocess.Popen(cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT)
+                    game_proc = subprocess.Popen(cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT)
                 else:
-                    subprocess.Popen(cmd, env=env_vars, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    game_proc = subprocess.Popen(cmd, env=env_vars, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                if is_wine_executable and run_ce:
+                    # Spawn CE in a background thread after a delay
+                    def inject_ce():
+                        import time
+                        print("Waiting 5 seconds for game to initialize before attaching Cheat Engine...")
+                        time.sleep(5)
+                        
+                        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
+                        ce_exe = os.path.join(ce_dir, "Lunar Engine", "lunarengine-x86_64.exe")
+                        if not os.path.exists(ce_exe):
+                            ce_exe = os.path.join(ce_dir, "lunarengine-x86_64.exe")
+                            
+                        if os.path.exists(ce_exe):
+                            # Write autorun lua script to auto-attach
+                            autorun_dir = os.path.join(os.path.dirname(ce_exe), "autorun")
+                            os.makedirs(autorun_dir, exist_ok=True)
+                            lua_script = os.path.join(autorun_dir, "wlib_autoattach.lua")
+                            with open(lua_script, "w") as f:
+                                # OpenProcess automatically attaches CE to the process name
+                                f.write(f'OpenProcess("{game_exe}")\n')
+                                
+                            print(f"Launching Cheat Engine: {ce_exe} in WINEPREFIX {env_vars.get('WINEPREFIX', 'default')}")
+                            # Launch CE using the SAME wine/proton command prefix
+                            ce_cmd = [proton_path] if proton_path else ["wine"]
+                            if is_proton:
+                                ce_cmd.append("run")
+                            ce_cmd.append(ce_exe)
+                            
+                            subprocess.Popen(ce_cmd, env=env_vars, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        else:
+                            print(f"Cheat Engine executable not found for auto-injection at {ce_exe}")
+
+                    import threading
+                    threading.Thread(target=inject_ce, daemon=True).start()
+                    
                 return {"success": True}
             except Exception as e:
                 print(f"Error launching game: {e}")
@@ -121,4 +157,5 @@ class Launcher:
             env["WINEDEBUG"] = "+all"
 
         print(f"Executing via Wine/Proton: {' '.join(command)} with prefix {wine_prefix}")
-        return execute_process(command, env)
+        game_exe_name = os.path.basename(exe_path)
+        return execute_process(command, env, is_wine_executable=True, run_ce=auto_inject_ce, game_exe=game_exe_name)

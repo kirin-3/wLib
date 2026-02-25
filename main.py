@@ -6,7 +6,7 @@ import subprocess
 import time
 
 # To allow dev server testing, we can point URL to Vite dev server, or local built assets.
-DEV_MODE = os.environ.get("DEV_MODE", "1") == "1"
+DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
 
 from core.api import Api
@@ -128,12 +128,13 @@ def main():
     global window_ref, DEV_MODE
     api = Api()
     
-    url = "ui/dist/index.html"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    url = os.path.join(script_dir, "ui", "dist", "index.html")
     vite_process = None
     
     import shutil
     missing_deps = []
-    for dep in ['wine', 'winetricks', 'npm']:
+    for dep in ['wine', 'winetricks']:
         if shutil.which(dep) is None:
             missing_deps.append(dep)
             
@@ -153,8 +154,13 @@ def main():
         </body>
         </html>
         """
-        import urllib.parse
-        url = "data:text/html," + urllib.parse.quote(html_content)
+        # Write to a temp file since http_server=True can't handle data: URIs
+        import tempfile
+        tmp_dir = tempfile.mkdtemp(prefix="wlib_")
+        tmp_html = os.path.join(tmp_dir, "error.html")
+        with open(tmp_html, "w") as f:
+            f.write(html_content)
+        url = tmp_html
         DEV_MODE = False # Disable dev mode if we're just showing an error
     
     if DEV_MODE:

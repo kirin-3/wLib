@@ -36,9 +36,9 @@ class Api:
         from core.database import get_all_games
         return get_all_games()
 
-    def add_game(self, title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False):
+    def add_game(self, title, exe_path, f95_url='', cover_image='', tags='', rating='', developer='', engine='', run_japanese_locale=False, auto_inject_ce=False):
         from core.database import add_game
-        game_id = add_game(title, exe_path, f95_url, cover_image=cover_image, tags=tags, rating=rating, developer=developer, engine=engine, run_japanese_locale=run_japanese_locale)
+        game_id = add_game(title, exe_path, f95_url, cover_image=cover_image, tags=tags, rating=rating, developer=developer, engine=engine, run_japanese_locale=run_japanese_locale, auto_inject_ce=auto_inject_ce)
         return {"id": game_id, "title": title}
 
     def delete_game(self, game_id):
@@ -228,14 +228,15 @@ class Api:
             return {"triggered": True, "result": result}
         
         return {"triggered": False, "reason": f"Last checked: {last_check_str}"}
+    # ==========================
     # Launcher API
     # ==========================
-    def launch_game(self, exe_path, command_line_args="", run_japanese_locale=False, run_wayland=False):
+    def launch_game(self, exe_path, command_line_args="", run_japanese_locale=False, run_wayland=False, auto_inject_ce=False):
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
-        print(f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland})")
-        result = self.launcher.launch(exe_path, command_line_args, run_japanese_locale, run_wayland)
+        print(f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce})")
+        result = self.launcher.launch(exe_path, command_line_args, run_japanese_locale, run_wayland, auto_inject_ce)
         return result
 
     def install_rpgmaker_dependencies(self):
@@ -528,3 +529,65 @@ class Api:
         except Exception as e:
             logging.error(f"Failed to check app updates: {e}")
             return {'success': False, 'error': str(e)}
+
+    # ==========================
+    # Cheat Engine API
+    # ==========================
+    def is_cheat_engine_installed(self):
+        """Checks if Cheat Engine (Lunar Engine) is installed in the wLib data directory."""
+        import os
+        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
+        # We look for the 64-bit Lunar Engine executable inside the extracted folder
+        # The zip extracts into a "Lunar Engine" subfolder usually, or directly containing it.
+        # Let's search for "lunarengine-x86_64.exe" or "cheatengine-x86_64.exe"
+        extracted_folder = os.path.join(ce_dir, "Lunar Engine")
+        if os.path.exists(os.path.join(extracted_folder, "lunarengine-x86_64.exe")):
+            return {"installed": True, "path": os.path.join(extracted_folder, "lunarengine-x86_64.exe")}
+        if os.path.exists(os.path.join(ce_dir, "lunarengine-x86_64.exe")):
+            return {"installed": True, "path": os.path.join(ce_dir, "lunarengine-x86_64.exe")}
+        return {"installed": False, "path": ""}
+
+    def download_cheat_engine(self):
+        """
+        Downloads a safe, portable build of Cheat Engine (Lunar Engine v7.2).
+        Lunar Engine is an undetected CE fork that works perfectly in Wine.
+        """
+        import os
+        import subprocess
+        import urllib.request
+        import zipfile
+        import shutil
+
+        url = "https://github.com/visibou/lunarengine/releases/download/v.7.2/Lunar.Engine.zip"
+        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
+        zip_path = os.path.join(ce_dir, "ce.zip")
+
+        try:
+            # Clean up old directory if exists
+            if os.path.exists(ce_dir):
+                shutil.rmtree(ce_dir)
+            
+            os.makedirs(ce_dir, exist_ok=True)
+            
+            print(f"Downloading Cheat Engine from {url}...")
+            
+            req = urllib.request.Request(url, headers={'User-Agent': 'wLib'})
+            with urllib.request.urlopen(req, timeout=30) as response, open(zip_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+            
+            print(f"Extracting Cheat Engine to {ce_dir}...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(ce_dir)
+                
+            os.remove(zip_path) # cleanup
+            
+            # Verify install
+            check = self.is_cheat_engine_installed()
+            if check["installed"]:
+                print("Cheat Engine successfully installed!")
+                return {"success": True, "path": check["path"]}
+            else:
+                return {"success": False, "error": "Extracted successfully but could not find lunarengine-x86_64.exe"}
+                
+        except Exception as e:
+            return {"success": False, "error": str(e)}

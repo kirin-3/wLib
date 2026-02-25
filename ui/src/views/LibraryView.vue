@@ -157,10 +157,10 @@ const handleGameDeleted = async () => {
     await loadGames()
 }
 
-const launchFromModal = async (exePath, args, runJapaneseLocale, runWayland) => {
+const launchFromModal = async (exePath, args, runJapaneseLocale, runWayland, autoInjectCe) => {
     if (!exePath) return;
     try {
-        const result = await api.launchGame(exePath, args, runJapaneseLocale, runWayland)
+        const result = await api.launchGame(exePath, args, runJapaneseLocale, runWayland, autoInjectCe)
         if (result && !result.success) {
             alert("Failed to launch game:\n\n" + (result.error || "Unknown error"))
         }
@@ -172,7 +172,7 @@ const launchFromModal = async (exePath, args, runJapaneseLocale, runWayland) => 
 const launchGameFast = async (game) => {
     if (!game.exe_path) return;
     try {
-        const result = await api.launchGame(game.exe_path, game.command_line_args, game.run_japanese_locale, game.run_wayland)
+        const result = await api.launchGame(game.exe_path, game.command_line_args, game.run_japanese_locale, game.run_wayland, game.auto_inject_ce)
         if (result && !result.success) {
             alert("Failed to launch game:\n\n" + (result.error || "Unknown error"))
         }

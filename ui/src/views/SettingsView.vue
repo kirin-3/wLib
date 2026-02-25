@@ -14,6 +14,10 @@ const protonError = ref('')
 const installingRtps = ref(false)
 const rtpSuccess = ref(false)
 const rtpError = ref('')
+const ceInstalled = ref(false)
+const cePath = ref('')
+const installingCe = ref(false)
+const ceError = ref('')
 
 const loadSettings = async () => {
     try {
@@ -23,6 +27,10 @@ const loadSettings = async () => {
            prefixPath.value = data.wine_prefix_path || ''
            enableLogging.value = !!data.enable_logging
         }
+        
+        const ceCheck = await api.isCheatEngineInstalled()
+        ceInstalled.value = !!ceCheck?.installed
+        cePath.value = ceCheck?.path || ''
     } catch (e) {
         console.error("Failed to load settings", e)
     }
@@ -91,6 +99,24 @@ const installDeps = async () => {
         installError.value = e.toString()
     } finally {
         installingDeps.value = false
+    }
+}
+
+const downloadCe = async () => {
+    installingCe.value = true
+    ceError.value = ''
+    try {
+        const result = await api.downloadCheatEngine()
+        if (result && result.success) {
+            ceInstalled.value = true
+            cePath.value = result.path
+        } else {
+            ceError.value = result?.error || "Unknown error occurred"
+        }
+    } catch (e) {
+        ceError.value = e.toString()
+    } finally {
+        installingCe.value = false
     }
 }
 
@@ -204,6 +230,20 @@ const saveSettings = async () => {
                     {{ installingRtps ? 'Processing...' : 'Install RTPs' }}
                   </button>
                 </div>
+
+                <div class="flex items-center justify-between bg-[#1a1a20] p-4 rounded-lg border border-[#2d2d34] relative overflow-hidden">
+                  <div class="absolute inset-y-0 left-0 w-1" :class="ceInstalled ? 'bg-green-500' : 'bg-gray-600'"></div>
+                  <div class="pl-3">
+                    <h5 class="text-sm font-medium text-gray-200">Cheat Engine (Lunar Engine)</h5>
+                    <p class="text-xs text-gray-500 mt-1" v-if="!ceInstalled">Provides the ability to auto-inject CE when launching games to modify values.</p>
+                    <p class="text-xs text-green-400 mt-1 font-mono" v-else>Installed</p>
+                  </div>
+                  <button @click="downloadCe" :disabled="installingCe || ceInstalled"
+                    class="bg-[#25252e] hover:bg-[#2d2d34] text-white px-4 py-2 rounded border border-[#33333d] transition-colors text-xs font-semibold disabled:opacity-50 flex items-center gap-2">
+                    <svg v-if="installingCe" class="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+                    {{ ceInstalled ? 'Installed' : (installingCe ? 'Downloading...' : 'Install CE') }}
+                  </button>
+                </div>
               </div>
 
               <div class="mt-2 space-y-1">
@@ -211,6 +251,7 @@ const saveSettings = async () => {
                 <p v-if="installSuccess" class="text-xs text-green-400">DLL Installation started in the terminal!</p>
                 <p v-if="rtpError" class="text-xs text-red-400">{{ rtpError }}</p>
                 <p v-if="rtpSuccess" class="text-xs text-green-400">RTP Installation started in the background! (This may take a minute)</p>
+                <p v-if="ceError" class="text-xs text-red-400">{{ ceError }}</p>
               </div>
             </div>
           </div>

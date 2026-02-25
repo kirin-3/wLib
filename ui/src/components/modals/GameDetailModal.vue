@@ -23,6 +23,8 @@ const newTag = ref('')
 const latestVersion = ref('')
 const runJapaneseLocale = ref(false)
 const runWayland = ref(false)
+const autoInjectCe = ref(false)
+const ceInstalled = ref(false)
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref('')
@@ -69,6 +71,7 @@ watch(() => props.game, (g) => {
         engine.value = g.engine || ''
         runJapaneseLocale.value = g.run_japanese_locale ? true : false
         runWayland.value = g.run_wayland ? true : false
+        autoInjectCe.value = g.auto_inject_ce ? true : false
         // Parse tags: could be comma-separated string or already an array
         if (typeof g.tags === 'string' && g.tags) {
             tags.value = g.tags.split(',').map(t => t.trim()).filter(Boolean)
@@ -85,6 +88,19 @@ watch(() => props.game, (g) => {
         ratingGameplay.value = g.rating_gameplay || 0
     }
 }, { immediate: true })
+
+import { onMounted } from 'vue'
+import { onWebviewReady } from '../../services/api'
+onMounted(() => {
+    onWebviewReady(async () => {
+        try {
+            const ceCheck = await api.isCheatEngineInstalled()
+            ceInstalled.value = !!ceCheck?.installed
+        } catch (e) {
+            console.error("Failed to check cheat engine status", e)
+        }
+    })
+})
 
 const close = () => {
     emit('update:modelValue', false)
@@ -112,6 +128,7 @@ const save = async () => {
             engine: engine.value,
             run_japanese_locale: runJapaneseLocale.value,
             run_wayland: runWayland.value,
+            auto_inject_ce: autoInjectCe.value,
             latest_version: latestVersion.value,
             rating_graphics: ratingGraphics.value,
             rating_story: ratingStory.value,
@@ -143,7 +160,7 @@ const deleteGame = async () => {
 
 const launchGame = () => {
     if (props.game) {
-        emit('launch', props.game.exe_path, commandLineArgs.value, runJapaneseLocale.value, runWayland.value)
+        emit('launch', props.game.exe_path, commandLineArgs.value, runJapaneseLocale.value, runWayland.value, autoInjectCe.value)
     }
 }
 
@@ -275,6 +292,21 @@ const openInBrowser = async () => {
             <label class="relative inline-flex items-center cursor-pointer">
               <input type="checkbox" v-model="runWayland" class="sr-only peer">
               <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
+          <div class="col-span-2 flex items-center justify-between p-3 rounded-lg border border-[#33333d] transition-colors"
+               :class="ceInstalled ? 'bg-[#202028]' : 'bg-[#15151a] opacity-60'">
+            <div>
+              <p class="text-sm font-medium text-white flex items-center gap-2">
+                Auto-Launch & Inject Cheat Engine
+                <span v-if="!ceInstalled" class="bg-gray-800 text-gray-400 text-[10px] uppercase px-2 py-0.5 rounded font-bold border border-gray-700">Not Installed</span>
+              </p>
+              <p class="text-xs text-gray-500 mt-1">Spawns Cheat Engine inside the same virtual Wine sandbox immediately after the game starts.</p>
+            </div>
+            <label class="relative inline-flex items-center" :class="ceInstalled ? 'cursor-pointer' : 'cursor-not-allowed'">
+              <input type="checkbox" v-model="autoInjectCe" :disabled="!ceInstalled" class="sr-only peer">
+              <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
             </label>
           </div>
           
