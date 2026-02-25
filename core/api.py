@@ -115,6 +115,7 @@ class Api:
         developer="",
         engine="",
         run_japanese_locale=False,
+        run_wayland=False,
         auto_inject_ce=False,
     ):
         from core.database import add_game
@@ -129,6 +130,7 @@ class Api:
             developer=developer,
             engine=engine,
             run_japanese_locale=run_japanese_locale,
+            run_wayland=run_wayland,
             auto_inject_ce=auto_inject_ce,
         )
         return {"id": game_id, "title": title}
