@@ -70,8 +70,8 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/i
 cp -r "$BUILD_DIR/$PACKAGE_NAME"/* "$APPDIR/usr/bin/"
 
 # Desktop file + icon
-cp wlib.desktop "$APPDIR/usr/share/applications/"
-cp wlib.desktop "$APPDIR/"
+cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
+cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/"
 
 # Create a simple icon if none exists
 if [ ! -f "$PROJECT_DIR/wlib.png" ]; then
