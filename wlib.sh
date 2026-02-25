@@ -5,7 +5,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VENV_DIR="$SCRIPT_DIR/venv"
+if [ -w "$SCRIPT_DIR" ]; then
+    VENV_DIR="$SCRIPT_DIR/venv"
+else
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+    mkdir -p "$DATA_DIR"
+    VENV_DIR="$DATA_DIR/venv"
+fi
 PYTHON=""
 
 # Find a suitable Python 3.x
