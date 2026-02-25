@@ -593,7 +593,12 @@ class Api:
         """Opens a native file dialog to select an executable."""
         if self.window:
             import webview
-            result = self.window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False)
+            try:
+                dt = webview.FileDialog.OPEN
+            except AttributeError:
+                dt = webview.OPEN_DIALOG
+            file_types = ('Executables (*.exe;*.sh;*.AppImage)', 'All files (*.*)')
+            result = self.window.create_file_dialog(dt, allow_multiple=False, file_types=file_types)
             if result and len(result) > 0:
                 return result[0]
         return ""
@@ -602,7 +607,11 @@ class Api:
         """Opens a native directory dialog, e.g. for choosing a wine prefix."""
         if self.window:
             import webview
-            result = self.window.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
+            try:
+                dt = webview.FileDialog.FOLDER
+            except AttributeError:
+                dt = webview.FOLDER_DIALOG
+            result = self.window.create_file_dialog(dt, allow_multiple=False)
             if result and len(result) > 0:
                 return result[0]
         return ""

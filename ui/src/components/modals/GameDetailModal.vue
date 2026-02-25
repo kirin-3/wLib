@@ -92,7 +92,7 @@ watch(() => props.game, (g) => {
 watch(() => props.modelValue, async (open) => {
     if (open) {
         try {
-            const ceCheck = await api.getCeStatus()
+            const ceCheck = await api.isCheatEngineInstalled()
             ceInstalled.value = ceCheck?.installed || false
         } catch (e) {
             console.error("Failed to check cheat engine status", e)
@@ -158,7 +158,7 @@ const deleteGame = async () => {
 
 const launchGame = () => {
     if (props.game) {
-        emit('launch', props.game.exe_path, commandLineArgs.value, runJapaneseLocale.value, runWayland.value, autoInjectCe.value)
+        emit('launch', props.game)
     }
 }
 

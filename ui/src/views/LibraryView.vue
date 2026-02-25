@@ -201,7 +201,10 @@ const handleAddGame = async (gameData) => {
             gameData.tags || '',
             gameData.rating || '',
             gameData.developer || '',
-            gameData.engine || ''
+            gameData.engine || '',
+            false, // run_japanese_locale
+            false, // run_wayland
+            false  // auto_inject_ce
         )
         if (result && result.id) {
             showAddModal.value = false

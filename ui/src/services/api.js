@@ -22,8 +22,8 @@ class ApiService {
         return this.invoke('get_games');
     }
 
-    async addGame(title, exe_path, f95_url = '', cover_image = '', tags = '', rating = '', developer = '', engine = '') {
-        return this.invoke('add_game', title, exe_path, f95_url, cover_image, tags, rating, developer, engine);
+    async addGame(title, exe_path, f95_url = '', cover_image = '', tags = '', rating = '', developer = '', engine = '', run_japanese_locale = false, run_wayland = false, auto_inject_ce = false) {
+        return this.invoke('add_game', title, exe_path, f95_url, cover_image, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce);
     }
 
     async deleteGame(id) {
