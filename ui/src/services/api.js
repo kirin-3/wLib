@@ -70,8 +70,8 @@ class ApiService {
         return this.invoke('maybe_auto_check');
     }
 
-    async launchGame(exe_path) {
-        return this.invoke('launch_game', exe_path);
+    async launchGame(exe_path, command_line_args = '', run_japanese_locale = false, run_wayland = false, auto_inject_ce = false) {
+        return this.invoke('launch_game', exe_path, command_line_args, run_japanese_locale, run_wayland, auto_inject_ce);
     }
 
     async getSettings() {
@@ -108,6 +108,14 @@ class ApiService {
 
     async check_app_updates() {
         return this.invoke('check_app_updates');
+    }
+
+    async isCheatEngineInstalled() {
+        return this.invoke('is_cheat_engine_installed');
+    }
+
+    async downloadCheatEngine() {
+        return this.invoke('download_cheat_engine');
     }
 
     // Fallback mocks

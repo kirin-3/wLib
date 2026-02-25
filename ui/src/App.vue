@@ -118,7 +118,7 @@ onUnmounted(() => {
       
       <!-- Footer: Version & Repo -->
       <div class="p-6 border-t border-[#2d2d34] flex items-center justify-between opacity-60 hover:opacity-100 transition-opacity">
-        <router-link to="/updates" v-if="hasAppUpdate" class="text-xs font-mono font-semibold bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/30 animate-pulse transition-all hover:bg-indigo-500/30 w-fit" title="wLib Update Available!">v0.1 ✨</router-link>
+        <router-link to="/updates" v-if="hasAppUpdate" class="text-xs font-mono font-semibold bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded border border-indigo-500/30 animate-pulse transition-all hover:bg-indigo-500/30 w-fit" title="wLib Update Available!">v0.1.8 ✨</router-link>
         <span v-else class="text-xs font-mono font-semibold text-gray-400">v0.1</span>
         <a href="https://github.com/kirin-3/wLib" target="_blank" rel="noopener noreferrer" 
            class="text-gray-400 hover:text-white transition-colors" title="View Source on GitHub">
