@@ -73,29 +73,12 @@ cp -r "$BUILD_DIR/$PACKAGE_NAME"/* "$APPDIR/usr/bin/"
 cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
 cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/"
 
-# Create a simple icon if none exists
-if [ ! -f "$PROJECT_DIR/wlib.png" ]; then
-    # Generate a simple 256x256 icon using Python
-    python3 -c "
-import struct, zlib
-def create_png(width, height, color):
-    def chunk(ctype, data):
-        return struct.pack('>I', len(data)) + ctype + data + struct.pack('>I', zlib.crc32(ctype + data) & 0xffffffff)
-    raw = b''
-    for y in range(height):
-        raw += b'\x00'
-        for x in range(width):
-            raw += bytes(color) + b'\xff'
-    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
-with open('wlib.png', 'wb') as f:
-    f.write(create_png(256, 256, (70, 100, 220)))
-" 2>/dev/null || echo "⚠️  Couldn't generate icon, AppImage will have no icon"
-fi
-
-if [ -f "$PROJECT_DIR/wlib.png" ]; then
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/"
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/"
-    cp "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"
+# Use the official SVG icon
+if [ -f "$PROJECT_DIR/icon.svg" ]; then
+    mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
+    cp "$PROJECT_DIR/icon.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/wlib.svg"
+    cp "$PROJECT_DIR/icon.svg" "$APPDIR/wlib.svg"
+    cp "$PROJECT_DIR/icon.svg" "$APPDIR/.DirIcon"
 fi
 
 # AppRun — the entry point for the AppImage
