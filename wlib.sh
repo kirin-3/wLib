@@ -81,7 +81,6 @@ fi
 
 CRASH_GUARD_FILE="$DATA_DIR/.gpu_crash_guard"
 GPU_SOFTWARE_FROM_CRASH_GUARD=0
-GPU_SELECTION_SOURCE=""
 
 detect_gpu() {
     local glxinfo_output=""
@@ -92,14 +91,12 @@ detect_gpu() {
 
     if [ "${LIBGL_ALWAYS_SOFTWARE:-}" = "1" ]; then
         export QT_QUICK_BACKEND="software"
-        GPU_SELECTION_SOURCE="libgl_software"
         return
     fi
 
     case "${GALLIUM_DRIVER:-}" in
         llvmpipe|softpipe)
             export QT_QUICK_BACKEND="software"
-            GPU_SELECTION_SOURCE="gallium_software"
             return
             ;;
     esac
@@ -107,7 +104,6 @@ detect_gpu() {
     if [ -f "$CRASH_GUARD_FILE" ]; then
         GPU_SOFTWARE_FROM_CRASH_GUARD=1
         export QT_QUICK_BACKEND="software"
-        GPU_SELECTION_SOURCE="crash_guard"
         return
     fi
 
@@ -118,20 +114,17 @@ detect_gpu() {
 
         if printf '%s\n' "$renderer_line" | grep -qiE 'llvmpipe|softpipe|swrast|d3d12|svga3d'; then
             export QT_QUICK_BACKEND="software"
-            GPU_SELECTION_SOURCE="glxinfo_software"
             return
         fi
 
         if [ -n "$renderer_line" ] && printf '%s\n' "$direct_line" | grep -qi 'yes'; then
             export QT_QUICK_BACKEND="opengl"
-            GPU_SELECTION_SOURCE="glxinfo_direct"
             return
         fi
     fi
 
     if ls /dev/dri/renderD* >/dev/null 2>&1; then
         export QT_QUICK_BACKEND="opengl"
-        GPU_SELECTION_SOURCE="render_node"
         return
     fi
 
@@ -141,21 +134,19 @@ detect_gpu() {
         case "$vendor_id" in
             0x10de|0x1002|0x8086)
                 export QT_QUICK_BACKEND="opengl"
-                GPU_SELECTION_SOURCE="sysfs_vendor"
                 return
                 ;;
         esac
     done
 
     export QT_QUICK_BACKEND="software"
-    GPU_SELECTION_SOURCE="fallback_software"
 }
 
 # Run wLib
 echo "🚀 Starting wLib..."
-export DEV_MODE=0
 detect_gpu
-echo "   QT_QUICK_BACKEND=$QT_QUICK_BACKEND (source: $GPU_SELECTION_SOURCE)"
+export DEV_MODE=0
+echo "   QT_QUICK_BACKEND=$QT_QUICK_BACKEND"
 
 if [ "$QT_QUICK_BACKEND" = "opengl" ]; then
     touch "$CRASH_GUARD_FILE"
