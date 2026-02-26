@@ -24,9 +24,13 @@ const checkConnection = async () => {
 
 const openExtensionFolder = async () => {
   try {
-    await api.openExtensionFolder();
-  } catch {
-    console.log("Could not open extension folder via API");
+    const res = await api.openExtensionFolder();
+    if (res && res.success === false) {
+      alert("Failed to open extension folder: " + (res.error || "Unknown error"));
+    }
+  } catch (e) {
+    console.error("Could not open extension folder via API", e);
+    alert("Error opening extension folder: " + e.toString());
   }
 };
 

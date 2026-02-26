@@ -69,48 +69,54 @@ const hasUpdate = computed(() => {
   );
 });
 
-// Sync props → local refs when game changes
-watch(
-  () => props.game,
-  (g) => {
-    if (g) {
-      title.value = g.title || "";
-      exePath.value = g.exe_path || "";
-      f95Url.value = g.f95_url || "";
-      version.value = g.version || "";
-      developer.value = g.developer || "";
-      commandLineArgs.value = g.command_line_args || "";
-      coverImage.value = g.cover_image_path || "";
-      status.value = g.status || "";
-      playStatus.value = g.play_status || "Plan to Play";
-      isFavorite.value = !!g.is_favorite;
-      engine.value = g.engine || "";
-      runJapaneseLocale.value = g.run_japanese_locale ? true : false;
-      runWayland.value = g.run_wayland ? true : false;
-      autoInjectCe.value = g.auto_inject_ce ? true : false;
-      customPrefix.value = g.custom_prefix || "";
-      protonVersion.value = g.proton_version || "";
-      useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
-      if (typeof g.tags === "string" && g.tags) {
-        tags.value = g.tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean);
-      } else if (Array.isArray(g.tags)) {
-        tags.value = [...g.tags];
-      } else {
-        tags.value = [];
-      }
-      latestVersion.value = g.latest_version || "";
-      f95Rating.value = g.rating || "";
+const lastSyncedId = ref(null);
 
-      ratingGraphics.value = g.rating_graphics || 0;
-      ratingStory.value = g.rating_story || 0;
-      ratingFappability.value = g.rating_fappability || 0;
-      ratingGameplay.value = g.rating_gameplay || 0;
+watch(
+  () => [props.modelValue, props.game],
+  ([isOpen, g]) => {
+    if (isOpen && g) {
+      if (g.id !== lastSyncedId.value) {
+        lastSyncedId.value = g.id;
+        title.value = g.title || "";
+        exePath.value = g.exe_path || "";
+        f95Url.value = g.f95_url || "";
+        version.value = g.version || "";
+        developer.value = g.developer || "";
+        commandLineArgs.value = g.command_line_args || "";
+        coverImage.value = g.cover_image_path || "";
+        status.value = g.status || "";
+        playStatus.value = g.play_status || "Plan to Play";
+        isFavorite.value = !!g.is_favorite;
+        engine.value = g.engine || "";
+        runJapaneseLocale.value = g.run_japanese_locale ? true : false;
+        runWayland.value = g.run_wayland ? true : false;
+        autoInjectCe.value = g.auto_inject_ce ? true : false;
+        customPrefix.value = g.custom_prefix || "";
+        protonVersion.value = g.proton_version || "";
+        useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
+        if (typeof g.tags === "string" && g.tags) {
+          tags.value = g.tags
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean);
+        } else if (Array.isArray(g.tags)) {
+          tags.value = [...g.tags];
+        } else {
+          tags.value = [];
+        }
+        latestVersion.value = g.latest_version || "";
+        f95Rating.value = g.rating || "";
+
+        ratingGraphics.value = g.rating_graphics || 0;
+        ratingStory.value = g.rating_story || 0;
+        ratingFappability.value = g.rating_fappability || 0;
+        ratingGameplay.value = g.rating_gameplay || 0;
+      }
+    } else if (!isOpen) {
+      lastSyncedId.value = null;
     }
   },
-  { immediate: true },
+  { immediate: true }
 );
 
 watch(
@@ -125,7 +131,9 @@ watch(
       }
       try {
         const res = await api.getAvailableRunners();
-        if (res?.success) {
+        if (res && res.success === false) {
+          console.error("Failed to get runners:", res.error);
+        } else if (res?.success) {
           availableRunners.value = res.runners;
         }
       } catch (e) {
@@ -140,26 +148,52 @@ const close = () => {
 };
 
 const browseExe = async () => {
-  const p = await api.browseFile();
-  if (p) exePath.value = p;
+  try {
+    const p = await api.browseFile();
+    if (p && p.success === false) {
+      alert("Failed to browse file: " + (p.error || "Unknown error"));
+    } else if (p) {
+      exePath.value = p;
+    }
+  } catch (e) {
+    console.error("Failed to browse file", e);
+    alert("Error browsing file: " + e.toString());
+  }
 };
 
 const browseCustomPrefix = async () => {
-  const p = await api.browseDirectory();
-  if (p) customPrefix.value = p;
+  try {
+    const p = await api.browseDirectory();
+    if (p && p.success === false) {
+      alert("Failed to browse directory: " + (p.error || "Unknown error"));
+    } else if (p) {
+      customPrefix.value = p;
+    }
+  } catch (e) {
+    console.error("Failed to browse directory", e);
+    alert("Error browsing directory: " + e.toString());
+  }
 };
 
 const installDepsToPrefix = async () => {
   if (!customPrefix.value && !protonVersion.value) return;
   alert("Dependencies installation has started in the background. It may take several minutes to complete.");
-  await api.installRpgmakerDependencies(customPrefix.value, protonVersion.value);
+  try {
+    const res = await api.installRpgmakerDependencies(customPrefix.value, protonVersion.value);
+    if (res && res.success === false) {
+      alert("Failed to install dependencies: " + (res.error || "Unknown error"));
+    }
+  } catch (e) {
+    console.error("Failed to install deps", e);
+    alert("Error installing dependencies: " + e.toString());
+  }
 };
 
 const save = async () => {
   if (!props.game) return;
   saving.value = true;
   try {
-    await api.updateGame(props.game.id, {
+    const res = await api.updateGame(props.game.id, {
       title: title.value,
       exe_path: exePath.value,
       f95_url: f95Url.value,
@@ -183,10 +217,15 @@ const save = async () => {
       rating_fappability: ratingFappability.value,
       rating_gameplay: ratingGameplay.value,
     });
-    emit("updated");
-    close();
+    if (res && res.success === false) {
+      alert("Failed to save game: " + (res.error || "Unknown error"));
+    } else {
+      emit("updated");
+      close();
+    }
   } catch (e) {
     console.error("Failed to save game", e);
+    alert("Error saving game: " + e.toString());
   } finally {
     saving.value = false;
   }
@@ -200,11 +239,16 @@ const deleteGame = async () => {
     return;
   deleting.value = true;
   try {
-    await api.deleteGame(props.game.id);
-    emit("deleted");
-    close();
+    const res = await api.deleteGame(props.game.id);
+    if (res && res.success === false) {
+      alert("Failed to delete game: " + (res.error || "Unknown error"));
+    } else {
+      emit("deleted");
+      close();
+    }
   } catch (e) {
     console.error("Failed to delete", e);
+    alert("Error deleting game: " + e.toString());
   } finally {
     deleting.value = false;
   }
@@ -232,7 +276,12 @@ const findSaves = async () => {
       useCustomPrefix.value ? customPrefix.value : "",
       useCustomPrefix.value ? protonVersion.value : ""
     );
-    saveResults.value = results || [];
+    if (results && results.success === false) {
+      alert("Failed to find saves: " + (results.error || "Unknown error"));
+      saveResults.value = [];
+    } else {
+      saveResults.value = results || [];
+    }
   } catch (e) {
     console.error("Failed to find saves", e);
     saveResults.value = [];
@@ -243,9 +292,13 @@ const findSaves = async () => {
 
 const openSaveFolder = async (path) => {
   try {
-    await api.openFolder(path);
+    const res = await api.openFolder(path);
+    if (res && res.success === false) {
+      alert("Failed to open folder: " + (res.error || "Unknown error"));
+    }
   } catch (e) {
     console.error("Failed to open folder", e);
+    alert("Error opening folder: " + e.toString());
   }
 };
 
@@ -275,7 +328,15 @@ const formatLastPlayed = (dateString) => {
 
 const openInBrowser = async () => {
   if (f95Url.value) {
-    await api.openInBrowser(f95Url.value);
+    try {
+      const res = await api.openInBrowser(f95Url.value);
+      if (res && res.success === false) {
+        alert("Failed to open browser: " + (res.error || "Unknown error"));
+      }
+    } catch (e) {
+      console.error("Failed to open browser", e);
+      alert("Error opening browser: " + e.toString());
+    }
   }
 };
 </script>

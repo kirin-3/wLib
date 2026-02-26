@@ -39,13 +39,17 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             exists = False
             if check_url:
-                from core.database import get_connection
+                try:
+                    from core.database import get_connection
 
-                conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM games WHERE f95_url = ?", (check_url,))
-                exists = cursor.fetchone() is not None
-                conn.close()
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM games WHERE f95_url = ?", (check_url,))
+                    exists = cursor.fetchone() is not None
+                    conn.close()
+                except Exception as e:
+                    print(f"[wLib] Database error during extension check: {e}")
+                    exists = False
 
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", "*")

@@ -31,7 +31,7 @@ const handleExtensionAdd = (event) => {
         developer: data.developer,
         engine: data.engine,
       },
-    });
+    }).catch((err) => console.error("Router error:", err));
   }
 };
 
@@ -44,7 +44,7 @@ const handleExtensionOpen = (event) => {
         action: "open",
         f95url: data.url,
       },
-    });
+    }).catch((err) => console.error("Router error:", err));
   }
 };
 

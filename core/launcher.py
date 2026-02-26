@@ -71,6 +71,14 @@ class Launcher:
                     game_proc = subprocess.Popen(
                         cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT
                     )
+                    
+                    # Ensure the file gets closed when process finishes in the background
+                    def track_log_file():
+                        game_proc.wait()
+                        log_file.close()
+                    
+                    import threading
+                    threading.Thread(target=track_log_file, daemon=True).start()
                 else:
                     game_proc = subprocess.Popen(
                         cmd,
@@ -139,10 +147,25 @@ class Launcher:
                 if on_exit_callback:
 
                     def track_playtime_thread():
-                        game_proc.wait()
-                        delta = int(time.time() - start_time)
-                        on_exit_callback(delta)
-
+                        last_saved_time = start_time
+                        while game_proc.poll() is None:
+                            try:
+                                game_proc.wait(timeout=60)
+                                # Process exited cleanly during wait
+                                break
+                            except subprocess.TimeoutExpired:
+                                pass
+                            now = time.time()
+                            delta = int(now - last_saved_time)
+                            last_saved_time = now
+                            on_exit_callback(delta, is_final=False)
+                            
+                        now = time.time()
+                        delta = int(now - last_saved_time)
+                        if delta > 0:
+                            on_exit_callback(delta, is_final=True)
+                        else:
+                            on_exit_callback(0, is_final=True)
                     threading.Thread(target=track_playtime_thread, daemon=True).start()
 
                 return {"success": True}

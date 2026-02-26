@@ -24,7 +24,13 @@ const currentVersion = ref("");
 
 const loadGames = async () => {
   try {
-    games.value = (await api.getGames()) || [];
+    const res = await api.getGames();
+    if (res && res.success === false) {
+      console.error("Failed to load games:", res.error);
+      games.value = [];
+    } else {
+      games.value = res || [];
+    }
   } catch (e) {
     console.error("Failed to load games", e);
   }
@@ -33,7 +39,9 @@ const loadGames = async () => {
 const loadAutoCheckSetting = async () => {
   try {
     const s = await api.getAutoCheckSetting();
-    if (s) {
+    if (s && s.success === false) {
+      console.error("Failed to load auto-check setting:", s.error);
+    } else if (s) {
       autoCheckFreq.value = s.frequency || "weekly";
       lastAutoCheck.value = s.last_check || "";
     }
@@ -44,33 +52,50 @@ const loadAutoCheckSetting = async () => {
 
 const setFrequency = async (freq) => {
   autoCheckFreq.value = freq;
-  await api.setAutoCheckSetting(freq);
+  try {
+    const res = await api.setAutoCheckSetting(freq);
+    if (res && res.success === false) {
+      alert("Failed to set frequency: " + (res.error || "Unknown error"));
+    }
+  } catch (e) {
+    console.error("Failed to set frequency", e);
+    alert("Error setting frequency: " + e.toString());
+  }
 };
 
 const startCheck = async () => {
   try {
     const result = await api.checkAllUpdates();
-    if (result && result.success) {
+    if (result && result.success === false) {
+      alert("Failed to start check: " + (result.error || "Unknown error"));
+    } else if (result && result.success) {
       lastCheckTime.value = new Date().toLocaleTimeString();
       startPolling();
     }
   } catch (e) {
     console.error("Failed to start update check", e);
+    alert("Error starting check: " + e.toString());
   }
 };
 
 const cancelCheck = async () => {
   try {
-    await api.cancelUpdateCheck();
+    const result = await api.cancelUpdateCheck();
+    if (result && result.success === false) {
+      alert("Failed to cancel check: " + (result.error || "Unknown error"));
+    }
   } catch (e) {
     console.error("Failed to cancel", e);
+    alert("Error cancelling check: " + e.toString());
   }
 };
 
 const pollStatus = async () => {
   try {
     const s = await api.getUpdateStatus();
-    if (s) {
+    if (s && s.success === false) {
+      console.error("Poll status failed:", s.error);
+    } else if (s) {
       status.value = s;
       if (!s.running && pollInterval) {
         clearInterval(pollInterval);

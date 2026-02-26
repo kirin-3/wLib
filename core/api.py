@@ -425,14 +425,14 @@ class Api:
             f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version})"
         )
 
-        def on_exit(delta):
+        def on_exit(delta, is_final=True):
             try:
                 from core.database import update_playtime
 
                 update_playtime(game_id, delta)
                 import webview
 
-                if webview.windows:
+                if is_final and webview.windows:
                     webview.windows[0].evaluate_js(
                         "window.dispatchEvent(new CustomEvent('wlib-refresh-library'))"
                     )
@@ -617,8 +617,6 @@ class Api:
             import ssl
 
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
 
             for i, rtp in enumerate(rtps):
                 self._rtp_install_status["done"] = i
@@ -784,8 +782,6 @@ class Api:
             import ssl
 
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
 
             with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
                 data = json.loads(response.read().decode())

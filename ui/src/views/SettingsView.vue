@@ -64,13 +64,31 @@ const pollInstallStatus = async () => {
 };
 
 const browseProton = async () => {
-  const p = await api.browseFile();
-  if (p) protonPath.value = p;
+  try {
+    const p = await api.browseFile();
+    if (p && p.success === false) {
+      alert("Failed to browse file: " + (p.error || "Unknown error"));
+    } else if (p) {
+      protonPath.value = p;
+    }
+  } catch (e) {
+    console.error("Browse proton error", e);
+    alert("Error browsing file: " + e.toString());
+  }
 };
 
 const browsePrefix = async () => {
-  const p = await api.browseDirectory();
-  if (p) prefixPath.value = p;
+  try {
+    const p = await api.browseDirectory();
+    if (p && p.success === false) {
+      alert("Failed to browse directory: " + (p.error || "Unknown error"));
+    } else if (p) {
+      prefixPath.value = p;
+    }
+  } catch (e) {
+    console.error("Browse prefix error", e);
+    alert("Error browsing directory: " + e.toString());
+  }
 };
 
 const downloadProton = async () => {
@@ -188,13 +206,17 @@ const saving = ref(false);
 const saveSettings = async () => {
   saving.value = true;
   try {
-    await api.saveSettings({
+    const res = await api.saveSettings({
       proton_path: protonPath.value,
       wine_prefix_path: prefixPath.value,
       enable_logging: enableLogging.value,
     });
+    if (res && res.success === false) {
+      alert("Failed to save settings: " + (res.error || "Unknown error"));
+    }
   } catch (e) {
     console.error(e);
+    alert("Error saving settings: " + e.toString());
   } finally {
     saving.value = false;
   }
