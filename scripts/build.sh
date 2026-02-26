@@ -187,7 +187,7 @@ fi
 
 ./wlib-bin "$@"
 WLIB_EXIT=$?
-if [ "$QT_QUICK_BACKEND" = "opengl" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; then
+if [ "$WLIB_EXIT" -eq 0 ] && { [ "$QT_QUICK_BACKEND" = "opengl" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; }; then
     rm -f "$GPU_CRASH_GUARD"
 fi
 exit "$WLIB_EXIT"
