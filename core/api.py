@@ -120,6 +120,8 @@ class Api:
         run_japanese_locale=False,
         run_wayland=False,
         auto_inject_ce=False,
+        custom_prefix="",
+        proton_version="",
     ):
         from core.database import add_game
 
@@ -136,6 +138,8 @@ class Api:
             run_japanese_locale=run_japanese_locale,
             run_wayland=run_wayland,
             auto_inject_ce=auto_inject_ce,
+            custom_prefix=custom_prefix,
+            proton_version=proton_version,
         )
         return {"id": game_id, "title": title}
 
@@ -381,30 +385,73 @@ class Api:
     # ==========================
     # Launcher API
     # ==========================
+    def get_available_runners(self):
+        """Scan ~/.local/share/wLib/proton/ for available proton versions and return them."""
+        import os
+        import shutil
+
+        runners = []
+
+        # Check system wine
+        if shutil.which("wine"):
+            runners.append({"name": "System Wine", "path": "wine"})
+
+        proton_dir = os.path.expanduser("~/.local/share/wLib/proton")
+        if os.path.exists(proton_dir):
+            for entry in os.listdir(proton_dir):
+                full_path = os.path.join(proton_dir, entry)
+                if os.path.isdir(full_path):
+                    proton_exec = os.path.join(full_path, "proton")
+                    if os.path.exists(proton_exec):
+                        runners.append({"name": entry, "path": proton_exec})
+
+        return {"success": True, "runners": runners}
+
     def launch_game(
         self,
+        game_id,
         exe_path,
         command_line_args="",
         run_japanese_locale=False,
         run_wayland=False,
         auto_inject_ce=False,
+        custom_prefix="",
+        proton_version="",
     ):
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
         print(
-            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce})"
+            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version})"
         )
+
+        def on_exit(delta):
+            try:
+                from core.database import update_playtime
+
+                update_playtime(game_id, delta)
+                import webview
+
+                if webview.windows:
+                    webview.windows[0].evaluate_js(
+                        "window.dispatchEvent(new CustomEvent('wlib-refresh-library'))"
+                    )
+            except Exception as e:
+                print(f"Failed to update playtime for game {game_id}: {e}")
+
         result = self.launcher.launch(
             exe_path,
             command_line_args,
             run_japanese_locale,
             run_wayland,
             auto_inject_ce,
+            custom_prefix,
+            proton_version,
+            on_exit_callback=on_exit,
         )
         return result
 
-    def install_rpgmaker_dependencies(self):
+    def install_rpgmaker_dependencies(self, prefix_path=None, proton_path=None):
         """
         Runs winetricks to install the common dependencies needed for RPGMaker/Unity visual novels.
         """
@@ -412,14 +459,17 @@ class Api:
         import subprocess
         import os
 
-        wine_prefix = get_setting("wine_prefix_path")
-        proton_path = get_setting("proton_path")
+        wine_prefix = prefix_path if prefix_path else get_setting("wine_prefix_path")
+        proton_path_to_use = proton_path if proton_path else get_setting("proton_path")
 
         if not wine_prefix:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
             os.makedirs(wine_prefix, exist_ok=True)
 
-        is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
+        is_proton = (
+            proton_path_to_use
+            and "proton" in os.path.basename(proton_path_to_use).lower()
+        )
 
         env = os.environ.copy()
         if is_proton:
@@ -849,7 +899,9 @@ class Api:
                 return result[0]
         return ""
 
-    def find_save_files(self, exe_path, title="", engine=""):
+    def find_save_files(
+        self, exe_path, title="", engine="", custom_prefix="", proton_version=""
+    ):
         """
         Searches common save file locations for a game.
         Returns a list of {path, type, description} for each found location.
@@ -924,11 +976,13 @@ class Api:
                         )
 
         # ── 3. Check Wine prefix AppData folders ──
-        wine_prefix = get_setting("wine_prefix_path")
+        wine_prefix = (
+            custom_prefix if custom_prefix else get_setting("wine_prefix_path")
+        )
         if not wine_prefix:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
 
-        proton_path = get_setting("proton_path")
+        proton_path = proton_version if proton_version else get_setting("proton_path")
         is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
 
         if is_proton:

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, onWebviewReady } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
@@ -120,6 +120,15 @@ const filteredGames = computed(() => {
       };
       va = parseRating(va);
       vb = parseRating(vb);
+    } else if (field === "playtime_seconds") {
+      va = Number(va) || 0;
+      vb = Number(vb) || 0;
+    } else if (field === "last_played") {
+      va = va ? new Date(va).getTime() : 0;
+      vb = vb ? new Date(vb).getTime() : 0;
+    } else if (field === "date_added") {
+      va = va ? new Date(va).getTime() : 0;
+      vb = vb ? new Date(vb).getTime() : 0;
     } else {
       va = (va || "").toString().toLowerCase();
       vb = (vb || "").toString().toLowerCase();
@@ -133,10 +142,21 @@ const filteredGames = computed(() => {
 
 const updatingId = ref(null);
 
+const formatPlaytime = (seconds) => {
+  if (!seconds) return "0.0 hrs";
+  return (seconds / 3600).toFixed(1) + " hrs";
+};
+
 const loadGames = async () => {
   try {
     const data = await api.getGames();
-    if (data) games.value = data;
+    if (data) {
+      games.value = data;
+      if (selectedGame.value) {
+        const updated = data.find((g) => g.id === selectedGame.value.id);
+        if (updated) selectedGame.value = updated;
+      }
+    }
   } catch (e) {
     console.error("Failed to load games", e);
   }
@@ -162,11 +182,14 @@ const handleGameDeleted = async () => {
 const launchFromModal = async (game) => {
   try {
     const result = await api.launchGame(
+      game.id,
       game.exe_path,
       game.command_line_args || "",
       game.run_japanese_locale || false,
       game.run_wayland || false,
       game.auto_inject_ce || false,
+      game.custom_prefix || "",
+      game.proton_version || "",
     );
     if (result && !result.success) {
       alert(`Failed to launch game:\n\n${result.error}`);
@@ -179,11 +202,14 @@ const launchFromModal = async (game) => {
 const launchGameFast = async (game) => {
   try {
     const result = await api.launchGame(
+      game.id,
       game.exe_path,
       game.command_line_args || "",
       game.run_japanese_locale || false,
       game.run_wayland || false,
       game.auto_inject_ce || false,
+      game.custom_prefix || "",
+      game.proton_version || "",
     );
     if (result && !result.success) {
       alert(`Failed to launch game:\n\n${result.error}`);
@@ -255,9 +281,14 @@ const checkUpdate = async (game, event) => {
 };
 
 onMounted(() => {
+  window.addEventListener("wlib-refresh-library", loadGames);
   onWebviewReady(() => {
     loadGames();
   });
+});
+
+onUnmounted(() => {
+  window.removeEventListener("wlib-refresh-library", loadGames);
 });
 </script>
 
@@ -379,6 +410,9 @@ onMounted(() => {
           <button
             v-for="s in [
               { key: 'title', label: 'A-Z' },
+              { key: 'date_added', label: 'Newest' },
+              { key: 'last_played', label: 'Recent' },
+              { key: 'playtime_seconds', label: 'Playtime' },
               { key: 'f95_rating', label: 'F95 ★' },
               { key: 'own_rating', label: 'My ★' },
             ]"
@@ -770,6 +804,15 @@ onMounted(() => {
                 class="flex items-center gap-1 px-2 py-0.5 md:py-1 bg-green-600/15 rounded-md border border-green-500/30 text-green-400 font-mono text-[10px] md:text-xs font-bold animate-pulse"
               >
                 ⬆ {{ game.latest_version }}
+              </div>
+              <div
+                v-if="game.playtime_seconds"
+                class="flex items-center gap-1.5 px-2 py-0.5 md:py-1 rounded-md"
+                style="background: var(--bg-raised); border: 1px solid var(--border);"
+              >
+                <span class="font-mono text-[10px] md:text-xs font-bold" style="color: var(--text-secondary)">
+                  ⏱ {{ formatPlaytime(game.playtime_seconds) }}
+                </span>
               </div>
             </div>
           </div>

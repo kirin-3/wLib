@@ -14,6 +14,9 @@ class Launcher:
         run_japanese_locale: bool = False,
         run_wayland: bool = False,
         auto_inject_ce: bool = False,
+        custom_prefix: str = "",
+        proton_version: str = "",
+        on_exit_callback=None,
     ):
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -45,10 +48,21 @@ class Launcher:
         enable_logging = get_setting("enable_logging") == "true"
         game_dir = os.path.dirname(exe_path)
 
+        # Helper to apply Steam-style %command% substitution
+        def build_command(base_cmd, user_args):
+            if "%command%" in user_args:
+                idx = user_args.index("%command%")
+                return user_args[:idx] + base_cmd + user_args[idx + 1 :]
+            return base_cmd + user_args
+
         # Helper for common subprocess execution
         def execute_process(
             cmd, env_vars, is_wine_executable=False, run_ce=False, game_exe=""
         ):
+            import time
+            import threading
+
+            start_time = time.time()
             try:
                 if enable_logging:
                     log_path = os.path.splitext(exe_path)[0] + "_wlib.log"
@@ -122,6 +136,15 @@ class Launcher:
 
                     threading.Thread(target=inject_ce, daemon=True).start()
 
+                if on_exit_callback:
+
+                    def track_playtime_thread():
+                        game_proc.wait()
+                        delta = int(time.time() - start_time)
+                        on_exit_callback(delta)
+
+                    threading.Thread(target=track_playtime_thread, daemon=True).start()
+
                 return {"success": True}
             except Exception as e:
                 print(f"Error launching game: {e}")
@@ -129,26 +152,28 @@ class Launcher:
 
         # 1. Native Shell Script (e.g. Ren'Py)
         if ext == ".sh":
-            command = [exe_path] + args
+            command = build_command([exe_path], args)
             print(f"Executing shell script natively: {' '.join(command)}")
             return execute_process(command, env)
 
         # 2. Java Archives (.jar)
         if ext == ".jar":
-            command = ["java", "-jar", exe_path] + args
+            command = build_command(["java", "-jar", exe_path], args)
             print(f"Executing Java archive: {' '.join(command)}")
             return execute_process(command, env)
 
         # 3. Native Linux Binary (Executable without .exe/.bat extension or standard Linux build)
         # Some native Linux games like Godot have no extension or .x86_64
         if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat"]:
-            command = [exe_path] + args
+            command = build_command([exe_path], args)
             print(f"Executing Linux binary natively: {' '.join(command)}")
             return execute_process(command, env)
 
         # 4. Fallback to Wine / Proton execution for Windows executables
-        proton_path = get_setting("proton_path")
-        wine_prefix = get_setting("wine_prefix_path")
+        proton_path = proton_version if proton_version else get_setting("proton_path")
+        wine_prefix = (
+            custom_prefix if custom_prefix else get_setting("wine_prefix_path")
+        )
 
         if not wine_prefix:
             # We must supply a prefix for Proton to function at all.
@@ -158,12 +183,12 @@ class Launcher:
 
         is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
 
-        command = [proton_path] if proton_path else ["wine"]
+        base_cmd = [proton_path] if proton_path else ["wine"]
         if is_proton:
-            command.append("run")
+            base_cmd.append("run")
 
-        command.append(exe_path)
-        command.extend(args)
+        base_cmd.append(exe_path)
+        command = build_command(base_cmd, args)
 
         # Apply global DLL overrides required for various titles
         global_overrides = "mscoree=n,b;msvcrt=b,n;winhttp=n,b"

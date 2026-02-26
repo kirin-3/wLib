@@ -24,6 +24,10 @@ const latestVersion = ref("");
 const runJapaneseLocale = ref(false);
 const runWayland = ref(false);
 const autoInjectCe = ref(false);
+const customPrefix = ref("");
+const protonVersion = ref("");
+const useCustomPrefix = ref(false);
+const availableRunners = ref([]);
 const ceInstalled = ref(false);
 
 // F95Zone rating (read-only, from scraper)
@@ -82,6 +86,9 @@ watch(
       runJapaneseLocale.value = g.run_japanese_locale ? true : false;
       runWayland.value = g.run_wayland ? true : false;
       autoInjectCe.value = g.auto_inject_ce ? true : false;
+      customPrefix.value = g.custom_prefix || "";
+      protonVersion.value = g.proton_version || "";
+      useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
       if (typeof g.tags === "string" && g.tags) {
         tags.value = g.tags
           .split(",")
@@ -114,6 +121,14 @@ watch(
       } catch (e) {
         console.error("Failed to check cheat engine status", e);
       }
+      try {
+        const res = await api.getAvailableRunners();
+        if (res?.success) {
+          availableRunners.value = res.runners;
+        }
+      } catch (e) {
+        console.error("Failed to get runners", e);
+      }
     }
   },
 );
@@ -125,6 +140,17 @@ const close = () => {
 const browseExe = async () => {
   const p = await api.browseFile();
   if (p) exePath.value = p;
+};
+
+const browseCustomPrefix = async () => {
+  const p = await api.browseDirectory();
+  if (p) customPrefix.value = p;
+};
+
+const installDepsToPrefix = async () => {
+  if (!customPrefix.value && !protonVersion.value) return;
+  alert("Dependencies installation has started in the background. It may take several minutes to complete.");
+  await api.installRpgmakerDependencies(customPrefix.value, protonVersion.value);
 };
 
 const save = async () => {
@@ -145,6 +171,8 @@ const save = async () => {
       run_japanese_locale: runJapaneseLocale.value,
       run_wayland: runWayland.value,
       auto_inject_ce: autoInjectCe.value,
+      custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
+      proton_version: useCustomPrefix.value ? protonVersion.value : "",
       latest_version: latestVersion.value,
       rating_graphics: ratingGraphics.value,
       rating_story: ratingStory.value,
@@ -197,6 +225,8 @@ const findSaves = async () => {
       props.game.exe_path,
       title.value,
       engine.value,
+      useCustomPrefix.value ? customPrefix.value : "",
+      useCustomPrefix.value ? protonVersion.value : ""
     );
     saveResults.value = results || [];
   } catch (e) {
@@ -225,6 +255,18 @@ const addTag = () => {
 
 const removeTag = (tag) => {
   tags.value = tags.value.filter((t) => t !== tag);
+};
+
+const formatPlaytime = (seconds) => {
+  if (!seconds) return "0.0 hrs";
+  return (seconds / 3600).toFixed(1) + " hrs";
+};
+
+const formatLastPlayed = (dateString) => {
+  if (!dateString) return "Never";
+  return new Date(dateString).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric'
+  });
 };
 
 const openInBrowser = async () => {
@@ -302,6 +344,20 @@ const openInBrowser = async () => {
                 "
                 >{{ engine }}</span
               >
+              <span
+                v-if="game?.playtime_seconds"
+                class="text-xs font-bold px-2 py-0.5 rounded-md text-gray-300"
+                style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);"
+              >
+                ⏱ {{ formatPlaytime(game.playtime_seconds) }}
+              </span>
+              <span
+                v-if="game?.last_played"
+                class="text-xs font-bold px-2 py-0.5 rounded-md text-gray-400"
+                style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);"
+              >
+                Last played: {{ formatLastPlayed(game.last_played) }}
+              </span>
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -416,7 +472,7 @@ const openInBrowser = async () => {
             <input
               v-model="commandLineArgs"
               type="text"
-              placeholder="--fullscreen --no-intro"
+              placeholder="gamemoderun %command% --fullscreen"
               class="modal-input w-full font-mono"
             />
           </div>
@@ -542,6 +598,78 @@ const openInBrowser = async () => {
               class="modal-input w-full"
               style="color: #b380cc"
             />
+          </div>
+
+          <!-- Advanced Launch Options -->
+          <div class="col-span-2 mt-2">
+            <div
+              class="flex items-center justify-between p-3 rounded-lg"
+              style="
+                background: var(--bg-raised);
+                border: 1px solid var(--border);
+              "
+            >
+              <div>
+                <p class="text-sm font-medium" style="color: var(--text-primary)">
+                  Use Custom Wine Prefix & Proton Version
+                </p>
+                <p class="text-xs" style="color: var(--text-muted)">
+                  Isolate this game's save files and dependencies from the global prefix.
+                </p>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="useCustomPrefix"
+                  class="sr-only peer"
+                />
+                <div
+                  class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
+                ></div>
+              </label>
+            </div>
+
+            <div v-if="useCustomPrefix" class="mt-3 p-4 rounded-lg space-y-4" style="background: var(--bg-inset); border: 1px dashed var(--border);">
+              <div>
+                <label class="modal-label">Custom Prefix Path</label>
+                <div class="flex gap-2">
+                  <input
+                    v-model="customPrefix"
+                    type="text"
+                    placeholder="/home/user/games/my_game_prefix"
+                    class="modal-input flex-1 font-mono text-xs"
+                  />
+                  <button @click="browseCustomPrefix" class="modal-btn">Browse</button>
+                </div>
+              </div>
+
+              <div>
+                <label class="modal-label">Proton Version</label>
+                <select
+                  v-model="protonVersion"
+                  class="modal-input w-full"
+                >
+                  <option value="">(Use Global Default)</option>
+                  <option
+                    v-for="runner in availableRunners"
+                    :key="runner.path"
+                    :value="runner.path"
+                  >
+                    {{ runner.name }}
+                  </option>
+                </select>
+              </div>
+
+              <div class="pt-2 border-t border-gray-700/50">
+                <button
+                  @click="installDepsToPrefix"
+                  class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
+                  style="background: rgba(90, 57, 104, 0.2); color: #b380cc; border: 1px solid rgba(90, 57, 104, 0.4);"
+                >
+                  Install RPGMaker DLLs to this Prefix
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

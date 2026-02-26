@@ -38,6 +38,8 @@ class ApiService {
     run_japanese_locale = false,
     run_wayland = false,
     auto_inject_ce = false,
+    custom_prefix = "",
+    proton_version = "",
   ) {
     return this.invoke(
       "add_game",
@@ -53,6 +55,8 @@ class ApiService {
       run_japanese_locale,
       run_wayland,
       auto_inject_ce,
+      custom_prefix,
+      proton_version,
     );
   }
 
@@ -101,20 +105,30 @@ class ApiService {
   }
 
   async launchGame(
+    game_id,
     exe_path,
     command_line_args = "",
     run_japanese_locale = false,
     run_wayland = false,
     auto_inject_ce = false,
+    custom_prefix = "",
+    proton_version = "",
   ) {
     return this.invoke(
       "launch_game",
+      game_id,
       exe_path,
       command_line_args,
       run_japanese_locale,
       run_wayland,
       auto_inject_ce,
+      custom_prefix,
+      proton_version,
     );
+  }
+
+  async getAvailableRunners() {
+    return this.invoke("get_available_runners");
   }
 
   async getSettings() {
@@ -133,8 +147,8 @@ class ApiService {
     return this.invoke("browse_directory");
   }
 
-  async installRpgmakerDependencies() {
-    return this.invoke("install_rpgmaker_dependencies");
+  async installRpgmakerDependencies(prefix_path = null, proton_path = null) {
+    return this.invoke("install_rpgmaker_dependencies", prefix_path, proton_path);
   }
 
   async installRpgmakerRtp() {
@@ -169,8 +183,8 @@ class ApiService {
     return this.invoke("get_install_status");
   }
 
-  async findSaveFiles(exe_path, title = "", engine = "") {
-    return this.invoke("find_save_files", exe_path, title, engine);
+  async findSaveFiles(exe_path, title = "", engine = "", custom_prefix = "", proton_version = "") {
+    return this.invoke("find_save_files", exe_path, title, engine, custom_prefix, proton_version);
   }
 
   async openFolder(path) {

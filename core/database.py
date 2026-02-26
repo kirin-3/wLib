@@ -77,6 +77,11 @@ def init_db():
         ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
         ("run_wayland", "BOOLEAN DEFAULT 0"),
         ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
+        ("custom_prefix", "TEXT DEFAULT ''"),
+        ("proton_version", "TEXT DEFAULT ''"),
+        ("playtime_seconds", "INTEGER DEFAULT 0"),
+        ("last_played", "TIMESTAMP"),
+        ("date_added", "TIMESTAMP"),
     ]
     for col_name, col_type in new_columns:
         if col_name not in existing_columns:
@@ -100,6 +105,8 @@ def add_game(
     run_japanese_locale=False,
     run_wayland=False,
     auto_inject_ce=False,
+    custom_prefix="",
+    proton_version="",
 ):
     conn = get_connection()
     cursor = conn.cursor()
@@ -108,8 +115,12 @@ def add_game(
     if isinstance(tags, list):
         tags = ", ".join(tags)
 
+    import datetime
+
+    now_iso = datetime.datetime.now().isoformat()
+
     cursor.execute(
-        "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             title,
             exe_path,
@@ -123,6 +134,9 @@ def add_game(
             run_japanese_locale,
             run_wayland,
             auto_inject_ce,
+            custom_prefix,
+            proton_version,
+            now_iso,
         ),
     )
     game_id = cursor.lastrowid
@@ -182,6 +196,8 @@ def update_game(game_id, fields):
         "run_japanese_locale",
         "run_wayland",
         "auto_inject_ce",
+        "custom_prefix",
+        "proton_version",
     }
     # Only allow known columns
     safe_fields = {k: v for k, v in fields.items() if k in allowed}
@@ -194,6 +210,20 @@ def update_game(game_id, fields):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def update_playtime(game_id, delta_seconds):
+    import datetime
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    now_iso = datetime.datetime.now().isoformat()
+    cursor.execute(
+        "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
+        (delta_seconds, now_iso, game_id),
+    )
     conn.commit()
     conn.close()
 

@@ -87,3 +87,46 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
         # It should append "proton_compat" to avoid colliding with the standard wine prefix
         assert "proton_compat" in env["STEAM_COMPAT_DATA_PATH"]
         assert env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] == "/tmp/wlib"
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_command_substitution(mock_get_setting, mock_popen, mock_access, mock_exists):
+    """Test Steam-style %command% substitution."""
+    mock_exists.return_value = True
+    mock_access.return_value = True
+    mock_get_setting.return_value = "false"
+
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    # Test with %command% in args
+    result = launcher.launch(
+        "/opt/game/run.sh", 
+        command_line_args="gamemoderun gamescope -W 1920 -H 1080 -- %command% -developer"
+    )
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == [
+        "gamemoderun", 
+        "gamescope", 
+        "-W", 
+        "1920", 
+        "-H", 
+        "1080", 
+        "--", 
+        "/opt/game/run.sh", 
+        "-developer"
+    ]
+
+    # Test without %command% (fallback behavior)
+    launcher.launch(
+        "/opt/game/run.sh", 
+        command_line_args="-developer"
+    )
+
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["/opt/game/run.sh", "-developer"]
+
