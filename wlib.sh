@@ -80,74 +80,72 @@ if [ ! -d "$SCRIPT_DIR/ui/dist" ]; then
 fi
 
 CRASH_GUARD_FILE="$DATA_DIR/.gpu_crash_guard"
+GPU_SOFTWARE_FROM_CRASH_GUARD=0
 GPU_SELECTION_SOURCE=""
 
 detect_gpu() {
-    local renderer=""
-    local renderer_lc=""
-    local qt_override="${QT_QUICK_BACKEND:-}"
+    local glxinfo_output=""
+    local renderer_line=""
+    local direct_line=""
+    local vendor_id=""
+    local vendor_path=""
 
-    if [ -n "$qt_override" ]; then
-        qt_override="${qt_override,,}"
-        case "$qt_override" in
-            opengl|software)
-                export QT_QUICK_BACKEND="$qt_override"
-                GPU_SELECTION_SOURCE="env"
-                return
-                ;;
-        esac
+    if [ "${LIBGL_ALWAYS_SOFTWARE:-}" = "1" ]; then
+        export QT_QUICK_BACKEND="software"
+        GPU_SELECTION_SOURCE="libgl_software"
+        return
     fi
 
+    case "${GALLIUM_DRIVER:-}" in
+        llvmpipe|softpipe)
+            export QT_QUICK_BACKEND="software"
+            GPU_SELECTION_SOURCE="gallium_software"
+            return
+            ;;
+    esac
+
     if [ -f "$CRASH_GUARD_FILE" ]; then
+        GPU_SOFTWARE_FROM_CRASH_GUARD=1
         export QT_QUICK_BACKEND="software"
         GPU_SELECTION_SOURCE="crash_guard"
         return
     fi
 
     if command -v glxinfo >/dev/null 2>&1; then
-        while IFS= read -r line; do
-            case "$line" in
-                OpenGL\ renderer\ string:*)
-                    renderer="${line#OpenGL renderer string: }"
-                    break
-                    ;;
-            esac
-        done < <(glxinfo -B 2>/dev/null || true)
+        glxinfo_output="$(glxinfo -B 2>/dev/null || true)"
+        renderer_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'OpenGL renderer string:' || true)"
+        direct_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'direct rendering:' || true)"
 
-        if [ -n "$renderer" ]; then
-            renderer_lc="${renderer,,}"
-            case "$renderer_lc" in
-                *llvmpipe*|*softpipe*|*swrast*|*d3d12*|*svga3d*)
-                    export QT_QUICK_BACKEND="software"
-                    GPU_SELECTION_SOURCE="glxinfo_software"
-                    return
-                    ;;
-                *)
-                    export QT_QUICK_BACKEND="opengl"
-                    GPU_SELECTION_SOURCE="glxinfo_hardware"
-                    return
-                    ;;
-            esac
+        if printf '%s\n' "$renderer_line" | grep -qiE 'llvmpipe|softpipe|swrast|d3d12|svga3d'; then
+            export QT_QUICK_BACKEND="software"
+            GPU_SELECTION_SOURCE="glxinfo_software"
+            return
+        fi
+
+        if [ -n "$renderer_line" ] && printf '%s\n' "$direct_line" | grep -qi 'yes'; then
+            export QT_QUICK_BACKEND="opengl"
+            GPU_SELECTION_SOURCE="glxinfo_direct"
+            return
         fi
     fi
 
-    if [ -d /dev/dri ]; then
-        for vendor_file in /sys/class/drm/card*/device/vendor; do
-            [ -r "$vendor_file" ] || continue
-            vendor_id="$(tr '[:upper:]' '[:lower:]' < "$vendor_file" 2>/dev/null || true)"
-            case "$vendor_id" in
-                0x8086|0x1002|0x1022|0x10de|0x1af4)
-                    export QT_QUICK_BACKEND="opengl"
-                    GPU_SELECTION_SOURCE="sysfs_vendor"
-                    return
-                    ;;
-            esac
-        done
-
+    if ls /dev/dri/renderD* >/dev/null 2>&1; then
         export QT_QUICK_BACKEND="opengl"
-        GPU_SELECTION_SOURCE="dri_device"
+        GPU_SELECTION_SOURCE="render_node"
         return
     fi
+
+    for vendor_path in /sys/class/drm/card*/device/vendor; do
+        [ -f "$vendor_path" ] || continue
+        vendor_id="$(tr '[:upper:]' '[:lower:]' < "$vendor_path" 2>/dev/null || true)"
+        case "$vendor_id" in
+            0x10de|0x1002|0x8086)
+                export QT_QUICK_BACKEND="opengl"
+                GPU_SELECTION_SOURCE="sysfs_vendor"
+                return
+                ;;
+        esac
+    done
 
     export QT_QUICK_BACKEND="software"
     GPU_SELECTION_SOURCE="fallback_software"
@@ -159,7 +157,7 @@ export DEV_MODE=0
 detect_gpu
 echo "   QT_QUICK_BACKEND=$QT_QUICK_BACKEND (source: $GPU_SELECTION_SOURCE)"
 
-if [ "$QT_QUICK_BACKEND" = "opengl" ] && [ "$GPU_SELECTION_SOURCE" != "env" ]; then
+if [ "$QT_QUICK_BACKEND" = "opengl" ]; then
     touch "$CRASH_GUARD_FILE"
 fi
 
@@ -168,11 +166,11 @@ python main.py
 APP_EXIT_CODE=$?
 set -e
 
-if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$QT_QUICK_BACKEND" = "opengl" ] && [ "$GPU_SELECTION_SOURCE" != "env" ]; then
+if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$QT_QUICK_BACKEND" = "opengl" ]; then
     rm -f "$CRASH_GUARD_FILE"
 fi
 
-if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$GPU_SELECTION_SOURCE" = "crash_guard" ]; then
+if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; then
     rm -f "$CRASH_GUARD_FILE"
 fi
 
