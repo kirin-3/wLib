@@ -17,6 +17,8 @@ const developer = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
 const status = ref("");
+const playStatus = ref("Plan to Play");
+const isFavorite = ref(false);
 const tags = ref([]);
 const engine = ref("");
 const newTag = ref("");
@@ -43,12 +45,10 @@ const saving = ref(false);
 const deleting = ref(false);
 
 const statuses = [
-  { value: "", label: "Not Started" },
-  { value: "completed", label: "✅ Completed" },
-  { value: "in_progress", label: "🎮 In Progress" },
-  { value: "replaying", label: "🔄 Replaying" },
-  { value: "waiting_update", label: "⏳ Waiting for Update" },
-  { value: "abandoned", label: "🚫 Abandoned" },
+  { value: 'Playing', label: '🎮 Playing' },
+  { value: 'Completed', label: '✅ Completed' },
+  { value: 'On Hold', label: '⏸️ On Hold' },
+  { value: 'Plan to Play', label: '🗓️ Plan to Play' }
 ];
 
 const averagePersonalRating = computed(() => {
@@ -82,6 +82,8 @@ watch(
       commandLineArgs.value = g.command_line_args || "";
       coverImage.value = g.cover_image_path || "";
       status.value = g.status || "";
+      playStatus.value = g.play_status || "Plan to Play";
+      isFavorite.value = !!g.is_favorite;
       engine.value = g.engine || "";
       runJapaneseLocale.value = g.run_japanese_locale ? true : false;
       runWayland.value = g.run_wayland ? true : false;
@@ -166,6 +168,8 @@ const save = async () => {
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       status: status.value,
+      play_status: playStatus.value,
+      is_favorite: isFavorite.value ? 1 : 0,
       tags: tags.value.join(", "),
       engine: engine.value,
       run_japanese_locale: runJapaneseLocale.value,
@@ -404,20 +408,37 @@ const openInBrowser = async () => {
 
       <!-- Scrollable Body -->
       <div class="p-6 overflow-y-auto space-y-6 flex-1">
-        <!-- Status Selector -->
-        <div class="flex flex-wrap gap-2">
+        <!-- Status Selector & Favorite Toggle -->
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="s in statuses"
+              :key="s.value"
+              @click="playStatus = s.value"
+              class="px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+              :style="
+                playStatus === s.value
+                  ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
+                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
+              "
+            >
+              {{ s.label }}
+            </button>
+          </div>
+          
           <button
-            v-for="s in statuses"
-            :key="s.value"
-            @click="status = s.value"
-            class="px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+            @click="isFavorite = !isFavorite"
+            class="ml-auto px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all"
             :style="
-              status === s.value
-                ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
+              isFavorite
+                ? 'background: rgba(234, 179, 8, 0.15); border: 1px solid rgba(234, 179, 8, 0.5); color: #eab308; box-shadow: 0 0 10px rgba(234, 179, 8, 0.2)'
+                : 'background: var(--bg-raised); border: 1px dashed var(--border); color: var(--text-muted)'
             "
           >
-            {{ s.label }}
+            <svg class="w-4 h-4" viewBox="0 0 24 24" :fill="isFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+            </svg>
+            {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
           </button>
         </div>
 

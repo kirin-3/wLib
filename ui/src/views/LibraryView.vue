@@ -15,9 +15,9 @@ const selectedGame = ref(null);
 // Search & Filter state
 const searchQuery = ref("");
 const filterStatuses = ref([]);
+const filterCollection = ref("All"); // "All" or "Favorites"
 const filterEngines = ref([]);
 const filterTags = ref([]);
-const showFilters = ref(false);
 const layoutMode = ref("grid"); // 'grid' or 'list'
 const sortBy = ref("title");
 const sortDir = ref("asc");
@@ -32,12 +32,10 @@ const toggleSort = (field) => {
 };
 
 const allStatuses = [
-  { value: "__none__", label: "Not Started" },
-  { value: "completed", label: "✅ Completed" },
-  { value: "in_progress", label: "🎮 In Progress" },
-  { value: "replaying", label: "🔄 Replaying" },
-  { value: "waiting_update", label: "⏳ Waiting" },
-  { value: "abandoned", label: "🚫 Abandoned" },
+  { value: "Playing", label: "🎮 Playing" },
+  { value: "Completed", label: "✅ Completed" },
+  { value: "On Hold", label: "⏸️ On Hold" },
+  { value: "Plan to Play", label: "🗓️ Plan to Play" },
 ];
 
 const toggleFilter = (arr, val) => {
@@ -68,14 +66,13 @@ const uniqueTags = computed(() => {
 
 const activeFilterCount = computed(
   () =>
-    filterStatuses.value.length +
-    filterEngines.value.length +
-    filterTags.value.length,
+    filterStatuses.value.length + filterEngines.value.length + filterTags.value.length + (filterCollection.value !== "All" ? 1 : 0),
 );
 const clearFilters = () => {
   filterStatuses.value = [];
   filterEngines.value = [];
   filterTags.value = [];
+  filterCollection.value = "All";
 };
 
 const filteredGames = computed(() => {
@@ -88,10 +85,12 @@ const filteredGames = computed(() => {
       return t.includes(q) || d.includes(q);
     });
   }
+  if (filterCollection.value === 'Favorites') {
+    result = result.filter((g) => g.is_favorite);
+  }
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
-      if (filterStatuses.value.includes("__none__") && !g.status) return true;
-      return filterStatuses.value.includes(g.status);
+      return filterStatuses.value.includes(g.play_status);
     });
   }
   if (filterEngines.value.length) {
@@ -103,7 +102,8 @@ const filteredGames = computed(() => {
         typeof g.tags === "string"
           ? g.tags.split(",").map((t) => t.trim())
           : g.tags || [];
-      return filterTags.value.some((ft) => gameTags.includes(ft));
+      // Intersect: require ALL selected tags to be present in the game's tags
+      return filterTags.value.every((ft) => gameTags.includes(ft));
     });
   }
   // Sort
@@ -293,7 +293,49 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="p-8 h-full flex flex-col">
+  <div class="h-full flex overflow-hidden">
+    <!-- Smart Collections Sidebar -->
+    <aside class="w-64 shrink-0 flex flex-col h-full overflow-y-auto" style="background: var(--bg-surface); border-right: 1px solid var(--border);">
+      <div class="p-6 pb-2">
+        <h3 class="text-xs uppercase tracking-widest font-bold mb-3" style="color: var(--text-muted)">Smart Collections</h3>
+        <div class="space-y-1">
+          <button @click="filterCollection = 'All'" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors" :style="filterCollection === 'All' ? 'background: var(--bg-raised); color: var(--text-primary)' : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            All Games
+          </button>
+          <button @click="filterCollection = 'Favorites'" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors" :style="filterCollection === 'Favorites' ? 'background: var(--bg-raised); color: var(--text-primary)' : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" :fill="filterCollection === 'Favorites' ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            Favorites
+          </button>
+        </div>
+      </div>
+
+      <div class="p-6 pb-2 pt-4">
+        <h3 class="text-xs uppercase tracking-widest font-bold mb-3" style="color: var(--text-muted)">Play Status</h3>
+        <div class="space-y-1">
+          <label v-for="s in allStatuses" :key="s.value" class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-white/5 transition-colors">
+            <input type="checkbox" :value="s.value" v-model="filterStatuses" class="rounded border-gray-600 bg-transparent text-emerald-500 focus:ring-emerald-500 focus:ring-offset-gray-900" style="accent-color: var(--brand)" />
+            <span style="color: var(--text-secondary)">{{ s.label }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="p-6 pt-4 flex-1">
+        <h3 class="text-xs uppercase tracking-widest font-bold mb-3 flex justify-between items-center" style="color: var(--text-muted)">
+          Tags
+          <span v-if="filterTags.length" @click="filterTags = []" class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal">Clear</span>
+        </h3>
+        <div class="flex flex-wrap gap-1.5">
+          <button v-for="tag in uniqueTags" :key="tag" @click="toggleFilter(filterTags, tag)" class="px-2.5 py-1 rounded-full text-[11px] font-medium transition-all" :style="filterTags.includes(tag) ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)' : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'">
+            {{ tag }}
+          </button>
+          <div v-if="!uniqueTags.length" class="text-xs italic" style="color: var(--text-muted)">No tags found</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 p-8 overflow-y-auto flex flex-col relative">
     <header class="flex justify-between items-center mb-8">
       <div>
         <h2
@@ -375,32 +417,6 @@ onUnmounted(() => {
 
       <!-- Filter Toggle, Sort & Counter -->
       <div class="flex items-center gap-3">
-        <button
-          @click="showFilters = !showFilters"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-          :style="
-            showFilters || activeFilterCount > 0
-              ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-              : 'background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-secondary)'
-          "
-        >
-          <svg
-            class="w-3.5 h-3.5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
-          </svg>
-          Filters
-          <span
-            v-if="activeFilterCount"
-            class="text-white rounded-full w-4 h-4 text-[10px] flex items-center justify-center"
-            style="background: var(--brand)"
-            >{{ activeFilterCount }}</span
-          >
-        </button>
 
         <!-- Sort Buttons -->
         <div
@@ -525,80 +541,6 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Filter Pills (collapsible) -->
-      <div v-if="showFilters" class="space-y-3 pt-2">
-        <!-- Status Pills -->
-        <div class="flex flex-wrap items-center gap-1.5">
-          <span
-            class="text-[10px] uppercase tracking-wider font-semibold w-14 shrink-0"
-            style="color: var(--text-muted)"
-            >Status</span
-          >
-          <button
-            v-for="s in allStatuses"
-            :key="s.value"
-            @click="toggleFilter(filterStatuses, s.value)"
-            class="px-2.5 py-1 rounded-full text-xs transition-all"
-            :style="
-              filterStatuses.includes(s.value)
-                ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                : 'background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-secondary)'
-            "
-          >
-            {{ s.label }}
-          </button>
-        </div>
-
-        <!-- Engine Pills -->
-        <div
-          v-if="uniqueEngines.length"
-          class="flex flex-wrap items-center gap-1.5"
-        >
-          <span
-            class="text-[10px] uppercase tracking-wider font-semibold w-14 shrink-0"
-            style="color: var(--text-muted)"
-            >Engine</span
-          >
-          <button
-            v-for="eng in uniqueEngines"
-            :key="eng"
-            @click="toggleFilter(filterEngines, eng)"
-            class="px-2.5 py-1 rounded-full text-xs transition-all"
-            :style="
-              filterEngines.includes(eng)
-                ? 'background: rgba(90, 57, 104, 0.2); border: 1px solid var(--brand-deep); color: #b380cc'
-                : 'background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-secondary)'
-            "
-          >
-            {{ eng }}
-          </button>
-        </div>
-
-        <!-- Tag Pills -->
-        <div
-          v-if="uniqueTags.length"
-          class="flex flex-wrap items-center gap-1.5"
-        >
-          <span
-            class="text-[10px] uppercase tracking-wider font-semibold w-14 shrink-0"
-            style="color: var(--text-muted)"
-            >Tags</span
-          >
-          <button
-            v-for="tag in uniqueTags"
-            :key="tag"
-            @click="toggleFilter(filterTags, tag)"
-            class="px-2.5 py-1 rounded-full text-xs transition-all"
-            :style="
-              filterTags.includes(tag)
-                ? 'background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399'
-                : 'background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-secondary)'
-            "
-          >
-            {{ tag }}
-          </button>
-        </div>
-      </div>
     </div>
 
     <TransitionGroup
@@ -830,18 +772,18 @@ onUnmounted(() => {
               v-if="layoutMode === 'grid'"
               class="text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[50%]"
               style="color: var(--text-muted)"
-              :title="game.status"
+              :title="game.play_status"
             >
               {{
-                game.status === "completed"
+                game.play_status === "completed"
                   ? "✅ Done"
-                  : game.status === "in_progress"
+                  : game.play_status === "in_progress"
                     ? "🎮 Playing"
-                    : game.status === "replaying"
+                    : game.play_status === "replaying"
                       ? "🔄 Replay"
-                      : game.status === "waiting_update"
+                      : game.play_status === "waiting_update"
                         ? "⏳ Waiting"
-                        : game.status === "abandoned"
+                        : game.play_status === "abandoned"
                           ? "🚫"
                           : "Not Started"
               }}
@@ -863,18 +805,18 @@ onUnmounted(() => {
               v-if="layoutMode === 'list'"
               class="hidden sm:block w-24 text-right text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis"
               style="color: var(--text-muted)"
-              :title="game.status"
+              :title="game.play_status"
             >
               {{
-                game.status === "completed"
+                game.play_status === "completed"
                   ? "✅ Done"
-                  : game.status === "in_progress"
+                  : game.play_status === "in_progress"
                     ? "🎮 Playing"
-                    : game.status === "replaying"
+                    : game.play_status === "replaying"
                       ? "🔄 Replay"
-                      : game.status === "waiting_update"
+                      : game.play_status === "waiting_update"
                         ? "⏳ Waiting"
-                        : game.status === "abandoned"
+                        : game.play_status === "abandoned"
                           ? "🚫"
                           : "Not Started"
               }}
@@ -892,6 +834,7 @@ onUnmounted(() => {
       @deleted="handleGameDeleted"
       @launch="launchFromModal"
     />
+  </div>
   </div>
 </template>
 

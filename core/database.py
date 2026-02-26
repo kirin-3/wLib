@@ -82,10 +82,20 @@ def init_db():
         ("playtime_seconds", "INTEGER DEFAULT 0"),
         ("last_played", "TIMESTAMP"),
         ("date_added", "TIMESTAMP"),
+        ("play_status", "TEXT DEFAULT 'Plan to Play'"),
+        ("is_favorite", "BOOLEAN DEFAULT 0"),
     ]
+
     for col_name, col_type in new_columns:
         if col_name not in existing_columns:
             cursor.execute(f"ALTER TABLE games ADD COLUMN {col_name} {col_type}")
+
+    # Migrate legacy status to play_status
+    if "status" in existing_columns and "play_status" not in existing_columns:
+        cursor.execute("UPDATE games SET play_status = 'Completed' WHERE status = 'completed'")
+        cursor.execute("UPDATE games SET play_status = 'Playing' WHERE status IN ('in_progress', 'replaying')")
+        cursor.execute("UPDATE games SET play_status = 'On Hold' WHERE status IN ('waiting_update', 'abandoned')")
+        cursor.execute("UPDATE games SET play_status = 'Plan to Play' WHERE status = '' OR status IS NULL")
 
     conn.commit()
     conn.close()
@@ -198,6 +208,8 @@ def update_game(game_id, fields):
         "auto_inject_ce",
         "custom_prefix",
         "proton_version",
+        "play_status",
+        "is_favorite",
     }
     # Only allow known columns
     safe_fields = {k: v for k, v in fields.items() if k in allowed}

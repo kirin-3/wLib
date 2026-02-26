@@ -39,6 +39,7 @@ venv/
 *.sw?
 .agent/
 .kilocode/
+.opencode/
 *.sublime-project
 *.sublime-workspace
 .project
