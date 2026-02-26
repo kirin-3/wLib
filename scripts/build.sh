@@ -109,11 +109,74 @@ cd "$SELF_DIR/usr/bin"
 # Fallback to X11 if Wayland EGL initialization fails
 export QT_QPA_PLATFORM="xcb;wayland"
 
-# Force Qt Quick scene graph to use software rendering so compositing
-# does not depend on the host having a working Vulkan/OpenGL stack.
-# The WebEngine content (the actual Vue UI) still uses Chromium's own
-# GPU process with the host's native drivers, so performance is unaffected.
-export QT_QUICK_BACKEND=software
+GPU_CRASH_GUARD="${XDG_DATA_HOME:-$HOME/.local/share}/wLib/.gpu_crash_guard"
+GPU_SOFTWARE_FROM_CRASH_GUARD=0
+
+detect_gpu() {
+    local glxinfo_output=""
+    local renderer_line=""
+    local direct_line=""
+    local vendor_id=""
+    local vendor_path=""
+
+    if [ "${LIBGL_ALWAYS_SOFTWARE:-}" = "1" ]; then
+        export QT_QUICK_BACKEND=software
+        return
+    fi
+
+    case "${GALLIUM_DRIVER:-}" in
+        llvmpipe|softpipe)
+            export QT_QUICK_BACKEND=software
+            return
+            ;;
+    esac
+
+    if [ -f "$GPU_CRASH_GUARD" ]; then
+        GPU_SOFTWARE_FROM_CRASH_GUARD=1
+        export QT_QUICK_BACKEND=software
+        return
+    fi
+
+    if command -v glxinfo >/dev/null 2>&1; then
+        glxinfo_output="$(glxinfo -B 2>/dev/null || true)"
+        renderer_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'OpenGL renderer string:' || true)"
+        direct_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'direct rendering:' || true)"
+
+        if printf '%s\n' "$renderer_line" | grep -qiE 'llvmpipe|softpipe|swrast|d3d12|svga3d'; then
+            export QT_QUICK_BACKEND=software
+            return
+        fi
+
+        if [ -n "$renderer_line" ] && printf '%s\n' "$direct_line" | grep -qi 'yes'; then
+            export QT_QUICK_BACKEND=opengl
+            return
+        fi
+    fi
+
+    if ls /dev/dri/renderD* >/dev/null 2>&1; then
+        export QT_QUICK_BACKEND=opengl
+        return
+    fi
+
+    for vendor_path in /sys/class/drm/card*/device/vendor; do
+        [ -f "$vendor_path" ] || continue
+        vendor_id="$(tr '[:upper:]' '[:lower:]' < "$vendor_path" 2>/dev/null || true)"
+        case "$vendor_id" in
+            0x10de|0x1002|0x8086)
+                export QT_QUICK_BACKEND=opengl
+                return
+                ;;
+        esac
+    done
+
+    export QT_QUICK_BACKEND=software
+}
+
+detect_gpu
+mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+if [ "$QT_QUICK_BACKEND" = "opengl" ]; then
+    touch "$GPU_CRASH_GUARD"
+fi
 
 # Ensure the bundled Qt does not shadow the host's native GPU libraries.
 # LD_LIBRARY_PATH is intentionally NOT set to $SELF_DIR/usr/bin/_internal
@@ -122,7 +185,12 @@ export QT_QUICK_BACKEND=software
 # Playwright browsers are installed to ~/.cache/ms-playwright at first run.
 # This is handled automatically by the app.
 
-exec ./wlib-bin "$@"
+./wlib-bin "$@"
+WLIB_EXIT=$?
+if [ "$QT_QUICK_BACKEND" = "opengl" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; then
+    rm -f "$GPU_CRASH_GUARD"
+fi
+exit "$WLIB_EXIT"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"
 
