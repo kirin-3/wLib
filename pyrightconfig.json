@@ -1,0 +1,12 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "stubPath": "typings",
+  "extraPaths": [
+    "typings"
+  ],
+  "exclude": [
+    "ui/node_modules",
+    "ui/dist"
+  ]
+}

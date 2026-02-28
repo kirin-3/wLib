@@ -1,9 +1,9 @@
 import os
 import sys
-import webview
 import threading
 import subprocess
 import time
+import importlib
 
 PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
@@ -14,6 +14,11 @@ VITE_DEV_SERVER = "http://localhost:5173"
 from core.api import Api
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+try:
+    webview = importlib.import_module("webview")
+except Exception:
+    webview = None
 
 window_ref = None
 
@@ -39,17 +44,22 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             exists = False
             if check_url:
+                conn = None
                 try:
                     from core.database import get_connection
 
                     conn = get_connection()
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id FROM games WHERE f95_url = ?", (check_url,))
+                    cursor.execute(
+                        "SELECT id FROM games WHERE f95_url = ?", (check_url,)
+                    )
                     exists = cursor.fetchone() is not None
-                    conn.close()
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     exists = False
+                finally:
+                    if conn is not None:
+                        conn.close()
 
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -75,8 +85,8 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         )
                         js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-open', {{ detail: {{ url: decodeURIComponent(escape(atob('{b64_url}'))) }} }}));"
                         window_ref.evaluate_js(js_code)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[wLib] Failed to process extension open event: {e}")
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Type", "application/json")
@@ -88,7 +98,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/add":
-            content_length = int(self.headers["Content-Length"])
+            content_length = int(self.headers.get("Content-Length", "0"))
             post_data = self.rfile.read(content_length)
 
             try:
@@ -156,10 +166,12 @@ def ensure_playwright_browsers():
 
     print("Installing Playwright chromium browser...")
     try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as p:
-            p.chromium.install()
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         print("Playwright chromium installed successfully.")
         return True
     except Exception as e:
@@ -174,13 +186,18 @@ def main():
 
     global window_ref, DEV_MODE
 
+    if webview is None:
+        raise RuntimeError("pywebview is required to run wLib")
+
     ensure_playwright_browsers()
 
     api = Api()
 
     # Resolve base path for bundled assets (PyInstaller vs dev source)
     if getattr(sys, "frozen", False):
-        script_dir = sys._MEIPASS
+        script_dir = getattr(
+            sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))
+        )
     else:
         script_dir = os.path.dirname(os.path.abspath(__file__))
 

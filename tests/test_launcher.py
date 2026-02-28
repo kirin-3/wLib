@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 import pytest
 import os
 import subprocess
@@ -88,11 +89,14 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
         assert "proton_compat" in env["STEAM_COMPAT_DATA_PATH"]
         assert env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] == "/tmp/wlib"
 
+
 @patch("os.path.exists")
 @patch("os.access")
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting")
-def test_launch_command_substitution(mock_get_setting, mock_popen, mock_access, mock_exists):
+def test_launch_command_substitution(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
     """Test Steam-style %command% substitution."""
     mock_exists.return_value = True
     mock_access.return_value = True
@@ -103,30 +107,45 @@ def test_launch_command_substitution(mock_get_setting, mock_popen, mock_access, 
     launcher = Launcher()
     # Test with %command% in args
     result = launcher.launch(
-        "/opt/game/run.sh", 
-        command_line_args="gamemoderun gamescope -W 1920 -H 1080 -- %command% -developer"
+        "/opt/game/run.sh",
+        command_line_args="gamemoderun gamescope -W 1920 -H 1080 -- %command% -developer",
     )
 
     assert result["success"] is True
     args, kwargs = mock_popen.call_args
     assert args[0] == [
-        "gamemoderun", 
-        "gamescope", 
-        "-W", 
-        "1920", 
-        "-H", 
-        "1080", 
-        "--", 
-        "/opt/game/run.sh", 
-        "-developer"
+        "gamemoderun",
+        "gamescope",
+        "-W",
+        "1920",
+        "-H",
+        "1080",
+        "--",
+        "/opt/game/run.sh",
+        "-developer",
     ]
 
     # Test without %command% (fallback behavior)
-    launcher.launch(
-        "/opt/game/run.sh", 
-        command_line_args="-developer"
-    )
+    launcher.launch("/opt/game/run.sh", command_line_args="-developer")
 
     args, kwargs = mock_popen.call_args
     assert args[0] == ["/opt/game/run.sh", "-developer"]
 
+
+def test_launch_rejects_empty_executable_path():
+    launcher = Launcher()
+    result = launcher.launch("   ")
+
+    assert result["success"] is False
+    assert "non-empty string" in str(result.get("error", ""))
+
+
+@patch("os.path.exists")
+def test_launch_rejects_invalid_command_line(mock_exists):
+    mock_exists.return_value = True
+
+    launcher = Launcher()
+    result = launcher.launch("/opt/game/run.sh", command_line_args='"unterminated')
+
+    assert result["success"] is False
+    assert "Invalid command line arguments" in str(result.get("error", ""))

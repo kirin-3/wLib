@@ -40,6 +40,8 @@ venv/
 .agent/
 .kilocode/
 .opencode/
+.sisyphus/
+.serena/
 *.sublime-project
 *.sublime-workspace
 .project

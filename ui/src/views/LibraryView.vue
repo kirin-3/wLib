@@ -147,6 +147,28 @@ const formatPlaytime = (seconds) => {
   return (seconds / 3600).toFixed(1) + " hrs";
 };
 
+const formatPlayStatus = (status) => {
+  switch (status) {
+    case "Completed":
+    case "completed":
+      return "✅ Done";
+    case "Playing":
+    case "in_progress":
+      return "🎮 Playing";
+    case "replaying":
+      return "🔄 Replay";
+    case "On Hold":
+      return "⏸️ On Hold";
+    case "waiting_update":
+      return "⏳ Waiting";
+    case "abandoned":
+      return "🚫";
+    case "Plan to Play":
+    default:
+      return "Not Started";
+  }
+};
+
 const loadGames = async () => {
   try {
     const data = await api.getGames();
@@ -774,19 +796,7 @@ onUnmounted(() => {
               style="color: var(--text-muted)"
               :title="game.play_status"
             >
-              {{
-                game.play_status === "completed"
-                  ? "✅ Done"
-                  : game.play_status === "in_progress"
-                    ? "🎮 Playing"
-                    : game.play_status === "replaying"
-                      ? "🔄 Replay"
-                      : game.play_status === "waiting_update"
-                        ? "⏳ Waiting"
-                        : game.play_status === "abandoned"
-                          ? "🚫"
-                          : "Not Started"
-              }}
+              {{ formatPlayStatus(game.play_status) }}
             </div>
             <button
               @click.stop="launchGameFast(game)"
@@ -807,19 +817,7 @@ onUnmounted(() => {
               style="color: var(--text-muted)"
               :title="game.play_status"
             >
-              {{
-                game.play_status === "completed"
-                  ? "✅ Done"
-                  : game.play_status === "in_progress"
-                    ? "🎮 Playing"
-                    : game.play_status === "replaying"
-                      ? "🔄 Replay"
-                      : game.play_status === "waiting_update"
-                        ? "⏳ Waiting"
-                        : game.play_status === "abandoned"
-                          ? "🚫"
-                          : "Not Started"
-              }}
+              {{ formatPlayStatus(game.play_status) }}
             </div>
           </div>
         </div>

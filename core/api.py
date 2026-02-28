@@ -14,6 +14,33 @@ class Api:
         init_db()
         self.scraper = Scraper()
         self.launcher = Launcher()
+        self._update_running = False
+        self._update_total = 0
+        self._update_checked = 0
+        self._update_current = ""
+        self._update_results = []
+        self._deps_install_status = {
+            "running": False,
+            "done": 0,
+            "total": 0,
+            "current": "",
+            "error": "",
+        }
+        self._rtp_install_status = {
+            "running": False,
+            "done": 0,
+            "total": 0,
+            "current": "",
+            "error": "",
+        }
+
+    def _load_webview_module(self):
+        import importlib
+
+        try:
+            return importlib.import_module("webview")
+        except Exception:
+            return None
 
     def set_window(self, window):
         self.window = window
@@ -23,7 +50,12 @@ class Api:
 
         # Source: bundled extension inside the AppImage / dev source
         if getattr(sys, "frozen", False):
-            bundled_ext_dir = os.path.join(sys._MEIPASS, "extension")
+            bundle_root = getattr(
+                sys,
+                "_MEIPASS",
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            )
+            bundled_ext_dir = os.path.join(bundle_root, "extension")
         else:
             bundled_ext_dir = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
@@ -163,14 +195,31 @@ class Api:
         Uses Playwright to hit F95Zone and extract the version string from the thread title.
         Stores it in latest_version for comparison with the current version.
         """
+        if not isinstance(url, str) or not url.strip():
+            return {"success": False, "error": "A valid thread URL is required"}
+
+        url = url.strip()
         print(f"Checking for updates for {url}")
         try:
             version_info = self.scraper.get_thread_version(url, headless=True)
-            if version_info.get("success") and version_info.get("version"):
-                remote_version = version_info["version"]
-                # Store in latest_version field
-                from core.database import get_connection
+            if not version_info.get("success"):
+                return {
+                    "success": False,
+                    "error": version_info.get("error", "Failed to check for updates"),
+                }
 
+            remote_version = version_info.get("version")
+            if not remote_version:
+                return {
+                    "success": False,
+                    "error": "Could not extract a version from thread",
+                }
+
+            # Store in latest_version field
+            from core.database import get_connection
+
+            conn = None
+            try:
                 conn = get_connection()
                 cursor = conn.cursor()
                 cursor.execute(
@@ -180,22 +229,24 @@ class Api:
                 # Check if it differs from current version
                 cursor.execute("SELECT version FROM games WHERE f95_url = ?", (url,))
                 row = cursor.fetchone()
-                current_version = row[0] if row else ""
+                current_version = row[0] if row and row[0] is not None else ""
                 conn.commit()
-                conn.close()
-                has_update = bool(
-                    current_version
-                    and remote_version
-                    and current_version.strip() != remote_version.strip()
-                )
-                return {
-                    "success": True,
-                    "version": remote_version,
-                    "has_update": has_update,
-                }
-            return version_info
+            finally:
+                if conn is not None:
+                    conn.close()
+
+            has_update = bool(
+                current_version
+                and remote_version
+                and str(current_version).strip() != str(remote_version).strip()
+            )
+            return {
+                "success": True,
+                "version": remote_version,
+                "has_update": has_update,
+            }
         except Exception as e:
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
 
     def open_in_browser(self, url):
         """Opens a URL in the user's default browser and brings it to foreground."""
@@ -226,72 +277,91 @@ class Api:
         from datetime import datetime
         from core.database import get_connection
 
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_update_check', ?)",
-            (datetime.now().isoformat(),),
-        )
-        conn.commit()
-        conn.close()
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_update_check', ?)",
+                (datetime.now().isoformat(),),
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"[wLib] Failed to update last_update_check setting: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
 
         def run_checks():
-            urls = [game["f95_url"] for game in games_with_url]
+            try:
+                urls = [game["f95_url"] for game in games_with_url]
 
-            def check_callback(url, result):
-                if not self._update_running:
-                    return False  # Stop checking
+                def check_callback(url, result):
+                    if not self._update_running:
+                        return False  # Stop checking
 
-                game = next((g for g in games_with_url if g["f95_url"] == url), None)
-                if not game:
+                    game = next(
+                        (g for g in games_with_url if g["f95_url"] == url), None
+                    )
+                    if not game:
+                        return True
+
+                    self._update_current = game.get("title", "Unknown")
+
+                    has_update = False
+                    callback_error = result.get("error")
+                    if result.get("success") and result.get("version"):
+                        remote_version = result["version"]
+                        from core.database import get_connection
+
+                        conn = None
+                        try:
+                            conn = get_connection()
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "UPDATE games SET latest_version = ? WHERE f95_url = ?",
+                                (remote_version, url),
+                            )
+                            cursor.execute(
+                                "SELECT version FROM games WHERE f95_url = ?", (url,)
+                            )
+                            row = cursor.fetchone()
+                            current_version = (
+                                row[0] if row and row[0] is not None else ""
+                            )
+                            conn.commit()
+                            has_update = bool(
+                                current_version
+                                and remote_version
+                                and str(current_version).strip()
+                                != str(remote_version).strip()
+                            )
+                        except Exception as e:
+                            callback_error = f"Failed to save update data: {e}"
+                        finally:
+                            if conn is not None:
+                                conn.close()
+
+                    self._update_results.append(
+                        {
+                            "id": game["id"],
+                            "title": game.get("title", ""),
+                            "current_version": game.get("version", ""),
+                            "latest_version": result.get("version", ""),
+                            "has_update": has_update,
+                            "error": callback_error,
+                        }
+                    )
+                    self._update_checked += 1
                     return True
 
-                self._update_current = game.get("title", "Unknown")
-
-                has_update = False
-                if result.get("success") and result.get("version"):
-                    remote_version = result["version"]
-                    from core.database import get_connection
-
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                        (remote_version, url),
-                    )
-                    cursor.execute(
-                        "SELECT version FROM games WHERE f95_url = ?", (url,)
-                    )
-                    row = cursor.fetchone()
-                    current_version = row[0] if row else ""
-                    conn.commit()
-                    conn.close()
-                    has_update = bool(
-                        current_version
-                        and remote_version
-                        and current_version.strip() != remote_version.strip()
-                    )
-
-                self._update_results.append(
-                    {
-                        "id": game["id"],
-                        "title": game.get("title", ""),
-                        "current_version": game.get("version", ""),
-                        "latest_version": result.get("version", ""),
-                        "has_update": has_update,
-                        "error": result.get("error", None),
-                    }
+                self.scraper.get_multiple_thread_versions(
+                    urls, headless=True, delay=15, callback=check_callback
                 )
-                self._update_checked += 1
-                return True
-
-            self.scraper.get_multiple_thread_versions(
-                urls, headless=True, delay=15, callback=check_callback
-            )
-
-            self._update_checked = self._update_total
-            self._update_current = ""
-            self._update_running = False
+            finally:
+                self._update_checked = self._update_total
+                self._update_current = ""
+                self._update_running = False
 
         thread = threading.Thread(target=run_checks, daemon=True)
         thread.start()
@@ -430,10 +500,8 @@ class Api:
                 from core.database import update_playtime
 
                 update_playtime(game_id, delta)
-                import webview
-
-                if is_final and webview.windows:
-                    webview.windows[0].evaluate_js(
+                if is_final and self.window:
+                    self.window.evaluate_js(
                         "window.dispatchEvent(new CustomEvent('wlib-refresh-library'))"
                     )
             except Exception as e:
@@ -570,7 +638,11 @@ class Api:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
             os.makedirs(wine_prefix, exist_ok=True)
 
-        is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
+        is_proton = bool(
+            isinstance(proton_path, str)
+            and proton_path
+            and "proton" in os.path.basename(proton_path).lower()
+        )
         env = os.environ.copy()
 
         if is_proton:
@@ -662,11 +734,10 @@ class Api:
 
                 if setup_exe:
                     print(f"Installing {rtp['name']} RTP silently in prefix...")
-                    command = (
-                        [proton_path, "run", setup_exe, "/S", "/v/qn"]
-                        if is_proton
-                        else ["wine", setup_exe, "/S", "/v/qn"]
-                    )
+                    setup_exe_str = str(setup_exe)
+                    command = ["wine", setup_exe_str, "/S", "/v/qn"]
+                    if is_proton and isinstance(proton_path, str):
+                        command = [proton_path, "run", setup_exe_str, "/S", "/v/qn"]
                     try:
                         subprocess.run(
                             command,
@@ -867,7 +938,9 @@ class Api:
     def browse_file(self):
         """Opens a native file dialog to select an executable."""
         if self.window:
-            import webview
+            webview = self._load_webview_module()
+            if webview is None:
+                return ""
 
             try:
                 dt = webview.FileDialog.OPEN
@@ -884,7 +957,9 @@ class Api:
     def browse_directory(self):
         """Opens a native directory dialog, e.g. for choosing a wine prefix."""
         if self.window:
-            import webview
+            webview = self._load_webview_module()
+            if webview is None:
+                return ""
 
             try:
                 dt = webview.FileDialog.FOLDER

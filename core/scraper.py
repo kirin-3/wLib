@@ -1,6 +1,6 @@
 import os
-from playwright.sync_api import sync_playwright
 import re
+from urllib.parse import urlparse
 
 
 class Scraper:
@@ -50,12 +50,13 @@ class Scraper:
             for pattern in html_patterns:
                 m = re.search(pattern, html_content, re.I)
                 if m:
-                    version = m.group(1).strip().split()[0]
+                    raw_value = (m.group(1) or "").strip()
+                    version = raw_value.split()[0] if raw_value else ""
                     if version and re.match(r"^\d", version):
                         return version
 
             # Fallback: plain text search
-            text_content = first_post.text_content()
+            text_content = first_post.text_content() or ""
             text_patterns = [
                 r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
                 r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
@@ -71,6 +72,17 @@ class Scraper:
             print(f"[wLib] Failed to extract version from post body: {e}")
 
         return "Unknown"
+
+    def _is_valid_thread_url(self, url):
+        if not isinstance(url, str):
+            return False
+
+        normalized = url.strip()
+        if not normalized:
+            return False
+
+        parsed = urlparse(normalized)
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
     def _extract_title_text_from_page(self, page):
         """
@@ -114,12 +126,24 @@ class Scraper:
 
         return title_text, version
 
+    def _load_sync_playwright(self):
+        import importlib
+
+        module = importlib.import_module("playwright.sync_api")
+        return module.sync_playwright
+
     def get_thread_version(self, url: str, headless=False):
         """
         Navigates to an F95Zone thread URL and extracts the version string from the title or tags.
         Spins up and down the browser safely within the calling thread.
         """
+        if not self._is_valid_thread_url(url):
+            return {"success": False, "error": "Invalid thread URL"}
+
+        target_url = url.strip()
+
         try:
+            sync_playwright = self._load_sync_playwright()
             with sync_playwright() as p:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=self.user_data_dir,
@@ -127,7 +151,7 @@ class Scraper:
                     args=["--disable-blink-features=AutomationControlled"],
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
 
                 try:
                     page.wait_for_selector("h1.p-title-value", timeout=60000)
@@ -153,6 +177,7 @@ class Scraper:
         """
         results = {}
         try:
+            sync_playwright = self._load_sync_playwright()
             with sync_playwright() as p:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=self.user_data_dir,
@@ -163,11 +188,24 @@ class Scraper:
                 for i, url in enumerate(urls):
                     page = context.new_page()
                     try:
-                        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        if not self._is_valid_thread_url(url):
+                            result = {"success": False, "error": "Invalid thread URL"}
+                            results[url] = result
+                            page.close()
+                            if callback:
+                                if not callback(url, result):
+                                    break
+                            continue
+
+                        page.goto(
+                            url.strip(), wait_until="domcontentloaded", timeout=60000
+                        )
                         try:
                             page.wait_for_selector("h1.p-title-value", timeout=60000)
                         except Exception:
-                            pass
+                            print(
+                                f"Could not find thread title for {url}. Might be blocked or require login."
+                            )
 
                         title, version = self._extract_version_from_page(page)
 

@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 import pytest
 from core.scraper import Scraper
 
@@ -148,3 +149,23 @@ def test_extract_version_from_post_html():
     m = re.search(text_patterns[2], "Release: 2.1", re.I)
     assert m is not None
     assert m.group(1) == "2.1"
+
+
+def test_thread_url_validation():
+    scraper = Scraper()
+
+    assert scraper._is_valid_thread_url("https://f95zone.to/threads/some-game.12345/")
+    assert scraper._is_valid_thread_url("http://example.com/path")
+    assert not scraper._is_valid_thread_url("")
+    assert not scraper._is_valid_thread_url("   ")
+    assert not scraper._is_valid_thread_url("javascript:alert(1)")
+    assert not scraper._is_valid_thread_url("file:///tmp/x")
+    assert not scraper._is_valid_thread_url(None)
+
+
+def test_get_thread_version_rejects_invalid_url():
+    scraper = Scraper()
+    result = scraper.get_thread_version("javascript:alert(1)")
+
+    assert result["success"] is False
+    assert result["error"] == "Invalid thread URL"

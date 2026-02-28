@@ -22,6 +22,14 @@ class Launcher:
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
         Otherwise, launches using the configured Proton/Wine path.
         """
+        if not isinstance(exe_path, str) or not exe_path.strip():
+            return {
+                "success": False,
+                "error": "Executable path must be a non-empty string",
+            }
+
+        exe_path = exe_path.strip()
+
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
             return {"success": False, "error": f"Executable not found at {exe_path}"}
@@ -43,7 +51,16 @@ class Launcher:
 
         import shlex
 
-        args = shlex.split(command_line_args)
+        if command_line_args is None:
+            command_line_args = ""
+        elif not isinstance(command_line_args, str):
+            command_line_args = str(command_line_args)
+
+        try:
+            args = shlex.split(command_line_args)
+        except ValueError as exc:
+            return {"success": False, "error": f"Invalid command line arguments: {exc}"}
+
         ext = os.path.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
         game_dir = os.path.dirname(exe_path)
@@ -71,13 +88,14 @@ class Launcher:
                     game_proc = subprocess.Popen(
                         cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT
                     )
-                    
+
                     # Ensure the file gets closed when process finishes in the background
                     def track_log_file():
                         game_proc.wait()
                         log_file.close()
-                    
+
                     import threading
+
                     threading.Thread(target=track_log_file, daemon=True).start()
                 else:
                     game_proc = subprocess.Popen(
@@ -115,8 +133,12 @@ class Launcher:
                             )
                             with open(lua_script, "w") as f:
                                 # OpenProcess automatically attaches CE to the process name
-                                safe_game_exe = game_exe.replace("\\", "\\\\").replace(
-                                    '"', '\\"'
+                                safe_game_exe = (
+                                    (game_exe or "")
+                                    .replace("\n", "")
+                                    .replace("\r", "")
+                                    .replace("\\", "\\\\")
+                                    .replace('"', '\\"')
                                 )
                                 f.write(f'OpenProcess("{safe_game_exe}")\n')
 
@@ -158,15 +180,22 @@ class Launcher:
                             now = time.time()
                             delta = int(now - last_saved_time)
                             last_saved_time = now
-                            on_exit_callback(delta, is_final=False)
-                            
+                            if on_exit_callback is not None:
+                                on_exit_callback(delta, is_final=False)
+
                         now = time.time()
                         delta = int(now - last_saved_time)
                         if delta > 0:
-                            on_exit_callback(delta, is_final=True)
+                            if on_exit_callback is not None:
+                                on_exit_callback(delta, is_final=True)
                         else:
-                            on_exit_callback(0, is_final=True)
+                            if on_exit_callback is not None:
+                                on_exit_callback(0, is_final=True)
+
                     threading.Thread(target=track_playtime_thread, daemon=True).start()
+
+                if not enable_logging and not on_exit_callback:
+                    threading.Thread(target=game_proc.wait, daemon=True).start()
 
                 return {"success": True}
             except Exception as e:

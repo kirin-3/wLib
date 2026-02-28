@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false
 import pytest
 import sqlite3
 import os
@@ -36,6 +37,10 @@ def test_database_initialization():
     columns = [row[1] for row in cursor.fetchall()]
     assert "tags" in columns
     assert "run_wayland" in columns
+
+    cursor.execute("PRAGMA foreign_keys")
+    assert cursor.fetchone()[0] == 1
+
     conn.close()
 
 
