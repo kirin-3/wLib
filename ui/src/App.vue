@@ -8,11 +8,21 @@ const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
 const isDark = ref(true);
+const isNavCollapsed = ref(false);
+const navCollapsedStorageKey = "wlib-nav-collapsed";
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
   document.documentElement.classList.toggle("light", !isDark.value);
   localStorage.setItem("wlib-theme", isDark.value ? "dark" : "light");
+};
+
+const toggleNavCollapse = () => {
+  isNavCollapsed.value = !isNavCollapsed.value;
+  localStorage.setItem(
+    navCollapsedStorageKey,
+    isNavCollapsed.value ? "true" : "false",
+  );
 };
 
 const handleExtensionAdd = (event) => {
@@ -56,6 +66,11 @@ onMounted(() => {
     document.documentElement.classList.add("light");
   }
 
+  const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
+  if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
+    isNavCollapsed.value = savedNavCollapsed === "true";
+  }
+
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
 
@@ -85,44 +100,57 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="flex h-screen w-screen overflow-hidden"
-    style="background: var(--bg-base); color: var(--text-primary)"
-  >
+  <div class="app-shell flex h-screen w-screen overflow-hidden">
     <!-- Sidebar -->
     <aside
-      class="w-64 flex flex-col justify-between shrink-0"
+      :class="[
+        isNavCollapsed ? 'w-16' : 'w-64',
+        'flex flex-col justify-between shrink-0 collapse-width-transition',
+      ]"
       style="
         background: var(--bg-surface);
         border-right: 1px solid var(--border);
       "
     >
       <div>
-        <div class="px-6 py-8">
-          <div class="flex items-center gap-3">
+        <div :class="isNavCollapsed ? 'px-2 py-8' : 'px-6 py-8'">
+          <div
+            class="flex items-center"
+            :class="isNavCollapsed ? 'justify-center' : 'gap-3'"
+          >
             <img
               src="/icon.svg"
               alt="wLib Logo"
-              class="w-8 h-8 drop-shadow-lg"
+              class="w-8 h-8 drop-shadow-lg shrink-0"
             />
             <h1
-              class="text-2xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-[#d152d1] to-[#5a3968]"
+              class="brand-gradient-text text-2xl font-extrabold bg-clip-text text-transparent whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
             >
               wLib
             </h1>
           </div>
           <p
-            class="text-xs mt-1.5 uppercase tracking-widest font-semibold"
+            class="text-xs uppercase tracking-widest font-semibold whitespace-nowrap transition-opacity duration-150"
+            :class="
+              isNavCollapsed
+                ? 'opacity-0 h-0 mt-0 overflow-hidden'
+                : 'opacity-100 mt-1.5'
+            "
             style="color: var(--text-muted)"
           >
             Game Manager
           </p>
         </div>
 
-        <nav class="px-4 space-y-1 mt-2">
+        <nav :class="isNavCollapsed ? 'px-2 space-y-1 mt-2' : 'px-4 space-y-1 mt-2'">
           <router-link
             to="/"
-            class="nav-link flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium"
+            :title="isNavCollapsed ? 'Library' : ''"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
             active-class="nav-active"
             exact-active-class="nav-active"
           >
@@ -136,18 +164,27 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              class="shrink-0"
             >
               <rect width="7" height="9" x="3" y="3" rx="1" />
               <rect width="7" height="5" x="14" y="3" rx="1" />
               <rect width="7" height="9" x="14" y="12" rx="1" />
               <rect width="7" height="5" x="3" y="16" rx="1" />
             </svg>
-            Library
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Library</span
+            >
           </router-link>
 
           <router-link
             to="/updates"
-            class="nav-link flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium"
+            :title="isNavCollapsed ? 'Updates' : ''"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
             active-class="nav-active"
             exact-active-class="nav-active"
           >
@@ -161,17 +198,26 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              class="shrink-0"
             >
               <path
                 d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-10.45l4.8 4.8"
               />
             </svg>
-            Updates
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Updates</span
+            >
           </router-link>
 
           <router-link
             to="/extension"
-            class="nav-link flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium"
+            :title="isNavCollapsed ? 'Extension' : ''"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
             active-class="nav-active"
             exact-active-class="nav-active"
           >
@@ -185,16 +231,25 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              class="shrink-0"
             >
               <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
               <path d="m15 5 4 4" />
             </svg>
-            Extension
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Extension</span
+            >
           </router-link>
 
           <router-link
             to="/settings"
-            class="nav-link flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium"
+            :title="isNavCollapsed ? 'Settings' : ''"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
             active-class="nav-active"
             exact-active-class="nav-active"
           >
@@ -208,25 +263,31 @@ onUnmounted(() => {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
+              class="shrink-0"
             >
               <path
                 d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
               />
               <circle cx="12" cy="12" r="3" />
             </svg>
-            Settings
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Settings</span
+            >
           </router-link>
         </nav>
       </div>
 
       <!-- Footer: Version, Theme Toggle & Repo -->
       <div
-        class="p-5 flex items-center justify-between"
+        class="p-5 flex items-center"
+        :class="isNavCollapsed ? 'justify-center' : 'justify-between'"
         style="border-top: 1px solid var(--border)"
       >
         <router-link
           to="/updates"
-          v-if="hasAppUpdate"
+          v-if="hasAppUpdate && !isNavCollapsed"
           class="text-xs font-mono font-bold px-2 py-0.5 rounded-md animate-pulse"
           style="
             background: var(--brand-glow-strong);
@@ -236,13 +297,18 @@ onUnmounted(() => {
           >{{ latestVersion }} ✨</router-link
         >
         <span
-          v-else
+          v-else-if="!isNavCollapsed"
           class="text-xs font-mono font-semibold"
           style="color: var(--text-muted)"
           >{{ currentVersion }}</span
         >
 
-        <div class="flex items-center gap-2">
+        <div
+          :class="[
+            'flex',
+            isNavCollapsed ? 'flex-col items-center gap-2' : 'items-center gap-2',
+          ]"
+        >
           <!-- Theme Toggle -->
           <button
             @click="toggleTheme"
@@ -287,6 +353,7 @@ onUnmounted(() => {
 
           <!-- GitHub -->
           <a
+            v-if="!isNavCollapsed"
             href="https://github.com/kirin-3/wLib"
             target="_blank"
             rel="noopener noreferrer"
@@ -306,6 +373,14 @@ onUnmounted(() => {
               />
             </svg>
           </a>
+
+          <button
+            @click="toggleNavCollapse"
+            class="theme-toggle p-1.5 rounded-lg text-base leading-none font-semibold"
+            :title="isNavCollapsed ? 'Expand navigation' : 'Collapse navigation'"
+          >
+            {{ isNavCollapsed ? "»" : "«" }}
+          </button>
         </div>
       </div>
     </aside>
@@ -329,6 +404,15 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.app-shell {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+.brand-gradient-text {
+  background-image: linear-gradient(to right, var(--brand), var(--brand-deep));
 }
 
 .nav-link {

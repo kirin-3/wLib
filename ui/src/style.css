@@ -36,6 +36,20 @@
 
   --scrollbar-track: #15151c;
   --scrollbar-thumb: #2d2d38;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+
+  --overlay-scrim: rgba(0, 0, 0, 0.6);
+  --overlay-scrim-strong: rgba(0, 0, 0, 0.8);
+  --overlay-border: rgba(255, 255, 255, 0.1);
+  --overlay-control: rgba(255, 255, 255, 0.12);
+  --overlay-control-hover-bg: #ffffff;
+  --overlay-control-text: #ffffff;
+  --overlay-control-hover-text: #0f0f14;
+
+  --rating-accent: #facc15;
+  --success-bg: rgba(34, 197, 94, 0.15);
+  --success-border: rgba(34, 197, 94, 0.35);
+  --success-text: #4ade80;
 }
 
 /* ========== LIGHT THEME ========== */
@@ -68,6 +82,20 @@
 
   --scrollbar-track: #f0f0f4;
   --scrollbar-thumb: #c8c8d4;
+  --surface-hover: rgba(26, 26, 46, 0.06);
+
+  --overlay-scrim: rgba(15, 15, 20, 0.45);
+  --overlay-scrim-strong: rgba(15, 15, 20, 0.62);
+  --overlay-border: rgba(255, 255, 255, 0.22);
+  --overlay-control: rgba(255, 255, 255, 0.22);
+  --overlay-control-hover-bg: #ffffff;
+  --overlay-control-text: #ffffff;
+  --overlay-control-hover-text: #0f0f14;
+
+  --rating-accent: #ca8a04;
+  --success-bg: rgba(34, 197, 94, 0.12);
+  --success-border: rgba(21, 128, 61, 0.3);
+  --success-text: #166534;
 }
 
 /* ========== GLOBAL STYLES ========== */
@@ -114,4 +142,49 @@ body {
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
+}
+
+/* Shared UI utilities */
+.collapse-width-transition {
+  overflow: hidden;
+  transition: width 0.2s ease-in-out;
+}
+
+.ui-hover-surface {
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.ui-hover-surface:hover {
+  background: var(--surface-hover);
+}
+
+/* Empty-state utilities */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem 1rem 3rem;
+  text-align: center;
+}
+
+.empty-state-icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  color: var(--text-muted);
+}
+
+.empty-state-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.empty-state-subtext {
+  color: var(--text-secondary);
+}
+
+.empty-state-hint {
+  font-size: 0.875rem;
+  color: var(--text-muted);
 }

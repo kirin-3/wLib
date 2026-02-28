@@ -22,6 +22,17 @@ const layoutMode = ref("grid"); // 'grid' or 'list'
 const sortBy = ref("title");
 const sortDir = ref("asc");
 
+const filtersPaneStorageKey = "wlib-filters-collapsed";
+const filterSectionsStorageKey = "wlib-filter-sections";
+const defaultFilterSections = {
+  collections: true,
+  status: true,
+  tags: true,
+};
+
+const isFiltersCollapsed = ref(true);
+const filterSections = ref({ ...defaultFilterSections });
+
 const toggleSort = (field) => {
   if (sortBy.value === field) {
     sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
@@ -30,6 +41,29 @@ const toggleSort = (field) => {
     sortDir.value = field === "title" ? "asc" : "desc"; // ratings default to high-first
   }
 };
+
+const toggleFiltersPane = () => {
+  isFiltersCollapsed.value = !isFiltersCollapsed.value;
+};
+
+const toggleFilterSection = (section) => {
+  filterSections.value[section] = !filterSections.value[section];
+};
+
+const normalizeFilterSections = (value) => ({
+  collections:
+    typeof value?.collections === "boolean"
+      ? value.collections
+      : defaultFilterSections.collections,
+  status:
+    typeof value?.status === "boolean"
+      ? value.status
+      : defaultFilterSections.status,
+  tags:
+    typeof value?.tags === "boolean"
+      ? value.tags
+      : defaultFilterSections.tags,
+});
 
 const allStatuses = [
   { value: "Playing", label: "🎮 Playing" },
@@ -66,9 +100,12 @@ const uniqueTags = computed(() => {
 
 const activeFilterCount = computed(
   () =>
-    filterStatuses.value.length + filterEngines.value.length + filterTags.value.length + (filterCollection.value !== "All" ? 1 : 0),
+    (filterCollection.value !== "All" ? 1 : 0) +
+    (filterStatuses.value.length > 0 ? 1 : 0) +
+    (filterTags.value.length > 0 ? 1 : 0),
 );
 const clearFilters = () => {
+  searchQuery.value = "";
   filterStatuses.value = [];
   filterEngines.value = [];
   filterTags.value = [];
@@ -302,7 +339,43 @@ const checkUpdate = async (game, event) => {
   }
 };
 
+watch(isFiltersCollapsed, (collapsed) => {
+  localStorage.setItem(filtersPaneStorageKey, String(collapsed));
+});
+
+watch(
+  filterSections,
+  (sections) => {
+    localStorage.setItem(
+      filterSectionsStorageKey,
+      JSON.stringify({
+        collections: sections.collections,
+        status: sections.status,
+        tags: sections.tags,
+      }),
+    );
+  },
+  { deep: true },
+);
+
 onMounted(() => {
+  const storedFiltersCollapsed = localStorage.getItem(filtersPaneStorageKey);
+  if (storedFiltersCollapsed === "true" || storedFiltersCollapsed === "false") {
+    isFiltersCollapsed.value = storedFiltersCollapsed === "true";
+  }
+
+  const storedFilterSections = localStorage.getItem(filterSectionsStorageKey);
+  if (storedFilterSections) {
+    try {
+      filterSections.value = normalizeFilterSections(
+        JSON.parse(storedFilterSections),
+      );
+    } catch (error) {
+      console.warn("Failed to parse saved filter section state", error);
+      filterSections.value = { ...defaultFilterSections };
+    }
+  }
+
   window.addEventListener("wlib-refresh-library", loadGames);
   onWebviewReady(() => {
     loadGames();
@@ -317,41 +390,142 @@ onUnmounted(() => {
 <template>
   <div class="h-full flex overflow-hidden">
     <!-- Smart Collections Sidebar -->
-    <aside class="w-64 shrink-0 flex flex-col h-full overflow-y-auto" style="background: var(--bg-surface); border-right: 1px solid var(--border);">
-      <div class="p-6 pb-2">
-        <h3 class="text-xs uppercase tracking-widest font-bold mb-3" style="color: var(--text-muted)">Smart Collections</h3>
-        <div class="space-y-1">
-          <button @click="filterCollection = 'All'" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors" :style="filterCollection === 'All' ? 'background: var(--bg-raised); color: var(--text-primary)' : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-            All Games
+    <aside
+      :class="[
+        'filters-pane shrink-0 h-full collapse-width-transition',
+        isFiltersCollapsed ? 'w-0 filters-pane-collapsed' : 'w-64',
+      ]"
+    >
+      <div class="w-64 h-full flex flex-col overflow-y-auto">
+        <div class="p-6 pb-2">
+          <button
+            @click="toggleFilterSection('collections')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Smart Collections</span>
+            <span class="text-sm">{{
+              filterSections.collections ? "▾" : "▸"
+            }}</span>
           </button>
-          <button @click="filterCollection = 'Favorites'" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors" :style="filterCollection === 'Favorites' ? 'background: var(--bg-raised); color: var(--text-primary)' : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'">
-            <svg class="w-4 h-4" viewBox="0 0 24 24" :fill="filterCollection === 'Favorites' ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-            Favorites
-          </button>
+          <div v-show="filterSections.collections" class="space-y-1 mt-3">
+            <button
+              @click="filterCollection = 'All'"
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :style="
+                filterCollection === 'All'
+                  ? 'background: var(--bg-raised); color: var(--text-primary)'
+                  : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
+              "
+            >
+              <svg
+                class="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+              All Games
+            </button>
+            <button
+              @click="filterCollection = 'Favorites'"
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              :style="
+                filterCollection === 'Favorites'
+                  ? 'background: var(--bg-raised); color: var(--text-primary)'
+                  : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
+              "
+            >
+              <svg
+                class="w-4 h-4"
+                viewBox="0 0 24 24"
+                :fill="filterCollection === 'Favorites' ? 'currentColor' : 'none'"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <polygon
+                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
+                ></polygon>
+              </svg>
+              Favorites
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div class="p-6 pb-2 pt-4">
-        <h3 class="text-xs uppercase tracking-widest font-bold mb-3" style="color: var(--text-muted)">Play Status</h3>
-        <div class="space-y-1">
-          <label v-for="s in allStatuses" :key="s.value" class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer hover:bg-white/5 transition-colors">
-            <input type="checkbox" :value="s.value" v-model="filterStatuses" class="rounded border-gray-600 bg-transparent text-emerald-500 focus:ring-emerald-500 focus:ring-offset-gray-900" style="accent-color: var(--brand)" />
-            <span style="color: var(--text-secondary)">{{ s.label }}</span>
-          </label>
-        </div>
-      </div>
-
-      <div class="p-6 pt-4 flex-1">
-        <h3 class="text-xs uppercase tracking-widest font-bold mb-3 flex justify-between items-center" style="color: var(--text-muted)">
-          Tags
-          <span v-if="filterTags.length" @click="filterTags = []" class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal">Clear</span>
-        </h3>
-        <div class="flex flex-wrap gap-1.5">
-          <button v-for="tag in uniqueTags" :key="tag" @click="toggleFilter(filterTags, tag)" class="px-2.5 py-1 rounded-full text-[11px] font-medium transition-all" :style="filterTags.includes(tag) ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)' : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'">
-            {{ tag }}
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('status')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Play Status</span>
+            <span class="text-sm">{{ filterSections.status ? "▾" : "▸" }}</span>
           </button>
-          <div v-if="!uniqueTags.length" class="text-xs italic" style="color: var(--text-muted)">No tags found</div>
+          <div v-show="filterSections.status" class="space-y-1 mt-3">
+            <label
+              v-for="s in allStatuses"
+              :key="s.value"
+              class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ui-hover-surface"
+            >
+              <input
+                type="checkbox"
+                :value="s.value"
+                v-model="filterStatuses"
+                class="filters-checkbox rounded"
+              />
+              <span style="color: var(--text-secondary)">{{ s.label }}</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="p-6 pt-4 flex-1">
+          <button
+            @click="toggleFilterSection('tags')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Tags</span>
+            <span class="text-sm">{{ filterSections.tags ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="filterSections.tags" class="mt-3">
+            <div class="mb-2 flex justify-end">
+              <button
+                v-if="filterTags.length"
+                @click="filterTags = []"
+                class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal transition-colors"
+                style="color: var(--text-muted)"
+              >
+                Clear
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="tag in uniqueTags"
+                :key="tag"
+                @click="toggleFilter(filterTags, tag)"
+                class="px-2.5 py-1 rounded-full text-[11px] font-medium transition-all"
+                :style="
+                  filterTags.includes(tag)
+                    ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
+                    : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
+                "
+              >
+                {{ tag }}
+              </button>
+              <div
+                v-if="!uniqueTags.length"
+                class="text-xs italic"
+                style="color: var(--text-muted)"
+              >
+                No tags found
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </aside>
@@ -377,31 +551,61 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <button
-        @click="showAddModal = true"
-        class="hover:brightness-110 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all"
-        style="background: var(--brand); box-shadow: var(--shadow-brand)"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+      <div class="flex items-center gap-3">
+        <button
+          @click="toggleFiltersPane"
+          class="relative px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium transition-all ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
+          style="color: var(--text-primary); border: 1px solid var(--border)"
+          :title="isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'"
         >
-          <path d="M5 12h14" />
-          <path d="M12 5v14" />
-        </svg>
-        Add Game
-      </button>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="w-5 h-5"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 019 17v-5.586L4.293 6.707A1 1 0 014 6V3z"
+              clip-rule="evenodd"
+            />
+          </svg>
+          <span>Filters</span>
+          <span
+            v-if="activeFilterCount > 0"
+            class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[10px] font-bold flex items-center justify-center"
+            style="background: var(--brand); color: var(--text-inverse)"
+          >
+            {{ activeFilterCount }}
+          </span>
+        </button>
+
+        <button
+          @click="showAddModal = true"
+          class="hover:brightness-110 px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all active:scale-95"
+          style="background: var(--brand); color: var(--text-inverse); box-shadow: var(--shadow-brand)"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </svg>
+          Add Game
+        </button>
+      </div>
     </header>
 
     <!-- Search & Filter Bar -->
-    <div class="mb-6 space-y-3">
+    <div v-if="games.length > 0" class="mb-6 space-y-3">
       <!-- Search Input -->
       <div class="relative">
         <svg
@@ -420,20 +624,7 @@ onUnmounted(() => {
           v-model="searchQuery"
           type="text"
           placeholder="Search games..."
-          class="w-full rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none transition-all"
-          style="
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            color: var(--text-primary);
-          "
-          onfocus="
-            this.style.borderColor = 'var(--brand)';
-            this.style.boxShadow = '0 0 0 3px var(--brand-glow)';
-          "
-          onblur="
-            this.style.borderColor = 'var(--border)';
-            this.style.boxShadow = 'none';
-          "
+          class="library-search-input w-full rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none transition-all"
         />
       </div>
 
@@ -456,7 +647,7 @@ onUnmounted(() => {
             ]"
             :key="s.key"
             @click="toggleSort(s.key)"
-            class="px-2.5 py-1.5 text-xs font-medium transition-all flex items-center gap-1"
+            class="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
             :style="
               sortBy === s.key
                 ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -481,8 +672,8 @@ onUnmounted(() => {
         <button
           v-if="activeFilterCount > 0"
           @click="clearFilters"
-          class="text-xs hover:text-red-400 transition-colors flex items-center gap-1"
-          style="color: var(--text-muted)"
+          class="px-3 py-1.5 rounded-lg text-sm hover:text-red-400 transition-all flex items-center gap-1 border active:scale-95 active:bg-[var(--bg-overlay)]"
+          style="color: var(--text-muted); border-color: var(--border)"
         >
           <svg
             class="w-3 h-3"
@@ -513,10 +704,10 @@ onUnmounted(() => {
           >
             <button
               @click="layoutMode = 'grid'"
-              class="p-1.5 rounded-md transition-all"
+              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'grid'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.1)'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
                   : 'color: var(--text-muted)'
               "
               title="Grid View"
@@ -536,10 +727,10 @@ onUnmounted(() => {
             </button>
             <button
               @click="layoutMode = 'list'"
-              class="p-1.5 rounded-md transition-all"
+              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'list'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,0.1)'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
                   : 'color: var(--text-muted)'
               "
               title="List View"
@@ -565,7 +756,53 @@ onUnmounted(() => {
 
     </div>
 
-    <TransitionGroup
+    <div v-if="games.length === 0" class="empty-state flex-1">
+      <svg
+        class="empty-state-icon"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <rect x="2.5" y="7.5" width="19" height="9" rx="3" />
+        <path d="M7 12h2M8 11v2M15.5 11.5h.01M18 13.5h.01" />
+      </svg>
+      <h3 class="empty-state-title">Your library is empty</h3>
+      <p class="empty-state-subtext">Add your first game to get started</p>
+      <p class="empty-state-hint">
+        Use the Add Game button above to import your first title.
+      </p>
+    </div>
+
+    <div v-else-if="filteredGames.length === 0" class="empty-state flex-1">
+      <svg
+        class="empty-state-icon"
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="m21 21-4.35-4.35M8 11h6" />
+      </svg>
+      <h3 class="empty-state-title">No games found</h3>
+      <p class="empty-state-subtext">Try adjusting your search or filters</p>
+      <button
+        @click="clearFilters"
+        class="px-3 py-1.5 rounded-lg text-sm font-medium transition-all border active:scale-95 active:bg-[var(--bg-overlay)]"
+        style="color: var(--text-secondary); border-color: var(--border)"
+      >
+        Clear filters
+      </button>
+    </div>
+
+    <TransitionGroup v-else
       name="list"
       tag="div"
       :class="[
@@ -625,10 +862,10 @@ onUnmounted(() => {
           </svg>
 
           <div
-            class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
+            class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
           >
             <button
-              class="bg-white/10 hover:bg-white text-white hover:text-black rounded-full p-4 transition-all transform scale-90 group-hover:scale-100"
+              class="card-overlay-play-btn rounded-full p-4 transition-all transform scale-90 group-hover:scale-100"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -646,9 +883,9 @@ onUnmounted(() => {
           <!-- Rating Badge (Top Left) -->
           <div
             v-if="game.rating"
-            class="absolute top-3 left-3 bg-black/60 backdrop-blur-md text-yellow-400 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-1"
+            class="rating-badge absolute top-3 left-3 backdrop-blur-md text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1"
           >
-            <svg class="w-3.5 h-3.5 fill-yellow-400" viewBox="0 0 20 20">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20">
               <path
                 d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z"
               />
@@ -660,7 +897,7 @@ onUnmounted(() => {
           <button
             v-if="game.f95_url"
             @click.stop="checkUpdate(game, $event)"
-            class="absolute top-3 right-3 bg-black/50 hover:bg-black/80 text-gray-300 hover:text-white p-2 rounded-lg backdrop-blur-md border border-white/10 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-100 disabled:cursor-wait"
+            class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 disabled:opacity-100 disabled:cursor-wait"
           >
             <svg
               v-if="updatingId !== game.id"
@@ -765,7 +1002,7 @@ onUnmounted(() => {
                 v-if="
                   game.latest_version && game.latest_version !== game.version
                 "
-                class="flex items-center gap-1 px-2 py-0.5 md:py-1 bg-green-600/15 rounded-md border border-green-500/30 text-green-400 font-mono text-[10px] md:text-xs font-bold animate-pulse"
+                class="update-version-badge flex items-center gap-1 px-2 py-0.5 md:py-1 rounded-md font-mono text-[10px] md:text-xs font-bold animate-pulse"
               >
                 ⬆ {{ game.latest_version }}
               </div>
@@ -800,7 +1037,7 @@ onUnmounted(() => {
             </div>
             <button
               @click.stop="launchGameFast(game)"
-              class="play-btn text-white px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-2 transition-all active:scale-95 shrink-0"
+              class="play-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-2 transition-all active:scale-95 shrink-0"
             >
               <svg
                 class="w-3 h-3 md:w-4 md:h-4"
@@ -864,9 +1101,81 @@ onUnmounted(() => {
 
 .play-btn {
   background: var(--brand);
+  color: var(--text-inverse);
   box-shadow: var(--shadow-brand);
 }
 .play-btn:hover {
   filter: brightness(1.15);
+}
+
+.filters-pane {
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+}
+
+.filters-pane-collapsed {
+  border-right: 0 solid transparent;
+}
+
+.library-search-input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.library-search-input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-glow);
+}
+
+.filters-checkbox {
+  accent-color: var(--brand);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.filters-checkbox:focus {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.card-image-overlay {
+  background: var(--overlay-scrim);
+}
+
+.card-overlay-play-btn {
+  background: var(--overlay-control);
+  color: var(--overlay-control-text);
+}
+
+.card-overlay-play-btn:hover {
+  background: var(--overlay-control-hover-bg);
+  color: var(--overlay-control-hover-text);
+}
+
+.rating-badge {
+  background: var(--overlay-scrim);
+  border: 1px solid var(--overlay-border);
+  color: var(--rating-accent);
+}
+
+.rating-badge svg {
+  fill: currentColor;
+}
+
+.update-overlay-btn {
+  background: var(--overlay-scrim-strong);
+  border: 1px solid var(--overlay-border);
+  color: var(--text-secondary);
+}
+
+.update-overlay-btn:hover {
+  background: var(--overlay-scrim);
+  color: var(--text-primary);
+}
+
+.update-version-badge {
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success-text);
 }
 </style>

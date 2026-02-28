@@ -57,6 +57,7 @@ desktop.ini
 # Task files
 tasks.json
 tasks/
+openspec/
 
 # Build outputs
 dist/
