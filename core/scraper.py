@@ -225,7 +225,8 @@ class Scraper:
         # F95 attachments may expose thumbnail URLs under /thumb/.
         # Prefer the original asset path when possible.
         if "attachments.f95zone.to/" in normalized and "/thumb/" in normalized:
-            normalized = normalized.replace("/thumb/", "/")
+            while "/thumb/" in normalized:
+                normalized = normalized.replace("/thumb/", "/", 1)
 
         return normalized
 

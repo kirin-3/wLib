@@ -93,6 +93,15 @@ def init_db():
             if col_name not in existing_columns:
                 cursor.execute(f"ALTER TABLE games ADD COLUMN {col_name} {col_type}")
 
+        try:
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_f95_url_unique ON games(f95_url) WHERE f95_url IS NOT NULL AND f95_url != ''"
+            )
+        except sqlite3.IntegrityError:
+            print(
+                "[wLib] Warning: duplicate f95_url values exist; unique index not applied"
+            )
+
         # Migrate legacy status to play_status
         if "status" in existing_columns and "play_status" not in existing_columns:
             cursor.execute(
@@ -134,18 +143,27 @@ def add_game(
     if isinstance(tags, list):
         tags = ", ".join(tags)
 
+    normalized_url = f95_url.strip() if isinstance(f95_url, str) else ""
+
     import datetime
 
     now_iso = datetime.datetime.now().isoformat()
 
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
+        if normalized_url:
+            cursor.execute(
+                "SELECT id FROM games WHERE f95_url = ? LIMIT 1", (normalized_url,)
+            )
+            if cursor.fetchone() is not None:
+                raise sqlite3.IntegrityError("duplicate f95_url")
+
         cursor.execute(
             "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
-                f95_url,
+                normalized_url,
                 version,
                 cover_image,
                 tags,
@@ -219,7 +237,7 @@ def update_game(game_id, fields):
         "is_favorite",
     }
     # Only allow known columns
-    safe_fields = {k: v for k, v in fields.items() if k in allowed}
+    safe_fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not safe_fields:
         return
 
@@ -234,6 +252,8 @@ def update_game(game_id, fields):
 
 def update_playtime(game_id, delta_seconds):
     import datetime
+
+    delta_seconds = max(0, delta_seconds)
 
     with closing(get_connection()) as conn:
         cursor = conn.cursor()

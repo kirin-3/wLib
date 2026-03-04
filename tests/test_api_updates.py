@@ -190,3 +190,28 @@ def test_add_game_backfills_missing_metadata(monkeypatch):
     assert game["engine"] == "Unity"
     assert game["tags"] == "3d, adventure"
     assert game["cover_image_path"] == "https://img.example/new-cover.jpg"
+
+
+def test_add_game_rejects_duplicate_f95_url(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {"success": False},
+    )
+
+    first = api.add_game(
+        title="First",
+        exe_path="/tmp/first.exe",
+        f95_url="https://f95zone.to/threads/dupe.777/",
+    )
+    second = api.add_game(
+        title="Second",
+        exe_path="/tmp/second.exe",
+        f95_url="https://f95zone.to/threads/dupe.777/",
+    )
+
+    assert first["id"] is not None
+    assert second["success"] is False
+    assert second["error_code"] == "duplicate_url"

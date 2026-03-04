@@ -68,8 +68,13 @@ class Launcher:
         # Helper to apply Steam-style %command% substitution
         def build_command(base_cmd, user_args):
             if "%command%" in user_args:
-                idx = user_args.index("%command%")
-                return user_args[:idx] + base_cmd + user_args[idx + 1 :]
+                result = []
+                for arg in user_args:
+                    if arg == "%command%":
+                        result.extend(base_cmd)
+                    else:
+                        result.append(arg)
+                return result
             return base_cmd + user_args
 
         # Helper for common subprocess execution

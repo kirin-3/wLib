@@ -159,26 +159,35 @@ class Api:
         custom_prefix="",
         proton_version="",
     ):
+        import sqlite3
+
         from core.database import add_game
 
         normalized_url = f95_url.strip() if isinstance(f95_url, str) else ""
 
-        game_id = add_game(
-            title,
-            exe_path,
-            normalized_url,
-            version=version,
-            cover_image=cover_image,
-            tags=tags,
-            rating=rating,
-            developer=developer,
-            engine=engine,
-            run_japanese_locale=run_japanese_locale,
-            run_wayland=run_wayland,
-            auto_inject_ce=auto_inject_ce,
-            custom_prefix=custom_prefix,
-            proton_version=proton_version,
-        )
+        try:
+            game_id = add_game(
+                title,
+                exe_path,
+                normalized_url,
+                version=version,
+                cover_image=cover_image,
+                tags=tags,
+                rating=rating,
+                developer=developer,
+                engine=engine,
+                run_japanese_locale=run_japanese_locale,
+                run_wayland=run_wayland,
+                auto_inject_ce=auto_inject_ce,
+                custom_prefix=custom_prefix,
+                proton_version=proton_version,
+            )
+        except sqlite3.IntegrityError:
+            return {
+                "success": False,
+                "error": "A game with this URL is already in your library",
+                "error_code": "duplicate_url",
+            }
 
         needs_metadata = bool(normalized_url) and (
             self._is_missing_text(engine)
