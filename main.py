@@ -161,6 +161,14 @@ def ensure_playwright_browsers():
     chromium_path = os.path.join(PLAYWRIGHT_BROWSERS_PATH, "chromium-*")
     import glob
 
+    try:
+        importlib.import_module("playwright")
+    except ModuleNotFoundError:
+        print(
+            "[wLib] Playwright Python package is missing; cannot install browser binaries."
+        )
+        return False
+
     if glob.glob(chromium_path):
         return True
 
@@ -179,6 +187,20 @@ def ensure_playwright_browsers():
         return False
 
 
+def ensure_playwright_browsers_async():
+    """Run Playwright browser availability checks outside startup critical path."""
+
+    def _ensure():
+        ok = ensure_playwright_browsers()
+        if not ok:
+            print(
+                "[wLib] Playwright browser check failed; update checks may fail until installed."
+            )
+
+    thread = threading.Thread(target=_ensure, daemon=True)
+    thread.start()
+
+
 def main():
     if "--install-playwright-if-needed" in sys.argv:
         ensure_playwright_browsers()
@@ -188,8 +210,6 @@ def main():
 
     if webview is None:
         raise RuntimeError("pywebview is required to run wLib")
-
-    ensure_playwright_browsers()
 
     api = Api()
 
@@ -220,6 +240,9 @@ def main():
     )
     window_ref = window
     api.set_window(window)
+
+    # Keep startup responsive by verifying Playwright browsers in the background.
+    ensure_playwright_browsers_async()
 
     # Start the extension background server in a daemon thread
     threading.Thread(target=start_extension_server, daemon=True).start()

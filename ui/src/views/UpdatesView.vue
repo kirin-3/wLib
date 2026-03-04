@@ -124,6 +124,12 @@ const progress = computed(() => {
   return Math.round((status.value.checked / status.value.total) * 100);
 });
 
+const statusDelaySeconds = computed(() => {
+  const raw = Number(status.value.delay_seconds);
+  if (!Number.isFinite(raw) || raw <= 0) return 5;
+  return raw;
+});
+
 const gamesWithUpdates = computed(() => {
   return status.value.results.filter((r) => r.has_update);
 });
@@ -494,7 +500,8 @@ onUnmounted(() => {
           style="color: var(--text-muted)"
         >
           Click "Check All Games" to scan F95Zone for new versions. Games are
-          checked one-by-one with a 15-second delay to avoid rate limiting.
+          checked one-by-one with a {{ statusDelaySeconds }}-second delay to
+          avoid rate limiting.
         </p>
       </section>
 

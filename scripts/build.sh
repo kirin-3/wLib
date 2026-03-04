@@ -41,6 +41,7 @@ pyinstaller --noconfirm --onedir \
     --add-data "wlib.png:." \
     --hidden-import "core" \
     --hidden-import "playwright" \
+    --hidden-import "playwright.sync_api" \
     --hidden-import "pywebview" \
     --hidden-import "PyQt6" \
     --hidden-import "webview.platforms.qt" \

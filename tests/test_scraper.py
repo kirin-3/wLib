@@ -168,4 +168,116 @@ def test_get_thread_version_rejects_invalid_url():
     result = scraper.get_thread_version("javascript:alert(1)")
 
     assert result["success"] is False
+    assert result["code"] == "invalid_url"
     assert result["error"] == "Invalid thread URL"
+
+
+def test_non_actionable_version_detection():
+    scraper = Scraper()
+
+    assert scraper._is_non_actionable_version("Unknown")
+    assert scraper._is_non_actionable_version("  ")
+    assert scraper._is_non_actionable_version(None)
+    assert not scraper._is_non_actionable_version("1.2.3")
+
+
+def test_classify_page_issue_cloudflare():
+    scraper = Scraper()
+
+    class FakePage:
+        def title(self):
+            return "Just a moment..."
+
+        def content(self):
+            return "<html>Cloudflare challenge</html>"
+
+    issue = scraper._classify_page_issue(FakePage())
+
+    assert issue is not None
+    assert issue["code"] == "blocked"
+
+
+def test_get_thread_version_returns_blocked_on_challenge(monkeypatch):
+    scraper = Scraper()
+
+    class FakePage:
+        def goto(self, *args, **kwargs):
+            return None
+
+        def wait_for_selector(self, *args, **kwargs):
+            raise RuntimeError("selector timeout")
+
+        def title(self):
+            return "Cloudflare"
+
+        def content(self):
+            return "Checking your browser before accessing"
+
+        def close(self):
+            return None
+
+    class FakeContext:
+        def __init__(self, page):
+            self._page = page
+
+        def new_page(self):
+            return self._page
+
+        def close(self):
+            return None
+
+    class FakePlaywright:
+        def __init__(self, page):
+            self.chromium = self
+            self._page = page
+
+        def launch_persistent_context(self, **kwargs):
+            return FakeContext(self._page)
+
+    class FakeSyncPlaywright:
+        def __init__(self, page):
+            self._page = page
+
+        def start(self):
+            return FakePlaywright(self._page)
+
+        def stop(self):
+            return None
+
+    monkeypatch.setattr(
+        scraper, "_load_sync_playwright", lambda: lambda: FakeSyncPlaywright(FakePage())
+    )
+
+    result = scraper.get_thread_version("https://f95zone.to/threads/example.1/")
+
+    assert result["success"] is False
+    assert result["code"] == "blocked"
+
+
+def test_get_thread_version_dependency_missing(monkeypatch):
+    scraper = Scraper()
+
+    monkeypatch.setattr(
+        scraper,
+        "_load_sync_playwright",
+        lambda: (_ for _ in ()).throw(ModuleNotFoundError("playwright.sync_api")),
+    )
+
+    result = scraper.get_thread_version("https://f95zone.to/threads/example.1/")
+
+    assert result["success"] is False
+    assert result["code"] == "dependency_missing"
+    assert "Playwright" in result["error"]
+
+
+def test_normalize_cover_image_url_upgrades_thumb_path():
+    scraper = Scraper()
+
+    thumb_url = (
+        "https://attachments.f95zone.to/2025/04/thumb/4773537_Screenshot_Banner.png"
+    )
+    normalized = scraper._normalize_cover_image_url(thumb_url)
+
+    assert normalized == (
+        "https://attachments.f95zone.to/2025/04/4773537_Screenshot_Banner.png"
+    )

@@ -178,6 +178,18 @@ const filteredGames = computed(() => {
 });
 
 const updatingId = ref(null);
+const updateNotice = ref({ type: "", message: "" });
+let updateNoticeTimeout = null;
+
+const showUpdateNotice = (type, message) => {
+  updateNotice.value = { type, message };
+  if (updateNoticeTimeout) {
+    clearTimeout(updateNoticeTimeout);
+  }
+  updateNoticeTimeout = setTimeout(() => {
+    updateNotice.value = { type: "", message: "" };
+  }, 3500);
+};
 
 const formatPlaytime = (seconds) => {
   if (!seconds) return "0.0 hrs";
@@ -331,11 +343,47 @@ const checkUpdate = async (game, event) => {
     const result = await api.checkForUpdates(game.f95_url);
     if (result && result.success) {
       await loadGames();
+      if (result.has_update) {
+        showUpdateNotice(
+          "success",
+          `${game.title}: new version ${result.version} available.`,
+        );
+      } else {
+        showUpdateNotice(
+          "success",
+          `${game.title}: no new update found (${result.version}).`,
+        );
+      }
+    } else {
+      const reason = result?.error || "Update check failed";
+      showUpdateNotice("error", `${game.title}: ${reason}`);
     }
   } catch (e) {
     console.error("Update check failed", e);
+    showUpdateNotice("error", `${game.title}: ${e?.toString() || "Update check failed"}`);
   } finally {
     updatingId.value = null;
+  }
+};
+
+const handlePlaytimeTick = (event) => {
+  const detail = event?.detail || {};
+  const gameId = Number(detail.gameId);
+  const delta = Number(detail.delta);
+  if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta <= 0) return;
+
+  const game = games.value.find((g) => g.id === gameId);
+  if (!game) return;
+
+  game.playtime_seconds = (Number(game.playtime_seconds) || 0) + delta;
+  game.last_played = new Date().toISOString();
+
+  if (selectedGame.value && selectedGame.value.id === gameId) {
+    selectedGame.value = {
+      ...selectedGame.value,
+      playtime_seconds: game.playtime_seconds,
+      last_played: game.last_played,
+    };
   }
 };
 
@@ -377,6 +425,7 @@ onMounted(() => {
   }
 
   window.addEventListener("wlib-refresh-library", loadGames);
+  window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
   onWebviewReady(() => {
     loadGames();
   });
@@ -384,6 +433,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("wlib-refresh-library", loadGames);
+  window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
+  if (updateNoticeTimeout) {
+    clearTimeout(updateNoticeTimeout);
+  }
 });
 </script>
 
@@ -606,6 +659,18 @@ onUnmounted(() => {
 
     <!-- Search & Filter Bar -->
     <div v-if="games.length > 0" class="mb-6 space-y-3">
+      <div
+        v-if="updateNotice.message"
+        class="rounded-lg px-3 py-2 text-sm"
+        :style="
+          updateNotice.type === 'error'
+            ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #fecaca;'
+            : 'background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.35); color: #bbf7d0;'
+        "
+      >
+        {{ updateNotice.message }}
+      </div>
+
       <!-- Search Input -->
       <div class="relative">
         <svg
@@ -897,7 +962,8 @@ onUnmounted(() => {
           <button
             v-if="game.f95_url"
             @click.stop="checkUpdate(game, $event)"
-            class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 disabled:opacity-100 disabled:cursor-wait"
+            :disabled="updatingId === game.id"
+            class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
           >
             <svg
               v-if="updatingId !== game.id"

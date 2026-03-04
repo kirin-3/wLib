@@ -1,10 +1,12 @@
-from core.database import init_db
-from core.scraper import Scraper
-from core.launcher import Launcher
-import sys
 import os
+import sys
+from contextlib import closing
 
-APP_VERSION = "0.2.7"
+from core.database import init_db
+from core.launcher import Launcher
+from core.scraper import Scraper
+
+APP_VERSION = "0.2.9"
 
 
 class Api:
@@ -46,7 +48,9 @@ class Api:
         self.window = window
 
     def open_extension_folder(self):
-        import subprocess, shutil, json
+        import json
+        import shutil
+        import subprocess
 
         # Source: bundled extension inside the AppImage / dev source
         if getattr(sys, "frozen", False):
@@ -157,10 +161,12 @@ class Api:
     ):
         from core.database import add_game
 
+        normalized_url = f95_url.strip() if isinstance(f95_url, str) else ""
+
         game_id = add_game(
             title,
             exe_path,
-            f95_url,
+            normalized_url,
             version=version,
             cover_image=cover_image,
             tags=tags,
@@ -173,7 +179,37 @@ class Api:
             custom_prefix=custom_prefix,
             proton_version=proton_version,
         )
-        return {"id": game_id, "title": title}
+
+        needs_metadata = bool(normalized_url) and (
+            self._is_missing_text(engine)
+            or self._is_missing_text(cover_image)
+            or not self._normalize_tags_csv(tags)
+        )
+
+        metadata_updated = 0
+        if needs_metadata:
+            metadata_result = self.scraper.get_thread_metadata(
+                normalized_url, headless=True
+            )
+            if (
+                isinstance(metadata_result, dict)
+                and not metadata_result.get("success")
+                and metadata_result.get("code") in ("blocked", "login_required")
+            ):
+                metadata_result = self.scraper.get_thread_metadata(
+                    normalized_url,
+                    headless=False,
+                    timeout_ms=180000,
+                    hold_open_seconds=self._get_headed_retry_hold_seconds(),
+                )
+
+            if isinstance(metadata_result, dict) and metadata_result.get("success"):
+                metadata_updated = self._backfill_missing_metadata_for_url(
+                    normalized_url,
+                    metadata_result,
+                )
+
+        return {"id": game_id, "title": title, "metadata_updated": metadata_updated}
 
     def delete_game(self, game_id):
         from core.database import delete_game
@@ -190,6 +226,125 @@ class Api:
     # ==========================
     # Scraper API
     # ==========================
+    def _is_actionable_remote_version(self, version) -> bool:
+        if version is None:
+            return False
+        value = str(version).strip().lower()
+        return value not in ("", "unknown", "n/a", "na", "none", "null")
+
+    def _build_scraper_error_payload(self, payload, fallback_message):
+        code = None
+        message = fallback_message
+
+        if isinstance(payload, dict):
+            code = payload.get("code")
+            message = payload.get("error") or payload.get("message") or fallback_message
+        elif isinstance(payload, str) and payload.strip():
+            message = payload.strip()
+
+        result = {"success": False, "error": message}
+        if code:
+            result["error_code"] = code
+
+        if code == "blocked":
+            result["error"] = (
+                f"{message}. Try checking again once the challenge is cleared, "
+                "or log in to F95Zone and retry."
+            )
+        elif code == "login_required":
+            result["error"] = (
+                f"{message}. Please log in to F95Zone in the scraper browser session and retry."
+            )
+        return result
+
+    def _get_bulk_check_delay_seconds(self) -> int:
+        raw = os.environ.get("WLIB_UPDATE_CHECK_DELAY_SECONDS", "5")
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            parsed = 5
+        return max(2, min(parsed, 30))
+
+    def _get_headed_retry_hold_seconds(self) -> int:
+        raw = os.environ.get("WLIB_HEADED_RETRY_HOLD_SECONDS", "20")
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            parsed = 20
+        return max(5, min(parsed, 300))
+
+    def _normalize_tags_csv(self, tags) -> str:
+        if isinstance(tags, str):
+            values = [part.strip() for part in tags.split(",") if part.strip()]
+        elif isinstance(tags, list):
+            values = [str(part).strip() for part in tags if str(part).strip()]
+        else:
+            values = []
+
+        deduped = []
+        seen = set()
+        for value in values:
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(value)
+        return ", ".join(deduped)
+
+    def _is_missing_text(self, value) -> bool:
+        return not isinstance(value, str) or not value.strip()
+
+    def _backfill_missing_metadata_for_url(self, url, metadata):
+        if (
+            not isinstance(url, str)
+            or not url.strip()
+            or not isinstance(metadata, dict)
+        ):
+            return 0
+
+        engine_value = str(metadata.get("engine") or "").strip()
+        tags_value = self._normalize_tags_csv(metadata.get("tags"))
+        cover_value = str(metadata.get("cover_image") or "").strip()
+
+        if not engine_value and not tags_value and not cover_value:
+            return 0
+
+        import sqlite3
+
+        from core.database import get_connection
+
+        updated_rows = 0
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, engine, tags, cover_image_path FROM games WHERE f95_url = ?",
+                (url.strip(),),
+            )
+            games = cursor.fetchall()
+
+            for game in games:
+                fields = {}
+                if engine_value and self._is_missing_text(game["engine"]):
+                    fields["engine"] = engine_value
+                if tags_value and self._is_missing_text(game["tags"]):
+                    fields["tags"] = tags_value
+                if cover_value and self._is_missing_text(game["cover_image_path"]):
+                    fields["cover_image_path"] = cover_value
+
+                if fields:
+                    set_clause = ", ".join([f"{k} = ?" for k in fields.keys()])
+                    values = list(fields.values()) + [game["id"]]
+                    cursor.execute(
+                        f"UPDATE games SET {set_clause} WHERE id = ?", values
+                    )
+                    updated_rows += 1
+
+            if updated_rows:
+                conn.commit()
+
+        return updated_rows
+
     def check_for_updates(self, url):
         """
         Uses Playwright to hit F95Zone and extract the version string from the thread title.
@@ -201,18 +356,38 @@ class Api:
         url = url.strip()
         print(f"Checking for updates for {url}")
         try:
-            version_info = self.scraper.get_thread_version(url, headless=True)
+            version_info = self.scraper.get_thread_version(
+                url,
+                headless=True,
+                include_metadata=True,
+            )
+
+            # If anti-bot/login blocks headless scraping, retry once in headed mode
+            # so users can clear the challenge with the persisted session.
+            if (
+                isinstance(version_info, dict)
+                and not version_info.get("success")
+                and version_info.get("code") in ("blocked", "login_required")
+            ):
+                version_info = self.scraper.get_thread_version(
+                    url,
+                    headless=False,
+                    timeout_ms=180000,
+                    hold_open_seconds=self._get_headed_retry_hold_seconds(),
+                    include_metadata=True,
+                )
+
             if not version_info.get("success"):
-                return {
-                    "success": False,
-                    "error": version_info.get("error", "Failed to check for updates"),
-                }
+                return self._build_scraper_error_payload(
+                    version_info, "Failed to check for updates"
+                )
 
             remote_version = version_info.get("version")
-            if not remote_version:
+            if not self._is_actionable_remote_version(remote_version):
                 return {
                     "success": False,
                     "error": "Could not extract a version from thread",
+                    "error_code": "extract_failed",
                 }
 
             # Store in latest_version field
@@ -240,13 +415,21 @@ class Api:
                 and remote_version
                 and str(current_version).strip() != str(remote_version).strip()
             )
+            metadata_updated = self._backfill_missing_metadata_for_url(
+                url, version_info
+            )
             return {
                 "success": True,
-                "version": remote_version,
+                "version": str(remote_version).strip(),
                 "has_update": has_update,
+                "metadata_updated": metadata_updated,
             }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error": str(e),
+                "error_code": "check_failed",
+            }
 
     def open_in_browser(self, url):
         """Opens a URL in the user's default browser and brings it to foreground."""
@@ -256,7 +439,7 @@ class Api:
         return {"success": True}
 
     def check_all_updates(self):
-        """Start a background thread to check all games for updates, 15s apart."""
+        """Start a background thread to check all games for updates."""
         import threading
 
         if hasattr(self, "_update_running") and self._update_running:
@@ -272,9 +455,22 @@ class Api:
         self._update_checked = 0
         self._update_current = ""
         self._update_results = []
+        self._update_delay_seconds = self._get_bulk_check_delay_seconds()
+
+        games_by_url = {
+            g.get("f95_url"): g
+            for g in games_with_url
+            if isinstance(g.get("f95_url"), str)
+        }
+        current_versions_by_url = {
+            g.get("f95_url"): str(g.get("version") or "")
+            for g in games_with_url
+            if isinstance(g.get("f95_url"), str)
+        }
 
         # Record the check timestamp
         from datetime import datetime
+
         from core.database import get_connection
 
         conn = None
@@ -300,9 +496,7 @@ class Api:
                     if not self._update_running:
                         return False  # Stop checking
 
-                    game = next(
-                        (g for g in games_with_url if g["f95_url"] == url), None
-                    )
+                    game = games_by_url.get(url)
                     if not game:
                         return True
 
@@ -310,7 +504,11 @@ class Api:
 
                     has_update = False
                     callback_error = result.get("error")
-                    if result.get("success") and result.get("version"):
+                    callback_error_code = result.get("code")
+
+                    if result.get("success") and self._is_actionable_remote_version(
+                        result.get("version")
+                    ):
                         remote_version = result["version"]
                         from core.database import get_connection
 
@@ -322,13 +520,7 @@ class Api:
                                 "UPDATE games SET latest_version = ? WHERE f95_url = ?",
                                 (remote_version, url),
                             )
-                            cursor.execute(
-                                "SELECT version FROM games WHERE f95_url = ?", (url,)
-                            )
-                            row = cursor.fetchone()
-                            current_version = (
-                                row[0] if row and row[0] is not None else ""
-                            )
+                            current_version = current_versions_by_url.get(url, "")
                             conn.commit()
                             has_update = bool(
                                 current_version
@@ -338,9 +530,13 @@ class Api:
                             )
                         except Exception as e:
                             callback_error = f"Failed to save update data: {e}"
+                            callback_error_code = "db_write_failed"
                         finally:
                             if conn is not None:
                                 conn.close()
+                    elif result.get("success"):
+                        callback_error = "Could not extract a version from thread"
+                        callback_error_code = "extract_failed"
 
                     self._update_results.append(
                         {
@@ -350,14 +546,39 @@ class Api:
                             "latest_version": result.get("version", ""),
                             "has_update": has_update,
                             "error": callback_error,
+                            "error_code": callback_error_code,
                         }
                     )
                     self._update_checked += 1
                     return True
 
-                self.scraper.get_multiple_thread_versions(
-                    urls, headless=True, delay=15, callback=check_callback
+                bulk_results = self.scraper.get_multiple_thread_versions(
+                    urls,
+                    headless=True,
+                    delay=self._update_delay_seconds,
+                    callback=check_callback,
                 )
+
+                batch_error = None
+                if isinstance(bulk_results, dict):
+                    batch_error = bulk_results.get("__batch_error__")
+
+                if batch_error and self._update_checked == 0 and games_with_url:
+                    for game in games_with_url:
+                        self._update_results.append(
+                            {
+                                "id": game["id"],
+                                "title": game.get("title", ""),
+                                "current_version": game.get("version", ""),
+                                "latest_version": "",
+                                "has_update": False,
+                                "error": batch_error.get(
+                                    "error", "Batch update check failed"
+                                ),
+                                "error_code": batch_error.get("code", "batch_failed"),
+                            }
+                        )
+                    self._update_checked = len(games_with_url)
             finally:
                 self._update_checked = self._update_total
                 self._update_current = ""
@@ -365,7 +586,11 @@ class Api:
 
         thread = threading.Thread(target=run_checks, daemon=True)
         thread.start()
-        return {"success": True, "total": self._update_total}
+        return {
+            "success": True,
+            "total": self._update_total,
+            "delay_seconds": self._update_delay_seconds,
+        }
 
     def get_update_status(self):
         """Get the current status of the bulk update check."""
@@ -375,6 +600,7 @@ class Api:
             "checked": getattr(self, "_update_checked", 0),
             "current": getattr(self, "_update_current", ""),
             "results": getattr(self, "_update_results", []),
+            "delay_seconds": getattr(self, "_update_delay_seconds", 5),
         }
 
     def cancel_update_check(self):
@@ -386,15 +612,14 @@ class Api:
         """Get the auto update check frequency setting."""
         from core.database import get_connection
 
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'auto_update_check'")
-        row = cursor.fetchone()
-        freq = row[0] if row else "weekly"
-        cursor.execute("SELECT value FROM settings WHERE key = 'last_update_check'")
-        row2 = cursor.fetchone()
-        last = row2[0] if row2 else ""
-        conn.close()
+        with closing(get_connection()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'auto_update_check'")
+            row = cursor.fetchone()
+            freq = row[0] if row else "weekly"
+            cursor.execute("SELECT value FROM settings WHERE key = 'last_update_check'")
+            row2 = cursor.fetchone()
+            last = row2[0] if row2 else ""
         return {"frequency": freq, "last_check": last}
 
     def set_auto_check_setting(self, frequency):
@@ -413,8 +638,9 @@ class Api:
 
     def maybe_auto_check(self):
         """Check if auto update should run based on frequency and last check time."""
-        from core.database import get_connection
         from datetime import datetime, timedelta
+
+        from core.database import get_connection
 
         conn = get_connection()
         cursor = conn.cursor()
@@ -500,9 +726,13 @@ class Api:
                 from core.database import update_playtime
 
                 update_playtime(game_id, delta)
-                if is_final and self.window:
+                if self.window:
+                    safe_game_id = int(game_id)
+                    safe_delta = max(int(delta), 0)
                     self.window.evaluate_js(
-                        "window.dispatchEvent(new CustomEvent('wlib-refresh-library'))"
+                        "window.dispatchEvent(new CustomEvent('wlib-playtime-tick', { detail: { "
+                        f"gameId: {safe_game_id}, delta: {safe_delta}, isFinal: {str(bool(is_final)).lower()}"
+                        " } }))"
                     )
             except Exception as e:
                 print(f"Failed to update playtime for game {game_id}: {e}")
@@ -523,9 +753,10 @@ class Api:
         """
         Runs winetricks to install the common dependencies needed for RPGMaker/Unity visual novels.
         """
-        from core.database import get_setting
-        import subprocess
         import os
+        import subprocess
+
+        from core.database import get_setting
 
         wine_prefix = prefix_path if prefix_path else get_setting("wine_prefix_path")
         proton_path_to_use = proton_path if proton_path else get_setting("proton_path")
@@ -624,12 +855,13 @@ class Api:
         Downloads and installs RPG Maker VX Ace and XP RTPs into the configured wine prefix.
         Currently downloads the official zips and triggers their setup.exe silently.
         """
-        from core.database import get_setting
-        import subprocess
         import os
+        import subprocess
+        import threading
         import urllib.request
         import zipfile
-        import threading
+
+        from core.database import get_setting
 
         wine_prefix = get_setting("wine_prefix_path")
         proton_path = get_setting("proton_path")
@@ -840,10 +1072,10 @@ class Api:
         """
         Downloads the latest Proton-GE release and extracts it to the local share directory.
         """
-        import urllib.request
         import json
         import os
         import tarfile
+        import urllib.request
 
         try:
             print("Fetching latest GE-Proton release info...")
@@ -977,8 +1209,9 @@ class Api:
         Searches common save file locations for a game.
         Returns a list of {path, type, description} for each found location.
         """
-        import os
         import glob
+        import os
+
         from core.database import get_setting
 
         results = []
@@ -1130,7 +1363,9 @@ class Api:
 
     def open_folder(self, path):
         """Opens a folder in the system file manager."""
-        import subprocess, shutil, os
+        import os
+        import shutil
+        import subprocess
 
         if not os.path.exists(path):
             return {"success": False, "error": f"Path does not exist: {path}"}
@@ -1150,9 +1385,9 @@ class Api:
 
     def check_app_updates(self):
         """Fetches the latest release from the kirin-3/wLib GitHub repository."""
-        import urllib.request
         import json
         import logging
+        import urllib.request
 
         try:
             req = urllib.request.Request(
@@ -1218,10 +1453,10 @@ class Api:
         Lunar Engine is an undetected CE fork that works perfectly in Wine.
         """
         import os
+        import shutil
         import subprocess
         import urllib.request
         import zipfile
-        import shutil
 
         url = "https://github.com/visibou/lunarengine/releases/download/v.7.2/Lunar.Engine.zip"
         ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")

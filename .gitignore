@@ -17,6 +17,7 @@ plans/
 colors.md
 GITHUB_WORKFLOW.md
 AGENTS.md
+lancedb/
 
 # Dependency directories
 node_modules/

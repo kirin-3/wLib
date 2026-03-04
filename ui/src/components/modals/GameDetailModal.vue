@@ -13,7 +13,6 @@ const title = ref("");
 const exePath = ref("");
 const f95Url = ref("");
 const version = ref("");
-const developer = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
 const status = ref("");
@@ -30,7 +29,13 @@ const customPrefix = ref("");
 const protonVersion = ref("");
 const useCustomPrefix = ref(false);
 const availableRunners = ref([]);
+const loadingRunners = ref(false);
+const runnersLoaded = ref(false);
 const ceInstalled = ref(false);
+const showJapaneseLocaleInfo = ref(false);
+const showWaylandInfo = ref(false);
+const showCheatEngineInfo = ref(false);
+const tagsExpanded = ref(false);
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref("");
@@ -81,9 +86,8 @@ watch(
         exePath.value = g.exe_path || "";
         f95Url.value = g.f95_url || "";
         version.value = g.version || "";
-        developer.value = g.developer || "";
         commandLineArgs.value = g.command_line_args || "";
-        coverImage.value = g.cover_image_path || "";
+        coverImage.value = g.cover_image_path || g.cover_image || "";
         status.value = g.status || "";
         playStatus.value = g.play_status || "Plan to Play";
         isFavorite.value = !!g.is_favorite;
@@ -94,6 +98,10 @@ watch(
         customPrefix.value = g.custom_prefix || "";
         protonVersion.value = g.proton_version || "";
         useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
+        showJapaneseLocaleInfo.value = false;
+        showWaylandInfo.value = false;
+        showCheatEngineInfo.value = false;
+        tagsExpanded.value = false;
         if (typeof g.tags === "string" && g.tags) {
           tags.value = g.tags
             .split(",")
@@ -123,24 +131,40 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (open) {
+      availableRunners.value = [];
+      runnersLoaded.value = false;
+      loadingRunners.value = false;
       try {
         const ceCheck = await api.isCheatEngineInstalled();
         ceInstalled.value = ceCheck?.installed || false;
       } catch (e) {
         console.error("Failed to check cheat engine status", e);
       }
-      try {
-        const res = await api.getAvailableRunners();
-        if (res && res.success === false) {
-          console.error("Failed to get runners:", res.error);
-        } else if (res?.success) {
-          availableRunners.value = res.runners;
-        }
-      } catch (e) {
-        console.error("Failed to get runners", e);
-      }
     }
   },
+);
+
+watch(
+  () => useCustomPrefix.value,
+  async (enabled) => {
+    if (!enabled || runnersLoaded.value || loadingRunners.value) {
+      return;
+    }
+    loadingRunners.value = true;
+    try {
+      const res = await api.getAvailableRunners();
+      if (res && res.success === false) {
+        console.error("Failed to get runners:", res.error);
+      } else if (res?.success) {
+        availableRunners.value = res.runners;
+        runnersLoaded.value = true;
+      }
+    } catch (e) {
+      console.error("Failed to get runners", e);
+    } finally {
+      loadingRunners.value = false;
+    }
+  }
 );
 
 const close = () => {
@@ -198,7 +222,6 @@ const save = async () => {
       exe_path: exePath.value,
       f95_url: f95Url.value,
       version: version.value,
-      developer: developer.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       status: status.value,
@@ -256,7 +279,24 @@ const deleteGame = async () => {
 
 const launchGame = () => {
   if (props.game) {
-    emit("launch", props.game);
+    emit("launch", {
+      ...props.game,
+      title: title.value,
+      exe_path: exePath.value,
+      f95_url: f95Url.value,
+      version: version.value,
+      command_line_args: commandLineArgs.value,
+      cover_image_path: coverImage.value,
+      play_status: playStatus.value,
+      is_favorite: isFavorite.value ? 1 : 0,
+      tags: tags.value.join(", "),
+      engine: engine.value,
+      run_japanese_locale: !!runJapaneseLocale.value,
+      run_wayland: !!runWayland.value,
+      auto_inject_ce: !!autoInjectCe.value,
+      custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
+      proton_version: useCustomPrefix.value ? protonVersion.value : "",
+    });
   }
 };
 
@@ -348,17 +388,17 @@ const openInBrowser = async () => {
   >
     <!-- Overlay -->
     <div
-      class="absolute inset-0 bg-black/70 backdrop-blur-sm"
+      class="absolute inset-0 bg-black/80"
       @click="close"
     ></div>
 
     <!-- Modal Content -->
     <div
-      class="modal-content w-full max-w-2xl rounded-2xl shadow-2xl relative overflow-hidden transform transition-all flex flex-col max-h-[90vh]"
+      class="modal-content w-full max-w-3xl rounded-2xl shadow-2xl relative overflow-hidden transform transition-[opacity,transform] flex flex-col max-h-[90vh]"
     >
       <!-- Header with Cover Image Background -->
       <div
-        class="relative h-40 overflow-hidden"
+        class="relative h-48 overflow-hidden"
         style="
           background: linear-gradient(
             135deg,
@@ -370,7 +410,7 @@ const openInBrowser = async () => {
         <img
           v-if="coverImage"
           :src="coverImage"
-          class="absolute inset-0 w-full h-full object-cover opacity-40 blur-sm"
+          class="absolute inset-0 w-full h-full object-cover opacity-60 blur-sm"
         />
         <div
           class="absolute inset-0"
@@ -388,17 +428,10 @@ const openInBrowser = async () => {
           class="absolute bottom-4 left-6 right-6 flex items-end justify-between"
         >
           <div>
-            <h3 class="text-xl font-bold text-white drop-shadow-lg">
+            <h3 class="text-xl font-bold text-white drop-shadow-lg line-clamp-2 max-w-lg">
               {{ title || "Untitled Game" }}
             </h3>
             <div class="flex items-center gap-2 mt-0.5">
-              <p
-                v-if="developer"
-                class="text-sm"
-                style="color: var(--text-secondary)"
-              >
-                by {{ developer }}
-              </p>
               <span
                 v-if="engine"
                 class="text-xs font-bold px-2 py-0.5 rounded-md"
@@ -428,7 +461,7 @@ const openInBrowser = async () => {
           <div class="flex items-center gap-2">
             <div
               v-if="f95Rating"
-              class="bg-black/60 backdrop-blur-md text-yellow-400 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-1"
+              class="bg-black/70 text-yellow-400 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-1"
             >
               <svg class="w-3.5 h-3.5 fill-yellow-400" viewBox="0 0 20 20">
                 <path
@@ -438,7 +471,7 @@ const openInBrowser = async () => {
               F95: {{ f95Rating }}
             </div>
             <div
-              class="bg-black/60 backdrop-blur-md text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10"
+              class="bg-black/70 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10"
               style="color: var(--brand)"
             >
               You: {{ averagePersonalRating }}
@@ -448,7 +481,7 @@ const openInBrowser = async () => {
 
         <button
           @click="close"
-          class="absolute top-3 right-3 text-gray-400 hover:text-white transition-colors bg-black/40 rounded-lg p-1.5 backdrop-blur-md"
+          class="absolute top-3 right-3 text-gray-400 hover:text-white transition-colors bg-black/70 rounded-lg p-1.5"
         >
           <svg
             class="w-5 h-5"
@@ -468,7 +501,7 @@ const openInBrowser = async () => {
       </div>
 
       <!-- Scrollable Body -->
-      <div class="p-6 overflow-y-auto space-y-6 flex-1">
+      <div class="modal-scroll-body p-6 overflow-y-auto space-y-6 flex-1">
         <!-- Status Selector & Favorite Toggle -->
         <div class="flex flex-wrap items-center gap-3">
           <div class="flex flex-wrap gap-2">
@@ -534,8 +567,14 @@ const openInBrowser = async () => {
           </div>
 
           <div>
-            <label class="modal-label">Developer</label>
-            <input v-model="developer" type="text" class="modal-input w-full" />
+            <label class="modal-label">Engine</label>
+            <input
+              v-model="engine"
+              type="text"
+              placeholder="Unity, RPGM, Ren'Py..."
+              class="modal-input w-full"
+              style="color: #b380cc"
+            />
           </div>
 
           <div class="col-span-2">
@@ -550,118 +589,6 @@ const openInBrowser = async () => {
           </div>
 
           <div class="col-span-2">
-            <label class="modal-label">Command Line Arguments</label>
-            <input
-              v-model="commandLineArgs"
-              type="text"
-              placeholder="gamemoderun %command% --fullscreen"
-              class="modal-input w-full font-mono"
-            />
-          </div>
-
-          <div
-            class="col-span-2 flex items-center justify-between p-3 rounded-lg"
-            style="
-              background: var(--bg-raised);
-              border: 1px solid var(--border);
-            "
-          >
-            <div>
-              <p class="text-sm font-medium" style="color: var(--text-primary)">
-                Run with Japanese Locale
-              </p>
-              <p class="text-xs" style="color: var(--text-muted)">
-                Enable this if the game has unreadable text (Mojibake) or
-                crashes due to missing Japanese fonts.
-              </p>
-            </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                v-model="runJapaneseLocale"
-                class="sr-only peer"
-              />
-              <div
-                class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-              ></div>
-            </label>
-          </div>
-
-          <div
-            class="col-span-2 flex items-center justify-between p-3 rounded-lg"
-            style="
-              background: var(--bg-raised);
-              border: 1px solid var(--border);
-            "
-          >
-            <div>
-              <p class="text-sm font-medium" style="color: var(--text-primary)">
-                Run in Wayland Compatibility Mode
-              </p>
-              <p class="text-xs" style="color: var(--text-muted)">
-                Enable this if your system uses Wayland and the game crashes or
-                freezes on launch.
-              </p>
-            </div>
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                v-model="runWayland"
-                class="sr-only peer"
-              />
-              <div
-                class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-              ></div>
-            </label>
-          </div>
-
-          <div
-            class="col-span-2 flex items-center justify-between p-3 rounded-lg transition-colors"
-            :style="
-              ceInstalled
-                ? 'background: var(--bg-raised); border: 1px solid var(--border)'
-                : 'background: var(--bg-inset); border: 1px solid var(--border); opacity: 0.6'
-            "
-          >
-            <div>
-              <p
-                class="text-sm font-medium flex items-center gap-2"
-                style="color: var(--text-primary)"
-              >
-                Auto-Launch & Inject Cheat Engine
-                <span
-                  v-if="!ceInstalled"
-                  class="text-[10px] uppercase px-2 py-0.5 rounded font-bold"
-                  style="
-                    background: var(--bg-overlay);
-                    color: var(--text-muted);
-                    border: 1px solid var(--border);
-                  "
-                  >Not Installed</span
-                >
-              </p>
-              <p class="text-xs mt-1" style="color: var(--text-muted)">
-                Spawns Cheat Engine inside the same virtual Wine sandbox
-                immediately after the game starts.
-              </p>
-            </div>
-            <label
-              class="relative inline-flex items-center"
-              :class="ceInstalled ? 'cursor-pointer' : 'cursor-not-allowed'"
-            >
-              <input
-                type="checkbox"
-                v-model="autoInjectCe"
-                :disabled="!ceInstalled"
-                class="sr-only peer"
-              />
-              <div
-                class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"
-              ></div>
-            </label>
-          </div>
-
-          <div class="col-span-2">
             <label class="modal-label">Cover Image URL</label>
             <input
               v-model="coverImage"
@@ -671,15 +598,139 @@ const openInBrowser = async () => {
             />
           </div>
 
-          <div>
-            <label class="modal-label">Engine</label>
+          <div class="col-span-2">
+            <label class="modal-label">Command Line Arguments</label>
             <input
-              v-model="engine"
+              v-model="commandLineArgs"
               type="text"
-              placeholder="Unity, RPGM, Ren'Py..."
-              class="modal-input w-full"
-              style="color: #b380cc"
+              placeholder="gamemoderun %command% --fullscreen"
+              class="modal-input w-full font-mono"
             />
+          </div>
+
+          <div class="col-span-2">
+            <label class="modal-label">Launch Options</label>
+            <div
+              class="rounded-lg p-3 space-y-2"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              <div class="rounded-md px-2 py-1" style="background: var(--bg-surface)">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    Run with Japanese Locale
+                  </span>
+                  <button
+                    type="button"
+                    @click="showJapaneseLocaleInfo = !showJapaneseLocaleInfo"
+                    class="w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center"
+                    style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
+                  >
+                    i
+                  </button>
+                  <label class="relative inline-flex items-center cursor-pointer ml-auto">
+                    <input
+                      type="checkbox"
+                      v-model="runJapaneseLocale"
+                      class="sr-only peer"
+                    />
+                    <div
+                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
+                    ></div>
+                  </label>
+                </div>
+                <p
+                  v-show="showJapaneseLocaleInfo"
+                  class="text-xs mt-1 pr-12"
+                  style="color: var(--text-muted)"
+                >
+                  Enable this if the game has unreadable text (Mojibake) or crashes due to missing Japanese fonts.
+                </p>
+              </div>
+
+              <div class="rounded-md px-2 py-1" style="background: var(--bg-surface)">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    Run in Wayland Compatibility Mode
+                  </span>
+                  <button
+                    type="button"
+                    @click="showWaylandInfo = !showWaylandInfo"
+                    class="w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center"
+                    style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
+                  >
+                    i
+                  </button>
+                  <label class="relative inline-flex items-center cursor-pointer ml-auto">
+                    <input
+                      type="checkbox"
+                      v-model="runWayland"
+                      class="sr-only peer"
+                    />
+                    <div
+                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
+                    ></div>
+                  </label>
+                </div>
+                <p
+                  v-show="showWaylandInfo"
+                  class="text-xs mt-1 pr-12"
+                  style="color: var(--text-muted)"
+                >
+                  Enable this if your system uses Wayland and the game crashes or freezes on launch.
+                </p>
+              </div>
+
+              <div
+                class="rounded-md px-2 py-1 transition-colors"
+                :style="
+                  ceInstalled
+                    ? 'background: var(--bg-surface)'
+                    : 'background: var(--bg-inset); opacity: 0.7'
+                "
+              >
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">
+                    Auto-Launch & Inject Cheat Engine
+                  </span>
+                  <span
+                    v-if="!ceInstalled"
+                    class="text-[10px] uppercase px-1.5 py-0.5 rounded font-bold"
+                    style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
+                  >
+                    Not Installed
+                  </span>
+                  <button
+                    type="button"
+                    @click="showCheatEngineInfo = !showCheatEngineInfo"
+                    class="w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center"
+                    style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
+                  >
+                    i
+                  </button>
+                  <label
+                    class="relative inline-flex items-center ml-auto"
+                    :class="ceInstalled ? 'cursor-pointer' : 'cursor-not-allowed'"
+                  >
+                    <input
+                      type="checkbox"
+                      v-model="autoInjectCe"
+                      :disabled="!ceInstalled"
+                      class="sr-only peer"
+                    />
+                    <div
+                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"
+                    ></div>
+                  </label>
+                </div>
+                <p
+                  v-show="showCheatEngineInfo"
+                  class="text-xs mt-1 pr-12"
+                  style="color: var(--text-muted)"
+                >
+                  Spawns Cheat Engine inside the same virtual Wine sandbox immediately after the game starts.
+                </p>
+              </div>
+            </div>
           </div>
 
           <!-- Advanced Launch Options -->
@@ -731,7 +782,10 @@ const openInBrowser = async () => {
                   v-model="protonVersion"
                   class="modal-input w-full"
                 >
-                  <option value="">(Use Global Default)</option>
+                  <option v-if="loadingRunners" value="" disabled>
+                    Loading runners...
+                  </option>
+                  <option v-else value="">(Use Global Default)</option>
                   <option
                     v-for="runner in availableRunners"
                     :key="runner.path"
@@ -773,7 +827,7 @@ const openInBrowser = async () => {
             </svg>
             Your Ratings
           </h4>
-          <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
             <div
               v-for="cat in [
                 { label: '🎨 Graphics', model: 'ratingGraphics' },
@@ -782,10 +836,11 @@ const openInBrowser = async () => {
                 { label: '🎮 Gameplay', model: 'ratingGameplay' },
               ]"
               :key="cat.model"
-              class="flex items-center gap-3"
+              class="flex items-center gap-3 rounded-lg p-2"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
               <span
-                class="text-xs w-28 shrink-0"
+                class="text-xs w-24 shrink-0"
                 style="color: var(--text-secondary)"
                 >{{ cat.label }}</span
               >
@@ -802,7 +857,7 @@ const openInBrowser = async () => {
                           ? (ratingFappability = star)
                           : (ratingGameplay = star)
                   "
-                  class="transition-all hover:scale-110"
+                  class="transition-transform hover:scale-110"
                 >
                   <svg
                     class="w-5 h-5"
@@ -857,37 +912,59 @@ const openInBrowser = async () => {
 
         <!-- Tags (editable) -->
         <div>
-          <h4 class="modal-label mb-2">Tags</h4>
-          <div class="flex flex-wrap gap-1.5 mb-2">
-            <span
-              v-for="tag in tags"
-              :key="tag"
-              class="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
-              style="
-                background: var(--bg-raised);
-                border: 1px solid var(--border);
-                color: var(--text-secondary);
-              "
-            >
-              {{ tag }}
-              <button
-                @click="removeTag(tag)"
-                class="hover:text-red-400 transition-colors ml-0.5"
-                style="color: var(--text-muted)"
-              >
-                &times;
-              </button>
+          <button
+            type="button"
+            class="w-full flex items-center justify-between px-3 py-2 rounded-lg"
+            style="background: var(--bg-raised); border: 1px solid var(--border)"
+            @click="tagsExpanded = !tagsExpanded"
+          >
+            <span class="text-xs font-medium" style="color: var(--text-secondary)">
+              Tags ({{ tags.length }})
             </span>
-          </div>
-          <div class="flex gap-2">
-            <input
-              v-model="newTag"
-              type="text"
-              placeholder="Add a tag..."
-              @keydown.enter.prevent="addTag"
-              class="modal-input flex-1 !py-1.5 !text-xs"
-            />
-            <button @click="addTag" class="modal-btn">Add</button>
+            <svg
+              class="w-4 h-4 transition-transform"
+              :class="tagsExpanded ? 'rotate-180' : ''"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              style="color: var(--text-muted)"
+            >
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          <div v-show="tagsExpanded" class="mt-2">
+            <div class="flex flex-wrap gap-1.5 mb-2">
+              <span
+                v-for="tag in tags"
+                :key="tag"
+                class="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
+                style="
+                  background: var(--bg-raised);
+                  border: 1px solid var(--border);
+                  color: var(--text-secondary);
+                "
+              >
+                {{ tag }}
+                <button
+                  @click="removeTag(tag)"
+                  class="hover:text-red-400 transition-colors ml-0.5"
+                  style="color: var(--text-muted)"
+                >
+                  &times;
+                </button>
+              </span>
+            </div>
+            <div class="flex gap-2">
+              <input
+                v-model="newTag"
+                type="text"
+                placeholder="Add a tag..."
+                @keydown.enter.prevent="addTag"
+                class="modal-input flex-1 !py-1.5 !text-xs"
+              />
+              <button @click="addTag" class="modal-btn">Add</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1071,6 +1148,13 @@ const openInBrowser = async () => {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-modal);
+  contain: layout paint;
+  will-change: transform, opacity;
+}
+
+.modal-scroll-body {
+  contain: content;
+  will-change: scroll-position;
 }
 
 .modal-label {
@@ -1115,5 +1199,12 @@ const openInBrowser = async () => {
   height: 1.5rem;
   background: var(--bg-overlay);
   border-radius: 9999px;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 </style>
