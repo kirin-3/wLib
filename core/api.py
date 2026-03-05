@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from contextlib import closing
 
 from core.database import init_db
@@ -7,6 +8,7 @@ from core.launcher import Launcher
 from core.scraper import Scraper
 
 APP_VERSION = "0.2.9"
+DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 
 
 class Api:
@@ -21,6 +23,8 @@ class Api:
         self._update_checked = 0
         self._update_current = ""
         self._update_results = []
+        self._update_lock = threading.Lock()
+        self._status_lock = threading.Lock()
         self._deps_install_status = {
             "running": False,
             "done": 0,
@@ -447,24 +451,32 @@ class Api:
         webbrowser.open(url)
         return {"success": True}
 
+    def open_scraper_login_session(self):
+        """Open headed Playwright session for manual F95 login and wait until user closes it."""
+        return self.scraper.open_login_session("https://f95zone.to/login/")
+
+    def reset_scraper_session(self):
+        """Clear persisted Playwright session/cookies used by scraper."""
+        return self.scraper.reset_browser_session()
+
     def check_all_updates(self):
         """Start a background thread to check all games for updates."""
-        import threading
-
-        if hasattr(self, "_update_running") and self._update_running:
-            return {"success": False, "error": "Update check already in progress"}
+        with self._update_lock:
+            if getattr(self, "_update_running", False):
+                return {"success": False, "error": "Update check already in progress"}
 
         from core.database import get_all_games
 
         all_games = get_all_games()
         games_with_url = [g for g in all_games if g.get("f95_url")]
 
-        self._update_running = True
-        self._update_total = len(games_with_url)
-        self._update_checked = 0
-        self._update_current = ""
-        self._update_results = []
-        self._update_delay_seconds = self._get_bulk_check_delay_seconds()
+        with self._update_lock:
+            self._update_running = True
+            self._update_total = len(games_with_url)
+            self._update_checked = 0
+            self._update_current = ""
+            self._update_results = []
+            self._update_delay_seconds = self._get_bulk_check_delay_seconds()
 
         games_by_url = {
             g.get("f95_url"): g
@@ -502,14 +514,14 @@ class Api:
                 urls = [game["f95_url"] for game in games_with_url]
 
                 def check_callback(url, result):
-                    if not self._update_running:
-                        return False  # Stop checking
-
                     game = games_by_url.get(url)
                     if not game:
                         return True
 
-                    self._update_current = game.get("title", "Unknown")
+                    with self._update_lock:
+                        if not self._update_running:
+                            return False  # Stop checking
+                        self._update_current = game.get("title", "Unknown")
 
                     has_update = False
                     callback_error = result.get("error")
@@ -547,18 +559,19 @@ class Api:
                         callback_error = "Could not extract a version from thread"
                         callback_error_code = "extract_failed"
 
-                    self._update_results.append(
-                        {
-                            "id": game["id"],
-                            "title": game.get("title", ""),
-                            "current_version": game.get("version", ""),
-                            "latest_version": result.get("version", ""),
-                            "has_update": has_update,
-                            "error": callback_error,
-                            "error_code": callback_error_code,
-                        }
-                    )
-                    self._update_checked += 1
+                    with self._update_lock:
+                        self._update_results.append(
+                            {
+                                "id": game["id"],
+                                "title": game.get("title", ""),
+                                "current_version": game.get("version", ""),
+                                "latest_version": result.get("version", ""),
+                                "has_update": has_update,
+                                "error": callback_error,
+                                "error_code": callback_error_code,
+                            }
+                        )
+                        self._update_checked += 1
                     return True
 
                 bulk_results = self.scraper.get_multiple_thread_versions(
@@ -571,50 +584,69 @@ class Api:
                 batch_error = None
                 if isinstance(bulk_results, dict):
                     batch_error = bulk_results.get("__batch_error__")
+                batch_error_payload = (
+                    batch_error if isinstance(batch_error, dict) else {}
+                )
 
-                if batch_error and self._update_checked == 0 and games_with_url:
-                    for game in games_with_url:
-                        self._update_results.append(
-                            {
-                                "id": game["id"],
-                                "title": game.get("title", ""),
-                                "current_version": game.get("version", ""),
-                                "latest_version": "",
-                                "has_update": False,
-                                "error": batch_error.get(
-                                    "error", "Batch update check failed"
-                                ),
-                                "error_code": batch_error.get("code", "batch_failed"),
-                            }
-                        )
-                    self._update_checked = len(games_with_url)
+                with self._update_lock:
+                    should_append_batch_error = (
+                        bool(batch_error)
+                        and self._update_checked == 0
+                        and bool(games_with_url)
+                    )
+
+                if should_append_batch_error:
+                    with self._update_lock:
+                        for game in games_with_url:
+                            self._update_results.append(
+                                {
+                                    "id": game["id"],
+                                    "title": game.get("title", ""),
+                                    "current_version": game.get("version", ""),
+                                    "latest_version": "",
+                                    "has_update": False,
+                                    "error": batch_error_payload.get(
+                                        "error", "Batch update check failed"
+                                    ),
+                                    "error_code": batch_error_payload.get(
+                                        "code", "batch_failed"
+                                    ),
+                                }
+                            )
+                        self._update_checked = len(games_with_url)
             finally:
-                self._update_checked = self._update_total
-                self._update_current = ""
-                self._update_running = False
+                with self._update_lock:
+                    self._update_checked = self._update_total
+                    self._update_current = ""
+                    self._update_running = False
 
         thread = threading.Thread(target=run_checks, daemon=True)
         thread.start()
+        with self._update_lock:
+            total = self._update_total
+            delay_seconds = self._update_delay_seconds
         return {
             "success": True,
-            "total": self._update_total,
-            "delay_seconds": self._update_delay_seconds,
+            "total": total,
+            "delay_seconds": delay_seconds,
         }
 
     def get_update_status(self):
         """Get the current status of the bulk update check."""
-        return {
-            "running": getattr(self, "_update_running", False),
-            "total": getattr(self, "_update_total", 0),
-            "checked": getattr(self, "_update_checked", 0),
-            "current": getattr(self, "_update_current", ""),
-            "results": getattr(self, "_update_results", []),
-            "delay_seconds": getattr(self, "_update_delay_seconds", 5),
-        }
+        with self._update_lock:
+            return {
+                "running": getattr(self, "_update_running", False),
+                "total": getattr(self, "_update_total", 0),
+                "checked": getattr(self, "_update_checked", 0),
+                "current": getattr(self, "_update_current", ""),
+                "results": list(getattr(self, "_update_results", [])),
+                "delay_seconds": getattr(self, "_update_delay_seconds", 5),
+            }
 
     def cancel_update_check(self):
         """Cancel an in-progress bulk update check."""
-        self._update_running = False
+        with self._update_lock:
+            self._update_running = False
         return {"success": True}
 
     def get_auto_check_setting(self):
@@ -820,21 +852,23 @@ class Api:
             f"Running winetricks command in {env.get('WINEPREFIX')}: {' '.join(command)}"
         )
 
-        self._deps_install_status = {
-            "running": True,
-            "done": 0,
-            "total": len(verbs),
-            "current": verbs[0],
-            "error": "",
-        }
+        with self._status_lock:
+            self._deps_install_status = {
+                "running": True,
+                "done": 0,
+                "total": len(verbs),
+                "current": verbs[0],
+                "error": "",
+            }
 
         # We run this in a background thread so we don't block the UI returning 'success' immediately
         # (Winetricks downloads huge MS packages that take longer than the IPC timeout)
         def _install_deps():
             try:
                 for i, verb in enumerate(verbs):
-                    self._deps_install_status["done"] = i
-                    self._deps_install_status["current"] = verb
+                    with self._status_lock:
+                        self._deps_install_status["done"] = i
+                        self._deps_install_status["current"] = verb
                     print(f"Installing winetricks verb {i + 1}/{len(verbs)}: {verb}")
                     subprocess.run(
                         ["winetricks", "-q", verb],
@@ -842,16 +876,18 @@ class Api:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                self._deps_install_status["done"] = len(verbs)
-                self._deps_install_status["current"] = ""
-                self._deps_install_status["running"] = False
+                with self._status_lock:
+                    self._deps_install_status["done"] = len(verbs)
+                    self._deps_install_status["current"] = ""
+                    self._deps_install_status["running"] = False
                 from core.database import update_setting
 
                 update_setting("dlls_installed", "true")
                 print("Finished installing winetricks dependencies.")
             except Exception as e:
-                self._deps_install_status["running"] = False
-                self._deps_install_status["error"] = str(e)
+                with self._status_lock:
+                    self._deps_install_status["running"] = False
+                    self._deps_install_status["error"] = str(e)
                 print(f"Winetricks encountered an error: {e}")
 
         import threading
@@ -932,8 +968,9 @@ class Api:
             ctx = ssl.create_default_context()
 
             for i, rtp in enumerate(rtps):
-                self._rtp_install_status["done"] = i
-                self._rtp_install_status["current"] = rtp["name"]
+                with self._status_lock:
+                    self._rtp_install_status["done"] = i
+                    self._rtp_install_status["current"] = rtp["name"]
                 download_path = os.path.join(rtp_dir, rtp["filename"])
                 extract_path = os.path.join(rtp_dir, rtp["name"].replace(" ", "_"))
 
@@ -992,21 +1029,23 @@ class Api:
                     except Exception as e:
                         print(f"Wine failed to run {rtp['name']} setup: {e}")
 
-            self._rtp_install_status["done"] = len(rtps)
-            self._rtp_install_status["current"] = ""
-            self._rtp_install_status["running"] = False
+            with self._status_lock:
+                self._rtp_install_status["done"] = len(rtps)
+                self._rtp_install_status["current"] = ""
+                self._rtp_install_status["running"] = False
             from core.database import update_setting
 
             update_setting("rtps_installed", "true")
             print("All RTPs installed successfully.")
 
-        self._rtp_install_status = {
-            "running": True,
-            "done": 0,
-            "total": len(rtps),
-            "current": rtps[0]["name"],
-            "error": "",
-        }
+        with self._status_lock:
+            self._rtp_install_status = {
+                "running": True,
+                "done": 0,
+                "total": len(rtps),
+                "current": rtps[0]["name"],
+                "error": "",
+            }
         import threading
 
         threading.Thread(target=_download_and_install, daemon=True).start()
@@ -1016,17 +1055,37 @@ class Api:
         """Returns the current status of background DLL and RTP installs, plus whether they've previously completed."""
         from core.database import get_setting
 
+        with self._status_lock:
+            deps_status = dict(
+                getattr(
+                    self,
+                    "_deps_install_status",
+                    {
+                        "running": False,
+                        "done": 0,
+                        "total": 0,
+                        "current": "",
+                        "error": "",
+                    },
+                )
+            )
+            rtp_status = dict(
+                getattr(
+                    self,
+                    "_rtp_install_status",
+                    {
+                        "running": False,
+                        "done": 0,
+                        "total": 0,
+                        "current": "",
+                        "error": "",
+                    },
+                )
+            )
+
         return {
-            "deps": getattr(
-                self,
-                "_deps_install_status",
-                {"running": False, "done": 0, "total": 0, "current": "", "error": ""},
-            ),
-            "rtps": getattr(
-                self,
-                "_rtp_install_status",
-                {"running": False, "done": 0, "total": 0, "current": "", "error": ""},
-            ),
+            "deps": deps_status,
+            "rtps": rtp_status,
             "dlls_installed": get_setting("dlls_installed") == "true",
             "rtps_installed": get_setting("rtps_installed") == "true",
         }
@@ -1160,20 +1219,36 @@ class Api:
     def get_settings(self):
         from core.database import get_setting
 
+        playwright_path = get_setting("playwright_browsers_path")
+        if not isinstance(playwright_path, str) or not playwright_path.strip():
+            playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+
         return {
             "proton_path": get_setting("proton_path"),
             "wine_prefix_path": get_setting("wine_prefix_path"),
             "enable_logging": get_setting("enable_logging") == "true",
+            "playwright_browsers_path": playwright_path,
         }
 
     def save_settings(self, settings):
         from core.database import update_setting
+
+        raw_playwright_path = settings.get(
+            "playwright_browsers_path", DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+        )
+        if isinstance(raw_playwright_path, str):
+            playwright_path = raw_playwright_path.strip()
+        else:
+            playwright_path = str(raw_playwright_path or "").strip()
+        if not playwright_path:
+            playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
         update_setting("proton_path", settings.get("proton_path", ""))
         update_setting("wine_prefix_path", settings.get("wine_prefix_path", ""))
         update_setting(
             "enable_logging", "true" if settings.get("enable_logging") else "false"
         )
+        update_setting("playwright_browsers_path", playwright_path)
         return {"success": True}
 
     def browse_file(self):

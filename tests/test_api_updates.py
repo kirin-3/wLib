@@ -3,7 +3,7 @@ import os
 import pytest
 
 from core.api import Api
-from core.database import init_db, add_game, get_all_games
+from core.database import init_db, add_game, get_all_games, get_setting
 
 
 @pytest.fixture(autouse=True)
@@ -215,3 +215,58 @@ def test_add_game_rejects_duplicate_f95_url(monkeypatch):
     assert first["id"] is not None
     assert second["success"] is False
     assert second["error_code"] == "duplicate_url"
+
+
+def test_get_settings_includes_playwright_path_default():
+    api = Api()
+
+    settings = api.get_settings()
+
+    assert settings["playwright_browsers_path"] == os.path.expanduser(
+        "~/.cache/ms-playwright"
+    )
+
+
+def test_save_settings_persists_playwright_path():
+    api = Api()
+
+    api.save_settings(
+        {
+            "proton_path": "",
+            "wine_prefix_path": "",
+            "enable_logging": False,
+            "playwright_browsers_path": "/tmp/custom-playwright-cache",
+        }
+    )
+
+    assert get_setting("playwright_browsers_path") == "/tmp/custom-playwright-cache"
+
+
+def test_open_scraper_login_session_delegates_to_scraper(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "open_login_session",
+        lambda login_url: {"success": True, "login_url": login_url},
+    )
+
+    result = api.open_scraper_login_session()
+
+    assert result["success"] is True
+    assert result["login_url"] == "https://f95zone.to/login/"
+
+
+def test_reset_scraper_session_delegates_to_scraper(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "reset_browser_session",
+        lambda: {"success": True, "message": "reset"},
+    )
+
+    result = api.reset_scraper_session()
+
+    assert result["success"] is True
+    assert result["message"] == "reset"

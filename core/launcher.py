@@ -90,9 +90,13 @@ class Launcher:
                     log_path = os.path.splitext(exe_path)[0] + "_wlib.log"
                     print(f"Debug logging enabled. Outputting to {log_path}")
                     log_file = open(log_path, "w")
-                    game_proc = subprocess.Popen(
-                        cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT
-                    )
+                    try:
+                        game_proc = subprocess.Popen(
+                            cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT
+                        )
+                    except Exception:
+                        log_file.close()
+                        raise
 
                     # Ensure the file gets closed when process finishes in the background
                     def track_log_file():

@@ -6,6 +6,7 @@
 class ApiService {
   constructor() {
     this.isWebview = window.pywebview !== undefined;
+    this._mockWarnings = new Set();
   }
 
   async invoke(method, ...args) {
@@ -16,7 +17,10 @@ class ApiService {
     ) {
       return await window.pywebview.api[method](...args);
     } else {
-      console.warn(`[ApiService] Mocking call to ${method}`, args);
+      if (!this._mockWarnings.has(method)) {
+        console.warn(`[ApiService] Mocking call to ${method}`, args);
+        this._mockWarnings.add(method);
+      }
       return this._mockResponse(method, args);
     }
   }
@@ -74,6 +78,14 @@ class ApiService {
 
   async openInBrowser(url) {
     return this.invoke("open_in_browser", url);
+  }
+
+  async openScraperLoginSession() {
+    return this.invoke("open_scraper_login_session");
+  }
+
+  async resetScraperSession() {
+    return this.invoke("reset_scraper_session");
   }
 
   async checkForUpdates(url) {
@@ -197,21 +209,48 @@ class ApiService {
 
   // Fallback mocks
   _mockResponse(method, args) {
+    const unavailable = {
+      success: false,
+      mock: true,
+      error: `Backend method '${method}' is unavailable outside PyWebView`,
+    };
+
     switch (method) {
       case "get_games":
-        return [
-          {
-            id: 1,
-            title: "Demo RPGMaker",
-            version: "v1.0.0",
-            progress: "Chapter 2",
-            exe_path: "/path/game.exe",
-          },
-        ];
+        return [];
       case "get_settings":
-        return { proton_path: "", wine_prefix_path: "" };
+        return {
+          proton_path: "",
+          wine_prefix_path: "",
+          enable_logging: false,
+          playwright_browsers_path: "~/.cache/ms-playwright",
+        };
+      case "get_available_runners":
+        return { success: true, mock: true, runners: [] };
+      case "get_install_status":
+        return {
+          deps: { running: false, done: 0, total: 0, current: "", error: "" },
+          rtps: { running: false, done: 0, total: 0, current: "", error: "" },
+          dlls_installed: false,
+          rtps_installed: false,
+        };
+      case "get_system_deps_command":
+        return {
+          detected: false,
+          package_manager: "unknown",
+          distro: "Unknown",
+          command:
+            "# Backend unavailable in browser mode. Run this in the desktop app.",
+        };
+      case "open_scraper_login_session":
+      case "reset_scraper_session":
+        return {
+          success: false,
+          mock: true,
+          error: "Scraper session controls require the desktop app runtime.",
+        };
       default:
-        return { success: true, mock: true };
+        return unavailable;
     }
   }
 }

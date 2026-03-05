@@ -648,6 +648,7 @@ def test_settings_table_default_values():
         "enable_logging": "false",
         "auto_update_check": "weekly",
         "last_update_check": "",
+        "playwright_browsers_path": os.path.expanduser("~/.cache/ms-playwright"),
     }
 
     for key, expected_value in expected_settings.items():

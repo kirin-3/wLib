@@ -61,6 +61,10 @@ def init_db():
         cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
         )
+        cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('playwright_browsers_path', ?)",
+            (os.path.expanduser("~/.cache/ms-playwright"),),
+        )
 
         # Safely migrate existing DBs by adding new columns
         cursor.execute("PRAGMA table_info(games)")

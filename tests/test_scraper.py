@@ -1,4 +1,6 @@
 # pyright: reportMissingImports=false
+import os
+
 import pytest
 from core.scraper import Scraper
 
@@ -46,6 +48,7 @@ def test_extract_version_from_title():
         scraper._extract_version_from_title("Game Title [RenPy] [Windows]") == "Unknown"
     )
     assert scraper._extract_version_from_title("Just the Title") == "Unknown"
+    assert scraper._extract_version_from_title(None) == "Unknown"
 
 
 def test_extract_version_from_title_real_f95_formats():
@@ -281,3 +284,84 @@ def test_normalize_cover_image_url_upgrades_thumb_path():
     assert normalized == (
         "https://attachments.f95zone.to/2025/04/4773537_Screenshot_Banner.png"
     )
+
+
+def test_open_login_session_waits_for_user_close(monkeypatch):
+    scraper = Scraper()
+    events = []
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            events.append(("goto", url, kwargs.get("wait_until")))
+
+        def bring_to_front(self):
+            events.append(("front",))
+
+        def wait_for_event(self, name, timeout=0):
+            events.append(("wait", name, timeout))
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = []
+            self.closed = False
+
+        def new_page(self):
+            page = FakePage()
+            self.pages.append(page)
+            return page
+
+        def close(self):
+            self.closed = True
+
+    class FakePlaywright:
+        def __init__(self):
+            self.chromium = self
+            self.context = FakeContext()
+            self.stopped = False
+            self.launch_kwargs = {}
+
+        def launch_persistent_context(self, **kwargs):
+            self.launch_kwargs = kwargs
+            return self.context
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeSyncPlaywright:
+        def __init__(self, playwright):
+            self._playwright = playwright
+
+        def start(self):
+            return self._playwright
+
+    fake_playwright = FakePlaywright()
+    monkeypatch.setattr(
+        scraper,
+        "_load_sync_playwright",
+        lambda: lambda: FakeSyncPlaywright(fake_playwright),
+    )
+
+    result = scraper.open_login_session()
+
+    assert result["success"] is True
+    assert fake_playwright.launch_kwargs["headless"] is False
+    assert fake_playwright.launch_kwargs["user_data_dir"].endswith("/browser_session")
+    assert ("wait", "close", 0) in events
+    assert fake_playwright.context.closed is True
+    assert fake_playwright.stopped is True
+
+
+def test_reset_browser_session_clears_profile(tmp_path):
+    scraper = Scraper()
+    scraper.user_data_dir = str(tmp_path / "browser_session")
+    os.makedirs(scraper.user_data_dir, exist_ok=True)
+
+    old_file = os.path.join(scraper.user_data_dir, "Cookies")
+    with open(old_file, "w", encoding="utf-8") as f:
+        f.write("stale-cookie-data")
+
+    result = scraper.reset_browser_session()
+
+    assert result["success"] is True
+    assert os.path.isdir(scraper.user_data_dir)
+    assert os.listdir(scraper.user_data_dir) == []

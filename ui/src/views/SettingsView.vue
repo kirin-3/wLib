@@ -4,6 +4,7 @@ import { api, onWebviewReady } from "../services/api.js";
 
 const protonPath = ref("");
 const prefixPath = ref("");
+const playwrightPath = ref("~/.cache/ms-playwright");
 const enableLogging = ref(false);
 const installingDeps = ref(false);
 const installError = ref("");
@@ -21,6 +22,10 @@ const depsProgress = ref({ done: 0, total: 0, current: "" });
 const rtpProgress = ref({ done: 0, total: 0, current: "" });
 const systemDeps = ref(null);
 const copiedCommand = ref(false);
+const openingLoginSession = ref(false);
+const resettingSession = ref(false);
+const sessionMessage = ref("");
+const sessionError = ref("");
 let pollTimer = null;
 
 const loadSettings = async () => {
@@ -29,6 +34,7 @@ const loadSettings = async () => {
     if (data) {
       protonPath.value = data.proton_path || "";
       prefixPath.value = data.wine_prefix_path || "";
+      playwrightPath.value = data.playwright_browsers_path || "~/.cache/ms-playwright";
       enableLogging.value = !!data.enable_logging;
     }
 
@@ -189,6 +195,50 @@ const copyDepsCommand = () => {
   setTimeout(() => (copiedCommand.value = false), 2000);
 };
 
+const openLoginSession = async () => {
+  openingLoginSession.value = true;
+  sessionError.value = "";
+  sessionMessage.value =
+    "Playwright login window opened. Complete login, then close the window to continue.";
+
+  try {
+    const result = await api.openScraperLoginSession();
+    if (result && result.success) {
+      sessionMessage.value =
+        result.message ||
+        "Login session closed. Future checks will reuse this session.";
+    } else {
+      sessionMessage.value = "";
+      sessionError.value = result?.error || "Failed to open login session.";
+    }
+  } catch (e) {
+    sessionMessage.value = "";
+    sessionError.value = e.toString();
+  } finally {
+    openingLoginSession.value = false;
+  }
+};
+
+const resetSession = async () => {
+  resettingSession.value = true;
+  sessionError.value = "";
+  sessionMessage.value = "";
+
+  try {
+    const result = await api.resetScraperSession();
+    if (result && result.success) {
+      sessionMessage.value =
+        result.message || "Scraper browser session was reset successfully.";
+    } else {
+      sessionError.value = result?.error || "Failed to reset scraper session.";
+    }
+  } catch (e) {
+    sessionError.value = e.toString();
+  } finally {
+    resettingSession.value = false;
+  }
+};
+
 onMounted(() => {
   onWebviewReady(() => {
     loadSettings();
@@ -209,6 +259,7 @@ const saveSettings = async () => {
     const res = await api.saveSettings({
       proton_path: protonPath.value,
       wine_prefix_path: prefixPath.value,
+      playwright_browsers_path: playwrightPath.value,
       enable_logging: enableLogging.value,
     });
     if (res && res.success === false) {
@@ -355,6 +406,64 @@ const saveSettings = async () => {
               <p class="text-xs mt-2" style="color: var(--text-muted)">
                 The location where game dependencies and save files will be
                 isolated.
+              </p>
+            </div>
+
+            <div>
+              <label
+                class="block text-sm font-medium mb-1.5"
+                style="color: var(--text-secondary)"
+                >Playwright Browsers Path</label
+              >
+              <input
+                v-model="playwrightPath"
+                type="text"
+                placeholder="~/.cache/ms-playwright"
+                class="settings-input w-full"
+              />
+              <p class="text-xs mt-2" style="color: var(--text-muted)">
+                This controls where Chromium is installed for scraping. Changes
+                apply after restarting wLib.
+              </p>
+            </div>
+
+            <div
+              class="p-4 rounded-lg"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+                F95 Login Session
+              </h4>
+              <p class="text-xs mt-1" style="color: var(--text-muted)">
+                Use Playwright's persistent browser profile for login-required
+                threads.
+              </p>
+              <div class="flex flex-wrap gap-3 mt-3">
+                <button
+                  @click="openLoginSession"
+                  :disabled="openingLoginSession || resettingSession"
+                  class="settings-btn disabled:opacity-50 inline-flex items-center gap-2"
+                >
+                  <img src="/f95.png" alt="F95" class="w-4 h-4" />
+                  {{
+                    openingLoginSession
+                      ? "Login Window Open..."
+                      : "Open F95 Login Window"
+                  }}
+                </button>
+                <button
+                  @click="resetSession"
+                  :disabled="resettingSession || openingLoginSession"
+                  class="settings-btn disabled:opacity-50"
+                >
+                  {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
+                </button>
+              </div>
+              <p v-if="sessionMessage" class="text-xs text-green-400 mt-2">
+                {{ sessionMessage }}
+              </p>
+              <p v-if="sessionError" class="text-xs text-red-400 mt-2">
+                {{ sessionError }}
               </p>
             </div>
 

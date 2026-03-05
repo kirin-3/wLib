@@ -5,8 +5,8 @@ import subprocess
 import time
 import importlib
 
-PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
+DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
+PLAYWRIGHT_BROWSERS_PATH = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
@@ -23,19 +23,72 @@ except Exception:
 window_ref = None
 
 
+def configure_playwright_browsers_path():
+    global PLAYWRIGHT_BROWSERS_PATH
+
+    configured_path = (os.environ.get("WLIB_PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+
+    if not configured_path:
+        try:
+            from core.database import get_setting, init_db
+
+            init_db()
+            configured_path = (get_setting("playwright_browsers_path") or "").strip()
+        except Exception as e:
+            print(f"[wLib] Failed to read Playwright path from settings: {e}")
+
+    PLAYWRIGHT_BROWSERS_PATH = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
+    return PLAYWRIGHT_BROWSERS_PATH
+
+
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
+    def _get_allowed_origin(self):
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return ""
+
+        if origin.startswith(("chrome-extension://", "moz-extension://")):
+            return origin
+
+        if DEV_MODE and origin == VITE_DEV_SERVER:
+            return origin
+
+        return None
+
+    def _send_cors_headers(self, allowed_origin):
+        self.send_header("Vary", "Origin")
+        if allowed_origin:
+            self.send_header("Access-Control-Allow-Origin", allowed_origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _reject_origin(self):
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"success": false, "error": "Origin not allowed"}')
+
     def log_message(self, format, *args):
         # Suppress default HTTP server logs to keep the console clean
         pass
 
     def do_OPTIONS(self):
+        allowed_origin = self._get_allowed_origin()
+        if allowed_origin is None:
+            self._reject_origin()
+            return
+
         self.send_response(200, "ok")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self._send_cors_headers(allowed_origin)
         self.end_headers()
 
     def do_GET(self):
+        allowed_origin = self._get_allowed_origin()
+        if allowed_origin is None:
+            self._reject_origin()
+            return
+
         if self.path.startswith("/api/check"):
             from urllib.parse import urlparse, parse_qs
 
@@ -62,7 +115,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         conn.close()
 
             self.send_response(200)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"exists": exists}).encode())
@@ -72,6 +125,8 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             game_url = query.get("url", [""])[0]
 
+            success = True
+            error_message = ""
             if window_ref:
                 try:
                     window_ref.on_top = True
@@ -87,16 +142,30 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         window_ref.evaluate_js(js_code)
                 except Exception as e:
                     print(f"[wLib] Failed to process extension open event: {e}")
+                    success = False
+                    error_message = str(e)
+            else:
+                success = False
+                error_message = "Application window is not ready"
+
             self.send_response(200)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"success": true}')
+            payload: dict[str, object] = {"success": success}
+            if error_message:
+                payload["error"] = error_message
+            self.wfile.write(json.dumps(payload).encode())
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        allowed_origin = self._get_allowed_origin()
+        if allowed_origin is None:
+            self._reject_origin()
+            return
+
         if self.path == "/api/add":
             content_length = int(self.headers.get("Content-Length", "0"))
             post_data = self.rfile.read(content_length)
@@ -115,13 +184,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     window_ref.evaluate_js(js_code)
 
                 self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self._send_cors_headers(allowed_origin)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(b'{"success": true}')
             except Exception as e:
                 self.send_response(400)
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self._send_cors_headers(allowed_origin)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(
@@ -202,6 +271,8 @@ def ensure_playwright_browsers_async():
 
 
 def main():
+    configure_playwright_browsers_path()
+
     if "--install-playwright-if-needed" in sys.argv:
         ensure_playwright_browsers()
         sys.exit(0)

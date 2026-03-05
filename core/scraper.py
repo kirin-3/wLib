@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import sys
 import time
 from urllib.parse import urlparse
@@ -11,6 +12,9 @@ class Scraper:
         self.user_data_dir = os.path.expanduser("~/.local/share/wLib/browser_session")
 
     def _extract_version_from_title(self, title):
+        if not isinstance(title, str):
+            return "Unknown"
+
         # Multi-pass version extraction from F95Zone titles
         # Pass 1: Bracketed version [v1.0], [1.0.2], [Version 2.1]
         match = re.search(
@@ -296,6 +300,64 @@ class Scraper:
             "Playwright is not installed in this Python environment. "
             "Run: python -m pip install playwright && python -m playwright install chromium"
         )
+
+    def open_login_session(self, login_url="https://f95zone.to/login/"):
+        if not self._is_valid_thread_url(login_url):
+            return self._error("invalid_url", "Invalid login URL")
+
+        context = None
+        page = None
+        playwright_instance = None
+
+        try:
+            sync_playwright = self._load_sync_playwright()
+        except ModuleNotFoundError:
+            return self._error("dependency_missing", self._dependency_missing_message())
+
+        try:
+            playwright_instance = sync_playwright().start()
+            context = playwright_instance.chromium.launch_persistent_context(
+                user_data_dir=self.user_data_dir,
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+
+            if context.pages:
+                page = context.pages[0]
+            else:
+                page = context.new_page()
+
+            page.goto(login_url.strip(), wait_until="domcontentloaded", timeout=60000)
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
+
+            # Keep session browser open until user closes the login tab/window.
+            page.wait_for_event("close", timeout=0)
+            return {"success": True, "message": "Login session closed"}
+        except Exception as e:
+            return self._error("scraper_error", str(e))
+        finally:
+            try:
+                if context is not None:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                if playwright_instance is not None:
+                    playwright_instance.stop()
+            except Exception:
+                pass
+
+    def reset_browser_session(self):
+        try:
+            if os.path.exists(self.user_data_dir):
+                shutil.rmtree(self.user_data_dir)
+            os.makedirs(self.user_data_dir, exist_ok=True)
+            return {"success": True, "message": "Browser session reset"}
+        except Exception as e:
+            return self._error("session_reset_failed", str(e))
 
     def get_thread_version(
         self,
