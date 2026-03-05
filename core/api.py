@@ -1252,7 +1252,7 @@ class Api:
         return {"success": True}
 
     def browse_file(self):
-        """Opens a native file dialog to select an executable."""
+        """Opens a native file dialog to select an executable or HTML game."""
         if self.window:
             webview = self._load_webview_module()
             if webview is None:
@@ -1262,7 +1262,10 @@ class Api:
                 dt = webview.FileDialog.OPEN
             except AttributeError:
                 dt = webview.OPEN_DIALOG
-            file_types = ("Executables (*.exe;*.sh;*.AppImage)", "All files (*.*)")
+            file_types = (
+                "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
+                "All files (*.*)",
+            )
             result = self.window.create_file_dialog(
                 dt, allow_multiple=False, file_types=file_types
             )

@@ -223,14 +223,58 @@ class Launcher:
             print(f"Executing Java archive: {' '.join(command)}")
             return execute_process(command, env)
 
-        # 3. Native Linux Binary (Executable without .exe/.bat extension or standard Linux build)
+        # 3. HTML Games (browser-based)
+        # Opens HTML files in the user's default browser using xdg-open.
+        # Note: Playtime tracking is not supported for HTML games since browser
+        # processes cannot be reliably monitored (browser may have other tabs open).
+        if ext in [".html", ".htm"]:
+            # Convert to absolute path and file:// URL for proper browser handling
+            abs_path = os.path.abspath(exe_path)
+            file_url = f"file://{abs_path}"
+            command = ["xdg-open", file_url]
+            print(f"Opening HTML game in default browser: {file_url}")
+            try:
+                # Use clean environment without Wine/Proton/AppImage variables that might interfere
+                clean_env = os.environ.copy()
+
+                # Remove AppImage-specific environment variables to ensure xdg-open
+                # runs on the host system, not within AppImage isolation
+                appimage_vars = [
+                    "APPIMAGE",
+                    "APPDIR",
+                    "ARGV0",
+                    "APPIMAGE_SILENT_INSTALL",
+                    "OWD",
+                    "APPIMAGE_EXTRACT_AND_RUN",
+                ]
+                for var in appimage_vars:
+                    clean_env.pop(var, None)
+
+                # Reset LD_LIBRARY_PATH to avoid AppImage library interference
+                if "LD_LIBRARY_PATH_ORIG" in clean_env:
+                    clean_env["LD_LIBRARY_PATH"] = clean_env["LD_LIBRARY_PATH_ORIG"]
+                elif "LD_LIBRARY_PATH" in clean_env:
+                    del clean_env["LD_LIBRARY_PATH"]
+
+                subprocess.Popen(
+                    command,
+                    env=clean_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return {"success": True}
+            except Exception as e:
+                print(f"Error launching HTML game: {e}")
+                return {"success": False, "error": str(e)}
+
+        # 4. Native Linux Binary (Executable without .exe/.bat extension or standard Linux build)
         # Some native Linux games like Godot have no extension or .x86_64
         if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat"]:
             command = build_command([exe_path], args)
             print(f"Executing Linux binary natively: {' '.join(command)}")
             return execute_process(command, env)
 
-        # 4. Fallback to Wine / Proton execution for Windows executables
+        # 5. Fallback to Wine / Proton execution for Windows executables
         proton_path = proton_version if proton_version else get_setting("proton_path")
         wine_prefix = (
             custom_prefix if custom_prefix else get_setting("wine_prefix_path")

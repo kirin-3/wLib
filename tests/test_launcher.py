@@ -149,3 +149,126 @@ def test_launch_rejects_invalid_command_line(mock_exists):
 
     assert result["success"] is False
     assert "Invalid command line arguments" in str(result.get("error", ""))
+
+
+@patch("os.path.exists")
+@patch("subprocess.Popen")
+@patch("os.path.abspath")
+def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
+    """Test launching an HTML game opens with xdg-open."""
+    mock_exists.return_value = True
+    mock_abspath.return_value = "/home/user/games/index.html"
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch("/home/user/games/index.html")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["xdg-open", "file:///home/user/games/index.html"]
+
+
+@patch("os.path.exists")
+@patch("subprocess.Popen")
+@patch("os.path.abspath")
+def test_launch_html_game_htm_extension(mock_abspath, mock_popen, mock_exists):
+    """Test launching an HTML game with .htm extension."""
+    mock_exists.return_value = True
+    mock_abspath.return_value = "/home/user/games/game.htm"
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch("/home/user/games/game.htm")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["xdg-open", "file:///home/user/games/game.htm"]
+
+
+@patch("os.path.exists")
+@patch("subprocess.Popen")
+@patch("os.path.abspath")
+def test_launch_html_game_case_insensitive(mock_abspath, mock_popen, mock_exists):
+    """Test launching an HTML game with uppercase extension."""
+    mock_exists.return_value = True
+    mock_abspath.return_value = "/home/user/games/INDEX.HTML"
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch("/home/user/games/INDEX.HTML")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["xdg-open", "file:///home/user/games/INDEX.HTML"]
+
+
+def test_launch_html_file_not_found():
+    """Test launching a non-existent HTML game returns error."""
+    launcher = Launcher()
+    result = launcher.launch("/nonexistent/game.html")
+
+    assert result["success"] is False
+    assert "not found" in str(result.get("error", "")).lower()
+
+
+@patch("os.path.exists")
+@patch("subprocess.Popen")
+def test_launch_html_no_playtime_tracking(mock_popen, mock_exists):
+    """Test HTML games don't trigger playtime tracking callback."""
+    mock_exists.return_value = True
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    callback_called = False
+
+    def test_callback(delta, is_final):
+        nonlocal callback_called
+        callback_called = True
+
+    result = launcher.launch(
+        "/home/user/games/index.html", on_exit_callback=test_callback
+    )
+
+    assert result["success"] is True
+    # Callback should not be triggered for HTML games
+    # (The browser process is not tracked)
+    assert callback_called is False
+
+
+@patch("os.path.exists")
+@patch("subprocess.Popen")
+@patch("os.path.abspath")
+@patch.dict(
+    "os.environ",
+    {
+        "APPIMAGE": "/tmp/wLib.AppImage",
+        "APPDIR": "/tmp/.mount_wLib",
+        "LD_LIBRARY_PATH": "/tmp/.mount_wLib/usr/lib",
+        "PATH": "/usr/bin:/bin",
+    },
+)
+def test_launch_html_from_appimage(mock_abspath, mock_popen, mock_exists):
+    """Test HTML games remove AppImage environment variables."""
+    mock_exists.return_value = True
+    mock_abspath.return_value = "/home/user/games/index.html"
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch("/home/user/games/index.html")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+
+    # Verify AppImage variables are removed from environment
+    env = kwargs["env"]
+    assert "APPIMAGE" not in env
+    assert "APPDIR" not in env
+    # LD_LIBRARY_PATH should be removed or reset
+    assert (
+        "LD_LIBRARY_PATH" not in env
+        or env["LD_LIBRARY_PATH"] != "/tmp/.mount_wLib/usr/lib"
+    )
