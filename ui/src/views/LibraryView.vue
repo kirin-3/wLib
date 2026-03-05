@@ -18,12 +18,14 @@ const filterStatuses = ref([]);
 const filterCollection = ref("All"); // "All" or "Favorites"
 const filterEngines = ref([]);
 const filterTags = ref([]);
-const layoutMode = ref("grid"); // 'grid' or 'list'
+const layoutMode = ref("grid"); // 'grid', 'list', or 'compact'
 const sortBy = ref("title");
 const sortDir = ref("asc");
 
+const layoutModeStorageKey = "wlib-layout-mode";
 const filtersPaneStorageKey = "wlib-filters-collapsed";
 const filterSectionsStorageKey = "wlib-filter-sections";
+const validLayoutModes = new Set(["grid", "list", "compact"]);
 const defaultFilterSections = {
   collections: true,
   status: true,
@@ -114,6 +116,21 @@ const clearFilters = () => {
 
 const filteredGames = computed(() => {
   let result = [...games.value];
+  const parseF95Rating = (rating) => {
+    if (!rating) return 0;
+    const match = String(rating).match(/([\d.]+)/);
+    return match ? parseFloat(match[1]) : 0;
+  };
+  const ownRatingAverage = (game) => {
+    const fields = [
+      game?.rating_graphics,
+      game?.rating_story,
+      game?.rating_fappability,
+      game?.rating_gameplay,
+    ];
+    const total = fields.reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return total / fields.length;
+  };
   const q = searchQuery.value.toLowerCase();
   if (q) {
     result = result.filter((g) => {
@@ -148,15 +165,12 @@ const filteredGames = computed(() => {
     const field = sortBy.value;
     let va = a[field],
       vb = b[field];
-    if (field.includes("rating")) {
-      // Parse rating numeric value for proper sorting
-      const parseRating = (r) => {
-        if (!r) return 0;
-        const m = String(r).match(/([\d.]+)/);
-        return m ? parseFloat(m[1]) : 0;
-      };
-      va = parseRating(va);
-      vb = parseRating(vb);
+    if (field === "own_rating") {
+      va = ownRatingAverage(a);
+      vb = ownRatingAverage(b);
+    } else if (field === "rating") {
+      va = parseF95Rating(va);
+      vb = parseF95Rating(vb);
     } else if (field === "playtime_seconds") {
       va = Number(va) || 0;
       vb = Number(vb) || 0;
@@ -406,7 +420,18 @@ watch(
   { deep: true },
 );
 
+watch(layoutMode, (mode) => {
+  if (validLayoutModes.has(mode)) {
+    localStorage.setItem(layoutModeStorageKey, mode);
+  }
+});
+
 onMounted(() => {
+  const storedLayoutMode = localStorage.getItem(layoutModeStorageKey);
+  if (storedLayoutMode && validLayoutModes.has(storedLayoutMode)) {
+    layoutMode.value = storedLayoutMode;
+  }
+
   const storedFiltersCollapsed = localStorage.getItem(filtersPaneStorageKey);
   if (storedFiltersCollapsed === "true" || storedFiltersCollapsed === "false") {
     isFiltersCollapsed.value = storedFiltersCollapsed === "true";
@@ -707,7 +732,7 @@ onUnmounted(() => {
               { key: 'date_added', label: 'Newest' },
               { key: 'last_played', label: 'Recent' },
               { key: 'playtime_seconds', label: 'Playtime' },
-              { key: 'f95_rating', label: 'F95 ★' },
+              { key: 'rating', label: 'F95 ★' },
               { key: 'own_rating', label: 'My ★' },
             ]"
             :key="s.key"
@@ -815,6 +840,34 @@ onUnmounted(() => {
                 <line x1="3" y1="18" x2="3.01" y2="18"></line>
               </svg>
             </button>
+            <button
+              @click="layoutMode = 'compact'"
+              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              :style="
+                layoutMode === 'compact'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                  : 'color: var(--text-muted)'
+              "
+              title="Compact View"
+            >
+              <svg
+                class="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <rect x="4" y="4" width="4" height="4"></rect>
+                <rect x="10" y="4" width="4" height="4"></rect>
+                <rect x="16" y="4" width="4" height="4"></rect>
+                <rect x="4" y="10" width="4" height="4"></rect>
+                <rect x="10" y="10" width="4" height="4"></rect>
+                <rect x="16" y="10" width="4" height="4"></rect>
+                <rect x="4" y="16" width="4" height="4"></rect>
+                <rect x="10" y="16" width="4" height="4"></rect>
+                <rect x="16" y="16" width="4" height="4"></rect>
+              </svg>
+            </button>
           </div>
         </div>
       </div>
@@ -872,7 +925,11 @@ onUnmounted(() => {
       tag="div"
       :class="[
         'grid gap-4 md:gap-6 pb-12',
-        layoutMode === 'grid' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1',
+        layoutMode === 'grid'
+          ? 'grid-cols-1 lg:grid-cols-2'
+          : layoutMode === 'compact'
+            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3'
+            : 'grid-cols-1',
       ]"
     >
       <!-- Game Cards Grid -->
@@ -884,7 +941,9 @@ onUnmounted(() => {
         :class="
           layoutMode === 'grid'
             ? 'flex flex-col lg:flex-row w-full h-auto min-h-[14rem] lg:h-56'
-            : 'flex flex-row items-center w-full h-24 md:h-32 pr-2 md:pr-4'
+            : layoutMode === 'compact'
+              ? 'relative w-full aspect-[16/9]'
+              : 'flex flex-row items-center w-full h-24 md:h-32 pr-2 md:pr-4'
         "
       >
         <!-- Cover Image -->
@@ -892,7 +951,9 @@ onUnmounted(() => {
           :class="[
             layoutMode === 'grid'
               ? 'w-full lg:flex-1 h-56 lg:h-full'
-              : 'w-24 md:w-36 lg:w-48 h-full',
+              : layoutMode === 'compact'
+                ? 'w-full h-full'
+                : 'w-24 md:w-36 lg:w-48 h-full',
             'flex items-center justify-center relative shadow-inner overflow-hidden shrink-0',
           ]"
           style="
@@ -927,6 +988,7 @@ onUnmounted(() => {
           </svg>
 
           <div
+            v-if="layoutMode !== 'compact'"
             class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
           >
             <button
@@ -947,7 +1009,7 @@ onUnmounted(() => {
 
           <!-- Rating Badge (Top Left) -->
           <div
-            v-if="game.rating"
+            v-if="layoutMode !== 'compact' && game.rating"
             class="rating-badge absolute top-3 left-3 backdrop-blur-md text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20">
@@ -960,7 +1022,7 @@ onUnmounted(() => {
 
           <!-- Update Button Overlay (Top Right) -->
           <button
-            v-if="game.f95_url"
+            v-if="layoutMode !== 'compact' && game.f95_url"
             @click.stop="checkUpdate(game, $event)"
             :disabled="updatingId === game.id"
             class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
@@ -1002,10 +1064,34 @@ onUnmounted(() => {
               <line x1="16.24" x2="19.07" y1="7.76" y2="4.93" />
             </svg>
           </button>
+
+          <div v-if="layoutMode === 'compact'" class="compact-image-overlay absolute inset-0"></div>
+
+          <div
+            v-if="layoutMode === 'compact'"
+            class="absolute inset-x-0 bottom-0 z-10 p-2 flex items-end justify-between gap-2"
+          >
+            <h3
+              class="compact-title text-xs md:text-sm font-bold leading-tight"
+              :title="game.title"
+            >
+              {{ game.title }}
+            </h3>
+            <button
+              @click.stop="launchGameFast(game)"
+              class="compact-play-btn rounded-md p-2 shrink-0 transition-all active:scale-95"
+              :title="`Play ${game.title}`"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M5 3l14 9-14 9V3z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Text Details Area -->
         <div
+          v-if="layoutMode !== 'compact'"
           :class="[
             'p-4 md:p-5 flex shrink-0 min-w-0',
             layoutMode === 'grid'
@@ -1216,6 +1302,37 @@ onUnmounted(() => {
 .card-overlay-play-btn:hover {
   background: var(--overlay-control-hover-bg);
   color: var(--overlay-control-hover-text);
+}
+
+.compact-image-overlay {
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.85) 0%,
+    rgba(0, 0, 0, 0.58) 42%,
+    rgba(0, 0, 0, 0.24) 70%,
+    rgba(0, 0, 0, 0.08) 100%
+  );
+}
+
+.compact-title {
+  color: #f8fafc;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 8px rgba(0, 0, 0, 0.85);
+  -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.65);
+  max-height: 2.6em;
+  overflow: hidden;
+}
+
+.compact-play-btn {
+  background: rgba(17, 24, 39, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: #f8fafc;
+}
+
+.compact-play-btn:hover {
+  background: rgba(17, 24, 39, 0.78);
+  border-color: rgba(255, 255, 255, 0.42);
 }
 
 .rating-badge {
