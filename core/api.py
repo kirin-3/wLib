@@ -7,7 +7,7 @@ from core.database import init_db
 from core.launcher import Launcher
 from core.scraper import Scraper
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 
 

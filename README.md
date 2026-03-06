@@ -59,7 +59,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 <table>
   <tr>
-    <td align="center"><b>Library View (List)</b></td>
+    <td align="center"><b>Library View (Small Grid)</b></td>
     <td align="center"><b>Library View (Grid)</b></td>
   </tr>
   <tr>
