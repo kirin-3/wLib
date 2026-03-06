@@ -68,7 +68,7 @@ DEV_MODE=1 python main.py
 We maintain a suite of automated tests and use strict formatting rules. **Please run these before submitting a PR.**
 
 ### Python Code
-We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` / `black` for formatting.
+We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` / `black` for formatting. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green.
 ```bash
 # Run the full backend check suite inside the active .venv
 bash scripts/check-python.sh

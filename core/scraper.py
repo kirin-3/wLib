@@ -3,15 +3,100 @@ import re
 import shutil
 import sys
 import time
+from collections.abc import Callable, Mapping, Sequence
+from types import TracebackType
+from typing import Protocol, TypeAlias, cast
 from urllib.parse import urlparse
 
 
-class Scraper:
-    def __init__(self):
-        # Store browser session in the user's data dir so login persists across installations
-        self.user_data_dir = os.path.expanduser("~/.local/share/wLib/browser_session")
+ScraperResultValue: TypeAlias = bool | str | list[str]
+ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
+ScraperResultDict: TypeAlias = dict[str, ScraperResultValue]
+ThreadMetadata: TypeAlias = dict[str, str | list[str]]
 
-    def _build_browser_launch_env(self):
+
+class PostElementLike(Protocol):
+    def inner_html(self) -> str: ...
+
+    def text_content(self) -> str | None: ...
+
+
+class PageLike(Protocol):
+    def query_selector(self, selector: str) -> PostElementLike | None: ...
+
+    def evaluate(
+        self, expression: str, arg: PostElementLike | None = None
+    ) -> object: ...
+
+    def title(self) -> str: ...
+
+    def content(self) -> str: ...
+
+    def goto(self, url: str, *, wait_until: str, timeout: int) -> None: ...
+
+    def bring_to_front(self) -> None: ...
+
+    def wait_for_event(self, event: str, *, timeout: int) -> None: ...
+
+    def wait_for_selector(self, selector: str, *, timeout: int) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class BrowserContextLike(Protocol):
+    pages: Sequence[PageLike]
+
+    def new_page(self) -> PageLike: ...
+
+    def close(self) -> None: ...
+
+
+class ChromiumLike(Protocol):
+    def launch_persistent_context(
+        self,
+        *,
+        user_data_dir: str,
+        headless: bool,
+        args: list[str],
+        env: dict[str, str],
+    ) -> BrowserContextLike: ...
+
+
+class PlaywrightInstanceLike(Protocol):
+    chromium: ChromiumLike
+
+    def stop(self) -> None: ...
+
+
+class PlaywrightContextManagerLike(Protocol):
+    def start(self) -> PlaywrightInstanceLike: ...
+
+    def __enter__(self) -> PlaywrightInstanceLike: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+
+class PlaywrightModuleLike(Protocol):
+    sync_playwright: Callable[[], PlaywrightContextManagerLike]
+
+
+class BatchResultCallback(Protocol):
+    def __call__(self, url: str, result: ScraperResult) -> bool: ...
+
+
+class Scraper:
+    def __init__(self) -> None:
+        # Store browser session in the user's data dir so login persists across installations
+        self.user_data_dir: str = os.path.expanduser(
+            "~/.local/share/wLib/browser_session"
+        )
+
+    def _build_browser_launch_env(self) -> dict[str, str]:
         clean_env = os.environ.copy()
 
         for var in (
@@ -22,17 +107,19 @@ class Scraper:
             "OWD",
             "APPIMAGE_EXTRACT_AND_RUN",
         ):
-            clean_env.pop(var, None)
+            _ = clean_env.pop(var, None)
 
         original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
         if original_library_path:
             clean_env["LD_LIBRARY_PATH"] = original_library_path
         else:
-            clean_env.pop("LD_LIBRARY_PATH", None)
+            _ = clean_env.pop("LD_LIBRARY_PATH", None)
 
         return clean_env
 
-    def _launch_persistent_browser_context(self, playwright_instance, headless):
+    def _launch_persistent_browser_context(
+        self, playwright_instance: PlaywrightInstanceLike, headless: bool
+    ) -> BrowserContextLike:
         return playwright_instance.chromium.launch_persistent_context(
             user_data_dir=self.user_data_dir,
             headless=headless,
@@ -40,7 +127,7 @@ class Scraper:
             env=self._build_browser_launch_env(),
         )
 
-    def _extract_version_from_title(self, title):
+    def _extract_version_from_title(self, title: object) -> str:
         if not isinstance(title, str):
             return "Unknown"
 
@@ -66,7 +153,7 @@ class Scraper:
             return next((g for g in match.groups() if g is not None), "Unknown")
         return "Unknown"
 
-    def _extract_version_from_post(self, page):
+    def _extract_version_from_post(self, page: PageLike) -> str:
         """
         Fallback: extract version from the first post body.
         Looks for patterns like <b>Version</b>: 1.07 or plain text "Version: 1.07".
@@ -108,7 +195,7 @@ class Scraper:
 
         return "Unknown"
 
-    def _is_valid_thread_url(self, url):
+    def _is_valid_thread_url(self, url: object) -> bool:
         if not isinstance(url, str):
             return False
 
@@ -119,7 +206,7 @@ class Scraper:
         parsed = urlparse(normalized)
         return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
-    def _extract_title_text_from_page(self, page):
+    def _extract_title_text_from_page(self, page: PageLike) -> str:
         """
         Extract the clean title text from the h1.p-title-value DOM element,
         stripping out label/badge links (engine tags, status tags).
@@ -139,15 +226,17 @@ class Scraper:
                 """,
                     h1,
                 )
-                if clean_text:
-                    return clean_text
+                if isinstance(clean_text, str):
+                    normalized_text = clean_text.strip()
+                    if normalized_text:
+                        return normalized_text
         except Exception as e:
             print(f"[wLib] Failed to extract title from h1 element: {e}")
 
         # Fallback to page title
         return page.title()
 
-    def _extract_version_from_page(self, page):
+    def _extract_version_from_page(self, page: PageLike) -> tuple[str, str]:
         """
         Full version extraction pipeline:
         1. Try extracting from the h1.p-title-value element text
@@ -161,9 +250,9 @@ class Scraper:
 
         return title_text, version
 
-    def _extract_metadata_from_page(self, page):
+    def _extract_metadata_from_page(self, page: PageLike) -> ThreadMetadata:
         """Extract thread metadata fields used by the app."""
-        metadata = {
+        metadata: ThreadMetadata = {
             "engine": "",
             "tags": [],
             "cover_image": "",
@@ -233,21 +322,25 @@ class Scraper:
                 """
             )
             if isinstance(extracted, dict):
-                metadata["engine"] = str(extracted.get("engine") or "").strip()
-                raw_tags = extracted.get("tags") or []
-                if isinstance(raw_tags, list):
-                    metadata["tags"] = [
-                        str(tag).strip() for tag in raw_tags if str(tag).strip()
-                    ]
+                extracted_dict = cast(dict[str, object], extracted)
+                metadata["engine"] = str(extracted_dict.get("engine") or "").strip()
+                raw_tags_obj = extracted_dict.get("tags")
+                if isinstance(raw_tags_obj, list):
+                    tags: list[str] = []
+                    for raw_tag in cast(list[object], raw_tags_obj):
+                        normalized_tag = str(raw_tag).strip()
+                        if normalized_tag:
+                            tags.append(normalized_tag)
+                    metadata["tags"] = tags
                 metadata["cover_image"] = self._normalize_cover_image_url(
-                    str(extracted.get("cover_image") or "").strip()
+                    extracted_dict.get("cover_image")
                 )
         except Exception as e:
             print(f"[wLib] Failed to extract metadata from page: {e}")
 
         return metadata
 
-    def _normalize_cover_image_url(self, url: str) -> str:
+    def _normalize_cover_image_url(self, url: object) -> str:
         if not isinstance(url, str):
             return ""
 
@@ -263,16 +356,16 @@ class Scraper:
 
         return normalized
 
-    def _error(self, code: str, message: str):
+    def _error(self, code: str, message: str) -> ScraperResult:
         return {"success": False, "code": code, "error": message}
 
-    def _is_non_actionable_version(self, version) -> bool:
+    def _is_non_actionable_version(self, version: object) -> bool:
         if version is None:
             return True
         value = str(version).strip().lower()
         return value in ("", "unknown", "n/a", "na", "none", "null")
 
-    def _classify_page_issue(self, page):
+    def _classify_page_issue(self, page: PageLike) -> dict[str, str] | None:
         try:
             page_title = (page.title() or "").lower()
         except Exception:
@@ -313,11 +406,12 @@ class Scraper:
 
         return None
 
-    def _load_sync_playwright(self):
+    def _load_sync_playwright(self) -> Callable[[], PlaywrightContextManagerLike]:
         import importlib
 
         module = importlib.import_module("playwright.sync_api")
-        return module.sync_playwright
+        typed_module = cast(PlaywrightModuleLike, cast(object, module))
+        return typed_module.sync_playwright
 
     def _dependency_missing_message(self) -> str:
         if getattr(sys, "frozen", False):
@@ -330,13 +424,15 @@ class Scraper:
             "Run: python -m pip install playwright && python -m playwright install chromium"
         )
 
-    def open_login_session(self, login_url="https://f95zone.to/login/"):
+    def open_login_session(
+        self, login_url: str = "https://f95zone.to/login/"
+    ) -> ScraperResult:
         if not self._is_valid_thread_url(login_url):
             return self._error("invalid_url", "Invalid login URL")
 
-        context = None
-        page = None
-        playwright_instance = None
+        context: BrowserContextLike | None = None
+        page: PageLike | None = None
+        playwright_instance: PlaywrightInstanceLike | None = None
 
         try:
             sync_playwright = self._load_sync_playwright()
@@ -377,7 +473,7 @@ class Scraper:
             except Exception:
                 pass
 
-    def reset_browser_session(self):
+    def reset_browser_session(self) -> ScraperResult:
         try:
             if os.path.exists(self.user_data_dir):
                 shutil.rmtree(self.user_data_dir)
@@ -389,11 +485,11 @@ class Scraper:
     def get_thread_version(
         self,
         url: str,
-        headless=False,
-        timeout_ms=60000,
-        hold_open_seconds=0,
-        include_metadata=False,
-    ):
+        headless: bool = False,
+        timeout_ms: int = 60000,
+        hold_open_seconds: int = 0,
+        include_metadata: bool = False,
+    ) -> ScraperResult:
         """
         Navigates to an F95Zone thread URL and extracts the version string from the title or tags.
         Spins up and down the browser safely within the calling thread.
@@ -402,9 +498,9 @@ class Scraper:
             return self._error("invalid_url", "Invalid thread URL")
 
         target_url = url.strip()
-        context = None
-        page = None
-        playwright_instance = None
+        context: BrowserContextLike | None = None
+        page: PageLike | None = None
+        playwright_instance: PlaywrightInstanceLike | None = None
 
         try:
             sync_playwright = self._load_sync_playwright()
@@ -447,7 +543,7 @@ class Scraper:
                     "Could not extract a usable version from thread",
                 )
 
-            result = {
+            result: ScraperResultDict = {
                 "success": True,
                 "title": title,
                 "version": str(version).strip(),
@@ -484,17 +580,17 @@ class Scraper:
     def get_thread_metadata(
         self,
         url: str,
-        headless=True,
-        timeout_ms=60000,
-        hold_open_seconds=0,
-    ):
+        headless: bool = True,
+        timeout_ms: int = 60000,
+        hold_open_seconds: int = 0,
+    ) -> ScraperResult:
         if not self._is_valid_thread_url(url):
             return self._error("invalid_url", "Invalid thread URL")
 
         target_url = url.strip()
-        context = None
-        page = None
-        playwright_instance = None
+        context: BrowserContextLike | None = None
+        page: PageLike | None = None
+        playwright_instance: PlaywrightInstanceLike | None = None
 
         try:
             sync_playwright = self._load_sync_playwright()
@@ -558,11 +654,17 @@ class Scraper:
             except Exception:
                 pass
 
-    def get_multiple_thread_versions(self, urls, headless=True, delay=5, callback=None):
+    def get_multiple_thread_versions(
+        self,
+        urls: Sequence[str],
+        headless: bool = True,
+        delay: int = 5,
+        callback: BatchResultCallback | None = None,
+    ) -> dict[str, ScraperResult]:
         """
         Checks multiple URLs reusing the same browser context to reduce overhead.
         """
-        results = {}
+        results: dict[str, ScraperResult] = {}
         try:
             delay_seconds = int(delay)
         except (TypeError, ValueError):

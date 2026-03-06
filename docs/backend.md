@@ -39,7 +39,8 @@ Responsible for fetching and parsing data from F95Zone.
 ## Backend Verification Workflow
 
 - **Type checking**: `pyrightconfig.json` is configured for `basedpyright` and currently checks `main.py` plus modules under `core/`.
+- **Strict rollout**: The backend entrypoints and core runtime modules (`main.py`, `core/api.py`, `core/database.py`, `core/launcher.py`, and `core/scraper.py`) are opted into `strict` checking while the rest of the project remains at `recommended`.
 - **Initial rollout scope**: `tests/` are intentionally excluded from type checking for now so backend diagnostics stay focused on application code.
-- **Baseline tracking**: Existing backend typing debt is recorded in `.basedpyright/baseline.json`, which keeps the tool actionable while still catching newly introduced issues.
+- **Baseline tracking**: `.basedpyright/baseline.json` is currently empty. It remains in the repo so future typing rollouts can use the same incremental workflow without changing tool paths.
 - **Runtime smoke check**: `scripts/smoke_backend.py` imports the backend, configures runtime helpers, imports `pywebview`, and exercises extension sync inside a temporary HOME directory so it does not touch a contributor's real app data.
 - **Local wrappers**: `bash scripts/check-python.sh` runs `basedpyright`, the smoke check, and `pytest` in the active environment. `bash scripts/check-python-clean.sh` recreates that workflow from a fresh Python 3.12 virtual environment.

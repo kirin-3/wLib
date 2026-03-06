@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
@@ -71,6 +71,30 @@ class ExtensionServiceStatus(TypedDict):
     success: bool
     reachable: bool
     error: NotRequired[str]
+
+
+class ScraperResponse(TypedDict, total=False):
+    success: bool
+    error: str
+    message: str
+    code: str
+    version: str
+    engine: str
+    cover_image: str
+    tags: str | list[object]
+
+
+class GameRecord(TypedDict):
+    id: int
+    title: str
+    version: str
+    f95_url: str
+
+
+class SaveLocation(TypedDict):
+    path: str
+    type: str
+    description: str
 
 
 class WebviewModule(Protocol):
@@ -852,36 +876,41 @@ class Api:
     # ==========================
     # Database / Game API
     # ==========================
-    def get_games(self):
+    def get_games(self) -> list[dict[str, object]]:
         from core.database import get_all_games
 
         return get_all_games()
 
     def add_game(
         self,
-        title,
-        exe_path,
-        f95_url="",
-        version="",
-        cover_image="",
-        tags="",
-        rating="",
-        developer="",
-        engine="",
-        run_japanese_locale=False,
-        run_wayland=False,
-        auto_inject_ce=False,
-        custom_prefix="",
-        proton_version="",
-    ):
+        title: str,
+        exe_path: str,
+        f95_url: str = "",
+        version: str = "",
+        cover_image: str = "",
+        tags: str = "",
+        rating: str = "",
+        developer: str = "",
+        engine: str = "",
+        run_japanese_locale: bool = False,
+        run_wayland: bool = False,
+        auto_inject_ce: bool = False,
+        custom_prefix: str = "",
+        proton_version: str = "",
+    ) -> dict[str, object]:
         import sqlite3
 
         from core.database import add_game
 
+        add_game_fn = cast(
+            Callable[..., int | None],
+            add_game,
+        )
+
         normalized_url = normalize_thread_url(f95_url)
 
         try:
-            game_id = add_game(
+            game_id = add_game_fn(
                 title,
                 exe_path,
                 normalized_url,
@@ -912,22 +941,34 @@ class Api:
 
         metadata_updated = 0
         if needs_metadata:
-            metadata_result = self.scraper.get_thread_metadata(
-                normalized_url, headless=True
-            )
-            if (
-                isinstance(metadata_result, dict)
-                and not metadata_result.get("success")
-                and metadata_result.get("code") in ("blocked", "login_required")
-            ):
-                metadata_result = self.scraper.get_thread_metadata(
-                    normalized_url,
-                    headless=False,
-                    timeout_ms=180000,
-                    hold_open_seconds=self._get_headed_retry_hold_seconds(),
+            metadata_result = self._coerce_string_key_dict(
+                cast(
+                    object,
+                    self.scraper.get_thread_metadata(normalized_url, headless=True),
                 )
+            )
+            if metadata_result is None:
+                metadata_result = {}
 
-            if isinstance(metadata_result, dict) and metadata_result.get("success"):
+            if not metadata_result.get("success") and metadata_result.get("code") in (
+                "blocked",
+                "login_required",
+            ):
+                metadata_result = self._coerce_string_key_dict(
+                    cast(
+                        object,
+                        self.scraper.get_thread_metadata(
+                            normalized_url,
+                            headless=False,
+                            timeout_ms=180000,
+                            hold_open_seconds=self._get_headed_retry_hold_seconds(),
+                        ),
+                    )
+                )
+                if metadata_result is None:
+                    metadata_result = {}
+
+            if metadata_result.get("success"):
                 metadata_updated = self._backfill_missing_metadata_for_url(
                     normalized_url,
                     metadata_result,
@@ -935,23 +976,31 @@ class Api:
 
         return {"id": game_id, "title": title, "metadata_updated": metadata_updated}
 
-    def delete_game(self, game_id):
+    def delete_game(self, game_id: int) -> dict[str, bool]:
         from core.database import delete_game
 
-        delete_game(game_id)
+        delete_game_fn = cast(Callable[[int], None], delete_game)
+
+        delete_game_fn(game_id)
         return {"success": True}
 
-    def update_game(self, game_id, fields):
+    def update_game(
+        self, game_id: int, fields: Mapping[str, object] | None
+    ) -> dict[str, object]:
         import sqlite3
 
         from core.database import update_game
 
-        updated_fields = dict(fields or {})
+        update_game_fn = cast(Callable[[int, dict[str, object]], None], update_game)
+
+        updated_fields: dict[str, object] = dict(fields or {})
         if "f95_url" in updated_fields:
-            updated_fields["f95_url"] = normalize_thread_url(updated_fields["f95_url"])
+            updated_fields["f95_url"] = normalize_thread_url(
+                str(updated_fields["f95_url"] or "")
+            )
 
         try:
-            update_game(game_id, updated_fields)
+            update_game_fn(game_id, updated_fields)
         except sqlite3.IntegrityError:
             return {
                 "success": False,
@@ -964,19 +1013,28 @@ class Api:
     # ==========================
     # Scraper API
     # ==========================
-    def _is_actionable_remote_version(self, version) -> bool:
+    def _is_actionable_remote_version(self, version: object | None) -> bool:
         if version is None:
             return False
         value = str(version).strip().lower()
         return value not in ("", "unknown", "n/a", "na", "none", "null")
 
-    def _build_scraper_error_payload(self, payload, fallback_message):
-        code = None
+    def _build_scraper_error_payload(
+        self, payload: object, fallback_message: str
+    ) -> dict[str, str | bool]:
+        code: str | None = None
         message = fallback_message
 
         if isinstance(payload, dict):
-            code = payload.get("code")
-            message = payload.get("error") or payload.get("message") or fallback_message
+            payload_dict = cast(dict[str, object], payload)
+            code_value = payload_dict.get("code")
+            if isinstance(code_value, str) and code_value.strip():
+                code = code_value.strip()
+            message = str(
+                payload_dict.get("error")
+                or payload_dict.get("message")
+                or fallback_message
+            )
         elif isinstance(payload, str) and payload.strip():
             message = payload.strip()
 
@@ -1011,16 +1069,19 @@ class Api:
             parsed = 20
         return max(5, min(parsed, 300))
 
-    def _normalize_tags_csv(self, tags) -> str:
+    def _normalize_tags_csv(self, tags: object) -> str:
         if isinstance(tags, str):
-            values = [part.strip() for part in tags.split(",") if part.strip()]
+            values: list[str] = [
+                part.strip() for part in tags.split(",") if part.strip()
+            ]
         elif isinstance(tags, list):
-            values = [str(part).strip() for part in tags if str(part).strip()]
+            tag_items = cast(list[object], tags)
+            values = [str(part).strip() for part in tag_items if str(part).strip()]
         else:
             values = []
 
-        deduped = []
-        seen = set()
+        deduped: list[str] = []
+        seen: set[str] = set()
         for value in values:
             key = value.lower()
             if key in seen:
@@ -1029,15 +1090,13 @@ class Api:
             deduped.append(value)
         return ", ".join(deduped)
 
-    def _is_missing_text(self, value) -> bool:
+    def _is_missing_text(self, value: object) -> bool:
         return not isinstance(value, str) or not value.strip()
 
-    def _backfill_missing_metadata_for_url(self, url, metadata):
-        if (
-            not isinstance(url, str)
-            or not url.strip()
-            or not isinstance(metadata, dict)
-        ):
+    def _backfill_missing_metadata_for_url(
+        self, url: str, metadata: Mapping[str, object]
+    ) -> int:
+        if not url.strip():
             return 0
 
         engine_value = str(metadata.get("engine") or "").strip()
@@ -1055,25 +1114,34 @@ class Api:
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute(
+            _ = cursor.execute(
                 "SELECT id, engine, tags, cover_image_path FROM games WHERE f95_url = ?",
                 (url.strip(),),
             )
-            games = cursor.fetchall()
+            games = cast(list[sqlite3.Row], cursor.fetchall())
 
             for game in games:
-                fields = {}
-                if engine_value and self._is_missing_text(game["engine"]):
+                fields: dict[str, str] = {}
+                engine_current = str(cast(object, game["engine"]) or "").strip()
+                tags_current = str(cast(object, game["tags"]) or "").strip()
+                cover_current = str(
+                    cast(object, game["cover_image_path"]) or ""
+                ).strip()
+                game_id = cast(object, game["id"])
+                if not isinstance(game_id, int):
+                    continue
+
+                if engine_value and self._is_missing_text(engine_current):
                     fields["engine"] = engine_value
-                if tags_value and self._is_missing_text(game["tags"]):
+                if tags_value and self._is_missing_text(tags_current):
                     fields["tags"] = tags_value
-                if cover_value and self._is_missing_text(game["cover_image_path"]):
+                if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
 
                 if fields:
-                    set_clause = ", ".join([f"{k} = ?" for k in fields.keys()])
-                    values = list(fields.values()) + [game["id"]]
-                    cursor.execute(
+                    set_clause = ", ".join(f"{key} = ?" for key in fields)
+                    values: list[str | int] = list(fields.values()) + [game_id]
+                    _ = cursor.execute(
                         f"UPDATE games SET {set_clause} WHERE id = ?", values
                     )
                     updated_rows += 1
@@ -1083,37 +1151,50 @@ class Api:
 
         return updated_rows
 
-    def check_for_updates(self, url):
+    def check_for_updates(self, url: str) -> Mapping[str, object]:
         """
         Uses Playwright to hit F95Zone and extract the version string from the thread title.
         Stores it in latest_version for comparison with the current version.
         """
-        if not isinstance(url, str) or not url.strip():
+        if not url.strip():
             return {"success": False, "error": "A valid thread URL is required"}
 
         url = url.strip()
         print(f"Checking for updates for {url}")
         try:
-            version_info = self.scraper.get_thread_version(
-                url,
-                headless=True,
-                include_metadata=True,
+            version_info = self._coerce_string_key_dict(
+                cast(
+                    object,
+                    self.scraper.get_thread_version(
+                        url,
+                        headless=True,
+                        include_metadata=True,
+                    ),
+                )
             )
+            if version_info is None:
+                version_info = {}
 
             # If anti-bot/login blocks headless scraping, retry once in headed mode
             # so users can clear the challenge with the persisted session.
-            if (
-                isinstance(version_info, dict)
-                and not version_info.get("success")
-                and version_info.get("code") in ("blocked", "login_required")
+            if not version_info.get("success") and version_info.get("code") in (
+                "blocked",
+                "login_required",
             ):
-                version_info = self.scraper.get_thread_version(
-                    url,
-                    headless=False,
-                    timeout_ms=180000,
-                    hold_open_seconds=self._get_headed_retry_hold_seconds(),
-                    include_metadata=True,
+                version_info = self._coerce_string_key_dict(
+                    cast(
+                        object,
+                        self.scraper.get_thread_version(
+                            url,
+                            headless=False,
+                            timeout_ms=180000,
+                            hold_open_seconds=self._get_headed_retry_hold_seconds(),
+                            include_metadata=True,
+                        ),
+                    )
                 )
+                if version_info is None:
+                    version_info = {}
 
             if not version_info.get("success"):
                 return self._build_scraper_error_payload(
@@ -1129,20 +1210,28 @@ class Api:
                 }
 
             # Store in latest_version field
+            import sqlite3
+
             from core.database import get_connection
 
-            conn = None
+            get_connection_fn = get_connection
+
+            conn: sqlite3.Connection | None = None
             try:
-                conn = get_connection()
+                conn = get_connection_fn()
                 cursor = conn.cursor()
-                cursor.execute(
+                _ = cursor.execute(
                     "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                    (remote_version, url),
+                    (str(remote_version).strip(), url),
                 )
                 # Check if it differs from current version
-                cursor.execute("SELECT version FROM games WHERE f95_url = ?", (url,))
-                row = cursor.fetchone()
-                current_version = row[0] if row and row[0] is not None else ""
+                _ = cursor.execute(
+                    "SELECT version FROM games WHERE f95_url = ?", (url,)
+                )
+                row = cast(object, cursor.fetchone())
+                current_version = ""
+                if isinstance(row, Sequence) and len(row) > 0 and row[0] is not None:
+                    current_version = str(row[0]).strip()
                 conn.commit()
             finally:
                 if conn is not None:
@@ -1169,11 +1258,11 @@ class Api:
                 "error_code": "check_failed",
             }
 
-    def open_in_browser(self, url):
+    def open_in_browser(self, url: str) -> dict[str, bool]:
         """Opens a URL in the user's default browser and brings it to foreground."""
         import webbrowser
 
-        webbrowser.open(url)
+        _ = webbrowser.open(url)
         return {"success": True}
 
     def open_scraper_login_session(self):
@@ -1184,7 +1273,7 @@ class Api:
         """Clear persisted Playwright session/cookies used by scraper."""
         return self.scraper.reset_browser_session()
 
-    def check_all_updates(self):
+    def check_all_updates(self) -> dict[str, object]:
         """Start a background thread to check all games for updates."""
         with self._update_lock:
             if getattr(self, "_update_running", False):
@@ -1192,8 +1281,25 @@ class Api:
 
         from core.database import get_all_games
 
-        all_games = get_all_games()
-        games_with_url = [g for g in all_games if g.get("f95_url")]
+        all_games_raw = get_all_games()
+        games_with_url: list[GameRecord] = []
+        for game in all_games_raw:
+            game_id = game.get("id")
+            url = game.get("f95_url")
+            if (
+                not isinstance(game_id, int)
+                or not isinstance(url, str)
+                or not url.strip()
+            ):
+                continue
+            games_with_url.append(
+                {
+                    "id": game_id,
+                    "title": str(game.get("title") or ""),
+                    "version": str(game.get("version") or ""),
+                    "f95_url": url.strip(),
+                }
+            )
 
         with self._update_lock:
             self._update_running = True
@@ -1203,16 +1309,8 @@ class Api:
             self._update_results = []
             self._update_delay_seconds = self._get_bulk_check_delay_seconds()
 
-        games_by_url = {
-            g.get("f95_url"): g
-            for g in games_with_url
-            if isinstance(g.get("f95_url"), str)
-        }
-        current_versions_by_url = {
-            g.get("f95_url"): str(g.get("version") or "")
-            for g in games_with_url
-            if isinstance(g.get("f95_url"), str)
-        }
+        games_by_url = {g["f95_url"]: g for g in games_with_url}
+        current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
 
         # Record the check timestamp
         from datetime import datetime
@@ -1223,7 +1321,7 @@ class Api:
         try:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(
+            _ = cursor.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_update_check', ?)",
                 (datetime.now().isoformat(),),
             )
@@ -1234,11 +1332,11 @@ class Api:
             if conn is not None:
                 conn.close()
 
-        def run_checks():
+        def run_checks() -> None:
             try:
                 urls = [game["f95_url"] for game in games_with_url]
 
-                def check_callback(url, result):
+                def check_callback(url: str, result: object) -> bool:
                     game = games_by_url.get(url)
                     if not game:
                         return True
@@ -1246,23 +1344,35 @@ class Api:
                     with self._update_lock:
                         if not self._update_running:
                             return False  # Stop checking
-                        self._update_current = game.get("title", "Unknown")
+                        self._update_current = game["title"]
+
+                    result_dict = self._coerce_string_key_dict(result)
+                    if result_dict is None:
+                        result_dict = {}
 
                     has_update = False
-                    callback_error = result.get("error")
-                    callback_error_code = result.get("code")
+                    callback_error = str(result_dict.get("error") or "")
+                    callback_error_code = str(result_dict.get("code") or "")
 
-                    if result.get("success") and self._is_actionable_remote_version(
-                        result.get("version")
+                    if result_dict.get(
+                        "success"
+                    ) and self._is_actionable_remote_version(
+                        result_dict.get("version")
                     ):
-                        remote_version = result["version"]
+                        remote_version = str(result_dict.get("version") or "").strip()
                         from core.database import get_connection
 
-                        conn = None
+                        import sqlite3
+
+                        get_connection_fn: Callable[[], sqlite3.Connection] = (
+                            get_connection
+                        )
+
+                        conn: sqlite3.Connection | None = None
                         try:
-                            conn = get_connection()
+                            conn = get_connection_fn()
                             cursor = conn.cursor()
-                            cursor.execute(
+                            _ = cursor.execute(
                                 "UPDATE games SET latest_version = ? WHERE f95_url = ?",
                                 (remote_version, url),
                             )
@@ -1280,7 +1390,7 @@ class Api:
                         finally:
                             if conn is not None:
                                 conn.close()
-                    elif result.get("success"):
+                    elif result_dict.get("success"):
                         callback_error = "Could not extract a version from thread"
                         callback_error_code = "extract_failed"
 
@@ -1288,9 +1398,9 @@ class Api:
                         self._update_results.append(
                             {
                                 "id": game["id"],
-                                "title": game.get("title", ""),
-                                "current_version": game.get("version", ""),
-                                "latest_version": result.get("version", ""),
+                                "title": game["title"],
+                                "current_version": game["version"],
+                                "latest_version": str(result_dict.get("version") or ""),
                                 "has_update": has_update,
                                 "error": callback_error,
                                 "error_code": callback_error_code,
@@ -1299,23 +1409,35 @@ class Api:
                         self._update_checked += 1
                     return True
 
-                bulk_results = self.scraper.get_multiple_thread_versions(
-                    urls,
-                    headless=True,
-                    delay=self._update_delay_seconds,
-                    callback=check_callback,
+                get_multiple_thread_versions_fn = cast(
+                    Callable[
+                        [list[str], bool, int, Callable[[str, object], bool]], object
+                    ],
+                    self.scraper.get_multiple_thread_versions,
                 )
 
-                batch_error = None
-                if isinstance(bulk_results, dict):
-                    batch_error = bulk_results.get("__batch_error__")
-                batch_error_payload = (
-                    batch_error if isinstance(batch_error, dict) else {}
+                bulk_results = self._coerce_string_key_dict(
+                    get_multiple_thread_versions_fn(
+                        urls,
+                        True,
+                        self._update_delay_seconds,
+                        check_callback,
+                    )
                 )
+                if bulk_results is None:
+                    bulk_results = {}
+
+                batch_error_payload = self._coerce_string_key_dict(
+                    bulk_results.get("__batch_error__")
+                )
+                if batch_error_payload is None:
+                    batch_error_payload = {}
+
+                batch_error = bool(batch_error_payload)
 
                 with self._update_lock:
                     should_append_batch_error = (
-                        bool(batch_error)
+                        batch_error
                         and self._update_checked == 0
                         and bool(games_with_url)
                     )
@@ -1326,15 +1448,17 @@ class Api:
                             self._update_results.append(
                                 {
                                     "id": game["id"],
-                                    "title": game.get("title", ""),
-                                    "current_version": game.get("version", ""),
+                                    "title": game["title"],
+                                    "current_version": game["version"],
                                     "latest_version": "",
                                     "has_update": False,
-                                    "error": batch_error_payload.get(
-                                        "error", "Batch update check failed"
+                                    "error": str(
+                                        batch_error_payload.get(
+                                            "error", "Batch update check failed"
+                                        )
                                     ),
-                                    "error_code": batch_error_payload.get(
-                                        "code", "batch_failed"
+                                    "error_code": str(
+                                        batch_error_payload.get("code", "batch_failed")
                                     ),
                                 }
                             )
@@ -1356,7 +1480,7 @@ class Api:
             "delay_seconds": delay_seconds,
         }
 
-    def get_update_status(self):
+    def get_update_status(self) -> dict[str, object]:
         """Get the current status of the bulk update check."""
         with self._update_lock:
             return {
@@ -1368,33 +1492,45 @@ class Api:
                 "delay_seconds": getattr(self, "_update_delay_seconds", 5),
             }
 
-    def cancel_update_check(self):
+    def cancel_update_check(self) -> dict[str, bool]:
         """Cancel an in-progress bulk update check."""
         with self._update_lock:
             self._update_running = False
         return {"success": True}
 
-    def get_auto_check_setting(self):
+    def get_auto_check_setting(self) -> dict[str, str]:
         """Get the auto update check frequency setting."""
         from core.database import get_connection
 
-        with closing(get_connection()) as conn:
+        get_connection_fn = get_connection
+
+        with closing(get_connection_fn()) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT value FROM settings WHERE key = 'auto_update_check'")
-            row = cursor.fetchone()
-            freq = row[0] if row else "weekly"
-            cursor.execute("SELECT value FROM settings WHERE key = 'last_update_check'")
-            row2 = cursor.fetchone()
-            last = row2[0] if row2 else ""
+            _ = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'auto_update_check'"
+            )
+            row = cast(object, cursor.fetchone())
+            freq = "weekly"
+            if isinstance(row, Sequence) and len(row) > 0 and row[0] is not None:
+                freq = str(row[0])
+            _ = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'last_update_check'"
+            )
+            row2 = cast(object, cursor.fetchone())
+            last = ""
+            if isinstance(row2, Sequence) and len(row2) > 0 and row2[0] is not None:
+                last = str(row2[0])
         return {"frequency": freq, "last_check": last}
 
-    def set_auto_check_setting(self, frequency):
+    def set_auto_check_setting(self, frequency: str) -> dict[str, bool]:
         """Set auto update check frequency: 'weekly', 'monthly', or 'off'."""
         from core.database import get_connection
 
-        conn = get_connection()
+        get_connection_fn = get_connection
+
+        conn = get_connection_fn()
         cursor = conn.cursor()
-        cursor.execute(
+        _ = cursor.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_update_check', ?)",
             (frequency,),
         )
@@ -1402,25 +1538,31 @@ class Api:
         conn.close()
         return {"success": True}
 
-    def maybe_auto_check(self):
+    def maybe_auto_check(self) -> dict[str, object]:
         """Check if auto update should run based on frequency and last check time."""
         from datetime import datetime, timedelta
 
         from core.database import get_connection
 
-        conn = get_connection()
+        get_connection_fn = get_connection
+
+        conn = get_connection_fn()
         cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key = 'auto_update_check'")
-        row = cursor.fetchone()
-        freq = row[0] if row else "weekly"
+        _ = cursor.execute("SELECT value FROM settings WHERE key = 'auto_update_check'")
+        row = cast(object, cursor.fetchone())
+        freq = "weekly"
+        if isinstance(row, Sequence) and len(row) > 0 and row[0] is not None:
+            freq = str(row[0])
 
         if freq == "off":
             conn.close()
             return {"triggered": False, "reason": "Auto-check is disabled"}
 
-        cursor.execute("SELECT value FROM settings WHERE key = 'last_update_check'")
-        row2 = cursor.fetchone()
-        last_check_str = row2[0] if row2 else ""
+        _ = cursor.execute("SELECT value FROM settings WHERE key = 'last_update_check'")
+        row2 = cast(object, cursor.fetchone())
+        last_check_str = ""
+        if isinstance(row2, Sequence) and len(row2) > 0 and row2[0] is not None:
+            last_check_str = str(row2[0])
         conn.close()
 
         now = datetime.now()
@@ -1447,12 +1589,12 @@ class Api:
     # ==========================
     # Launcher API
     # ==========================
-    def get_available_runners(self):
+    def get_available_runners(self) -> dict[str, object]:
         """Scan ~/.local/share/wLib/proton/ for available proton versions and return them."""
         import os
         import shutil
 
-        runners = []
+        runners: list[dict[str, str]] = []
 
         # Check system wine
         if shutil.which("wine"):
@@ -1471,15 +1613,15 @@ class Api:
 
     def launch_game(
         self,
-        game_id,
-        exe_path,
-        command_line_args="",
-        run_japanese_locale=False,
-        run_wayland=False,
-        auto_inject_ce=False,
-        custom_prefix="",
-        proton_version="",
-    ):
+        game_id: int,
+        exe_path: str,
+        command_line_args: str = "",
+        run_japanese_locale: bool = False,
+        run_wayland: bool = False,
+        auto_inject_ce: bool = False,
+        custom_prefix: str = "",
+        proton_version: str = "",
+    ) -> Mapping[str, object]:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
@@ -1487,18 +1629,20 @@ class Api:
             f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version})"
         )
 
-        def on_exit(delta, is_final=True):
+        def on_exit(delta: int, is_final: bool = True) -> None:
             try:
                 from core.database import update_playtime
 
-                update_playtime(game_id, delta)
+                update_playtime_fn = cast(
+                    Callable[[int, int], None], cast(object, update_playtime)
+                )
+
+                update_playtime_fn(game_id, delta)
                 if self.window:
                     safe_game_id = int(game_id)
                     safe_delta = max(int(delta), 0)
                     self.window.evaluate_js(
-                        "window.dispatchEvent(new CustomEvent('wlib-playtime-tick', { detail: { "
-                        f"gameId: {safe_game_id}, delta: {safe_delta}, isFinal: {str(bool(is_final)).lower()}"
-                        " } }))"
+                        f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {{ gameId: {safe_game_id}, delta: {safe_delta}, isFinal: {str(bool(is_final)).lower()} }} }}))"
                     )
             except Exception as e:
                 print(f"Failed to update playtime for game {game_id}: {e}")
@@ -1515,7 +1659,9 @@ class Api:
         )
         return result
 
-    def install_rpgmaker_dependencies(self, prefix_path=None, proton_path=None):
+    def install_rpgmaker_dependencies(
+        self, prefix_path: str | None = None, proton_path: str | None = None
+    ) -> dict[str, bool]:
         """
         Runs winetricks to install the common dependencies needed for RPGMaker/Unity visual novels.
         """
@@ -1524,14 +1670,22 @@ class Api:
 
         from core.database import get_setting
 
-        wine_prefix = prefix_path if prefix_path else get_setting("wine_prefix_path")
-        proton_path_to_use = proton_path if proton_path else get_setting("proton_path")
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+
+        wine_prefix_value = (
+            prefix_path if prefix_path else get_setting_fn("wine_prefix_path")
+        )
+        proton_path_value = (
+            proton_path if proton_path else get_setting_fn("proton_path")
+        )
+        wine_prefix = str(wine_prefix_value or "").strip()
+        proton_path_to_use = str(proton_path_value or "").strip()
 
         if not wine_prefix:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
             os.makedirs(wine_prefix, exist_ok=True)
 
-        is_proton = (
+        is_proton = bool(
             proton_path_to_use
             and "proton" in os.path.basename(proton_path_to_use).lower()
         )
@@ -1595,7 +1749,7 @@ class Api:
                         self._deps_install_status["done"] = i
                         self._deps_install_status["current"] = verb
                     print(f"Installing winetricks verb {i + 1}/{len(verbs)}: {verb}")
-                    subprocess.run(
+                    _ = subprocess.run(
                         ["winetricks", "-q", verb],
                         env=env,
                         stdout=subprocess.DEVNULL,
@@ -1615,35 +1769,34 @@ class Api:
                     self._deps_install_status["error"] = str(e)
                 print(f"Winetricks encountered an error: {e}")
 
-        import threading
-
         threading.Thread(target=_install_deps, daemon=True).start()
         return {"success": True}
 
-    def install_rpgmaker_rtp(self):
+    def install_rpgmaker_rtp(self) -> dict[str, bool]:
         """
         Downloads and installs RPG Maker VX Ace and XP RTPs into the configured wine prefix.
         Currently downloads the official zips and triggers their setup.exe silently.
         """
         import os
         import subprocess
-        import threading
         import urllib.request
         import zipfile
 
         from core.database import get_setting
 
-        wine_prefix = get_setting("wine_prefix_path")
-        proton_path = get_setting("proton_path")
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+
+        wine_prefix_value = get_setting_fn("wine_prefix_path")
+        proton_path_value = get_setting_fn("proton_path")
+        wine_prefix = str(wine_prefix_value or "").strip()
+        proton_path = str(proton_path_value or "").strip()
 
         if not wine_prefix:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
             os.makedirs(wine_prefix, exist_ok=True)
 
         is_proton = bool(
-            isinstance(proton_path, str)
-            and proton_path
-            and "proton" in os.path.basename(proton_path).lower()
+            proton_path and "proton" in os.path.basename(proton_path).lower()
         )
         env = os.environ.copy()
 
@@ -1683,8 +1836,6 @@ class Api:
 
         # We run this in a background thread so we don't block the UI returning 'success' immediately
         def _download_and_install():
-            import shutil
-
             rtp_dir = os.path.expanduser("~/.local/share/wLib/rtp")
             os.makedirs(rtp_dir, exist_ok=True)
 
@@ -1706,12 +1857,13 @@ class Api:
                             rtp["url"], headers={"User-Agent": "Mozilla/5.0"}
                         )
                         with (
-                            urllib.request.urlopen(
-                                req, context=ctx, timeout=30
+                            cast(
+                                URLResponseContext,
+                                urllib.request.urlopen(req, context=ctx, timeout=30),
                             ) as response,
                             open(download_path, "wb") as out_file,
                         ):
-                            shutil.copyfileobj(response, out_file)
+                            _ = out_file.write(response.read())
                     except Exception as e:
                         print(f"Failed to download {rtp['name']} RTP: {e}")
                         continue
@@ -1727,7 +1879,7 @@ class Api:
                             zf.extractall(extract_path)
 
                     # Find the setup executable inside the extracted folder
-                    for root, dirs, files in os.walk(extract_path):
+                    for root, _dirs, files in os.walk(extract_path):
                         for f in files:
                             if f.lower().endswith(".exe"):
                                 setup_exe = os.path.join(root, f)
@@ -1739,10 +1891,10 @@ class Api:
                     print(f"Installing {rtp['name']} RTP silently in prefix...")
                     setup_exe_str = str(setup_exe)
                     command = ["wine", setup_exe_str, "/S", "/v/qn"]
-                    if is_proton and isinstance(proton_path, str):
+                    if is_proton:
                         command = [proton_path, "run", setup_exe_str, "/S", "/v/qn"]
                     try:
-                        subprocess.run(
+                        _ = subprocess.run(
                             command,
                             env=env,
                             stdout=subprocess.DEVNULL,
@@ -1771,14 +1923,14 @@ class Api:
                 "current": rtps[0]["name"],
                 "error": "",
             }
-        import threading
-
         threading.Thread(target=_download_and_install, daemon=True).start()
         return {"success": True}
 
-    def get_install_status(self):
+    def get_install_status(self) -> dict[str, object]:
         """Returns the current status of background DLL and RTP installs, plus whether they've previously completed."""
         from core.database import get_setting
+
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
         with self._status_lock:
             deps_status = dict(
@@ -1811,11 +1963,11 @@ class Api:
         return {
             "deps": deps_status,
             "rtps": rtp_status,
-            "dlls_installed": get_setting("dlls_installed") == "true",
-            "rtps_installed": get_setting("rtps_installed") == "true",
+            "dlls_installed": get_setting_fn("dlls_installed") == "true",
+            "rtps_installed": get_setting_fn("rtps_installed") == "true",
         }
 
-    def get_system_deps_command(self):
+    def get_system_deps_command(self) -> dict[str, object]:
         """Detects the system package manager and returns the command to install 32-bit GStreamer/multimedia dependencies."""
         import shutil
 
@@ -1861,7 +2013,7 @@ class Api:
     # ==========================
     # Settings & Utils API
     # ==========================
-    def download_proton_ge(self):
+    def download_proton_ge(self) -> dict[str, object]:
         """
         Downloads the latest Proton-GE release and extracts it to the local share directory.
         """
@@ -1879,14 +2031,28 @@ class Api:
 
             ctx = ssl.create_default_context()
 
-            with urllib.request.urlopen(req, context=ctx, timeout=30) as response:
-                data = json.loads(response.read().decode())
+            with cast(
+                URLResponseContext,
+                urllib.request.urlopen(req, context=ctx, timeout=30),
+            ) as response:
+                data = self._coerce_string_key_dict(
+                    cast(object, json.loads(response.read().decode()))
+                )
+            if data is None:
+                data = {}
 
-            download_url = None
-            release_name = data.get("tag_name", "proton-ge")
-            for asset in data.get("assets", []):
-                if asset.get("name", "").endswith(".tar.gz"):
-                    download_url = asset.get("browser_download_url")
+            download_url = ""
+            release_name = str(data.get("tag_name") or "proton-ge")
+            assets = data.get("assets")
+            for asset_obj in (
+                cast(list[object], assets) if isinstance(assets, list) else []
+            ):
+                asset = self._coerce_string_key_dict(asset_obj)
+                if not asset:
+                    continue
+                asset_name = str(asset.get("name") or "")
+                if asset_name.endswith(".tar.gz"):
+                    download_url = str(asset.get("browser_download_url") or "")
                     break
 
             if not download_url:
@@ -1901,20 +2067,19 @@ class Api:
             tar_path = os.path.join("/tmp", f"{release_name}.tar.gz")
 
             print(f"Downloading {release_name} from {download_url}...")
-            # We must use urlopen with our context and shutil here instead of urlretrieve
+            # We must use urlopen with our context here instead of urlretrieve
             # because urlretrieve doesn't easily accept a custom SSL context.
-            import shutil
-
             download_req = urllib.request.Request(
                 download_url, headers={"User-Agent": "wLib"}
             )
             with (
-                urllib.request.urlopen(
-                    download_req, context=ctx, timeout=30
+                cast(
+                    URLResponseContext,
+                    urllib.request.urlopen(download_req, context=ctx, timeout=30),
                 ) as response,
                 open(tar_path, "wb") as out_file,
             ):
-                shutil.copyfileobj(response, out_file)
+                _ = out_file.write(response.read())
 
             print(f"Extracting {tar_path}...")
             with tarfile.open(tar_path, "r:gz") as tar:
@@ -1941,22 +2106,26 @@ class Api:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def get_settings(self):
+    def get_settings(self) -> dict[str, object]:
         from core.database import get_setting
 
-        playwright_path = get_setting("playwright_browsers_path")
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+
+        playwright_path = get_setting_fn("playwright_browsers_path")
         if not isinstance(playwright_path, str) or not playwright_path.strip():
             playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
         return {
-            "proton_path": get_setting("proton_path"),
-            "wine_prefix_path": get_setting("wine_prefix_path"),
-            "enable_logging": get_setting("enable_logging") == "true",
+            "proton_path": str(get_setting_fn("proton_path") or ""),
+            "wine_prefix_path": str(get_setting_fn("wine_prefix_path") or ""),
+            "enable_logging": get_setting_fn("enable_logging") == "true",
             "playwright_browsers_path": playwright_path,
         }
 
-    def save_settings(self, settings):
+    def save_settings(self, settings: Mapping[str, object]) -> dict[str, bool]:
         from core.database import update_setting
+
+        update_setting_fn = cast(Callable[[str, str], None], update_setting)
 
         raw_playwright_path = settings.get(
             "playwright_browsers_path", DEFAULT_PLAYWRIGHT_BROWSERS_PATH
@@ -1968,15 +2137,17 @@ class Api:
         if not playwright_path:
             playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
-        update_setting("proton_path", settings.get("proton_path", ""))
-        update_setting("wine_prefix_path", settings.get("wine_prefix_path", ""))
-        update_setting(
+        update_setting_fn("proton_path", str(settings.get("proton_path", "") or ""))
+        update_setting_fn(
+            "wine_prefix_path", str(settings.get("wine_prefix_path", "") or "")
+        )
+        update_setting_fn(
             "enable_logging", "true" if settings.get("enable_logging") else "false"
         )
-        update_setting("playwright_browsers_path", playwright_path)
+        update_setting_fn("playwright_browsers_path", playwright_path)
         return {"success": True}
 
-    def browse_file(self, start_path=""):
+    def browse_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select an executable or HTML game."""
         file_types = (
             "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
@@ -1992,7 +2163,7 @@ class Api:
             "file", directory=start_path, file_types=file_types
         )
 
-    def browse_directory(self, start_path=""):
+    def browse_directory(self, start_path: str = "") -> str:
         """Opens a native directory dialog, e.g. for choosing a wine prefix."""
         if sys.platform.startswith("linux"):
             return self._browse_linux_dialog("directory", directory=start_path)
@@ -2000,8 +2171,13 @@ class Api:
         return self._browse_qt_dialog("directory", directory=start_path)
 
     def find_save_files(
-        self, exe_path, title="", engine="", custom_prefix="", proton_version=""
-    ):
+        self,
+        exe_path: str,
+        title: str = "",
+        engine: str = "",
+        custom_prefix: str = "",
+        proton_version: str = "",
+    ) -> list[SaveLocation]:
         """
         Searches common save file locations for a game.
         Returns a list of {path, type, description} for each found location.
@@ -2011,7 +2187,11 @@ class Api:
 
         from core.database import get_setting
 
-        results = []
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+
+        _ = engine
+
+        results: list[SaveLocation] = []
         game_dir = os.path.dirname(exe_path) if exe_path else ""
         game_name = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ""
         title_clean = title.strip() if title else game_name
@@ -2078,13 +2258,21 @@ class Api:
 
         # ── 3. Check Wine prefix AppData folders ──
         wine_prefix = (
-            custom_prefix if custom_prefix else get_setting("wine_prefix_path")
+            custom_prefix
+            if custom_prefix
+            else str(get_setting_fn("wine_prefix_path") or "")
         )
         if not wine_prefix:
             wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
 
-        proton_path = proton_version if proton_version else get_setting("proton_path")
-        is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
+        proton_path = (
+            proton_version
+            if proton_version
+            else str(get_setting_fn("proton_path") or "")
+        )
+        is_proton = bool(
+            proton_path and "proton" in os.path.basename(proton_path).lower()
+        )
 
         if is_proton:
             pfx_path = os.path.join(wine_prefix, "pfx")
@@ -2149,8 +2337,8 @@ class Api:
                         continue
 
         # Deduplicate by path
-        seen = set()
-        unique_results = []
+        seen: set[str] = set()
+        unique_results: list[SaveLocation] = []
         for r in results:
             if r["path"] not in seen:
                 seen.add(r["path"])
@@ -2158,18 +2346,18 @@ class Api:
 
         return unique_results
 
-    def open_folder(self, path):
+    def open_folder(self, path: str) -> OpenPathResult:
         """Opens a folder in the system file manager."""
         if not os.path.exists(path):
             return {"success": False, "error": f"Path does not exist: {path}"}
 
         return self._open_path_with_system_handler(path)
 
-    def open_dev_tools(self):
+    def open_dev_tools(self) -> None:
         if self.window:
             self.window.toggle_inspect()
 
-    def check_app_updates(self):
+    def check_app_updates(self) -> dict[str, object]:
         """Fetches the latest release from the kirin-3/wLib GitHub repository."""
         import json
         import logging
@@ -2180,39 +2368,57 @@ class Api:
                 "https://api.github.com/repos/kirin-3/wLib/releases/latest",
                 headers={"User-Agent": "wLib-AppUpdater"},
             )
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with cast(
+                URLResponseContext,
+                urllib.request.urlopen(req, timeout=10),
+            ) as response:
                 if response.status == 200:
-                    data = json.loads(response.read().decode("utf-8"))
-                    latest_tag = data.get("tag_name", "")
+                    data = self._coerce_string_key_dict(
+                        cast(object, json.loads(response.read().decode("utf-8")))
+                    )
+                    if data is None:
+                        data = {}
+
+                    latest_tag = str(data.get("tag_name") or "")
                     latest_tag = (
                         latest_tag if latest_tag.startswith("v") else f"v{latest_tag}"
                     )
+                    assets = data.get("assets")
+                    parsed_assets: list[dict[str, str]] = []
+                    for asset_obj in (
+                        cast(list[object], assets) if isinstance(assets, list) else []
+                    ):
+                        asset = self._coerce_string_key_dict(asset_obj)
+                        if not asset:
+                            continue
+                        parsed_assets.append(
+                            {
+                                "name": str(asset.get("name") or ""),
+                                "url": str(asset.get("browser_download_url") or ""),
+                            }
+                        )
+
                     return {
                         "success": True,
                         "version": latest_tag,
                         "current_version": f"v{APP_VERSION}",
-                        "changelog": data.get("body", ""),
-                        "url": data.get("html_url", ""),
-                        "assets": [
-                            {
-                                "name": a.get("name"),
-                                "url": a.get("browser_download_url"),
-                            }
-                            for a in data.get("assets", [])
-                        ],
+                        "changelog": str(data.get("body") or ""),
+                        "url": str(data.get("html_url") or ""),
+                        "assets": parsed_assets,
                     }
+            return {"success": False, "error": "Unexpected status from update API"}
         except Exception as e:
             logging.error(f"Failed to check app updates: {e}")
             return {"success": False, "error": str(e)}
 
-    def get_app_version(self):
+    def get_app_version(self) -> dict[str, str]:
         """Returns the current app version."""
         return {"version": f"v{APP_VERSION}"}
 
     # ==========================
     # Cheat Engine API
     # ==========================
-    def is_cheat_engine_installed(self):
+    def is_cheat_engine_installed(self) -> dict[str, object]:
         """Checks if Cheat Engine (Lunar Engine) is installed in the wLib data directory."""
         import os
 
@@ -2233,14 +2439,13 @@ class Api:
             }
         return {"installed": False, "path": ""}
 
-    def download_cheat_engine(self):
+    def download_cheat_engine(self) -> dict[str, object]:
         """
         Downloads a safe, portable build of Cheat Engine (Lunar Engine v7.2).
         Lunar Engine is an undetected CE fork that works perfectly in Wine.
         """
         import os
         import shutil
-        import subprocess
         import urllib.request
         import zipfile
 
@@ -2259,10 +2464,12 @@ class Api:
 
             req = urllib.request.Request(url, headers={"User-Agent": "wLib"})
             with (
-                urllib.request.urlopen(req, timeout=30) as response,
+                cast(
+                    URLResponseContext, urllib.request.urlopen(req, timeout=30)
+                ) as response,
                 open(zip_path, "wb") as out_file,
             ):
-                shutil.copyfileobj(response, out_file)
+                _ = out_file.write(response.read())
 
             print(f"Extracting Cheat Engine to {ce_dir}...")
             with zipfile.ZipFile(zip_path, "r") as zip_ref:

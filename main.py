@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 import threading
@@ -5,6 +7,7 @@ import subprocess
 import time
 import importlib
 import shutil
+from typing import TYPE_CHECKING, Protocol, cast, override
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
@@ -17,12 +20,44 @@ from core.f95zone import normalize_thread_url
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-webview = None
+if TYPE_CHECKING:
+    from webview import Window
 
-window_ref = None
+
+class WebviewModule(Protocol):
+    def create_window(
+        self,
+        title: str,
+        url: str,
+        *,
+        js_api: Api,
+        width: int,
+        height: int,
+        background_color: str,
+    ) -> Window: ...
+
+    def start(
+        self,
+        *,
+        gui: str,
+        debug: bool,
+        http_server: bool,
+        icon: str | None,
+    ) -> None: ...
 
 
-def configure_playwright_browsers_path():
+class ExtensionWindow(Protocol):
+    on_top: bool
+
+    def evaluate_js(self, script: str) -> object: ...
+
+
+webview: WebviewModule | None = None
+
+window_ref: Window | None = None
+
+
+def configure_playwright_browsers_path() -> str:
     global playwright_browsers_path
 
     configured_path = (os.environ.get("WLIB_PLAYWRIGHT_BROWSERS_PATH") or "").strip()
@@ -41,7 +76,7 @@ def configure_playwright_browsers_path():
     return playwright_browsers_path
 
 
-def configure_qt_runtime_environment():
+def configure_qt_runtime_environment() -> dict[str, str]:
     session_type = (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower()
     wayland_display = (os.environ.get("WAYLAND_DISPLAY") or "").strip()
     display = (os.environ.get("DISPLAY") or "").strip()
@@ -69,12 +104,7 @@ def configure_qt_runtime_environment():
 
     platform_label = selected_platform or "<unset>"
     print(
-        "[wLib] Qt runtime environment: "
-        f"session={session_type or '<unknown>'}, "
-        f"wayland_display={wayland_display or '<unset>'}, "
-        f"display={display or '<unset>'}, "
-        f"qt_qpa_platform={platform_label}, "
-        f"source={source}"
+        f"[wLib] Qt runtime environment: session={session_type or '<unknown>'}, wayland_display={wayland_display or '<unset>'}, display={display or '<unset>'}, qt_qpa_platform={platform_label}, source={source}"
     )
 
     return {
@@ -86,14 +116,14 @@ def configure_qt_runtime_environment():
     }
 
 
-def load_webview_module():
+def load_webview_module() -> WebviewModule | None:
     global webview
 
     if webview is not None:
         return webview
 
     try:
-        webview = importlib.import_module("webview")
+        webview = cast(WebviewModule, cast(object, importlib.import_module("webview")))
     except Exception as e:
         print(f"[wLib] Failed to import pywebview: {e}")
         webview = None
@@ -102,7 +132,7 @@ def load_webview_module():
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
-    def _find_matching_game(self, url):
+    def _find_matching_game(self, url: object) -> dict[str, object] | None:
         if not isinstance(url, str) or not url.strip():
             return None
 
@@ -110,7 +140,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
         return find_game_by_f95_url(url)
 
-    def _get_allowed_origin(self):
+    def _get_allowed_origin(self) -> str | None:
         origin = (self.headers.get("Origin") or "").strip()
         if not origin:
             return ""
@@ -123,24 +153,25 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
         return None
 
-    def _send_cors_headers(self, allowed_origin):
+    def _send_cors_headers(self, allowed_origin: str) -> None:
         self.send_header("Vary", "Origin")
         if allowed_origin:
             self.send_header("Access-Control-Allow-Origin", allowed_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-    def _reject_origin(self):
+    def _reject_origin(self) -> None:
         self.send_response(403)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"success": false, "error": "Origin not allowed"}')
+        _ = self.wfile.write(b'{"success": false, "error": "Origin not allowed"}')
 
-    def log_message(self, format, *args):
+    @override
+    def log_message(self, format: str, *args: object) -> None:
         # Suppress default HTTP server logs to keep the console clean
         pass
 
-    def do_OPTIONS(self):
+    def do_OPTIONS(self) -> None:
         allowed_origin = self._get_allowed_origin()
         if allowed_origin is None:
             self._reject_origin()
@@ -150,7 +181,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         self._send_cors_headers(allowed_origin)
         self.end_headers()
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         allowed_origin = self._get_allowed_origin()
         if allowed_origin is None:
             self._reject_origin()
@@ -174,7 +205,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"exists": exists}).encode())
+            _ = self.wfile.write(json.dumps({"exists": exists}).encode())
         elif self.path.startswith("/api/open"):
             from urllib.parse import urlparse, parse_qs
 
@@ -186,22 +217,26 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             error_message = ""
             if window_ref:
                 try:
+                    active_window = cast(ExtensionWindow, window_ref)
                     if game_url:
                         matching_game = self._find_matching_game(game_url)
-                        if matching_game and matching_game.get("f95_url"):
-                            resolved_url = matching_game["f95_url"]
+                        if matching_game:
+                            resolved_f95_url = matching_game.get("f95_url")
+                            if isinstance(resolved_f95_url, str) and resolved_f95_url:
+                                resolved_url = resolved_f95_url
 
-                    window_ref.on_top = True
-                    window_ref.on_top = False
+                    active_window.on_top = True
+                    active_window.on_top = False
                     # Tell the frontend to open the edit modal for this game
                     if resolved_url:
                         import base64
 
-                        b64_url = base64.b64encode(resolved_url.encode("utf-8")).decode(
-                            "utf-8"
-                        )
+                        resolved_url_text = str(resolved_url)
+                        b64_url = base64.b64encode(
+                            resolved_url_text.encode("utf-8")
+                        ).decode("utf-8")
                         js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-open', {{ detail: {{ url: decodeURIComponent(escape(atob('{b64_url}'))) }} }}));"
-                        window_ref.evaluate_js(js_code)
+                        _ = active_window.evaluate_js(js_code)
                 except Exception as e:
                     print(f"[wLib] Failed to process extension open event: {e}")
                     success = False
@@ -217,12 +252,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             payload: dict[str, object] = {"success": success}
             if error_message:
                 payload["error"] = error_message
-            self.wfile.write(json.dumps(payload).encode())
+            _ = self.wfile.write(json.dumps(payload).encode())
         else:
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         allowed_origin = self._get_allowed_origin()
         if allowed_origin is None:
             self._reject_origin()
@@ -233,29 +268,31 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
 
             try:
-                payload = json.loads(post_data.decode("utf-8"))
+                payload = cast(object, json.loads(post_data.decode("utf-8")))
 
                 # We have the payload. Send it to the Vue frontend via PyWebView javascript evaluation
                 if window_ref:
                     import base64
 
+                    active_window = cast(ExtensionWindow, window_ref)
+
                     b64_json = base64.b64encode(
                         json.dumps(payload).encode("utf-8")
                     ).decode("utf-8")
                     js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-add', {{ detail: JSON.parse(decodeURIComponent(escape(atob('{b64_json}')))) }}));"
-                    window_ref.evaluate_js(js_code)
+                    _ = active_window.evaluate_js(js_code)
 
                 self.send_response(200)
                 self._send_cors_headers(allowed_origin)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(b'{"success": true}')
+                _ = self.wfile.write(b'{"success": true}')
             except Exception as e:
                 self.send_response(400)
                 self._send_cors_headers(allowed_origin)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(
+                _ = self.wfile.write(
                     json.dumps({"success": False, "error": str(e)}).encode()
                 )
         else:
@@ -263,7 +300,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def start_extension_server():
+def start_extension_server() -> None:
     try:
         server = HTTPServer(("localhost", 8183), ExtensionRequestHandler)
         print("Starting extension HTTP receiver on port 8183...")
@@ -272,7 +309,7 @@ def start_extension_server():
         print(f"Failed to start extension HTTP server: {e}")
 
 
-def start_vite_dev_server():
+def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
     print("Starting Vite dev server...")
     # Change dir to the 'ui' folder relative to main.py
     ui_dir = os.path.join(os.path.dirname(__file__), "ui")
@@ -287,7 +324,7 @@ def start_vite_dev_server():
     return None
 
 
-def _is_same_executable(path_a, path_b):
+def _is_same_executable(path_a: str | None, path_b: str | None) -> bool:
     if not path_a or not path_b:
         return False
     try:
@@ -296,7 +333,7 @@ def _is_same_executable(path_a, path_b):
         return os.path.realpath(path_a) == os.path.realpath(path_b)
 
 
-def _get_playwright_install_command():
+def _get_playwright_install_command() -> list[str] | None:
     # Prefer Playwright's packaged driver entrypoint so frozen builds don't
     # accidentally relaunch this app binary via sys.executable.
     try:
@@ -318,13 +355,13 @@ def _get_playwright_install_command():
     return [sys.executable, "-m", "playwright", "install", "chromium"]
 
 
-def ensure_playwright_browsers():
+def ensure_playwright_browsers() -> bool:
     """Ensure Playwright chromium browser is installed."""
     chromium_path = os.path.join(playwright_browsers_path, "chromium-*")
     import glob
 
     try:
-        importlib.import_module("playwright")
+        _ = importlib.import_module("playwright")
     except ModuleNotFoundError:
         print(
             "[wLib] Playwright Python package is missing; cannot install browser binaries."
@@ -349,7 +386,7 @@ def ensure_playwright_browsers():
 
     print("Installing Playwright chromium browser...")
     try:
-        subprocess.run(
+        _ = subprocess.run(
             install_cmd,
             check=True,
             stdout=subprocess.DEVNULL,
@@ -362,10 +399,10 @@ def ensure_playwright_browsers():
         return False
 
 
-def ensure_playwright_browsers_async():
+def ensure_playwright_browsers_async() -> None:
     """Run Playwright browser availability checks outside startup critical path."""
 
-    def _ensure():
+    def _ensure() -> None:
         ok = ensure_playwright_browsers()
         if not ok:
             print(
@@ -376,16 +413,16 @@ def ensure_playwright_browsers_async():
     thread.start()
 
 
-def main():
-    configure_playwright_browsers_path()
+def main() -> None:
+    _ = configure_playwright_browsers_path()
 
     if "--install-playwright-if-needed" in sys.argv:
-        ensure_playwright_browsers()
+        _ = ensure_playwright_browsers()
         sys.exit(0)
 
     global window_ref, DEV_MODE
 
-    configure_qt_runtime_environment()
+    _ = configure_qt_runtime_environment()
     webview_module = load_webview_module()
 
     if webview_module is None:
@@ -396,14 +433,11 @@ def main():
     api.set_startup_extension_sync_status(sync_result)
     if sync_result.get("success") is False:
         print(
-            "[wLib] Failed to sync browser extension files on startup: "
-            f"{sync_result.get('error', 'Unknown error')}"
+            f"[wLib] Failed to sync browser extension files on startup: {sync_result.get('error', 'Unknown error')}"
         )
     elif sync_result.get("updated"):
         print(
-            "[wLib] Synced browser extension files on startup: "
-            f"{sync_result.get('installed_version') or '?'} "
-            f"(reason={sync_result.get('reason', 'unknown')})"
+            f"[wLib] Synced browser extension files on startup: {sync_result.get('installed_version') or '?'} (reason={sync_result.get('reason', 'unknown')})"
         )
 
     # Resolve base path for bundled assets (PyInstaller vs dev source)

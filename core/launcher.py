@@ -1,6 +1,12 @@
 import subprocess
 import os
+from typing import Protocol
+
 from .database import get_setting
+
+
+class ExitCallback(Protocol):
+    def __call__(self, delta: int, is_final: bool = True) -> object: ...
 
 
 class Launcher:
@@ -9,15 +15,15 @@ class Launcher:
 
     def launch(
         self,
-        exe_path: str,
-        command_line_args: str = "",
+        exe_path: object,
+        command_line_args: object | None = "",
         run_japanese_locale: bool = False,
         run_wayland: bool = False,
         auto_inject_ce: bool = False,
         custom_prefix: str = "",
         proton_version: str = "",
-        on_exit_callback=None,
-    ):
+        on_exit_callback: ExitCallback | None = None,
+    ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
         Otherwise, launches using the configured Proton/Wine path.
@@ -66,9 +72,9 @@ class Launcher:
         game_dir = os.path.dirname(exe_path)
 
         # Helper to apply Steam-style %command% substitution
-        def build_command(base_cmd, user_args):
+        def build_command(base_cmd: list[str], user_args: list[str]) -> list[str]:
             if "%command%" in user_args:
-                result = []
+                result: list[str] = []
                 for arg in user_args:
                     if arg == "%command%":
                         result.extend(base_cmd)
@@ -79,8 +85,12 @@ class Launcher:
 
         # Helper for common subprocess execution
         def execute_process(
-            cmd, env_vars, is_wine_executable=False, run_ce=False, game_exe=""
-        ):
+            cmd: list[str],
+            env_vars: dict[str, str],
+            is_wine_executable: bool = False,
+            run_ce: bool = False,
+            game_exe: str = "",
+        ) -> dict[str, object]:
             import time
             import threading
 
@@ -100,7 +110,7 @@ class Launcher:
 
                     # Ensure the file gets closed when process finishes in the background
                     def track_log_file():
-                        game_proc.wait()
+                        _ = game_proc.wait()
                         log_file.close()
 
                     import threading
@@ -149,7 +159,7 @@ class Launcher:
                                     .replace("\\", "\\\\")
                                     .replace('"', '\\"')
                                 )
-                                f.write(f'OpenProcess("{safe_game_exe}")\n')
+                                _ = f.write(f'OpenProcess("{safe_game_exe}")\n')
 
                             print(
                                 f"Launching Cheat Engine: {ce_exe} in WINEPREFIX {env_vars.get('WINEPREFIX', 'default')}"
@@ -160,7 +170,7 @@ class Launcher:
                                 ce_cmd.append("run")
                             ce_cmd.append(ce_exe)
 
-                            subprocess.Popen(
+                            _ = subprocess.Popen(
                                 ce_cmd,
                                 env=env_vars,
                                 stdout=subprocess.DEVNULL,
@@ -181,7 +191,7 @@ class Launcher:
                         last_saved_time = start_time
                         while game_proc.poll() is None:
                             try:
-                                game_proc.wait(timeout=60)
+                                _ = game_proc.wait(timeout=60)
                                 # Process exited cleanly during wait
                                 break
                             except subprocess.TimeoutExpired:
@@ -190,16 +200,16 @@ class Launcher:
                             delta = int(now - last_saved_time)
                             last_saved_time = now
                             if on_exit_callback is not None:
-                                on_exit_callback(delta, is_final=False)
+                                _ = on_exit_callback(delta, False)
 
                         now = time.time()
                         delta = int(now - last_saved_time)
                         if delta > 0:
                             if on_exit_callback is not None:
-                                on_exit_callback(delta, is_final=True)
+                                _ = on_exit_callback(delta, True)
                         else:
                             if on_exit_callback is not None:
-                                on_exit_callback(0, is_final=True)
+                                _ = on_exit_callback(0, True)
 
                     threading.Thread(target=track_playtime_thread, daemon=True).start()
 
@@ -248,7 +258,7 @@ class Launcher:
                     "APPIMAGE_EXTRACT_AND_RUN",
                 ]
                 for var in appimage_vars:
-                    clean_env.pop(var, None)
+                    _ = clean_env.pop(var, None)
 
                 # Reset LD_LIBRARY_PATH to avoid AppImage library interference
                 if "LD_LIBRARY_PATH_ORIG" in clean_env:
@@ -256,7 +266,7 @@ class Launcher:
                 elif "LD_LIBRARY_PATH" in clean_env:
                     del clean_env["LD_LIBRARY_PATH"]
 
-                subprocess.Popen(
+                _ = subprocess.Popen(
                     command,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,

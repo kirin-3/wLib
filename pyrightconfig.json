@@ -25,5 +25,12 @@
   "pythonVersion": "3.12",
   "pythonPlatform": "Linux",
   "typeCheckingMode": "recommended",
+  "strict": [
+    "core/api.py",
+    "core/database.py",
+    "core/launcher.py",
+    "core/scraper.py",
+    "main.py"
+  ],
   "reportMissingTypeStubs": false
 }
