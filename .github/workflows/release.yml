@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set version
         id: version
@@ -31,6 +33,37 @@ jobs:
           else
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Generate changelog from commits
+        id: changelog
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+
+          PREV_TAG="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)"
+
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_RANGE="${PREV_TAG}..${VERSION}"
+            COMPARE_LINE="[Full Changelog](${REPO_URL}/compare/${PREV_TAG}...${VERSION})"
+          else
+            COMMIT_RANGE="$VERSION"
+            COMPARE_LINE="Full changelog unavailable (first tagged release)."
+          fi
+
+          COMMITS="$(git log "$COMMIT_RANGE" --no-merges --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))' || true)"
+
+          if [ -z "$COMMITS" ]; then
+            COMMITS="- No user-facing commits found in this range."
+          fi
+
+          {
+            echo "commits<<EOF"
+            echo "$COMMITS"
+            echo "EOF"
+            echo "compare_line=$COMPARE_LINE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -67,11 +100,15 @@ jobs:
           name: wLib ${{ steps.version.outputs.version }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
           files: |
             dist/*.tar.gz
             dist/*.AppImage
           body: |
+            ## 📝 Changes
+
+            ${{ steps.changelog.outputs.commits }}
+
             ## 📦 Downloads
 
             | File | Description |
@@ -95,3 +132,6 @@ jobs:
             - Python 3.11+ (auto-detected)
             - Node.js 18+ (only if frontend needs rebuilding)
             - A WebKit2GTK-compatible display (most Linux desktops)
+
+            ### Full Changelog
+            ${{ steps.changelog.outputs.compare_line }}

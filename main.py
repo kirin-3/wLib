@@ -4,6 +4,7 @@ import threading
 import subprocess
 import time
 import importlib
+import shutil
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 PLAYWRIGHT_BROWSERS_PATH = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
@@ -225,6 +226,37 @@ def start_vite_dev_server():
     return None
 
 
+def _is_same_executable(path_a, path_b):
+    if not path_a or not path_b:
+        return False
+    try:
+        return os.path.samefile(path_a, path_b)
+    except Exception:
+        return os.path.realpath(path_a) == os.path.realpath(path_b)
+
+
+def _get_playwright_install_command():
+    # Prefer Playwright's packaged driver entrypoint so frozen builds don't
+    # accidentally relaunch this app binary via sys.executable.
+    try:
+        from playwright._impl import _driver as playwright_driver
+
+        driver_executable, driver_cli = playwright_driver.compute_driver_executable()
+        if driver_executable and driver_cli:
+            return [driver_executable, driver_cli, "install", "chromium"]
+    except Exception as e:
+        print(f"[wLib] Failed to resolve Playwright driver executable: {e}")
+
+    playwright_cli = shutil.which("playwright")
+    if playwright_cli:
+        return [playwright_cli, "install", "chromium"]
+
+    if getattr(sys, "frozen", False):
+        return None
+
+    return [sys.executable, "-m", "playwright", "install", "chromium"]
+
+
 def ensure_playwright_browsers():
     """Ensure Playwright chromium browser is installed."""
     chromium_path = os.path.join(PLAYWRIGHT_BROWSERS_PATH, "chromium-*")
@@ -241,10 +273,23 @@ def ensure_playwright_browsers():
     if glob.glob(chromium_path):
         return True
 
+    install_cmd = _get_playwright_install_command()
+    if not install_cmd:
+        print("[wLib] Could not locate a Playwright installer command in this build.")
+        return False
+
+    if getattr(sys, "frozen", False) and _is_same_executable(
+        install_cmd[0], sys.executable
+    ):
+        print(
+            "[wLib] Refusing to run Playwright installer via app executable to avoid recursive relaunch."
+        )
+        return False
+
     print("Installing Playwright chromium browser...")
     try:
         subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
+            install_cmd,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
