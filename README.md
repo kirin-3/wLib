@@ -59,12 +59,28 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 <table>
   <tr>
-    <td align="center"><b>Library View</b></td>
-    <td align="center"><b>Game Settings</b></td>
+    <td align="center"><b>Library View (List)</b></td>
+    <td align="center"><b>Library View (Grid)</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/library.png" alt="Library View" /></td>
-    <td><img src="docs/screenshots/settings.png" alt="Settings View" /></td>
+    <td><img src="docs/screenshots/library1.png" alt="Library View List" /></td>
+    <td><img src="docs/screenshots/library2.png" alt="Library View Grid" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Update Tracker</b></td>
+    <td align="center"><b>Browser Extension</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/updates.png" alt="Update Tracker" /></td>
+    <td><img src="docs/screenshots/extension.png" alt="Browser Extension" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>App Settings</b></td>
+    <td align="center"><b>Game Configurations</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings1.png" alt="App Settings" /></td>
+    <td><img src="docs/screenshots/settings2.png" alt="Game Configurations" /></td>
   </tr>
 </table>
 
