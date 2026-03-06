@@ -17,33 +17,43 @@
 
 ---
 
-wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a beautiful Vue 3 frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates by scraping F95Zone thread pages.
+wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a beautiful Vue 3 frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates seamlessly by scraping F95Zone thread pages.
 
 ## 🐧 Why wLib?
 
-wLib was inspired by tools like **xLibrary** and other game managers. However, wLib is built from the ground up to be:
+wLib was inspired by tools like **xLibrary** and other Windows-centric game managers. However, wLib is built from the ground up to be:
 
 | | |
 |:--|:--|
-| 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable |
-| 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight PyWebView shell |
-| 🍷 **First-class Wine & Proton** | Built-in support for Wine, Proton-GE, and native Linux runtimes out of the box |
+| 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable. |
+| 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight, native webview shell. |
+| 🍷 **First-class Wine & Proton** | Built-in support for Wine, Proton-GE, and native Linux runtimes out of the box. |
 
 If you've been looking for a game manager that truly belongs on Linux, wLib is for you.
 
 ## ✨ Features
 
-- **Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status
-- **Wine / Proton Launcher** — Launch `.exe` games via Wine, Proton-GE, or run native Linux binaries, shell scripts, and `.jar` files
-- **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines
-- **Dependency Installers** — One-click installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RTPs
-- **F95Zone Update Checker** — Automatically checks for new game versions by scraping F95Zone threads via Playwright
-- **Japanese Locale Mode** — Run games with `ja_JP.UTF-8` locale for untranslated Japanese titles
-- **Cheat Engine Injection** — Auto-download and inject Lunar Engine (a Cheat Engine fork) into running games
-- **Browser Extension** — A Chromium extension that adds "Add to wLib" buttons directly on F95Zone thread pages
-- **In-App Updates** — Check for new wLib releases from GitHub and view changelogs
-- **Dark & Light Themes** — Toggle between polished dark and light themes
-- **AppImage & tar.gz Builds** — Automated CI/CD via GitHub Actions for portable distribution
+### 🎮 Library & Organization
+- **Smart Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status.
+- **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
+- **Dark & Light Themes** — Toggle instantly between a polished dark mode and a clean light interface.
+
+### 🚀 Advanced Launcher
+- **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
+- **Wine / Proton Integration** — Support for Wine, Proton, native Linux binaries, shell scripts, and even `.jar` files safely.
+- **Engine Auto-Configuration** — Automatically applies environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
+- **Japanese Locale Mode** — Run games strictly with `LC_ALL=ja_JP.UTF-8` locale for parsing untranslated Japanese titles correctly.
+- **Wayland Support** — Force `SDL_VIDEODRIVER=wayland` with a single toggle.
+- **Cheat Engine Injection** — Auto-downloads and seamlessly injects Lunar Engine (a Cheat Engine fork) securely into running Windows games.
+- **Dependency Installers** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RTPs.
+
+### 🌐 F95Zone Integration & Automation
+- **Automated Update Checker** — Tracks your local version against the latest releases by scraping F95Zone threads.
+- **Cloudflare Bypass** — Intelligently resolves Cloudflare Anti-Bot challenges using Microsoft Playwright to ensure scraping remains reliable.
+- **Browser Extension** — A custom Chrome/Firefox extension that injects "Add to wLib" and "Open in wLib" buttons directly onto F95Zone pages.
+
+> [!TIP]
+> wLib includes an **In-App Updater** for its own releases, meaning you can download the latest AppImage and view changelogs directly from the settings page!
 
 ## 📸 Screenshots
 
@@ -64,7 +74,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 | **GTK 3 / PyGObject** | ✅ | Native UI integration (file dialogs, system tray) |
 
 > [!NOTE]
-> The `wlib.sh` launcher script automatically creates a Python virtual environment and installs all pip dependencies for you. You only need the system-level packages listed above.
+> The `wlib.sh` launcher script automatically creates a Python virtual environment and installs all missing **pip** dependencies for you. You only need to ensure the system-level packages listed above are installed.
 
 ### Install System Packages
 
@@ -105,6 +115,9 @@ chmod +x wLib-*.AppImage
 ./wLib-*.AppImage
 ```
 
+> [!IMPORTANT]
+> Some AppImages require FUSE to run. If your distribution doesn't have it enabled by default (like Ubuntu 22.04+), install `libfuse2`.
+
 ### Option 2: tar.gz Archive
 
 ```bash
@@ -142,59 +155,33 @@ npm run dev
 DEV_MODE=1 python main.py
 ```
 
-This connects PyWebView to `http://localhost:5173` so you get instant frontend updates without rebuilding.
+This connects PyWebView natively to `http://localhost:5173` so you receive instant frontend updates without a separate rebuild step.
 
-### Project Structure
-
-```
-wLib/
-├── main.py                 # Application entry point (PyWebView + HTTP receiver)
-├── wlib.sh                 # Launcher script (venv setup, dep install, run)
-├── requirements.txt        # Python dependencies
-├── core/
-│   ├── api.py              # PyWebView JS API (game CRUD, settings, launcher)
-│   ├── database.py         # SQLite database layer
-│   ├── launcher.py         # Wine/Proton game launcher
-│   └── scraper.py          # F95Zone version scraper (Playwright)
-├── ui/                     # Vue 3 + Vite frontend
-│   ├── src/
-│   │   ├── views/          # Library, Settings, Updates, Extension views
-│   │   ├── components/     # Reusable UI components
-│   │   └── style.css       # Global styles and theme system
-│   └── package.json
-├── extension/              # Browser extension source assets
-│   ├── manifest.json
-│   ├── content.js          # F95Zone page integration
-│   └── background.js       # Service worker
-├── scripts/
-│   └── build.sh            # Build script (tar.gz + AppImage packaging)
-└── .github/
-    └── workflows/
-        └── release.yml     # CI/CD: auto-build and publish releases
-```
+> [!NOTE]
+> Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).
 
 ## 🌐 Browser Extension
 
-wLib includes browser extensions that add integration buttons directly on F95Zone thread pages. They communicate with the running wLib app over a local HTTP server on port `8183`.
+wLib includes a browser extension that adds quick-action buttons directly to F95Zone thread pages. These buttons communicate securely with your running wLib app over a local HTTP server on port `8183`.
 
-Use the Extension page's `Open Extension Folder` button to sync the install files into `~/.local/share/wLib/extension/`.
+Use the Extension page's **Open Extension Folder** button in the app to synchronize the local installation files into `~/.local/share/wLib/extension/`.
 
-### Installing in Chrome / Chromium / Edge
+### Chrome, Chromium, Brave, Edge
 
-1. Open your Chromium-based browser
-2. Navigate to `chrome://extensions/`
-3. Enable **Developer mode**
-4. Click **Load unpacked** and select `~/.local/share/wLib/extension/chrome/`
-5. Visit any F95Zone thread and the wLib buttons should appear
+1. Open your Chromium-based browser.
+2. Navigate to `chrome://extensions/`.
+3. Enable **Developer mode** in the top right.
+4. Click **Load unpacked** and select the newly extracted folder: `~/.local/share/wLib/extension/chrome/`.
+5. Visit any F95Zone thread to see the wLib integration buttons!
 
-### Installing in Firefox
+### Firefox
 
-1. Open `about:debugging#/runtime/this-firefox`
-2. Click **Load Temporary Add-on**
-3. Select `~/.local/share/wLib/extension/firefox/wLib.xpi`
-4. Reload it after each Firefox restart
+1. Open a new tab and navigate to `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on**.
+3. Select the file: `~/.local/share/wLib/extension/firefox/wLib.xpi`.
 
-Do not load the repo-root `extension/` folder directly in Firefox.
+> [!WARNING]
+> Do NOT load the raw `extension/` directory directly in Firefox. Firefox requires the generated `.xpi` archive natively. Note that because Firefox enforces manifest strictness, temporary add-ons must be reloaded after each browser restart.
 
 ## 🐛 Reporting Bugs
 
@@ -202,13 +189,15 @@ Found a bug? Please [open an issue](https://github.com/kirin-3/wLib/issues/new?t
 
 - **Steps to reproduce** the issue
 - **Expected vs actual behavior**
-- Your **Linux distribution** and version
+- Your **Linux distribution**, version, and display server (X11/Wayland)
 - Your **Wine/Proton version** (if game-launch related)
 - Any **error logs** (enable logging in Settings → Debug Logging)
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md) before submitting pull requests.
+Contributions are highly welcome! Whether it's tracking down an RPGMaker engine quirk or refactoring Vue components, we'd love your help. 
+
+Please read the [Contributing Guide](CONTRIBUTING.md) to initialize your dev environment properly before submitting pull requests.
 
 ## 📄 License
 
