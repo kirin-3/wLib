@@ -111,6 +111,440 @@ class Api:
 
         return {"success": False, "error": "No file manager opener found"}
 
+    def _normalize_selected_path(self, value):
+        from urllib.parse import unquote, urlparse
+
+        raw_value = str(value or "").strip()
+        if not raw_value:
+            return ""
+
+        if raw_value.startswith("file://"):
+            parsed = urlparse(raw_value)
+            raw_value = unquote(parsed.path or "")
+
+        return os.path.abspath(os.path.expanduser(raw_value))
+
+    def _coerce_browse_directory(self, start_path=""):
+        normalized_path = self._normalize_selected_path(start_path)
+        if normalized_path and os.path.isdir(normalized_path):
+            return normalized_path
+        if normalized_path and os.path.isfile(normalized_path):
+            return os.path.dirname(normalized_path)
+
+        parent = os.path.dirname(normalized_path)
+        if parent and os.path.isdir(parent):
+            return parent
+
+        return os.path.expanduser("~")
+
+    def _run_picker_command(self, command, env=None):
+        import subprocess
+
+        try:
+            completed = subprocess.run(
+                command,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as e:
+            return {
+                "success": False,
+                "cancelled": False,
+                "error": str(e),
+                "stderr": "",
+                "returncode": None,
+            }
+
+        stdout = str(completed.stdout or "").strip()
+        stderr = str(completed.stderr or "").strip()
+
+        if completed.returncode == 0:
+            selected_path = self._normalize_selected_path(stdout.splitlines()[0])
+            if selected_path:
+                return {
+                    "success": True,
+                    "cancelled": False,
+                    "path": selected_path,
+                    "stderr": stderr,
+                    "returncode": completed.returncode,
+                }
+            return {
+                "success": False,
+                "cancelled": True,
+                "error": "Picker completed without a selected path",
+                "stderr": stderr,
+                "returncode": completed.returncode,
+            }
+
+        if completed.returncode in (1, 130):
+            return {
+                "success": False,
+                "cancelled": True,
+                "error": stderr or "Picker cancelled",
+                "stderr": stderr,
+                "returncode": completed.returncode,
+            }
+
+        return {
+            "success": False,
+            "cancelled": False,
+            "error": stderr or f"Picker exited with status {completed.returncode}",
+            "stderr": stderr,
+            "returncode": completed.returncode,
+        }
+
+    def _desktop_portal_available(self, env):
+        import shutil
+        import subprocess
+
+        commands = []
+
+        gdbus_path = shutil.which("gdbus")
+        if gdbus_path:
+            commands.append(
+                [
+                    gdbus_path,
+                    "introspect",
+                    "--session",
+                    "--dest",
+                    "org.freedesktop.portal.Desktop",
+                    "--object-path",
+                    "/org/freedesktop/portal/desktop",
+                ]
+            )
+
+        busctl_path = shutil.which("busctl")
+        if busctl_path:
+            commands.append(
+                [busctl_path, "--user", "status", "org.freedesktop.portal.Desktop"]
+            )
+
+        dbus_send_path = shutil.which("dbus-send")
+        if dbus_send_path:
+            commands.append(
+                [
+                    dbus_send_path,
+                    "--session",
+                    "--dest=org.freedesktop.portal.Desktop",
+                    "--type=method_call",
+                    "--print-reply",
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.DBus.Peer.Ping",
+                ]
+            )
+
+        for command in commands:
+            try:
+                completed = subprocess.run(
+                    command,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                continue
+
+            if completed.returncode == 0:
+                return True
+
+        return False
+
+    def _should_continue_after_cancel(self, backend, result):
+        if not backend.get("continue_on_cancel_error"):
+            return False
+
+        stderr = str(result.get("stderr") or "").strip().lower()
+        error = str(result.get("error") or "").strip().lower()
+        details = f"{stderr}\n{error}"
+
+        if not details.strip():
+            return False
+
+        known_failure_markers = backend.get("cancel_error_markers") or ()
+        return any(marker.lower() in details for marker in known_failure_markers)
+
+    def _build_linux_browse_backends(self, dialog_kind, directory, file_types=()):
+        import shutil
+
+        backends = []
+        clean_env = self._build_host_open_env()
+        normalized_directory = self._coerce_browse_directory(directory)
+
+        zenity_path = shutil.which("zenity")
+        if zenity_path:
+            zenity_command = [
+                zenity_path,
+                "--file-selection",
+                f"--title={'Select Folder' if dialog_kind == 'directory' else 'Select Game File'}",
+                f"--filename={normalized_directory.rstrip(os.sep) + os.sep}",
+            ]
+            if dialog_kind == "directory":
+                zenity_command.append("--directory")
+            else:
+                zenity_command.extend(
+                    [
+                        "--file-filter=Game Files | *.exe *.sh *.AppImage *.html *.htm",
+                        "--file-filter=All files | *",
+                    ]
+                )
+
+            if self._desktop_portal_available(clean_env):
+                portal_env = clean_env.copy()
+                portal_env["GTK_USE_PORTAL"] = "1"
+                backends.append(
+                    {
+                        "name": "portal",
+                        "command": list(zenity_command),
+                        "env": portal_env,
+                        "continue_on_cancel_error": True,
+                        "cancel_error_markers": (
+                            "org.freedesktop.portal.desktop",
+                            "failed to talk to portal",
+                            "cannot open display",
+                            "no such name",
+                            "service unknown",
+                            "name has no owner",
+                        ),
+                    }
+                )
+            backends.append(
+                {
+                    "name": "zenity",
+                    "command": list(zenity_command),
+                    "env": clean_env,
+                }
+            )
+
+        kdialog_path = shutil.which("kdialog")
+        if kdialog_path:
+            if dialog_kind == "directory":
+                kdialog_command = [
+                    kdialog_path,
+                    "--getexistingdirectory",
+                    normalized_directory,
+                ]
+            else:
+                filter_string = (
+                    "Game Files (*.exe *.sh *.AppImage *.html *.htm)\nAll Files (*)"
+                )
+                kdialog_command = [
+                    kdialog_path,
+                    "--getopenfilename",
+                    normalized_directory,
+                    filter_string,
+                ]
+
+            backends.append(
+                {
+                    "name": "kdialog",
+                    "command": kdialog_command,
+                    "env": clean_env,
+                }
+            )
+
+        return backends
+
+    def _browse_qt_dialog(self, dialog_kind, directory="", file_types=()):
+        if not self.window:
+            return ""
+
+        webview = self._load_webview_module()
+        if webview is None:
+            return ""
+
+        if dialog_kind == "directory":
+            try:
+                dialog_type = webview.FileDialog.FOLDER
+            except AttributeError:
+                dialog_type = webview.FOLDER_DIALOG
+        else:
+            try:
+                dialog_type = webview.FileDialog.OPEN
+            except AttributeError:
+                dialog_type = webview.OPEN_DIALOG
+
+        kwargs = {
+            "allow_multiple": False,
+            "directory": self._coerce_browse_directory(directory),
+        }
+        if file_types:
+            kwargs["file_types"] = file_types
+
+        result = self.window.create_file_dialog(dialog_type, **kwargs)
+        if result and len(result) > 0:
+            return self._normalize_selected_path(result[0])
+
+        return ""
+
+    def _browse_linux_dialog(self, dialog_kind, directory="", file_types=()):
+        errors = []
+
+        for backend in self._build_linux_browse_backends(
+            dialog_kind, directory, file_types=file_types
+        ):
+            result = self._run_picker_command(backend["command"], env=backend["env"])
+            if result.get("success"):
+                return result.get("path", "")
+            if result.get("cancelled"):
+                if self._should_continue_after_cancel(backend, result):
+                    errors.append(
+                        f"{backend['name']}: {result.get('error', 'unknown error')}"
+                    )
+                    continue
+                return ""
+            errors.append(f"{backend['name']}: {result.get('error', 'unknown error')}")
+
+        qt_result = self._browse_qt_dialog(
+            dialog_kind, directory=directory, file_types=file_types
+        )
+        if qt_result:
+            return qt_result
+
+        if errors:
+            print(f"[wLib] Linux chooser fallbacks failed: {'; '.join(errors)}")
+
+        return ""
+
+    def _iter_proc_mounts(self):
+        import re
+
+        def decode_mount_value(value):
+            def replace_octal(match):
+                return chr(int(match.group(1), 8))
+
+            return re.sub(r"\\([0-7]{3})", replace_octal, value)
+
+        mount_entries = []
+
+        try:
+            with open("/proc/mounts", "r", encoding="utf-8") as mounts_file:
+                for line in mounts_file:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    mount_entries.append(
+                        (
+                            decode_mount_value(parts[0]),
+                            decode_mount_value(parts[1]),
+                            decode_mount_value(parts[2]),
+                        )
+                    )
+        except OSError:
+            return []
+
+        return mount_entries
+
+    def _is_user_relevant_mount(self, source, mount_point, fs_type):
+        skipped_fs = {
+            "autofs",
+            "cgroup",
+            "cgroup2",
+            "configfs",
+            "debugfs",
+            "devpts",
+            "devtmpfs",
+            "fusectl",
+            "hugetlbfs",
+            "mqueue",
+            "nsfs",
+            "overlay",
+            "proc",
+            "pstore",
+            "ramfs",
+            "securityfs",
+            "squashfs",
+            "sysfs",
+            "tmpfs",
+            "tracefs",
+        }
+        if fs_type in skipped_fs:
+            return False
+
+        skipped_prefixes = (
+            "/app",
+            "/dev",
+            "/proc",
+            "/run/credentials",
+            "/run/user",
+            "/snap",
+            "/sys",
+            "/var/lib/docker",
+            "/var/lib/flatpak",
+        )
+        if mount_point in ("/", "/boot", "/boot/efi"):
+            return False
+        if mount_point.startswith(skipped_prefixes):
+            return False
+
+        if mount_point.startswith(("/run/media/", "/media/", "/mnt/")):
+            return True
+
+        if source.startswith(("/dev/", "//")) and mount_point.startswith("/"):
+            return True
+
+        return False
+
+    def _append_browse_location(self, locations, seen_paths, path, label, source):
+        normalized_path = self._normalize_selected_path(path)
+        if not normalized_path or normalized_path in seen_paths:
+            return
+        if not os.path.isdir(normalized_path):
+            return
+
+        seen_paths.add(normalized_path)
+        locations.append({"path": normalized_path, "label": label, "source": source})
+
+    def _get_browse_locations(self):
+        import pwd
+
+        locations = []
+        seen_paths = set()
+        home_dir = os.path.expanduser("~")
+        downloads_dir = os.path.join(home_dir, "Downloads")
+
+        try:
+            username = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:
+            username = os.environ.get("USER", "")
+
+        self._append_browse_location(locations, seen_paths, home_dir, "Home", "home")
+        self._append_browse_location(
+            locations, seen_paths, downloads_dir, "Downloads", "downloads"
+        )
+        self._append_browse_location(
+            locations,
+            seen_paths,
+            os.path.join("/run/media", username) if username else "",
+            "Removable Media",
+            "common-root",
+        )
+        self._append_browse_location(
+            locations,
+            seen_paths,
+            os.path.join("/media", username) if username else "",
+            "Media",
+            "common-root",
+        )
+        self._append_browse_location(
+            locations, seen_paths, "/mnt", "Mounted Drives", "common-root"
+        )
+
+        for source, mount_point, fs_type in self._iter_proc_mounts():
+            if not self._is_user_relevant_mount(source, mount_point, fs_type):
+                continue
+            label = os.path.basename(mount_point.rstrip(os.sep)) or mount_point
+            self._append_browse_location(
+                locations, seen_paths, mount_point, label, "mount"
+            )
+
+        return locations
+
+    def get_browse_locations(self):
+        return {"success": True, "locations": self._get_browse_locations()}
+
     def open_extension_folder(self):
         import json
         import shutil
@@ -1301,43 +1735,28 @@ class Api:
         update_setting("playwright_browsers_path", playwright_path)
         return {"success": True}
 
-    def browse_file(self):
+    def browse_file(self, start_path=""):
         """Opens a native file dialog to select an executable or HTML game."""
-        if self.window:
-            webview = self._load_webview_module()
-            if webview is None:
-                return ""
+        file_types = (
+            "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
+            "All files (*.*)",
+        )
 
-            try:
-                dt = webview.FileDialog.OPEN
-            except AttributeError:
-                dt = webview.OPEN_DIALOG
-            file_types = (
-                "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
-                "All files (*.*)",
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
             )
-            result = self.window.create_file_dialog(
-                dt, allow_multiple=False, file_types=file_types
-            )
-            if result and len(result) > 0:
-                return result[0]
-        return ""
 
-    def browse_directory(self):
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
+    def browse_directory(self, start_path=""):
         """Opens a native directory dialog, e.g. for choosing a wine prefix."""
-        if self.window:
-            webview = self._load_webview_module()
-            if webview is None:
-                return ""
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog("directory", directory=start_path)
 
-            try:
-                dt = webview.FileDialog.FOLDER
-            except AttributeError:
-                dt = webview.FOLDER_DIALOG
-            result = self.window.create_file_dialog(dt, allow_multiple=False)
-            if result and len(result) > 0:
-                return result[0]
-        return ""
+        return self._browse_qt_dialog("directory", directory=start_path)
 
     def find_save_files(
         self, exe_path, title="", engine="", custom_prefix="", proton_version=""

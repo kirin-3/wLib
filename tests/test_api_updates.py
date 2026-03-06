@@ -246,6 +246,247 @@ def test_save_settings_persists_playwright_path():
     assert get_setting("playwright_browsers_path") == "/tmp/custom-playwright-cache"
 
 
+def test_browse_file_uses_linux_fallback_order(monkeypatch, tmp_path):
+    api = Api()
+    selected_file = tmp_path / "game.exe"
+    selected_file.write_text("demo")
+    calls = []
+
+    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr(
+        api,
+        "_build_linux_browse_backends",
+        lambda *_args, **_kwargs: [
+            {"name": "portal", "command": ["portal"], "env": {"GTK_USE_PORTAL": "1"}},
+            {"name": "zenity", "command": ["zenity"], "env": {}},
+        ],
+    )
+
+    def fake_run_picker(command, env=None):
+        calls.append((tuple(command), dict(env or {})))
+        if command[0] == "portal":
+            return {"success": False, "cancelled": False, "error": "portal unavailable"}
+        return {"success": True, "cancelled": False, "path": str(selected_file)}
+
+    monkeypatch.setattr(api, "_run_picker_command", fake_run_picker)
+    monkeypatch.setattr(api, "_browse_qt_dialog", lambda *_args, **_kwargs: "")
+
+    result = api.browse_file()
+
+    assert result == str(selected_file)
+    assert [command[0] for command, _env in calls] == ["portal", "zenity"]
+
+
+def test_browse_file_falls_back_after_portal_error_like_cancel(monkeypatch, tmp_path):
+    api = Api()
+    selected_file = tmp_path / "game.exe"
+    selected_file.write_text("demo")
+    calls = []
+
+    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr(
+        api,
+        "_build_linux_browse_backends",
+        lambda *_args, **_kwargs: [
+            {
+                "name": "portal",
+                "command": ["portal"],
+                "env": {"GTK_USE_PORTAL": "1"},
+                "continue_on_cancel_error": True,
+                "cancel_error_markers": ("failed to talk to portal",),
+            },
+            {"name": "zenity", "command": ["zenity"], "env": {}},
+        ],
+    )
+
+    def fake_run_picker(command, env=None):
+        calls.append((tuple(command), dict(env or {})))
+        if command[0] == "portal":
+            return {
+                "success": False,
+                "cancelled": True,
+                "error": "Failed to talk to portal",
+                "stderr": "Failed to talk to portal",
+                "returncode": 1,
+            }
+        return {
+            "success": True,
+            "cancelled": False,
+            "path": str(selected_file),
+            "stderr": "",
+            "returncode": 0,
+        }
+
+    monkeypatch.setattr(api, "_run_picker_command", fake_run_picker)
+    monkeypatch.setattr(api, "_browse_qt_dialog", lambda *_args, **_kwargs: "")
+
+    result = api.browse_file()
+
+    assert result == str(selected_file)
+    assert [command[0] for command, _env in calls] == ["portal", "zenity"]
+
+
+def test_browse_file_stops_on_user_cancel_even_with_portal_stderr(monkeypatch):
+    api = Api()
+    calls = []
+
+    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr(
+        api,
+        "_build_linux_browse_backends",
+        lambda *_args, **_kwargs: [
+            {
+                "name": "portal",
+                "command": ["portal"],
+                "env": {"GTK_USE_PORTAL": "1"},
+                "continue_on_cancel_error": True,
+                "cancel_error_markers": ("failed to talk to portal",),
+            },
+            {"name": "zenity", "command": ["zenity"], "env": {}},
+        ],
+    )
+
+    def fake_run_picker(command, env=None):
+        calls.append((tuple(command), dict(env or {})))
+        return {
+            "success": False,
+            "cancelled": True,
+            "error": "Dialog cancelled",
+            "stderr": "GtkDialog mapped without transient parent",
+            "returncode": 1,
+        }
+
+    monkeypatch.setattr(api, "_run_picker_command", fake_run_picker)
+    monkeypatch.setattr(
+        api,
+        "_browse_qt_dialog",
+        lambda *_args, **_kwargs: "/tmp/should-not-open",
+    )
+
+    result = api.browse_file()
+
+    assert result == ""
+    assert [command[0] for command, _env in calls] == ["portal"]
+
+
+def test_build_linux_browse_backends_skips_portal_when_unavailable(monkeypatch):
+    api = Api()
+
+    def fake_which(command):
+        mapping = {
+            "zenity": "/usr/bin/zenity",
+            "kdialog": "/usr/bin/kdialog",
+        }
+        return mapping.get(command)
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr(api, "_desktop_portal_available", lambda _env: False)
+    monkeypatch.setattr(api, "_build_host_open_env", lambda: {})
+    monkeypatch.setattr(api, "_coerce_browse_directory", lambda _path: "/home/tester")
+
+    backends = api._build_linux_browse_backends("file", "")
+
+    assert [backend["name"] for backend in backends] == ["zenity", "kdialog"]
+
+
+def test_browse_directory_returns_empty_string_when_linux_picker_cancelled(monkeypatch):
+    api = Api()
+    qt_calls = []
+
+    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr(
+        api,
+        "_build_linux_browse_backends",
+        lambda *_args, **_kwargs: [
+            {"name": "portal", "command": ["portal"], "env": {}}
+        ],
+    )
+    monkeypatch.setattr(
+        api,
+        "_run_picker_command",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "cancelled": True,
+            "error": "Picker cancelled",
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "_browse_qt_dialog",
+        lambda *_args, **_kwargs: qt_calls.append(True) or "/tmp/should-not-open",
+    )
+
+    result = api.browse_directory()
+
+    assert result == ""
+    assert qt_calls == []
+
+
+def test_get_browse_locations_includes_detected_mounts(monkeypatch, tmp_path):
+    api = Api()
+    home_dir = tmp_path / "home"
+    downloads_dir = home_dir / "Downloads"
+    removable_root = tmp_path / "run" / "media" / "tester"
+    mounted_drive = removable_root / "USB Drive"
+    mounted_other = tmp_path / "mnt" / "Games"
+
+    downloads_dir.mkdir(parents=True)
+    mounted_drive.mkdir(parents=True)
+    mounted_other.mkdir(parents=True)
+
+    monkeypatch.setattr("core.api.os.getuid", lambda: 1000)
+
+    class FakePwdEntry:
+        pw_name = "tester"
+
+    monkeypatch.setattr("pwd.getpwuid", lambda _uid: FakePwdEntry())
+
+    real_expanduser = os.path.expanduser
+    monkeypatch.setattr(
+        "core.api.os.path.expanduser",
+        lambda path: str(home_dir) if path == "~" else real_expanduser(path),
+    )
+    monkeypatch.setattr(
+        api,
+        "_iter_proc_mounts",
+        lambda: [
+            ("/dev/sdb1", str(mounted_drive), "ext4"),
+            ("tmpfs", "/run/user/1000", "tmpfs"),
+            ("/dev/sdc1", str(mounted_other), "exfat"),
+        ],
+    )
+
+    locations = api.get_browse_locations()["locations"]
+    location_paths = {entry["path"] for entry in locations}
+
+    assert str(home_dir) in location_paths
+    assert str(downloads_dir) in location_paths
+    assert str(mounted_drive) in location_paths
+    assert str(mounted_other) in location_paths
+    assert "/run/user/1000" not in location_paths
+
+
+def test_iter_proc_mounts_decodes_escaped_paths(monkeypatch):
+    api = Api()
+    mount_data = "/dev/sdb1 /run/media/tester/USB\\040Drive ext4 rw 0 0\n"
+
+    class FakeMountsFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter([mount_data])
+
+    monkeypatch.setattr("builtins.open", lambda *_args, **_kwargs: FakeMountsFile())
+
+    mounts = api._iter_proc_mounts()
+
+    assert mounts == [("/dev/sdb1", "/run/media/tester/USB Drive", "ext4")]
+
+
 def test_open_scraper_login_session_delegates_to_scraper(monkeypatch):
     api = Api()
 

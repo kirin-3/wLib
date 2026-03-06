@@ -151,12 +151,12 @@ class ApiService {
     return this.invoke("save_settings", settings);
   }
 
-  async browseFile() {
-    return this.invoke("browse_file");
+  async browseFile(startPath = "") {
+    return this.invoke("browse_file", startPath);
   }
 
-  async browseDirectory() {
-    return this.invoke("browse_directory");
+  async browseDirectory(startPath = "") {
+    return this.invoke("browse_directory", startPath);
   }
 
   async installRpgmakerDependencies(prefix_path = null, proton_path = null) {

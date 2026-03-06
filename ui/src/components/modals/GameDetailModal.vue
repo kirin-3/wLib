@@ -173,7 +173,7 @@ const close = () => {
 
 const browseExe = async () => {
   try {
-    const p = await api.browseFile();
+    const p = await api.browseFile(exePath.value || "");
     if (p && p.success === false) {
       alert("Failed to browse file: " + (p.error || "Unknown error"));
     } else if (p) {
@@ -187,7 +187,7 @@ const browseExe = async () => {
 
 const browseCustomPrefix = async () => {
   try {
-    const p = await api.browseDirectory();
+    const p = await api.browseDirectory(customPrefix.value || "");
     if (p && p.success === false) {
       alert("Failed to browse directory: " + (p.error || "Unknown error"));
     } else if (p) {

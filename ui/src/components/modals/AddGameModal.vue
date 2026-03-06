@@ -23,6 +23,10 @@ const engine = ref("");
 watch(
   () => [props.modelValue, route.query],
   ([isOpen, query]) => {
+    if (!isOpen) {
+      return;
+    }
+
     if (isOpen && query.action === "import") {
       title.value = query.title || "";
       f95Url.value = query.f95url || "";
@@ -57,8 +61,8 @@ const close = () => {
   emit("update:modelValue", false);
 };
 
-const browseExe = async () => {
-  const p = await api.browseFile();
+const browseExe = async (startPath = exePath.value) => {
+  const p = await api.browseFile(startPath || "");
   if (p) exePath.value = p;
 };
 

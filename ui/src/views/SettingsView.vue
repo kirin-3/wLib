@@ -71,7 +71,7 @@ const pollInstallStatus = async () => {
 
 const browseProton = async () => {
   try {
-    const p = await api.browseFile();
+    const p = await api.browseFile(protonPath.value || "");
     if (p && p.success === false) {
       alert("Failed to browse file: " + (p.error || "Unknown error"));
     } else if (p) {
@@ -85,7 +85,7 @@ const browseProton = async () => {
 
 const browsePrefix = async () => {
   try {
-    const p = await api.browseDirectory();
+    const p = await api.browseDirectory(prefixPath.value || "");
     if (p && p.success === false) {
       alert("Failed to browse directory: " + (p.error || "Unknown error"));
     } else if (p) {
