@@ -45,6 +45,9 @@ pyinstaller --noconfirm --onedir \
     --hidden-import "pywebview" \
     --hidden-import "PyQt6" \
     --hidden-import "webview.platforms.qt" \
+    --exclude-module "gi" \
+    --exclude-module "webview.platforms.gtk" \
+    --exclude-module "webview.platforms.gtkwebkit2" \
     main.py
 
 # Clean up system libraries bundled by PyInstaller that break host graphics drivers (e.g. Vulkan/OpenGL)
@@ -58,6 +61,19 @@ find dist/wlib-bin -name "libGLESv2*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libvulkan*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libdrm*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgbm*" -exec rm -f {} + || true
+
+# Remove bundled GLib/GIO/GTK stack so the host runtime provides these libs.
+# This avoids GLIBC version mismatches from host-built artifacts on older distros.
+find dist/wlib-bin -name "libglib-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgobject-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgio-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgthread-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgmodule-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgirepository-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgtk-3.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgdk-3.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libgdk_pixbuf-2.0.so*" -exec rm -f {} + || true
+rm -rf dist/wlib-bin/_internal/gi dist/wlib-bin/_internal/gi_typelibs dist/wlib-bin/_internal/gio_modules || true
 
 # Move the built binary to the package folder
 cp -r dist/wlib-bin/* "$BUILD_DIR/$PACKAGE_NAME/"
