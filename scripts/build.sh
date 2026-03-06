@@ -123,8 +123,34 @@ SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export PATH="$SELF_DIR/usr/bin:$PATH"
 cd "$SELF_DIR/usr/bin"
 
-# Fallback to X11 if Wayland EGL initialization fails
-export QT_QPA_PLATFORM="xcb;wayland"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+LOG_FILE="$DATA_DIR/appimage-launch.log"
+
+mkdir -p "$DATA_DIR"
+
+restore_host_library_path() {
+    if [ -n "${LD_LIBRARY_PATH_ORIG:-}" ]; then
+        export LD_LIBRARY_PATH="$LD_LIBRARY_PATH_ORIG"
+    else
+        unset LD_LIBRARY_PATH
+    fi
+}
+
+log_launch_context() {
+    {
+        printf '\n=== %s ===\n' "$(date -Is 2>/dev/null || date)"
+        printf 'launcher=AppImage\n'
+        printf 'session_type=%s\n' "${XDG_SESSION_TYPE:-}"
+        printf 'display=%s\n' "${DISPLAY:-}"
+        printf 'wayland_display=%s\n' "${WAYLAND_DISPLAY:-}"
+        printf 'qt_qpa_platform=%s\n' "${QT_QPA_PLATFORM:-<unset>}"
+        printf 'qt_quick_backend=%s\n' "${QT_QUICK_BACKEND:-<unset>}"
+        printf 'qt_opengl=%s\n' "${QT_OPENGL:-<unset>}"
+        printf 'qtwebengine_flags=%s\n' "${QTWEBENGINE_CHROMIUM_FLAGS:-<unset>}"
+        printf 'ld_library_path=%s\n' "${LD_LIBRARY_PATH:-<unset>}"
+        printf 'ld_library_path_orig=%s\n' "${LD_LIBRARY_PATH_ORIG:-<unset>}"
+    } >> "$LOG_FILE"
+}
 
 GPU_CRASH_GUARD="${XDG_DATA_HOME:-$HOME/.local/share}/wLib/.gpu_crash_guard"
 GPU_SOFTWARE_FROM_CRASH_GUARD=0
@@ -190,20 +216,28 @@ detect_gpu() {
 }
 
 detect_gpu
-mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
 if [ "$QT_QUICK_BACKEND" = "opengl" ]; then
     touch "$GPU_CRASH_GUARD"
 fi
 
+# Let the app set QT_QPA_PLATFORM based on the active desktop session.
+# Forcing xcb inside Wayland sessions can make Qt windows disappear on focus changes.
+
 # Ensure the bundled Qt does not shadow the host's native GPU libraries.
-# LD_LIBRARY_PATH is intentionally NOT set to $SELF_DIR/usr/bin/_internal
-# so that libEGL, libvulkan, libdrm, etc. resolve from the host system.
+restore_host_library_path
+export WLIB_APPIMAGE_LAUNCH_LOG="$LOG_FILE"
+log_launch_context
 
 # Playwright browsers are installed to ~/.cache/ms-playwright at first run.
 # This is handled automatically by the app.
 
-./wlib-bin "$@"
+if [ -t 1 ] || [ -t 2 ]; then
+    ./wlib-bin "$@" > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
+else
+    ./wlib-bin "$@" >> "$LOG_FILE" 2>&1
+fi
 WLIB_EXIT=$?
+printf 'exit_code=%s\n' "$WLIB_EXIT" >> "$LOG_FILE"
 if [ "$WLIB_EXIT" -eq 0 ] && { [ "$QT_QUICK_BACKEND" = "opengl" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; }; then
     rm -f "$GPU_CRASH_GUARD"
 fi

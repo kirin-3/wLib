@@ -16,10 +16,7 @@ from core.api import Api
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-try:
-    webview = importlib.import_module("webview")
-except Exception:
-    webview = None
+webview = None
 
 window_ref = None
 
@@ -41,6 +38,66 @@ def configure_playwright_browsers_path():
     PLAYWRIGHT_BROWSERS_PATH = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
     return PLAYWRIGHT_BROWSERS_PATH
+
+
+def configure_qt_runtime_environment():
+    session_type = (os.environ.get("XDG_SESSION_TYPE") or "").strip().lower()
+    wayland_display = (os.environ.get("WAYLAND_DISPLAY") or "").strip()
+    display = (os.environ.get("DISPLAY") or "").strip()
+
+    override_platform = (os.environ.get("WLIB_QPA_PLATFORM") or "").strip()
+    existing_platform = (os.environ.get("QT_QPA_PLATFORM") or "").strip()
+
+    if override_platform:
+        os.environ["QT_QPA_PLATFORM"] = override_platform
+        selected_platform = override_platform
+        source = "override"
+    elif existing_platform:
+        selected_platform = existing_platform
+        source = "existing"
+    elif session_type == "wayland" or wayland_display:
+        selected_platform = ""
+        source = "auto-wayland"
+    elif session_type == "x11" or display:
+        selected_platform = "xcb"
+        os.environ["QT_QPA_PLATFORM"] = selected_platform
+        source = "auto-x11"
+    else:
+        selected_platform = ""
+        source = "auto-default"
+
+    platform_label = selected_platform or "<unset>"
+    print(
+        "[wLib] Qt runtime environment: "
+        f"session={session_type or '<unknown>'}, "
+        f"wayland_display={wayland_display or '<unset>'}, "
+        f"display={display or '<unset>'}, "
+        f"qt_qpa_platform={platform_label}, "
+        f"source={source}"
+    )
+
+    return {
+        "session_type": session_type,
+        "wayland_display": wayland_display,
+        "display": display,
+        "qt_qpa_platform": selected_platform,
+        "source": source,
+    }
+
+
+def load_webview_module():
+    global webview
+
+    if webview is not None:
+        return webview
+
+    try:
+        webview = importlib.import_module("webview")
+    except Exception as e:
+        print(f"[wLib] Failed to import pywebview: {e}")
+        webview = None
+
+    return webview
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
@@ -324,7 +381,10 @@ def main():
 
     global window_ref, DEV_MODE
 
-    if webview is None:
+    configure_qt_runtime_environment()
+    webview_module = load_webview_module()
+
+    if webview_module is None:
         raise RuntimeError("pywebview is required to run wLib")
 
     api = Api()
@@ -346,7 +406,7 @@ def main():
         # Give Vite a second to start
         time.sleep(2)
 
-    window = webview.create_window(
+    window = webview_module.create_window(
         "wLib - Game Manager",
         url,
         js_api=api,
@@ -366,7 +426,7 @@ def main():
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wlib.png")
-    webview.start(
+    webview_module.start(
         gui="qt",
         debug=False,
         http_server=True,
