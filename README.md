@@ -57,9 +57,16 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 ## 📸 Screenshots
 
-<!-- Add screenshots here after the first public release -->
-<!-- ![Library View](docs/screenshots/library.png) -->
-<!-- ![Settings View](docs/screenshots/settings.png) -->
+<table>
+  <tr>
+    <td align="center"><b>Library View</b></td>
+    <td align="center"><b>Game Settings</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/library.png" alt="Library View" /></td>
+    <td><img src="docs/screenshots/settings.png" alt="Settings View" /></td>
+  </tr>
+</table>
 
 ## 📋 Requirements
 
