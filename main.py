@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import os
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import shutil
+import subprocess
 import sys
 import threading
-import subprocess
 import time
 import importlib
-import shutil
 from typing import TYPE_CHECKING, Protocol, cast, override
+
+from core.api import Api
+from core.f95zone import normalize_thread_url
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
-
-from core.api import Api
-from core.f95zone import normalize_thread_url
-import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 if TYPE_CHECKING:
     from webview import Window

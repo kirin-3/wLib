@@ -1,6 +1,5 @@
 # pyright: reportMissingImports=false
 import pytest
-import sqlite3
 import os
 from core.database import (
     init_db,
@@ -9,7 +8,6 @@ from core.database import (
     find_game_by_f95_url,
     update_game,
     get_all_games,
-    DB_PATH,
 )
 
 

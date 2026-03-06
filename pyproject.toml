@@ -1,0 +1,16 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+include = ["*.py"]
+exclude = [
+  ".git",
+  ".venv",
+  ".ubuntuvenv",
+  "venv",
+  "test_venv",
+  "build",
+  "dist",
+  "ui/dist",
+  "ui/node_modules",
+]
+force-exclude = true

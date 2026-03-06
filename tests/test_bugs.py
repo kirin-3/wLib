@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.database import (
-    DB_PATH,
     add_game,
     delete_game,
     get_all_games,
@@ -90,7 +89,7 @@ def test_update_game_with_none_values():
 def test_database_concurrent_access():
     """Test database behavior under simulated concurrent access."""
     # Add initial game
-    game_id = add_game(title="Concurrent Test", exe_path="/tmp/test.exe")
+    add_game(title="Concurrent Test", exe_path="/tmp/test.exe")
 
     # Simulate multiple connections
     connections = []

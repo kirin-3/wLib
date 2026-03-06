@@ -1,7 +1,6 @@
 # pyright: reportMissingImports=false
 import os
 
-import pytest
 from core.scraper import Scraper
 
 
@@ -93,8 +92,6 @@ def test_extract_version_from_title_real_f95_formats():
 
 def test_extract_version_from_post_html():
     """Test the _extract_version_from_post fallback using mock page objects."""
-    scraper = Scraper()
-
     # We can't easily mock a Playwright page, but we can test the regex patterns
     # used inside _extract_version_from_post directly via _extract_version_from_title
     # as a sanity check. The actual HTML parsing is tested by the regex patterns below.

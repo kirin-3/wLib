@@ -11,7 +11,7 @@ Backend changes are validated separately from release packaging through `.github
 - The workflow runs on pull requests, pushes to `main`, and manual dispatches.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
 - It creates a fresh virtual environment, installs `requirements-dev.txt`, and runs `bash scripts/check-python-clean.sh`.
-- The clean check executes `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
+- The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
 
 For local use, contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.
 

@@ -46,5 +46,6 @@ echo "==> Creating clean Python 3.12 environment"
 PYTHON_BIN="$VENV_DIR/bin/python" \
 PIP_BIN="$VENV_DIR/bin/pip" \
 BASEDPYRIGHT_BIN="$VENV_DIR/bin/basedpyright" \
+RUFF_BIN="$VENV_DIR/bin/ruff" \
 PYTEST_BIN="$VENV_DIR/bin/pytest" \
     bash scripts/check-python.sh

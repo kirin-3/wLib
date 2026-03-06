@@ -1,7 +1,4 @@
 # pyright: reportMissingImports=false
-import pytest
-import os
-import subprocess
 from unittest.mock import patch, MagicMock
 from core.launcher import Launcher
 
@@ -74,7 +71,7 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
 
     # Prevent os.makedirs from doing anything
     with (
-        patch("os.makedirs") as mock_makedirs,
+        patch("os.makedirs"),
         patch("os.path.isdir", side_effect=exists_side_effect),
     ):
         launcher = Launcher()

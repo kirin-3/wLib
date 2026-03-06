@@ -1,6 +1,4 @@
-import re
-
-with open('core/api.py', 'r') as f:
+with open("core/api.py", "r") as f:
     content = f.read()
 
 # Replace on_exit signature and logic
@@ -33,5 +31,5 @@ new_on_exit = """        def on_exit(delta, is_final=True):
                 print(f"Failed to update playtime for game {game_id}: {e}")"""
 
 content = content.replace(old_on_exit, new_on_exit)
-with open('core/api.py', 'w') as f:
+with open("core/api.py", "w") as f:
     f.write(content)
