@@ -622,6 +622,36 @@ class Api:
 
         return self._open_path_with_system_handler(persistent_ext_dir)
 
+    def get_extension_service_status(self):
+        import json
+        import urllib.request
+
+        request = urllib.request.Request(
+            "http://127.0.0.1:8183/api/check?url=__ping__",
+            headers={"User-Agent": "wLib-ExtensionStatus"},
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=2) as response:
+                if getattr(response, "status", None) != 200:
+                    return {
+                        "success": True,
+                        "reachable": False,
+                        "error": f"Unexpected status: {getattr(response, 'status', 'unknown')}",
+                    }
+
+                payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict) or "exists" not in payload:
+                    return {
+                        "success": True,
+                        "reachable": False,
+                        "error": "Unexpected response payload",
+                    }
+
+                return {"success": True, "reachable": True}
+        except Exception as e:
+            return {"success": True, "reachable": False, "error": str(e)}
+
     # ==========================
     # Database / Game API
     # ==========================

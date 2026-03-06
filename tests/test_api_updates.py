@@ -2,6 +2,7 @@
 import json
 import os
 import zipfile
+from urllib.error import URLError
 from unittest.mock import MagicMock
 
 import pytest
@@ -599,3 +600,50 @@ def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
     assert kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
     assert "APPIMAGE" not in kwargs["env"]
     assert "APPDIR" not in kwargs["env"]
+
+
+def test_get_extension_service_status_reports_reachable(monkeypatch):
+    api = Api()
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def read(self):
+            return b'{"exists": false}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["origin"] = request.headers.get("Origin")
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = api.get_extension_service_status()
+
+    assert result == {"success": True, "reachable": True}
+    assert captured["url"] == "http://127.0.0.1:8183/api/check?url=__ping__"
+    assert captured["timeout"] == 2
+    assert captured["origin"] is None
+
+
+def test_get_extension_service_status_reports_unreachable(monkeypatch):
+    api = Api()
+
+    def fake_urlopen(_request, timeout=0):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = api.get_extension_service_status()
+
+    assert result["success"] is True
+    assert result["reachable"] is False
+    assert "connection refused" in str(result["error"])

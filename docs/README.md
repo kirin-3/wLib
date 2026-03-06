@@ -10,4 +10,4 @@ Welcome to the wLib developer documentation! This directory contains in-depth ex
 5. [Browser Extension API](extension_api.md) - Details on how the companion browser extension communicates with wLib.
 6. [Build & Packaging](build.md) - How `build.sh`, PyInstaller, and AppImage bundle the app.
 
-For general contributing guidelines, linting, and running tests, please refer to the `AGENTS.md` and `CONTRIBUTING.md` in the root of the repository.
+For general contributing guidelines, linting, and running tests, please refer to the `CONTRIBUTING.md` in the root of the repository.

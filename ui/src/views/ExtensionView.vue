@@ -8,10 +8,8 @@ let pollInterval = null;
 
 const checkConnection = async () => {
   try {
-    const resp = await fetch("http://localhost:8183/api/check?url=__ping__", {
-      signal: AbortSignal.timeout(2000),
-    });
-    if (resp.ok) {
+    const resp = await api.getExtensionServiceStatus();
+    if (resp && resp.reachable) {
       connectionStatus.value = "connected";
     } else {
       connectionStatus.value = "disconnected";
@@ -67,7 +65,7 @@ onUnmounted(() => {
     </header>
 
     <div class="space-y-8 pb-12">
-      <!-- Connection Status -->
+      <!-- Local Service Status -->
       <section class="ext-card rounded-xl p-6">
         <h3
           class="text-lg font-semibold mb-4 flex items-center gap-2"
@@ -84,7 +82,7 @@ onUnmounted(() => {
             <path d="M2 12h5l2-9 4 18 2-9h5" />
             <circle cx="19" cy="12" r="2" />
           </svg>
-          Connection Status
+          Local Service Status
         </h3>
 
         <div class="flex items-center gap-4">
@@ -120,7 +118,9 @@ onUnmounted(() => {
                 }}
               </p>
               <p class="text-xs" style="color: var(--text-muted)">
-                HTTP server on port 8183 · Last checked: {{ lastCheck || "—" }}
+                Checks whether wLib's local HTTP service on port 8183 is reachable.
+                It does not verify whether the browser addon is installed. Last checked:
+                {{ lastCheck || "-" }}
               </p>
             </div>
           </div>

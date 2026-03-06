@@ -76,6 +76,10 @@ class ApiService {
     return this.invoke("open_extension_folder");
   }
 
+  async getExtensionServiceStatus() {
+    return this.invoke("get_extension_service_status");
+  }
+
   async openInBrowser(url) {
     return this.invoke("open_in_browser", url);
   }
@@ -248,6 +252,13 @@ class ApiService {
           success: false,
           mock: true,
           error: "Scraper session controls require the desktop app runtime.",
+        };
+      case "get_extension_service_status":
+        return {
+          success: false,
+          mock: true,
+          reachable: false,
+          error: "Extension service status requires the desktop app runtime.",
         };
       default:
         return unavailable;
