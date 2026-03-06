@@ -1,5 +1,9 @@
 # pyright: reportMissingImports=false
+import json
 import os
+import zipfile
+from unittest.mock import MagicMock
+
 import pytest
 
 from core.api import Api
@@ -270,3 +274,87 @@ def test_reset_scraper_session_delegates_to_scraper(monkeypatch):
 
     assert result["success"] is True
     assert result["message"] == "reset"
+
+
+def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_path):
+    api = Api()
+    target_dir = tmp_path / "folder"
+    target_dir.mkdir()
+
+    popen_mock = MagicMock()
+    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
+    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(
+        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+    )
+    monkeypatch.setattr("subprocess.Popen", popen_mock)
+
+    result = api.open_folder(str(target_dir))
+
+    assert result["success"] is True
+    popen_mock.assert_called_once()
+    args, kwargs = popen_mock.call_args
+    assert args[0] == ["/usr/bin/xdg-open", str(target_dir)]
+    assert kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
+    assert kwargs["env"]["DISPLAY"] == ":0"
+    assert kwargs["env"]["WAYLAND_DISPLAY"] == "wayland-0"
+    assert "APPIMAGE" not in kwargs["env"]
+    assert "APPDIR" not in kwargs["env"]
+    assert kwargs["start_new_session"] is True
+
+
+def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    popen_mock = MagicMock()
+    persistent_dir = tmp_path / "extension"
+    real_expanduser = os.path.expanduser
+
+    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
+    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
+    )
+    monkeypatch.setattr("subprocess.Popen", popen_mock)
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.open_extension_folder()
+
+    assert result["success"] is True
+    chrome_manifest_path = persistent_dir / "chrome" / "manifest.json"
+    firefox_xpi_path = persistent_dir / "firefox" / "wLib.xpi"
+
+    assert chrome_manifest_path.is_file()
+    assert firefox_xpi_path.is_file()
+
+    chrome_manifest = json.loads(chrome_manifest_path.read_text())
+    assert chrome_manifest["background"]["service_worker"] == "background.js"
+    assert "scripts" not in chrome_manifest["background"]
+
+    with zipfile.ZipFile(firefox_xpi_path) as firefox_xpi:
+        firefox_manifest = json.loads(firefox_xpi.read("manifest.json").decode("utf-8"))
+
+    assert firefox_manifest["background"]["service_worker"] == "background.js"
+    assert firefox_manifest["background"]["scripts"] == ["background.js"]
+
+    popen_mock.assert_called_once()
+    args, kwargs = popen_mock.call_args
+    assert args[0] == ["/usr/bin/xdg-open", str(persistent_dir)]
+    assert kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
+    assert "APPIMAGE" not in kwargs["env"]
+    assert "APPDIR" not in kwargs["env"]

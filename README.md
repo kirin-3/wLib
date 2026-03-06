@@ -162,7 +162,7 @@ wLib/
 │   │   ├── components/     # Reusable UI components
 │   │   └── style.css       # Global styles and theme system
 │   └── package.json
-├── extension/              # Chromium browser extension (Manifest V3)
+├── extension/              # Browser extension source assets
 │   ├── manifest.json
 │   ├── content.js          # F95Zone page integration
 │   └── background.js       # Service worker
@@ -175,15 +175,26 @@ wLib/
 
 ## 🌐 Browser Extension
 
-wLib includes a Chromium browser extension that adds integration buttons directly on F95Zone thread pages. It communicates with the running wLib app over a local HTTP server on port `8183`.
+wLib includes browser extensions that add integration buttons directly on F95Zone thread pages. They communicate with the running wLib app over a local HTTP server on port `8183`.
 
-### Installing the Extension
+Use the Extension page's `Open Extension Folder` button to sync the install files into `~/.local/share/wLib/extension/`.
 
-1. Open your Chromium-based browser (Chrome, Brave, Edge, Vivaldi, etc.)
+### Installing in Chrome / Chromium / Edge
+
+1. Open your Chromium-based browser
 2. Navigate to `chrome://extensions/`
-3. Enable **Developer mode** (top-right toggle)
-4. Click **Load unpacked** and select the `extension/` folder from your wLib directory
-5. Visit any F95Zone thread — you'll see wLib integration buttons appear on the page
+3. Enable **Developer mode**
+4. Click **Load unpacked** and select `~/.local/share/wLib/extension/chrome/`
+5. Visit any F95Zone thread and the wLib buttons should appear
+
+### Installing in Firefox
+
+1. Open `about:debugging#/runtime/this-firefox`
+2. Click **Load Temporary Add-on**
+3. Select `~/.local/share/wLib/extension/firefox/wLib.xpi`
+4. Reload it after each Firefox restart
+
+Do not load the repo-root `extension/` folder directly in Firefox.
 
 ## 🐛 Reporting Bugs
 

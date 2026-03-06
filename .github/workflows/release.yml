@@ -80,7 +80,17 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2
+          sudo apt-get install -y \
+            libfuse2 \
+            libxcb-xkb1 \
+            libxcb-shape0 \
+            libxcb-icccm4 \
+            libxcb-cursor0 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-util1 \
+            libxcb-render-util0 \
+            libxkbcommon-x11-0
 
       - name: Build packages
         run: |

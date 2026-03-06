@@ -47,7 +47,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="p-8 max-w-4xl h-full flex flex-col overflow-y-auto">
+  <div class="allow-text-selection p-8 max-w-4xl h-full flex flex-col overflow-y-auto">
     <header class="mb-8">
       <h2
         class="text-3xl font-bold mb-2 tracking-tight"
@@ -153,11 +153,13 @@ onUnmounted(() => {
         </h3>
 
         <p class="text-sm mb-4" style="color: var(--text-secondary)">
-          The browser extension is synced to
+          The browser extension is synced into
           <code class="ext-code" style="color: var(--brand)"
             >~/.local/share/wLib/extension/</code
           >
-          and auto-updates when wLib is updated.
+          when you use <span style="color: var(--text-primary)">Open Extension Folder</span>.
+          Use the synced files there, not the repo-root
+          <code class="ext-code">extension/</code> folder.
         </p>
 
         <button
@@ -237,8 +239,10 @@ onUnmounted(() => {
             </li>
             <li>
               Select the
-              <code class="ext-code text-blue-400">extension/chrome/</code>
-              folder from the wLib directory
+              <code class="ext-code text-blue-400"
+                >~/.local/share/wLib/extension/chrome/</code
+              >
+              folder
             </li>
             <li>The wLib extension icon should appear in your toolbar</li>
           </ol>
@@ -273,16 +277,17 @@ onUnmounted(() => {
               >
             </li>
             <li>
-              Navigate to the
-              <code class="ext-code text-orange-400">extension/firefox/</code>
-              folder and select
-              <code class="ext-code text-orange-400">wLib.xpi</code>
+              Select
+              <code class="ext-code text-orange-400"
+                >~/.local/share/wLib/extension/firefox/wLib.xpi</code
+              >
+              directly
             </li>
             <li>The extension will remain active until Firefox is restarted</li>
           </ol>
           <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
-            Note: Firefox requires the extension to be reloaded each time the
-            browser restarts (temporary add-on limitation).
+            Note: Firefox requires the XPI temporary add-on and it must be
+            reloaded each time the browser restarts.
           </p>
         </div>
       </section>
@@ -342,12 +347,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* Make all text in the extension view selectable for copying URLs/paths */
-:deep(*) {
-  user-select: text;
-  -webkit-user-select: text;
-}
-
 .ext-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);

@@ -7,7 +7,7 @@ from core.database import init_db
 from core.launcher import Launcher
 from core.scraper import Scraper
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 
 
@@ -51,10 +51,69 @@ class Api:
     def set_window(self, window):
         self.window = window
 
+    def _build_host_open_env(self):
+        clean_env = os.environ.copy()
+
+        for var in (
+            "APPIMAGE",
+            "APPDIR",
+            "ARGV0",
+            "APPIMAGE_SILENT_INSTALL",
+            "OWD",
+            "APPIMAGE_EXTRACT_AND_RUN",
+        ):
+            clean_env.pop(var, None)
+
+        original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
+        if original_library_path:
+            clean_env["LD_LIBRARY_PATH"] = original_library_path
+        else:
+            clean_env.pop("LD_LIBRARY_PATH", None)
+
+        return clean_env
+
+    def _open_path_with_system_handler(self, path):
+        import shutil
+        import subprocess
+
+        normalized_path = os.path.abspath(path)
+        clean_env = self._build_host_open_env()
+
+        commands = [
+            ["xdg-open", normalized_path],
+            ["gio", "open", normalized_path],
+            ["kde-open5", normalized_path],
+            ["kde-open", normalized_path],
+            ["gnome-open", normalized_path],
+        ]
+
+        launch_errors = []
+        for command in commands:
+            binary = shutil.which(command[0])
+            if not binary:
+                continue
+
+            command[0] = binary
+            try:
+                subprocess.Popen(
+                    command,
+                    env=clean_env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                return {"success": True}
+            except Exception as e:
+                launch_errors.append(f"{command[0]}: {e}")
+
+        if launch_errors:
+            return {"success": False, "error": "; ".join(launch_errors)}
+
+        return {"success": False, "error": "No file manager opener found"}
+
     def open_extension_folder(self):
         import json
         import shutil
-        import subprocess
 
         # Source: bundled extension inside the AppImage / dev source
         if getattr(sys, "frozen", False):
@@ -127,16 +186,7 @@ class Api:
             print(f"[wLib] Failed to sync extension: {e}")
             return {"success": False, "error": str(e)}
 
-        # Open the persistent extension folder
-        for cmd in ["xdg-open", "gio", "kde-open5", "gnome-open"]:
-            binary = shutil.which(cmd)
-            if binary:
-                if cmd == "gio":
-                    subprocess.Popen([binary, "open", persistent_ext_dir])
-                else:
-                    subprocess.Popen([binary, persistent_ext_dir])
-                return {"success": True}
-        return {"success": False, "error": "No file manager opener found"}
+        return self._open_path_with_system_handler(persistent_ext_dir)
 
     # ==========================
     # Database / Game API
@@ -1450,21 +1500,10 @@ class Api:
 
     def open_folder(self, path):
         """Opens a folder in the system file manager."""
-        import os
-        import shutil
-        import subprocess
-
         if not os.path.exists(path):
             return {"success": False, "error": f"Path does not exist: {path}"}
-        for cmd in ["xdg-open", "gio", "kde-open5", "gnome-open"]:
-            binary = shutil.which(cmd)
-            if binary:
-                if cmd == "gio":
-                    subprocess.Popen([binary, "open", path])
-                else:
-                    subprocess.Popen([binary, path])
-                return {"success": True}
-        return {"success": False, "error": "No file manager opener found"}
+
+        return self._open_path_with_system_handler(path)
 
     def open_dev_tools(self):
         if self.window:

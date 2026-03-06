@@ -11,6 +11,35 @@ class Scraper:
         # Store browser session in the user's data dir so login persists across installations
         self.user_data_dir = os.path.expanduser("~/.local/share/wLib/browser_session")
 
+    def _build_browser_launch_env(self):
+        clean_env = os.environ.copy()
+
+        for var in (
+            "APPIMAGE",
+            "APPDIR",
+            "ARGV0",
+            "APPIMAGE_SILENT_INSTALL",
+            "OWD",
+            "APPIMAGE_EXTRACT_AND_RUN",
+        ):
+            clean_env.pop(var, None)
+
+        original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
+        if original_library_path:
+            clean_env["LD_LIBRARY_PATH"] = original_library_path
+        else:
+            clean_env.pop("LD_LIBRARY_PATH", None)
+
+        return clean_env
+
+    def _launch_persistent_browser_context(self, playwright_instance, headless):
+        return playwright_instance.chromium.launch_persistent_context(
+            user_data_dir=self.user_data_dir,
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+            env=self._build_browser_launch_env(),
+        )
+
     def _extract_version_from_title(self, title):
         if not isinstance(title, str):
             return "Unknown"
@@ -316,10 +345,8 @@ class Scraper:
 
         try:
             playwright_instance = sync_playwright().start()
-            context = playwright_instance.chromium.launch_persistent_context(
-                user_data_dir=self.user_data_dir,
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled"],
+            context = self._launch_persistent_browser_context(
+                playwright_instance, headless=False
             )
 
             if context.pages:
@@ -385,10 +412,8 @@ class Scraper:
             return self._error("dependency_missing", self._dependency_missing_message())
         try:
             playwright_instance = sync_playwright().start()
-            context = playwright_instance.chromium.launch_persistent_context(
-                user_data_dir=self.user_data_dir,
-                headless=headless,
-                args=["--disable-blink-features=AutomationControlled"],
+            context = self._launch_persistent_browser_context(
+                playwright_instance, headless=headless
             )
             page = context.new_page()
             try:
@@ -478,10 +503,8 @@ class Scraper:
 
         try:
             playwright_instance = sync_playwright().start()
-            context = playwright_instance.chromium.launch_persistent_context(
-                user_data_dir=self.user_data_dir,
-                headless=headless,
-                args=["--disable-blink-features=AutomationControlled"],
+            context = self._launch_persistent_browser_context(
+                playwright_instance, headless=headless
             )
             page = context.new_page()
             try:
@@ -556,11 +579,7 @@ class Scraper:
 
         try:
             with sync_playwright() as p:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=self.user_data_dir,
-                    headless=headless,
-                    args=["--disable-blink-features=AutomationControlled"],
-                )
+                context = self._launch_persistent_browser_context(p, headless=headless)
 
                 for i, url in enumerate(urls):
                     page = context.new_page()

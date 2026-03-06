@@ -289,6 +289,10 @@ def test_normalize_cover_image_url_upgrades_thumb_path():
 def test_open_login_session_waits_for_user_close(monkeypatch):
     scraper = Scraper()
     events = []
+    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
+    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
 
     class FakePage:
         def goto(self, url, **kwargs):
@@ -346,9 +350,44 @@ def test_open_login_session_waits_for_user_close(monkeypatch):
     assert result["success"] is True
     assert fake_playwright.launch_kwargs["headless"] is False
     assert fake_playwright.launch_kwargs["user_data_dir"].endswith("/browser_session")
+    assert fake_playwright.launch_kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
+    assert "APPIMAGE" not in fake_playwright.launch_kwargs["env"]
+    assert "APPDIR" not in fake_playwright.launch_kwargs["env"]
     assert ("wait", "close", 0) in events
     assert fake_playwright.context.closed is True
     assert fake_playwright.stopped is True
+
+
+def test_build_browser_launch_env_drops_appimage_overrides(monkeypatch):
+    scraper = Scraper()
+
+    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
+    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
+    monkeypatch.setenv("OWD", "/tmp")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
+
+    env = scraper._build_browser_launch_env()
+
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
+    assert "APPIMAGE" not in env
+    assert "APPDIR" not in env
+    assert "OWD" not in env
+
+
+def test_build_browser_launch_env_removes_bundled_library_path_without_orig(
+    monkeypatch,
+):
+    scraper = Scraper()
+
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+
+    env = scraper._build_browser_launch_env()
+
+    assert "LD_LIBRARY_PATH" not in env
 
 
 def test_reset_browser_session_clears_profile(tmp_path):

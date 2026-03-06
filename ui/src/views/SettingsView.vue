@@ -275,7 +275,7 @@ const saveSettings = async () => {
 </script>
 
 <template>
-  <div class="p-8 max-w-4xl pb-12">
+  <div class="allow-text-selection p-8 max-w-4xl pb-12">
     <header class="mb-10">
       <h2
         class="text-3xl font-bold mb-2 tracking-tight"
@@ -381,7 +381,7 @@ const saveSettings = async () => {
               <p class="text-xs mt-2" style="color: var(--text-muted)">
                 Leave empty to use the system default `wine` command.
               </p>
-              <p v-if="protonError" class="text-xs text-red-400 mt-1">
+              <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
                 {{ protonError }}
               </p>
             </div>
@@ -459,10 +459,10 @@ const saveSettings = async () => {
                   {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
                 </button>
               </div>
-              <p v-if="sessionMessage" class="text-xs text-green-400 mt-2">
+              <p v-if="sessionMessage" class="copyable-feedback text-xs text-green-400 mt-2">
                 {{ sessionMessage }}
               </p>
-              <p v-if="sessionError" class="text-xs text-red-400 mt-2">
+              <p v-if="sessionError" class="copyable-feedback text-xs text-red-400 mt-2">
                 {{ sessionError }}
               </p>
             </div>
@@ -741,13 +741,13 @@ const saveSettings = async () => {
               </div>
 
               <div class="mt-2 space-y-1">
-                <p v-if="installError" class="text-xs text-red-400">
+                <p v-if="installError" class="copyable-feedback text-xs text-red-400">
                   {{ installError }}
                 </p>
-                <p v-if="rtpError" class="text-xs text-red-400">
+                <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">
                   {{ rtpError }}
                 </p>
-                <p v-if="ceError" class="text-xs text-red-400">{{ ceError }}</p>
+                <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
               </div>
             </div>
           </div>

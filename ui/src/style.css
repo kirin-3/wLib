@@ -157,6 +157,26 @@ body {
   background: var(--surface-hover);
 }
 
+.allow-text-selection,
+.allow-text-selection * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.allow-text-selection button,
+.allow-text-selection svg,
+.allow-text-selection img,
+.allow-text-selection input[type="checkbox"],
+.allow-text-selection input[type="radio"] {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.copyable-feedback {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Empty-state utilities */
 .empty-state {
   display: flex;
