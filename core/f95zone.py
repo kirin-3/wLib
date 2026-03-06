@@ -5,7 +5,7 @@ from urllib.parse import urlparse, urlunparse
 THREAD_PATH_RE = re.compile(r"^/threads/(?:(?P<slug>.+)\.)?(?P<thread_id>\d+)(?:/.*)?$")
 
 
-def _coerce_url(value):
+def _coerce_url(value: object) -> str:
     if not isinstance(value, str):
         return ""
 
@@ -19,14 +19,14 @@ def _coerce_url(value):
     return normalized
 
 
-def _normalize_path(path):
+def _normalize_path(path: str) -> str:
     collapsed = re.sub(r"/+", "/", path or "/")
     if not collapsed.startswith("/"):
         collapsed = f"/{collapsed}"
     return collapsed
 
 
-def extract_thread_id(url):
+def extract_thread_id(url: object) -> str:
     normalized = _coerce_url(url)
     if not normalized:
         return ""
@@ -37,7 +37,7 @@ def extract_thread_id(url):
     return match.group("thread_id") if match else ""
 
 
-def normalize_thread_url(url):
+def normalize_thread_url(url: object) -> str:
     normalized = _coerce_url(url)
     if not normalized:
         return ""
@@ -66,7 +66,7 @@ def normalize_thread_url(url):
     return urlunparse((scheme, netloc, path, "", "", ""))
 
 
-def thread_urls_match(left, right):
+def thread_urls_match(left: object, right: object) -> bool:
     left_normalized = normalize_thread_url(left)
     right_normalized = normalize_thread_url(right)
     if not left_normalized or not right_normalized:

@@ -139,7 +139,7 @@ jobs:
             ```
 
             ### Requirements
-            - Python 3.11+ (auto-detected)
+            - Python 3.12+ (auto-detected)
             - Node.js 18+ (only if frontend needs rebuilding)
             - A WebKit2GTK-compatible display (most Linux desktops)
 

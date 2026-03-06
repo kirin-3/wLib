@@ -4,6 +4,17 @@ The official method of distribution for wLib is a self-contained GNU/Linux `AppI
 
 The packaging pipeline seamlessly integrates the Python backend and the Vue frontend into a single, generic distribution archive (`tar.gz`) alongside the AppImage.
 
+## Continuous Verification
+
+Backend changes are validated separately from release packaging through `.github/workflows/python-checks.yml`.
+
+- The workflow runs on pull requests, pushes to `main`, and manual dispatches.
+- It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
+- It creates a fresh virtual environment, installs `requirements-dev.txt`, and runs `bash scripts/check-python-clean.sh`.
+- The clean check executes `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
+
+For local use, contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.
+
 ## Build Pipeline (`scripts/build.sh`)
 
 When the build script executes, it follows these precise steps:

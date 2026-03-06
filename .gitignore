@@ -24,7 +24,7 @@ lancedb/
 node_modules/
 .pnp/
 .pnp.js
-venv/
+.venv/
 
 # Environment variables
 .env

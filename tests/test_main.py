@@ -51,7 +51,7 @@ def test_configure_qt_runtime_environment_honors_override(monkeypatch):
 def test_ensure_playwright_browsers_refuses_recursive_installer_in_frozen(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(main, "PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
     monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
     monkeypatch.setattr(
         main,
@@ -80,7 +80,7 @@ def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
         "chromium",
     ]
 
-    monkeypatch.setattr(main, "PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
     monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
     monkeypatch.setattr(main, "_get_playwright_install_command", lambda: install_cmd)
     monkeypatch.setattr(main.sys, "frozen", True, raising=False)

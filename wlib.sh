@@ -14,8 +14,8 @@ else
 fi
 PYTHON=""
 
-# Find a suitable Python 3.x
-for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+# Find a suitable Python 3.x, preferring the supported 3.12 toolchain.
+for candidate in python3.12 python3.13 python3.14 python3.11 python3; do
     if command -v "$candidate" &>/dev/null; then
         PYTHON="$candidate"
         break
@@ -24,7 +24,7 @@ done
 
 if [ -z "$PYTHON" ]; then
     echo "❌ Error: No Python 3 installation found."
-    echo "   Please install Python 3.11+ and the venv module using your system package manager."
+    echo "   Please install Python 3.12+ and the venv module using your system package manager."
     exit 1
 fi
 

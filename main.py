@@ -7,7 +7,7 @@ import importlib
 import shutil
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
-PLAYWRIGHT_BROWSERS_PATH = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
@@ -23,7 +23,7 @@ window_ref = None
 
 
 def configure_playwright_browsers_path():
-    global PLAYWRIGHT_BROWSERS_PATH
+    global playwright_browsers_path
 
     configured_path = (os.environ.get("WLIB_PLAYWRIGHT_BROWSERS_PATH") or "").strip()
 
@@ -36,9 +36,9 @@ def configure_playwright_browsers_path():
         except Exception as e:
             print(f"[wLib] Failed to read Playwright path from settings: {e}")
 
-    PLAYWRIGHT_BROWSERS_PATH = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PLAYWRIGHT_BROWSERS_PATH
-    return PLAYWRIGHT_BROWSERS_PATH
+    playwright_browsers_path = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
+    return playwright_browsers_path
 
 
 def configure_qt_runtime_environment():
@@ -320,7 +320,7 @@ def _get_playwright_install_command():
 
 def ensure_playwright_browsers():
     """Ensure Playwright chromium browser is installed."""
-    chromium_path = os.path.join(PLAYWRIGHT_BROWSERS_PATH, "chromium-*")
+    chromium_path = os.path.join(playwright_browsers_path, "chromium-*")
     import glob
 
     try:

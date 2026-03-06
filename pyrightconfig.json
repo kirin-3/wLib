@@ -1,12 +1,29 @@
 {
+  "include": [
+    "main.py",
+    "core"
+  ],
+  "exclude": [
+    "tests",
+    "ui/node_modules",
+    "ui/dist",
+    "build",
+    "dist",
+    "node_modules",
+    ".venv",
+    "venv",
+    ".ubuntuvenv",
+    "test_venv"
+  ],
   "venvPath": ".",
-  "venv": "venv",
+  "venv": ".venv",
   "stubPath": "typings",
   "extraPaths": [
     "typings"
   ],
-  "exclude": [
-    "ui/node_modules",
-    "ui/dist"
-  ]
+  "baselineFile": ".basedpyright/baseline.json",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "recommended",
+  "reportMissingTypeStubs": false
 }

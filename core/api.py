@@ -1,21 +1,113 @@
+from __future__ import annotations
+
 import os
 import sys
 import threading
+from collections.abc import Callable, Sequence
 from contextlib import closing
+from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
 from core.database import init_db
-from core.f95zone import normalize_thread_url
+from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.launcher import Launcher
 from core.scraper import Scraper
+
+if TYPE_CHECKING:
+    from webview import Window
+
+
+class ProgressStatus(TypedDict):
+    running: bool
+    done: int
+    total: int
+    current: str
+    error: str
+
+
+class ExtensionSyncStatus(TypedDict):
+    success: bool
+    updated: NotRequired[bool]
+    path: NotRequired[str]
+    bundled_version: NotRequired[str]
+    installed_version: NotRequired[str]
+    reason: NotRequired[str]
+    error: NotRequired[str]
+
+
+class OpenPathResult(TypedDict):
+    success: bool
+    error: NotRequired[str]
+
+
+class PickerCommandResult(TypedDict):
+    success: bool
+    cancelled: bool
+    stderr: str
+    returncode: int | None
+    path: NotRequired[str]
+    error: NotRequired[str]
+
+
+class BrowseBackend(TypedDict):
+    name: str
+    command: list[str]
+    env: dict[str, str]
+    continue_on_cancel_error: NotRequired[bool]
+    cancel_error_markers: NotRequired[tuple[str, ...]]
+
+
+class BrowseLocation(TypedDict):
+    path: str
+    label: str
+    source: str
+
+
+class BrowseLocationsResponse(TypedDict):
+    success: bool
+    locations: list[BrowseLocation]
+
+
+class ExtensionServiceStatus(TypedDict):
+    success: bool
+    reachable: bool
+    error: NotRequired[str]
+
+
+class WebviewModule(Protocol):
+    class FileDialog(Protocol):
+        FOLDER: int
+        OPEN: int
+
+    FOLDER_DIALOG: int
+    OPEN_DIALOG: int
+
+
+class URLResponse(Protocol):
+    status: int
+
+    def read(self) -> bytes: ...
+
+
+class URLResponseContext(Protocol):
+    def __enter__(self) -> URLResponse: ...
+
+    def __exit__(
+        self, exc_type: object, exc_value: object, traceback: object
+    ) -> None: ...
+
+
+normalize_thread_url: Callable[[str], str] = cast(
+    Callable[[str], str], cast(object, _normalize_thread_url)
+)
 
 APP_VERSION = "0.3.2"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 
 
 class Api:
-    def __init__(self):
-        self.window = None
-        self._startup_extension_sync_status = {
+    def __init__(self) -> None:
+        self.window: Window | None = None
+        self._startup_extension_sync_status: ExtensionSyncStatus = {
             "success": True,
             "updated": False,
             "path": os.path.expanduser("~/.local/share/wLib/extension"),
@@ -25,23 +117,24 @@ class Api:
         }
         # Make sure our database is initialized
         init_db()
-        self.scraper = Scraper()
-        self.launcher = Launcher()
-        self._update_running = False
-        self._update_total = 0
-        self._update_checked = 0
-        self._update_current = ""
-        self._update_results = []
-        self._update_lock = threading.Lock()
-        self._status_lock = threading.Lock()
-        self._deps_install_status = {
+        self.scraper: Scraper = Scraper()
+        self.launcher: Launcher = Launcher()
+        self._update_running: bool = False
+        self._update_total: int = 0
+        self._update_checked: int = 0
+        self._update_current: str = ""
+        self._update_results: list[dict[str, object]] = []
+        self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
+        self._update_lock: threading.Lock = threading.Lock()
+        self._status_lock: threading.Lock = threading.Lock()
+        self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
             "total": 0,
             "current": "",
             "error": "",
         }
-        self._rtp_install_status = {
+        self._rtp_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
             "total": 0,
@@ -49,18 +142,19 @@ class Api:
             "error": "",
         }
 
-    def _load_webview_module(self):
+    def _load_webview_module(self) -> WebviewModule | None:
         import importlib
 
         try:
-            return importlib.import_module("webview")
+            module = importlib.import_module("webview")
+            return cast(WebviewModule, cast(object, module))
         except Exception:
             return None
 
-    def set_window(self, window):
+    def set_window(self, window: Window | None) -> None:
         self.window = window
 
-    def _get_bundled_extension_dir(self):
+    def _get_bundled_extension_dir(self) -> str:
         if getattr(sys, "frozen", False):
             bundle_root = getattr(
                 sys,
@@ -73,32 +167,52 @@ class Api:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
         )
 
-    def _get_persistent_extension_dir(self):
+    def _get_persistent_extension_dir(self) -> str:
         return os.path.expanduser("~/.local/share/wLib/extension")
 
-    def _read_manifest_version(self, manifest_path):
+    def _coerce_string_key_dict(self, payload: object) -> dict[str, object] | None:
+        if not isinstance(payload, dict):
+            return None
+
+        payload_dict = cast(dict[object, object], payload)
+        return {str(key): value for key, value in payload_dict.items()}
+
+    def _read_manifest_version(self, manifest_path: str) -> str:
         import json
 
         if not os.path.isfile(manifest_path):
             return ""
 
         with open(manifest_path, encoding="utf-8") as f:
-            return str(json.load(f).get("version", "")).strip()
+            manifest_data = self._coerce_string_key_dict(cast(object, json.load(f)))
 
-    def set_startup_extension_sync_status(self, status):
-        payload = dict(status or {})
-        payload.setdefault("success", True)
-        payload.setdefault("updated", False)
-        payload.setdefault("path", self._get_persistent_extension_dir())
-        payload.setdefault("bundled_version", "")
-        payload.setdefault("installed_version", "")
-        payload.setdefault("reason", "not-run")
+        if manifest_data is None:
+            return ""
+
+        return str(manifest_data.get("version", "")).strip()
+
+    def set_startup_extension_sync_status(
+        self, status: ExtensionSyncStatus | None
+    ) -> None:
+        payload: ExtensionSyncStatus = {
+            "success": True,
+            "updated": False,
+            "path": self._get_persistent_extension_dir(),
+            "bundled_version": "",
+            "installed_version": "",
+            "reason": "not-run",
+        }
+        if status:
+            payload.update(status)
         self._startup_extension_sync_status = payload
 
-    def get_startup_extension_sync_status(self):
-        return dict(self._startup_extension_sync_status)
+    def get_startup_extension_sync_status(self) -> ExtensionSyncStatus:
+        return cast(
+            ExtensionSyncStatus,
+            cast(object, dict(self._startup_extension_sync_status)),
+        )
 
-    def sync_extension_files(self):
+    def sync_extension_files(self) -> ExtensionSyncStatus:
         import shutil
 
         bundled_ext_dir = self._get_bundled_extension_dir()
@@ -132,25 +246,29 @@ class Api:
                     shutil.rmtree(persistent_ext_dir)
                 os.makedirs(persistent_ext_dir, exist_ok=True)
 
-                shutil.copytree(bundled_ext_dir, chrome_dir)
+                _ = shutil.copytree(bundled_ext_dir, chrome_dir)
 
                 chrome_manifest_path = os.path.join(chrome_dir, "manifest.json")
                 import json
 
                 with open(chrome_manifest_path, "r", encoding="utf-8") as f:
-                    chrome_manifest = json.load(f)
+                    chrome_manifest = self._coerce_string_key_dict(
+                        cast(object, json.load(f))
+                    )
 
-                if (
-                    "background" in chrome_manifest
-                    and "scripts" in chrome_manifest["background"]
-                ):
-                    del chrome_manifest["background"]["scripts"]
+                if chrome_manifest is None:
+                    raise ValueError("Bundled extension manifest must be a JSON object")
+
+                background = chrome_manifest.get("background")
+
+                if isinstance(background, dict) and "scripts" in background:
+                    del background["scripts"]
                     with open(chrome_manifest_path, "w", encoding="utf-8") as f:
                         json.dump(chrome_manifest, f, indent=4)
 
                 os.makedirs(firefox_dir, exist_ok=True)
                 xpi_path = os.path.join(firefox_dir, "wLib")
-                shutil.make_archive(xpi_path, "zip", bundled_ext_dir)
+                _ = shutil.make_archive(xpi_path, "zip", bundled_ext_dir)
                 os.rename(xpi_path + ".zip", xpi_path + ".xpi")
                 installed_version = self._read_manifest_version(chrome_manifest_path)
 
@@ -166,8 +284,8 @@ class Api:
             print(f"[wLib] Failed to sync extension: {e}")
             return {"success": False, "error": str(e)}
 
-    def _build_host_open_env(self):
-        clean_env = os.environ.copy()
+    def _build_host_open_env(self) -> dict[str, str]:
+        clean_env: dict[str, str] = os.environ.copy()
 
         for var in (
             "APPIMAGE",
@@ -177,24 +295,24 @@ class Api:
             "OWD",
             "APPIMAGE_EXTRACT_AND_RUN",
         ):
-            clean_env.pop(var, None)
+            _ = clean_env.pop(var, None)
 
         original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
         if original_library_path:
             clean_env["LD_LIBRARY_PATH"] = original_library_path
         else:
-            clean_env.pop("LD_LIBRARY_PATH", None)
+            _ = clean_env.pop("LD_LIBRARY_PATH", None)
 
         return clean_env
 
-    def _open_path_with_system_handler(self, path):
+    def _open_path_with_system_handler(self, path: str) -> OpenPathResult:
         import shutil
         import subprocess
 
         normalized_path = os.path.abspath(path)
         clean_env = self._build_host_open_env()
 
-        commands = [
+        commands: list[list[str]] = [
             ["xdg-open", normalized_path],
             ["gio", "open", normalized_path],
             ["kde-open5", normalized_path],
@@ -202,7 +320,7 @@ class Api:
             ["gnome-open", normalized_path],
         ]
 
-        launch_errors = []
+        launch_errors: list[str] = []
         for command in commands:
             binary = shutil.which(command[0])
             if not binary:
@@ -210,7 +328,7 @@ class Api:
 
             command[0] = binary
             try:
-                subprocess.Popen(
+                _ = subprocess.Popen(
                     command,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
@@ -226,7 +344,7 @@ class Api:
 
         return {"success": False, "error": "No file manager opener found"}
 
-    def _normalize_selected_path(self, value):
+    def _normalize_selected_path(self, value: object) -> str:
         from urllib.parse import unquote, urlparse
 
         raw_value = str(value or "").strip()
@@ -239,7 +357,7 @@ class Api:
 
         return os.path.abspath(os.path.expanduser(raw_value))
 
-    def _coerce_browse_directory(self, start_path=""):
+    def _coerce_browse_directory(self, start_path: str = "") -> str:
         normalized_path = self._normalize_selected_path(start_path)
         if normalized_path and os.path.isdir(normalized_path):
             return normalized_path
@@ -252,7 +370,9 @@ class Api:
 
         return os.path.expanduser("~")
 
-    def _run_picker_command(self, command, env=None):
+    def _run_picker_command(
+        self, command: Sequence[str], env: dict[str, str] | None = None
+    ) -> PickerCommandResult:
         import subprocess
 
         try:
@@ -310,11 +430,11 @@ class Api:
             "returncode": completed.returncode,
         }
 
-    def _desktop_portal_available(self, env):
+    def _desktop_portal_available(self, env: dict[str, str]) -> bool:
         import shutil
         import subprocess
 
-        commands = []
+        commands: list[list[str]] = []
 
         gdbus_path = shutil.which("gdbus")
         if gdbus_path:
@@ -367,7 +487,9 @@ class Api:
 
         return False
 
-    def _should_continue_after_cancel(self, backend, result):
+    def _should_continue_after_cancel(
+        self, backend: BrowseBackend, result: PickerCommandResult
+    ) -> bool:
         if not backend.get("continue_on_cancel_error"):
             return False
 
@@ -381,10 +503,13 @@ class Api:
         known_failure_markers = backend.get("cancel_error_markers") or ()
         return any(marker.lower() in details for marker in known_failure_markers)
 
-    def _build_linux_browse_backends(self, dialog_kind, directory, file_types=()):
+    def _build_linux_browse_backends(
+        self, dialog_kind: str, directory: str, file_types: Sequence[str] = ()
+    ) -> list[BrowseBackend]:
         import shutil
 
-        backends = []
+        _ = file_types
+        backends: list[BrowseBackend] = []
         clean_env = self._build_host_open_env()
         normalized_directory = self._coerce_browse_directory(directory)
 
@@ -462,7 +587,9 @@ class Api:
 
         return backends
 
-    def _browse_qt_dialog(self, dialog_kind, directory="", file_types=()):
+    def _browse_qt_dialog(
+        self, dialog_kind: str, directory: str = "", file_types: Sequence[str] = ()
+    ) -> str:
         if not self.window:
             return ""
 
@@ -481,21 +608,29 @@ class Api:
             except AttributeError:
                 dialog_type = webview.OPEN_DIALOG
 
-        kwargs = {
-            "allow_multiple": False,
-            "directory": self._coerce_browse_directory(directory),
-        }
+        start_directory = self._coerce_browse_directory(directory)
         if file_types:
-            kwargs["file_types"] = file_types
-
-        result = self.window.create_file_dialog(dialog_type, **kwargs)
+            result = self.window.create_file_dialog(
+                dialog_type,
+                allow_multiple=False,
+                directory=start_directory,
+                file_types=file_types,
+            )
+        else:
+            result = self.window.create_file_dialog(
+                dialog_type,
+                allow_multiple=False,
+                directory=start_directory,
+            )
         if result and len(result) > 0:
             return self._normalize_selected_path(result[0])
 
         return ""
 
-    def _browse_linux_dialog(self, dialog_kind, directory="", file_types=()):
-        errors = []
+    def _browse_linux_dialog(
+        self, dialog_kind: str, directory: str = "", file_types: Sequence[str] = ()
+    ) -> str:
+        errors: list[str] = []
 
         for backend in self._build_linux_browse_backends(
             dialog_kind, directory, file_types=file_types
@@ -523,16 +658,16 @@ class Api:
 
         return ""
 
-    def _iter_proc_mounts(self):
+    def _iter_proc_mounts(self) -> list[tuple[str, str, str]]:
         import re
 
-        def decode_mount_value(value):
-            def replace_octal(match):
+        def decode_mount_value(value: str) -> str:
+            def replace_octal(match: re.Match[str]) -> str:
                 return chr(int(match.group(1), 8))
 
             return re.sub(r"\\([0-7]{3})", replace_octal, value)
 
-        mount_entries = []
+        mount_entries: list[tuple[str, str, str]] = []
 
         try:
             with open("/proc/mounts", "r", encoding="utf-8") as mounts_file:
@@ -552,7 +687,9 @@ class Api:
 
         return mount_entries
 
-    def _is_user_relevant_mount(self, source, mount_point, fs_type):
+    def _is_user_relevant_mount(
+        self, source: str, mount_point: str, fs_type: str
+    ) -> bool:
         skipped_fs = {
             "autofs",
             "cgroup",
@@ -602,7 +739,14 @@ class Api:
 
         return False
 
-    def _append_browse_location(self, locations, seen_paths, path, label, source):
+    def _append_browse_location(
+        self,
+        locations: list[BrowseLocation],
+        seen_paths: set[str],
+        path: str,
+        label: str,
+        source: str,
+    ) -> None:
         normalized_path = self._normalize_selected_path(path)
         if not normalized_path or normalized_path in seen_paths:
             return
@@ -612,11 +756,11 @@ class Api:
         seen_paths.add(normalized_path)
         locations.append({"path": normalized_path, "label": label, "source": source})
 
-    def _get_browse_locations(self):
+    def _get_browse_locations(self) -> list[BrowseLocation]:
         import pwd
 
-        locations = []
-        seen_paths = set()
+        locations: list[BrowseLocation] = []
+        seen_paths: set[str] = set()
         home_dir = os.path.expanduser("~")
         downloads_dir = os.path.join(home_dir, "Downloads")
 
@@ -657,10 +801,10 @@ class Api:
 
         return locations
 
-    def get_browse_locations(self):
+    def get_browse_locations(self) -> BrowseLocationsResponse:
         return {"success": True, "locations": self._get_browse_locations()}
 
-    def open_extension_folder(self):
+    def open_extension_folder(self) -> ExtensionSyncStatus | OpenPathResult:
         sync_result = self.sync_extension_files()
         if sync_result.get("success") is False:
             return sync_result
@@ -668,7 +812,7 @@ class Api:
         persistent_ext_dir = self._get_persistent_extension_dir()
         return self._open_path_with_system_handler(persistent_ext_dir)
 
-    def get_extension_service_status(self):
+    def get_extension_service_status(self) -> ExtensionServiceStatus:
         import json
         import urllib.request
 
@@ -678,7 +822,10 @@ class Api:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=2) as response:
+            with cast(
+                URLResponseContext,
+                urllib.request.urlopen(request, timeout=2),
+            ) as response:
                 if getattr(response, "status", None) != 200:
                     return {
                         "success": True,
@@ -686,8 +833,12 @@ class Api:
                         "error": f"Unexpected status: {getattr(response, 'status', 'unknown')}",
                     }
 
-                payload = json.loads(response.read().decode("utf-8"))
-                if not isinstance(payload, dict) or "exists" not in payload:
+                response_bytes = response.read()
+                response_text = response_bytes.decode("utf-8")
+                payload = self._coerce_string_key_dict(
+                    cast(object, json.loads(response_text))
+                )
+                if payload is None or "exists" not in payload:
                     return {
                         "success": True,
                         "reachable": False,

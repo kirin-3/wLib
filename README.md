@@ -11,7 +11,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/platform-Linux-lightgrey.svg" alt="Platform: Linux" />
-  <img src="https://img.shields.io/badge/python-3.11+-yellow.svg" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/python-3.12+-yellow.svg" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/vue-3-brightgreen.svg" alt="Vue 3" />
 </p>
 
@@ -90,7 +90,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 | Dependency | Required | Purpose |
 |------------|----------|---------|
-| **Python 3.11+** | ✅ | Backend runtime |
+| **Python 3.12+** | ✅ | Backend runtime |
 | **Node.js 18+** | ⚙️ Build only | Compiles the Vue frontend |
 | **Wine** | ✅ | Runs Windows game executables |
 | **Winetricks** | ✅ | Installs Windows DLLs and runtime libraries |

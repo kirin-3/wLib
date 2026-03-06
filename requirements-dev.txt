@@ -1,0 +1,5 @@
+-r requirements.txt
+basedpyright>=1.31.3
+black
+pytest
+ruff

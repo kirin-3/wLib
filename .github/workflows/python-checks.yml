@@ -1,0 +1,49 @@
+name: Python Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-checks:
+    name: Backend Checks (Python 3.12)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfuse2 \
+            libxcb-xkb1 \
+            libxcb-shape0 \
+            libxcb-icccm4 \
+            libxcb-cursor0 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-util1 \
+            libxcb-render-util0 \
+            libxkbcommon-x11-0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Run clean backend verification
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: bash scripts/check-python-clean.sh

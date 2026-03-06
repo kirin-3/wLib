@@ -23,7 +23,7 @@ wLib consists of a Python 3 backend and a Vue 3 frontend.
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12 (recommended for backend development and type checking)
 - Node.js 18+ and npm
 - Linux environment (tested heavily on Arch/CachyOS)
 - Playwright dependencies (installed automatically on first run, but may need system packages)
@@ -31,11 +31,12 @@ wLib consists of a Python 3 backend and a Vue 3 frontend.
 ### Setup
 
 #### 1. Python Backend
-Set up a virtual environment and install the dependencies:
+Set up a `.venv` virtual environment with Python 3.12 and install the development dependencies:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python --version  # should report Python 3.12.x
+pip install -r requirements-dev.txt
 ```
 
 #### 2. Vue 3 Frontend
@@ -67,13 +68,25 @@ DEV_MODE=1 python main.py
 We maintain a suite of automated tests and use strict formatting rules. **Please run these before submitting a PR.**
 
 ### Python Code
-We use `pytest` for testing and `ruff` / `black` for formatting.
+We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` / `black` for formatting.
 ```bash
+# Run the full backend check suite inside the active .venv
+bash scripts/check-python.sh
+
+# Recreate a clean Python 3.12 environment and rerun the backend checks
+bash scripts/check-python-clean.sh
+
 # Run all tests
 pytest
 
 # Run a specific test module
 pytest tests/test_database.py -v
+
+# Run backend type checking (main.py + core/)
+basedpyright
+
+# Run the backend smoke check without opening the UI
+python scripts/smoke_backend.py
 
 # Format and lint code
 black core/ main.py tests/
