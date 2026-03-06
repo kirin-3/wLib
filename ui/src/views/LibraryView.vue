@@ -35,6 +35,46 @@ const defaultFilterSections = {
 const isFiltersCollapsed = ref(true);
 const filterSections = ref({ ...defaultFilterSections });
 
+const normalizeF95Url = (rawUrl) => {
+  if (typeof rawUrl !== "string") return "";
+
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return "";
+
+  try {
+    const parsed = new URL(trimmed);
+    const match = parsed.pathname.match(/^\/threads\/(?:(.+)\.)?(\d+)(?:\/.*)?$/);
+    if (match) {
+      const slug = (match[1] || "").replace(/^\.+|\.+$/g, "");
+      parsed.pathname = slug
+        ? `/threads/${slug}.${match[2]}/`
+        : `/threads/${match[2]}/`;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch (_error) {
+    return trimmed;
+  }
+};
+
+const extractThreadIdFromUrl = (rawUrl) => {
+  const normalized = normalizeF95Url(rawUrl);
+  const match = normalized.match(/\/threads\/(?:.+\.)?(\d+)\/?$/);
+  return match ? match[1] : "";
+};
+
+const urlsMatchByThreadIdentity = (left, right) => {
+  const leftThreadId = extractThreadIdFromUrl(left);
+  const rightThreadId = extractThreadIdFromUrl(right);
+
+  if (leftThreadId && rightThreadId) {
+    return leftThreadId === rightThreadId;
+  }
+
+  return normalizeF95Url(left) === normalizeF95Url(right);
+};
+
 const toggleSort = (field) => {
   if (sortBy.value === field) {
     sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
@@ -315,7 +355,9 @@ watch(
     }
     if (q.action === "open" && q.f95url) {
       await loadGames();
-      const match = games.value.find((g) => g.f95_url === q.f95url);
+      const match = games.value.find((g) =>
+        urlsMatchByThreadIdentity(g.f95_url, q.f95url),
+      );
       if (match) openDetail(match);
     }
   },
@@ -338,6 +380,11 @@ const handleAddGame = async (gameData) => {
       false, // run_wayland
       false, // auto_inject_ce
     );
+    if (result && result.success === false) {
+      alert(`Failed to add game:\n\n${result.error || "Unknown error"}`);
+      return;
+    }
+
     if (result && result.id) {
       showAddModal.value = false;
       router.replace({ path: "/", query: {} });

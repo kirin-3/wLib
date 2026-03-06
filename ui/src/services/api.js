@@ -80,6 +80,10 @@ class ApiService {
     return this.invoke("get_extension_service_status");
   }
 
+  async getStartupExtensionSyncStatus() {
+    return this.invoke("get_startup_extension_sync_status");
+  }
+
   async openInBrowser(url) {
     return this.invoke("open_in_browser", url);
   }
@@ -259,6 +263,16 @@ class ApiService {
           mock: true,
           reachable: false,
           error: "Extension service status requires the desktop app runtime.",
+        };
+      case "get_startup_extension_sync_status":
+        return {
+          success: true,
+          mock: true,
+          updated: false,
+          path: "~/.local/share/wLib/extension",
+          bundled_version: "",
+          installed_version: "",
+          reason: "mock",
         };
       default:
         return unavailable;

@@ -23,7 +23,7 @@ Stores the library records and their associated configuration flags.
 | `developer` | `TEXT` | Extracted developer name. |
 | `engine` | `TEXT` | Game engine (Ren'Py, RPGM, Unity). |
 | `tags` | `TEXT` | Comma-separated list of tags. |
-| `f95_url` | `TEXT` | F95Zone thread URL (`UNIQUE` indexed to prevent duplication). |
+| `f95_url` | `TEXT` | F95Zone thread URL. An SQLite unique index still protects exact duplicates, and the app additionally rejects equivalent F95 thread URL variants by thread identity before insert/update. |
 | `version` | `TEXT` | The local downloaded version string. |
 | `latest_version` | `TEXT` | The remote version identified by the scraper. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |

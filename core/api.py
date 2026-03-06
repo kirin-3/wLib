@@ -4,6 +4,7 @@ import threading
 from contextlib import closing
 
 from core.database import init_db
+from core.f95zone import normalize_thread_url
 from core.launcher import Launcher
 from core.scraper import Scraper
 
@@ -14,6 +15,14 @@ DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 class Api:
     def __init__(self):
         self.window = None
+        self._startup_extension_sync_status = {
+            "success": True,
+            "updated": False,
+            "path": os.path.expanduser("~/.local/share/wLib/extension"),
+            "bundled_version": "",
+            "installed_version": "",
+            "reason": "not-run",
+        }
         # Make sure our database is initialized
         init_db()
         self.scraper = Scraper()
@@ -50,6 +59,112 @@ class Api:
 
     def set_window(self, window):
         self.window = window
+
+    def _get_bundled_extension_dir(self):
+        if getattr(sys, "frozen", False):
+            bundle_root = getattr(
+                sys,
+                "_MEIPASS",
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            )
+            return os.path.join(bundle_root, "extension")
+
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
+        )
+
+    def _get_persistent_extension_dir(self):
+        return os.path.expanduser("~/.local/share/wLib/extension")
+
+    def _read_manifest_version(self, manifest_path):
+        import json
+
+        if not os.path.isfile(manifest_path):
+            return ""
+
+        with open(manifest_path, encoding="utf-8") as f:
+            return str(json.load(f).get("version", "")).strip()
+
+    def set_startup_extension_sync_status(self, status):
+        payload = dict(status or {})
+        payload.setdefault("success", True)
+        payload.setdefault("updated", False)
+        payload.setdefault("path", self._get_persistent_extension_dir())
+        payload.setdefault("bundled_version", "")
+        payload.setdefault("installed_version", "")
+        payload.setdefault("reason", "not-run")
+        self._startup_extension_sync_status = payload
+
+    def get_startup_extension_sync_status(self):
+        return dict(self._startup_extension_sync_status)
+
+    def sync_extension_files(self):
+        import shutil
+
+        bundled_ext_dir = self._get_bundled_extension_dir()
+        persistent_ext_dir = self._get_persistent_extension_dir()
+        chrome_dir = os.path.join(persistent_ext_dir, "chrome")
+        firefox_dir = os.path.join(persistent_ext_dir, "firefox")
+        bundled_manifest = os.path.join(bundled_ext_dir, "manifest.json")
+        installed_manifest = os.path.join(chrome_dir, "manifest.json")
+
+        try:
+            bundled_version = self._read_manifest_version(bundled_manifest)
+            installed_version = self._read_manifest_version(installed_manifest)
+            needs_copy = False
+            reason = "up-to-date"
+            if not os.path.isdir(chrome_dir) or not os.path.isfile(
+                os.path.join(firefox_dir, "wLib.xpi")
+            ):
+                needs_copy = True
+                reason = "missing-installed-files"
+            else:
+                if bundled_version and installed_version:
+                    if bundled_version != installed_version:
+                        needs_copy = True
+                        reason = "version-changed"
+                elif os.path.isfile(bundled_manifest):
+                    needs_copy = True
+                    reason = "missing-installed-manifest"
+
+            if needs_copy and os.path.isdir(bundled_ext_dir):
+                if os.path.exists(persistent_ext_dir):
+                    shutil.rmtree(persistent_ext_dir)
+                os.makedirs(persistent_ext_dir, exist_ok=True)
+
+                shutil.copytree(bundled_ext_dir, chrome_dir)
+
+                chrome_manifest_path = os.path.join(chrome_dir, "manifest.json")
+                import json
+
+                with open(chrome_manifest_path, "r", encoding="utf-8") as f:
+                    chrome_manifest = json.load(f)
+
+                if (
+                    "background" in chrome_manifest
+                    and "scripts" in chrome_manifest["background"]
+                ):
+                    del chrome_manifest["background"]["scripts"]
+                    with open(chrome_manifest_path, "w", encoding="utf-8") as f:
+                        json.dump(chrome_manifest, f, indent=4)
+
+                os.makedirs(firefox_dir, exist_ok=True)
+                xpi_path = os.path.join(firefox_dir, "wLib")
+                shutil.make_archive(xpi_path, "zip", bundled_ext_dir)
+                os.rename(xpi_path + ".zip", xpi_path + ".xpi")
+                installed_version = self._read_manifest_version(chrome_manifest_path)
+
+            return {
+                "success": True,
+                "path": persistent_ext_dir,
+                "updated": needs_copy,
+                "bundled_version": bundled_version,
+                "installed_version": installed_version,
+                "reason": reason,
+            }
+        except Exception as e:
+            print(f"[wLib] Failed to sync extension: {e}")
+            return {"success": False, "error": str(e)}
 
     def _build_host_open_env(self):
         clean_env = os.environ.copy()
@@ -546,80 +661,11 @@ class Api:
         return {"success": True, "locations": self._get_browse_locations()}
 
     def open_extension_folder(self):
-        import json
-        import shutil
+        sync_result = self.sync_extension_files()
+        if sync_result.get("success") is False:
+            return sync_result
 
-        # Source: bundled extension inside the AppImage / dev source
-        if getattr(sys, "frozen", False):
-            bundle_root = getattr(
-                sys,
-                "_MEIPASS",
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            )
-            bundled_ext_dir = os.path.join(bundle_root, "extension")
-        else:
-            bundled_ext_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extension"
-            )
-        # Target: persistent location in user data dir
-        persistent_ext_dir = os.path.expanduser("~/.local/share/wLib/extension")
-
-        chrome_dir = os.path.join(persistent_ext_dir, "chrome")
-        firefox_dir = os.path.join(persistent_ext_dir, "firefox")
-
-        # Copy or update extension to persistent location
-        try:
-            needs_copy = False
-            if not os.path.isdir(chrome_dir) or not os.path.isfile(
-                os.path.join(firefox_dir, "wLib.xpi")
-            ):
-                needs_copy = True
-            else:
-                # Compare manifest.json versions to detect updates
-                bundled_manifest = os.path.join(bundled_ext_dir, "manifest.json")
-                installed_manifest = os.path.join(chrome_dir, "manifest.json")
-                if os.path.isfile(bundled_manifest) and os.path.isfile(
-                    installed_manifest
-                ):
-                    with open(bundled_manifest) as f:
-                        bundled_ver = json.load(f).get("version", "0")
-                    with open(installed_manifest) as f:
-                        installed_ver = json.load(f).get("version", "0")
-                    if bundled_ver != installed_ver:
-                        needs_copy = True
-                elif os.path.isfile(bundled_manifest):
-                    needs_copy = True
-
-            if needs_copy and os.path.isdir(bundled_ext_dir):
-                if os.path.exists(persistent_ext_dir):
-                    shutil.rmtree(persistent_ext_dir)
-                os.makedirs(persistent_ext_dir, exist_ok=True)
-
-                # Setup Chrome folder
-                shutil.copytree(bundled_ext_dir, chrome_dir)
-
-                # Strip out "scripts" from Chrome manifest (v3 compatibility)
-                chrome_manifest_path = os.path.join(chrome_dir, "manifest.json")
-                with open(chrome_manifest_path, "r") as f:
-                    chrome_manifest = json.load(f)
-
-                if (
-                    "background" in chrome_manifest
-                    and "scripts" in chrome_manifest["background"]
-                ):
-                    del chrome_manifest["background"]["scripts"]
-                    with open(chrome_manifest_path, "w") as f:
-                        json.dump(chrome_manifest, f, indent=4)
-
-                # Setup Firefox folder
-                os.makedirs(firefox_dir, exist_ok=True)
-                xpi_path = os.path.join(firefox_dir, "wLib")
-                shutil.make_archive(xpi_path, "zip", bundled_ext_dir)
-                os.rename(xpi_path + ".zip", xpi_path + ".xpi")
-        except Exception as e:
-            print(f"[wLib] Failed to sync extension: {e}")
-            return {"success": False, "error": str(e)}
-
+        persistent_ext_dir = self._get_persistent_extension_dir()
         return self._open_path_with_system_handler(persistent_ext_dir)
 
     def get_extension_service_status(self):
@@ -681,7 +727,7 @@ class Api:
 
         from core.database import add_game
 
-        normalized_url = f95_url.strip() if isinstance(f95_url, str) else ""
+        normalized_url = normalize_thread_url(f95_url)
 
         try:
             game_id = add_game(
@@ -745,9 +791,23 @@ class Api:
         return {"success": True}
 
     def update_game(self, game_id, fields):
+        import sqlite3
+
         from core.database import update_game
 
-        update_game(game_id, fields)
+        updated_fields = dict(fields or {})
+        if "f95_url" in updated_fields:
+            updated_fields["f95_url"] = normalize_thread_url(updated_fields["f95_url"])
+
+        try:
+            update_game(game_id, updated_fields)
+        except sqlite3.IntegrityError:
+            return {
+                "success": False,
+                "error": "A game with this URL is already in your library",
+                "error_code": "duplicate_url",
+            }
+
         return {"success": True}
 
     # ==========================

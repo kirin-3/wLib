@@ -1,4 +1,38 @@
 // Wait for the page to finish loading basic elements
+function getThreadIdentity(rawUrl = window.location.href) {
+    try {
+        const parsed = new URL(rawUrl, window.location.origin);
+        const match = parsed.pathname.match(/^\/threads\/(?:(.+)\.)?(\d+)(?:\/.*)?$/);
+        if (match) {
+            const slug = (match[1] || '').replace(/^\.+|\.+$/g, '');
+            const threadPath = slug
+                ? `/threads/${slug}.${match[2]}/`
+                : `/threads/${match[2]}/`;
+
+            parsed.pathname = threadPath;
+            parsed.search = '';
+            parsed.hash = '';
+
+            return {
+                id: match[2],
+                canonicalUrl: parsed.toString(),
+            };
+        }
+
+        parsed.search = '';
+        parsed.hash = '';
+        return {
+            id: '',
+            canonicalUrl: parsed.toString(),
+        };
+    } catch (_error) {
+        return {
+            id: '',
+            canonicalUrl: rawUrl,
+        };
+    }
+}
+
 function initWLibExtension() {
     // Only run on actual thread pages
     if (!window.location.pathname.startsWith('/threads/')) return;
@@ -10,21 +44,32 @@ function initWLibExtension() {
     const gameInfo = extractGameInfo();
     if (!gameInfo.title) return; // Not a valid game thread, probably
 
-    // Check if the game is already in wLib
-    fetch(`http://localhost:8183/api/check?url=${encodeURIComponent(gameInfo.url)}`)
-        .then(response => response.json())
-        .then(data => {
-            gameInfo.existsInWLib = data.exists;
-            injectUI(gameInfo);
-        })
-        .catch(err => {
-            console.warn("wLib extension: Could not connect to background wLib service.", err);
+    // Check if the game is already in wLib via the extension worker so
+    // the request uses the extension origin instead of the page origin.
+    chrome.runtime.sendMessage({
+        action: "checkGameInWLib",
+        url: gameInfo.url,
+    }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.warn("wLib extension: Could not connect to background wLib service.", chrome.runtime.lastError);
             gameInfo.existsInWLib = false;
             injectUI(gameInfo);
-        });
+            return;
+        }
+
+        if (response && response.success && response.data) {
+            gameInfo.existsInWLib = Boolean(response.data.exists);
+        } else {
+            console.warn("wLib extension: Check request failed.", response?.error || response);
+            gameInfo.existsInWLib = false;
+        }
+
+        injectUI(gameInfo);
+    });
 }
 
 function extractGameInfo() {
+    const threadIdentity = getThreadIdentity();
     const info = {
         title: '',
         developer: '',
@@ -33,15 +78,11 @@ function extractGameInfo() {
         tags: [],
         rating: '',
         coverImage: '',
-        url: window.location.href,
-        id: ''
+        url: threadIdentity.canonicalUrl,
+        id: threadIdentity.id
     };
 
     try {
-        // 1. Thread ID from URL
-        const threadMatch = window.location.pathname.match(/\/threads\/[^\/]+\.(\d+)/);
-        if (threadMatch) info.id = threadMatch[1];
-
         // 2. Full Title (Parsing game name and version)
         // Usually: [Prefix] Game Name [Version] [Developer]
         const h1 = document.querySelector('h1.p-title-value');

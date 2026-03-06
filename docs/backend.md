@@ -7,9 +7,10 @@ The core strength of wLib relies on its native Python backend, divided primarily
 
 1. **Environment Setup**: Parses command-line arguments and sets up `~/.local/share/wLib` directories.
 2. **Database Initialization**: Calls `core.database.init_db()` to create/migrate the SQLite schema.
-3. **Playwright Preflight**: Silently fires a `playwright install chromium` subprocess if the required browsers aren't found in `~/.cache/ms-playwright`.
-4. **Daemon Threads**: Starts the HTTP extension proxy server (`start_extension_server()`) in a daemonized background thread to prevent blocking the main GUI loop.
-5. **WebView Launch**: Binds the `core.api.Api` instance to `pywebview` and enters the blocking UI loop.
+3. **Extension Sync**: Copies the bundled browser extension assets into `~/.local/share/wLib/extension/` when the installed files are missing or the bundled manifest version changed.
+4. **Playwright Preflight**: Silently fires a `playwright install chromium` subprocess if the required browsers aren't found in `~/.cache/ms-playwright`.
+5. **Daemon Threads**: Starts the HTTP extension proxy server (`start_extension_server()`) in a daemonized background thread to prevent blocking the main GUI loop.
+6. **WebView Launch**: Binds the `core.api.Api` instance to `pywebview` and enters the blocking UI loop.
 
 ## Core Modules
 
@@ -17,6 +18,7 @@ The core strength of wLib relies on its native Python backend, divided primarily
 The `Api` class acts as the single point of entry for the Vue frontend. All methods defined without a leading underscore (e.g. `get_games`, `launch_game`) are automatically serialized into Promises on the `window.pywebview.api` object.
 - **Concurrency**: UI calls are technically asynchronous on the JS side but block the pywebview worker pool on the Python side. The `Api` class heavily uses background thread spawning (`threading.Thread`) for long tasks (like downloading updates or mass-scraping metadata) so the UI doesn't freeze.
 - **Event Emitter**: Contains wrapper helpers to dispatch Global UI Events back to Vue using `webview.evaluate_js()`.
+- **Extension Sync Metadata**: Tracks whether startup extension synchronization actually updated the installed browser files so the frontend can show a toast prompting the user to reload the addon.
 
 ### `core/launcher.py` (Process Management)
 This module handles the complexities of launching games on Linux.

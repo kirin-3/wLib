@@ -13,6 +13,7 @@ DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
 
 from core.api import Api
+from core.f95zone import normalize_thread_url
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -101,6 +102,14 @@ def load_webview_module():
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
+    def _find_matching_game(self, url):
+        if not isinstance(url, str) or not url.strip():
+            return None
+
+        from core.database import find_game_by_f95_url
+
+        return find_game_by_f95_url(url)
+
     def _get_allowed_origin(self):
         origin = (self.headers.get("Origin") or "").strip()
         if not origin:
@@ -155,22 +164,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             exists = False
             if check_url:
-                conn = None
                 try:
-                    from core.database import get_connection
-
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT id FROM games WHERE f95_url = ?", (check_url,)
-                    )
-                    exists = cursor.fetchone() is not None
+                    exists = self._find_matching_game(check_url) is not None
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     exists = False
-                finally:
-                    if conn is not None:
-                        conn.close()
 
             self.send_response(200)
             self._send_cors_headers(allowed_origin)
@@ -182,18 +180,24 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             query = parse_qs(urlparse(self.path).query)
             game_url = query.get("url", [""])[0]
+            resolved_url = normalize_thread_url(game_url) or game_url
 
             success = True
             error_message = ""
             if window_ref:
                 try:
+                    if game_url:
+                        matching_game = self._find_matching_game(game_url)
+                        if matching_game and matching_game.get("f95_url"):
+                            resolved_url = matching_game["f95_url"]
+
                     window_ref.on_top = True
                     window_ref.on_top = False
                     # Tell the frontend to open the edit modal for this game
-                    if game_url:
+                    if resolved_url:
                         import base64
 
-                        b64_url = base64.b64encode(game_url.encode("utf-8")).decode(
+                        b64_url = base64.b64encode(resolved_url.encode("utf-8")).decode(
                             "utf-8"
                         )
                         js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-open', {{ detail: {{ url: decodeURIComponent(escape(atob('{b64_url}'))) }} }}));"
@@ -388,6 +392,19 @@ def main():
         raise RuntimeError("pywebview is required to run wLib")
 
     api = Api()
+    sync_result = api.sync_extension_files()
+    api.set_startup_extension_sync_status(sync_result)
+    if sync_result.get("success") is False:
+        print(
+            "[wLib] Failed to sync browser extension files on startup: "
+            f"{sync_result.get('error', 'Unknown error')}"
+        )
+    elif sync_result.get("updated"):
+        print(
+            "[wLib] Synced browser extension files on startup: "
+            f"{sync_result.get('installed_version') or '?'} "
+            f"(reason={sync_result.get('reason', 'unknown')})"
+        )
 
     # Resolve base path for bundled assets (PyInstaller vs dev source)
     if getattr(sys, "frozen", False):

@@ -9,7 +9,19 @@ const currentVersion = ref("");
 const latestVersion = ref("");
 const isDark = ref(true);
 const isNavCollapsed = ref(false);
+const startupToast = ref({ visible: false, title: "", message: "" });
 const navCollapsedStorageKey = "wlib-nav-collapsed";
+let startupToastTimeout = null;
+
+const showStartupToast = (title, message) => {
+  startupToast.value = { visible: true, title, message };
+  if (startupToastTimeout) {
+    clearTimeout(startupToastTimeout);
+  }
+  startupToastTimeout = setTimeout(() => {
+    startupToast.value = { visible: false, title: "", message: "" };
+  }, 5000);
+};
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
@@ -77,6 +89,17 @@ onMounted(() => {
   // Check for App Updates on Startup
   onWebviewReady(async () => {
     try {
+      const extensionSync = await api.getStartupExtensionSyncStatus();
+      if (extensionSync?.success && extensionSync?.updated) {
+        const version = extensionSync.installed_version || extensionSync.bundled_version;
+        showStartupToast(
+          "Extension Updated",
+          version
+            ? `Synced browser extension files to v${version}. Reload the browser addon to pick up the update.`
+            : "Synced browser extension files. Reload the browser addon to pick up the update.",
+        );
+      }
+
       const versionInfo = await api.get_app_version();
       currentVersion.value = versionInfo?.version || "";
 
@@ -96,6 +119,9 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
+  if (startupToastTimeout) {
+    clearTimeout(startupToastTimeout);
+  }
 });
 </script>
 
@@ -387,6 +413,25 @@ onUnmounted(() => {
 
     <!-- Main Content Area -->
     <main class="flex-1 overflow-y-auto relative">
+      <transition name="fade">
+        <div
+          v-if="startupToast.visible"
+          class="fixed top-5 right-5 z-50 max-w-sm rounded-xl px-4 py-3 shadow-2xl backdrop-blur-sm"
+          style="
+            background: color-mix(in srgb, var(--bg-surface) 88%, var(--brand) 12%);
+            border: 1px solid var(--brand-deep);
+            color: var(--text-primary);
+          "
+        >
+          <p class="text-sm font-semibold" style="color: var(--text-primary)">
+            {{ startupToast.title }}
+          </p>
+          <p class="mt-1 text-xs leading-5" style="color: var(--text-secondary)">
+            {{ startupToast.message }}
+          </p>
+        </div>
+      </transition>
+
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">
           <component :is="Component" />

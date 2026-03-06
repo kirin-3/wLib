@@ -157,7 +157,8 @@ onUnmounted(() => {
           <code class="ext-code" style="color: var(--brand)"
             >~/.local/share/wLib/extension/</code
           >
-          when you use <span style="color: var(--text-primary)">Open Extension Folder</span>.
+          on app startup and again when you use
+          <span style="color: var(--text-primary)">Open Extension Folder</span>.
           Use the synced files there, not the repo-root
           <code class="ext-code">extension/</code> folder.
         </p>

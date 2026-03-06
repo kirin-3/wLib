@@ -6,6 +6,7 @@ from core.database import (
     init_db,
     get_connection,
     add_game,
+    find_game_by_f95_url,
     update_game,
     get_all_games,
     DB_PATH,
@@ -99,3 +100,23 @@ def test_update_invalid_field():
 
     games = get_all_games()
     assert games[0]["title"] == "Changed Title"
+
+
+def test_find_game_by_f95_url_matches_equivalent_thread_variants():
+    game_id = add_game(
+        title="Variant Match",
+        exe_path="/tmp/variant.exe",
+        f95_url="https://f95zone.to/threads/original-slug.12345/",
+    )
+
+    lookup_urls = [
+        "https://f95zone.to/threads/renamed-slug.12345/",
+        "https://f95zone.to/threads/renamed-slug.12345/page-2",
+        "https://f95zone.to/threads/renamed-slug.12345/?latest=1",
+        "https://f95zone.to/threads/renamed-slug.12345/#post-999",
+    ]
+
+    for lookup_url in lookup_urls:
+        match = find_game_by_f95_url(lookup_url)
+        assert match is not None
+        assert match["id"] == game_id

@@ -187,7 +187,9 @@ This connects PyWebView natively to `http://localhost:5173` so you receive insta
 
 wLib includes a browser extension that adds quick-action buttons directly to F95Zone thread pages. These buttons communicate securely with your running wLib app over a local HTTP server on port `8183`.
 
-Use the Extension page's **Open Extension Folder** button in the app to synchronize the local installation files into `~/.local/share/wLib/extension/`.
+The app synchronizes the browser extension files into `~/.local/share/wLib/extension/` on startup and again when you use the Extension page's **Open Extension Folder** button.
+
+If the bundled extension version changes, wLib shows a startup toast telling you to reload the browser addon so the new files take effect.
 
 ### Chrome, Chromium, Brave, Edge
 

@@ -79,7 +79,6 @@ const save = () => {
     developer: developer.value,
     engine: engine.value,
   });
-  close();
 };
 </script>
 

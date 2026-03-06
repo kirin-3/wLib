@@ -10,6 +10,7 @@ Source files reside entirely in the `ui/src/` directory.
 This module is the backbone of frontend-to-backend communication. Because the UI is hosted inside `pywebview`, standard browser APIs like `fetch()` or `XMLHttpRequest` cannot natively communicate with the Python backend functions directly.
 - **The Proxy `ApiService`**: Exposes Javascript wrapper methods that seamlessly return Promises resolving from `window.pywebview.api`.
 - **Mock Fallback**: During rapid frontend prototyping, a developer might open `http://localhost:5173` in a standard desktop browser like Chrome. `ApiService` auto-detects if `window.pywebview` is injected. If missing, it immediately substitutes API calls with hardcoded mock data, preventing application crashes and allowing UI iteration without running the Python server.
+- **Startup Extension Status**: `App.vue` queries a lightweight backend status payload on startup so the UI can show a toast when the installed browser extension files were refreshed and the user needs to reload the addon.
 
 ### State & Routing
 wLib uses standard `vue-router` to handle navigation between primary views:
@@ -25,8 +26,8 @@ While the UI relies on Promises to pull data from Python, the backend frequently
 
 To capture these, the Vue frontend attaches to standard `window.addEventListener` DOM events:
 - **`wlib-playtime-tick`**: Emitted when a game process stops, updating the local UI without requiring a full page reload.
-- **`wlib-extension-open`**: Triggered when the browser extension commands the app to focus.
-- **`wlib-extension-add`**: Fired when the extension sends payload data. Vue handles this by catching the event and proactively un-hiding the "Add Game" modal, prepopulating the input fields with the provided payload (`title`, `f95_url`, `tags`).
+- **`wlib-extension-open`**: Triggered when the browser extension commands the app to focus. The library route resolves the target game by F95 thread identity instead of relying only on exact URL equality.
+- **`wlib-extension-add`**: Fired when the extension sends payload data. Vue catches the event, opens the "Add Game" modal with prefilled fields, and keeps the modal open if the backend rejects the add as a duplicate so the user gets explicit feedback.
 
 ## Styling Convention
 

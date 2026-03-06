@@ -222,6 +222,61 @@ def test_add_game_rejects_duplicate_f95_url(monkeypatch):
     assert second["error_code"] == "duplicate_url"
 
 
+def test_add_game_rejects_duplicate_thread_url_variants(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {"success": False},
+    )
+
+    first = api.add_game(
+        title="First",
+        exe_path="/tmp/first.exe",
+        f95_url="https://f95zone.to/threads/original-slug.777/",
+    )
+    second = api.add_game(
+        title="Second",
+        exe_path="/tmp/second.exe",
+        f95_url="https://f95zone.to/threads/renamed-slug.777/page-2?latest=1#post-5",
+    )
+
+    assert first["id"] is not None
+    assert second["success"] is False
+    assert second["error_code"] == "duplicate_url"
+
+
+def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {"success": False},
+    )
+
+    first = api.add_game(
+        title="First",
+        exe_path="/tmp/first.exe",
+        f95_url="https://f95zone.to/threads/original-slug.777/",
+    )
+    second = api.add_game(
+        title="Second",
+        exe_path="/tmp/second.exe",
+        f95_url="https://f95zone.to/threads/different-slug.888/",
+    )
+
+    result = api.update_game(
+        second["id"],
+        {"f95_url": "https://f95zone.to/threads/renamed-slug.777/page-3#post-42"},
+    )
+
+    assert first["id"] is not None
+    assert result["success"] is False
+    assert result["error_code"] == "duplicate_url"
+
+
 def test_get_settings_includes_playwright_path_default():
     api = Api()
 
@@ -600,6 +655,117 @@ def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
     assert kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
     assert "APPIMAGE" not in kwargs["env"]
     assert "APPDIR" not in kwargs["env"]
+
+
+def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    real_expanduser = os.path.expanduser
+
+    chrome_dir.mkdir(parents=True)
+    firefox_dir.mkdir(parents=True)
+    (chrome_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "1.0.1",
+                "background": {
+                    "service_worker": "background.js",
+                },
+            }
+        )
+    )
+    (chrome_dir / "content.js").write_text("old-content")
+    (firefox_dir / "wLib.xpi").write_text("outdated")
+
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result["updated"] is True
+
+    chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
+    chrome_content = (chrome_dir / "content.js").read_text()
+
+    assert chrome_manifest["version"] == "1.0.2"
+    assert "scripts" not in chrome_manifest["background"]
+    assert "checkGameInWLib" in chrome_content
+    assert (firefox_dir / "wLib.xpi").is_file()
+
+
+def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    real_expanduser = os.path.expanduser
+
+    chrome_dir.mkdir(parents=True)
+    firefox_dir.mkdir(parents=True)
+    (chrome_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "1.0.2",
+                "background": {
+                    "service_worker": "background.js",
+                },
+            }
+        )
+    )
+    sentinel = "kept-existing-files"
+    (chrome_dir / "content.js").write_text(sentinel)
+    (firefox_dir / "wLib.xpi").write_text("existing")
+
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result["updated"] is False
+    assert result["reason"] == "up-to-date"
+    assert result["installed_version"] == "1.0.2"
+    assert (chrome_dir / "content.js").read_text() == sentinel
+
+
+def test_startup_extension_sync_status_defaults_and_updates():
+    api = Api()
+
+    initial = api.get_startup_extension_sync_status()
+    assert initial["success"] is True
+    assert initial["updated"] is False
+
+    api.set_startup_extension_sync_status(
+        {
+            "success": True,
+            "updated": True,
+            "installed_version": "1.0.2",
+            "bundled_version": "1.0.2",
+            "reason": "version-changed",
+        }
+    )
+
+    updated = api.get_startup_extension_sync_status()
+    assert updated["updated"] is True
+    assert updated["installed_version"] == "1.0.2"
+    assert updated["reason"] == "version-changed"
 
 
 def test_get_extension_service_status_reports_reachable(monkeypatch):

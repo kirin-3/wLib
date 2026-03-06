@@ -2,9 +2,38 @@ import sqlite3
 import os
 from contextlib import closing
 
+from core.f95zone import normalize_thread_url, thread_urls_match
+
 DATA_DIR = os.path.expanduser("~/.local/share/wLib")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
+
+
+def _find_matching_game_row(cursor, url, exclude_id=None):
+    lookup_url = normalize_thread_url(url)
+    if not lookup_url:
+        return None
+
+    query = "SELECT id, title, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+    params = []
+    if exclude_id is not None:
+        query += " AND id != ?"
+        params.append(exclude_id)
+    query += " ORDER BY id ASC"
+
+    cursor.execute(query, params)
+    for row in cursor.fetchall():
+        if thread_urls_match(row["f95_url"], lookup_url):
+            return row
+    return None
+
+
+def find_game_by_f95_url(url, exclude_id=None):
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        row = _find_matching_game_row(cursor, url, exclude_id=exclude_id)
+    return dict(row) if row is not None else None
 
 
 def get_connection():
@@ -147,20 +176,20 @@ def add_game(
     if isinstance(tags, list):
         tags = ", ".join(tags)
 
-    normalized_url = f95_url.strip() if isinstance(f95_url, str) else ""
+    normalized_url = normalize_thread_url(f95_url)
 
     import datetime
 
     now_iso = datetime.datetime.now().isoformat()
 
     with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        if normalized_url:
-            cursor.execute(
-                "SELECT id FROM games WHERE f95_url = ? LIMIT 1", (normalized_url,)
-            )
-            if cursor.fetchone() is not None:
-                raise sqlite3.IntegrityError("duplicate f95_url")
+        if (
+            normalized_url
+            and _find_matching_game_row(cursor, normalized_url) is not None
+        ):
+            raise sqlite3.IntegrityError("duplicate f95_url")
 
         cursor.execute(
             "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -245,11 +274,20 @@ def update_game(game_id, fields):
     if not safe_fields:
         return
 
-    set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
-    values = list(safe_fields.values()) + [game_id]
+    if "f95_url" in safe_fields:
+        safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
 
     with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        updated_url = safe_fields.get("f95_url")
+        if updated_url and _find_matching_game_row(
+            cursor, updated_url, exclude_id=game_id
+        ):
+            raise sqlite3.IntegrityError("duplicate f95_url")
+
+        set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
+        values = list(safe_fields.values()) + [game_id]
         cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
         conn.commit()
 

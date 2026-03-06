@@ -1,4 +1,20 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "checkGameInWLib") {
+        fetch(`http://localhost:8183/api/check?url=${encodeURIComponent(message.url)}`)
+            .then(async (response) => {
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || `Request failed with status ${response.status}`);
+                }
+                sendResponse({ success: true, data });
+            })
+            .catch(error => {
+                console.error("wLib Check Error:", error);
+                sendResponse({ success: false, error: error.message });
+            });
+        return true;
+    }
+
     if (message.action === "addGameToWLib") {
         fetch("http://localhost:8183/api/add", {
             method: "POST",
