@@ -1,10 +1,25 @@
-<script setup>
+<script setup lang="ts">
 import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../../services/api";
 
-const props = defineProps(["modelValue"]);
-const emit = defineEmits(["update:modelValue", "save"]);
+interface AddGamePayload {
+  title: string;
+  exe_path: string;
+  f95_url: string;
+  version: string;
+  cover_image: string;
+  tags: string;
+  rating: string;
+  developer: string;
+  engine: string;
+}
+
+const props = defineProps<{ modelValue: boolean }>();
+const emit = defineEmits<{
+  "update:modelValue": [value: boolean];
+  save: [payload: AddGamePayload];
+}>();
 
 const route = useRoute();
 const router = useRouter();
@@ -19,34 +34,56 @@ const rating = ref("");
 const developer = ref("");
 const engine = ref("");
 
+const readQueryValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return typeof value[0] === "string" ? value[0] : "";
+  }
+  return typeof value === "string" ? value : "";
+};
+
+const parseImportedTags = (rawTags: string): string => {
+  if (!rawTags) return "";
+  try {
+    const parsed = JSON.parse(rawTags) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((tag) => String(tag).trim())
+        .filter(Boolean)
+        .join(", ");
+    }
+    if (typeof parsed === "string") {
+      return parsed;
+    }
+  } catch (_error) {
+    // Fall through and return raw value.
+  }
+  return rawTags;
+};
+
 // Auto-fill from query params when opened
 watch(
-  () => [props.modelValue, route.query],
+  () => [props.modelValue, route.query] as const,
   ([isOpen, query]) => {
     if (!isOpen) {
       return;
     }
 
-    if (isOpen && query.action === "import") {
-      title.value = query.title || "";
-      f95Url.value = query.f95url || "";
-      version.value = query.version || "";
-      coverImage.value = query.coverImage || "";
-      try {
-        tags.value = query.tags ? JSON.parse(query.tags) : [];
-      } catch (e) {
-        tags.value = [];
-      }
-      rating.value = query.rating || "";
-      developer.value = query.developer || "";
-      engine.value = query.engine || "";
+    if (readQueryValue(query.action) === "import") {
+      title.value = readQueryValue(query.title);
+      f95Url.value = readQueryValue(query.f95url);
+      version.value = readQueryValue(query.version);
+      coverImage.value = readQueryValue(query.coverImage);
+      tags.value = parseImportedTags(readQueryValue(query.tags));
+      rating.value = readQueryValue(query.rating);
+      developer.value = readQueryValue(query.developer);
+      engine.value = readQueryValue(query.engine);
     }
   },
   { immediate: true },
 );
 
 const close = () => {
-  if (route.query.action === "import") {
+  if (readQueryValue(route.query.action) === "import") {
     router.replace({ query: {} });
   }
   title.value = "";
@@ -54,15 +91,15 @@ const close = () => {
   f95Url.value = "";
   version.value = "";
   coverImage.value = "";
-  tags.value = [];
+  tags.value = "";
   rating.value = "";
   developer.value = "";
   engine.value = "";
   emit("update:modelValue", false);
 };
 
-const browseExe = async (startPath = exePath.value) => {
-  const p = await api.browseFile(startPath || "");
+const browseExe = async () => {
+  const p = await api.browseFile(exePath.value || "");
   if (p) exePath.value = p;
 };
 

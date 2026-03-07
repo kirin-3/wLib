@@ -1,10 +1,11 @@
 import { createRouter, createWebHashHistory } from "vue-router";
+import type { RouteRecordRaw } from "vue-router";
 import LibraryView from "../views/LibraryView.vue";
 import SettingsView from "../views/SettingsView.vue";
 import ExtensionView from "../views/ExtensionView.vue";
 import UpdatesView from "../views/UpdatesView.vue";
 
-const routes = [
+const routes: RouteRecordRaw[] = [
   {
     path: "/",
     name: "library",

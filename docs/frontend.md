@@ -1,34 +1,49 @@
-# Frontend (Vue 3)
+# Frontend (Vue 3 + TypeScript)
 
-The user interface for wLib is a modern single-page application built entirely in Vue 3 using the Composition API (`<script setup>`, `ref()`, `computed()`), bundled by Vite, and styled exclusively with TailwindCSS and custom CSS variables.
+The wLib UI is a Vue 3 SPA built with the Composition API, TypeScript, and Vite.
 
-Source files reside entirely in the `ui/src/` directory.
+- Vue SFCs use `<script setup lang="ts">`.
+- Type checking is enforced with `vue-tsc` (`npm run typecheck`).
+- Production bundles are built with Vite (`npm run build`).
+- Source files live in `ui/src/`.
 
-## Core Services
+## Core Entry Points
 
-### `services/api.js`
-This module is the backbone of frontend-to-backend communication. Because the UI is hosted inside `pywebview`, standard browser APIs like `fetch()` or `XMLHttpRequest` cannot natively communicate with the Python backend functions directly.
-- **The Proxy `ApiService`**: Exposes Javascript wrapper methods that seamlessly return Promises resolving from `window.pywebview.api`.
-- **Mock Fallback**: During rapid frontend prototyping, a developer might open `http://localhost:5173` in a standard desktop browser like Chrome. `ApiService` auto-detects if `window.pywebview` is injected. If missing, it immediately substitutes API calls with hardcoded mock data, preventing application crashes and allowing UI iteration without running the Python server.
-- **Startup Extension Status**: `App.vue` queries a lightweight backend status payload on startup so the UI can show a toast when the installed browser extension files were refreshed and the user needs to reload the addon.
+- `ui/src/main.ts`: app bootstrap and plugin registration.
+- `ui/src/router/index.ts`: route definitions.
+- `ui/src/services/api.ts`: the only frontend-to-backend bridge.
 
-### State & Routing
-wLib uses standard `vue-router` to handle navigation between primary views:
-- **Library View**: Displays the grid/list of known games.
-- **Update View**: Tracks games that have remote F95Zone updates available.
-- **Settings View**: Modifies launch preferences, backend settings, and theme options.
+## Backend Bridge (`services/api.ts`)
 
-State is typically managed locally within components or shared via lightweight Composition API composables (`src/composables/`), as the application does not rely heavily on global stores like Pinia.
+The UI runs inside PyWebView and calls backend methods via `window.pywebview.api`.
 
-## Backend-to-Frontend Communication
+- **Typed API surface**: `ApiService` exposes typed methods and shared response interfaces used by views/components.
+- **Mock fallback**: when `window.pywebview` is unavailable (for browser-only UI work at `http://localhost:5173`), API calls return structured mock responses to keep the app functional.
+- **Startup extension status**: `App.vue` reads startup sync status so the UI can notify users when extension files were refreshed.
 
-While the UI relies on Promises to pull data from Python, the backend frequently pushes asynchronous background events (e.g. Scraper progress, Extension injection) via pywebview’s `evaluate_js` function.
+Always route backend calls through `ui/src/services/api.ts`; do not call `window.pywebview.api` directly from view components.
 
-To capture these, the Vue frontend attaches to standard `window.addEventListener` DOM events:
-- **`wlib-playtime-tick`**: Emitted when a game process stops, updating the local UI without requiring a full page reload.
-- **`wlib-extension-open`**: Triggered when the browser extension commands the app to focus. The library route resolves the target game by F95 thread identity instead of relying only on exact URL equality.
-- **`wlib-extension-add`**: Fired when the extension sends payload data. Vue catches the event, opens the "Add Game" modal with prefilled fields, and keeps the modal open if the backend rejects the add as a duplicate so the user gets explicit feedback.
+## State & Routing
 
-## Styling Convention
+wLib uses `vue-router` for top-level views:
 
-We use **TailwindCSS** for primary utility-class styling combined with custom CSS variables (`--color-surface`, `--color-accent`) defined in `index.css`. This enables instantaneous, performant Dark/Light theme switching by merely toggling a `dark` class on the root HTML body node.
+- **Library View**: game browsing, filtering, sorting, quick launch, add/edit modals.
+- **Updates View**: single and bulk update checks plus app release checks.
+- **Settings View**: launcher/runtime settings, dependency install status, scraper session controls.
+- **Extension View**: extension service status and folder shortcuts.
+
+State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
+
+## Backend-to-Frontend Events
+
+Backend background tasks push updates into the UI using webview JS evaluation. The frontend listens via DOM events:
+
+- `wlib-playtime-tick`
+- `wlib-extension-open`
+- `wlib-extension-add`
+
+Keep these event names stable unless backend and frontend are updated together.
+
+## Styling
+
+The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` for theming. Dark/light mode behavior should remain compatible across all updated components.

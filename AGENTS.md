@@ -10,7 +10,7 @@ Guide for coding agents working in `wLib`.
   - `core/database.py` owns SQLite setup, migrations, and CRUD helpers.
   - `core/launcher.py` handles native, Wine, and Proton launch flows.
   - `core/scraper.py` handles F95Zone scraping and persistent browser sessions.
-  - `ui/src/services/api.js` is the only frontend-to-backend bridge.
+  - `ui/src/services/api.ts` is the only frontend-to-backend bridge.
   - `extension/` contains the browser extension source.
 - Persistent app data lives under `~/.local/share/wLib`.
 
@@ -54,13 +54,13 @@ pytest tests/test_main.py -v
 pytest tests/test_api_updates.py -v
 
 # frontend/build
-cd ui && npm run build
+cd ui && npm run typecheck && npm run build
 bash scripts/build.sh
 ```
 
 ## 4) Repo-Specific Rules
 ### Backend
-- Keep frontend-callable methods in `core/api.py`; if you add one, mirror it in `ui/src/services/api.js`.
+- Keep frontend-callable methods in `core/api.py`; if you add one, mirror it in `ui/src/services/api.ts`.
 - Keep API payloads JSON-serializable and prefer `{"success": False, "error": "..."}` on failures.
 - Long-running backend work should not block the UI; follow the existing thread + status/event pattern.
 - Reuse `core/database.py` helpers instead of adding ad hoc SQL in unrelated files.
@@ -70,8 +70,9 @@ bash scripts/build.sh
 
 ### Frontend
 - Use Vue 3 Composition API patterns already present in `ui/src/`.
-- Route backend access through `ui/src/services/api.js`, not direct `window.pywebview` calls in views.
-- `ui/src/services/api.js` supports mock responses in a normal browser; do not assume PyWebView is always present.
+- Keep Vue SFC scripts in TypeScript (`<script setup lang="ts">`) and keep frontend contracts typed.
+- Route backend access through `ui/src/services/api.ts`, not direct `window.pywebview` calls in views.
+- `ui/src/services/api.ts` supports mock responses in a normal browser; do not assume PyWebView is always present.
 - Keep UI changes compatible with both light and dark themes.
 
 ### Extension And Desktop Bridge
@@ -88,7 +89,7 @@ bash scripts/build.sh
 - Run `basedpyright` before finishing backend changes.
 - Run full `pytest` before finishing backend changes.
 - If you change backend tooling, environment bootstrap, or CI, run `bash scripts/check-python-clean.sh`.
-- Run `cd ui && npm run build` before finishing frontend changes.
+- Run `cd ui && npm run typecheck && npm run build` before finishing frontend changes.
 - If you change extension, launcher, scraper, or startup behavior, prefer targeted coverage first.
 
 ## 6) Delivery Checklist

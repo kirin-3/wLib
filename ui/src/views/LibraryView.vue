@@ -1,41 +1,89 @@
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, onWebviewReady } from "../services/api";
+import type { GameRecord } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 
+type LayoutMode = "grid" | "list" | "compact";
+type SortDir = "asc" | "desc";
+type SortField =
+  | "title"
+  | "date_added"
+  | "last_played"
+  | "playtime_seconds"
+  | "rating"
+  | "own_rating";
+
+interface FilterSections {
+  collections: boolean;
+  status: boolean;
+  tags: boolean;
+}
+
+interface UpdateNotice {
+  type: "" | "success" | "error";
+  message: string;
+}
+
+interface AddGamePayload {
+  title: string;
+  exe_path: string;
+  f95_url?: string;
+  version?: string;
+  cover_image?: string;
+  tags?: string;
+  rating?: string;
+  developer?: string;
+  engine?: string;
+}
+
+interface PlaytimeTickDetail {
+  gameId?: number;
+  delta?: number;
+}
+
+const readQueryValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return typeof value[0] === "string" ? value[0] : "";
+  }
+  return typeof value === "string" ? value : "";
+};
+
 const route = useRoute();
 const router = useRouter();
-const games = ref([]);
+const games = ref<GameRecord[]>([]);
 const showAddModal = ref(false);
 const showDetailModal = ref(false);
-const selectedGame = ref(null);
+const selectedGame = ref<GameRecord | null>(null);
 
 // Search & Filter state
 const searchQuery = ref("");
-const filterStatuses = ref([]);
+const filterStatuses = ref<string[]>([]);
 const filterCollection = ref("All"); // "All" or "Favorites"
-const filterEngines = ref([]);
-const filterTags = ref([]);
-const layoutMode = ref("grid"); // 'grid', 'list', or 'compact'
-const sortBy = ref("title");
-const sortDir = ref("asc");
+const filterEngines = ref<string[]>([]);
+const filterTags = ref<string[]>([]);
+const layoutMode = ref<LayoutMode>("grid"); // 'grid', 'list', or 'compact'
+const sortBy = ref<SortField>("title");
+const sortDir = ref<SortDir>("asc");
 
 const layoutModeStorageKey = "wlib-layout-mode";
 const filtersPaneStorageKey = "wlib-filters-collapsed";
 const filterSectionsStorageKey = "wlib-filter-sections";
-const validLayoutModes = new Set(["grid", "list", "compact"]);
-const defaultFilterSections = {
+const validLayoutModes = new Set<LayoutMode>(["grid", "list", "compact"]);
+const isLayoutMode = (value: string): value is LayoutMode =>
+  validLayoutModes.has(value as LayoutMode);
+const defaultFilterSections: FilterSections = {
   collections: true,
   status: true,
   tags: true,
 };
 
 const isFiltersCollapsed = ref(true);
-const filterSections = ref({ ...defaultFilterSections });
+const filterSections = ref<FilterSections>({ ...defaultFilterSections });
 
-const normalizeF95Url = (rawUrl) => {
+const normalizeF95Url = (rawUrl: unknown): string => {
   if (typeof rawUrl !== "string") return "";
 
   const trimmed = rawUrl.trim();
@@ -58,13 +106,13 @@ const normalizeF95Url = (rawUrl) => {
   }
 };
 
-const extractThreadIdFromUrl = (rawUrl) => {
+const extractThreadIdFromUrl = (rawUrl: unknown): string => {
   const normalized = normalizeF95Url(rawUrl);
   const match = normalized.match(/\/threads\/(?:.+\.)?(\d+)\/?$/);
-  return match ? match[1] : "";
+  return match ? (match[1] ?? "") : "";
 };
 
-const urlsMatchByThreadIdentity = (left, right) => {
+const urlsMatchByThreadIdentity = (left: unknown, right: unknown): boolean => {
   const leftThreadId = extractThreadIdFromUrl(left);
   const rightThreadId = extractThreadIdFromUrl(right);
 
@@ -75,7 +123,7 @@ const urlsMatchByThreadIdentity = (left, right) => {
   return normalizeF95Url(left) === normalizeF95Url(right);
 };
 
-const toggleSort = (field) => {
+const toggleSort = (field: SortField) => {
   if (sortBy.value === field) {
     sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
   } else {
@@ -88,24 +136,28 @@ const toggleFiltersPane = () => {
   isFiltersCollapsed.value = !isFiltersCollapsed.value;
 };
 
-const toggleFilterSection = (section) => {
+const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
 };
 
-const normalizeFilterSections = (value) => ({
+const normalizeFilterSections = (value: unknown): FilterSections => {
+  const source = (value as Partial<FilterSections> | null) || null;
+
+  return {
   collections:
-    typeof value?.collections === "boolean"
-      ? value.collections
+    typeof source?.collections === "boolean"
+      ? source.collections
       : defaultFilterSections.collections,
   status:
-    typeof value?.status === "boolean"
-      ? value.status
+    typeof source?.status === "boolean"
+      ? source.status
       : defaultFilterSections.status,
   tags:
-    typeof value?.tags === "boolean"
-      ? value.tags
+    typeof source?.tags === "boolean"
+      ? source.tags
       : defaultFilterSections.tags,
-});
+  };
+};
 
 const allStatuses = [
   { value: "Playing", label: "🎮 Playing" },
@@ -114,7 +166,16 @@ const allStatuses = [
   { value: "Plan to Play", label: "🗓️ Plan to Play" },
 ];
 
-const toggleFilter = (arr, val) => {
+const sortOptions: Array<{ key: SortField; label: string }> = [
+  { key: "title", label: "A-Z" },
+  { key: "date_added", label: "Newest" },
+  { key: "last_played", label: "Recent" },
+  { key: "playtime_seconds", label: "Playtime" },
+  { key: "rating", label: "F95 ★" },
+  { key: "own_rating", label: "My ★" },
+];
+
+const toggleFilter = (arr: string[], val: string) => {
   const idx = arr.indexOf(val);
   if (idx === -1) arr.push(val);
   else arr.splice(idx, 1);
@@ -122,12 +183,16 @@ const toggleFilter = (arr, val) => {
 
 // Derived unique values for filter pills
 const uniqueEngines = computed(() => {
-  const set = new Set(games.value.map((g) => g.engine).filter(Boolean));
+  const set = new Set(
+    games.value
+      .map((g) => g.engine)
+      .filter((engine): engine is string => typeof engine === "string" && !!engine),
+  );
   return [...set].sort();
 });
 
 const uniqueTags = computed(() => {
-  const set = new Set();
+  const set = new Set<string>();
   games.value.forEach((g) => {
     if (g.tags) {
       const list = typeof g.tags === "string" ? g.tags.split(",") : g.tags;
@@ -156,20 +221,18 @@ const clearFilters = () => {
 
 const filteredGames = computed(() => {
   let result = [...games.value];
-  const parseF95Rating = (rating) => {
+  const parseF95Rating = (rating: unknown): number => {
     if (!rating) return 0;
     const match = String(rating).match(/([\d.]+)/);
-    return match ? parseFloat(match[1]) : 0;
+    return match ? parseFloat(match[1] ?? "0") : 0;
   };
-  const ownRatingAverage = (game) => {
-    const fields = [
-      game?.rating_graphics,
-      game?.rating_story,
-      game?.rating_fappability,
-      game?.rating_gameplay,
-    ];
-    const total = fields.reduce((sum, value) => sum + (Number(value) || 0), 0);
-    return total / fields.length;
+  const ownRatingAverage = (game: GameRecord): number => {
+    const total =
+      (Number(game.rating_graphics) || 0) +
+      (Number(game.rating_story) || 0) +
+      (Number(game.rating_fappability) || 0) +
+      (Number(game.rating_gameplay) || 0);
+    return total / 4;
   };
   const q = searchQuery.value.toLowerCase();
   if (q) {
@@ -184,11 +247,11 @@ const filteredGames = computed(() => {
   }
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
-      return filterStatuses.value.includes(g.play_status);
+      return filterStatuses.value.includes(g.play_status || "");
     });
   }
   if (filterEngines.value.length) {
-    result = result.filter((g) => filterEngines.value.includes(g.engine));
+    result = result.filter((g) => filterEngines.value.includes(g.engine || ""));
   }
   if (filterTags.value.length) {
     result = result.filter((g) => {
@@ -203,26 +266,26 @@ const filteredGames = computed(() => {
   // Sort
   result.sort((a, b) => {
     const field = sortBy.value;
-    let va = a[field],
-      vb = b[field];
+    let va: string | number;
+    let vb: string | number;
     if (field === "own_rating") {
       va = ownRatingAverage(a);
       vb = ownRatingAverage(b);
     } else if (field === "rating") {
-      va = parseF95Rating(va);
-      vb = parseF95Rating(vb);
+      va = parseF95Rating(a.rating);
+      vb = parseF95Rating(b.rating);
     } else if (field === "playtime_seconds") {
-      va = Number(va) || 0;
-      vb = Number(vb) || 0;
+      va = Number(a.playtime_seconds) || 0;
+      vb = Number(b.playtime_seconds) || 0;
     } else if (field === "last_played") {
-      va = va ? new Date(va).getTime() : 0;
-      vb = vb ? new Date(vb).getTime() : 0;
+      va = a.last_played ? new Date(a.last_played).getTime() : 0;
+      vb = b.last_played ? new Date(b.last_played).getTime() : 0;
     } else if (field === "date_added") {
-      va = va ? new Date(va).getTime() : 0;
-      vb = vb ? new Date(vb).getTime() : 0;
+      va = a.date_added ? new Date(a.date_added).getTime() : 0;
+      vb = b.date_added ? new Date(b.date_added).getTime() : 0;
     } else {
-      va = (va || "").toString().toLowerCase();
-      vb = (vb || "").toString().toLowerCase();
+      va = String(a.title || "").toLowerCase();
+      vb = String(b.title || "").toLowerCase();
     }
     if (va < vb) return sortDir.value === "asc" ? -1 : 1;
     if (va > vb) return sortDir.value === "asc" ? 1 : -1;
@@ -231,11 +294,11 @@ const filteredGames = computed(() => {
   return result;
 });
 
-const updatingId = ref(null);
-const updateNotice = ref({ type: "", message: "" });
-let updateNoticeTimeout = null;
+const updatingId = ref<number | null>(null);
+const updateNotice = ref<UpdateNotice>({ type: "", message: "" });
+let updateNoticeTimeout: ReturnType<typeof setTimeout> | null = null;
 
-const showUpdateNotice = (type, message) => {
+const showUpdateNotice = (type: UpdateNotice["type"], message: string) => {
   updateNotice.value = { type, message };
   if (updateNoticeTimeout) {
     clearTimeout(updateNoticeTimeout);
@@ -245,12 +308,12 @@ const showUpdateNotice = (type, message) => {
   }, 3500);
 };
 
-const formatPlaytime = (seconds) => {
+const formatPlaytime = (seconds: number | null | undefined): string => {
   if (!seconds) return "0.0 hrs";
   return (seconds / 3600).toFixed(1) + " hrs";
 };
 
-const formatPlayStatus = (status) => {
+const formatPlayStatus = (status: string | null | undefined): string => {
   switch (status) {
     case "Completed":
     case "completed":
@@ -278,7 +341,8 @@ const loadGames = async () => {
     if (data) {
       games.value = data;
       if (selectedGame.value) {
-        const updated = data.find((g) => g.id === selectedGame.value.id);
+        const selectedId = selectedGame.value.id;
+        const updated = data.find((g) => g.id === selectedId);
         if (updated) selectedGame.value = updated;
       }
     }
@@ -287,7 +351,7 @@ const loadGames = async () => {
   }
 };
 
-const openDetail = (game) => {
+const openDetail = (game: GameRecord) => {
   selectedGame.value = game;
   showDetailModal.value = true;
 };
@@ -304,7 +368,7 @@ const handleGameDeleted = async () => {
   await loadGames();
 };
 
-const launchFromModal = async (game) => {
+const launchFromModal = async (game: GameRecord) => {
   try {
     const result = await api.launchGame(
       game.id,
@@ -324,7 +388,7 @@ const launchFromModal = async (game) => {
   }
 };
 
-const launchGameFast = async (game) => {
+const launchGameFast = async (game: GameRecord) => {
   try {
     const result = await api.launchGame(
       game.id,
@@ -349,14 +413,16 @@ watch(
   () => route.query,
   async (q) => {
     if (!q) return;
-    if (q.action === "import" && q.f95url) {
+    const action = readQueryValue(q.action);
+    const queryUrl = readQueryValue(q.f95url);
+    if (action === "import" && queryUrl) {
       await loadGames();
       showAddModal.value = true;
     }
-    if (q.action === "open" && q.f95url) {
+    if (action === "open" && queryUrl) {
       await loadGames();
       const match = games.value.find((g) =>
-        urlsMatchByThreadIdentity(g.f95_url, q.f95url),
+        urlsMatchByThreadIdentity(g.f95_url, queryUrl),
       );
       if (match) openDetail(match);
     }
@@ -364,7 +430,7 @@ watch(
   { immediate: true },
 );
 
-const handleAddGame = async (gameData) => {
+const handleAddGame = async (gameData: AddGamePayload) => {
   try {
     const result = await api.addGame(
       gameData.title,
@@ -395,7 +461,7 @@ const handleAddGame = async (gameData) => {
   }
 };
 
-const checkUpdate = async (game, event) => {
+const checkUpdate = async (game: GameRecord, event: Event) => {
   event.stopPropagation();
   if (!game.f95_url) return;
 
@@ -421,14 +487,14 @@ const checkUpdate = async (game, event) => {
     }
   } catch (e) {
     console.error("Update check failed", e);
-    showUpdateNotice("error", `${game.title}: ${e?.toString() || "Update check failed"}`);
+    showUpdateNotice("error", `${game.title}: ${String(e) || "Update check failed"}`);
   } finally {
     updatingId.value = null;
   }
 };
 
-const handlePlaytimeTick = (event) => {
-  const detail = event?.detail || {};
+const handlePlaytimeTick = (event: Event) => {
+  const detail = (event as CustomEvent<PlaytimeTickDetail>).detail || {};
   const gameId = Number(detail.gameId);
   const delta = Number(detail.delta);
   if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta <= 0) return;
@@ -475,7 +541,7 @@ watch(layoutMode, (mode) => {
 
 onMounted(() => {
   const storedLayoutMode = localStorage.getItem(layoutModeStorageKey);
-  if (storedLayoutMode && validLayoutModes.has(storedLayoutMode)) {
+  if (storedLayoutMode && isLayoutMode(storedLayoutMode)) {
     layoutMode.value = storedLayoutMode;
   }
 
@@ -774,14 +840,7 @@ onUnmounted(() => {
           style="border: 1px solid var(--border)"
         >
           <button
-            v-for="s in [
-              { key: 'title', label: 'A-Z' },
-              { key: 'date_added', label: 'Newest' },
-              { key: 'last_played', label: 'Recent' },
-              { key: 'playtime_seconds', label: 'Playtime' },
-              { key: 'rating', label: 'F95 ★' },
-              { key: 'own_rating', label: 'My ★' },
-            ]"
+            v-for="s in sortOptions"
             :key="s.key"
             @click="toggleSort(s.key)"
             class="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"

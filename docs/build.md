@@ -20,6 +20,7 @@ For local use, contributors can run the same checks with `bash scripts/check-pyt
 When the build script executes, it follows these precise steps:
 
 1. **Frontend Compilation**: 
+   - (Recommended pre-check) run `npm run typecheck` in `ui/` to validate the TypeScript frontend before packaging.
    - Navigates into `ui/` and runs `npm run build`.
    - The Vite bundler compiles the Vue application and outputs static HTML/JS/CSS assets into `ui/dist/`.
 2. **PyInstaller Bundling**: 

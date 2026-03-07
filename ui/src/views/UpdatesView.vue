@@ -1,38 +1,47 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { api, onWebviewReady } from "../services/api";
+import type {
+  AppReleaseAsset,
+  GameRecord,
+  UpdateStatusResponse,
+} from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
-const games = ref([]);
-const status = ref({
+interface AppUpdateState {
+  version: string;
+  changelogHtml: string;
+  url: string;
+  assets: AppReleaseAsset[];
+}
+
+const games = ref<GameRecord[]>([]);
+const status = ref<UpdateStatusResponse>({
   running: false,
   total: 0,
   checked: 0,
   current: "",
   results: [],
+  delay_seconds: 5,
 });
 const lastCheckTime = ref("");
 const autoCheckFreq = ref("weekly");
 const lastAutoCheck = ref("");
-let pollInterval = null;
+let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 // App Update State
-const appUpdate = ref(null);
+const appUpdate = ref<AppUpdateState | null>(null);
 const appUpdateLoading = ref(true);
 const currentVersion = ref("");
 
 const loadGames = async () => {
   try {
     const res = await api.getGames();
-    if (res && res.success === false) {
-      console.error("Failed to load games:", res.error);
-      games.value = [];
-    } else {
-      games.value = res || [];
-    }
+    games.value = res || [];
   } catch (e) {
     console.error("Failed to load games", e);
+    games.value = [];
   }
 };
 
@@ -50,7 +59,7 @@ const loadAutoCheckSetting = async () => {
   }
 };
 
-const setFrequency = async (freq) => {
+const setFrequency = async (freq: string) => {
   autoCheckFreq.value = freq;
   try {
     const res = await api.setAutoCheckSetting(freq);
@@ -59,7 +68,7 @@ const setFrequency = async (freq) => {
     }
   } catch (e) {
     console.error("Failed to set frequency", e);
-    alert("Error setting frequency: " + e.toString());
+    alert("Error setting frequency: " + String(e));
   }
 };
 
@@ -74,7 +83,7 @@ const startCheck = async () => {
     }
   } catch (e) {
     console.error("Failed to start update check", e);
-    alert("Error starting check: " + e.toString());
+    alert("Error starting check: " + String(e));
   }
 };
 
@@ -86,7 +95,7 @@ const cancelCheck = async () => {
     }
   } catch (e) {
     console.error("Failed to cancel", e);
-    alert("Error cancelling check: " + e.toString());
+    alert("Error cancelling check: " + String(e));
   }
 };
 
@@ -115,7 +124,7 @@ const startPolling = () => {
   pollStatus();
 };
 
-const openInBrowser = async (url) => {
+const openInBrowser = async (url?: string) => {
   if (url) await api.openInBrowser(url);
 };
 
@@ -171,12 +180,12 @@ onMounted(() => {
       const release = await api.check_app_updates();
       if (release && release.success && release.version) {
         if (release.version !== currentVersion.value) {
+          const rendered = marked.parse(release.changelog || "No changelog provided.");
+          const changelogHtml = typeof rendered === "string" ? rendered : await rendered;
           appUpdate.value = {
             version: release.version,
-            changelogHtml: DOMPurify.sanitize(
-              marked.parse(release.changelog || "No changelog provided."),
-            ),
-            url: release.url,
+            changelogHtml: DOMPurify.sanitize(changelogHtml),
+            url: release.url || "",
             assets: release.assets || [],
           };
         }

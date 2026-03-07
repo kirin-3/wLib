@@ -1,10 +1,12 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { api, onWebviewReady } from "../services/api";
 
-const connectionStatus = ref("checking"); // 'checking' | 'connected' | 'disconnected'
+type ConnectionStatus = "checking" | "connected" | "disconnected";
+
+const connectionStatus = ref<ConnectionStatus>("checking");
 const lastCheck = ref("");
-let pollInterval = null;
+let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 const checkConnection = async () => {
   try {
@@ -28,7 +30,7 @@ const openExtensionFolder = async () => {
     }
   } catch (e) {
     console.error("Could not open extension folder via API", e);
-    alert("Error opening extension folder: " + e.toString());
+    alert("Error opening extension folder: " + String(e));
   }
 };
 

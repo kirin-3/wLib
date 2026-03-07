@@ -5,7 +5,7 @@ Welcome to the wLib developer documentation! This directory contains in-depth ex
 ## Table of Contents
 1. [Architecture Overview](architecture.md) - High-level summary of the tech stack and system communication.
 2. [Backend Systems (Python)](backend.md) - Detailed breakdown of the Python core (API, Launcher, Scraper, etc.).
-3. [Frontend (Vue 3)](frontend.md) - Information on the UI, communication with backend, and Vite setup.
+3. [Frontend (Vue 3 + TypeScript)](frontend.md) - Information on the UI, typed API bridge, and Vite/vue-tsc workflow.
 4. [Database & Schema](database.md) - Explanation of the SQLite database schema and migrations.
 5. [Browser Extension API](extension_api.md) - Details on how the companion browser extension communicates with wLib.
 6. [Build & Packaging](build.md) - How `build.sh`, PyInstaller, AppImage packaging, and backend CI verification work.

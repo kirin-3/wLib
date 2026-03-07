@@ -1,7 +1,24 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { api, onWebviewReady } from "./services/api";
+
+interface StartupToast {
+  visible: boolean;
+  title: string;
+  message: string;
+}
+
+interface ExtensionEventDetail {
+  url: string;
+  title?: string;
+  version?: string;
+  coverImage?: string;
+  tags?: string[];
+  rating?: string;
+  developer?: string;
+  engine?: string;
+}
 
 const router = useRouter();
 const hasAppUpdate = ref(false);
@@ -9,11 +26,11 @@ const currentVersion = ref("");
 const latestVersion = ref("");
 const isDark = ref(true);
 const isNavCollapsed = ref(false);
-const startupToast = ref({ visible: false, title: "", message: "" });
+const startupToast = ref<StartupToast>({ visible: false, title: "", message: "" });
 const navCollapsedStorageKey = "wlib-nav-collapsed";
-let startupToastTimeout = null;
+let startupToastTimeout: ReturnType<typeof setTimeout> | null = null;
 
-const showStartupToast = (title, message) => {
+const showStartupToast = (title: string, message: string) => {
   startupToast.value = { visible: true, title, message };
   if (startupToastTimeout) {
     clearTimeout(startupToastTimeout);
@@ -37,8 +54,8 @@ const toggleNavCollapse = () => {
   );
 };
 
-const handleExtensionAdd = (event) => {
-  const data = event.detail;
+const handleExtensionAdd = (event: Event) => {
+  const data = (event as CustomEvent<ExtensionEventDetail>).detail;
   if (data && data.url) {
     router.push({
       path: "/",
@@ -57,8 +74,8 @@ const handleExtensionAdd = (event) => {
   }
 };
 
-const handleExtensionOpen = (event) => {
-  const data = event.detail;
+const handleExtensionOpen = (event: Event) => {
+  const data = (event as CustomEvent<ExtensionEventDetail>).detail;
   if (data && data.url) {
     router.push({
       path: "/",

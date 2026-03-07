@@ -1,6 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { api, onWebviewReady } from "../services/api.js";
+import { api, onWebviewReady } from "../services/api";
+import type { InstallProgressStatus, SystemDepsCommandResponse } from "../services/api";
 
 const protonPath = ref("");
 const prefixPath = ref("");
@@ -18,15 +19,27 @@ const installingCe = ref(false);
 const ceError = ref("");
 const dllsInstalled = ref(false);
 const rtpsInstalled = ref(false);
-const depsProgress = ref({ done: 0, total: 0, current: "" });
-const rtpProgress = ref({ done: 0, total: 0, current: "" });
-const systemDeps = ref(null);
+const depsProgress = ref<InstallProgressStatus>({
+  running: false,
+  done: 0,
+  total: 0,
+  current: "",
+  error: "",
+});
+const rtpProgress = ref<InstallProgressStatus>({
+  running: false,
+  done: 0,
+  total: 0,
+  current: "",
+  error: "",
+});
+const systemDeps = ref<SystemDepsCommandResponse | null>(null);
 const copiedCommand = ref(false);
 const openingLoginSession = ref(false);
 const resettingSession = ref(false);
 const sessionMessage = ref("");
 const sessionError = ref("");
-let pollTimer = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const loadSettings = async () => {
   try {
@@ -72,28 +85,24 @@ const pollInstallStatus = async () => {
 const browseProton = async () => {
   try {
     const p = await api.browseFile(protonPath.value || "");
-    if (p && p.success === false) {
-      alert("Failed to browse file: " + (p.error || "Unknown error"));
-    } else if (p) {
+    if (p) {
       protonPath.value = p;
     }
   } catch (e) {
     console.error("Browse proton error", e);
-    alert("Error browsing file: " + e.toString());
+    alert("Error browsing file: " + String(e));
   }
 };
 
 const browsePrefix = async () => {
   try {
     const p = await api.browseDirectory(prefixPath.value || "");
-    if (p && p.success === false) {
-      alert("Failed to browse directory: " + (p.error || "Unknown error"));
-    } else if (p) {
+    if (p) {
       prefixPath.value = p;
     }
   } catch (e) {
     console.error("Browse prefix error", e);
-    alert("Error browsing directory: " + e.toString());
+    alert("Error browsing directory: " + String(e));
   }
 };
 
@@ -109,7 +118,7 @@ const downloadProton = async () => {
       protonError.value = result?.error || "Failed to download Proton.";
     }
   } catch (e) {
-    protonError.value = e.toString();
+    protonError.value = String(e);
   } finally {
     downloadingProton.value = false;
   }
@@ -127,7 +136,7 @@ const installRtps = async () => {
       installingRtps.value = false;
     }
   } catch (e) {
-    rtpError.value = e.toString();
+    rtpError.value = String(e);
     installingRtps.value = false;
   }
 };
@@ -144,7 +153,7 @@ const installDeps = async () => {
       installingDeps.value = false;
     }
   } catch (e) {
-    installError.value = e.toString();
+    installError.value = String(e);
     installingDeps.value = false;
   }
 };
@@ -169,12 +178,12 @@ const downloadCe = async () => {
     const result = await api.downloadCheatEngine();
     if (result && result.success) {
       ceInstalled.value = true;
-      cePath.value = result.path;
+      cePath.value = result.path || "";
     } else {
       ceError.value = result?.error || "Unknown error occurred";
     }
   } catch (e) {
-    ceError.value = e.toString();
+    ceError.value = String(e);
   } finally {
     installingCe.value = false;
   }
@@ -213,7 +222,7 @@ const openLoginSession = async () => {
     }
   } catch (e) {
     sessionMessage.value = "";
-    sessionError.value = e.toString();
+    sessionError.value = String(e);
   } finally {
     openingLoginSession.value = false;
   }
@@ -233,7 +242,7 @@ const resetSession = async () => {
       sessionError.value = result?.error || "Failed to reset scraper session.";
     }
   } catch (e) {
-    sessionError.value = e.toString();
+    sessionError.value = String(e);
   } finally {
     resettingSession.value = false;
   }
@@ -267,7 +276,7 @@ const saveSettings = async () => {
     }
   } catch (e) {
     console.error(e);
-    alert("Error saving settings: " + e.toString());
+    alert("Error saving settings: " + String(e));
   } finally {
     saving.value = false;
   }

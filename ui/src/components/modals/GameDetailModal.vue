@@ -1,12 +1,21 @@
-<script setup>
+<script setup lang="ts">
 import { ref, watch, computed } from "vue";
 import { api } from "../../services/api";
+import type { GameRecord, RunnerInfo, SaveLocation } from "../../services/api";
 
-const props = defineProps({
-  modelValue: Boolean,
-  game: Object,
-});
-const emit = defineEmits(["update:modelValue", "updated", "deleted", "launch"]);
+type PlayStatus = "Playing" | "Completed" | "On Hold" | "Plan to Play";
+
+const props = defineProps<{
+  modelValue: boolean;
+  game: GameRecord | null;
+}>();
+
+const emit = defineEmits<{
+  "update:modelValue": [value: boolean];
+  updated: [];
+  deleted: [];
+  launch: [payload: GameRecord];
+}>();
 
 // Editable fields
 const title = ref("");
@@ -16,9 +25,9 @@ const version = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
 const status = ref("");
-const playStatus = ref("Plan to Play");
+const playStatus = ref<PlayStatus>("Plan to Play");
 const isFavorite = ref(false);
-const tags = ref([]);
+const tags = ref<string[]>([]);
 const engine = ref("");
 const newTag = ref("");
 const latestVersion = ref("");
@@ -28,7 +37,7 @@ const autoInjectCe = ref(false);
 const customPrefix = ref("");
 const protonVersion = ref("");
 const useCustomPrefix = ref(false);
-const availableRunners = ref([]);
+const availableRunners = ref<RunnerInfo[]>([]);
 const loadingRunners = ref(false);
 const runnersLoaded = ref(false);
 const ceInstalled = ref(false);
@@ -49,12 +58,18 @@ const ratingGameplay = ref(0);
 const saving = ref(false);
 const deleting = ref(false);
 
-const statuses = [
-  { value: 'Playing', label: '🎮 Playing' },
-  { value: 'Completed', label: '✅ Completed' },
-  { value: 'On Hold', label: '⏸️ On Hold' },
-  { value: 'Plan to Play', label: '🗓️ Plan to Play' }
+const statuses: Array<{ value: PlayStatus; label: string }> = [
+  { value: "Playing", label: "🎮 Playing" },
+  { value: "Completed", label: "✅ Completed" },
+  { value: "On Hold", label: "⏸️ On Hold" },
+  { value: "Plan to Play", label: "🗓️ Plan to Play" },
 ];
+
+const isPlayStatus = (value: string | undefined): value is PlayStatus =>
+  value === "Playing" ||
+  value === "Completed" ||
+  value === "On Hold" ||
+  value === "Plan to Play";
 
 const averagePersonalRating = computed(() => {
   const sum =
@@ -74,12 +89,12 @@ const hasUpdate = computed(() => {
   );
 });
 
-const lastSyncedId = ref(null);
+const lastSyncedId = ref<number | null>(null);
 
 watch(
-  () => [props.modelValue, props.game],
+  () => [props.modelValue, props.game] as const,
   ([isOpen, g]) => {
-    if (isOpen && g) {
+    if (isOpen && g && typeof g.id === "number") {
       if (g.id !== lastSyncedId.value) {
         lastSyncedId.value = g.id;
         title.value = g.title || "";
@@ -89,7 +104,9 @@ watch(
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
         status.value = g.status || "";
-        playStatus.value = g.play_status || "Plan to Play";
+        playStatus.value = isPlayStatus(g.play_status)
+          ? g.play_status
+          : "Plan to Play";
         isFavorite.value = !!g.is_favorite;
         engine.value = g.engine || "";
         runJapaneseLocale.value = g.run_japanese_locale ? true : false;
@@ -108,7 +125,9 @@ watch(
             .map((t) => t.trim())
             .filter(Boolean);
         } else if (Array.isArray(g.tags)) {
-          tags.value = [...g.tags];
+          tags.value = g.tags
+            .map((tag) => String(tag).trim())
+            .filter(Boolean);
         } else {
           tags.value = [];
         }
@@ -124,7 +143,7 @@ watch(
       lastSyncedId.value = null;
     }
   },
-  { immediate: true }
+  { immediate: true },
 );
 
 watch(
@@ -136,7 +155,7 @@ watch(
       loadingRunners.value = false;
       try {
         const ceCheck = await api.isCheatEngineInstalled();
-        ceInstalled.value = ceCheck?.installed || false;
+        ceInstalled.value = ceCheck.installed;
       } catch (e) {
         console.error("Failed to check cheat engine status", e);
       }
@@ -156,7 +175,7 @@ watch(
       if (res && res.success === false) {
         console.error("Failed to get runners:", res.error);
       } else if (res?.success) {
-        availableRunners.value = res.runners;
+        availableRunners.value = res.runners || [];
         runnersLoaded.value = true;
       }
     } catch (e) {
@@ -164,7 +183,7 @@ watch(
     } finally {
       loadingRunners.value = false;
     }
-  }
+  },
 );
 
 const close = () => {
@@ -174,28 +193,24 @@ const close = () => {
 const browseExe = async () => {
   try {
     const p = await api.browseFile(exePath.value || "");
-    if (p && p.success === false) {
-      alert("Failed to browse file: " + (p.error || "Unknown error"));
-    } else if (p) {
+    if (p) {
       exePath.value = p;
     }
   } catch (e) {
     console.error("Failed to browse file", e);
-    alert("Error browsing file: " + e.toString());
+    alert("Error browsing file: " + String(e));
   }
 };
 
 const browseCustomPrefix = async () => {
   try {
     const p = await api.browseDirectory(customPrefix.value || "");
-    if (p && p.success === false) {
-      alert("Failed to browse directory: " + (p.error || "Unknown error"));
-    } else if (p) {
+    if (p) {
       customPrefix.value = p;
     }
   } catch (e) {
     console.error("Failed to browse directory", e);
-    alert("Error browsing directory: " + e.toString());
+    alert("Error browsing directory: " + String(e));
   }
 };
 
@@ -209,12 +224,12 @@ const installDepsToPrefix = async () => {
     }
   } catch (e) {
     console.error("Failed to install deps", e);
-    alert("Error installing dependencies: " + e.toString());
+    alert("Error installing dependencies: " + String(e));
   }
 };
 
 const save = async () => {
-  if (!props.game) return;
+  if (!props.game || typeof props.game.id !== "number") return;
   saving.value = true;
   try {
     const res = await api.updateGame(props.game.id, {
@@ -248,7 +263,7 @@ const save = async () => {
     }
   } catch (e) {
     console.error("Failed to save game", e);
-    alert("Error saving game: " + e.toString());
+    alert("Error saving game: " + String(e));
   } finally {
     saving.value = false;
   }
@@ -257,6 +272,7 @@ const save = async () => {
 const deleteGame = async () => {
   if (
     !props.game ||
+    typeof props.game.id !== "number" ||
     !confirm("Are you sure you want to remove this game from your library?")
   )
     return;
@@ -271,7 +287,7 @@ const deleteGame = async () => {
     }
   } catch (e) {
     console.error("Failed to delete", e);
-    alert("Error deleting game: " + e.toString());
+    alert("Error deleting game: " + String(e));
   } finally {
     deleting.value = false;
   }
@@ -279,7 +295,7 @@ const deleteGame = async () => {
 
 const launchGame = () => {
   if (props.game) {
-    emit("launch", {
+    const payload: GameRecord = {
       ...props.game,
       title: title.value,
       exe_path: exePath.value,
@@ -288,7 +304,7 @@ const launchGame = () => {
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       play_status: playStatus.value,
-      is_favorite: isFavorite.value ? 1 : 0,
+      is_favorite: !!isFavorite.value,
       tags: tags.value.join(", "),
       engine: engine.value,
       run_japanese_locale: !!runJapaneseLocale.value,
@@ -296,11 +312,12 @@ const launchGame = () => {
       auto_inject_ce: !!autoInjectCe.value,
       custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
       proton_version: useCustomPrefix.value ? protonVersion.value : "",
-    });
+    };
+    emit("launch", payload);
   }
 };
 
-const saveResults = ref([]);
+const saveResults = ref<SaveLocation[]>([]);
 const searchingSaves = ref(false);
 const showSavePanel = ref(false);
 
@@ -316,12 +333,7 @@ const findSaves = async () => {
       useCustomPrefix.value ? customPrefix.value : "",
       useCustomPrefix.value ? protonVersion.value : ""
     );
-    if (results && results.success === false) {
-      alert("Failed to find saves: " + (results.error || "Unknown error"));
-      saveResults.value = [];
-    } else {
-      saveResults.value = results || [];
-    }
+    saveResults.value = results || [];
   } catch (e) {
     console.error("Failed to find saves", e);
     saveResults.value = [];
@@ -330,7 +342,7 @@ const findSaves = async () => {
   }
 };
 
-const openSaveFolder = async (path) => {
+const openSaveFolder = async (path: string) => {
   try {
     const res = await api.openFolder(path);
     if (res && res.success === false) {
@@ -338,7 +350,7 @@ const openSaveFolder = async (path) => {
     }
   } catch (e) {
     console.error("Failed to open folder", e);
-    alert("Error opening folder: " + e.toString());
+    alert("Error opening folder: " + String(e));
   }
 };
 
@@ -350,19 +362,21 @@ const addTag = () => {
   newTag.value = "";
 };
 
-const removeTag = (tag) => {
+const removeTag = (tag: string) => {
   tags.value = tags.value.filter((t) => t !== tag);
 };
 
-const formatPlaytime = (seconds) => {
+const formatPlaytime = (seconds: number | null | undefined): string => {
   if (!seconds) return "0.0 hrs";
   return (seconds / 3600).toFixed(1) + " hrs";
 };
 
-const formatLastPlayed = (dateString) => {
+const formatLastPlayed = (dateString: string | null | undefined): string => {
   if (!dateString) return "Never";
   return new Date(dateString).toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric'
+    year: "numeric",
+    month: "short",
+    day: "numeric",
   });
 };
 
@@ -375,7 +389,7 @@ const openInBrowser = async () => {
       }
     } catch (e) {
       console.error("Failed to open browser", e);
-      alert("Error opening browser: " + e.toString());
+      alert("Error opening browser: " + String(e));
     }
   }
 };

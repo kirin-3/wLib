@@ -17,7 +17,7 @@
 
 ---
 
-wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a beautiful Vue 3 frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates seamlessly by scraping F95Zone thread pages.
+wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates seamlessly by scraping F95Zone thread pages.
 
 ## 🐧 Why wLib?
 
@@ -156,7 +156,7 @@ git clone https://github.com/kirin-3/wLib.git
 cd wLib
 
 # Build the Vue frontend
-cd ui && npm install && npm run build && cd ..
+cd ui && npm install && npm run typecheck && npm run build && cd ..
 
 # Launch (auto-creates venv and installs Python deps)
 ./wlib.sh
@@ -179,6 +179,14 @@ DEV_MODE=1 python main.py
 ```
 
 This connects PyWebView natively to `http://localhost:5173` so you receive instant frontend updates without a separate rebuild step.
+
+Before submitting frontend changes, run:
+
+```bash
+cd ui
+npm run typecheck
+npm run build
+```
 
 > [!NOTE]
 > Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).

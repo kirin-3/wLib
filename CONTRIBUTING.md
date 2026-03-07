@@ -19,7 +19,7 @@ This guide provides instructions and workflows to help you set up your developme
 
 ## 🛠 Development Environment
 
-wLib consists of a Python 3 backend and a Vue 3 frontend. 
+wLib consists of a Python 3 backend and a Vue 3 + TypeScript frontend.
 
 ### Prerequisites
 
@@ -99,7 +99,8 @@ ruff check .
 ### Frontend Code
 ```bash
 cd ui
-npx prettier --write "src/**/*.{js,vue,css}"
+npx prettier --write "src/**/*.{ts,vue,css}"
+npm run typecheck # Run vue-tsc type checks
 npm run build # Ensure the production build succeeds
 ```
 
