@@ -697,9 +697,16 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.2"
+    assert chrome_manifest["version"] == "1.0.4"
     assert "scripts" not in chrome_manifest["background"]
+    assert (
+        "*://f95zone.to/sam/latest_alpha*"
+        in chrome_manifest["content_scripts"][0]["matches"]
+    )
     assert "checkGameInWLib" in chrome_content
+    assert "resource-tile_link" in chrome_content
+    assert "wlib-library-badge" in chrome_content
+    assert "hashchange" in chrome_content
     assert (firefox_dir / "wLib.xpi").is_file()
 
 
@@ -716,7 +723,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.2",
+                "version": "1.0.4",
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -741,7 +748,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result["updated"] is False
     assert result["reason"] == "up-to-date"
-    assert result["installed_version"] == "1.0.2"
+    assert result["installed_version"] == "1.0.4"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 
@@ -756,15 +763,15 @@ def test_startup_extension_sync_status_defaults_and_updates():
         {
             "success": True,
             "updated": True,
-            "installed_version": "1.0.2",
-            "bundled_version": "1.0.2",
+            "installed_version": "1.0.4",
+            "bundled_version": "1.0.4",
             "reason": "version-changed",
         }
     )
 
     updated = api.get_startup_extension_sync_status()
     assert updated["updated"] is True
-    assert updated["installed_version"] == "1.0.2"
+    assert updated["installed_version"] == "1.0.4"
     assert updated["reason"] == "version-changed"
 
 

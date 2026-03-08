@@ -82,3 +82,31 @@
     text-align: center;
     margin-top: 2px;
 }
+
+.wlib-badge-host {
+    position: relative;
+    overflow: hidden;
+}
+
+.wlib-library-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, rgba(209, 82, 209, 0.9) 0%, rgba(90, 57, 104, 0.94) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #f8fafc;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.24), 0 0 14px rgba(209, 82, 209, 0.18);
+    backdrop-filter: blur(6px);
+    pointer-events: none;
+}
