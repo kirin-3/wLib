@@ -676,27 +676,27 @@ const openInBrowser = async () => {
             />
           </div>
 
-          <div class="col-span-2 grid gap-3 md:grid-cols-2">
+          <div class="col-span-2 grid gap-2 md:grid-cols-2">
             <div
-              class="rounded-lg p-3"
+              class="rounded-md px-3 py-2"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
-              <p class="text-[11px] uppercase tracking-[0.18em]" style="color: var(--text-muted)">
+              <p class="text-[10px] uppercase tracking-[0.14em]" style="color: var(--text-muted)">
                 Executable Modified
               </p>
-              <p class="mt-1 text-sm font-medium" style="color: var(--text-primary)">
+              <p class="mt-0.5 text-xs font-medium leading-tight" style="color: var(--text-primary)">
                 {{ executableModifiedDisplay }}
               </p>
             </div>
 
             <div
-              class="rounded-lg p-3"
+              class="rounded-md px-3 py-2"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
-              <p class="text-[11px] uppercase tracking-[0.18em]" style="color: var(--text-muted)">
+              <p class="text-[10px] uppercase tracking-[0.14em]" style="color: var(--text-muted)">
                 Thread Main Post Edited
               </p>
-              <p class="mt-1 text-sm font-medium" style="color: var(--text-primary)">
+              <p class="mt-0.5 text-xs font-medium leading-tight" style="color: var(--text-primary)">
                 {{ threadMainPostEditedDisplay }}
               </p>
             </div>
