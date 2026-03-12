@@ -39,7 +39,9 @@ pyinstaller --noconfirm --onedir \
     --add-data "ui/dist:ui/dist" \
     --add-data "extension:extension" \
     --add-data "wlib.png:." \
+    --collect-data "certifi" \
     --hidden-import "core" \
+    --hidden-import "certifi" \
     --hidden-import "playwright" \
     --hidden-import "playwright.sync_api" \
     --hidden-import "pywebview" \
@@ -70,6 +72,12 @@ find dist/wlib-bin -name "libgio-2.0.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgthread-2.0.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgmodule-2.0.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgirepository-2.0.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libpcre2*.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libreadline*.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libhistory*.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libncurses*.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libtinfo*.so*" -exec rm -f {} + || true
+find dist/wlib-bin -name "libedit*.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgtk-3.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgdk-3.so*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgdk_pixbuf-2.0.so*" -exec rm -f {} + || true
@@ -149,6 +157,8 @@ log_launch_context() {
         printf 'qtwebengine_flags=%s\n' "${QTWEBENGINE_CHROMIUM_FLAGS:-<unset>}"
         printf 'ld_library_path=%s\n' "${LD_LIBRARY_PATH:-<unset>}"
         printf 'ld_library_path_orig=%s\n' "${LD_LIBRARY_PATH_ORIG:-<unset>}"
+        printf 'ssl_cert_file=%s\n' "${SSL_CERT_FILE:-<unset>}"
+        printf 'requests_ca_bundle=%s\n' "${REQUESTS_CA_BUNDLE:-<unset>}"
     } >> "$LOG_FILE"
 }
 
@@ -225,6 +235,35 @@ fi
 
 # Ensure the bundled Qt does not shadow the host's native GPU libraries.
 restore_host_library_path
+
+configure_ssl_certificates() {
+    local bundled_certifi="${SELF_DIR}/usr/bin/_internal/certifi/cacert.pem"
+    local host_certificates="/etc/ssl/certs/ca-certificates.crt"
+    local host_cert_pem="/etc/ssl/cert.pem"
+    local configured_cert_file="${SSL_CERT_FILE:-}"
+
+    if [ -n "$configured_cert_file" ] && [ ! -f "$configured_cert_file" ]; then
+        unset SSL_CERT_FILE
+        configured_cert_file=""
+    fi
+
+    if [ -z "$configured_cert_file" ]; then
+        if [ -f "$bundled_certifi" ]; then
+            export SSL_CERT_FILE="$bundled_certifi"
+        elif [ -f "$host_certificates" ]; then
+            export SSL_CERT_FILE="$host_certificates"
+        elif [ -f "$host_cert_pem" ]; then
+            export SSL_CERT_FILE="$host_cert_pem"
+        fi
+    fi
+
+    if [ -n "${SSL_CERT_FILE:-}" ]; then
+        export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-$SSL_CERT_FILE}"
+        export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$SSL_CERT_FILE}"
+    fi
+}
+
+configure_ssl_certificates
 export WLIB_APPIMAGE_LAUNCH_LOG="$LOG_FILE"
 log_launch_context
 

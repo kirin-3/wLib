@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
+import importlib
 import json
+import os
+import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import importlib
 from typing import TYPE_CHECKING, Protocol, cast, override
 
 from core.api import Api
@@ -74,6 +75,62 @@ def configure_playwright_browsers_path() -> str:
     playwright_browsers_path = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
     return playwright_browsers_path
+
+
+def configure_ssl_certificates() -> str | None:
+    runtime_dir = os.path.dirname(os.path.abspath(sys.executable))
+    bundled_certifi_path = os.path.join(
+        runtime_dir, "_internal", "certifi", "cacert.pem"
+    )
+    existing_cert_file = (os.environ.get("SSL_CERT_FILE") or "").strip()
+    existing_requests_bundle = (os.environ.get("REQUESTS_CA_BUNDLE") or "").strip()
+    selected_cert_file: str | None = None
+
+    if existing_cert_file and os.path.isfile(existing_cert_file):
+        selected_cert_file = existing_cert_file
+    else:
+        if existing_cert_file:
+            print(f"[wLib] Ignoring missing SSL_CERT_FILE: {existing_cert_file}")
+
+        certifi_path = ""
+        try:
+            certifi_module = importlib.import_module("certifi")
+            where_fn = getattr(certifi_module, "where", None)
+            if callable(where_fn):
+                certifi_candidate = where_fn()
+                if isinstance(certifi_candidate, str):
+                    certifi_path = certifi_candidate
+        except Exception as e:
+            print(f"[wLib] Failed to resolve certifi CA bundle: {e}")
+
+        candidate_paths = [
+            existing_requests_bundle,
+            bundled_certifi_path,
+            certifi_path,
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/cert.pem",
+        ]
+        for candidate in candidate_paths:
+            if candidate and os.path.isfile(candidate):
+                selected_cert_file = candidate
+                break
+
+    if selected_cert_file:
+        os.environ["SSL_CERT_FILE"] = selected_cert_file
+        os.environ["REQUESTS_CA_BUNDLE"] = selected_cert_file
+        os.environ["CURL_CA_BUNDLE"] = selected_cert_file
+
+    default_verify_paths = ssl.get_default_verify_paths()
+    ssl_summary = (
+        "[wLib] SSL certificates: "
+        + f"ssl_cert_file={os.environ.get('SSL_CERT_FILE') or '<unset>'}, "
+        + f"requests_ca_bundle={os.environ.get('REQUESTS_CA_BUNDLE') or '<unset>'}, "
+        + f"default_cafile={default_verify_paths.cafile or '<unset>'}, "
+        + f"default_capath={default_verify_paths.capath or '<unset>'}"
+    )
+    print(ssl_summary)
+
+    return selected_cert_file
 
 
 def configure_qt_runtime_environment() -> dict[str, str]:
@@ -414,6 +471,7 @@ def ensure_playwright_browsers_async() -> None:
 
 
 def main() -> None:
+    _ = configure_ssl_certificates()
     _ = configure_playwright_browsers_path()
 
     if "--install-playwright-if-needed" in sys.argv:

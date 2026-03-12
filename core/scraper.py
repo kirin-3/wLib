@@ -97,6 +97,13 @@ class Scraper:
             "~/.local/share/wLib/browser_session"
         )
 
+    def _log_scrape_stage(self, url: str, stage: str, detail: str = "") -> None:
+        target_url = str(url or "").strip() or "<unknown-url>"
+        message = f"[wLib] Scraper[{stage}] {target_url}"
+        if detail:
+            message += f" - {detail}"
+        print(message)
+
     def _build_browser_launch_env(self) -> dict[str, str]:
         clean_env = os.environ.copy()
 
@@ -528,23 +535,29 @@ class Scraper:
         page: PageLike | None = None
         playwright_instance: PlaywrightInstanceLike | None = None
 
+        self._log_scrape_stage(target_url, "start", f"headless={headless}")
         try:
             sync_playwright = self._load_sync_playwright()
         except ModuleNotFoundError:
+            self._log_scrape_stage(target_url, "dependency-missing")
             return self._error("dependency_missing", self._dependency_missing_message())
         try:
             playwright_instance = sync_playwright().start()
             context = self._launch_persistent_browser_context(
                 playwright_instance, headless=headless
             )
+            self._log_scrape_stage(target_url, "browser-ready")
             page = context.new_page()
             try:
+                self._log_scrape_stage(target_url, "navigate")
                 page.goto(
                     target_url,
                     wait_until="domcontentloaded",
                     timeout=timeout_ms,
                 )
+                self._log_scrape_stage(target_url, "navigated")
             except Exception:
+                self._log_scrape_stage(target_url, "navigation-timeout")
                 return self._error(
                     "navigation_timeout",
                     "Timed out while loading thread page",
@@ -552,18 +565,31 @@ class Scraper:
 
             try:
                 page.wait_for_selector("h1.p-title-value", timeout=timeout_ms)
+                self._log_scrape_stage(target_url, "title-ready")
             except Exception:
                 page_issue = self._classify_page_issue(page)
                 if page_issue:
+                    self._log_scrape_stage(
+                        target_url,
+                        "page-issue",
+                        str(page_issue.get("code") or "unknown"),
+                    )
                     return self._error(page_issue["code"], page_issue["error"])
+                self._log_scrape_stage(target_url, "title-missing")
                 return self._error(
                     "title_not_found",
                     "Could not find thread title on page",
                 )
 
             title, version = self._extract_version_from_page(page)
+            self._log_scrape_stage(
+                target_url,
+                "version-extracted",
+                f"title={title!r}, version={version!r}",
+            )
 
             if self._is_non_actionable_version(version):
+                self._log_scrape_stage(target_url, "version-non-actionable")
                 return self._error(
                     "extract_failed",
                     "Could not extract a usable version from thread",
@@ -575,9 +601,12 @@ class Scraper:
                 "version": str(version).strip(),
             }
             if include_metadata:
+                self._log_scrape_stage(target_url, "metadata-extract")
                 result.update(self._extract_metadata_from_page(page))
+            self._log_scrape_stage(target_url, "done", "success")
             return result
         except Exception as e:
+            self._log_scrape_stage(target_url, "error", str(e))
             return self._error("scraper_error", str(e))
         finally:
             try:
@@ -618,9 +647,11 @@ class Scraper:
         page: PageLike | None = None
         playwright_instance: PlaywrightInstanceLike | None = None
 
+        self._log_scrape_stage(target_url, "metadata-start", f"headless={headless}")
         try:
             sync_playwright = self._load_sync_playwright()
         except ModuleNotFoundError:
+            self._log_scrape_stage(target_url, "dependency-missing")
             return self._error("dependency_missing", self._dependency_missing_message())
 
         try:
@@ -628,14 +659,18 @@ class Scraper:
             context = self._launch_persistent_browser_context(
                 playwright_instance, headless=headless
             )
+            self._log_scrape_stage(target_url, "browser-ready")
             page = context.new_page()
             try:
+                self._log_scrape_stage(target_url, "navigate")
                 page.goto(
                     target_url,
                     wait_until="domcontentloaded",
                     timeout=timeout_ms,
                 )
+                self._log_scrape_stage(target_url, "navigated")
             except Exception:
+                self._log_scrape_stage(target_url, "navigation-timeout")
                 return self._error(
                     "navigation_timeout",
                     "Timed out while loading thread page",
@@ -643,18 +678,28 @@ class Scraper:
 
             try:
                 page.wait_for_selector("h1.p-title-value", timeout=timeout_ms)
+                self._log_scrape_stage(target_url, "title-ready")
             except Exception:
                 page_issue = self._classify_page_issue(page)
                 if page_issue:
+                    self._log_scrape_stage(
+                        target_url,
+                        "page-issue",
+                        str(page_issue.get("code") or "unknown"),
+                    )
                     return self._error(page_issue["code"], page_issue["error"])
+                self._log_scrape_stage(target_url, "title-missing")
                 return self._error(
                     "title_not_found",
                     "Could not find thread title on page",
                 )
 
+            self._log_scrape_stage(target_url, "metadata-extract")
             metadata = self._extract_metadata_from_page(page)
+            self._log_scrape_stage(target_url, "done", "metadata-success")
             return {"success": True, **metadata}
         except Exception as e:
+            self._log_scrape_stage(target_url, "error", str(e))
             return self._error("scraper_error", str(e))
         finally:
             try:
@@ -709,11 +754,17 @@ class Scraper:
         try:
             with sync_playwright() as p:
                 context = self._launch_persistent_browser_context(p, headless=headless)
+                self._log_scrape_stage(
+                    "<batch>",
+                    "batch-start",
+                    f"count={len(urls)}, headless={headless}, include_metadata={include_metadata}",
+                )
 
                 for i, url in enumerate(urls):
                     page = context.new_page()
                     try:
                         if not self._is_valid_thread_url(url):
+                            self._log_scrape_stage(url, "invalid-url")
                             result = self._error("invalid_url", "Invalid thread URL")
                             results[url] = result
                             page.close()
@@ -723,12 +774,17 @@ class Scraper:
                             continue
 
                         try:
+                            self._log_scrape_stage(
+                                url, "batch-navigate", f"index={i + 1}/{len(urls)}"
+                            )
                             page.goto(
                                 url.strip(),
                                 wait_until="domcontentloaded",
                                 timeout=60000,
                             )
+                            self._log_scrape_stage(url, "batch-navigated")
                         except Exception:
+                            self._log_scrape_stage(url, "navigation-timeout")
                             result = self._error(
                                 "navigation_timeout",
                                 "Timed out while loading thread page",
@@ -745,13 +801,20 @@ class Scraper:
 
                         try:
                             page.wait_for_selector("h1.p-title-value", timeout=60000)
+                            self._log_scrape_stage(url, "title-ready")
                         except Exception:
                             page_issue = self._classify_page_issue(page)
                             if page_issue:
+                                self._log_scrape_stage(
+                                    url,
+                                    "page-issue",
+                                    str(page_issue.get("code") or "unknown"),
+                                )
                                 result = self._error(
                                     page_issue["code"], page_issue["error"]
                                 )
                             else:
+                                self._log_scrape_stage(url, "title-missing")
                                 result = self._error(
                                     "title_not_found",
                                     "Could not find thread title on page",
@@ -767,8 +830,14 @@ class Scraper:
                             continue
 
                         title, version = self._extract_version_from_page(page)
+                        self._log_scrape_stage(
+                            url,
+                            "version-extracted",
+                            f"title={title!r}, version={version!r}",
+                        )
 
                         if self._is_non_actionable_version(version):
+                            self._log_scrape_stage(url, "version-non-actionable")
                             result = self._error(
                                 "extract_failed",
                                 "Could not extract a usable version from thread",
@@ -783,8 +852,11 @@ class Scraper:
                                 },
                             )
                             if include_metadata:
+                                self._log_scrape_stage(url, "metadata-extract")
                                 result.update(self._extract_metadata_from_page(page))
+                            self._log_scrape_stage(url, "done", "success")
                     except Exception as e:
+                        self._log_scrape_stage(url, "error", str(e))
                         result = self._error("scraper_error", str(e))
 
                     results[url] = result
