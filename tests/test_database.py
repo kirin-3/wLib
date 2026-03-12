@@ -2,6 +2,7 @@
 import pytest
 import os
 from core.database import (
+    DEFAULT_PLAY_STATUS,
     init_db,
     get_connection,
     add_game,
@@ -57,6 +58,7 @@ def test_add_and_get_game():
     assert games[0]["title"] == "Test Game"
     assert games[0]["exe_path"] == "/tmp/game.exe"
     assert games[0]["tags"] == "visual novel, rpg"
+    assert games[0]["play_status"] == DEFAULT_PLAY_STATUS
 
 
 def test_add_game_with_version():
@@ -79,6 +81,7 @@ def test_add_game_with_version():
 def test_update_game_fields():
     """Test updating arbitrary fields of a game."""
     game_id = add_game(title="Test Game 2", exe_path="/tmp/game2.exe")
+    assert game_id is not None
 
     update_game(
         game_id, {"title": "Updated Game 2", "rating": "9/10", "run_wayland": True}
@@ -94,6 +97,7 @@ def test_update_game_fields():
 def test_update_invalid_field():
     """Test updating a non-existent field is ignored safely."""
     game_id = add_game(title="Test Game 3", exe_path="/tmp/game3.exe")
+    assert game_id is not None
 
     # "invalid_column" is not in allowed fields
     update_game(game_id, {"title": "Changed Title", "invalid_column": "should ignore"})
@@ -120,3 +124,54 @@ def test_find_game_by_f95_url_matches_equivalent_thread_variants():
         match = find_game_by_f95_url(lookup_url)
         assert match is not None
         assert match["id"] == game_id
+
+
+def test_init_db_recovers_legacy_statuses_and_preserves_existing_plan_to_play():
+    waiting_game_id = add_game(title="Waiting", exe_path="/tmp/waiting.exe")
+    abandoned_game_id = add_game(title="Abandoned", exe_path="/tmp/abandoned.exe")
+    planned_game_id = add_game(title="Planned", exe_path="/tmp/planned.exe")
+    missing_game_id = add_game(title="Missing", exe_path="/tmp/missing.exe")
+    assert waiting_game_id is not None
+    assert abandoned_game_id is not None
+    assert planned_game_id is not None
+    assert missing_game_id is not None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET play_status = ?, status = ? WHERE id = ?",
+        ("On Hold", "waiting_update", waiting_game_id),
+    )
+    cursor.execute(
+        "UPDATE games SET play_status = ?, status = ? WHERE id = ?",
+        ("On Hold", "abandoned", abandoned_game_id),
+    )
+    cursor.execute(
+        "UPDATE games SET play_status = ?, status = ? WHERE id = ?",
+        ("Plan to Play", "", planned_game_id),
+    )
+    cursor.execute(
+        "UPDATE games SET play_status = ?, status = ? WHERE id = ?",
+        ("", "", missing_game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+
+    games_by_id = {game["id"]: game for game in get_all_games()}
+    assert games_by_id[waiting_game_id]["play_status"] == "Waiting For Update"
+    assert games_by_id[abandoned_game_id]["play_status"] == "Abandoned"
+    assert games_by_id[planned_game_id]["play_status"] == "Plan to Play"
+    assert games_by_id[missing_game_id]["play_status"] == DEFAULT_PLAY_STATUS
+
+
+def test_update_game_normalizes_legacy_play_status_values():
+    game_id = add_game(title="Legacy Update", exe_path="/tmp/legacy-update.exe")
+    assert game_id is not None
+
+    update_game(game_id, {"play_status": "waiting_update"})
+
+    games = get_all_games()
+    game = next(game for game in games if game["id"] == game_id)
+    assert game["play_status"] == "Waiting For Update"

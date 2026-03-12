@@ -9,7 +9,7 @@ Upon startup in `core/database.py`, the engine executes `PRAGMA journal_mode=WAL
 
 ## Schema Versioning
 wLib avoids heavyweight migration libraries like Alembic in favor of a lightweight auto-patching approach. 
-The `init_db()` function programmatically inspects `PRAGMA table_info(games)` during boot. If the application updates require new columns, `init_db` automatically executes `ALTER TABLE` statements conditionally to bring the schema up to date.
+The `init_db()` function programmatically inspects `PRAGMA table_info(games)` during boot. If the application updates require new columns, `init_db` automatically executes `ALTER TABLE` statements conditionally to bring the schema up to date. It also performs additive data normalization for evolved fields such as `play_status`, allowing older stored values to be mapped into the current canonical status set during startup.
 
 ## Tables & Structures
 
@@ -44,7 +44,7 @@ Stores the library records and their associated configuration flags.
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
 | `status` | `TEXT` | Legacy status field (migrated to `play_status`). |
-| `play_status` | `TEXT` | User-defined status (`Plan to Play`, `Playing`, `Completed`, `On Hold`, `Dropped`). |
+| `play_status` | `TEXT` | User-defined status (`Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`). New games default to `Not Started`; older legacy values are normalized during startup. |
 | `is_favorite` | `BOOLEAN` | Favorite flag for library filtering. |
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |

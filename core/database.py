@@ -13,6 +13,91 @@ DATA_DIR = os.path.expanduser("~/.local/share/wLib")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
 
+DEFAULT_PLAY_STATUS = "Not Started"
+CANONICAL_PLAY_STATUSES = (
+    DEFAULT_PLAY_STATUS,
+    "Plan to Play",
+    "Playing",
+    "Waiting For Update",
+    "On Hold",
+    "Completed",
+    "Abandoned",
+)
+
+_CANONICAL_PLAY_STATUS_MAP = {
+    status.lower(): status for status in CANONICAL_PLAY_STATUSES
+}
+_LEGACY_PLAY_STATUS_MAP = {
+    "completed": "Completed",
+    "in_progress": "Playing",
+    "replaying": "Playing",
+    "waiting_update": "Waiting For Update",
+    "abandoned": "Abandoned",
+}
+_LEGACY_RECOVERABLE_PLAY_STATUSES = {
+    "",
+    DEFAULT_PLAY_STATUS.lower(),
+    "on hold",
+    "waiting_update",
+    "abandoned",
+}
+
+
+def _normalize_status_key(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def normalize_play_status(
+    play_status: object, legacy_status: object | None = None
+) -> str:
+    normalized_play_status = _normalize_status_key(play_status)
+    normalized_legacy_status = _normalize_status_key(legacy_status)
+
+    recovered_status = _LEGACY_PLAY_STATUS_MAP.get(normalized_legacy_status)
+    if (
+        recovered_status is not None
+        and normalized_play_status in _LEGACY_RECOVERABLE_PLAY_STATUSES
+    ):
+        return recovered_status
+
+    canonical_status = _CANONICAL_PLAY_STATUS_MAP.get(normalized_play_status)
+    if canonical_status is not None:
+        return canonical_status
+
+    legacy_status_value = _LEGACY_PLAY_STATUS_MAP.get(normalized_play_status)
+    if legacy_status_value is not None:
+        return legacy_status_value
+
+    legacy_fallback = _LEGACY_PLAY_STATUS_MAP.get(normalized_legacy_status)
+    if legacy_fallback is not None:
+        return legacy_fallback
+
+    return DEFAULT_PLAY_STATUS
+
+
+def _normalize_game_play_statuses(
+    cursor: sqlite3.Cursor, existing_columns: set[str]
+) -> None:
+    select_columns = ["id", "play_status"]
+    has_legacy_status = "status" in existing_columns
+    if has_legacy_status:
+        select_columns.append("status")
+
+    _ = cursor.execute(f"SELECT {', '.join(select_columns)} FROM games")
+    rows = cast(list[sqlite3.Row], cursor.fetchall())
+
+    for row in rows:
+        current_play_status = cast(object, row["play_status"])
+        legacy_status = (
+            cast(object | None, row["status"]) if has_legacy_status else None
+        )
+        normalized_status = normalize_play_status(current_play_status, legacy_status)
+        if normalized_status != current_play_status:
+            _ = cursor.execute(
+                "UPDATE games SET play_status = ? WHERE id = ?",
+                (normalized_status, row["id"]),
+            )
+
 
 def _find_matching_game_row(
     cursor: sqlite3.Cursor, url: object, exclude_id: int | None = None
@@ -56,6 +141,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     conn = get_connection()
+    conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
 
@@ -132,7 +218,7 @@ def init_db() -> None:
             ("playtime_seconds", "INTEGER DEFAULT 0"),
             ("last_played", "TIMESTAMP"),
             ("date_added", "TIMESTAMP"),
-            ("play_status", "TEXT DEFAULT 'Plan to Play'"),
+            ("play_status", f"TEXT DEFAULT '{DEFAULT_PLAY_STATUS}'"),
             ("is_favorite", "BOOLEAN DEFAULT 0"),
             ("thread_main_post_last_edit_at", "TIMESTAMP"),
             ("thread_main_post_checked_at", "TIMESTAMP"),
@@ -153,20 +239,7 @@ def init_db() -> None:
                 "[wLib] Warning: duplicate f95_url values exist; unique index not applied"
             )
 
-        # Migrate legacy status to play_status
-        if "status" in existing_columns and "play_status" not in existing_columns:
-            _ = cursor.execute(
-                "UPDATE games SET play_status = 'Completed' WHERE status = 'completed'"
-            )
-            _ = cursor.execute(
-                "UPDATE games SET play_status = 'Playing' WHERE status IN ('in_progress', 'replaying')"
-            )
-            _ = cursor.execute(
-                "UPDATE games SET play_status = 'On Hold' WHERE status IN ('waiting_update', 'abandoned')"
-            )
-            _ = cursor.execute(
-                "UPDATE games SET play_status = 'Plan to Play' WHERE status = '' OR status IS NULL"
-            )
+        _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
 
         conn.commit()
     finally:
@@ -208,7 +281,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added, play_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -225,6 +298,7 @@ def add_game(
                 custom_prefix,
                 proton_version,
                 now_iso,
+                DEFAULT_PLAY_STATUS,
             ),
         )
         game_id = cursor.lastrowid
@@ -298,6 +372,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
+
+    if "play_status" in safe_fields:
+        safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row

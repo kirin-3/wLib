@@ -16,8 +16,12 @@ import {
 } from "@tabler/icons-vue";
 import { api } from "../../services/api";
 import type { GameRecord, RunnerInfo, SaveLocation } from "../../services/api";
-
-type PlayStatus = "Playing" | "Completed" | "On Hold" | "Plan to Play";
+import {
+  DEFAULT_PLAY_STATUS,
+  PLAY_STATUS_OPTIONS,
+  normalizePlayStatus,
+  type PlayStatus,
+} from "../../utils/playStatus";
 
 type UpdateCheckState = {
   running: boolean;
@@ -83,7 +87,7 @@ const version = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
 const status = ref("");
-const playStatus = ref<PlayStatus>("Plan to Play");
+const playStatus = ref<PlayStatus>(DEFAULT_PLAY_STATUS);
 const isFavorite = ref(false);
 const tags = ref<string[]>([]);
 const engine = ref<EngineOption>("Others");
@@ -122,18 +126,7 @@ const saving = ref(false);
 const deleting = ref(false);
 const engineDropdownRef = ref<HTMLElement | null>(null);
 
-const statuses: Array<{ value: PlayStatus; label: string }> = [
-  { value: "Playing", label: "🎮 Playing" },
-  { value: "Completed", label: "✅ Completed" },
-  { value: "On Hold", label: "⏸️ On Hold" },
-  { value: "Plan to Play", label: "🗓️ Plan to Play" },
-];
-
-const isPlayStatus = (value: string | undefined): value is PlayStatus =>
-  value === "Playing" ||
-  value === "Completed" ||
-  value === "On Hold" ||
-  value === "Plan to Play";
+const statuses: Array<{ value: PlayStatus; label: string }> = PLAY_STATUS_OPTIONS;
 
 const averagePersonalRating = computed(() => {
   const sum =
@@ -180,15 +173,22 @@ const statusButtonStyle = (value: PlayStatus) => {
   }
 
   switch (value) {
+    case "Not Started":
+      return "background: rgba(107, 114, 128, 0.16); border: 1px solid rgba(156, 163, 175, 0.28); color: #d1d5db";
+    case "Plan to Play":
+      return "background: rgba(120, 113, 46, 0.18); border: 1px solid rgba(202, 138, 4, 0.28); color: #fcd34d";
     case "Playing":
       return "background: rgba(234, 179, 8, 0.16); border: 1px solid rgba(250, 204, 21, 0.3); color: #facc15";
+    case "Waiting For Update":
+      return "background: rgba(59, 130, 246, 0.16); border: 1px solid rgba(96, 165, 250, 0.28); color: #93c5fd";
+    case "Abandoned":
+      return "background: rgba(239, 68, 68, 0.16); border: 1px solid rgba(248, 113, 113, 0.28); color: #fca5a5";
     case "Completed":
       return "background: rgba(47, 106, 73, 0.18); border: 1px solid rgba(74, 222, 128, 0.28); color: #86efac";
     case "On Hold":
       return "background: rgba(180, 83, 9, 0.18); border: 1px solid rgba(251, 146, 60, 0.3); color: #fdba74";
-    case "Plan to Play":
     default:
-      return "background: rgba(120, 113, 46, 0.18); border: 1px solid rgba(202, 138, 4, 0.28); color: #fcd34d";
+      return "background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)";
   }
 };
 
@@ -253,9 +253,7 @@ watch(
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
         status.value = g.status || "";
-        playStatus.value = isPlayStatus(g.play_status)
-          ? g.play_status
-          : "Plan to Play";
+        playStatus.value = normalizePlayStatus(g.play_status, g.status);
         isFavorite.value = !!g.is_favorite;
         engine.value = normalizeEngine(g.engine);
         runJapaneseLocale.value = g.run_japanese_locale ? true : false;
@@ -666,13 +664,28 @@ const openInBrowser = async () => {
     <div
       class="modal-content relative flex max-h-[90vh] w-full max-w-[49rem] flex-col overflow-hidden rounded-xl"
     >
-      <button
-        @click="close"
-        class="absolute right-4 top-4 z-10 rounded-md p-1.5 transition-colors"
-        style="color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border)"
-      >
-        <IconX class="w-5 h-5" />
-      </button>
+      <div class="absolute right-4 top-4 z-10 flex items-center gap-2">
+        <button
+          @click="isFavorite = !isFavorite"
+          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+          :style="
+            isFavorite
+              ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
+              : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
+          "
+        >
+          <IconStarFilled class="w-4 h-4" :style="isFavorite ? '' : 'opacity: 0.7'" />
+          {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
+        </button>
+
+        <button
+          @click="close"
+          class="rounded-md px-3 py-1.5 inline-flex items-center justify-center transition-colors"
+          style="color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border)"
+        >
+          <IconX class="w-4 h-4" />
+        </button>
+      </div>
 
       <div class="modal-scroll-body overflow-y-auto p-6 pt-14 space-y-6 flex-1">
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -692,7 +705,7 @@ const openInBrowser = async () => {
           </div>
         </div>
 
-        <div class="status-strip flex flex-wrap items-center gap-3">
+        <div class="status-strip flex flex-wrap items-center gap-3 pr-36 sm:pr-44">
           <div class="flex flex-wrap gap-2">
             <button
               v-for="s in statuses"
@@ -704,19 +717,6 @@ const openInBrowser = async () => {
               {{ s.label }}
             </button>
           </div>
-          
-          <button
-            @click="isFavorite = !isFavorite"
-            class="ml-auto flex items-center gap-1.5 rounded-md px-4 py-1.5 text-xs font-medium transition-colors"
-            :style="
-              isFavorite
-                ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
-                : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
-            "
-          >
-            <IconStarFilled class="w-4 h-4" :style="isFavorite ? '' : 'opacity: 0.7'" />
-            {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
-          </button>
         </div>
 
         <div class="grid grid-cols-2 gap-4">

@@ -6,6 +6,7 @@ import {
   LEGACY_FILTERS_PANE_STORAGE_KEY,
   LEGACY_FILTER_SECTIONS_STORAGE_KEY,
   LEGACY_LAYOUT_MODE_STORAGE_KEY,
+  LIBRARY_PLAY_STATUSES,
   LIBRARY_VIEW_STATE_STORAGE_KEY,
   clearLegacyLibraryViewState,
   normalizeLibraryViewState,
@@ -122,4 +123,12 @@ test("readLibraryViewState prefers current blob and prunes unsupported tags", ()
   assert.equal(restored.state.filterCollection, "Favorites");
   assert.deepEqual(restored.state.filterStatuses, ["Completed"]);
   assert.deepEqual(restored.state.filterTags, ["keep"]);
+});
+
+test("normalizeLibraryViewState preserves the expanded supported status set", () => {
+  const state = normalizeLibraryViewState({
+    filterStatuses: [...LIBRARY_PLAY_STATUSES, "Unknown"],
+  });
+
+  assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES]);
 });

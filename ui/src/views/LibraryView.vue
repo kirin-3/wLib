@@ -19,10 +19,10 @@ import { api, onWebviewReady } from "../services/api";
 import type { GameRecord } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
+import { PLAY_STATUS_OPTIONS, normalizePlayStatus } from "../utils/playStatus";
 import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
-  LIBRARY_PLAY_STATUSES,
   clearLegacyLibraryViewState,
   normalizeLibraryViewState,
   readLibraryViewState,
@@ -145,12 +145,7 @@ const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
 };
 
-const allStatuses = [
-  { value: LIBRARY_PLAY_STATUSES[0], label: "🎮 Playing" },
-  { value: LIBRARY_PLAY_STATUSES[1], label: "✅ Completed" },
-  { value: LIBRARY_PLAY_STATUSES[2], label: "⏸️ On Hold" },
-  { value: LIBRARY_PLAY_STATUSES[3], label: "🗓️ Plan to Play" },
-];
+const allStatuses = PLAY_STATUS_OPTIONS;
 
 const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "title", label: "A-Z" },
@@ -273,7 +268,9 @@ const filteredGames = computed(() => {
   }
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
-      return filterStatuses.value.includes(g.play_status || "");
+      return filterStatuses.value.includes(
+        normalizePlayStatus(g.play_status, g.status),
+      );
     });
   }
   if (filterEngines.value.length) {
@@ -364,27 +361,10 @@ const formatPlaytime = (seconds: number | null | undefined): string => {
   return (seconds / 3600).toFixed(1) + " hrs";
 };
 
-const formatPlayStatus = (status: string | null | undefined): string => {
-  switch (status) {
-    case "Completed":
-    case "completed":
-      return "✅ Done";
-    case "Playing":
-    case "in_progress":
-      return "🎮 Playing";
-    case "replaying":
-      return "🔄 Replay";
-    case "On Hold":
-      return "⏸️ On Hold";
-    case "waiting_update":
-      return "⏳ Waiting";
-    case "abandoned":
-      return "🚫";
-    case "Plan to Play":
-    default:
-      return "Not Started";
-  }
-};
+const formatPlayStatus = (
+  status: string | null | undefined,
+  legacyStatus?: string | null | undefined,
+): string => normalizePlayStatus(status, legacyStatus);
 
 const loadGames = async () => {
   try {
@@ -1184,7 +1164,7 @@ onUnmounted(() => {
               style="color: var(--text-muted)"
               :title="game.play_status"
             >
-              {{ formatPlayStatus(game.play_status) }}
+              {{ formatPlayStatus(game.play_status, game.status) }}
             </div>
             <button
               @click.stop="launchGameFast(game)"
@@ -1205,7 +1185,7 @@ onUnmounted(() => {
               style="color: var(--text-muted)"
               :title="game.play_status"
             >
-              {{ formatPlayStatus(game.play_status) }}
+              {{ formatPlayStatus(game.play_status, game.status) }}
             </div>
           </div>
         </div>

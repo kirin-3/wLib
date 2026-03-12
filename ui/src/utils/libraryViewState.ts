@@ -1,3 +1,5 @@
+import { PLAY_STATUSES } from "./playStatus.ts";
+
 export type LayoutMode = "grid" | "list" | "compact";
 export type SortDir = "asc" | "desc";
 export type SortField =
@@ -44,12 +46,7 @@ export const LEGACY_FILTERS_PANE_STORAGE_KEY = "wlib-filters-collapsed";
 export const LEGACY_FILTER_SECTIONS_STORAGE_KEY = "wlib-filter-sections";
 export const LIBRARY_VIEW_STATE_VERSION = 1;
 
-export const LIBRARY_PLAY_STATUSES = [
-  "Playing",
-  "Completed",
-  "On Hold",
-  "Plan to Play",
-] as const;
+export const LIBRARY_PLAY_STATUSES = PLAY_STATUSES;
 
 export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   collections: true,
