@@ -380,17 +380,16 @@ const browseCustomPrefix = async () => {
   }
 };
 
-const installDepsToPrefix = async () => {
-  if (!customPrefix.value && !protonVersion.value) return;
-  alert("Dependencies installation has started in the background. It may take several minutes to complete.");
+const installRtpsToPrefix = async () => {
+  alert("RTP installation has started in the background. It may take several minutes to complete.");
   try {
-    const res = await api.installRpgmakerDependencies(customPrefix.value, protonVersion.value);
+    const res = await api.installRpgmakerRtp(customPrefix.value, protonVersion.value);
     if (res && res.success === false) {
-      alert("Failed to install dependencies: " + (res.error || "Unknown error"));
+      alert("Failed to install RTPs: " + (res.error || "Unknown error"));
     }
   } catch (e) {
-    console.error("Failed to install deps", e);
-    alert("Error installing dependencies: " + String(e));
+    console.error("Failed to install RTPs", e);
+    alert("Error installing RTPs: " + String(e));
   }
 };
 
@@ -1019,11 +1018,11 @@ const openInBrowser = async () => {
 
               <div class="pt-2 border-t border-gray-700/50">
                 <button
-                  @click="installDepsToPrefix"
+                  @click="installRtpsToPrefix"
                   class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
                   style="background: rgba(90, 57, 104, 0.2); color: #b380cc; border: 1px solid rgba(90, 57, 104, 0.4);"
                 >
-                  Install RPGMaker DLLs to this Prefix
+                  Install RTPs to this Prefix
                 </button>
               </div>
             </div>

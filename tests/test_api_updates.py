@@ -1,7 +1,9 @@
 # pyright: reportMissingImports=false
 import json
 import os
+import ssl
 import zipfile
+from typing import cast
 from urllib.error import URLError
 from unittest.mock import MagicMock
 
@@ -63,7 +65,7 @@ def test_check_for_updates_propagates_structured_scraper_error(monkeypatch):
 
     assert result["success"] is False
     assert result["error_code"] == "blocked"
-    assert "Blocked" in result["error"]
+    assert "Blocked" in str(result.get("error", ""))
 
 
 def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
@@ -367,7 +369,7 @@ def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
     )
 
     result = api.update_game(
-        second["id"],
+        cast(int, second["id"]),
         {"f95_url": "https://f95zone.to/threads/renamed-slug.777/page-3#post-42"},
     )
 
@@ -895,7 +897,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     result = api.sync_extension_files()
 
     assert result["success"] is True
-    assert result["updated"] is True
+    assert result.get("updated") is True
 
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
@@ -949,9 +951,9 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     result = api.sync_extension_files()
 
     assert result["success"] is True
-    assert result["updated"] is False
-    assert result["reason"] == "up-to-date"
-    assert result["installed_version"] == "1.0.4"
+    assert result.get("updated") is False
+    assert result.get("reason") == "up-to-date"
+    assert result.get("installed_version") == "1.0.4"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 
@@ -960,7 +962,7 @@ def test_startup_extension_sync_status_defaults_and_updates():
 
     initial = api.get_startup_extension_sync_status()
     assert initial["success"] is True
-    assert initial["updated"] is False
+    assert initial.get("updated") is False
 
     api.set_startup_extension_sync_status(
         {
@@ -973,9 +975,9 @@ def test_startup_extension_sync_status_defaults_and_updates():
     )
 
     updated = api.get_startup_extension_sync_status()
-    assert updated["updated"] is True
-    assert updated["installed_version"] == "1.0.4"
-    assert updated["reason"] == "version-changed"
+    assert updated.get("updated") is True
+    assert updated.get("installed_version") == "1.0.4"
+    assert updated.get("reason") == "version-changed"
 
 
 def test_get_extension_service_status_reports_reachable(monkeypatch):
@@ -1022,4 +1024,257 @@ def test_get_extension_service_status_reports_unreachable(monkeypatch):
 
     assert result["success"] is True
     assert result["reachable"] is False
-    assert "connection refused" in str(result["error"])
+    assert "connection refused" in str(result.get("error", ""))
+
+
+def test_resolve_runtime_install_target_prefers_proton_pfx(tmp_path):
+    api = Api()
+    base_prefix = tmp_path / "compat-prefix"
+    pfx_path = base_prefix / "pfx"
+    pfx_path.mkdir(parents=True)
+
+    target = api._resolve_runtime_install_target(
+        str(base_prefix), "/tmp/GE-Proton/proton"
+    )
+
+    assert target["base_prefix"] == str(base_prefix)
+    assert target["resolved_prefix"] == str(pfx_path)
+    assert target["is_proton"] is True
+
+
+def test_get_install_status_derives_from_requested_prefix(tmp_path):
+    api = Api()
+    resolved_prefix = tmp_path / "prefix"
+
+    required_paths = [
+        resolved_prefix / "drive_c" / "windows" / "Fonts" / "arial.ttf",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "d3dcompiler_47.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "msvcr120.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "vcruntime140.dll",
+        resolved_prefix
+        / "drive_c"
+        / "windows"
+        / "Microsoft.NET"
+        / "Framework"
+        / "v4.0.30319",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS301.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS202E.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS104E.dll",
+        resolved_prefix
+        / "drive_c"
+        / "Program Files"
+        / "Common Files"
+        / "ASCII"
+        / "RPG2003",
+    ]
+
+    for path in required_paths:
+        if path.suffix:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installed")
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+
+    status = api.get_install_status(str(resolved_prefix), "")
+
+    assert status["dlls_installed"] is True
+    assert status["rtps_installed"] is True
+
+
+def test_get_install_status_requires_all_rtp_sentinels(tmp_path):
+    api = Api()
+    resolved_prefix = tmp_path / "prefix"
+    partial_rtp_paths = [
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS301.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS202E.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS104E.dll",
+    ]
+
+    for path in partial_rtp_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("installed")
+
+    partial_status = api.get_install_status(str(resolved_prefix), "")
+    assert partial_status["rtps_installed"] is False
+
+    final_path = (
+        resolved_prefix
+        / "drive_c"
+        / "Program Files"
+        / "Common Files"
+        / "ASCII"
+        / "RPG2003"
+    )
+    final_path.mkdir(parents=True, exist_ok=True)
+
+    full_status = api.get_install_status(str(resolved_prefix), "")
+    assert full_status["rtps_installed"] is True
+
+
+def test_get_install_status_detects_rpgmaker_2003_in_user_appdata(tmp_path):
+    api = Api()
+    resolved_prefix = tmp_path / "prefix"
+    required_paths = [
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS301.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS202E.dll",
+        resolved_prefix / "drive_c" / "windows" / "system32" / "RGSS104E.dll",
+        resolved_prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "Roaming"
+        / "KADOKAWA"
+        / "Common"
+        / "RPG Maker 2003 RTP",
+    ]
+
+    for path in required_paths:
+        if path.suffix:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installed")
+        else:
+            path.mkdir(parents=True, exist_ok=True)
+
+    status = api.get_install_status(str(resolved_prefix), "")
+
+    assert status["rtps_installed"] is True
+
+
+def test_install_rpgmaker_dependencies_fails_fast_without_winetricks(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda command: None if command == "winetricks" else "/usr/bin/wine",
+    )
+
+    result = api.install_rpgmaker_dependencies("/tmp/prefix", "")
+
+    assert result["success"] is False
+    assert "Winetricks is not installed" in str(result["error"])
+
+
+def test_install_rpgmaker_dependencies_reports_background_failure(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    prefix_path = tmp_path / "prefix"
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    class FailedRunResult:
+        returncode = 1
+
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda command: (
+            "/usr/bin/winetricks" if command == "winetricks" else "/usr/bin/wine"
+        ),
+    )
+    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: FailedRunResult())
+
+    result = api.install_rpgmaker_dependencies(str(prefix_path), "")
+    status = api.get_install_status(str(prefix_path), "")
+    deps_status = cast(dict[str, object], status["deps"])
+
+    assert result["success"] is True
+    assert deps_status["running"] is False
+    assert "corefonts" in str(deps_status["error"])
+    assert status["dlls_installed"] is False
+
+
+def test_open_url_with_targeted_tls_fallback_retries_komodo_with_intermediate(
+    monkeypatch,
+):
+    api = Api()
+    created_contexts: list[object] = []
+    used_contexts: list[object] = []
+
+    class FakeContext:
+        def __init__(self):
+            self.loaded_cadata: list[str] = []
+
+        def load_verify_locations(self, cafile=None, capath=None, cadata=None):
+            if cadata:
+                self.loaded_cadata.append(str(cadata))
+
+    def fake_create_default_context(*_args, **_kwargs):
+        context = FakeContext()
+        created_contexts.append(context)
+        return context
+
+    def fake_urlopen(request, context=None, timeout=0):
+        used_contexts.append(context)
+        if len(used_contexts) == 1:
+            raise URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+        return {"ok": True, "request": request, "timeout": timeout}
+
+    monkeypatch.setattr("ssl.create_default_context", fake_create_default_context)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = api._open_url_with_targeted_tls_fallback(
+        "https://dl.komodo.jp/rpgmakerweb/run-time-packages/RPGVXAce_RTP.zip",
+        timeout=15,
+    )
+
+    assert result["ok"] is True
+    assert len(created_contexts) == 2
+    assert cast(FakeContext, created_contexts[0]).loaded_cadata == []
+    assert cast(FakeContext, created_contexts[1]).loaded_cadata
+    assert (
+        "BEGIN CERTIFICATE" in cast(FakeContext, created_contexts[1]).loaded_cadata[0]
+    )
+
+
+def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    prefix_path = tmp_path / "prefix"
+    rtp_dir = tmp_path / "rtp-cache"
+    real_expanduser = os.path.expanduser
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    monkeypatch.setattr(
+        "shutil.which", lambda command: "/usr/bin/wine" if command == "wine" else None
+    )
+    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr(
+        api,
+        "_open_url_with_targeted_tls_fallback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+        ),
+    )
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(rtp_dir) if path == "~/.local/share/wLib/rtp" else real_expanduser(path)
+        ),
+    )
+
+    result = api.install_rpgmaker_rtp(str(prefix_path), "")
+    status = api.get_install_status(str(prefix_path), "")
+    rtp_status = cast(dict[str, object], status["rtps"])
+    error_text = str(rtp_status["error"])
+
+    assert result["success"] is True
+    assert "official RPG Maker file host" in error_text
+    assert "https://www.rpgmakerweb.com/run-time-package" in error_text

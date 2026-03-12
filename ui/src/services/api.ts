@@ -415,8 +415,11 @@ class ApiService {
     );
   }
 
-  async installRpgmakerRtp(): Promise<ApiBasicResponse> {
-    return this.invoke<ApiBasicResponse>("install_rpgmaker_rtp");
+  async installRpgmakerRtp(
+    prefix_path: string | null = null,
+    proton_path: string | null = null
+  ): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("install_rpgmaker_rtp", prefix_path, proton_path);
   }
 
   async downloadProtonGe(): Promise<DownloadProtonResponse> {
@@ -443,8 +446,11 @@ class ApiService {
     return this.invoke<DownloadCheatEngineResponse>("download_cheat_engine");
   }
 
-  async getInstallStatus(): Promise<InstallStatusResponse> {
-    return this.invoke<InstallStatusResponse>("get_install_status");
+  async getInstallStatus(
+    prefix_path: string | null = null,
+    proton_path: string | null = null
+  ): Promise<InstallStatusResponse> {
+    return this.invoke<InstallStatusResponse>("get_install_status", prefix_path, proton_path);
   }
 
   async findSaveFiles(

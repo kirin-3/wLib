@@ -54,7 +54,9 @@ const sessionMessage = ref("");
 const sessionError = ref("");
 const saveMessage = ref("");
 const saveError = ref("");
+const settingsLoaded = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applySettings = (data: SettingsResponse) => {
   protonPath.value = data.proton_path || "";
@@ -80,22 +82,26 @@ const loadSettings = async () => {
     if (sysDeps) systemDeps.value = sysDeps;
   } catch (e) {
     console.error("Failed to load settings", e);
+  } finally {
+    settingsLoaded.value = true;
   }
 };
 
 const pollInstallStatus = async () => {
   try {
-    const s = await api.getInstallStatus();
+    const s = await api.getInstallStatus(prefixPath.value, protonPath.value);
     if (s) {
       dllsInstalled.value = !!s.dlls_installed;
       rtpsInstalled.value = !!s.rtps_installed;
       if (s.deps) {
         depsProgress.value = s.deps;
         installingDeps.value = !!s.deps.running;
+        installError.value = s.deps.error || "";
       }
       if (s.rtps) {
         rtpProgress.value = s.rtps;
         installingRtps.value = !!s.rtps.running;
+        rtpError.value = s.rtps.error || "";
       }
     }
   } catch (e) {}
@@ -147,7 +153,7 @@ const installRtps = async () => {
   installingRtps.value = true;
   rtpError.value = "";
   try {
-    const result = await api.installRpgmakerRtp();
+    const result = await api.installRpgmakerRtp(prefixPath.value, protonPath.value);
     if (result && result.success) {
       startPolling();
     } else {
@@ -164,7 +170,7 @@ const installDeps = async () => {
   installingDeps.value = true;
   installError.value = "";
   try {
-    const result = await api.installRpgmakerDependencies();
+    const result = await api.installRpgmakerDependencies(prefixPath.value, protonPath.value);
     if (result && result.success) {
       startPolling();
     } else {
@@ -278,6 +284,10 @@ onUnmounted(() => {
     clearTimeout(pollTimer);
     pollTimer = null;
   }
+  if (statusRefreshTimer) {
+    clearTimeout(statusRefreshTimer);
+    statusRefreshTimer = null;
+  }
 });
 
 const saving = ref(false);
@@ -286,6 +296,16 @@ watch([protonPath, prefixPath, playwrightPath, enableLogging], () => {
   if (saving.value) return;
   saveMessage.value = "";
   saveError.value = "";
+});
+
+watch([protonPath, prefixPath], () => {
+  if (!settingsLoaded.value) return;
+  if (pollTimer) return;
+  if (statusRefreshTimer) clearTimeout(statusRefreshTimer);
+  statusRefreshTimer = setTimeout(() => {
+    statusRefreshTimer = null;
+    void pollInstallStatus();
+  }, 300);
 });
 
 const saveSettings = async () => {
@@ -315,6 +335,7 @@ const saveSettings = async () => {
     }
 
     applySettings(persistedSettings);
+    await pollInstallStatus();
     saveMessage.value = "Settings saved.";
   } catch (e) {
     console.error("Failed to save settings", e);
@@ -627,15 +648,15 @@ const saveSettings = async () => {
                         class="text-sm font-medium"
                         style="color: var(--text-primary)"
                       >
-                        RPGMaker XP / VX Ace RTP
+                        RPGMaker RTP (VX Ace, VX, XP, 2003)
                       </h5>
                       <p
                         v-if="!rtpsInstalled && !installingRtps"
                         class="text-xs mt-1"
                         style="color: var(--text-muted)"
                       >
-                        Downloads official RGSS-RTP missing files (rgss104e,
-                        rgss3a) into your prefix.
+                        Downloads and verifies the official RTP packages for VX
+                        Ace, VX, XP, and 2003 in the default prefix shown above.
                       </p>
                       <p
                         v-if="installingRtps"
