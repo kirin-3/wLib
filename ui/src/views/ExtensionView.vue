@@ -5,6 +5,8 @@ import {
   IconFolderOpen,
   IconHelpCircle,
   IconInfoCircle,
+  IconPuzzle,
+  IconRefresh,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 
@@ -56,10 +58,11 @@ onUnmounted(() => {
   <div class="allow-text-selection p-8 max-w-4xl h-full flex flex-col overflow-y-auto">
     <header class="mb-8">
       <h2
-        class="text-3xl font-bold mb-2 tracking-tight"
+        class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
         style="color: var(--text-primary)"
       >
-        Browser Extension
+        <IconPuzzle class="ui-page-heading-icon" />
+        <span>Browser Extension</span>
       </h2>
       <p
         class="text-sm pl-3"
@@ -76,10 +79,10 @@ onUnmounted(() => {
       <!-- Local Service Status -->
       <section class="ext-card rounded-xl p-6">
         <h3
-          class="text-lg font-semibold mb-4 flex items-center gap-2"
+          class="ui-section-heading text-lg font-semibold mb-4"
           style="color: var(--text-primary)"
         >
-          <IconActivityHeartbeat class="w-5 h-5" style="color: var(--brand)" />
+          <IconActivityHeartbeat class="ui-section-icon" />
           Local Service Status
         </h3>
 
@@ -123,7 +126,8 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <button @click="checkConnection" class="ext-btn ml-auto">
+          <button @click="checkConnection" class="ext-btn ui-action-btn ml-auto">
+            <IconRefresh class="ui-action-icon" />
             Refresh
           </button>
         </div>
@@ -132,10 +136,10 @@ onUnmounted(() => {
       <!-- Extension Folder -->
       <section class="ext-card rounded-xl p-6">
         <h3
-          class="text-lg font-semibold mb-4 flex items-center gap-2"
+          class="ui-section-heading text-lg font-semibold mb-4"
           style="color: var(--text-primary)"
         >
-          <IconFolderOpen class="w-5 h-5" style="color: var(--brand)" />
+          <IconFolderOpen class="ui-section-icon" />
           Extension Files
         </h3>
 
@@ -152,22 +156,10 @@ onUnmounted(() => {
 
         <button
           @click="openExtensionFolder"
-          class="text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+          class="ui-action-btn text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-all"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
-          <svg
-            class="w-4 h-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path
-              d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
-            />
-            <line x1="12" x2="12" y1="11" y2="17" />
-            <polyline points="9 14 12 11 15 14" />
-          </svg>
+          <IconFolderOpen class="ui-action-icon" />
           Open Extension Folder
         </button>
       </section>
@@ -175,10 +167,10 @@ onUnmounted(() => {
       <!-- Installation Instructions -->
       <section class="ext-card rounded-xl p-6">
         <h3
-          class="text-lg font-semibold mb-4 flex items-center gap-2"
+          class="ui-section-heading text-lg font-semibold mb-4"
           style="color: var(--text-primary)"
         >
-          <IconInfoCircle class="w-5 h-5" style="color: var(--brand)" />
+          <IconInfoCircle class="ui-section-icon" />
           How to Install
         </h3>
 
@@ -273,10 +265,10 @@ onUnmounted(() => {
       <!-- How it works -->
       <section class="ext-card rounded-xl p-6">
         <h3
-          class="text-lg font-semibold mb-4 flex items-center gap-2"
+          class="ui-section-heading text-lg font-semibold mb-4"
           style="color: var(--text-primary)"
         >
-          <IconHelpCircle class="w-5 h-5" style="color: var(--brand)" />
+          <IconHelpCircle class="ui-section-icon" />
           How It Works
         </h3>
         <div class="space-y-3 text-sm" style="color: var(--text-secondary)">

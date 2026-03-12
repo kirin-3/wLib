@@ -51,6 +51,28 @@
   --success-border: rgba(34, 197, 94, 0.35);
   --success-text: #4ade80;
   --toggle-active: #2f6a49;
+
+  --status-not-started-bg: rgba(148, 163, 184, 0.12);
+  --status-not-started-border: rgba(148, 163, 184, 0.3);
+  --status-not-started-text: #cbd5e1;
+  --status-plan-bg: rgba(234, 179, 8, 0.14);
+  --status-plan-border: rgba(245, 158, 11, 0.3);
+  --status-plan-text: #fcd34d;
+  --status-playing-bg: rgba(45, 212, 191, 0.14);
+  --status-playing-border: rgba(45, 212, 191, 0.32);
+  --status-playing-text: #5eead4;
+  --status-waiting-bg: rgba(59, 130, 246, 0.14);
+  --status-waiting-border: rgba(96, 165, 250, 0.3);
+  --status-waiting-text: #93c5fd;
+  --status-on-hold-bg: rgba(249, 115, 22, 0.14);
+  --status-on-hold-border: rgba(251, 146, 60, 0.32);
+  --status-on-hold-text: #fdba74;
+  --status-completed-bg: rgba(34, 197, 94, 0.14);
+  --status-completed-border: rgba(74, 222, 128, 0.28);
+  --status-completed-text: #86efac;
+  --status-abandoned-bg: rgba(239, 68, 68, 0.14);
+  --status-abandoned-border: rgba(248, 113, 113, 0.3);
+  --status-abandoned-text: #fca5a5;
 }
 
 /* ========== LIGHT THEME ========== */
@@ -98,6 +120,28 @@
   --success-border: rgba(21, 128, 61, 0.3);
   --success-text: #166534;
   --toggle-active: #2f855a;
+
+  --status-not-started-bg: rgba(148, 163, 184, 0.12);
+  --status-not-started-border: rgba(148, 163, 184, 0.28);
+  --status-not-started-text: #475569;
+  --status-plan-bg: rgba(245, 158, 11, 0.12);
+  --status-plan-border: rgba(217, 119, 6, 0.24);
+  --status-plan-text: #92400e;
+  --status-playing-bg: rgba(20, 184, 166, 0.12);
+  --status-playing-border: rgba(13, 148, 136, 0.24);
+  --status-playing-text: #0f766e;
+  --status-waiting-bg: rgba(59, 130, 246, 0.12);
+  --status-waiting-border: rgba(37, 99, 235, 0.24);
+  --status-waiting-text: #1d4ed8;
+  --status-on-hold-bg: rgba(249, 115, 22, 0.12);
+  --status-on-hold-border: rgba(234, 88, 12, 0.24);
+  --status-on-hold-text: #c2410c;
+  --status-completed-bg: rgba(34, 197, 94, 0.12);
+  --status-completed-border: rgba(22, 163, 74, 0.24);
+  --status-completed-text: #166534;
+  --status-abandoned-bg: rgba(239, 68, 68, 0.12);
+  --status-abandoned-border: rgba(220, 38, 38, 0.24);
+  --status-abandoned-text: #b91c1c;
 }
 
 /* ========== GLOBAL STYLES ========== */
@@ -219,6 +263,129 @@ body {
 .copyable-feedback {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.ui-page-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ui-page-heading-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  color: var(--brand);
+}
+
+.ui-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.ui-section-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  color: var(--brand);
+}
+
+.ui-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  line-height: 1;
+}
+
+.ui-action-icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.ui-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  line-height: 1;
+}
+
+.ui-status-chip,
+.ui-status-inline,
+.ui-status-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.ui-status-chip {
+  border-radius: 0.625rem;
+  border: 1px solid var(--ui-status-border, var(--border));
+  background: var(--ui-status-bg, var(--bg-raised));
+  color: var(--ui-status-text, var(--text-secondary));
+}
+
+.ui-status-chip--idle {
+  border-color: var(--border);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+}
+
+.ui-status-inline {
+  color: var(--ui-status-text, var(--text-secondary));
+}
+
+.ui-status-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+}
+
+.ui-status-tone-not-started {
+  --ui-status-bg: var(--status-not-started-bg);
+  --ui-status-border: var(--status-not-started-border);
+  --ui-status-text: var(--status-not-started-text);
+}
+
+.ui-status-tone-plan-to-play {
+  --ui-status-bg: var(--status-plan-bg);
+  --ui-status-border: var(--status-plan-border);
+  --ui-status-text: var(--status-plan-text);
+}
+
+.ui-status-tone-playing {
+  --ui-status-bg: var(--status-playing-bg);
+  --ui-status-border: var(--status-playing-border);
+  --ui-status-text: var(--status-playing-text);
+}
+
+.ui-status-tone-waiting {
+  --ui-status-bg: var(--status-waiting-bg);
+  --ui-status-border: var(--status-waiting-border);
+  --ui-status-text: var(--status-waiting-text);
+}
+
+.ui-status-tone-on-hold {
+  --ui-status-bg: var(--status-on-hold-bg);
+  --ui-status-border: var(--status-on-hold-border);
+  --ui-status-text: var(--status-on-hold-text);
+}
+
+.ui-status-tone-completed {
+  --ui-status-bg: var(--status-completed-bg);
+  --ui-status-border: var(--status-completed-border);
+  --ui-status-text: var(--status-completed-text);
+}
+
+.ui-status-tone-abandoned {
+  --ui-status-bg: var(--status-abandoned-bg);
+  --ui-status-border: var(--status-abandoned-border);
+  --ui-status-text: var(--status-abandoned-text);
 }
 
 /* Empty-state utilities */

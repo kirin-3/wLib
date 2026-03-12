@@ -4,8 +4,10 @@ import {
   IconAutomation,
   IconDeviceFloppyFilled,
   IconDownloadFilled,
+  IconFolderOpen,
   IconLoader2,
   IconLogout2,
+  IconSettings,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type {
@@ -327,10 +329,11 @@ const saveSettings = async () => {
   <div class="allow-text-selection p-8 max-w-4xl pb-12">
     <header class="mb-10">
       <h2
-        class="text-3xl font-bold mb-2 tracking-tight"
+        class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
         style="color: var(--text-primary)"
       >
-        Settings
+        <IconSettings class="ui-page-heading-icon" />
+        <span>Settings</span>
       </h2>
       <p
         class="text-sm pl-3"
@@ -348,10 +351,10 @@ const saveSettings = async () => {
         <!-- Environment Settings -->
         <section>
           <h3
-            class="text-lg font-semibold mb-4 flex items-center gap-2"
+            class="ui-section-heading text-lg font-semibold mb-4"
             style="color: var(--text-primary)"
           >
-            <IconAutomation class="w-5 h-5" style="color: var(--brand)" />
+            <IconAutomation class="ui-section-icon" />
             Proton & Wine Environment
           </h3>
 
@@ -365,16 +368,16 @@ const saveSettings = async () => {
                 <button
                   @click="downloadProton"
                   :disabled="downloadingProton"
-                  class="text-xs font-medium flex items-center gap-1 disabled:opacity-50"
+                  class="ui-action-btn text-xs font-medium disabled:opacity-50"
                   style="color: var(--brand)"
                 >
                   <IconLoader2
                     v-if="downloadingProton"
-                    class="w-3 h-3 animate-spin"
+                    class="ui-action-icon animate-spin"
                   />
                   <IconDownloadFilled
                     v-else
-                    class="w-3 h-3"
+                    class="ui-action-icon"
                   />
                   {{
                     downloadingProton
@@ -390,7 +393,8 @@ const saveSettings = async () => {
                   placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
                   class="settings-input flex-1"
                 />
-                <button @click="browseProton" class="settings-btn">
+                <button @click="browseProton" class="settings-btn ui-action-btn">
+                  <IconFolderOpen class="ui-action-icon" />
                   Browse
                 </button>
               </div>
@@ -415,7 +419,8 @@ const saveSettings = async () => {
                   placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
                   class="settings-input flex-1"
                 />
-                <button @click="browsePrefix" class="settings-btn">
+                <button @click="browsePrefix" class="settings-btn ui-action-btn">
+                  <IconFolderOpen class="ui-action-icon" />
                   Browse
                 </button>
               </div>
@@ -458,9 +463,9 @@ const saveSettings = async () => {
                 <button
                   @click="openLoginSession"
                   :disabled="openingLoginSession || resettingSession"
-                  class="settings-btn disabled:opacity-50 inline-flex items-center gap-2"
+                  class="settings-btn ui-action-btn disabled:opacity-50"
                 >
-                  <img src="/f95.png" alt="F95" class="w-4 h-4" />
+                  <img src="/f95.png" alt="F95" class="ui-action-icon" />
                   {{
                     openingLoginSession
                       ? "Login Window Open..."
@@ -470,9 +475,9 @@ const saveSettings = async () => {
                 <button
                   @click="resetSession"
                   :disabled="resettingSession || openingLoginSession"
-                  class="settings-btn disabled:opacity-50 inline-flex items-center gap-2"
+                  class="settings-btn ui-action-btn disabled:opacity-50"
                 >
-                  <IconLogout2 class="w-4 h-4" />
+                  <IconLogout2 class="ui-action-icon" />
                   {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
                 </button>
               </div>
@@ -568,15 +573,15 @@ const saveSettings = async () => {
                         Installed
                       </p>
                     </div>
-                    <button
-                      @click="installDeps"
-                      :disabled="installingDeps || dllsInstalled"
-                      class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50"
-                    >
-                      <IconLoader2
-                        v-if="installingDeps"
-                        class="w-3 h-3 animate-spin"
-                      />
+                      <button
+                        @click="installDeps"
+                        :disabled="installingDeps || dllsInstalled"
+                        class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
+                      >
+                        <IconLoader2
+                          v-if="installingDeps"
+                          class="ui-action-icon animate-spin"
+                        />
                       {{
                         dllsInstalled
                           ? "Installed"
@@ -647,15 +652,15 @@ const saveSettings = async () => {
                         Installed
                       </p>
                     </div>
-                    <button
-                      @click="installRtps"
-                      :disabled="installingRtps || rtpsInstalled"
-                      class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50"
-                    >
-                      <IconLoader2
-                        v-if="installingRtps"
-                        class="w-3 h-3 animate-spin"
-                      />
+                      <button
+                        @click="installRtps"
+                        :disabled="installingRtps || rtpsInstalled"
+                        class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
+                      >
+                        <IconLoader2
+                          v-if="installingRtps"
+                          class="ui-action-icon animate-spin"
+                        />
                       {{
                         rtpsInstalled
                           ? "Installed"
@@ -714,11 +719,11 @@ const saveSettings = async () => {
                   <button
                     @click="downloadCe"
                     :disabled="installingCe || ceInstalled"
-                    class="settings-btn flex items-center gap-2 absolute right-4 top-1/2 -translate-y-1/2 disabled:opacity-50"
+                    class="settings-btn ui-action-btn absolute right-4 top-1/2 -translate-y-1/2 disabled:opacity-50"
                   >
                     <IconLoader2
                       v-if="installingCe"
-                      class="w-3 h-3 animate-spin"
+                      class="ui-action-icon animate-spin"
                     />
                     {{
                       ceInstalled
@@ -760,10 +765,10 @@ const saveSettings = async () => {
         <button
           @click="saveSettings"
           :disabled="saving"
-          class="inline-flex items-center gap-2 text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
+          class="ui-action-btn text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
-          <IconDeviceFloppyFilled class="w-4 h-4" />
+          <IconDeviceFloppyFilled class="ui-action-icon" />
           {{ saving ? "Saving..." : "Save Changes" }}
         </button>
       </div>

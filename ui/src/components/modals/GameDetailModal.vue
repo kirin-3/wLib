@@ -4,13 +4,16 @@ import {
   IconBookFilled,
   IconCheck,
   IconChevronDown,
+  IconDeviceFloppyFilled,
   IconExternalLinkFilled,
   IconFlameFilled,
   IconFolderOpenFilled,
+  IconLoader2,
   IconPaletteFilled,
   IconPlayerPlayFilled,
   IconRefresh,
   IconStarFilled,
+  IconTrashX,
   IconX,
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
@@ -18,6 +21,7 @@ import { api } from "../../services/api";
 import type { GameRecord, RunnerInfo, SaveLocation } from "../../services/api";
 import {
   DEFAULT_PLAY_STATUS,
+  getPlayStatusMeta,
   PLAY_STATUS_OPTIONS,
   normalizePlayStatus,
   type PlayStatus,
@@ -126,7 +130,7 @@ const saving = ref(false);
 const deleting = ref(false);
 const engineDropdownRef = ref<HTMLElement | null>(null);
 
-const statuses: Array<{ value: PlayStatus; label: string }> = PLAY_STATUS_OPTIONS;
+const statuses = PLAY_STATUS_OPTIONS;
 
 const averagePersonalRating = computed(() => {
   const sum =
@@ -167,29 +171,12 @@ const getEngineBadgeStyle = (value: EngineOption): string => ENGINE_STYLES[value
 
 const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
 
-const statusButtonStyle = (value: PlayStatus) => {
-  if (playStatus.value !== value) {
-    return "background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)";
-  }
-
-  switch (value) {
-    case "Not Started":
-      return "background: rgba(107, 114, 128, 0.16); border: 1px solid rgba(156, 163, 175, 0.28); color: #d1d5db";
-    case "Plan to Play":
-      return "background: rgba(120, 113, 46, 0.18); border: 1px solid rgba(202, 138, 4, 0.28); color: #fcd34d";
-    case "Playing":
-      return "background: rgba(234, 179, 8, 0.16); border: 1px solid rgba(250, 204, 21, 0.3); color: #facc15";
-    case "Waiting For Update":
-      return "background: rgba(59, 130, 246, 0.16); border: 1px solid rgba(96, 165, 250, 0.28); color: #93c5fd";
-    case "Abandoned":
-      return "background: rgba(239, 68, 68, 0.16); border: 1px solid rgba(248, 113, 113, 0.28); color: #fca5a5";
-    case "Completed":
-      return "background: rgba(47, 106, 73, 0.18); border: 1px solid rgba(74, 222, 128, 0.28); color: #86efac";
-    case "On Hold":
-      return "background: rgba(180, 83, 9, 0.18); border: 1px solid rgba(251, 146, 60, 0.3); color: #fdba74";
-    default:
-      return "background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)";
-  }
+const statusButtonClasses = (value: PlayStatus) => {
+  const meta = getPlayStatusMeta(value);
+  return [
+    "status-chip px-3 py-1.5 text-xs font-medium transition-colors",
+    playStatus.value === value ? ["ui-status-chip", meta.toneClass, "status-chip-active"] : ["ui-status-chip", "ui-status-chip--idle", "status-chip-idle"],
+  ];
 };
 
 const summaryItems = computed(() => [
@@ -664,30 +651,56 @@ const openInBrowser = async () => {
     <div
       class="modal-content relative flex max-h-[90vh] w-full max-w-[49rem] flex-col overflow-hidden rounded-xl"
     >
-      <div class="absolute right-4 top-4 z-10 flex items-center gap-2">
-        <button
-          @click="isFavorite = !isFavorite"
-          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
-          :style="
-            isFavorite
-              ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
-              : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
-          "
-        >
-          <IconStarFilled class="w-4 h-4" :style="isFavorite ? '' : 'opacity: 0.7'" />
-          {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
-        </button>
-
+      <div class="absolute right-4 top-4 z-10">
         <button
           @click="close"
-          class="rounded-md px-3 py-1.5 inline-flex items-center justify-center transition-colors"
+          class="modal-close-btn transition-colors"
           style="color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border)"
         >
-          <IconX class="w-4 h-4" />
+          <IconX class="ui-action-icon" />
         </button>
       </div>
 
-      <div class="modal-scroll-body overflow-y-auto p-6 pt-14 space-y-6 flex-1">
+      <div class="modal-scroll-body overflow-y-auto p-6 pt-4 space-y-6 flex-1">
+        <div class="modal-toolbar pr-12">
+          <div class="modal-toolbar-group">
+            <button
+              v-if="f95Url"
+              @click="openInBrowser"
+              class="modal-toolbar-action ui-action-btn"
+              style="color: var(--text-primary)"
+            >
+              <IconExternalLinkFilled class="ui-action-icon" />
+              Open in Browser
+            </button>
+            <button
+              v-if="game.f95_url"
+              @click="requestUpdateCheck"
+              :disabled="updateCheckState.running"
+              class="modal-toolbar-action ui-action-btn"
+              style="color: var(--text-primary)"
+            >
+              <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
+              {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
+            </button>
+          </div>
+
+          <div class="modal-toolbar-group modal-toolbar-group--end">
+            <button
+              @click="isFavorite = !isFavorite"
+              class="modal-toolbar-action ui-action-btn"
+              :style="
+                isFavorite
+                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
+                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
+              "
+            >
+              <IconStarFilled class="ui-action-icon" :style="isFavorite ? '' : 'opacity: 0.7'" />
+              {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
+            </button>
+          </div>
+        </div>
+
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <div
             v-for="item in summaryItems"
@@ -705,16 +718,16 @@ const openInBrowser = async () => {
           </div>
         </div>
 
-        <div class="status-strip flex flex-wrap items-center gap-3 pr-36 sm:pr-44">
-          <div class="flex flex-wrap gap-2">
+        <div class="status-strip">
+          <div class="status-grid">
             <button
               v-for="s in statuses"
               :key="s.value"
               @click="playStatus = s.value"
-              class="status-chip px-3 py-1.5 text-xs font-medium transition-colors"
-              :style="statusButtonStyle(s.value)"
+              :class="[statusButtonClasses(s.value), 'w-full']"
             >
-              {{ s.label }}
+              <component :is="s.icon" class="ui-status-icon" />
+              <span>{{ s.label }}</span>
             </button>
           </div>
         </div>
@@ -733,7 +746,10 @@ const openInBrowser = async () => {
                 type="text"
                 class="modal-input flex-1 font-mono"
               />
-              <button @click="browseExe" class="modal-btn">Browse</button>
+              <button @click="browseExe" class="modal-btn ui-action-btn">
+                <IconFolderOpenFilled class="ui-action-icon" />
+                Browse
+              </button>
             </div>
           </div>
 
@@ -974,7 +990,10 @@ const openInBrowser = async () => {
                     placeholder="/home/user/games/my_game_prefix"
                     class="modal-input flex-1 font-mono text-xs"
                   />
-                  <button @click="browseCustomPrefix" class="modal-btn">Browse</button>
+                  <button @click="browseCustomPrefix" class="modal-btn ui-action-btn">
+                    <IconFolderOpenFilled class="ui-action-icon" />
+                    Browse
+                  </button>
                 </div>
               </div>
 
@@ -1013,19 +1032,10 @@ const openInBrowser = async () => {
 
         <div>
           <h4
-            class="text-sm font-bold mb-3 flex items-center gap-2"
+            class="ui-section-heading text-sm font-bold mb-3"
             style="color: var(--text-secondary)"
           >
-            <svg
-              class="w-4 h-4"
-              style="color: var(--brand)"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-            >
-              <path
-                d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z"
-              />
-            </svg>
+            <IconStarFilled class="ui-section-icon" />
             Your Ratings
           </h4>
           <div class="grid grid-cols-2 gap-3">
@@ -1098,17 +1108,11 @@ const openInBrowser = async () => {
             <span class="text-xs font-medium" style="color: var(--text-secondary)">
               Tags ({{ tags.length }})
             </span>
-            <svg
+            <IconChevronDown
               class="w-4 h-4 transition-transform"
               :class="tagsExpanded ? 'rotate-180' : ''"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
               style="color: var(--text-muted)"
-            >
-              <path d="M6 9l6 6 6-6" />
-            </svg>
+            />
           </button>
           <div v-show="tagsExpanded" class="mt-2">
             <div class="flex flex-wrap gap-1.5 mb-2">
@@ -1153,9 +1157,10 @@ const openInBrowser = async () => {
       >
         <div class="flex items-center justify-between mb-2">
           <h4
-            class="text-xs font-semibold uppercase tracking-wider"
+            class="ui-section-heading text-xs font-semibold uppercase tracking-wider"
             style="color: var(--text-secondary)"
           >
+            <IconFolderOpenFilled class="ui-section-icon" />
             Save File Locations
           </h4>
           <button
@@ -1171,17 +1176,7 @@ const openInBrowser = async () => {
           class="text-xs py-2 flex items-center gap-2"
           style="color: var(--text-secondary)"
         >
-          <svg
-            class="w-3 h-3 animate-spin"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 2a10 10 0 0 1 10 10" />
-          </svg>
+          <IconLoader2 class="ui-action-icon animate-spin" />
           Searching...
         </div>
         <div
@@ -1252,57 +1247,40 @@ const openInBrowser = async () => {
         >
           {{ updateCheckState.message }}
         </p>
-        <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex flex-wrap gap-2">
             <button
               @click="deleteGame"
               :disabled="deleting"
-              class="footer-action text-red-400"
+              class="footer-action ui-action-btn text-red-400"
             >
+              <IconTrashX class="ui-action-icon" />
               {{ deleting ? "Removing..." : "Remove" }}
-            </button>
-            <button
-              v-if="f95Url"
-              @click="openInBrowser"
-              class="footer-action inline-flex items-center gap-2"
-              style="color: var(--text-primary)"
-            >
-              <IconExternalLinkFilled class="w-4 h-4" />
-              Open in Browser
             </button>
             <button
               @click="findSaves"
               :disabled="searchingSaves"
-              class="footer-action inline-flex items-center gap-2"
+              class="footer-action ui-action-btn"
               style="color: var(--text-primary)"
             >
-              <IconFolderOpenFilled class="w-4 h-4" />
+              <IconFolderOpenFilled class="ui-action-icon" />
               {{ searchingSaves ? "Searching..." : "Find Saves" }}
-            </button>
-            <button
-              v-if="game.f95_url"
-              @click="requestUpdateCheck"
-              :disabled="updateCheckState.running"
-              class="footer-action inline-flex items-center gap-2"
-              style="color: var(--text-primary)"
-            >
-              <IconRefresh class="w-4 h-4" :class="updateCheckState.running ? 'animate-spin' : ''" />
-              {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
             </button>
           </div>
           <div class="flex flex-wrap gap-3">
             <button
               @click="launchGame"
-              class="launch-btn"
+              class="launch-btn ui-action-btn"
             >
-              <IconPlayerPlayFilled class="w-4 h-4" />
+              <IconPlayerPlayFilled class="ui-action-icon" />
               Play
             </button>
             <button
               @click="save"
               :disabled="saving"
-              class="save-btn disabled:opacity-50"
+              class="save-btn ui-action-btn disabled:opacity-50"
             >
+              <IconDeviceFloppyFilled class="ui-action-icon" />
               {{ saving ? "Saving..." : "Save Changes" }}
             </button>
           </div>
@@ -1417,7 +1395,14 @@ const openInBrowser = async () => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  min-height: 2.375rem;
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
   text-align: left;
+}
+
+.engine-select .identity-badge {
+  padding: 0.25rem 0.5rem;
 }
 
 .engine-menu {
@@ -1456,27 +1441,75 @@ const openInBrowser = async () => {
   padding: 0.75rem;
 }
 
-.status-chip {
-  border-radius: 0.55rem;
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.75rem, 1fr));
+  gap: 0.5rem;
 }
 
+.modal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.modal-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modal-toolbar-group--end {
+  margin-left: auto;
+}
+
+.modal-toolbar-action,
 .footer-action {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
+  min-height: 2.375rem;
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
+.modal-toolbar-action:hover:not(:disabled),
 .footer-action:hover:not(:disabled) {
   background: var(--bg-overlay);
   border-color: var(--border-hover);
 }
 
+.modal-toolbar-action:disabled,
 .footer-action:disabled {
   opacity: 0.6;
+}
+
+.modal-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.375rem;
+  height: 2.375rem;
+  border-radius: 0.5rem;
+}
+
+.status-chip {
+  border-radius: 0.625rem;
+}
+
+.status-chip-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.status-chip-idle:hover {
+  background: var(--bg-overlay);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
 }
 
 .launch-btn,
@@ -1485,6 +1518,7 @@ const openInBrowser = async () => {
   align-items: center;
   gap: 0.5rem;
   border-radius: 0.5rem;
+  min-height: 2.375rem;
   padding: 0.5rem 1rem;
   font-size: 0.875rem;
   font-weight: 600;

@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   IconColumns2Filled,
+  IconDeviceGamepad2,
+  IconDeviceGamepad2Filled,
   IconFilterFilled,
   IconLibraryPlus,
   IconLayoutGridFilled,
@@ -19,7 +21,11 @@ import { api, onWebviewReady } from "../services/api";
 import type { GameRecord } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
-import { PLAY_STATUS_OPTIONS, normalizePlayStatus } from "../utils/playStatus";
+import {
+  PLAY_STATUS_OPTIONS,
+  getPlayStatusMeta,
+  normalizePlayStatus,
+} from "../utils/playStatus";
 import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
@@ -361,10 +367,9 @@ const formatPlaytime = (seconds: number | null | undefined): string => {
   return (seconds / 3600).toFixed(1) + " hrs";
 };
 
-const formatPlayStatus = (
-  status: string | null | undefined,
-  legacyStatus?: string | null | undefined,
-): string => normalizePlayStatus(status, legacyStatus);
+const getGamePlayStatusMeta = (game: GameRecord) => {
+  return getPlayStatusMeta(game.play_status, game.status);
+};
 
 const loadGames = async () => {
   try {
@@ -699,7 +704,10 @@ onUnmounted(() => {
                 v-model="filterStatuses"
                 class="filters-checkbox rounded"
               />
-              <span style="color: var(--text-secondary)">{{ s.label }}</span>
+              <span class="ui-status-option" :class="s.toneClass">
+                <component :is="s.icon" class="ui-status-icon" />
+                <span>{{ s.label }}</span>
+              </span>
             </label>
           </div>
         </div>
@@ -756,10 +764,11 @@ onUnmounted(() => {
     <header class="flex justify-between items-center mb-8">
       <div>
         <h2
-          class="text-3xl font-bold mb-2 tracking-tight"
+          class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
           style="color: var(--text-primary)"
         >
-          Your Library
+          <IconDeviceGamepad2 class="ui-page-heading-icon" />
+          <span>Your Library</span>
         </h2>
         <p
           class="text-sm pl-3"
@@ -775,11 +784,11 @@ onUnmounted(() => {
       <div class="flex items-center gap-3">
         <button
           @click="toggleFiltersPane"
-          class="relative px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-medium transition-all ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
+          class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium transition-all ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
           style="color: var(--text-primary); border: 1px solid var(--border)"
           :title="isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'"
         >
-          <IconFilterFilled class="w-5 h-5" />
+          <IconFilterFilled class="ui-action-icon" />
           <span>Filters</span>
           <span
             v-if="activeFilterCount > 0"
@@ -792,10 +801,10 @@ onUnmounted(() => {
 
         <button
           @click="showAddModal = true"
-          class="hover:brightness-110 px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all active:scale-95"
+          class="ui-action-btn hover:brightness-110 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all active:scale-95"
           style="background: var(--brand); color: var(--text-inverse); box-shadow: var(--shadow-brand)"
         >
-          <IconLibraryPlus class="w-4 h-4" />
+          <IconLibraryPlus class="ui-action-icon" />
           Add Game
         </button>
       </div>
@@ -866,10 +875,10 @@ onUnmounted(() => {
         <button
           v-if="activeFilterCount > 0"
           @click="clearFilters"
-          class="px-3 py-1.5 rounded-lg text-sm hover:text-red-400 transition-all flex items-center gap-1 border active:scale-95 active:bg-[var(--bg-overlay)]"
+          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 transition-all border active:scale-95 active:bg-[var(--bg-overlay)]"
           style="color: var(--text-muted); border-color: var(--border)"
         >
-          <IconX class="w-3 h-3" />
+          <IconX class="ui-action-icon" />
           Clear all
         </button>
 
@@ -890,7 +899,7 @@ onUnmounted(() => {
           >
             <button
               @click="layoutMode = 'grid'"
-              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'grid'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -898,11 +907,11 @@ onUnmounted(() => {
               "
               title="Grid View"
             >
-              <IconColumns2Filled class="w-4 h-4" />
+              <IconColumns2Filled class="ui-action-icon" />
             </button>
             <button
               @click="layoutMode = 'list'"
-              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'list'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -910,11 +919,11 @@ onUnmounted(() => {
               "
               title="List View"
             >
-              <IconLayoutListFilled class="w-4 h-4" />
+              <IconLayoutListFilled class="ui-action-icon" />
             </button>
             <button
               @click="layoutMode = 'compact'"
-              class="px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'compact'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -922,7 +931,7 @@ onUnmounted(() => {
               "
               title="Compact View"
             >
-              <IconLayoutGridFilled class="w-4 h-4 opacity-90" />
+              <IconLayoutGridFilled class="ui-action-icon opacity-90" />
             </button>
           </div>
         </div>
@@ -1029,22 +1038,22 @@ onUnmounted(() => {
           </div>
 
           <!-- Update Button Overlay (Top Right) -->
-          <button
-            v-if="layoutMode !== 'compact' && game.f95_url"
-            @click.stop="checkUpdate(game, $event)"
-            :disabled="updatingId === game.id"
-            class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
-          >
-            <IconRefresh
-              v-if="updatingId !== game.id"
-              class="w-4 h-4"
-            />
-            <IconLoader2
-              v-else
-              class="w-4 h-4 animate-spin"
-              style="color: var(--brand)"
-            />
-          </button>
+            <button
+              v-if="layoutMode !== 'compact' && game.f95_url"
+              @click.stop="checkUpdate(game, $event)"
+              :disabled="updatingId === game.id"
+              class="update-overlay-btn ui-icon-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
+            >
+              <IconRefresh
+                v-if="updatingId !== game.id"
+                class="ui-action-icon"
+              />
+              <IconLoader2
+                v-else
+                class="ui-action-icon animate-spin"
+                style="color: var(--brand)"
+              />
+            </button>
 
           <div v-if="layoutMode === 'compact'" class="compact-image-overlay absolute inset-0"></div>
 
@@ -1160,32 +1169,29 @@ onUnmounted(() => {
           >
             <div
               v-if="layoutMode === 'grid'"
-              class="text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[50%]"
-              style="color: var(--text-muted)"
-              :title="game.play_status"
+              class="ui-status-chip px-2.5 py-1 text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[52%]"
+              :class="getGamePlayStatusMeta(game).toneClass"
+              :title="getGamePlayStatusMeta(game).label"
             >
-              {{ formatPlayStatus(game.play_status, game.status) }}
+              <component :is="getGamePlayStatusMeta(game).icon" class="ui-status-icon" />
+              <span class="truncate">{{ getGamePlayStatusMeta(game).label }}</span>
             </div>
             <button
               @click.stop="launchGameFast(game)"
-              class="play-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold flex items-center gap-2 transition-all active:scale-95 shrink-0"
+              class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold transition-all active:scale-95 shrink-0"
             >
-              <svg
-                class="w-3 h-3 md:w-4 md:h-4"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M5 3l14 9-14 9V3z" />
-              </svg>
+              <IconPlayerPlayFilled class="ui-action-icon" />
               <span class="hidden md:inline">Play</span>
             </button>
             <div
               v-if="layoutMode === 'list'"
-              class="hidden sm:block w-24 text-right text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis"
-              style="color: var(--text-muted)"
-              :title="game.play_status"
+              class="hidden sm:inline-flex w-28 justify-end text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis"
+              :title="getGamePlayStatusMeta(game).label"
             >
-              {{ formatPlayStatus(game.play_status, game.status) }}
+              <span class="ui-status-inline" :class="getGamePlayStatusMeta(game).toneClass">
+                <component :is="getGamePlayStatusMeta(game).icon" class="ui-status-icon" />
+                <span class="truncate">{{ getGamePlayStatusMeta(game).label }}</span>
+              </span>
             </div>
           </div>
         </div>
