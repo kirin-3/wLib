@@ -94,3 +94,50 @@ def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
     assert result is True
     run_mock.assert_called_once()
     assert run_mock.call_args.args[0] == install_cmd
+
+
+def test_get_webview_storage_path_creates_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+
+    storage_path = main.get_webview_storage_path()
+
+    assert storage_path == os.path.join(str(tmp_path), main.PYWEBVIEW_STORAGE_DIR_NAME)
+    assert os.path.isdir(storage_path)
+
+
+def test_start_webview_uses_persistent_storage_for_packaged_runtime(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+    webview_module = MagicMock()
+
+    main.start_webview(webview_module, dev_mode=False, icon_path="/tmp/wlib.png")
+
+    webview_module.start.assert_called_once()
+    kwargs = webview_module.start.call_args.kwargs
+    assert kwargs["http_server"] is True
+    assert kwargs["http_port"] == main.PYWEBVIEW_HTTP_PORT
+    assert kwargs["private_mode"] is False
+    assert kwargs["storage_path"] == os.path.join(
+        str(tmp_path), main.PYWEBVIEW_STORAGE_DIR_NAME
+    )
+    assert kwargs["icon"] == "/tmp/wlib.png"
+
+
+def test_start_webview_preserves_dev_mode_without_fixed_http_port(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+    webview_module = MagicMock()
+
+    main.start_webview(webview_module, dev_mode=True, icon_path=None)
+
+    webview_module.start.assert_called_once()
+    kwargs = webview_module.start.call_args.kwargs
+    assert kwargs["http_server"] is True
+    assert kwargs["private_mode"] is False
+    assert kwargs["storage_path"] == os.path.join(
+        str(tmp_path), main.PYWEBVIEW_STORAGE_DIR_NAME
+    )
+    assert "http_port" not in kwargs
+    assert kwargs["icon"] is None

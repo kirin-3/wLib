@@ -17,6 +17,9 @@ from core.f95zone import normalize_thread_url
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+APP_DATA_DIR = os.path.expanduser("~/.local/share/wLib")
+PYWEBVIEW_STORAGE_DIR_NAME = "webview"
+PYWEBVIEW_HTTP_PORT = 42001
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
@@ -43,7 +46,10 @@ class WebviewModule(Protocol):
         gui: str,
         debug: bool,
         http_server: bool,
-        icon: str | None,
+        icon: str | None = None,
+        http_port: int | None = None,
+        private_mode: bool = True,
+        storage_path: str | None = None,
     ) -> None: ...
 
 
@@ -186,6 +192,39 @@ def load_webview_module() -> WebviewModule | None:
         webview = None
 
     return webview
+
+
+def get_webview_storage_path() -> str:
+    storage_path = os.path.join(APP_DATA_DIR, PYWEBVIEW_STORAGE_DIR_NAME)
+    os.makedirs(storage_path, exist_ok=True)
+    return storage_path
+
+
+def start_webview(
+    webview_module: WebviewModule, *, dev_mode: bool, icon_path: str | None
+) -> None:
+    storage_path = get_webview_storage_path()
+
+    if dev_mode:
+        webview_module.start(
+            gui="qt",
+            debug=False,
+            http_server=True,
+            private_mode=False,
+            storage_path=storage_path,
+            icon=icon_path,
+        )
+        return
+
+    webview_module.start(
+        gui="qt",
+        debug=False,
+        http_server=True,
+        http_port=PYWEBVIEW_HTTP_PORT,
+        private_mode=False,
+        storage_path=storage_path,
+        icon=icon_path,
+    )
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
@@ -535,11 +574,10 @@ def main() -> None:
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wlib.png")
-    webview_module.start(
-        gui="qt",
-        debug=False,
-        http_server=True,
-        icon=icon_path if os.path.exists(icon_path) else None,
+    start_webview(
+        webview_module,
+        dev_mode=DEV_MODE,
+        icon_path=icon_path if os.path.exists(icon_path) else None,
     )
 
     # Cleanup Vite server when window closes

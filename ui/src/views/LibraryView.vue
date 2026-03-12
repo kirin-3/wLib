@@ -5,22 +5,21 @@ import { api, onWebviewReady } from "../services/api";
 import type { GameRecord } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
-
-type LayoutMode = "grid" | "list" | "compact";
-type SortDir = "asc" | "desc";
-type SortField =
-  | "title"
-  | "date_added"
-  | "last_played"
-  | "playtime_seconds"
-  | "rating"
-  | "own_rating";
-
-interface FilterSections {
-  collections: boolean;
-  status: boolean;
-  tags: boolean;
-}
+import {
+  DEFAULT_FILTER_SECTIONS,
+  DEFAULT_LIBRARY_VIEW_STATE,
+  LIBRARY_PLAY_STATUSES,
+  clearLegacyLibraryViewState,
+  normalizeLibraryViewState,
+  readLibraryViewState,
+  saveLibraryViewState,
+  type FilterCollection,
+  type FilterSections,
+  type LayoutMode,
+  type LibraryViewState,
+  type SortDir,
+  type SortField,
+} from "../utils/libraryViewState";
 
 interface UpdateNotice {
   type: "" | "success" | "error";
@@ -60,28 +59,16 @@ const selectedGame = ref<GameRecord | null>(null);
 
 // Search & Filter state
 const searchQuery = ref("");
-const filterStatuses = ref<string[]>([]);
-const filterCollection = ref("All"); // "All" or "Favorites"
+const filterStatuses = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterStatuses]);
+const filterCollection = ref<FilterCollection>(DEFAULT_LIBRARY_VIEW_STATE.filterCollection);
 const filterEngines = ref<string[]>([]);
-const filterTags = ref<string[]>([]);
-const layoutMode = ref<LayoutMode>("grid"); // 'grid', 'list', or 'compact'
-const sortBy = ref<SortField>("title");
-const sortDir = ref<SortDir>("asc");
+const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
+const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
+const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
+const sortDir = ref<SortDir>(DEFAULT_LIBRARY_VIEW_STATE.sortDir);
 
-const layoutModeStorageKey = "wlib-layout-mode";
-const filtersPaneStorageKey = "wlib-filters-collapsed";
-const filterSectionsStorageKey = "wlib-filter-sections";
-const validLayoutModes = new Set<LayoutMode>(["grid", "list", "compact"]);
-const isLayoutMode = (value: string): value is LayoutMode =>
-  validLayoutModes.has(value as LayoutMode);
-const defaultFilterSections: FilterSections = {
-  collections: true,
-  status: true,
-  tags: true,
-};
-
-const isFiltersCollapsed = ref(true);
-const filterSections = ref<FilterSections>({ ...defaultFilterSections });
+const isFiltersCollapsed = ref(DEFAULT_LIBRARY_VIEW_STATE.isFiltersCollapsed);
+const filterSections = ref<FilterSections>({ ...DEFAULT_FILTER_SECTIONS });
 
 const normalizeF95Url = (rawUrl: unknown): string => {
   if (typeof rawUrl !== "string") return "";
@@ -140,30 +127,11 @@ const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
 };
 
-const normalizeFilterSections = (value: unknown): FilterSections => {
-  const source = (value as Partial<FilterSections> | null) || null;
-
-  return {
-  collections:
-    typeof source?.collections === "boolean"
-      ? source.collections
-      : defaultFilterSections.collections,
-  status:
-    typeof source?.status === "boolean"
-      ? source.status
-      : defaultFilterSections.status,
-  tags:
-    typeof source?.tags === "boolean"
-      ? source.tags
-      : defaultFilterSections.tags,
-  };
-};
-
 const allStatuses = [
-  { value: "Playing", label: "🎮 Playing" },
-  { value: "Completed", label: "✅ Completed" },
-  { value: "On Hold", label: "⏸️ On Hold" },
-  { value: "Plan to Play", label: "🗓️ Plan to Play" },
+  { value: LIBRARY_PLAY_STATUSES[0], label: "🎮 Playing" },
+  { value: LIBRARY_PLAY_STATUSES[1], label: "✅ Completed" },
+  { value: LIBRARY_PLAY_STATUSES[2], label: "⏸️ On Hold" },
+  { value: LIBRARY_PLAY_STATUSES[3], label: "🗓️ Plan to Play" },
 ];
 
 const sortOptions: Array<{ key: SortField; label: string }> = [
@@ -217,6 +185,46 @@ const clearFilters = () => {
   filterEngines.value = [];
   filterTags.value = [];
   filterCollection.value = "All";
+};
+
+const applyLibraryViewState = (state: LibraryViewState) => {
+  layoutMode.value = state.layoutMode;
+  sortBy.value = state.sortBy;
+  sortDir.value = state.sortDir;
+  filterCollection.value = state.filterCollection;
+  filterStatuses.value = [...state.filterStatuses];
+  filterTags.value = [...state.filterTags];
+  isFiltersCollapsed.value = state.isFiltersCollapsed;
+  filterSections.value = { ...state.filterSections };
+};
+
+const buildLibraryViewState = (): LibraryViewState =>
+  normalizeLibraryViewState({
+    layoutMode: layoutMode.value,
+    sortBy: sortBy.value,
+    sortDir: sortDir.value,
+    filterCollection: filterCollection.value,
+    filterStatuses: filterStatuses.value,
+    filterTags: filterTags.value,
+    isFiltersCollapsed: isFiltersCollapsed.value,
+    filterSections: filterSections.value,
+  });
+
+const sameStringArray = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const persistLibraryViewState = () => {
+  saveLibraryViewState(localStorage, buildLibraryViewState());
+};
+
+const restoreLibraryViewState = () => {
+  const restored = readLibraryViewState(localStorage);
+  applyLibraryViewState(restored.state);
+
+  if (restored.source === "legacy") {
+    persistLibraryViewState();
+    clearLegacyLibraryViewState(localStorage);
+  }
 };
 
 const filteredGames = computed(() => {
@@ -514,53 +522,36 @@ const handlePlaytimeTick = (event: Event) => {
   }
 };
 
-watch(isFiltersCollapsed, (collapsed) => {
-  localStorage.setItem(filtersPaneStorageKey, String(collapsed));
-});
-
 watch(
-  filterSections,
-  (sections) => {
-    localStorage.setItem(
-      filterSectionsStorageKey,
-      JSON.stringify({
-        collections: sections.collections,
-        status: sections.status,
-        tags: sections.tags,
-      }),
-    );
+  [
+    layoutMode,
+    sortBy,
+    sortDir,
+    filterCollection,
+    filterStatuses,
+    filterTags,
+    isFiltersCollapsed,
+    filterSections,
+  ],
+  () => {
+    persistLibraryViewState();
   },
   { deep: true },
 );
 
-watch(layoutMode, (mode) => {
-  if (validLayoutModes.has(mode)) {
-    localStorage.setItem(layoutModeStorageKey, mode);
+watch(uniqueTags, (tags) => {
+  const normalizedTags = normalizeLibraryViewState(
+    { filterTags: filterTags.value },
+    { validTags: tags },
+  ).filterTags;
+
+  if (!sameStringArray(normalizedTags, filterTags.value)) {
+    filterTags.value = normalizedTags;
   }
 });
 
 onMounted(() => {
-  const storedLayoutMode = localStorage.getItem(layoutModeStorageKey);
-  if (storedLayoutMode && isLayoutMode(storedLayoutMode)) {
-    layoutMode.value = storedLayoutMode;
-  }
-
-  const storedFiltersCollapsed = localStorage.getItem(filtersPaneStorageKey);
-  if (storedFiltersCollapsed === "true" || storedFiltersCollapsed === "false") {
-    isFiltersCollapsed.value = storedFiltersCollapsed === "true";
-  }
-
-  const storedFilterSections = localStorage.getItem(filterSectionsStorageKey);
-  if (storedFilterSections) {
-    try {
-      filterSections.value = normalizeFilterSections(
-        JSON.parse(storedFilterSections),
-      );
-    } catch (error) {
-      console.warn("Failed to parse saved filter section state", error);
-      filterSections.value = { ...defaultFilterSections };
-    }
-  }
+  restoreLibraryViewState();
 
   window.addEventListener("wlib-refresh-library", loadGames);
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
