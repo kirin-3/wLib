@@ -42,8 +42,7 @@ node_modules/
 .agent/
 .kilocode/
 .opencode/
-.sisyphus/
-.serena/
+AGENTS.md
 *.sublime-project
 *.sublime-workspace
 .project
@@ -81,3 +80,4 @@ coverage/
 __pycache__/
 test_venv/
 .pytest_cache/
+AGENTS.md

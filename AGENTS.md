@@ -15,12 +15,7 @@ Guide for coding agents working in `wLib`.
 - Persistent app data lives under `~/.local/share/wLib`.
 
 ## 2) Useful Docs
-- `docs/architecture.md`: overall system boundaries and event flow.
-- `docs/backend.md`: backend responsibilities and threading patterns.
-- `docs/frontend.md`: Vue runtime details and mock API fallback.
-- `docs/database.md`: DB path, WAL mode, and migration style.
-- `docs/extension_api.md`: localhost extension API and CORS rules.
-- `docs/build.md`: packaging, PyInstaller, and AppImage behavior.
+`docs/architecture.md` • `docs/backend.md` • `docs/frontend.md` • `docs/database.md` • `docs/extension_api.md` • `docs/build.md`
 
 ## 3) Common Commands
 Run from repo root unless noted.
@@ -43,15 +38,10 @@ DEV_MODE=1 python main.py
 # tests
 ruff check .
 basedpyright
+pytest
 python scripts/smoke_backend.py
 bash scripts/check-python.sh
 bash scripts/check-python-clean.sh
-pytest
-pytest tests/test_database.py -v
-pytest tests/test_launcher.py -v
-pytest tests/test_scraper.py -v
-pytest tests/test_main.py -v
-pytest tests/test_api_updates.py -v
 
 # frontend/build
 cd ui && npm run typecheck && npm run build
