@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
+import {
+  IconAutomation,
+  IconDeviceFloppyFilled,
+  IconDownloadFilled,
+  IconLoader2,
+  IconLogout2,
+} from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type {
   InstallProgressStatus,
@@ -344,23 +351,7 @@ const saveSettings = async () => {
             class="text-lg font-semibold mb-4 flex items-center gap-2"
             style="color: var(--text-primary)"
           >
-            <svg
-              class="w-5 h-5"
-              style="color: var(--brand)"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
-              />
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-              <line x1="12" x2="12" y1="22.08" y2="12" />
-            </svg>
+            <IconAutomation class="w-5 h-5" style="color: var(--brand)" />
             Proton & Wine Environment
           </h3>
 
@@ -377,31 +368,14 @@ const saveSettings = async () => {
                   class="text-xs font-medium flex items-center gap-1 disabled:opacity-50"
                   style="color: var(--brand)"
                 >
-                  <svg
+                  <IconLoader2
                     v-if="downloadingProton"
                     class="w-3 h-3 animate-spin"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 2a10 10 0 0 1 10 10" />
-                  </svg>
-                  <svg
+                  />
+                  <IconDownloadFilled
                     v-else
                     class="w-3 h-3"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" x2="12" y1="15" y2="3" />
-                  </svg>
+                  />
                   {{
                     downloadingProton
                       ? "Downloading (Check terminal)..."
@@ -496,8 +470,9 @@ const saveSettings = async () => {
                 <button
                   @click="resetSession"
                   :disabled="resettingSession || openingLoginSession"
-                  class="settings-btn disabled:opacity-50"
+                  class="settings-btn disabled:opacity-50 inline-flex items-center gap-2"
                 >
+                  <IconLogout2 class="w-4 h-4" />
                   {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
                 </button>
               </div>
@@ -534,9 +509,7 @@ const saveSettings = async () => {
                   v-model="enableLogging"
                   class="sr-only peer"
                 />
-                <div
-                  class="settings-toggle peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-                ></div>
+                <div class="ui-toggle"></div>
               </label>
             </div>
 
@@ -600,18 +573,10 @@ const saveSettings = async () => {
                       :disabled="installingDeps || dllsInstalled"
                       class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50"
                     >
-                      <svg
+                      <IconLoader2
                         v-if="installingDeps"
                         class="w-3 h-3 animate-spin"
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <circle cx="12" cy="12" r="10" />
-                        <path d="M12 2a10 10 0 0 1 10 10" />
-                      </svg>
+                      />
                       {{
                         dllsInstalled
                           ? "Installed"
@@ -687,18 +652,10 @@ const saveSettings = async () => {
                       :disabled="installingRtps || rtpsInstalled"
                       class="settings-btn flex items-center gap-2 shrink-0 disabled:opacity-50"
                     >
-                      <svg
+                      <IconLoader2
                         v-if="installingRtps"
                         class="w-3 h-3 animate-spin"
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <circle cx="12" cy="12" r="10" />
-                        <path d="M12 2a10 10 0 0 1 10 10" />
-                      </svg>
+                      />
                       {{
                         rtpsInstalled
                           ? "Installed"
@@ -759,18 +716,10 @@ const saveSettings = async () => {
                     :disabled="installingCe || ceInstalled"
                     class="settings-btn flex items-center gap-2 absolute right-4 top-1/2 -translate-y-1/2 disabled:opacity-50"
                   >
-                    <svg
+                    <IconLoader2
                       v-if="installingCe"
                       class="w-3 h-3 animate-spin"
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M12 2a10 10 0 0 1 10 10" />
-                    </svg>
+                    />
                     {{
                       ceInstalled
                         ? "Installed"
@@ -811,9 +760,10 @@ const saveSettings = async () => {
         <button
           @click="saveSettings"
           :disabled="saving"
-          class="text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
+          class="inline-flex items-center gap-2 text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
+          <IconDeviceFloppyFilled class="w-4 h-4" />
           {{ saving ? "Saving..." : "Save Changes" }}
         </button>
       </div>
@@ -857,13 +807,6 @@ const saveSettings = async () => {
 }
 .settings-btn:hover {
   background: var(--border-hover);
-}
-
-.settings-toggle {
-  width: 2.75rem;
-  height: 1.5rem;
-  background: var(--bg-overlay);
-  border-radius: 9999px;
 }
 
 .tool-card {

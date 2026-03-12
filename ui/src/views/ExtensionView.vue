@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
+import {
+  IconActivityHeartbeat,
+  IconFolderOpen,
+  IconHelpCircle,
+  IconInfoCircle,
+} from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 
 type ConnectionStatus = "checking" | "connected" | "disconnected";
@@ -73,17 +79,7 @@ onUnmounted(() => {
           class="text-lg font-semibold mb-4 flex items-center gap-2"
           style="color: var(--text-primary)"
         >
-          <svg
-            class="w-5 h-5"
-            style="color: var(--brand)"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M2 12h5l2-9 4 18 2-9h5" />
-            <circle cx="19" cy="12" r="2" />
-          </svg>
+          <IconActivityHeartbeat class="w-5 h-5" style="color: var(--brand)" />
           Local Service Status
         </h3>
 
@@ -139,18 +135,7 @@ onUnmounted(() => {
           class="text-lg font-semibold mb-4 flex items-center gap-2"
           style="color: var(--text-primary)"
         >
-          <svg
-            class="w-5 h-5"
-            style="color: var(--brand)"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path
-              d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
-            />
-          </svg>
+          <IconFolderOpen class="w-5 h-5" style="color: var(--brand)" />
           Extension Files
         </h3>
 
@@ -193,17 +178,7 @@ onUnmounted(() => {
           class="text-lg font-semibold mb-4 flex items-center gap-2"
           style="color: var(--text-primary)"
         >
-          <svg
-            class="w-5 h-5"
-            style="color: var(--brand)"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 16v-4M12 8h.01" />
-          </svg>
+          <IconInfoCircle class="w-5 h-5" style="color: var(--brand)" />
           How to Install
         </h3>
 
@@ -301,18 +276,7 @@ onUnmounted(() => {
           class="text-lg font-semibold mb-4 flex items-center gap-2"
           style="color: var(--text-primary)"
         >
-          <svg
-            class="w-5 h-5"
-            style="color: var(--brand)"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path
-              d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"
-            />
-          </svg>
+          <IconHelpCircle class="w-5 h-5" style="color: var(--brand)" />
           How It Works
         </h3>
         <div class="space-y-3 text-sm" style="color: var(--text-secondary)">

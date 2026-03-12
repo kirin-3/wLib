@@ -1,6 +1,20 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import {
+  IconColumns2Filled,
+  IconFilterFilled,
+  IconLibraryPlus,
+  IconLayoutGridFilled,
+  IconLayoutListFilled,
+  IconLoader2,
+  IconPhotoFilled,
+  IconPlayerPlayFilled,
+  IconRefresh,
+  IconZoom,
+  IconStarFilled,
+  IconX,
+} from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type { GameRecord } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
@@ -24,6 +38,10 @@ import {
 interface UpdateNotice {
   type: "" | "success" | "error";
   message: string;
+}
+
+interface ModalUpdateState extends UpdateNotice {
+  running: boolean;
 }
 
 interface AddGamePayload {
@@ -305,6 +323,12 @@ const filteredGames = computed(() => {
 const updatingId = ref<number | null>(null);
 const updateNotice = ref<UpdateNotice>({ type: "", message: "" });
 let updateNoticeTimeout: ReturnType<typeof setTimeout> | null = null;
+const modalUpdateState = ref<ModalUpdateState>({
+  running: false,
+  type: "",
+  message: "",
+});
+let modalUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const showUpdateNotice = (type: UpdateNotice["type"], message: string) => {
   updateNotice.value = { type, message };
@@ -314,6 +338,25 @@ const showUpdateNotice = (type: UpdateNotice["type"], message: string) => {
   updateNoticeTimeout = setTimeout(() => {
     updateNotice.value = { type: "", message: "" };
   }, 3500);
+};
+
+const clearModalUpdateState = () => {
+  if (modalUpdateTimeout) {
+    clearTimeout(modalUpdateTimeout);
+    modalUpdateTimeout = null;
+  }
+  modalUpdateState.value = { running: false, type: "", message: "" };
+};
+
+const showModalUpdateNotice = (type: UpdateNotice["type"], message: string) => {
+  if (modalUpdateTimeout) {
+    clearTimeout(modalUpdateTimeout);
+  }
+  modalUpdateState.value = { running: false, type, message };
+  modalUpdateTimeout = setTimeout(() => {
+    modalUpdateState.value = { running: false, type: "", message: "" };
+    modalUpdateTimeout = null;
+  }, 5000);
 };
 
 const formatPlaytime = (seconds: number | null | undefined): string => {
@@ -360,20 +403,65 @@ const loadGames = async () => {
 };
 
 const openDetail = (game: GameRecord) => {
+  clearModalUpdateState();
   selectedGame.value = game;
   showDetailModal.value = true;
 };
 
 const handleGameUpdated = async () => {
+  clearModalUpdateState();
   showDetailModal.value = false;
   selectedGame.value = null;
   await loadGames();
 };
 
 const handleGameDeleted = async () => {
+  clearModalUpdateState();
   showDetailModal.value = false;
   selectedGame.value = null;
   await loadGames();
+};
+
+const runSingleGameUpdateCheck = async (game: GameRecord) => {
+  if (!game.f95_url) {
+    return {
+      type: "error" as const,
+      message: `${game.title}: missing F95 URL.`,
+    };
+  }
+
+  updatingId.value = game.id;
+  try {
+    const result = await api.checkForUpdates(game.f95_url);
+    if (result && result.success) {
+      await loadGames();
+      if (result.has_update) {
+        return {
+          type: "success" as const,
+          message: `${game.title}: new version ${result.version} available.`,
+        };
+      }
+
+      return {
+        type: "success" as const,
+        message: `${game.title}: no new update found (${result.version}).`,
+      };
+    }
+
+    const reason = result?.error || "Update check failed";
+    return {
+      type: "error" as const,
+      message: `${game.title}: ${reason}`,
+    };
+  } catch (e) {
+    console.error("Update check failed", e);
+    return {
+      type: "error" as const,
+      message: `${game.title}: ${String(e) || "Update check failed"}`,
+    };
+  } finally {
+    updatingId.value = null;
+  }
 };
 
 const launchFromModal = async (game: GameRecord) => {
@@ -471,34 +559,17 @@ const handleAddGame = async (gameData: AddGamePayload) => {
 
 const checkUpdate = async (game: GameRecord, event: Event) => {
   event.stopPropagation();
-  if (!game.f95_url) return;
+  const feedback = await runSingleGameUpdateCheck(game);
+  showUpdateNotice(feedback.type, feedback.message);
+};
 
-  updatingId.value = game.id;
-  try {
-    const result = await api.checkForUpdates(game.f95_url);
-    if (result && result.success) {
-      await loadGames();
-      if (result.has_update) {
-        showUpdateNotice(
-          "success",
-          `${game.title}: new version ${result.version} available.`,
-        );
-      } else {
-        showUpdateNotice(
-          "success",
-          `${game.title}: no new update found (${result.version}).`,
-        );
-      }
-    } else {
-      const reason = result?.error || "Update check failed";
-      showUpdateNotice("error", `${game.title}: ${reason}`);
-    }
-  } catch (e) {
-    console.error("Update check failed", e);
-    showUpdateNotice("error", `${game.title}: ${String(e) || "Update check failed"}`);
-  } finally {
-    updatingId.value = null;
-  }
+const handleModalUpdateCheck = async (gameId: number) => {
+  const game = games.value.find((entry) => entry.id === gameId) || selectedGame.value;
+  if (!game) return;
+
+  modalUpdateState.value = { running: true, type: "", message: "" };
+  const feedback = await runSingleGameUpdateCheck(game);
+  showModalUpdateNotice(feedback.type, feedback.message);
 };
 
 const handlePlaytimeTick = (event: Event) => {
@@ -550,6 +621,12 @@ watch(uniqueTags, (tags) => {
   }
 });
 
+watch(showDetailModal, (open) => {
+  if (!open) {
+    clearModalUpdateState();
+  }
+});
+
 onMounted(() => {
   restoreLibraryViewState();
 
@@ -565,6 +642,9 @@ onUnmounted(() => {
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
   if (updateNoticeTimeout) {
     clearTimeout(updateNoticeTimeout);
+  }
+  if (modalUpdateTimeout) {
+    clearTimeout(modalUpdateTimeout);
   }
 });
 </script>
@@ -600,18 +680,7 @@ onUnmounted(() => {
                   : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
               "
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <rect x="3" y="3" width="7" height="7"></rect>
-                <rect x="14" y="3" width="7" height="7"></rect>
-                <rect x="14" y="14" width="7" height="7"></rect>
-                <rect x="3" y="14" width="7" height="7"></rect>
-              </svg>
+              <IconLayoutGridFilled class="w-4 h-4" />
               All Games
             </button>
             <button
@@ -623,17 +692,7 @@ onUnmounted(() => {
                   : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
               "
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                :fill="filterCollection === 'Favorites' ? 'currentColor' : 'none'"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <polygon
-                  points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"
-                ></polygon>
-              </svg>
+              <IconStarFilled class="w-4 h-4" />
               Favorites
             </button>
           </div>
@@ -740,18 +799,7 @@ onUnmounted(() => {
           style="color: var(--text-primary); border: 1px solid var(--border)"
           :title="isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'"
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            class="w-5 h-5"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-          >
-            <path
-              fill-rule="evenodd"
-              d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 019 17v-5.586L4.293 6.707A1 1 0 014 6V3z"
-              clip-rule="evenodd"
-            />
-          </svg>
+          <IconFilterFilled class="w-5 h-5" />
           <span>Filters</span>
           <span
             v-if="activeFilterCount > 0"
@@ -767,20 +815,7 @@ onUnmounted(() => {
           class="hover:brightness-110 px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-semibold transition-all active:scale-95"
           style="background: var(--brand); color: var(--text-inverse); box-shadow: var(--shadow-brand)"
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-          </svg>
+          <IconLibraryPlus class="w-4 h-4" />
           Add Game
         </button>
       </div>
@@ -802,18 +837,10 @@ onUnmounted(() => {
 
       <!-- Search Input -->
       <div class="relative">
-        <svg
+        <IconZoom
           class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
           style="color: var(--text-muted)"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <circle cx="11" cy="11" r="8" />
-          <path d="m21 21-4.3-4.3" />
-        </svg>
+        />
         <input
           v-model="searchQuery"
           type="text"
@@ -862,15 +889,7 @@ onUnmounted(() => {
           class="px-3 py-1.5 rounded-lg text-sm hover:text-red-400 transition-all flex items-center gap-1 border active:scale-95 active:bg-[var(--bg-overlay)]"
           style="color: var(--text-muted); border-color: var(--border)"
         >
-          <svg
-            class="w-3 h-3"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
+          <IconX class="w-3 h-3" />
           Clear all
         </button>
 
@@ -899,18 +918,7 @@ onUnmounted(() => {
               "
               title="Grid View"
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <rect x="3" y="3" width="7" height="7"></rect>
-                <rect x="14" y="3" width="7" height="7"></rect>
-                <rect x="14" y="14" width="7" height="7"></rect>
-                <rect x="3" y="14" width="7" height="7"></rect>
-              </svg>
+              <IconColumns2Filled class="w-4 h-4" />
             </button>
             <button
               @click="layoutMode = 'list'"
@@ -922,20 +930,7 @@ onUnmounted(() => {
               "
               title="List View"
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <line x1="8" y1="6" x2="21" y2="6"></line>
-                <line x1="8" y1="12" x2="21" y2="12"></line>
-                <line x1="8" y1="18" x2="21" y2="18"></line>
-                <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                <line x1="3" y1="18" x2="3.01" y2="18"></line>
-              </svg>
+              <IconLayoutListFilled class="w-4 h-4" />
             </button>
             <button
               @click="layoutMode = 'compact'"
@@ -947,23 +942,7 @@ onUnmounted(() => {
               "
               title="Compact View"
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <rect x="4" y="4" width="4" height="4"></rect>
-                <rect x="10" y="4" width="4" height="4"></rect>
-                <rect x="16" y="4" width="4" height="4"></rect>
-                <rect x="4" y="10" width="4" height="4"></rect>
-                <rect x="10" y="10" width="4" height="4"></rect>
-                <rect x="16" y="10" width="4" height="4"></rect>
-                <rect x="4" y="16" width="4" height="4"></rect>
-                <rect x="10" y="16" width="4" height="4"></rect>
-                <rect x="16" y="16" width="4" height="4"></rect>
-              </svg>
+              <IconLayoutGridFilled class="w-4 h-4 opacity-90" />
             </button>
           </div>
         </div>
@@ -972,19 +951,7 @@ onUnmounted(() => {
     </div>
 
     <div v-if="games.length === 0" class="empty-state flex-1">
-      <svg
-        class="empty-state-icon"
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.75"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <rect x="2.5" y="7.5" width="19" height="9" rx="3" />
-        <path d="M7 12h2M8 11v2M15.5 11.5h.01M18 13.5h.01" />
-      </svg>
+      <IconDeviceGamepad2Filled class="empty-state-icon" />
       <h3 class="empty-state-title">Your library is empty</h3>
       <p class="empty-state-subtext">Add your first game to get started</p>
       <p class="empty-state-hint">
@@ -993,19 +960,7 @@ onUnmounted(() => {
     </div>
 
     <div v-else-if="filteredGames.length === 0" class="empty-state flex-1">
-      <svg
-        class="empty-state-icon"
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.75"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <circle cx="11" cy="11" r="7" />
-        <path d="m21 21-4.35-4.35M8 11h6" />
-      </svg>
+      <IconZoom class="empty-state-icon" />
       <h3 class="empty-state-title">No games found</h3>
       <p class="empty-state-subtext">Try adjusting your search or filters</p>
       <button
@@ -1067,22 +1022,11 @@ onUnmounted(() => {
             :alt="game.title"
             class="absolute inset-0 w-full h-full object-cover object-top"
           />
-          <svg
+          <IconPhotoFilled
             v-else
             class="w-12 h-12 transition-colors"
             style="color: var(--border)"
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-            <line x1="3" x2="21" y1="9" y2="9" />
-            <path d="M9 21V9" />
-          </svg>
+          />
 
           <div
             v-if="layoutMode !== 'compact'"
@@ -1091,16 +1035,7 @@ onUnmounted(() => {
             <button
               class="card-overlay-play-btn rounded-full p-4 transition-all transform scale-90 group-hover:scale-100"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                stroke="none"
-              >
-                <polygon points="5 3 19 12 5 21 5 3" />
-              </svg>
+              <IconPlayerPlayFilled class="w-6 h-6" />
             </button>
           </div>
 
@@ -1109,11 +1044,7 @@ onUnmounted(() => {
             v-if="layoutMode !== 'compact' && game.rating"
             class="rating-badge absolute top-3 left-3 backdrop-blur-md text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1"
           >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20">
-              <path
-                d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z"
-              />
-            </svg>
+            <IconStarFilled class="w-3.5 h-3.5" />
             {{ game.rating }}
           </div>
 
@@ -1124,42 +1055,15 @@ onUnmounted(() => {
             :disabled="updatingId === game.id"
             class="update-overlay-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
           >
-            <svg
+            <IconRefresh
               v-if="updatingId !== game.id"
               class="w-4 h-4"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-10.45l4.8 4.8"
-              />
-            </svg>
-            <svg
+            />
+            <IconLoader2
               v-else
               class="w-4 h-4 animate-spin"
               style="color: var(--brand)"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <line x1="12" x2="12" y1="2" y2="6" />
-              <line x1="12" x2="12" y1="18" y2="22" />
-              <line x1="4.93" x2="7.76" y1="4.93" y2="7.76" />
-              <line x1="16.24" x2="19.07" y1="16.24" y2="19.07" />
-              <line x1="2" x2="6" y1="12" y2="12" />
-              <line x1="18" x2="22" y1="12" y2="12" />
-              <line x1="4.93" x2="7.76" y1="19.07" y2="16.24" />
-              <line x1="16.24" x2="19.07" y1="7.76" y2="4.93" />
-            </svg>
+            />
           </button>
 
           <div v-if="layoutMode === 'compact'" class="compact-image-overlay absolute inset-0"></div>
@@ -1179,9 +1083,7 @@ onUnmounted(() => {
               class="compact-play-btn rounded-md p-2 shrink-0 transition-all active:scale-95"
               :title="`Play ${game.title}`"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M5 3l14 9-14 9V3z" />
-              </svg>
+              <IconPlayerPlayFilled class="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -1314,9 +1216,11 @@ onUnmounted(() => {
     <GameDetailModal
       v-model="showDetailModal"
       :game="selectedGame"
+      :update-check-state="modalUpdateState"
       @updated="handleGameUpdated"
       @deleted="handleGameDeleted"
       @launch="launchFromModal"
+      @check-updates="handleModalUpdateCheck"
     />
   </div>
   </div>

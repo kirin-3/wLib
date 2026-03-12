@@ -10,20 +10,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tabler/icons-vue": "^3.40.0",
     "dompurify": "^3.3.1",
     "marked": "^17.0.3",
     "vue": "^3.5.25"
   },
   "devDependencies": {
-    "@vue/tsconfig": "^0.8.1",
     "@tailwindcss/vite": "^4.2.1",
     "@vitejs/plugin-vue": "^6.0.2",
+    "@vue/tsconfig": "^0.8.1",
     "autoprefixer": "^10.4.24",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.2",
     "vite": "^7.3.1",
-    "vue-tsc": "^3.1.0",
-    "vue-router": "^5.0.3"
+    "vue-router": "^5.0.3",
+    "vue-tsc": "^3.1.0"
   }
 }

@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
+import {
+  IconArrowUp,
+  IconClockUp,
+  IconReload,
+} from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type {
   AppReleaseAsset,
@@ -363,17 +368,7 @@ onUnmounted(() => {
             class="text-lg font-semibold flex items-center gap-2"
             style="color: var(--text-primary)"
           >
-            <svg
-              class="w-5 h-5"
-              style="color: var(--brand)"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
+            <IconClockUp class="w-5 h-5" style="color: var(--brand)" />
             Automatic Checking
           </h3>
         </div>
@@ -417,17 +412,7 @@ onUnmounted(() => {
             class="text-lg font-semibold flex items-center gap-2"
             style="color: var(--text-primary)"
           >
-            <svg
-              class="w-5 h-5 text-green-400"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path
-                d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-10.45l4.8 4.8"
-              />
-            </svg>
+            <IconReload class="w-5 h-5 text-green-400" />
             Manual Check
           </h3>
 
@@ -437,17 +422,7 @@ onUnmounted(() => {
               @click="startCheck"
               class="bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg text-sm font-bold transition-all shadow-lg shadow-green-900/20 flex items-center gap-2"
             >
-              <svg
-                class="w-4 h-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path
-                  d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-10.45l4.8 4.8"
-                />
-              </svg>
+              <IconReload class="w-4 h-4" />
               Check All Games
             </button>
             <button
@@ -523,15 +498,7 @@ onUnmounted(() => {
         <h3
           class="text-lg font-semibold text-green-400 mb-4 flex items-center gap-2"
         >
-          <svg
-            class="w-5 h-5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <path d="M12 19V5M5 12l7-7 7 7" />
-          </svg>
+          <IconArrowUp class="w-5 h-5" />
           Updates Available ({{ persistedUpdates.length }})
         </h3>
 

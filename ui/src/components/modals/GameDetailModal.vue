@@ -1,13 +1,70 @@
 <script setup lang="ts">
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
+import {
+  IconBookFilled,
+  IconCheck,
+  IconChevronDown,
+  IconExternalLinkFilled,
+  IconFlameFilled,
+  IconFolderOpenFilled,
+  IconPaletteFilled,
+  IconPlayerPlayFilled,
+  IconRefresh,
+  IconStarFilled,
+  IconX,
+  IconDeviceGamepad2Filled,
+} from "@tabler/icons-vue";
 import { api } from "../../services/api";
 import type { GameRecord, RunnerInfo, SaveLocation } from "../../services/api";
 
 type PlayStatus = "Playing" | "Completed" | "On Hold" | "Plan to Play";
 
+type UpdateCheckState = {
+  running: boolean;
+  type: "" | "success" | "error";
+  message: string;
+};
+
+const ENGINE_OPTIONS = [
+  "ADRIFT",
+  "Flash",
+  "HTML",
+  "Java",
+  "Others",
+  "QSP",
+  "RAGS",
+  "RPGM",
+  "Ren'Py",
+  "Tads",
+  "Unity",
+  "Unreal Engine",
+  "WebGL",
+  "Wolf RPG",
+] as const;
+
+type EngineOption = (typeof ENGINE_OPTIONS)[number];
+
+const ENGINE_STYLES: Record<EngineOption, string> = {
+  ADRIFT: "background: rgba(109, 128, 145, 0.16); border: 1px solid rgba(109, 128, 145, 0.36); color: #bfd2e0",
+  Flash: "background: rgba(189, 93, 56, 0.16); border: 1px solid rgba(189, 93, 56, 0.36); color: #f3b28f",
+  HTML: "background: rgba(191, 125, 54, 0.16); border: 1px solid rgba(191, 125, 54, 0.36); color: #e8c08b",
+  Java: "background: rgba(177, 120, 45, 0.16); border: 1px solid rgba(177, 120, 45, 0.36); color: #f1ca78",
+  Others: "background: var(--bg-overlay); border: 1px solid var(--border); color: var(--text-secondary)",
+  QSP: "background: rgba(125, 82, 156, 0.16); border: 1px solid rgba(125, 82, 156, 0.36); color: #cfb0f0",
+  RAGS: "background: rgba(150, 80, 72, 0.16); border: 1px solid rgba(150, 80, 72, 0.36); color: #e1afa7",
+  RPGM: "background: rgba(179, 128, 204, 0.16); border: 1px solid rgba(179, 128, 204, 0.36); color: #d7b6ea",
+  "Ren'Py": "background: rgba(176, 90, 112, 0.16); border: 1px solid rgba(176, 90, 112, 0.36); color: #e6b0c0",
+  Tads: "background: rgba(104, 127, 83, 0.16); border: 1px solid rgba(104, 127, 83, 0.36); color: #c8ddaf",
+  Unity: "background: rgba(93, 141, 147, 0.16); border: 1px solid rgba(93, 141, 147, 0.36); color: #add9dd",
+  "Unreal Engine": "background: rgba(119, 119, 132, 0.16); border: 1px solid rgba(119, 119, 132, 0.36); color: #d6d6dc",
+  WebGL: "background: rgba(74, 148, 161, 0.16); border: 1px solid rgba(74, 148, 161, 0.36); color: #9fdbe5",
+  "Wolf RPG": "background: rgba(145, 91, 53, 0.16); border: 1px solid rgba(145, 91, 53, 0.36); color: #e2ba93",
+};
+
 const props = defineProps<{
   modelValue: boolean;
   game: GameRecord | null;
+  updateCheckState: UpdateCheckState;
 }>();
 
 const emit = defineEmits<{
@@ -15,6 +72,7 @@ const emit = defineEmits<{
   updated: [];
   deleted: [];
   launch: [payload: GameRecord];
+  "check-updates": [gameId: number];
 }>();
 
 // Editable fields
@@ -28,9 +86,10 @@ const status = ref("");
 const playStatus = ref<PlayStatus>("Plan to Play");
 const isFavorite = ref(false);
 const tags = ref<string[]>([]);
-const engine = ref("");
+const engine = ref<EngineOption>("Others");
 const newTag = ref("");
 const latestVersion = ref("");
+const engineMenuOpen = ref(false);
 const runJapaneseLocale = ref(false);
 const runWayland = ref(false);
 const autoInjectCe = ref(false);
@@ -61,6 +120,7 @@ const ratingGameplay = ref(0);
 
 const saving = ref(false);
 const deleting = ref(false);
+const engineDropdownRef = ref<HTMLElement | null>(null);
 
 const statuses: Array<{ value: PlayStatus; label: string }> = [
   { value: "Playing", label: "🎮 Playing" },
@@ -93,6 +153,91 @@ const hasUpdate = computed(() => {
   );
 });
 
+const syncReadonlyMetadata = (game: GameRecord | null) => {
+  latestVersion.value = game?.latest_version || "";
+  f95Rating.value = game?.rating || "";
+};
+
+const normalizeEngine = (value: string | null | undefined): EngineOption => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "unknown" || normalized === "null") {
+    return "Others";
+  }
+
+  const match = ENGINE_OPTIONS.find(
+    (option) => option.toLowerCase() === normalized,
+  );
+  return match || "Others";
+};
+
+const getEngineBadgeStyle = (value: EngineOption): string => ENGINE_STYLES[value];
+
+const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
+
+const statusButtonStyle = (value: PlayStatus) => {
+  if (playStatus.value !== value) {
+    return "background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)";
+  }
+
+  switch (value) {
+    case "Playing":
+      return "background: rgba(234, 179, 8, 0.16); border: 1px solid rgba(250, 204, 21, 0.3); color: #facc15";
+    case "Completed":
+      return "background: rgba(47, 106, 73, 0.18); border: 1px solid rgba(74, 222, 128, 0.28); color: #86efac";
+    case "On Hold":
+      return "background: rgba(180, 83, 9, 0.18); border: 1px solid rgba(251, 146, 60, 0.3); color: #fdba74";
+    case "Plan to Play":
+    default:
+      return "background: rgba(120, 113, 46, 0.18); border: 1px solid rgba(202, 138, 4, 0.28); color: #fcd34d";
+  }
+};
+
+const summaryItems = computed(() => [
+  {
+    label: "F95 Rating",
+    value: f95Rating.value || "Unavailable",
+    accent: f95Rating.value ? "color: var(--rating-accent)" : "",
+    showStar: true,
+  },
+  {
+    label: "Your Rating",
+    value: averagePersonalRating.value === "—" ? "Not rated" : `${averagePersonalRating.value}/5`,
+    accent: averagePersonalRating.value === "—" ? "" : "color: var(--rating-accent)",
+    showStar: true,
+  },
+  {
+    label: "Playtime",
+    value: formatPlaytime(props.game?.playtime_seconds),
+    accent: "",
+    showStar: false,
+  },
+  {
+    label: "Last Played",
+    value: formatLastPlayed(props.game?.last_played),
+    accent: "",
+    showStar: false,
+  },
+  {
+    label: "Exe Modified",
+    value: executableModifiedDisplay.value,
+    accent: "",
+    showStar: false,
+  },
+  {
+    label: "Thread Updated",
+    value: threadMainPostEditedDisplay.value,
+    accent: hasUpdate.value ? "color: #facc15" : "",
+    showStar: false,
+  },
+]);
+
+const ratingCategories = [
+  { label: "Graphics", model: "ratingGraphics", icon: IconPaletteFilled },
+  { label: "Story", model: "ratingStory", icon: IconBookFilled },
+  { label: "Fappability", model: "ratingFappability", icon: IconFlameFilled },
+  { label: "Gameplay", model: "ratingGameplay", icon: IconDeviceGamepad2Filled },
+] as const;
+
 const lastSyncedId = ref<number | null>(null);
 
 watch(
@@ -112,7 +257,7 @@ watch(
           ? g.play_status
           : "Plan to Play";
         isFavorite.value = !!g.is_favorite;
-        engine.value = g.engine || "";
+        engine.value = normalizeEngine(g.engine);
         runJapaneseLocale.value = g.run_japanese_locale ? true : false;
         runWayland.value = g.run_wayland ? true : false;
         autoInjectCe.value = g.auto_inject_ce ? true : false;
@@ -135,8 +280,7 @@ watch(
         } else {
           tags.value = [];
         }
-        latestVersion.value = g.latest_version || "";
-        f95Rating.value = g.rating || "";
+        syncReadonlyMetadata(g);
 
         ratingGraphics.value = g.rating_graphics || 0;
         ratingStory.value = g.rating_story || 0;
@@ -159,11 +303,22 @@ watch(
       loadingRunners.value = false;
       void Promise.all([loadCheatEngineStatus(), loadExecutableModifiedTime()]);
     } else {
+      engineMenuOpen.value = false;
       executableModifiedAt.value = null;
       executableModifiedKnown.value = false;
       loadingExecutableModifiedAt.value = false;
     }
   },
+);
+
+watch(
+  () => [props.game?.id, props.game?.latest_version, props.game?.rating] as const,
+  ([gameId]) => {
+    if (props.game && typeof gameId === "number" && gameId === lastSyncedId.value) {
+      syncReadonlyMetadata(props.game);
+    }
+  },
+  { immediate: true },
 );
 
 watch(
@@ -189,7 +344,30 @@ watch(
   },
 );
 
+const selectEngine = (value: EngineOption) => {
+  engine.value = value;
+  engineMenuOpen.value = false;
+};
+
+const handleOutsideClick = (event: MouseEvent) => {
+  if (!engineMenuOpen.value) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (!engineDropdownRef.value?.contains(target)) {
+    engineMenuOpen.value = false;
+  }
+};
+
+onMounted(() => {
+  document.addEventListener("mousedown", handleOutsideClick);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", handleOutsideClick);
+});
+
 const close = () => {
+  engineMenuOpen.value = false;
   emit("update:modelValue", false);
 };
 
@@ -246,7 +424,7 @@ const save = async () => {
       play_status: playStatus.value,
       is_favorite: isFavorite.value ? 1 : 0,
       tags: tags.value.join(", "),
-      engine: engine.value,
+      engine: normalizeEngine(engine.value),
       run_japanese_locale: runJapaneseLocale.value,
       run_wayland: runWayland.value,
       auto_inject_ce: autoInjectCe.value,
@@ -309,7 +487,7 @@ const launchGame = () => {
       play_status: playStatus.value,
       is_favorite: !!isFavorite.value,
       tags: tags.value.join(", "),
-      engine: engine.value,
+      engine: normalizeEngine(engine.value),
       run_japanese_locale: !!runJapaneseLocale.value,
       run_wayland: !!runWayland.value,
       auto_inject_ce: !!autoInjectCe.value,
@@ -317,6 +495,12 @@ const launchGame = () => {
       proton_version: useCustomPrefix.value ? protonVersion.value : "",
     };
     emit("launch", payload);
+  }
+};
+
+const requestUpdateCheck = () => {
+  if (props.game?.f95_url) {
+    emit("check-updates", props.game.id);
   }
 };
 
@@ -474,135 +658,48 @@ const openInBrowser = async () => {
     v-if="modelValue && game"
     class="fixed inset-0 z-50 flex items-center justify-center p-4"
   >
-    <!-- Overlay -->
     <div
       class="absolute inset-0 bg-black/80"
       @click="close"
     ></div>
 
-    <!-- Modal Content -->
     <div
-      class="modal-content w-full max-w-3xl rounded-2xl shadow-2xl relative overflow-hidden transform transition-[opacity,transform] flex flex-col max-h-[90vh]"
+      class="modal-content relative flex max-h-[90vh] w-full max-w-[49rem] flex-col overflow-hidden rounded-xl"
     >
-      <!-- Header with Cover Image Background -->
-      <div
-        class="relative h-48 overflow-hidden"
-        style="
-          background: linear-gradient(
-            135deg,
-            var(--bg-raised),
-            var(--bg-inset)
-          );
-        "
+      <button
+        @click="close"
+        class="absolute right-4 top-4 z-10 rounded-md p-1.5 transition-colors"
+        style="color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border)"
       >
-        <img
-          v-if="coverImage"
-          :src="coverImage"
-          class="absolute inset-0 w-full h-full object-cover opacity-60 blur-sm"
-        />
-        <div
-          class="absolute inset-0"
-          style="
-            background: linear-gradient(
-              to top,
-              var(--bg-surface),
-              transparent,
-              transparent
-            );
-          "
-        ></div>
+        <IconX class="w-5 h-5" />
+      </button>
 
-        <div
-          class="absolute bottom-4 left-6 right-6 flex items-end justify-between"
-        >
-          <div>
-            <h3 class="text-xl font-bold text-white drop-shadow-lg line-clamp-2 max-w-lg">
-              {{ title || "Untitled Game" }}
-            </h3>
-            <div class="flex items-center gap-2 mt-0.5">
-              <span
-                v-if="engine"
-                class="text-xs font-bold px-2 py-0.5 rounded-md"
-                style="
-                  background: rgba(90, 57, 104, 0.3);
-                  color: #b380cc;
-                  border: 1px solid rgba(90, 57, 104, 0.4);
-                "
-                >{{ engine }}</span
-              >
-              <span
-                v-if="game?.playtime_seconds"
-                class="text-xs font-bold px-2 py-0.5 rounded-md text-gray-300"
-                style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);"
-              >
-                ⏱ {{ formatPlaytime(game.playtime_seconds) }}
-              </span>
-              <span
-                v-if="game?.last_played"
-                class="text-xs font-bold px-2 py-0.5 rounded-md text-gray-400"
-                style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);"
-              >
-                Last played: {{ formatLastPlayed(game.last_played) }}
-              </span>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <div
-              v-if="f95Rating"
-              class="bg-black/70 text-yellow-400 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-1"
-            >
-              <svg class="w-3.5 h-3.5 fill-yellow-400" viewBox="0 0 20 20">
-                <path
-                  d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z"
-                />
-              </svg>
-              F95: {{ f95Rating }}
-            </div>
-            <div
-              class="bg-black/70 text-xs font-bold px-2.5 py-1 rounded-lg border border-white/10"
-              style="color: var(--brand)"
-            >
-              You: {{ averagePersonalRating }}
-            </div>
+      <div class="modal-scroll-body overflow-y-auto p-6 pt-14 space-y-6 flex-1">
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div
+            v-for="item in summaryItems"
+            :key="item.label"
+            class="summary-card"
+          >
+            <p class="summary-label">{{ item.label }}</p>
+            <p class="summary-value" :style="item.accent">
+              <IconStarFilled
+                v-if="item.showStar"
+                class="summary-star"
+              />
+              {{ item.value }}
+            </p>
           </div>
         </div>
 
-        <button
-          @click="close"
-          class="absolute top-3 right-3 text-gray-400 hover:text-white transition-colors bg-black/70 rounded-lg p-1.5"
-        >
-          <svg
-            class="w-5 h-5"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
-      </div>
-
-      <!-- Scrollable Body -->
-      <div class="modal-scroll-body p-6 overflow-y-auto space-y-6 flex-1">
-        <!-- Status Selector & Favorite Toggle -->
-        <div class="flex flex-wrap items-center gap-3">
+        <div class="status-strip flex flex-wrap items-center gap-3">
           <div class="flex flex-wrap gap-2">
             <button
               v-for="s in statuses"
               :key="s.value"
               @click="playStatus = s.value"
-              class="px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
-              :style="
-                playStatus === s.value
-                  ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
-              "
+              class="status-chip px-3 py-1.5 text-xs font-medium transition-colors"
+              :style="statusButtonStyle(s.value)"
             >
               {{ s.label }}
             </button>
@@ -610,21 +707,18 @@ const openInBrowser = async () => {
           
           <button
             @click="isFavorite = !isFavorite"
-            class="ml-auto px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all"
+            class="ml-auto flex items-center gap-1.5 rounded-md px-4 py-1.5 text-xs font-medium transition-colors"
             :style="
               isFavorite
-                ? 'background: rgba(234, 179, 8, 0.15); border: 1px solid rgba(234, 179, 8, 0.5); color: #eab308; box-shadow: 0 0 10px rgba(234, 179, 8, 0.2)'
-                : 'background: var(--bg-raised); border: 1px dashed var(--border); color: var(--text-muted)'
+                ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
+                : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
             "
           >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" :fill="isFavorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-            </svg>
+            <IconStarFilled class="w-4 h-4" :style="isFavorite ? '' : 'opacity: 0.7'" />
             {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
           </button>
         </div>
 
-        <!-- Game Info Fields -->
         <div class="grid grid-cols-2 gap-4">
           <div class="col-span-2">
             <label class="modal-label">Title</label>
@@ -654,15 +748,43 @@ const openInBrowser = async () => {
             />
           </div>
 
-          <div>
+          <div class="relative" ref="engineDropdownRef">
             <label class="modal-label">Engine</label>
-            <input
-              v-model="engine"
-              type="text"
-              placeholder="Unity, RPGM, Ren'Py..."
-              class="modal-input w-full"
-              style="color: #b380cc"
-            />
+            <button
+              type="button"
+              class="engine-select modal-input w-full"
+              @click="engineMenuOpen = !engineMenuOpen"
+            >
+              <span class="identity-badge" :style="selectedEngineStyle">
+                {{ engine }}
+              </span>
+              <IconChevronDown
+                class="h-4 w-4 shrink-0 transition-transform"
+                :class="engineMenuOpen ? 'rotate-180' : ''"
+                style="color: var(--text-muted)"
+              />
+            </button>
+            <div
+              v-if="engineMenuOpen"
+              class="engine-menu"
+            >
+              <button
+                v-for="option in ENGINE_OPTIONS"
+                :key="option"
+                type="button"
+                class="engine-menu-item"
+                @click="selectEngine(option)"
+              >
+                <span class="identity-badge" :style="getEngineBadgeStyle(option)">
+                  {{ option }}
+                </span>
+                <IconCheck
+                  v-if="engine === option"
+                  class="h-4 w-4 shrink-0"
+                  style="color: var(--text-secondary)"
+                />
+              </button>
+            </div>
           </div>
 
           <div class="col-span-2">
@@ -674,32 +796,6 @@ const openInBrowser = async () => {
               class="modal-input w-full"
               style="color: var(--brand)"
             />
-          </div>
-
-          <div class="col-span-2 grid gap-2 md:grid-cols-2">
-            <div
-              class="rounded-md px-3 py-2"
-              style="background: var(--bg-raised); border: 1px solid var(--border)"
-            >
-              <p class="text-[10px] uppercase tracking-[0.14em]" style="color: var(--text-muted)">
-                Executable Modified
-              </p>
-              <p class="mt-0.5 text-xs font-medium leading-tight" style="color: var(--text-primary)">
-                {{ executableModifiedDisplay }}
-              </p>
-            </div>
-
-            <div
-              class="rounded-md px-3 py-2"
-              style="background: var(--bg-raised); border: 1px solid var(--border)"
-            >
-              <p class="text-[10px] uppercase tracking-[0.14em]" style="color: var(--text-muted)">
-                Thread Main Post Edited
-              </p>
-              <p class="mt-0.5 text-xs font-medium leading-tight" style="color: var(--text-primary)">
-                {{ threadMainPostEditedDisplay }}
-              </p>
-            </div>
           </div>
 
           <div class="col-span-2">
@@ -747,9 +843,7 @@ const openInBrowser = async () => {
                       v-model="runJapaneseLocale"
                       class="sr-only peer"
                     />
-                    <div
-                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-                    ></div>
+                    <div class="ui-toggle"></div>
                   </label>
                 </div>
                 <p
@@ -780,9 +874,7 @@ const openInBrowser = async () => {
                       v-model="runWayland"
                       class="sr-only peer"
                     />
-                    <div
-                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-                    ></div>
+                    <div class="ui-toggle"></div>
                   </label>
                 </div>
                 <p
@@ -831,9 +923,7 @@ const openInBrowser = async () => {
                       :disabled="!ceInstalled"
                       class="sr-only peer"
                     />
-                    <div
-                      class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"
-                    ></div>
+                    <div class="ui-toggle"></div>
                   </label>
                 </div>
                 <p
@@ -870,9 +960,7 @@ const openInBrowser = async () => {
                   v-model="useCustomPrefix"
                   class="sr-only peer"
                 />
-                <div
-                  class="toggle-track peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--brand)]"
-                ></div>
+                <div class="ui-toggle"></div>
               </label>
             </div>
 
@@ -923,7 +1011,6 @@ const openInBrowser = async () => {
           </div>
         </div>
 
-        <!-- Personal Ratings Section -->
         <div>
           <h4
             class="text-sm font-bold mb-3 flex items-center gap-2"
@@ -943,21 +1030,15 @@ const openInBrowser = async () => {
           </h4>
           <div class="grid grid-cols-2 gap-3">
             <div
-              v-for="cat in [
-                { label: '🎨 Graphics', model: 'ratingGraphics' },
-                { label: '📖 Story', model: 'ratingStory' },
-                { label: '🔥 Fappability', model: 'ratingFappability' },
-                { label: '🎮 Gameplay', model: 'ratingGameplay' },
-              ]"
+              v-for="cat in ratingCategories"
               :key="cat.model"
               class="flex items-center gap-3 rounded-lg p-2"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
-              <span
-                class="text-xs w-24 shrink-0"
-                style="color: var(--text-secondary)"
-                >{{ cat.label }}</span
-              >
+              <span class="rating-label" style="color: var(--text-secondary)">
+                <component :is="cat.icon" class="w-4 h-4 shrink-0" style="color: var(--brand)" />
+                {{ cat.label }}
+              </span>
               <div class="flex gap-1">
                 <button
                   v-for="star in 5"
@@ -973,20 +1054,8 @@ const openInBrowser = async () => {
                   "
                   class="transition-transform hover:scale-110"
                 >
-                  <svg
+                  <IconStarFilled
                     class="w-5 h-5"
-                    :class="[
-                      star <=
-                      (cat.model === 'ratingGraphics'
-                        ? ratingGraphics
-                        : cat.model === 'ratingStory'
-                          ? ratingStory
-                          : cat.model === 'ratingFappability'
-                            ? ratingFappability
-                            : ratingGameplay)
-                        ? 'text-yellow-400 fill-yellow-400'
-                        : 'fill-current',
-                    ]"
                     :style="
                       star >
                       (cat.model === 'ratingGraphics'
@@ -997,14 +1066,9 @@ const openInBrowser = async () => {
                             ? ratingFappability
                             : ratingGameplay)
                         ? 'color: var(--border)'
-                        : ''
+                        : 'color: var(--rating-accent)'
                     "
-                    viewBox="0 0 20 20"
-                  >
-                    <path
-                      d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z"
-                    />
-                  </svg>
+                  />
                 </button>
               </div>
               <span
@@ -1024,7 +1088,6 @@ const openInBrowser = async () => {
           </div>
         </div>
 
-        <!-- Tags (editable) -->
         <div>
           <button
             type="button"
@@ -1083,7 +1146,6 @@ const openInBrowser = async () => {
         </div>
       </div>
 
-      <!-- Save File Finder Panel -->
       <div
         v-if="showSavePanel"
         class="px-6 py-3"
@@ -1175,82 +1237,75 @@ const openInBrowser = async () => {
         </p>
       </div>
 
-      <!-- Footer Actions -->
       <div
-        class="px-6 py-4 flex items-center justify-between"
+        class="px-6 py-4"
         style="border-top: 1px solid var(--border); background: var(--bg-inset)"
       >
-        <div class="flex gap-2">
-          <button
-            @click="deleteGame"
-            :disabled="deleting"
-            class="text-red-400 hover:text-red-300 hover:bg-red-500/10 px-3 py-2 rounded-lg text-xs font-medium transition-all"
-          >
-            {{ deleting ? "Removing..." : "🗑 Remove" }}
-          </button>
-          <button
-            v-if="f95Url"
-            @click="openInBrowser"
-            class="hover:bg-purple-500/10 px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1"
-            style="color: #b380cc"
-          >
-            <svg
-              class="w-3.5 h-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
+        <p
+          v-if="updateCheckState.message"
+          class="mb-3 rounded-md border px-3 py-2 text-xs"
+          :style="
+            updateCheckState.type === 'error'
+              ? 'background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.28); color: #fca5a5'
+              : 'background: var(--success-bg); border-color: var(--success-border); color: var(--success-text)'
+          "
+        >
+          {{ updateCheckState.message }}
+        </p>
+        <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div class="flex flex-wrap gap-2">
+            <button
+              @click="deleteGame"
+              :disabled="deleting"
+              class="footer-action text-red-400"
             >
-              <path
-                d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"
-              />
-            </svg>
-            Open in Browser
-          </button>
-          <button
-            @click="findSaves"
-            :disabled="searchingSaves"
-            class="text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1"
-          >
-            <svg
-              class="w-3.5 h-3.5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
+              {{ deleting ? "Removing..." : "Remove" }}
+            </button>
+            <button
+              v-if="f95Url"
+              @click="openInBrowser"
+              class="footer-action inline-flex items-center gap-2"
+              style="color: var(--text-primary)"
             >
-              <path
-                d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
-              />
-            </svg>
-            {{ searchingSaves ? "Searching..." : "Find Saves" }}
-          </button>
-        </div>
-        <div class="flex gap-3">
-          <button
-            @click="launchGame"
-            class="bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg text-sm font-bold transition-all shadow-lg shadow-green-900/20 flex items-center gap-2"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              stroke="none"
+              <IconExternalLinkFilled class="w-4 h-4" />
+              Open in Browser
+            </button>
+            <button
+              @click="findSaves"
+              :disabled="searchingSaves"
+              class="footer-action inline-flex items-center gap-2"
+              style="color: var(--text-primary)"
             >
-              <polygon points="5 3 19 12 5 21 5 3" />
-            </svg>
-            Play
-          </button>
-          <button
-            @click="save"
-            :disabled="saving"
-            class="text-white px-5 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-50"
-            style="background: var(--brand); box-shadow: var(--shadow-brand)"
-          >
-            {{ saving ? "Saving..." : "Save Changes" }}
-          </button>
+              <IconFolderOpenFilled class="w-4 h-4" />
+              {{ searchingSaves ? "Searching..." : "Find Saves" }}
+            </button>
+            <button
+              v-if="game.f95_url"
+              @click="requestUpdateCheck"
+              :disabled="updateCheckState.running"
+              class="footer-action inline-flex items-center gap-2"
+              style="color: var(--text-primary)"
+            >
+              <IconRefresh class="w-4 h-4" :class="updateCheckState.running ? 'animate-spin' : ''" />
+              {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
+            </button>
+          </div>
+          <div class="flex flex-wrap gap-3">
+            <button
+              @click="launchGame"
+              class="launch-btn"
+            >
+              <IconPlayerPlayFilled class="w-4 h-4" />
+              Play
+            </button>
+            <button
+              @click="save"
+              :disabled="saving"
+              class="save-btn disabled:opacity-50"
+            >
+              {{ saving ? "Saving..." : "Save Changes" }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1308,11 +1363,149 @@ const openInBrowser = async () => {
   background: var(--border-hover);
 }
 
-.toggle-track {
-  width: 2.75rem;
-  height: 1.5rem;
+.summary-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.summary-label {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.summary-value {
+  margin: 0.25rem 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.summary-star {
+  width: 0.85rem;
+  height: 0.85rem;
+  color: var(--rating-accent);
+  flex-shrink: 0;
+}
+
+.rating-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 7.5rem;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+
+.identity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 0.5rem;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.engine-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.engine-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-hover);
+  border-radius: 0.75rem;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+  padding: 0.4rem;
+}
+
+.engine-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  padding: 0.4rem;
+}
+
+.engine-menu-item:hover {
+  background: var(--bg-raised);
+}
+
+.status-strip {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-surface) 100%);
+  padding: 0.75rem;
+}
+
+.status-chip {
+  border-radius: 0.55rem;
+}
+
+.footer-action {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.footer-action:hover:not(:disabled) {
   background: var(--bg-overlay);
-  border-radius: 9999px;
+  border-color: var(--border-hover);
+}
+
+.footer-action:disabled {
+  opacity: 0.6;
+}
+
+.launch-btn,
+.save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.launch-btn {
+  background: var(--toggle-active);
+  border: 1px solid var(--toggle-active);
+  color: #f8fafc;
+}
+
+.launch-btn:hover {
+  filter: brightness(1.06);
+}
+
+.save-btn {
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  box-shadow: var(--shadow-brand);
+  color: var(--text-inverse);
 }
 
 .line-clamp-2 {
