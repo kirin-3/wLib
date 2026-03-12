@@ -1,7 +1,8 @@
 # pyright: reportMissingImports=false
 import os
+from typing import cast
 
-from core.scraper import Scraper
+from core.scraper import PageLike, Scraper
 
 
 def test_extract_version_from_title():
@@ -191,7 +192,7 @@ def test_classify_page_issue_cloudflare():
         def content(self):
             return "<html>Cloudflare challenge</html>"
 
-    issue = scraper._classify_page_issue(FakePage())
+    issue = scraper._classify_page_issue(cast(PageLike, cast(object, FakePage())))
 
     assert issue is not None
     assert issue["code"] == "blocked"
@@ -267,7 +268,7 @@ def test_get_thread_version_dependency_missing(monkeypatch):
 
     assert result["success"] is False
     assert result["code"] == "dependency_missing"
-    assert "Playwright" in result["error"]
+    assert "Playwright" in str(result["error"])
 
 
 def test_normalize_cover_image_url_upgrades_thumb_path():
@@ -281,6 +282,53 @@ def test_normalize_cover_image_url_upgrades_thumb_path():
     assert normalized == (
         "https://attachments.f95zone.to/2025/04/4773537_Screenshot_Banner.png"
     )
+
+
+def test_extract_metadata_from_page_reads_thread_starter_edit_timestamp():
+    scraper = Scraper()
+
+    class FakePage:
+        def evaluate(self, expression, arg=None):
+            _ = arg
+            assert "article.message-threadStarterPost.message--post" in expression
+            assert ".message-lastEdit time[datetime]" in expression
+            return {
+                "engine": "Ren'Py",
+                "tags": ["sandbox", "3dcg"],
+                "cover_image": "https://img.example/cover.jpg",
+                "thread_main_post_last_edit_at": "2026-03-06T22:59:58+0300",
+            }
+
+    metadata = scraper._extract_metadata_from_page(
+        cast(PageLike, cast(object, FakePage()))
+    )
+
+    assert metadata["engine"] == "Ren'Py"
+    assert metadata["tags"] == ["sandbox", "3dcg"]
+    assert metadata["cover_image"] == "https://img.example/cover.jpg"
+    assert metadata["thread_main_post_last_edit_at"] == "2026-03-06T22:59:58+0300"
+    assert metadata["thread_main_post_checked_at"]
+
+
+def test_extract_metadata_from_page_marks_thread_checked_without_last_edit():
+    scraper = Scraper()
+
+    class FakePage:
+        def evaluate(self, expression, arg=None):
+            _ = (expression, arg)
+            return {
+                "engine": "",
+                "tags": [],
+                "cover_image": "",
+                "thread_main_post_last_edit_at": "",
+            }
+
+    metadata = scraper._extract_metadata_from_page(
+        cast(PageLike, cast(object, FakePage()))
+    )
+
+    assert metadata["thread_main_post_last_edit_at"] == ""
+    assert metadata["thread_main_post_checked_at"]
 
 
 def test_open_login_session_waits_for_user_close(monkeypatch):

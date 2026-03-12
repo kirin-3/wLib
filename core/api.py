@@ -82,6 +82,8 @@ class ScraperResponse(TypedDict, total=False):
     engine: str
     cover_image: str
     tags: str | list[object]
+    thread_main_post_last_edit_at: str
+    thread_main_post_checked_at: str
 
 
 class GameRecord(TypedDict):
@@ -89,6 +91,14 @@ class GameRecord(TypedDict):
     title: str
     version: str
     f95_url: str
+    thread_main_post_last_edit_at: NotRequired[str | None]
+    thread_main_post_checked_at: NotRequired[str | None]
+
+
+class ExecutableModifiedTimeResponse(TypedDict):
+    success: bool
+    modified_at: str | None
+    error: NotRequired[str]
 
 
 class SaveLocation(TypedDict):
@@ -933,14 +943,14 @@ class Api:
                 "error_code": "duplicate_url",
             }
 
-        needs_metadata = bool(normalized_url) and (
+        needs_metadata_backfill = bool(normalized_url) and (
             self._is_missing_text(engine)
             or self._is_missing_text(cover_image)
             or not self._normalize_tags_csv(tags)
         )
 
         metadata_updated = 0
-        if needs_metadata:
+        if normalized_url:
             metadata_result = self._coerce_string_key_dict(
                 cast(
                     object,
@@ -969,10 +979,14 @@ class Api:
                     metadata_result = {}
 
             if metadata_result.get("success"):
-                metadata_updated = self._backfill_missing_metadata_for_url(
-                    normalized_url,
-                    metadata_result,
+                _ = self._update_thread_edit_metadata_for_url(
+                    normalized_url, metadata_result
                 )
+                if needs_metadata_backfill:
+                    metadata_updated = self._backfill_missing_metadata_for_url(
+                        normalized_url,
+                        metadata_result,
+                    )
 
         return {"id": game_id, "title": title, "metadata_updated": metadata_updated}
 
@@ -1151,6 +1165,60 @@ class Api:
 
         return updated_rows
 
+    def _update_thread_edit_metadata_for_url(
+        self, url: str, metadata: Mapping[str, object]
+    ) -> int:
+        normalized_url = normalize_thread_url(url)
+        if not normalized_url:
+            return 0
+
+        checked_at_value = str(
+            metadata.get("thread_main_post_checked_at") or ""
+        ).strip()
+        if not checked_at_value:
+            return 0
+
+        last_edit_raw = str(metadata.get("thread_main_post_last_edit_at") or "").strip()
+        last_edit_value: str | None = last_edit_raw or None
+
+        import sqlite3
+
+        from core.database import get_connection
+
+        updated_rows = 0
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            _ = cursor.execute(
+                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at FROM games WHERE f95_url = ?",
+                (normalized_url,),
+            )
+            games = cast(list[sqlite3.Row], cursor.fetchall())
+
+            for game in games:
+                game_id = cast(object, game["id"])
+                if not isinstance(game_id, int):
+                    continue
+
+                current_last_edit = cast(object, game["thread_main_post_last_edit_at"])
+                current_checked_at = cast(object, game["thread_main_post_checked_at"])
+                if (
+                    current_last_edit == last_edit_value
+                    and current_checked_at == checked_at_value
+                ):
+                    continue
+
+                _ = cursor.execute(
+                    "UPDATE games SET thread_main_post_last_edit_at = ?, thread_main_post_checked_at = ? WHERE id = ?",
+                    (last_edit_value, checked_at_value, game_id),
+                )
+                updated_rows += 1
+
+            if updated_rows:
+                conn.commit()
+
+        return updated_rows
+
     def check_for_updates(self, url: str) -> Mapping[str, object]:
         """
         Uses Playwright to hit F95Zone and extract the version string from the thread title.
@@ -1200,6 +1268,8 @@ class Api:
                 return self._build_scraper_error_payload(
                     version_info, "Failed to check for updates"
                 )
+
+            _ = self._update_thread_edit_metadata_for_url(url, version_info)
 
             remote_version = version_info.get("version")
             if not self._is_actionable_remote_version(remote_version):
@@ -1359,6 +1429,7 @@ class Api:
                     ) and self._is_actionable_remote_version(
                         result_dict.get("version")
                     ):
+                        _ = self._update_thread_edit_metadata_for_url(url, result_dict)
                         remote_version = str(result_dict.get("version") or "").strip()
                         from core.database import get_connection
 
@@ -1411,7 +1482,8 @@ class Api:
 
                 get_multiple_thread_versions_fn = cast(
                     Callable[
-                        [list[str], bool, int, Callable[[str, object], bool]], object
+                        [list[str], bool, int, bool, Callable[[str, object], bool]],
+                        object,
                     ],
                     self.scraper.get_multiple_thread_versions,
                 )
@@ -1421,6 +1493,7 @@ class Api:
                         urls,
                         True,
                         self._update_delay_seconds,
+                        True,
                         check_callback,
                     )
                 )
@@ -1497,6 +1570,29 @@ class Api:
         with self._update_lock:
             self._update_running = False
         return {"success": True}
+
+    def get_executable_modified_time(
+        self, exe_path: str
+    ) -> ExecutableModifiedTimeResponse:
+        from datetime import datetime
+
+        normalized_path = str(exe_path or "").strip()
+        if not normalized_path:
+            return {
+                "success": False,
+                "modified_at": None,
+                "error": "Executable path is required",
+            }
+
+        try:
+            stat_result = os.stat(normalized_path)
+        except OSError as e:
+            return {"success": False, "modified_at": None, "error": str(e)}
+
+        return {
+            "success": True,
+            "modified_at": datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
+        }
 
     def get_auto_check_setting(self) -> dict[str, str]:
         """Get the auto update check frequency setting."""

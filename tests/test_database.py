@@ -36,6 +36,8 @@ def test_database_initialization():
     columns = [row[1] for row in cursor.fetchall()]
     assert "tags" in columns
     assert "run_wayland" in columns
+    assert "thread_main_post_last_edit_at" in columns
+    assert "thread_main_post_checked_at" in columns
 
     cursor.execute("PRAGMA foreign_keys")
     assert cursor.fetchone()[0] == 1

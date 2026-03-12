@@ -134,6 +134,8 @@ def init_db() -> None:
             ("date_added", "TIMESTAMP"),
             ("play_status", "TEXT DEFAULT 'Plan to Play'"),
             ("is_favorite", "BOOLEAN DEFAULT 0"),
+            ("thread_main_post_last_edit_at", "TIMESTAMP"),
+            ("thread_main_post_checked_at", "TIMESTAMP"),
         ]
 
         for col_name, col_type in new_columns:

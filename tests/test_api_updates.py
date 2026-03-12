@@ -165,6 +165,47 @@ def test_check_for_updates_backfills_missing_metadata(monkeypatch):
     assert game["cover_image_path"] == "https://img.example/cover.jpg"
 
 
+def test_check_for_updates_refreshes_thread_edit_metadata_without_overwriting_existing_fields(
+    monkeypatch,
+):
+    api = Api()
+    add_game(
+        title="Demo",
+        exe_path="/tmp/demo.exe",
+        f95_url="https://f95zone.to/threads/demo.123/",
+        version="1.0",
+        tags="existing",
+        engine="Unity",
+        cover_image="https://img.example/existing.jpg",
+    )
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Demo [v1.1]",
+            "version": "1.1",
+            "engine": "Ren'Py",
+            "tags": ["3dcg", "sandbox"],
+            "cover_image": "https://img.example/new-cover.jpg",
+            "thread_main_post_last_edit_at": "2026-03-06T22:59:58+0300",
+            "thread_main_post_checked_at": "2026-03-07T01:00:00",
+        },
+    )
+
+    result = api.check_for_updates("https://f95zone.to/threads/demo.123/")
+
+    assert result["success"] is True
+
+    game = get_all_games()[0]
+    assert game["engine"] == "Unity"
+    assert game["tags"] == "existing"
+    assert game["cover_image_path"] == "https://img.example/existing.jpg"
+    assert game["thread_main_post_last_edit_at"] == "2026-03-06T22:59:58+0300"
+    assert game["thread_main_post_checked_at"] == "2026-03-07T01:00:00"
+
+
 def test_add_game_backfills_missing_metadata(monkeypatch):
     api = Api()
 
@@ -195,6 +236,64 @@ def test_add_game_backfills_missing_metadata(monkeypatch):
     assert game["engine"] == "Unity"
     assert game["tags"] == "3d, adventure"
     assert game["cover_image_path"] == "https://img.example/new-cover.jpg"
+
+
+def test_add_game_updates_thread_edit_metadata_without_overwriting_existing_fields(
+    monkeypatch,
+):
+    api = Api()
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "engine": "Ren'Py",
+            "tags": ["sandbox"],
+            "cover_image": "https://img.example/other.jpg",
+            "thread_main_post_last_edit_at": "2026-03-06T22:59:58+0300",
+            "thread_main_post_checked_at": "2026-03-07T01:00:00",
+        },
+    )
+
+    result = api.add_game(
+        title="Manual Add",
+        exe_path="/tmp/manual.exe",
+        f95_url="https://f95zone.to/threads/manual.321/",
+        tags="existing",
+        engine="Unity",
+        cover_image="https://img.example/existing.jpg",
+    )
+
+    assert result["id"] is not None
+    assert result["metadata_updated"] == 0
+
+    game = get_all_games()[0]
+    assert game["engine"] == "Unity"
+    assert game["tags"] == "existing"
+    assert game["cover_image_path"] == "https://img.example/existing.jpg"
+    assert game["thread_main_post_last_edit_at"] == "2026-03-06T22:59:58+0300"
+    assert game["thread_main_post_checked_at"] == "2026-03-07T01:00:00"
+
+
+def test_get_executable_modified_time_reports_file_timestamp(tmp_path):
+    api = Api()
+    executable = tmp_path / "demo.exe"
+    executable.write_text("demo")
+
+    result = api.get_executable_modified_time(str(executable))
+
+    assert result["success"] is True
+    assert isinstance(result["modified_at"], str)
+
+
+def test_get_executable_modified_time_handles_missing_file(tmp_path):
+    api = Api()
+
+    result = api.get_executable_modified_time(str(tmp_path / "missing.exe"))
+
+    assert result["success"] is False
+    assert result["modified_at"] is None
 
 
 def test_add_game_rejects_duplicate_f95_url(monkeypatch):

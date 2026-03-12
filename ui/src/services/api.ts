@@ -166,6 +166,11 @@ export interface DownloadCheatEngineResponse extends ApiBasicResponse {
   path?: string;
 }
 
+export interface ExecutableModifiedTimeResponse extends ApiBasicResponse {
+  success: boolean;
+  modified_at: string | null;
+}
+
 export interface SaveLocation {
   path: string;
   type: string;
@@ -201,6 +206,8 @@ export interface GameRecord {
   rating_story?: number;
   rating_fappability?: number;
   rating_gameplay?: number;
+  thread_main_post_last_edit_at?: string | null;
+  thread_main_post_checked_at?: string | null;
 }
 
 export interface SettingsPayload {
@@ -373,6 +380,10 @@ class ApiService {
     return this.invoke<GetAvailableRunnersResponse>("get_available_runners");
   }
 
+  async getExecutableModifiedTime(exe_path: string): Promise<ExecutableModifiedTimeResponse> {
+    return this.invoke<ExecutableModifiedTimeResponse>("get_executable_modified_time", exe_path);
+  }
+
   async getSettings(): Promise<SettingsResponse> {
     return this.invoke<SettingsResponse>("get_settings");
   }
@@ -536,6 +547,8 @@ class ApiService {
         return { version: "" };
       case "is_cheat_engine_installed":
         return { installed: false, path: "" };
+      case "get_executable_modified_time":
+        return { success: false, modified_at: null, mock: true, error: "Executable timestamps require the desktop app runtime." };
       case "find_save_files":
         return [];
       default:

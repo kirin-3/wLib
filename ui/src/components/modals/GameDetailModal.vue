@@ -45,6 +45,10 @@ const showJapaneseLocaleInfo = ref(false);
 const showWaylandInfo = ref(false);
 const showCheatEngineInfo = ref(false);
 const tagsExpanded = ref(false);
+const executableModifiedAt = ref<string | null>(null);
+const loadingExecutableModifiedAt = ref(false);
+const executableModifiedKnown = ref(false);
+const executableModifiedRequestId = ref(0);
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref("");
@@ -153,12 +157,11 @@ watch(
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
-      try {
-        const ceCheck = await api.isCheatEngineInstalled();
-        ceInstalled.value = ceCheck.installed;
-      } catch (e) {
-        console.error("Failed to check cheat engine status", e);
-      }
+      void Promise.all([loadCheatEngineStatus(), loadExecutableModifiedTime()]);
+    } else {
+      executableModifiedAt.value = null;
+      executableModifiedKnown.value = false;
+      loadingExecutableModifiedAt.value = false;
     }
   },
 );
@@ -380,6 +383,77 @@ const formatLastPlayed = (dateString: string | null | undefined): string => {
   });
 };
 
+const formatTimestamp = (dateString: string | null | undefined): string => {
+  if (!dateString) return "Unknown";
+  return new Date(dateString).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+};
+
+const loadCheatEngineStatus = async () => {
+  try {
+    const ceCheck = await api.isCheatEngineInstalled();
+    ceInstalled.value = ceCheck.installed;
+  } catch (e) {
+    console.error("Failed to check cheat engine status", e);
+  }
+};
+
+const loadExecutableModifiedTime = async () => {
+  const requestId = executableModifiedRequestId.value + 1;
+  executableModifiedRequestId.value = requestId;
+  executableModifiedAt.value = null;
+  executableModifiedKnown.value = false;
+
+  const path = exePath.value.trim();
+  if (!path) {
+    return;
+  }
+
+  loadingExecutableModifiedAt.value = true;
+  try {
+    const result = await api.getExecutableModifiedTime(path);
+    if (executableModifiedRequestId.value !== requestId) {
+      return;
+    }
+
+    executableModifiedKnown.value = true;
+    executableModifiedAt.value = result.success ? result.modified_at : null;
+  } catch (e) {
+    if (executableModifiedRequestId.value !== requestId) {
+      return;
+    }
+
+    executableModifiedKnown.value = true;
+    executableModifiedAt.value = null;
+    console.error("Failed to load executable modified time", e);
+  } finally {
+    if (executableModifiedRequestId.value === requestId) {
+      loadingExecutableModifiedAt.value = false;
+    }
+  }
+};
+
+const executableModifiedDisplay = computed(() => {
+  if (loadingExecutableModifiedAt.value) return "Loading...";
+  if (!executableModifiedKnown.value) return "Unknown";
+  if (!executableModifiedAt.value) return "Unavailable";
+  return formatTimestamp(executableModifiedAt.value);
+});
+
+const threadMainPostEditedDisplay = computed(() => {
+  const lastEditAt = props.game?.thread_main_post_last_edit_at || null;
+  const checkedAt = props.game?.thread_main_post_checked_at || null;
+
+  if (lastEditAt) return formatTimestamp(lastEditAt);
+  if (checkedAt) return "Not edited";
+  return "Unknown";
+});
+
 const openInBrowser = async () => {
   if (f95Url.value) {
     try {
@@ -600,6 +674,32 @@ const openInBrowser = async () => {
               class="modal-input w-full"
               style="color: var(--brand)"
             />
+          </div>
+
+          <div class="col-span-2 grid gap-3 md:grid-cols-2">
+            <div
+              class="rounded-lg p-3"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              <p class="text-[11px] uppercase tracking-[0.18em]" style="color: var(--text-muted)">
+                Executable Modified
+              </p>
+              <p class="mt-1 text-sm font-medium" style="color: var(--text-primary)">
+                {{ executableModifiedDisplay }}
+              </p>
+            </div>
+
+            <div
+              class="rounded-lg p-3"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              <p class="text-[11px] uppercase tracking-[0.18em]" style="color: var(--text-muted)">
+                Thread Main Post Edited
+              </p>
+              <p class="mt-1 text-sm font-medium" style="color: var(--text-primary)">
+                {{ threadMainPostEditedDisplay }}
+              </p>
+            </div>
           </div>
 
           <div class="col-span-2">

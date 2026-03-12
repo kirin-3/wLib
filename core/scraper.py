@@ -4,6 +4,7 @@ import shutil
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from types import TracebackType
 from typing import Protocol, TypeAlias, cast
 from urllib.parse import urlparse
@@ -256,7 +257,10 @@ class Scraper:
             "engine": "",
             "tags": [],
             "cover_image": "",
+            "thread_main_post_last_edit_at": "",
+            "thread_main_post_checked_at": "",
         }
+        metadata_extracted = False
 
         try:
             extracted = page.evaluate(
@@ -266,7 +270,13 @@ class Scraper:
                         engine: "",
                         tags: [],
                         cover_image: "",
+                        thread_main_post_last_edit_at: "",
                     };
+
+                    const starterPost =
+                        document.querySelector(
+                            "article.message-threadStarterPost.message--post"
+                        ) || document.querySelector("article.message--post");
 
                     const h1 = document.querySelector("h1.p-title-value");
                     if (h1) {
@@ -284,8 +294,17 @@ class Scraper:
                     result.tags = Array.from(tagSet);
 
                     const firstPostWrapper =
+                        starterPost?.querySelector(".message-body .bbWrapper") ||
                         document.querySelector("article.message--post .message-body .bbWrapper") ||
                         document.querySelector(".message-body .bbWrapper");
+
+                    const lastEditTime =
+                        starterPost?.querySelector(".message-lastEdit time[datetime]") ||
+                        starterPost?.querySelector(".message-lastEdit time");
+                    if (lastEditTime) {
+                        result.thread_main_post_last_edit_at =
+                            lastEditTime.getAttribute("datetime") || "";
+                    }
 
                     if (firstPostWrapper) {
                         const zoomer = firstPostWrapper.querySelector(
@@ -322,6 +341,7 @@ class Scraper:
                 """
             )
             if isinstance(extracted, dict):
+                metadata_extracted = True
                 extracted_dict = cast(dict[str, object], extracted)
                 metadata["engine"] = str(extracted_dict.get("engine") or "").strip()
                 raw_tags_obj = extracted_dict.get("tags")
@@ -335,8 +355,14 @@ class Scraper:
                 metadata["cover_image"] = self._normalize_cover_image_url(
                     extracted_dict.get("cover_image")
                 )
+                metadata["thread_main_post_last_edit_at"] = str(
+                    extracted_dict.get("thread_main_post_last_edit_at") or ""
+                ).strip()
         except Exception as e:
             print(f"[wLib] Failed to extract metadata from page: {e}")
+
+        if metadata_extracted:
+            metadata["thread_main_post_checked_at"] = datetime.now().isoformat()
 
         return metadata
 
@@ -659,6 +685,7 @@ class Scraper:
         urls: Sequence[str],
         headless: bool = True,
         delay: int = 5,
+        include_metadata: bool = False,
         callback: BatchResultCallback | None = None,
     ) -> dict[str, ScraperResult]:
         """
@@ -747,11 +774,16 @@ class Scraper:
                                 "Could not extract a usable version from thread",
                             )
                         else:
-                            result = {
-                                "success": True,
-                                "title": title,
-                                "version": str(version).strip(),
-                            }
+                            result = cast(
+                                ScraperResultDict,
+                                {
+                                    "success": True,
+                                    "title": title,
+                                    "version": str(version).strip(),
+                                },
+                            )
+                            if include_metadata:
+                                result.update(self._extract_metadata_from_page(page))
                     except Exception as e:
                         result = self._error("scraper_error", str(e))
 
