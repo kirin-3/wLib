@@ -339,19 +339,19 @@ class Api:
 
         return clean_env
 
-    def _open_path_with_system_handler(self, path: str) -> OpenPathResult:
+    def _open_with_system_handler(
+        self, target: str, missing_opener_error: str
+    ) -> OpenPathResult:
         import shutil
         import subprocess
 
-        normalized_path = os.path.abspath(path)
         clean_env = self._build_host_open_env()
-
         commands: list[list[str]] = [
-            ["xdg-open", normalized_path],
-            ["gio", "open", normalized_path],
-            ["kde-open5", normalized_path],
-            ["kde-open", normalized_path],
-            ["gnome-open", normalized_path],
+            ["xdg-open", target],
+            ["gio", "open", target],
+            ["kde-open5", target],
+            ["kde-open", target],
+            ["gnome-open", target],
         ]
 
         launch_errors: list[str] = []
@@ -360,10 +360,10 @@ class Api:
             if not binary:
                 continue
 
-            command[0] = binary
+            resolved_command = [binary, *command[1:]]
             try:
                 _ = subprocess.Popen(
-                    command,
+                    resolved_command,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -371,12 +371,18 @@ class Api:
                 )
                 return {"success": True}
             except Exception as e:
-                launch_errors.append(f"{command[0]}: {e}")
+                launch_errors.append(f"{binary}: {e}")
 
         if launch_errors:
             return {"success": False, "error": "; ".join(launch_errors)}
 
-        return {"success": False, "error": "No file manager opener found"}
+        return {"success": False, "error": missing_opener_error}
+
+    def _open_path_with_system_handler(self, path: str) -> OpenPathResult:
+        normalized_path = os.path.abspath(path)
+        return self._open_with_system_handler(
+            normalized_path, "No file manager opener found"
+        )
 
     def _normalize_selected_path(self, value: object) -> str:
         from urllib.parse import unquote, urlparse
@@ -542,28 +548,35 @@ class Api:
     ) -> list[BrowseBackend]:
         import shutil
 
-        _ = file_types
         backends: list[BrowseBackend] = []
         clean_env = self._build_host_open_env()
         normalized_directory = self._coerce_browse_directory(directory)
+
+        zenity_filters: list[str] = []
+        kdialog_filter_parts: list[str] = []
+        if dialog_kind != "directory":
+            for file_type in file_types:
+                label, _, raw_patterns = file_type.partition("(")
+                patterns = raw_patterns.rstrip(")").replace(";", " ").strip()
+                normalized_patterns = patterns if patterns not in {"*.*", ""} else "*"
+                filter_label = label.strip() or "Files"
+                zenity_filters.append(
+                    f"--file-filter={filter_label} | {normalized_patterns}"
+                )
+                kdialog_filter_parts.append(f"{filter_label} ({normalized_patterns})")
 
         zenity_path = shutil.which("zenity")
         if zenity_path:
             zenity_command = [
                 zenity_path,
                 "--file-selection",
-                f"--title={'Select Folder' if dialog_kind == 'directory' else 'Select Game File'}",
+                f"--title={'Select Folder' if dialog_kind == 'directory' else 'Select File'}",
                 f"--filename={normalized_directory.rstrip(os.sep) + os.sep}",
             ]
             if dialog_kind == "directory":
                 zenity_command.append("--directory")
             else:
-                zenity_command.extend(
-                    [
-                        "--file-filter=Game Files | *.exe *.sh *.AppImage *.html *.htm",
-                        "--file-filter=All files | *",
-                    ]
-                )
+                zenity_command.extend(zenity_filters)
 
             if self._desktop_portal_available(clean_env):
                 portal_env = clean_env.copy()
@@ -601,9 +614,7 @@ class Api:
                     normalized_directory,
                 ]
             else:
-                filter_string = (
-                    "Game Files (*.exe *.sh *.AppImage *.html *.htm)\nAll Files (*)"
-                )
+                filter_string = "\n".join(kdialog_filter_parts)
                 kdialog_command = [
                     kdialog_path,
                     "--getopenfilename",
@@ -1328,12 +1339,13 @@ class Api:
                 "error_code": "check_failed",
             }
 
-    def open_in_browser(self, url: str) -> dict[str, bool]:
-        """Opens a URL in the user's default browser and brings it to foreground."""
-        import webbrowser
+    def open_in_browser(self, url: str) -> OpenPathResult:
+        """Opens a URL in the user's default browser."""
+        normalized_url = str(url or "").strip()
+        if not normalized_url:
+            return {"success": False, "error": "URL is required"}
 
-        _ = webbrowser.open(url)
-        return {"success": True}
+        return self._open_with_system_handler(normalized_url, "No browser opener found")
 
     def open_scraper_login_session(self):
         """Open headed Playwright session for manual F95 login and wait until user closes it."""
@@ -2249,6 +2261,19 @@ class Api:
             "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
             "All files (*.*)",
         )
+
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
+    def browse_runner_file(self, start_path: str = "") -> str:
+        """Opens a native file dialog to select a Proton or Wine executable."""
+        file_types = ("Runner Binaries (*)",)
 
         if sys.platform.startswith("linux"):
             return self._browse_linux_dialog(

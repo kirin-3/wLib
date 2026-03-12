@@ -396,6 +396,10 @@ class ApiService {
     return this.invoke<string>("browse_file", startPath);
   }
 
+  async browseRunnerFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_runner_file", startPath);
+  }
+
   async browseDirectory(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_directory", startPath);
   }
@@ -487,6 +491,7 @@ class ApiService {
           playwright_browsers_path: "~/.cache/ms-playwright",
         };
       case "browse_file":
+      case "browse_runner_file":
       case "browse_directory":
         return "";
       case "get_available_runners":

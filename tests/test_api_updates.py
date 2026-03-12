@@ -544,6 +544,29 @@ def test_build_linux_browse_backends_skips_portal_when_unavailable(monkeypatch):
     assert [backend["name"] for backend in backends] == ["zenity", "kdialog"]
 
 
+def test_build_linux_browse_backends_uses_custom_file_filters(monkeypatch):
+    api = Api()
+
+    def fake_which(command):
+        mapping = {
+            "zenity": "/usr/bin/zenity",
+            "kdialog": "/usr/bin/kdialog",
+        }
+        return mapping.get(command)
+
+    monkeypatch.setattr("shutil.which", fake_which)
+    monkeypatch.setattr(api, "_desktop_portal_available", lambda _env: False)
+    monkeypatch.setattr(api, "_build_host_open_env", lambda: {})
+    monkeypatch.setattr(api, "_coerce_browse_directory", lambda _path: "/home/tester")
+
+    backends = api._build_linux_browse_backends(
+        "file", "", file_types=("Runner Binaries (*)",)
+    )
+
+    assert backends[0]["command"][-1] == "--file-filter=Runner Binaries | *"
+    assert backends[1]["command"][-1] == "Runner Binaries (*)"
+
+
 def test_browse_directory_returns_empty_string_when_linux_picker_cancelled(monkeypatch):
     api = Api()
     qt_calls = []
@@ -575,6 +598,30 @@ def test_browse_directory_returns_empty_string_when_linux_picker_cancelled(monke
 
     assert result == ""
     assert qt_calls == []
+
+
+def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
+    api = Api()
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr("core.api.sys.platform", "linux")
+
+    def fake_browse_linux_dialog(dialog_kind, directory="", file_types=()):
+        recorded["dialog_kind"] = dialog_kind
+        recorded["directory"] = directory
+        recorded["file_types"] = file_types
+        return "/tmp/proton"
+
+    monkeypatch.setattr(api, "_browse_linux_dialog", fake_browse_linux_dialog)
+
+    result = api.browse_runner_file("/tmp")
+
+    assert result == "/tmp/proton"
+    assert recorded == {
+        "dialog_kind": "file",
+        "directory": "/tmp",
+        "file_types": ("Runner Binaries (*)",),
+    }
 
 
 def test_get_browse_locations_includes_detected_mounts(monkeypatch, tmp_path):
@@ -701,6 +748,63 @@ def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_pat
     assert "APPIMAGE" not in kwargs["env"]
     assert "APPDIR" not in kwargs["env"]
     assert kwargs["start_new_session"] is True
+
+
+def test_open_in_browser_uses_host_env_outside_appimage_runtime(monkeypatch):
+    api = Api()
+    popen_mock = MagicMock()
+
+    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
+    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(
+        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+    )
+    monkeypatch.setattr("subprocess.Popen", popen_mock)
+
+    result = api.open_in_browser("https://example.com")
+
+    assert result["success"] is True
+    popen_mock.assert_called_once()
+    args, kwargs = popen_mock.call_args
+    assert args[0] == ["/usr/bin/xdg-open", "https://example.com"]
+    assert kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
+    assert kwargs["env"]["DISPLAY"] == ":0"
+    assert kwargs["env"]["WAYLAND_DISPLAY"] == "wayland-0"
+    assert "APPIMAGE" not in kwargs["env"]
+    assert "APPDIR" not in kwargs["env"]
+    assert kwargs["start_new_session"] is True
+
+
+def test_open_in_browser_returns_error_when_no_opener_found(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr("shutil.which", lambda _cmd: None)
+
+    result = api.open_in_browser("https://example.com")
+
+    assert result == {"success": False, "error": "No browser opener found"}
+
+
+def test_open_in_browser_returns_launch_error(monkeypatch):
+    api = Api()
+
+    monkeypatch.setattr(
+        "shutil.which", lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None
+    )
+
+    def raise_popen(*_args, **_kwargs):
+        raise OSError("launch failed")
+
+    monkeypatch.setattr("subprocess.Popen", raise_popen)
+
+    result = api.open_in_browser("https://example.com")
+
+    assert result["success"] is False
+    assert "launch failed" in result.get("error", "")
 
 
 def test_open_extension_folder_uses_host_env_outside_appimage_runtime(

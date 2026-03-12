@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { api, onWebviewReady } from "../services/api";
-import type { InstallProgressStatus, SystemDepsCommandResponse } from "../services/api";
+import type {
+  InstallProgressStatus,
+  SettingsResponse,
+  SystemDepsCommandResponse,
+} from "../services/api";
 
 const protonPath = ref("");
 const prefixPath = ref("");
@@ -39,16 +43,22 @@ const openingLoginSession = ref(false);
 const resettingSession = ref(false);
 const sessionMessage = ref("");
 const sessionError = ref("");
+const saveMessage = ref("");
+const saveError = ref("");
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+const applySettings = (data: SettingsResponse) => {
+  protonPath.value = data.proton_path || "";
+  prefixPath.value = data.wine_prefix_path || "";
+  playwrightPath.value = data.playwright_browsers_path || "~/.cache/ms-playwright";
+  enableLogging.value = !!data.enable_logging;
+};
 
 const loadSettings = async () => {
   try {
     const data = await api.getSettings();
     if (data) {
-      protonPath.value = data.proton_path || "";
-      prefixPath.value = data.wine_prefix_path || "";
-      playwrightPath.value = data.playwright_browsers_path || "~/.cache/ms-playwright";
-      enableLogging.value = !!data.enable_logging;
+      applySettings(data);
     }
 
     const ceCheck = await api.isCheatEngineInstalled();
@@ -84,7 +94,7 @@ const pollInstallStatus = async () => {
 
 const browseProton = async () => {
   try {
-    const p = await api.browseFile(protonPath.value || "");
+    const p = await api.browseRunnerFile(protonPath.value || "");
     if (p) {
       protonPath.value = p;
     }
@@ -262,8 +272,20 @@ onUnmounted(() => {
 });
 
 const saving = ref(false);
+
+watch([protonPath, prefixPath, playwrightPath, enableLogging], () => {
+  if (saving.value) return;
+  saveMessage.value = "";
+  saveError.value = "";
+});
+
 const saveSettings = async () => {
+  if (saving.value) return;
+
   saving.value = true;
+  saveMessage.value = "";
+  saveError.value = "";
+
   try {
     const res = await api.saveSettings({
       proton_path: protonPath.value,
@@ -271,12 +293,23 @@ const saveSettings = async () => {
       playwright_browsers_path: playwrightPath.value,
       enable_logging: enableLogging.value,
     });
-    if (res && res.success === false) {
-      alert("Failed to save settings: " + (res.error || "Unknown error"));
+
+    if (!res || res.success === false) {
+      saveError.value = "Failed to save settings: " + (res?.error || "Unknown error");
+      return;
     }
+
+    const persistedSettings = await api.getSettings();
+    if (!persistedSettings) {
+      saveError.value = "Settings were saved but could not be reloaded.";
+      return;
+    }
+
+    applySettings(persistedSettings);
+    saveMessage.value = "Settings saved.";
   } catch (e) {
-    console.error(e);
-    alert("Error saving settings: " + String(e));
+    console.error("Failed to save settings", e);
+    saveError.value = "Error saving settings: " + String(e);
   } finally {
     saving.value = false;
   }
@@ -764,21 +797,24 @@ const saveSettings = async () => {
       </div>
 
       <div
-        class="px-8 py-5 flex justify-end gap-3"
+        class="px-8 py-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
         style="border-top: 1px solid var(--border); background: var(--bg-inset)"
       >
-        <button
-          class="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          style="color: var(--text-secondary)"
-        >
-          Reset
-        </button>
+        <div class="min-h-[1.25rem]">
+          <p v-if="saveError" class="copyable-feedback text-xs text-red-400">
+            {{ saveError }}
+          </p>
+          <p v-else-if="saveMessage" class="copyable-feedback text-xs text-green-400">
+            {{ saveMessage }}
+          </p>
+        </div>
         <button
           @click="saveSettings"
-          class="text-white px-6 py-2 rounded-lg text-sm font-medium transition-all"
+          :disabled="saving"
+          class="text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
-          Save Changes
+          {{ saving ? "Saving..." : "Save Changes" }}
         </button>
       </div>
     </div>
