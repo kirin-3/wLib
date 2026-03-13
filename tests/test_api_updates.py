@@ -902,7 +902,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.4"
+    assert chrome_manifest["version"] == "1.0.5"
     assert "scripts" not in chrome_manifest["background"]
     assert (
         "*://f95zone.to/sam/latest_alpha*"
@@ -928,7 +928,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.4",
+                "version": "1.0.5",
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -953,7 +953,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result.get("updated") is False
     assert result.get("reason") == "up-to-date"
-    assert result.get("installed_version") == "1.0.4"
+    assert result.get("installed_version") == "1.0.5"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 
@@ -968,15 +968,15 @@ def test_startup_extension_sync_status_defaults_and_updates():
         {
             "success": True,
             "updated": True,
-            "installed_version": "1.0.4",
-            "bundled_version": "1.0.4",
+            "installed_version": "1.0.5",
+            "bundled_version": "1.0.5",
             "reason": "version-changed",
         }
     )
 
     updated = api.get_startup_extension_sync_status()
     assert updated.get("updated") is True
-    assert updated.get("installed_version") == "1.0.4"
+    assert updated.get("installed_version") == "1.0.5"
     assert updated.get("reason") == "version-changed"
 
 
@@ -1221,9 +1221,15 @@ def test_open_url_with_targeted_tls_fallback_retries_komodo_with_intermediate(
     monkeypatch.setattr("ssl.create_default_context", fake_create_default_context)
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    result = api._open_url_with_targeted_tls_fallback(
-        "https://dl.komodo.jp/rpgmakerweb/run-time-packages/RPGVXAce_RTP.zip",
-        timeout=15,
+    result = cast(
+        dict[str, object],
+        cast(
+            object,
+            api._open_url_with_targeted_tls_fallback(
+                "https://dl.komodo.jp/rpgmakerweb/run-time-packages/RPGVXAce_RTP.zip",
+                timeout=15,
+            ),
+        ),
     )
 
     assert result["ok"] is True

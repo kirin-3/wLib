@@ -1,3 +1,15 @@
+function normalizeCheckPayload(data) {
+    const payload = {
+        exists: Boolean(data && data.exists),
+    };
+
+    if (payload.exists && data && typeof data.playStatus === 'string' && data.playStatus.trim()) {
+        payload.playStatus = data.playStatus.trim();
+    }
+
+    return payload;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "checkGameInWLib") {
         fetch(`http://localhost:8183/api/check?url=${encodeURIComponent(message.url)}`)
@@ -6,7 +18,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 if (!response.ok) {
                     throw new Error(data.error || `Request failed with status ${response.status}`);
                 }
-                sendResponse({ success: true, data });
+                sendResponse({ success: true, data: normalizeCheckPayload(data) });
             })
             .catch(error => {
                 console.error("wLib Check Error:", error);

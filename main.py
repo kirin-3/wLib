@@ -236,6 +236,17 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
         return find_game_by_f95_url(url)
 
+    def _build_check_payload(self, url: object) -> dict[str, object]:
+        matching_game = self._find_matching_game(url)
+        payload: dict[str, object] = {"exists": matching_game is not None}
+
+        if matching_game is not None:
+            play_status = matching_game.get("play_status")
+            if isinstance(play_status, str) and play_status.strip():
+                payload["playStatus"] = play_status.strip()
+
+        return payload
+
     def _get_allowed_origin(self) -> str | None:
         origin = (self.headers.get("Origin") or "").strip()
         if not origin:
@@ -289,19 +300,19 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             check_url = query.get("url", [""])[0]
 
-            exists = False
+            check_payload: dict[str, object] = {"exists": False}
             if check_url:
                 try:
-                    exists = self._find_matching_game(check_url) is not None
+                    check_payload = self._build_check_payload(check_url)
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
-                    exists = False
+                    check_payload = {"exists": False}
 
             self.send_response(200)
             self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            _ = self.wfile.write(json.dumps({"exists": exists}).encode())
+            _ = self.wfile.write(json.dumps(check_payload).encode())
         elif self.path.startswith("/api/open"):
             from urllib.parse import urlparse, parse_qs
 

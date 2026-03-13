@@ -126,6 +126,25 @@ def test_find_game_by_f95_url_matches_equivalent_thread_variants():
         assert match["id"] == game_id
 
 
+def test_find_game_by_f95_url_returns_play_status_for_extension_matches():
+    game_id = add_game(
+        title="Status Match",
+        exe_path="/tmp/status.exe",
+        f95_url="https://f95zone.to/threads/status-slug.56789/",
+    )
+    assert game_id is not None
+
+    update_game(game_id, {"play_status": "waiting_update"})
+
+    match = find_game_by_f95_url(
+        "https://f95zone.to/threads/renamed-status-slug.56789/page-3?latest=1#post-9"
+    )
+
+    assert match is not None
+    assert match["id"] == game_id
+    assert match["play_status"] == "Waiting For Update"
+
+
 def test_init_db_recovers_legacy_statuses_and_preserves_existing_plan_to_play():
     waiting_game_id = add_game(title="Waiting", exe_path="/tmp/waiting.exe")
     abandoned_game_id = add_game(title="Abandoned", exe_path="/tmp/abandoned.exe")

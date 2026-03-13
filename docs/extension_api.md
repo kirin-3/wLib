@@ -26,9 +26,13 @@ Allows the extension to decorate an F95Zone page based on ownership.
 - **Response:**
   ```json
   {
-    "exists": true
+    "exists": true,
+    "playStatus": "Playing"
   }
   ```
+- **Contract Notes:**
+  - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
+  - `playStatus` is optional enrichment for matching games only. When present, it uses the same canonical values as the desktop app (`Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`).
 
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={f95_url}`**
@@ -69,3 +73,13 @@ The packaged extension files used by browsers live in `~/.local/share/wLib/exten
 - `firefox/wLib.xpi`: generated archive for Firefox temporary installs
 
 wLib updates that directory automatically on startup when the bundled manifest version changes or the installed files are missing. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed so the user knows to reload the browser addon.
+
+## Thread Widget Behavior
+
+On F95 thread pages, the content script injects a floating widget near the upper-left viewport edge using rem-based offsets instead of anchoring it into the page rails.
+
+- The expanded widget shows the wLib logo, a collapse control, a primary `Add to wLib` or `Open in wLib` action, and transient feedback text for open/add requests.
+- When the thread already matches a library entry, the widget also renders a non-interactive `Status: <value>` line beneath the action using lightweight status-aware color treatment.
+- Collapse state is ephemeral to the current page runtime. Collapsing compresses the card into a logo-only affordance that rests near the lower-left viewport edge; expanding reverses that transition.
+- The latest-alpha page continues to reuse `GET /api/check` for its `In wLib` tile badges, but it only reads the `exists` field and ignores `playStatus`.
+- Reduced-motion preferences are respected by shortening the collapse/expand transition to an effectively instant state change.

@@ -106,7 +106,7 @@ def _find_matching_game_row(
     if not lookup_url:
         return None
 
-    query = "SELECT id, title, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+    query = "SELECT id, title, f95_url, play_status FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
     params: list[int] = []
     if exclude_id is not None:
         query += " AND id != ?"

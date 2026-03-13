@@ -1,10 +1,29 @@
+from io import BytesIO
+from email.message import Message
 import os
 import sys
+import json
+from typing import cast
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import main
+
+
+def _make_extension_handler(path, matching_game=None, headers=None):
+    handler = main.ExtensionRequestHandler.__new__(main.ExtensionRequestHandler)
+    handler.path = path
+    message_headers = Message()
+    for key, value in (headers or {}).items():
+        message_headers[key] = value
+    handler.headers = message_headers
+    handler.__dict__["wfile"] = BytesIO()
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler._find_matching_game = MagicMock(return_value=matching_game)
+    return handler
 
 
 def test_configure_qt_runtime_environment_prefers_wayland(monkeypatch):
@@ -141,3 +160,39 @@ def test_start_webview_preserves_dev_mode_without_fixed_http_port(
     )
     assert "http_port" not in kwargs
     assert kwargs["icon"] is None
+
+
+def test_extension_check_payload_includes_play_status_for_matches():
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/",
+        matching_game={
+            "id": 1,
+            "title": "Demo",
+            "f95_url": "https://f95zone.to/threads/demo.123/",
+            "play_status": "Playing",
+        },
+    )
+
+    handler.do_GET()
+
+    response_body = cast(BytesIO, handler.wfile).getvalue().decode("utf-8")
+
+    assert json.loads(response_body) == {
+        "exists": True,
+        "playStatus": "Playing",
+    }
+
+
+def test_extension_check_payload_omits_play_status_for_missing_matches():
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/",
+        matching_game=None,
+    )
+
+    handler.do_GET()
+
+    response_body = cast(BytesIO, handler.wfile).getvalue().decode("utf-8")
+
+    assert json.loads(response_body) == {
+        "exists": False,
+    }

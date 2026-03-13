@@ -1,6 +1,59 @@
 const WLIB_UPDATES_PAGE_PATH = '/sam/latest_alpha/';
 const WLIB_THREAD_ROOT_ID = 'wlib-extension-root';
 const WLIB_TILE_BADGE_SELECTOR = '.wlib-library-badge';
+const WLIB_DEFAULT_PLAY_STATUS = 'Not Started';
+
+function getLogoUrl() {
+    return getAssetUrl('icon.svg');
+}
+
+function getAssetUrl(filename) {
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.getURL === 'function') {
+        return chrome.runtime.getURL(filename);
+    }
+
+    return filename;
+}
+
+function createLogoImage() {
+    const image = document.createElement('img');
+    image.className = 'wlib-logo';
+    image.src = getLogoUrl();
+    image.alt = 'wLib';
+    image.width = 28;
+    image.height = 28;
+    image.decoding = 'async';
+    return image;
+}
+
+const WLIB_ICON_FILES = {
+    arrowDownLeft: 'arrow-down-left.svg',
+    libraryPlus: 'library-plus.svg',
+    externalLink: 'external-link.svg',
+};
+
+function createIconImage(iconName) {
+    const filename = WLIB_ICON_FILES[iconName];
+    const image = document.createElement('img');
+    image.className = 'wlib-icon';
+    image.src = getAssetUrl(filename);
+    image.alt = '';
+    image.width = 16;
+    image.height = 16;
+    image.decoding = 'async';
+    image.setAttribute('aria-hidden', 'true');
+    return image;
+}
+
+const WLIB_PLAY_STATUS_TONE_CLASS_MAP = {
+    'not started': 'wlib-play-status--not-started',
+    'plan to play': 'wlib-play-status--plan-to-play',
+    playing: 'wlib-play-status--playing',
+    'waiting for update': 'wlib-play-status--waiting',
+    'on hold': 'wlib-play-status--on-hold',
+    completed: 'wlib-play-status--completed',
+    abandoned: 'wlib-play-status--abandoned',
+};
 
 const wlibTileCheckCache = new Map();
 const wlibPendingTileChecks = new Set();
@@ -51,6 +104,18 @@ function isLatestAlphaPage() {
     return window.location.pathname === WLIB_UPDATES_PAGE_PATH;
 }
 
+function normalizeCheckResult(data) {
+    const exists = Boolean(data && typeof data === 'object' && data.exists);
+    const playStatus = exists && data && typeof data.playStatus === 'string'
+        ? data.playStatus.trim()
+        : '';
+
+    return {
+        exists,
+        playStatus,
+    };
+}
+
 function checkGameInWLib(url) {
     return new Promise((resolve) => {
         chrome.runtime.sendMessage({
@@ -59,17 +124,17 @@ function checkGameInWLib(url) {
         }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn('wLib extension: Could not connect to background wLib service.', chrome.runtime.lastError);
-                resolve(false);
+                resolve({ exists: false, playStatus: '' });
                 return;
             }
 
             if (response && response.success && response.data) {
-                resolve(Boolean(response.data.exists));
+                resolve(normalizeCheckResult(response.data));
                 return;
             }
 
             console.warn('wLib extension: Check request failed.', response?.error || response);
-            resolve(false);
+            resolve({ exists: false, playStatus: '' });
         });
     });
 }
@@ -90,7 +155,9 @@ async function initThreadPageExtension() {
     const gameInfo = extractGameInfo();
     if (!gameInfo.title) return;
 
-    gameInfo.existsInWLib = await checkGameInWLib(gameInfo.url);
+    const checkResult = await checkGameInWLib(gameInfo.url);
+    gameInfo.existsInWLib = checkResult.exists;
+    gameInfo.playStatus = checkResult.playStatus;
     injectUI(gameInfo);
 }
 
@@ -188,7 +255,8 @@ function processLatestAlphaTile(tileLink) {
 
     wlibPendingTileChecks.add(threadIdentity.canonicalUrl);
     checkGameInWLib(threadIdentity.canonicalUrl)
-        .then((existsInWLib) => {
+        .then((checkResult) => {
+            const existsInWLib = checkResult.exists;
             wlibTileCheckCache.set(threadIdentity.canonicalUrl, existsInWLib);
             if (!document.contains(thumb)) {
                 return;
@@ -238,7 +306,8 @@ function extractGameInfo() {
         rating: '',
         coverImage: '',
         url: threadIdentity.canonicalUrl,
-        id: threadIdentity.id
+        id: threadIdentity.id,
+        playStatus: '',
     };
 
     try {
@@ -375,53 +444,108 @@ function extractGameInfo() {
     return info;
 }
 
+function getPlayStatusToneClass(playStatus) {
+    const key = String(playStatus || '').trim().toLowerCase();
+    return WLIB_PLAY_STATUS_TONE_CLASS_MAP[key] || 'wlib-play-status--not-started';
+}
+
+function setActionButtonContent(button, label, iconName, variant) {
+    const icon = createIconImage(iconName);
+    const text = document.createElement('span');
+    text.textContent = label;
+
+    button.replaceChildren(icon, text);
+    button.classList.toggle('is-open-action', variant === 'open');
+    button.classList.toggle('is-success-action', variant === 'success');
+}
+
 function injectUI(gameInfo) {
     const container = document.createElement('div');
     container.id = WLIB_THREAD_ROOT_ID;
     container.className = 'wlib-add-container';
+    container.setAttribute('data-state', 'expanded');
 
     const headerRow = document.createElement('div');
     headerRow.className = 'wlib-header-row';
 
-    const logoContainer = document.createElement('div');
-    logoContainer.innerHTML = `
-      <svg class="wlib-logo" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-          <linearGradient id="wlibGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#d152d1" />
-            <stop offset="100%" stop-color="#5a3968" />
-          </linearGradient>
-        </defs>
-        <circle cx="16" cy="16" r="15" fill="url(#wlibGradient)" />
-        <path d="M8 10l3.2 12h1.8l3-8.5 3 8.5h1.8L24 10h-2.4l-2 7-2.4-7h-1.8l-2.4 7-2-7z" fill="#ffffff" />
-      </svg>`;
+    const brandEl = document.createElement('div');
+    brandEl.className = 'wlib-brand';
+    brandEl.appendChild(createLogoImage());
 
-    const titleEl = document.createElement('h3');
-    titleEl.className = 'wlib-title';
-    titleEl.textContent = gameInfo.title || 'Unknown Game';
-    titleEl.title = gameInfo.title;
+    const collapseBtn = document.createElement('button');
+    collapseBtn.type = 'button';
+    collapseBtn.className = 'wlib-collapse-btn';
+    collapseBtn.setAttribute('aria-label', 'Collapse wLib widget');
+    collapseBtn.appendChild(createIconImage('arrowDownLeft'));
 
-    headerRow.appendChild(logoContainer.firstChild);
-    headerRow.appendChild(titleEl);
+    headerRow.appendChild(brandEl);
+    headerRow.appendChild(collapseBtn);
+
+    const body = document.createElement('div');
+    body.className = 'wlib-widget-body';
 
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'wlib-add-btn';
 
     if (gameInfo.existsInWLib) {
-        btn.textContent = 'Open in wLib';
-        btn.style.backgroundColor = '#16a34a';
+        setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
     } else {
-        btn.textContent = 'Add to wLib';
+        setActionButtonContent(btn, 'Add to wLib', 'libraryPlus', 'default');
+    }
+
+    const libraryStatusBlock = document.createElement('div');
+    libraryStatusBlock.className = 'wlib-library-status-block';
+
+    if (gameInfo.existsInWLib) {
+        const playStatus = gameInfo.playStatus || WLIB_DEFAULT_PLAY_STATUS;
+        const dividerEl = document.createElement('div');
+        dividerEl.className = 'wlib-status-divider';
+
+        const statusLine = document.createElement('p');
+        statusLine.className = 'wlib-library-status-line';
+        statusLine.appendChild(document.createTextNode('Status: '));
+
+        const statusValue = document.createElement('span');
+        statusValue.className = `wlib-play-status ${getPlayStatusToneClass(playStatus)}`;
+        statusValue.textContent = playStatus;
+
+        statusLine.appendChild(statusValue);
+        libraryStatusBlock.appendChild(dividerEl);
+        libraryStatusBlock.appendChild(statusLine);
     }
 
     const statusEl = document.createElement('div');
     statusEl.className = 'wlib-status';
+    statusEl.setAttribute('aria-live', 'polite');
+
+    const collapsedToggle = document.createElement('button');
+    collapsedToggle.type = 'button';
+    collapsedToggle.className = 'wlib-collapsed-toggle';
+    collapsedToggle.setAttribute('aria-label', 'Expand wLib widget');
+    collapsedToggle.appendChild(createLogoImage());
+
+    const setCollapsed = (collapsed) => {
+        container.classList.toggle('is-collapsed', collapsed);
+        container.setAttribute('data-state', collapsed ? 'collapsed' : 'expanded');
+        collapseBtn.tabIndex = collapsed ? -1 : 0;
+        collapsedToggle.tabIndex = collapsed ? 0 : -1;
+    };
+
+    collapseBtn.addEventListener('click', () => {
+        setCollapsed(true);
+    });
+
+    collapsedToggle.addEventListener('click', () => {
+        setCollapsed(false);
+    });
 
     btn.addEventListener('click', () => {
         btn.disabled = true;
+        statusEl.textContent = '';
 
         if (gameInfo.existsInWLib) {
-            btn.textContent = 'Opening...';
+            setActionButtonContent(btn, 'Opening...', 'externalLink', 'open');
             chrome.runtime.sendMessage({
                 action: 'openWLib',
                 url: gameInfo.url
@@ -429,7 +553,7 @@ function injectUI(gameInfo) {
                 if (chrome.runtime.lastError) {
                     statusEl.textContent = 'Error: Make sure wLib is open.';
                     btn.disabled = false;
-                    btn.textContent = 'Open in wLib';
+                    setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
                     return;
                 }
                 statusEl.textContent = 'Brought wLib to front.';
@@ -439,7 +563,7 @@ function injectUI(gameInfo) {
                 }, 2000);
             });
         } else {
-            btn.textContent = 'Adding...';
+            setActionButtonContent(btn, 'Adding...', 'libraryPlus', 'default');
 
             chrome.runtime.sendMessage({
                 action: 'addGameToWLib',
@@ -449,14 +573,13 @@ function injectUI(gameInfo) {
                     const err = chrome.runtime.lastError.message;
                     statusEl.textContent = 'Error: Make sure wLib is open.';
                     btn.disabled = false;
-                    btn.textContent = 'Retry';
+                    setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                     console.error('wLib Extension Error:', err);
                     return;
                 }
 
                 if (response && response.success) {
-                    btn.textContent = 'Added ✔';
-                    btn.style.backgroundColor = '#16a34a';
+                    setActionButtonContent(btn, 'Added to wLib', 'libraryPlus', 'success');
                     statusEl.textContent = 'Game sent to wLib successfully.';
                     setTimeout(() => {
                         container.style.opacity = '0';
@@ -465,15 +588,22 @@ function injectUI(gameInfo) {
                 } else {
                     statusEl.textContent = 'Failed to add to database.';
                     btn.disabled = false;
-                    btn.textContent = 'Retry';
+                    setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                 }
             });
         }
     });
 
     container.appendChild(headerRow);
-    container.appendChild(btn);
-    container.appendChild(statusEl);
+    body.appendChild(btn);
+    if (libraryStatusBlock.childElementCount) {
+        body.appendChild(libraryStatusBlock);
+    }
+    body.appendChild(statusEl);
+    container.appendChild(body);
+    container.appendChild(collapsedToggle);
+
+    setCollapsed(false);
 
     document.body.appendChild(container);
 }

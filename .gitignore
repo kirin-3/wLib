@@ -17,6 +17,7 @@ plans/
 colors.md
 GITHUB_WORKFLOW.md
 .ubuntuvenv/
+.playwright-cli/
 AGENTS.md
 lancedb/
 

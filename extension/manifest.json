@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "wLib",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Send F95Zone games directly to your native wLib game manager.",
     "permissions": [],
     "host_permissions": [
@@ -31,6 +31,19 @@
             ],
             "js": [
                 "content.js"
+            ]
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "icon.svg",
+                "arrow-down-left.svg",
+                "library-plus.svg",
+                "external-link.svg"
+            ],
+            "matches": [
+                "*://f95zone.to/*"
             ]
         }
     ],
