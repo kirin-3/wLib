@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   IconBrandGithub,
@@ -13,6 +13,7 @@ import {
   IconSun,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "./services/api";
+import { motionEnabled } from "./utils/motionPreference";
 
 interface StartupToast {
   visible: boolean;
@@ -40,6 +41,7 @@ const isNavCollapsed = ref(false);
 const startupToast = ref<StartupToast>({ visible: false, title: "", message: "" });
 const navCollapsedStorageKey = "wlib-nav-collapsed";
 let startupToastTimeout: ReturnType<typeof setTimeout> | null = null;
+const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 
 const showStartupToast = (title: string, message: string) => {
   startupToast.value = { visible: true, title, message };
@@ -338,7 +340,7 @@ onUnmounted(() => {
 
     <!-- Main Content Area -->
     <main class="flex-1 overflow-y-auto relative">
-      <transition name="fade">
+      <transition :name="fadeTransitionName">
         <div
           v-if="startupToast.visible"
           class="fixed top-5 right-5 z-50 max-w-sm rounded-xl px-4 py-3 shadow-2xl backdrop-blur-sm"
@@ -358,7 +360,7 @@ onUnmounted(() => {
       </transition>
 
       <router-view v-slot="{ Component }">
-        <transition name="fade" mode="out-in">
+        <transition :name="fadeTransitionName" mode="out-in">
           <component :is="Component" />
         </transition>
       </router-view>
@@ -387,7 +389,7 @@ onUnmounted(() => {
 
 .nav-link {
   color: var(--text-secondary);
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .nav-link:hover {
   background: var(--bg-raised);
@@ -401,7 +403,7 @@ onUnmounted(() => {
 
 .theme-toggle {
   color: var(--text-muted);
-  transition: all 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .theme-toggle:hover {
   color: var(--brand);

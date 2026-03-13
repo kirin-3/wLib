@@ -10,6 +10,11 @@ import {
   IconSettings,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
+import {
+  applyMotionPreference,
+  motionEnabled,
+  saveMotionPreference,
+} from "../utils/motionPreference";
 import type {
   InstallProgressStatus,
   SettingsResponse,
@@ -20,6 +25,7 @@ const protonPath = ref("");
 const prefixPath = ref("");
 const playwrightPath = ref("~/.cache/ms-playwright");
 const enableLogging = ref(false);
+const animationsEnabled = ref(motionEnabled.value);
 const installingDeps = ref(false);
 const installError = ref("");
 const downloadingProton = ref(false);
@@ -71,6 +77,8 @@ const loadSettings = async () => {
     if (data) {
       applySettings(data);
     }
+
+    animationsEnabled.value = motionEnabled.value;
 
     const ceCheck = await api.isCheatEngineInstalled();
     ceInstalled.value = !!ceCheck?.installed;
@@ -292,10 +300,15 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, playwrightPath, enableLogging], () => {
+watch([protonPath, prefixPath, playwrightPath, enableLogging, animationsEnabled], () => {
   if (saving.value) return;
   saveMessage.value = "";
   saveError.value = "";
+});
+
+watch(animationsEnabled, (enabled) => {
+  if (!settingsLoaded.value) return;
+  applyMotionPreference(enabled);
 });
 
 watch([protonPath, prefixPath], () => {
@@ -328,6 +341,8 @@ const saveSettings = async () => {
       return;
     }
 
+    saveMotionPreference(animationsEnabled.value);
+
     const persistedSettings = await api.getSettings();
     if (!persistedSettings) {
       saveError.value = "Settings were saved but could not be reloaded.";
@@ -335,6 +350,7 @@ const saveSettings = async () => {
     }
 
     applySettings(persistedSettings);
+    animationsEnabled.value = motionEnabled.value;
     await pollInstallStatus();
     saveMessage.value = "Settings saved.";
   } catch (e) {
@@ -537,6 +553,40 @@ const saveSettings = async () => {
                 />
                 <div class="ui-toggle"></div>
               </label>
+            </div>
+
+            <div
+              class="motion-setting-card flex items-center justify-between mt-4 p-4 rounded-lg gap-4"
+            >
+              <div>
+                <h4
+                  class="text-sm font-medium"
+                  style="color: var(--text-primary)"
+                >
+                  Animations
+                </h4>
+                <p class="text-xs mt-1" style="color: var(--text-muted)">
+                  Turn non-essential UI motion on or off. Loading indicators stay visible either way.
+                </p>
+              </div>
+              <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0">
+                <button
+                  type="button"
+                  class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+                  :class="animationsEnabled ? 'motion-option-active' : ''"
+                  @click="animationsEnabled = true"
+                >
+                  On
+                </button>
+                <button
+                  type="button"
+                  class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+                  :class="!animationsEnabled ? 'motion-option-active' : ''"
+                  @click="animationsEnabled = false"
+                >
+                  Off
+                </button>
+              </div>
             </div>
 
             <hr style="border-color: var(--border)" class="my-4" />
@@ -786,7 +836,7 @@ const saveSettings = async () => {
         <button
           @click="saveSettings"
           :disabled="saving"
-          class="ui-action-btn text-white px-6 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 disabled:cursor-wait"
+          class="ui-action-btn text-white px-6 py-2 rounded-lg text-sm font-medium settings-save-btn disabled:opacity-50 disabled:cursor-wait"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
           <IconDeviceFloppyFilled class="ui-action-icon" />
@@ -810,7 +860,7 @@ const saveSettings = async () => {
   padding: 0.625rem 1rem;
   font-size: 0.875rem;
   color: var(--text-primary);
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 .settings-input::placeholder {
   color: var(--text-muted);
@@ -829,10 +879,31 @@ const saveSettings = async () => {
   border-radius: 0.5rem;
   font-size: 0.75rem;
   font-weight: 600;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .settings-btn:hover {
   background: var(--border-hover);
+}
+
+.motion-setting-card,
+.motion-toggle {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.motion-option {
+  color: var(--text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.motion-option-active {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.settings-save-btn {
+  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .tool-card {

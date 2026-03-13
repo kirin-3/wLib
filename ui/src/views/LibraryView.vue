@@ -737,7 +737,7 @@ onUnmounted(() => {
                 v-for="tag in uniqueTags"
                 :key="tag"
                 @click="toggleFilter(filterTags, tag)"
-                class="px-2.5 py-1 rounded-full text-[11px] font-medium transition-all"
+                class="filter-tag-btn px-2.5 py-1 rounded-full text-[11px] font-medium"
                 :style="
                   filterTags.includes(tag)
                     ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
@@ -784,7 +784,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-3">
         <button
           @click="toggleFiltersPane"
-          class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium transition-all ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
+          class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
           style="color: var(--text-primary); border: 1px solid var(--border)"
           :title="isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'"
         >
@@ -801,7 +801,7 @@ onUnmounted(() => {
 
         <button
           @click="showAddModal = true"
-          class="ui-action-btn hover:brightness-110 px-3 py-1.5 rounded-lg text-sm font-semibold transition-all active:scale-95"
+          class="ui-action-btn library-primary-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
           style="background: var(--brand); color: var(--text-inverse); box-shadow: var(--shadow-brand)"
         >
           <IconLibraryPlus class="ui-action-icon" />
@@ -834,7 +834,7 @@ onUnmounted(() => {
           v-model="searchQuery"
           type="text"
           placeholder="Search games..."
-          class="library-search-input w-full rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none transition-all"
+          class="library-search-input w-full rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none"
         />
       </div>
 
@@ -850,7 +850,7 @@ onUnmounted(() => {
             v-for="s in sortOptions"
             :key="s.key"
             @click="toggleSort(s.key)"
-            class="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
+            class="library-sort-btn px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
             :style="
               sortBy === s.key
                 ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -875,7 +875,7 @@ onUnmounted(() => {
         <button
           v-if="activeFilterCount > 0"
           @click="clearFilters"
-          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 transition-all border active:scale-95 active:bg-[var(--bg-overlay)]"
+          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 border active:scale-95 active:bg-[var(--bg-overlay)]"
           style="color: var(--text-muted); border-color: var(--border)"
         >
           <IconX class="ui-action-icon" />
@@ -899,7 +899,7 @@ onUnmounted(() => {
           >
             <button
               @click="layoutMode = 'grid'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'grid'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -911,7 +911,7 @@ onUnmounted(() => {
             </button>
             <button
               @click="layoutMode = 'list'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'list'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -923,7 +923,7 @@ onUnmounted(() => {
             </button>
             <button
               @click="layoutMode = 'compact'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm transition-all active:scale-95 active:bg-[var(--bg-overlay)]"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
                 layoutMode === 'compact'
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
@@ -954,16 +954,15 @@ onUnmounted(() => {
       <p class="empty-state-subtext">Try adjusting your search or filters</p>
       <button
         @click="clearFilters"
-        class="px-3 py-1.5 rounded-lg text-sm font-medium transition-all border active:scale-95 active:bg-[var(--bg-overlay)]"
+        class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-medium border active:scale-95 active:bg-[var(--bg-overlay)]"
         style="color: var(--text-secondary); border-color: var(--border)"
       >
         Clear filters
       </button>
     </div>
 
-    <TransitionGroup v-else
-      name="list"
-      tag="div"
+    <div
+      v-else
       :class="[
         'grid gap-4 md:gap-6 pb-12',
         layoutMode === 'grid'
@@ -978,7 +977,7 @@ onUnmounted(() => {
         v-for="game in filteredGames"
         :key="game.id"
         @click="openDetail(game)"
-        class="game-card group rounded-xl overflow-hidden transition-all duration-300 cursor-pointer"
+        class="game-card group rounded-xl overflow-hidden cursor-pointer"
         :class="
           layoutMode === 'grid'
             ? 'flex flex-col lg:flex-row w-full h-auto min-h-[14rem] lg:h-56'
@@ -1022,7 +1021,7 @@ onUnmounted(() => {
             class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
           >
             <button
-              class="card-overlay-play-btn rounded-full p-4 transition-all transform scale-90 group-hover:scale-100"
+              class="card-overlay-play-btn rounded-full p-4 transform scale-90 group-hover:scale-100"
             >
               <IconPlayerPlayFilled class="w-6 h-6" />
             </button>
@@ -1042,7 +1041,7 @@ onUnmounted(() => {
               v-if="layoutMode !== 'compact' && game.f95_url"
               @click.stop="checkUpdate(game, $event)"
               :disabled="updatingId === game.id"
-              class="update-overlay-btn ui-icon-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md transition-all opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
+              class="update-overlay-btn ui-icon-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
             >
               <IconRefresh
                 v-if="updatingId !== game.id"
@@ -1069,7 +1068,7 @@ onUnmounted(() => {
             </h3>
             <button
               @click.stop="launchGameFast(game)"
-              class="compact-play-btn rounded-md p-2 shrink-0 transition-all active:scale-95"
+              class="compact-play-btn rounded-md p-2 shrink-0 active:scale-95"
               :title="`Play ${game.title}`"
             >
               <IconPlayerPlayFilled class="w-3.5 h-3.5" />
@@ -1178,7 +1177,7 @@ onUnmounted(() => {
             </div>
             <button
               @click.stop="launchGameFast(game)"
-              class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold transition-all active:scale-95 shrink-0"
+              class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold active:scale-95 shrink-0"
             >
               <IconPlayerPlayFilled class="ui-action-icon" />
               <span class="hidden md:inline">Play</span>
@@ -1196,7 +1195,7 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-    </TransitionGroup>
+    </div>
 
     <AddGameModal v-model="showAddModal" @save="handleAddGame" />
     <GameDetailModal
@@ -1213,24 +1212,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.list-move,
-.list-enter-active,
-.list-leave-active {
-  transition: all 0.4s ease;
-}
-.list-enter-from,
-.list-leave-to {
-  opacity: 0;
-  transform: translateY(20px) scale(0.95);
-}
-.list-leave-active {
-  position: absolute;
-}
-
 .game-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-card);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .game-card:hover {
   border-color: var(--brand);
@@ -1238,13 +1224,24 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
+:global(.motion-off) .game-card:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+  transform: none;
+}
+
 .play-btn {
   background: var(--brand);
   color: var(--text-inverse);
   box-shadow: var(--shadow-brand);
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
 }
 .play-btn:hover {
   filter: brightness(1.15);
+}
+
+.library-primary-btn {
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
 }
 
 .filters-pane {
@@ -1260,6 +1257,7 @@ onUnmounted(() => {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   color: var(--text-primary);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease;
 }
 .library-search-input:focus {
   border-color: var(--brand);
@@ -1284,6 +1282,7 @@ onUnmounted(() => {
 .card-overlay-play-btn {
   background: var(--overlay-control);
   color: var(--overlay-control-text);
+  transition: transform 0.18s ease, background-color 0.18s ease, color 0.18s ease;
 }
 
 .card-overlay-play-btn:hover {
@@ -1315,6 +1314,7 @@ onUnmounted(() => {
   background: rgba(17, 24, 39, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.28);
   color: #f8fafc;
+  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .compact-play-btn:hover {
@@ -1336,6 +1336,7 @@ onUnmounted(() => {
   background: var(--overlay-scrim-strong);
   border: 1px solid var(--overlay-border);
   color: var(--text-secondary);
+  transition: opacity 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .update-overlay-btn:hover {
@@ -1347,5 +1348,13 @@ onUnmounted(() => {
   background: var(--success-bg);
   border: 1px solid var(--success-border);
   color: var(--success-text);
+}
+
+.library-sort-btn {
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.filter-tag-btn {
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 </style>

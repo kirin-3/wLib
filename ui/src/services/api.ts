@@ -224,6 +224,51 @@ export interface SettingsResponse {
   playwright_browsers_path: string;
 }
 
+const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
+const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
+  proton_path: "",
+  wine_prefix_path: "",
+  enable_logging: false,
+  playwright_browsers_path: "~/.cache/ms-playwright",
+};
+
+const normalizeMockSettings = (value: unknown): SettingsResponse => {
+  const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+
+  return {
+    proton_path: typeof source.proton_path === "string" ? source.proton_path : DEFAULT_MOCK_SETTINGS.proton_path,
+    wine_prefix_path:
+      typeof source.wine_prefix_path === "string"
+        ? source.wine_prefix_path
+        : DEFAULT_MOCK_SETTINGS.wine_prefix_path,
+    enable_logging:
+      typeof source.enable_logging === "boolean"
+        ? source.enable_logging
+        : DEFAULT_MOCK_SETTINGS.enable_logging,
+    playwright_browsers_path:
+      typeof source.playwright_browsers_path === "string"
+        ? source.playwright_browsers_path
+        : DEFAULT_MOCK_SETTINGS.playwright_browsers_path,
+  };
+};
+
+const readMockSettings = (): SettingsResponse => {
+  try {
+    const raw = localStorage.getItem(MOCK_SETTINGS_STORAGE_KEY);
+    return raw ? normalizeMockSettings(JSON.parse(raw) as unknown) : DEFAULT_MOCK_SETTINGS;
+  } catch (_error) {
+    return DEFAULT_MOCK_SETTINGS;
+  }
+};
+
+const writeMockSettings = (settings: SettingsResponse): void => {
+  try {
+    localStorage.setItem(MOCK_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (_error) {
+    // Ignore browser mock persistence failures and fall back to defaults.
+  }
+};
+
 declare global {
   interface Window {
     pywebview?: PyWebViewBridge;
@@ -479,7 +524,7 @@ class ApiService {
   }
 
   // Fallback mocks
-  _mockResponse(method: string, _args: unknown[]): unknown {
+  _mockResponse(method: string, args: unknown[]): unknown {
     const unavailable: ApiErrorResult = {
       success: false,
       mock: true,
@@ -490,12 +535,12 @@ class ApiService {
       case "get_games":
         return [];
       case "get_settings":
-        return {
-          proton_path: "",
-          wine_prefix_path: "",
-          enable_logging: false,
-          playwright_browsers_path: "~/.cache/ms-playwright",
-        };
+        return readMockSettings();
+      case "save_settings": {
+        const nextSettings = normalizeMockSettings(args[0]);
+        writeMockSettings(nextSettings);
+        return { success: true, mock: true };
+      }
       case "browse_file":
       case "browse_runner_file":
       case "browse_directory":

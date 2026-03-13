@@ -46,6 +46,10 @@
   --overlay-control-text: #ffffff;
   --overlay-control-hover-text: #0f0f14;
 
+  --motion-fast: 150ms;
+  --motion-base: 180ms;
+  --motion-slow: 200ms;
+
   --rating-accent: #facc15;
   --success-bg: rgba(34, 197, 94, 0.15);
   --success-border: rgba(34, 197, 94, 0.35);
@@ -145,9 +149,6 @@
 }
 
 /* ========== GLOBAL STYLES ========== */
-* {
-  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease, box-shadow 0.2s ease;
-}
 
 body {
   margin: 0;
@@ -157,6 +158,16 @@ body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.motion-off *,
+.motion-off *::before,
+.motion-off *::after {
+  transition: none !important;
+}
+
+.motion-off .animate-pulse {
+  animation: none !important;
 }
 
 /* Scrollbar styling */
@@ -193,11 +204,11 @@ body {
 /* Shared UI utilities */
 .collapse-width-transition {
   overflow: hidden;
-  transition: width 0.2s ease-in-out;
+  transition: width var(--motion-base) ease-in-out;
 }
 
 .ui-hover-surface {
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
 .ui-hover-surface:hover {
   background: var(--surface-hover);
@@ -211,7 +222,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 9999px;
   background: var(--bg-overlay);
-  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease;
 }
 
 .ui-toggle::after {
@@ -224,7 +235,7 @@ body {
   border: 1px solid rgba(15, 23, 42, 0.16);
   border-radius: 9999px;
   background: #ffffff;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  transition: transform var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
 
 .peer:checked + .ui-toggle {
@@ -297,6 +308,7 @@ body {
   justify-content: center;
   gap: 0.5rem;
   line-height: 1;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease, transform var(--motion-fast) ease;
 }
 
 .ui-action-icon {
@@ -312,6 +324,7 @@ body {
   min-width: 2.25rem;
   min-height: 2.25rem;
   line-height: 1;
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease, transform var(--motion-fast) ease;
 }
 
 .ui-status-chip,
