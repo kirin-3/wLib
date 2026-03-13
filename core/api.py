@@ -142,7 +142,7 @@ normalize_thread_url: Callable[[str], str] = cast(
     Callable[[str], str], cast(object, _normalize_thread_url)
 )
 
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
 KOMODO_RTP_DOWNLOAD_HOSTS = {"dl.komodo.jp"}
