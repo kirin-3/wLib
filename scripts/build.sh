@@ -153,8 +153,15 @@ log_launch_context() {
         printf 'wayland_display=%s\n' "${WAYLAND_DISPLAY:-}"
         printf 'qt_qpa_platform=%s\n' "${QT_QPA_PLATFORM:-<unset>}"
         printf 'qt_quick_backend=%s\n' "${QT_QUICK_BACKEND:-<unset>}"
+        printf 'gpu_render_mode=%s\n' "${GPU_RENDER_MODE:-<unset>}"
         printf 'qt_opengl=%s\n' "${QT_OPENGL:-<unset>}"
+        printf 'qsg_rhi_backend=%s\n' "${QSG_RHI_BACKEND:-<unset>}"
         printf 'qtwebengine_flags=%s\n' "${QTWEBENGINE_CHROMIUM_FLAGS:-<unset>}"
+        printf 'gpu_detection_reason=%s\n' "${GPU_DETECTION_REASON:-<unset>}"
+        printf 'gpu_detected_renderer=%s\n' "${GPU_DETECTED_RENDERER:-<unset>}"
+        printf 'gpu_direct_rendering=%s\n' "${GPU_DIRECT_RENDERING:-<unset>}"
+        printf 'gpu_vendor_match=%s\n' "${GPU_VENDOR_MATCH:-<unset>}"
+        printf 'gpu_software_from_crash_guard=%s\n' "${GPU_SOFTWARE_FROM_CRASH_GUARD:-0}"
         printf 'ld_library_path=%s\n' "${LD_LIBRARY_PATH:-<unset>}"
         printf 'ld_library_path_orig=%s\n' "${LD_LIBRARY_PATH_ORIG:-<unset>}"
         printf 'ssl_cert_file=%s\n' "${SSL_CERT_FILE:-<unset>}"
@@ -164,6 +171,11 @@ log_launch_context() {
 
 GPU_CRASH_GUARD="${XDG_DATA_HOME:-$HOME/.local/share}/wLib/.gpu_crash_guard"
 GPU_SOFTWARE_FROM_CRASH_GUARD=0
+GPU_RENDER_MODE="software"
+GPU_DETECTION_REASON="uninitialized"
+GPU_DETECTED_RENDERER=""
+GPU_DIRECT_RENDERING=""
+GPU_VENDOR_MATCH=""
 
 detect_gpu() {
     local glxinfo_output=""
@@ -173,12 +185,16 @@ detect_gpu() {
     local vendor_path=""
 
     if [ "${LIBGL_ALWAYS_SOFTWARE:-}" = "1" ]; then
+        GPU_RENDER_MODE="software"
+        GPU_DETECTION_REASON="env:LIBGL_ALWAYS_SOFTWARE"
         export QT_QUICK_BACKEND=software
         return
     fi
 
     case "${GALLIUM_DRIVER:-}" in
         llvmpipe|softpipe)
+            GPU_RENDER_MODE="software"
+            GPU_DETECTION_REASON="env:GALLIUM_DRIVER=${GALLIUM_DRIVER}"
             export QT_QUICK_BACKEND=software
             return
             ;;
@@ -186,6 +202,8 @@ detect_gpu() {
 
     if [ -f "$GPU_CRASH_GUARD" ]; then
         GPU_SOFTWARE_FROM_CRASH_GUARD=1
+        GPU_RENDER_MODE="software"
+        GPU_DETECTION_REASON="crash-guard"
         export QT_QUICK_BACKEND=software
         return
     fi
@@ -194,20 +212,28 @@ detect_gpu() {
         glxinfo_output="$(glxinfo -B 2>/dev/null || true)"
         renderer_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'OpenGL renderer string:' || true)"
         direct_line="$(printf '%s\n' "$glxinfo_output" | grep -i 'direct rendering:' || true)"
+        GPU_DETECTED_RENDERER="${renderer_line#*: }"
+        GPU_DIRECT_RENDERING="${direct_line#*: }"
 
         if printf '%s\n' "$renderer_line" | grep -qiE 'llvmpipe|softpipe|swrast|d3d12|svga3d'; then
+            GPU_RENDER_MODE="software"
+            GPU_DETECTION_REASON="glxinfo:software-renderer"
             export QT_QUICK_BACKEND=software
             return
         fi
 
         if [ -n "$renderer_line" ] && printf '%s\n' "$direct_line" | grep -qi 'yes'; then
-            export QT_QUICK_BACKEND=opengl
+            GPU_RENDER_MODE="auto"
+            GPU_DETECTION_REASON="glxinfo:direct-rendering"
+            unset QT_QUICK_BACKEND
             return
         fi
     fi
 
     if ls /dev/dri/renderD* >/dev/null 2>&1; then
-        export QT_QUICK_BACKEND=opengl
+        GPU_RENDER_MODE="auto"
+        GPU_DETECTION_REASON="drm:render-node"
+        unset QT_QUICK_BACKEND
         return
     fi
 
@@ -216,17 +242,22 @@ detect_gpu() {
         vendor_id="$(tr '[:upper:]' '[:lower:]' < "$vendor_path" 2>/dev/null || true)"
         case "$vendor_id" in
             0x10de|0x1002|0x8086)
-                export QT_QUICK_BACKEND=opengl
+                GPU_VENDOR_MATCH="$vendor_id"
+                GPU_RENDER_MODE="auto"
+                GPU_DETECTION_REASON="drm:vendor=${vendor_id}"
+                unset QT_QUICK_BACKEND
                 return
                 ;;
         esac
     done
 
+    GPU_RENDER_MODE="software"
+    GPU_DETECTION_REASON="fallback:software"
     export QT_QUICK_BACKEND=software
 }
 
 detect_gpu
-if [ "$QT_QUICK_BACKEND" = "opengl" ]; then
+if [ "$GPU_RENDER_MODE" = "auto" ]; then
     touch "$GPU_CRASH_GUARD"
 fi
 
@@ -277,7 +308,7 @@ else
 fi
 WLIB_EXIT=$?
 printf 'exit_code=%s\n' "$WLIB_EXIT" >> "$LOG_FILE"
-if [ "$WLIB_EXIT" -eq 0 ] && { [ "$QT_QUICK_BACKEND" = "opengl" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; }; then
+if [ "$WLIB_EXIT" -eq 0 ] && { [ "$GPU_RENDER_MODE" = "auto" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; }; then
     rm -f "$GPU_CRASH_GUARD"
 fi
 exit "$WLIB_EXIT"

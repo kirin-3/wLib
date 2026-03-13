@@ -38,8 +38,9 @@ When the build script executes, it follows these precise steps:
 Inside the generated AppImage, execution begins at an `AppRun` bash script wrapper instead of directly hitting the Python binary. This script acts as a safety layer for cross-distro GPU compatibility:
 
 - **GPU Probing**: It briefly evaluates local hardware using `glxinfo` or by parsing `/sys/class/drm/` to determine if GPU acceleration is safely available.
-- **Renderer Fallback**: Dynamically decides whether to pass `QT_QUICK_BACKEND=opengl` or fallback to purely software rendering (`QT_QUICK_BACKEND=software`).
-- **Crash Guard**: Implements a generic "GPU crash guard": if the AppImage crashed fatally during its previous initialization attempt, the second consecutive run will automatically force a fallback to software rendering to bypass broken hardware drivers.
+- **Renderer Fallback**: Dynamically decides whether to leave Qt on its default accelerated path or force a software fallback via `QT_QUICK_BACKEND=software`. On GPU-capable hosts, the AppImage now prefers Qt's auto-selected renderer rather than forcing `QT_QUICK_BACKEND=opengl`.
+- **Crash Guard**: Implements a generic "GPU crash guard": if the AppImage crashed fatally during its previous accelerated startup attempt, the second consecutive run will automatically force a fallback to software rendering to bypass broken hardware drivers.
+- **Renderer Diagnostics**: The launcher now logs the selected Qt backend, the GPU detection reason, detected OpenGL renderer/direct-rendering status, and related Qt environment to both the terminal and `~/.local/share/wLib/renderer-diagnostics.log`. AppImage launches also mirror this context into `~/.local/share/wLib/appimage-launch.log`.
 
 ## Manual Build Example
 

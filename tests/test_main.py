@@ -128,6 +128,11 @@ def test_start_webview_uses_persistent_storage_for_packaged_runtime(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        main,
+        "RENDERER_DIAGNOSTICS_LOG",
+        os.path.join(str(tmp_path), "renderer-diagnostics.log"),
+    )
     webview_module = MagicMock()
 
     main.start_webview(webview_module, dev_mode=False, icon_path="/tmp/wlib.png")
@@ -141,12 +146,18 @@ def test_start_webview_uses_persistent_storage_for_packaged_runtime(
         str(tmp_path), main.PYWEBVIEW_STORAGE_DIR_NAME
     )
     assert kwargs["icon"] == "/tmp/wlib.png"
+    assert kwargs["func"] is main.log_runtime_renderer_diagnostics
 
 
 def test_start_webview_preserves_dev_mode_without_fixed_http_port(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        main,
+        "RENDERER_DIAGNOSTICS_LOG",
+        os.path.join(str(tmp_path), "renderer-diagnostics.log"),
+    )
     webview_module = MagicMock()
 
     main.start_webview(webview_module, dev_mode=True, icon_path=None)
@@ -160,6 +171,66 @@ def test_start_webview_preserves_dev_mode_without_fixed_http_port(
     )
     assert "http_port" not in kwargs
     assert kwargs["icon"] is None
+    assert kwargs["func"] is main.log_runtime_renderer_diagnostics
+
+
+def test_renderer_log_targets_include_appimage_log(monkeypatch, tmp_path):
+    renderer_log = tmp_path / "renderer-diagnostics.log"
+    appimage_log = tmp_path / "appimage-launch.log"
+    monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
+    monkeypatch.setenv("WLIB_APPIMAGE_LAUNCH_LOG", str(appimage_log))
+
+    assert main._renderer_log_targets() == [str(renderer_log), str(appimage_log)]
+
+
+def test_log_renderer_diagnostics_writes_renderer_and_appimage_logs(
+    monkeypatch, tmp_path, capsys
+):
+    app_data_dir = tmp_path / "appdata"
+    renderer_log = app_data_dir / "renderer-diagnostics.log"
+    appimage_log = tmp_path / "appimage-launch.log"
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
+    monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
+    monkeypatch.setenv("WLIB_APPIMAGE_LAUNCH_LOG", str(appimage_log))
+
+    main.log_renderer_diagnostics(
+        "startup",
+        {
+            "qt_qpa_platform": "xcb",
+            "qt_quick_backend": "opengl",
+            "gpu_crash_guard_present": False,
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "Renderer diagnostics (startup)" in output
+    assert "qt_qpa_platform=xcb" in output
+    assert "qt_quick_backend=opengl" in renderer_log.read_text(encoding="utf-8")
+    assert "qt_quick_backend=opengl" in appimage_log.read_text(encoding="utf-8")
+
+
+def test_collect_renderer_environment_snapshot_reports_crash_guard(
+    monkeypatch, tmp_path
+):
+    app_data_dir = tmp_path / "appdata"
+    crash_guard = app_data_dir / ".gpu_crash_guard"
+    app_data_dir.mkdir()
+    crash_guard.write_text("", encoding="utf-8")
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
+    monkeypatch.setattr(
+        main,
+        "RENDERER_DIAGNOSTICS_LOG",
+        str(app_data_dir / "renderer-diagnostics.log"),
+    )
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("QT_QUICK_BACKEND", "opengl")
+
+    snapshot = main.collect_renderer_environment_snapshot(dev_mode=False)
+
+    assert snapshot["qt_qpa_platform"] == "xcb"
+    assert snapshot["qt_quick_backend"] == "opengl"
+    assert snapshot["gpu_crash_guard_present"] is True
+    assert snapshot["gpu_crash_guard_path"] == str(crash_guard)
 
 
 def test_extension_check_payload_includes_play_status_for_matches():

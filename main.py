@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Protocol, cast, override
+from typing import TYPE_CHECKING, Callable, Protocol, cast, override
 
 from core.api import Api
 from core.f95zone import normalize_thread_url
@@ -20,9 +20,11 @@ playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 APP_DATA_DIR = os.path.expanduser("~/.local/share/wLib")
 PYWEBVIEW_STORAGE_DIR_NAME = "webview"
 PYWEBVIEW_HTTP_PORT = 42001
+RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log")
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
+renderer_log_lock = threading.Lock()
 
 if TYPE_CHECKING:
     from webview import Window
@@ -42,6 +44,8 @@ class WebviewModule(Protocol):
 
     def start(
         self,
+        func: Callable[..., None] | None = None,
+        args: tuple[object, ...] | None = None,
         *,
         gui: str,
         debug: bool,
@@ -55,6 +59,40 @@ class WebviewModule(Protocol):
 
 class ExtensionWindow(Protocol):
     on_top: bool
+
+    def evaluate_js(self, script: str) -> object: ...
+
+
+class WaitEvent(Protocol):
+    def wait(self, timeout: float | None = None) -> bool: ...
+
+
+class RendererEvents(Protocol):
+    shown: WaitEvent
+    loaded: WaitEvent
+
+
+class RuntimeQtProfile(Protocol):
+    def persistentStoragePath(self) -> str: ...
+
+    def httpUserAgent(self) -> str: ...
+
+
+class RuntimeQtPage(Protocol):
+    def profile(self) -> RuntimeQtProfile: ...
+
+
+class RuntimeQtWebView(Protocol):
+    def page(self) -> RuntimeQtPage: ...
+
+
+class RuntimeQtWindow(Protocol):
+    webview: RuntimeQtWebView
+
+
+class RendererDiagnosticsWindow(Protocol):
+    events: RendererEvents
+    native: RuntimeQtWindow | None
 
     def evaluate_js(self, script: str) -> object: ...
 
@@ -179,6 +217,265 @@ def configure_qt_runtime_environment() -> dict[str, str]:
     }
 
 
+def _format_renderer_log_value(value: object) -> str:
+    if value is None:
+        return "<unset>"
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True, default=str)
+
+    text = str(value).strip()
+    return text or "<unset>"
+
+
+def _renderer_log_targets() -> list[str]:
+    targets = [RENDERER_DIAGNOSTICS_LOG]
+    appimage_log = (os.environ.get("WLIB_APPIMAGE_LAUNCH_LOG") or "").strip()
+    if appimage_log and appimage_log not in targets:
+        targets.append(appimage_log)
+    return targets
+
+
+def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    header = f"[wLib] Renderer diagnostics ({stage})"
+    lines = [header]
+    for key, value in details.items():
+        lines.append(f"  {key}={_format_renderer_log_value(value)}")
+
+    print("\n".join(lines))
+
+    entry_lines = [f"=== {timestamp} | renderer:{stage} ==="]
+    for key, value in details.items():
+        entry_lines.append(f"{key}={_format_renderer_log_value(value)}")
+
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    entry_text = "\n".join(entry_lines) + "\n"
+    with renderer_log_lock:
+        for target in _renderer_log_targets():
+            try:
+                target_dir = os.path.dirname(target)
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
+                with open(target, "a", encoding="utf-8") as log_file:
+                    _ = log_file.write(entry_text)
+            except OSError as e:
+                print(f"[wLib] Failed to write renderer diagnostics to {target}: {e}")
+
+
+def collect_renderer_environment_snapshot(*, dev_mode: bool) -> dict[str, object]:
+    crash_guard_path = os.path.join(APP_DATA_DIR, ".gpu_crash_guard")
+    return {
+        "dev_mode": dev_mode,
+        "session_type": os.environ.get("XDG_SESSION_TYPE") or "",
+        "display": os.environ.get("DISPLAY") or "",
+        "wayland_display": os.environ.get("WAYLAND_DISPLAY") or "",
+        "qt_qpa_platform": os.environ.get("QT_QPA_PLATFORM") or "",
+        "qt_quick_backend": os.environ.get("QT_QUICK_BACKEND") or "",
+        "qsg_rhi_backend": os.environ.get("QSG_RHI_BACKEND") or "",
+        "qt_opengl": os.environ.get("QT_OPENGL") or "",
+        "qtwebengine_flags": os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS") or "",
+        "libgl_always_software": os.environ.get("LIBGL_ALWAYS_SOFTWARE") or "",
+        "gallium_driver": os.environ.get("GALLIUM_DRIVER") or "",
+        "wlib_qpa_platform_override": os.environ.get("WLIB_QPA_PLATFORM") or "",
+        "gpu_crash_guard_path": crash_guard_path,
+        "gpu_crash_guard_present": os.path.isfile(crash_guard_path),
+        "renderer_log": RENDERER_DIAGNOSTICS_LOG,
+        "appimage_launch_log": os.environ.get("WLIB_APPIMAGE_LAUNCH_LOG") or "",
+    }
+
+
+def collect_pywebview_module_snapshot(
+    webview_module: WebviewModule | None,
+) -> dict[str, object]:
+    qt_backend_path = ""
+    qt_backend_renderer = ""
+    qt_backend_webengine = ""
+
+    try:
+        qt_backend_module = importlib.import_module("webview.platforms.qt")
+        qt_backend_path = str(getattr(qt_backend_module, "__file__", "") or "")
+        qt_backend_renderer = str(getattr(qt_backend_module, "renderer", "") or "")
+        qt_backend_webengine = str(getattr(qt_backend_module, "is_webengine", "") or "")
+    except Exception as e:
+        qt_backend_path = f"<error: {e}>"
+
+    return {
+        "pywebview_module_path": getattr(webview_module, "__file__", "")
+        if webview_module
+        else "",
+        "pywebview_renderer": getattr(webview_module, "renderer", "")
+        if webview_module
+        else "",
+        "pywebview_qt_backend_path": qt_backend_path,
+        "pywebview_qt_backend_renderer": qt_backend_renderer,
+        "pywebview_qt_backend_is_webengine": qt_backend_webengine,
+    }
+
+
+def _extract_native_renderer_details(
+    window: RendererDiagnosticsWindow,
+) -> dict[str, object]:
+    native_window = window.native
+    native_webview: RuntimeQtWebView | None = None
+    native_page = None
+    native_profile = None
+    native_error = ""
+
+    try:
+        if native_window is not None:
+            native_webview = native_window.webview
+    except Exception as e:
+        native_error = str(e)
+
+    if native_webview is not None:
+        try:
+            native_page = native_webview.page()
+        except Exception as e:
+            native_error = str(e)
+
+    if native_page is not None:
+        try:
+            native_profile = native_page.profile()
+        except Exception as e:
+            native_error = str(e)
+
+    details: dict[str, object] = {
+        "native_window_class": type(native_window).__name__ if native_window else "",
+        "native_webview_class": type(native_webview).__name__ if native_webview else "",
+        "native_page_class": type(native_page).__name__ if native_page else "",
+        "native_profile_class": type(native_profile).__name__ if native_profile else "",
+    }
+    if native_error:
+        details["native_introspection_error"] = native_error
+
+    if native_profile is not None:
+        try:
+            details["qt_profile_storage_path"] = native_profile.persistentStoragePath()
+        except Exception as e:
+            details["qt_profile_storage_path_error"] = str(e)
+
+        try:
+            details["qt_profile_http_user_agent"] = native_profile.httpUserAgent()
+        except Exception as e:
+            details["qt_profile_http_user_agent_error"] = str(e)
+
+    return details
+
+
+def _probe_browser_renderer(window: RendererDiagnosticsWindow) -> dict[str, object]:
+    probe_script = """
+(() => {
+  const probe = (kind) => {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext(kind, { antialias: true, failIfMajorPerformanceCaveat: false });
+      if (!gl) {
+        return null;
+      }
+
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      const result = {
+        context: kind,
+        vendor: String(gl.getParameter(gl.VENDOR) || ''),
+        renderer: String(gl.getParameter(gl.RENDERER) || ''),
+        version: String(gl.getParameter(gl.VERSION) || ''),
+        shadingLanguageVersion: String(gl.getParameter(gl.SHADING_LANGUAGE_VERSION) || ''),
+      };
+
+      if (debug) {
+        result.unmaskedVendor = String(gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) || '');
+        result.unmaskedRenderer = String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) || '');
+      }
+
+      return result;
+    } catch (error) {
+      return { context: kind, error: String(error) };
+    }
+  };
+
+  return {
+    location: window.location.href,
+    userAgent: navigator.userAgent,
+    hardwareConcurrency: navigator.hardwareConcurrency || null,
+    webgl2: probe('webgl2'),
+    webgl: probe('webgl'),
+  };
+})()
+"""
+
+    try:
+        probe_result = window.evaluate_js(probe_script)
+    except Exception as e:
+        return {"browser_probe_error": str(e)}
+
+    if not isinstance(probe_result, dict):
+        return {"browser_probe_result": probe_result}
+
+    typed_probe_result = cast(dict[str, object], probe_result)
+
+    details: dict[str, object] = {
+        "page_location": typed_probe_result.get("location"),
+        "js_user_agent": typed_probe_result.get("userAgent"),
+        "js_hardware_concurrency": typed_probe_result.get("hardwareConcurrency"),
+    }
+
+    webgl2 = typed_probe_result.get("webgl2")
+    webgl = typed_probe_result.get("webgl")
+    selected_probe: dict[str, object] | None = None
+    if isinstance(webgl2, dict):
+        selected_probe = cast(dict[str, object], webgl2)
+    elif isinstance(webgl, dict):
+        selected_probe = cast(dict[str, object], webgl)
+
+    details["webgl2_probe"] = webgl2
+    details["webgl_probe"] = webgl
+    if selected_probe is not None:
+        details["detected_webgl_context"] = selected_probe.get("context")
+        details["detected_webgl_vendor"] = selected_probe.get(
+            "unmaskedVendor"
+        ) or selected_probe.get("vendor")
+        details["detected_webgl_renderer"] = selected_probe.get(
+            "unmaskedRenderer"
+        ) or selected_probe.get("renderer")
+        details["detected_webgl_version"] = selected_probe.get("version")
+
+    return details
+
+
+def log_runtime_renderer_diagnostics() -> None:
+    window = cast(RendererDiagnosticsWindow | None, window_ref)
+    if window is None:
+        log_renderer_diagnostics("runtime", {"error": "window_ref is not available"})
+        return
+
+    if not window.events.shown.wait(30):
+        log_renderer_diagnostics(
+            "runtime", {"error": "timed out waiting for window to show"}
+        )
+        return
+
+    if not window.events.loaded.wait(60):
+        log_renderer_diagnostics(
+            "runtime",
+            {
+                "error": "timed out waiting for webview content to load",
+                **_extract_native_renderer_details(window),
+            },
+        )
+        return
+
+    runtime_details = {
+        "pywebview_renderer": getattr(load_webview_module(), "renderer", ""),
+        **_extract_native_renderer_details(window),
+        **_probe_browser_renderer(window),
+    }
+    log_renderer_diagnostics("runtime", runtime_details)
+
+
 def load_webview_module() -> WebviewModule | None:
     global webview
 
@@ -207,6 +504,7 @@ def start_webview(
 
     if dev_mode:
         webview_module.start(
+            func=log_runtime_renderer_diagnostics,
             gui="qt",
             debug=False,
             http_server=True,
@@ -217,6 +515,7 @@ def start_webview(
         return
 
     webview_module.start(
+        func=log_runtime_renderer_diagnostics,
         gui="qt",
         debug=False,
         http_server=True,
@@ -535,6 +834,14 @@ def main() -> None:
 
     if webview_module is None:
         raise RuntimeError("pywebview is required to run wLib")
+
+    log_renderer_diagnostics(
+        "startup",
+        {
+            **collect_renderer_environment_snapshot(dev_mode=DEV_MODE),
+            **collect_pywebview_module_snapshot(webview_module),
+        },
+    )
 
     api = Api()
     sync_result = api.sync_extension_files()
