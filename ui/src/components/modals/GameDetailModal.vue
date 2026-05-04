@@ -18,7 +18,17 @@ import {
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
 import { api } from "../../services/api";
-import type { GameRecord, RunnerInfo, SaveLocation } from "../../services/api";
+import type {
+  GameRecord,
+  RunnerInfo,
+  SaveLocation,
+} from "../../services/api";
+import {
+  LAUNCH_MODE_OPTIONS,
+  normalizeLaunchMode,
+  usesWineProtonControls,
+} from "../../utils/launchMode";
+import type { LaunchMode } from "../../utils/launchMode";
 import {
   DEFAULT_PLAY_STATUS,
   getPlayStatusMeta,
@@ -103,6 +113,7 @@ const runWayland = ref(false);
 const autoInjectCe = ref(false);
 const customPrefix = ref("");
 const protonVersion = ref("");
+const launchMode = ref<LaunchMode>("auto");
 const useCustomPrefix = ref(false);
 const availableRunners = ref<RunnerInfo[]>([]);
 const loadingRunners = ref(false);
@@ -131,6 +142,9 @@ const deleting = ref(false);
 const engineDropdownRef = ref<HTMLElement | null>(null);
 
 const statuses = PLAY_STATUS_OPTIONS;
+const isNativeLaunchMode = computed(
+  () => !usesWineProtonControls(launchMode.value),
+);
 
 const averagePersonalRating = computed(() => {
   const sum =
@@ -248,6 +262,7 @@ watch(
         autoInjectCe.value = g.auto_inject_ce ? true : false;
         customPrefix.value = g.custom_prefix || "";
         protonVersion.value = g.proton_version || "";
+        launchMode.value = normalizeLaunchMode(g.launch_mode);
         useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
         showJapaneseLocaleInfo.value = false;
         showWaylandInfo.value = false;
@@ -307,9 +322,9 @@ watch(
 );
 
 watch(
-  () => useCustomPrefix.value,
-  async (enabled) => {
-    if (!enabled || runnersLoaded.value || loadingRunners.value) {
+  () => [useCustomPrefix.value, launchMode.value] as const,
+  async ([enabled, mode]) => {
+    if (!enabled || mode === "native" || runnersLoaded.value || loadingRunners.value) {
       return;
     }
     loadingRunners.value = true;
@@ -414,6 +429,7 @@ const save = async () => {
       auto_inject_ce: autoInjectCe.value,
       custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
       proton_version: useCustomPrefix.value ? protonVersion.value : "",
+      launch_mode: launchMode.value,
       latest_version: latestVersion.value,
       rating_graphics: ratingGraphics.value,
       rating_story: ratingStory.value,
@@ -474,9 +490,12 @@ const launchGame = () => {
       engine: normalizeEngine(engine.value),
       run_japanese_locale: !!runJapaneseLocale.value,
       run_wayland: !!runWayland.value,
-      auto_inject_ce: !!autoInjectCe.value,
-      custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
-      proton_version: useCustomPrefix.value ? protonVersion.value : "",
+      auto_inject_ce: !isNativeLaunchMode.value && !!autoInjectCe.value,
+      custom_prefix:
+        !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
+      proton_version:
+        !isNativeLaunchMode.value && useCustomPrefix.value ? protonVersion.value : "",
+      launch_mode: launchMode.value,
     };
     emit("launch", payload);
   }
@@ -501,8 +520,8 @@ const findSaves = async () => {
       props.game.exe_path,
       title.value,
       engine.value,
-      useCustomPrefix.value ? customPrefix.value : "",
-      useCustomPrefix.value ? protonVersion.value : ""
+      !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
+      !isNativeLaunchMode.value && useCustomPrefix.value ? protonVersion.value : ""
     );
     saveResults.value = results || [];
   } catch (e) {
@@ -839,6 +858,22 @@ const openInBrowser = async () => {
               class="rounded-lg p-3 space-y-2"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
+              <div class="rounded-md px-2 py-2" style="background: var(--bg-surface)">
+                <label class="modal-label">Runtime Mode</label>
+                <select v-model="launchMode" class="modal-input w-full">
+                  <option
+                    v-for="option in LAUNCH_MODE_OPTIONS"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+                <p class="text-xs mt-2" style="color: var(--text-muted)">
+                  Linux Native runs the selected file directly without Wine or Proton.
+                </p>
+              </div>
+
               <div class="rounded-md px-2 py-1" style="background: var(--bg-surface)">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium" style="color: var(--text-primary)">
@@ -902,6 +937,7 @@ const openInBrowser = async () => {
               </div>
 
               <div
+                v-if="!isNativeLaunchMode"
                 class="rounded-md px-2 py-1 transition-colors"
                 :style="
                   ceInstalled
@@ -953,7 +989,7 @@ const openInBrowser = async () => {
           </div>
 
           <!-- Advanced Launch Options -->
-          <div class="col-span-2 mt-2">
+          <div v-if="!isNativeLaunchMode" class="col-span-2 mt-2">
             <div
               class="flex items-center justify-between p-3 rounded-lg"
               style="

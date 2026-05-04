@@ -25,7 +25,8 @@ The `Api` class acts as the single point of entry for the Vue frontend. All meth
 ### `core/launcher.py` (Process Management)
 This module handles the complexities of launching games on Linux.
 - **Environment Overrides**: Depending on the settings enabled for a specific game (e.g. `run_wayland`, `run_japanese_locale`), the launcher injects OS-level environment variables (`LC_ALL=ja_JP.UTF-8`, `SDL_VIDEODRIVER=wayland`) directly into the `env` dictionary passed to `subprocess`.
-- **Wine & Proton**: Auto-detects if the target is an `.exe` file. If so, it prepends the configured `proton_path` or `wine` binary to the launch arguments, ensuring the proper `WINEPREFIX` is enforced.
+- **Launch Modes**: `auto` preserves extension/executable detection, `native` runs supported Linux host targets without Wine/Proton settings, and `wine_proton` forces the compatibility-runtime branch.
+- **Wine & Proton**: Prepends the configured `proton_path` or `wine` binary when compatibility mode is selected or auto-detection falls through to a Windows-style target, ensuring the proper `WINEPREFIX` or Proton compatibility path is enforced.
 - **Cheat Engine Integration**: Implements logic to auto-start `lunarengine-x86_64.exe` natively, passing a Lua injection script to map directly to the game's PID.
 - **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played.
 
@@ -33,6 +34,7 @@ This module handles the complexities of launching games on Linux.
 Responsible for fetching and parsing data from F95Zone.
 - **Headless Operations**: Uses `playwright.sync_api` to spin up headless Chromium instances.
 - **State Persistence**: Maintains session cookies manually by saving/loading states to a JSON file in the app data directory. This ensures the user does not have to log in on every scraper execution.
+- **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or unsupported values normalize to `auto`.
 - **Cloudflare Bypass**: Implements resilient `page.wait_for_selector()` heuristics to intelligently wait out or detect Cloudflare turnstiles, and identifies login-wall blocks to bubble up authentication errors to the UI.
 - **DOM Parsing**: Compiles metadata (title, version, image URLs, developer) by executing query selectors on the rendered HTML structure.
 

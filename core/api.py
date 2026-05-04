@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
-from core.database import init_db
+from core.database import init_db, normalize_launch_mode
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.launcher import Launcher
 from core.scraper import Scraper
@@ -92,6 +92,7 @@ class GameRecord(TypedDict):
     title: str
     version: str
     f95_url: str
+    launch_mode: NotRequired[str]
     thread_main_post_last_edit_at: NotRequired[str | None]
     thread_main_post_checked_at: NotRequired[str | None]
 
@@ -1202,6 +1203,7 @@ class Api:
         auto_inject_ce: bool = False,
         custom_prefix: str = "",
         proton_version: str = "",
+        launch_mode: str = "auto",
     ) -> dict[str, object]:
         import sqlite3
 
@@ -1213,6 +1215,7 @@ class Api:
         )
 
         normalized_url = normalize_thread_url(f95_url)
+        normalized_launch_mode = normalize_launch_mode(launch_mode)
 
         try:
             game_id = add_game_fn(
@@ -1230,6 +1233,7 @@ class Api:
                 auto_inject_ce=auto_inject_ce,
                 custom_prefix=custom_prefix,
                 proton_version=proton_version,
+                launch_mode=normalized_launch_mode,
             )
         except sqlite3.IntegrityError:
             return {
@@ -1306,6 +1310,10 @@ class Api:
         if "f95_url" in updated_fields:
             updated_fields["f95_url"] = normalize_thread_url(
                 str(updated_fields["f95_url"] or "")
+            )
+        if "launch_mode" in updated_fields:
+            updated_fields["launch_mode"] = normalize_launch_mode(
+                updated_fields["launch_mode"]
             )
 
         try:
@@ -2013,12 +2021,13 @@ class Api:
         auto_inject_ce: bool = False,
         custom_prefix: str = "",
         proton_version: str = "",
+        launch_mode: str = "auto",
     ) -> Mapping[str, object]:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
         print(
-            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version})"
+            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
         )
 
         def on_exit(delta: int, is_final: bool = True) -> None:
@@ -2047,6 +2056,7 @@ class Api:
             auto_inject_ce,
             custom_prefix,
             proton_version,
+            normalize_launch_mode(launch_mode),
             on_exit_callback=on_exit,
         )
         return result

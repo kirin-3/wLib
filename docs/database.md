@@ -56,3 +56,4 @@ A simple generic key-value store for application-wide persistence.
 |--------|------|-------------|
 | `key` | `TEXT` | Primary Key string matching a setting name (e.g. `proton_path`). |
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
+| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, or `wine_proton`. Defaults and invalid values normalize to `auto`. |

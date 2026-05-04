@@ -14,6 +14,12 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
 
 DEFAULT_PLAY_STATUS = "Not Started"
+DEFAULT_LAUNCH_MODE = "auto"
+CANONICAL_LAUNCH_MODES = (
+    DEFAULT_LAUNCH_MODE,
+    "native",
+    "wine_proton",
+)
 CANONICAL_PLAY_STATUSES = (
     DEFAULT_PLAY_STATUS,
     "Plan to Play",
@@ -42,9 +48,18 @@ _LEGACY_RECOVERABLE_PLAY_STATUSES = {
     "abandoned",
 }
 
+_CANONICAL_LAUNCH_MODE_SET = set(CANONICAL_LAUNCH_MODES)
+
 
 def _normalize_status_key(value: object) -> str:
     return str(value or "").strip().lower()
+
+
+def normalize_launch_mode(launch_mode: object) -> str:
+    normalized = str(launch_mode or "").strip().lower()
+    if normalized in _CANONICAL_LAUNCH_MODE_SET:
+        return normalized
+    return DEFAULT_LAUNCH_MODE
 
 
 def normalize_play_status(
@@ -222,6 +237,7 @@ def init_db() -> None:
             ("is_favorite", "BOOLEAN DEFAULT 0"),
             ("thread_main_post_last_edit_at", "TIMESTAMP"),
             ("thread_main_post_checked_at", "TIMESTAMP"),
+            ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
         ]
 
         for col_name, col_type in new_columns:
@@ -240,6 +256,10 @@ def init_db() -> None:
             )
 
         _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
+        _ = cursor.execute(
+            "UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN (?, ?, ?)",
+            (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
+        )
 
         conn.commit()
     finally:
@@ -262,6 +282,7 @@ def add_game(
     auto_inject_ce: bool = False,
     custom_prefix: str = "",
     proton_version: str = "",
+    launch_mode: str = DEFAULT_LAUNCH_MODE,
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
@@ -281,7 +302,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, date_added, play_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -297,6 +318,7 @@ def add_game(
                 auto_inject_ce,
                 custom_prefix,
                 proton_version,
+                normalize_launch_mode(launch_mode),
                 now_iso,
                 DEFAULT_PLAY_STATUS,
             ),
@@ -312,9 +334,12 @@ def get_all_games() -> list[dict[str, object]]:
         cursor = conn.cursor()
         _ = cursor.execute("SELECT * FROM games ORDER BY title ASC")
         games = cast(list[sqlite3.Row], cursor.fetchall())
-    return [
-        {str(key): cast(object, game[key]) for key in game.keys()} for game in games
-    ]
+    result: list[dict[str, object]] = []
+    for game in games:
+        game_dict = {str(key): cast(object, game[key]) for key in game.keys()}
+        game_dict["launch_mode"] = normalize_launch_mode(game_dict.get("launch_mode"))
+        result.append(game_dict)
+    return result
 
 
 def update_game_version(game_id: int, version: str) -> None:
@@ -360,6 +385,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
         "auto_inject_ce",
         "custom_prefix",
         "proton_version",
+        "launch_mode",
         "play_status",
         "is_favorite",
     }
@@ -375,6 +401,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
 
     if "play_status" in safe_fields:
         safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
+    if "launch_mode" in safe_fields:
+        safe_fields["launch_mode"] = normalize_launch_mode(safe_fields["launch_mode"])
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row

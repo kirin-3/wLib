@@ -23,6 +23,45 @@ def setup_test_db(tmp_path, monkeypatch):
         os.remove(db_file)
 
 
+def test_api_add_game_persists_launch_mode():
+    api = Api()
+
+    result = api.add_game("Native", "/tmp/native.sh", launch_mode="native")
+
+    assert result["id"] is not None
+    games = get_all_games()
+    assert games[0]["launch_mode"] == "native"
+
+
+def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
+    api = Api()
+    captured: dict[str, object] = {}
+
+    def fake_launch(
+        exe_path,
+        command_line_args="",
+        run_japanese_locale=False,
+        run_wayland=False,
+        auto_inject_ce=False,
+        custom_prefix="",
+        proton_version="",
+        launch_mode="auto",
+        on_exit_callback=None,
+    ):
+        captured["exe_path"] = exe_path
+        captured["launch_mode"] = launch_mode
+        captured["on_exit_callback"] = on_exit_callback
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", fake_launch)
+
+    result = api.launch_game(1, "/tmp/game.exe", launch_mode="unknown")
+
+    assert result["success"] is True
+    assert captured["exe_path"] == "/tmp/game.exe"
+    assert captured["launch_mode"] == "auto"
+
+
 def test_check_for_updates_rejects_unknown_version(monkeypatch):
     api = Api()
     add_game(

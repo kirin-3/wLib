@@ -129,6 +129,130 @@ def test_launch_command_substitution(
     assert args[0] == ["/opt/game/run.sh", "-developer"]
 
 
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch.dict(
+    "os.environ",
+    {
+        "WINEPREFIX": "/tmp/from-env",
+        "WINEDLLOVERRIDES": "winhttp=n,b",
+        "STEAM_COMPAT_DATA_PATH": "/tmp/steam-compat",
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH": "/tmp/steam-client",
+    },
+)
+def test_launch_native_mode_uses_host_binary_without_wine_settings(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    """Linux Native should run directly and ignore stale Wine/Proton settings."""
+    mock_exists.return_value = True
+    mock_access.return_value = True
+
+    def get_setting_side_effect(key):
+        assert key == "enable_logging"
+        return "false"
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch(
+        "/opt/game/Game.x86_64",
+        command_line_args="gamemoderun %command% --fullscreen",
+        auto_inject_ce=True,
+        custom_prefix="/tmp/custom-prefix",
+        proton_version="/tmp/proton",
+        launch_mode="native",
+    )
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["gamemoderun", "/opt/game/Game.x86_64", "--fullscreen"]
+    env = kwargs["env"]
+    assert "WINEPREFIX" not in env
+    assert "WINEDLLOVERRIDES" not in env
+    assert "STEAM_COMPAT_DATA_PATH" not in env
+    assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
+
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_native_mode_rejects_windows_executable_without_fallback(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    """Linux Native should fail clearly for Windows targets instead of falling back."""
+    mock_exists.return_value = True
+    mock_access.return_value = True
+    mock_get_setting.return_value = "false"
+
+    launcher = Launcher()
+    result = launcher.launch("/opt/game/game.exe", launch_mode="native")
+
+    assert result["success"] is False
+    assert "cannot run Windows" in str(result.get("error", ""))
+    mock_popen.assert_not_called()
+    assert mock_get_setting.call_count == 1
+
+
+@patch("os.path.exists")
+@patch("os.path.isdir")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_wine_proton_mode_forces_compat_runtime(
+    mock_get_setting, mock_popen, mock_access, mock_isdir, mock_exists
+):
+    """Wine/Proton mode should bypass native detection and use compatibility runtime."""
+
+    def exists_side_effect(path):
+        return path == "/opt/game/run.sh"
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "proton_path": "",
+            "wine_prefix_path": "/tmp/wlib-prefix",
+        }.get(key)
+
+    mock_exists.side_effect = exists_side_effect
+    mock_isdir.return_value = False
+    mock_access.return_value = True
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    launcher = Launcher()
+    result = launcher.launch("/opt/game/run.sh", launch_mode="wine_proton")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["wine", "/opt/game/run.sh"]
+    assert kwargs["env"]["WINEPREFIX"] == "/tmp/wlib-prefix"
+
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_native_mode_rejects_non_executable_target(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    mock_exists.return_value = True
+    mock_access.return_value = False
+    mock_get_setting.return_value = "false"
+
+    launcher = Launcher()
+    result = launcher.launch("/opt/game/Game.x86_64", launch_mode="native")
+
+    assert result["success"] is False
+    assert "host-native file" in str(result.get("error", ""))
+    mock_popen.assert_not_called()
+
+
 def test_launch_rejects_empty_executable_path():
     launcher = Launcher()
     result = launcher.launch("   ")
@@ -221,7 +345,7 @@ def test_launch_html_no_playtime_tracking(mock_popen, mock_exists):
     launcher = Launcher()
     callback_called = False
 
-    def test_callback(delta, is_final):
+    def test_callback(delta: int, is_final: bool = True) -> None:
         nonlocal callback_called
         callback_called = True
 

@@ -17,7 +17,7 @@
 
 ---
 
-wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Wine or Proton, and tracks updates seamlessly by scraping F95Zone thread pages.
+wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Linux-native, Wine, or Proton modes, and tracks updates seamlessly by scraping F95Zone thread pages.
 
 ## 🐧 Why wLib?
 
@@ -40,6 +40,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 ### 🚀 Advanced Launcher
 - **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
+- **Launch Modes** — Choose Auto Detect, Linux Native, or Wine / Proton per game. Native mode runs supported Linux targets directly without Wine or Proton.
 - **Wine / Proton Integration** — Support for Wine, Proton, native Linux binaries, shell scripts, and even `.jar` files safely.
 - **Engine Auto-Configuration** — Automatically applies environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
 - **Japanese Locale Mode** — Run games strictly with `LC_ALL=ja_JP.UTF-8` locale for parsing untranslated Japanese titles correctly.

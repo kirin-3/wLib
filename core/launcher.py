@@ -2,7 +2,7 @@ import subprocess
 import os
 from typing import Protocol
 
-from .database import get_setting
+from .database import get_setting, normalize_launch_mode
 
 
 class ExitCallback(Protocol):
@@ -22,6 +22,7 @@ class Launcher:
         auto_inject_ce: bool = False,
         custom_prefix: str = "",
         proton_version: str = "",
+        launch_mode: str = "auto",
         on_exit_callback: ExitCallback | None = None,
     ) -> dict[str, object]:
         """
@@ -39,6 +40,8 @@ class Launcher:
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
             return {"success": False, "error": f"Executable not found at {exe_path}"}
+
+        launch_mode = normalize_launch_mode(launch_mode)
 
         env = os.environ.copy()
 
@@ -221,23 +224,21 @@ class Launcher:
                 print(f"Error launching game: {e}")
                 return {"success": False, "error": str(e)}
 
-        # 1. Native Shell Script (e.g. Ren'Py)
-        if ext == ".sh":
-            command = build_command([exe_path], args)
-            print(f"Executing shell script natively: {' '.join(command)}")
-            return execute_process(command, env)
+        def without_wine_proton_env(env_vars: dict[str, str]) -> dict[str, str]:
+            clean_env = env_vars.copy()
+            for var in (
+                "WINEPREFIX",
+                "WINEDLLOVERRIDES",
+                "WINEDEBUG",
+                "PROTON_LOG",
+                "PROTON_LOG_DIR",
+                "STEAM_COMPAT_DATA_PATH",
+                "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+            ):
+                _ = clean_env.pop(var, None)
+            return clean_env
 
-        # 2. Java Archives (.jar)
-        if ext == ".jar":
-            command = build_command(["java", "-jar", exe_path], args)
-            print(f"Executing Java archive: {' '.join(command)}")
-            return execute_process(command, env)
-
-        # 3. HTML Games (browser-based)
-        # Opens HTML files in the user's default browser using xdg-open.
-        # Note: Playtime tracking is not supported for HTML games since browser
-        # processes cannot be reliably monitored (browser may have other tabs open).
-        if ext in [".html", ".htm"]:
+        def execute_html_game(strip_wine_env: bool = False) -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
             abs_path = os.path.abspath(exe_path)
             file_url = f"file://{abs_path}"
@@ -260,6 +261,9 @@ class Launcher:
                 for var in appimage_vars:
                     _ = clean_env.pop(var, None)
 
+                if strip_wine_env:
+                    clean_env = without_wine_proton_env(clean_env)
+
                 # Reset LD_LIBRARY_PATH to avoid AppImage library interference
                 if "LD_LIBRARY_PATH_ORIG" in clean_env:
                     clean_env["LD_LIBRARY_PATH"] = clean_env["LD_LIBRARY_PATH_ORIG"]
@@ -277,12 +281,66 @@ class Launcher:
                 print(f"Error launching HTML game: {e}")
                 return {"success": False, "error": str(e)}
 
-        # 4. Native Linux Binary (Executable without .exe/.bat extension or standard Linux build)
-        # Some native Linux games like Godot have no extension or .x86_64
-        if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat"]:
-            command = build_command([exe_path], args)
-            print(f"Executing Linux binary natively: {' '.join(command)}")
-            return execute_process(command, env)
+        def execute_host_native(strict_native: bool) -> dict[str, object] | None:
+            process_env = without_wine_proton_env(env) if strict_native else env
+
+            # 1. Native Shell Script (e.g. Ren'Py)
+            if ext == ".sh":
+                if strict_native and not os.access(exe_path, os.X_OK):
+                    return {
+                        "success": False,
+                        "error": (
+                            "Linux Native launch mode requires executable "
+                            f"permission for {exe_path}"
+                        ),
+                    }
+                command = build_command([exe_path], args)
+                print(f"Executing shell script natively: {' '.join(command)}")
+                return execute_process(command, process_env)
+
+            # 2. Java Archives (.jar)
+            if ext == ".jar":
+                command = build_command(["java", "-jar", exe_path], args)
+                print(f"Executing Java archive: {' '.join(command)}")
+                return execute_process(command, process_env)
+
+            # 3. HTML Games (browser-based)
+            # Playtime tracking is not supported because browser processes cannot
+            # be reliably monitored when other tabs or windows are open.
+            if ext in [".html", ".htm"]:
+                return execute_html_game(strip_wine_env=strict_native)
+
+            # 4. Native Linux Binary (Executable without .exe/.bat extension)
+            # Some native Linux games like Godot have no extension or .x86_64.
+            if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat"]:
+                command = build_command([exe_path], args)
+                print(f"Executing Linux binary natively: {' '.join(command)}")
+                return execute_process(command, process_env)
+
+            if strict_native:
+                if ext in [".exe", ".bat"]:
+                    return {
+                        "success": False,
+                        "error": (
+                            "Linux Native launch mode cannot run Windows "
+                            "executables directly. Choose Auto Detect or "
+                            "Wine/Proton for this game."
+                        ),
+                    }
+                return {
+                    "success": False,
+                    "error": (
+                        "Linux Native launch mode requires an executable "
+                        f"host-native file: {exe_path}"
+                    ),
+                }
+
+            return None
+
+        if launch_mode in ("auto", "native"):
+            native_result = execute_host_native(strict_native=launch_mode == "native")
+            if native_result is not None:
+                return native_result
 
         # 5. Fallback to Wine / Proton execution for Windows executables
         proton_path = proton_version if proton_version else get_setting("proton_path")

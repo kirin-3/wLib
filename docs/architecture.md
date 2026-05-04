@@ -49,7 +49,7 @@ flowchart TD
 
     DB <--> SQLITE
     SCRAPER <-->|Playwright Sync| F95
-    LAUNCHER -->|Subprocess/Wine| FS
+    LAUNCHER -->|Subprocess / Native / Wine / Proton| FS
     
     EXT <-->|CORS HTTP| EXT_SERVER
     EXT_SERVER -.->|UI Event Bus| UI

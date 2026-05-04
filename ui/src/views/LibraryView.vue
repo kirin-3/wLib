@@ -18,7 +18,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import type { GameRecord } from "../services/api";
+import type { GameRecord, LaunchMode } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 import {
@@ -60,6 +60,7 @@ interface AddGamePayload {
   rating?: string;
   developer?: string;
   engine?: string;
+  launch_mode?: LaunchMode;
 }
 
 interface PlaytimeTickDetail {
@@ -460,6 +461,7 @@ const launchFromModal = async (game: GameRecord) => {
       game.auto_inject_ce || false,
       game.custom_prefix || "",
       game.proton_version || "",
+      game.launch_mode || "auto",
     );
     if (result && !result.success) {
       alert(`Failed to launch game:\n\n${result.error}`);
@@ -480,6 +482,7 @@ const launchGameFast = async (game: GameRecord) => {
       game.auto_inject_ce || false,
       game.custom_prefix || "",
       game.proton_version || "",
+      game.launch_mode || "auto",
     );
     if (result && !result.success) {
       alert(`Failed to launch game:\n\n${result.error}`);
@@ -526,6 +529,9 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       false, // run_japanese_locale
       false, // run_wayland
       false, // auto_inject_ce
+      "", // custom_prefix
+      "", // proton_version
+      gameData.launch_mode || "auto",
     );
     if (result && result.success === false) {
       alert(`Failed to add game:\n\n${result.error || "Unknown error"}`);

@@ -3,12 +3,14 @@ import pytest
 import os
 from core.database import (
     DEFAULT_PLAY_STATUS,
+    DEFAULT_LAUNCH_MODE,
     init_db,
     get_connection,
     add_game,
     find_game_by_f95_url,
     update_game,
     get_all_games,
+    normalize_launch_mode,
 )
 
 
@@ -39,6 +41,7 @@ def test_database_initialization():
     assert "run_wayland" in columns
     assert "thread_main_post_last_edit_at" in columns
     assert "thread_main_post_checked_at" in columns
+    assert "launch_mode" in columns
 
     cursor.execute("PRAGMA foreign_keys")
     assert cursor.fetchone()[0] == 1
@@ -59,6 +62,91 @@ def test_add_and_get_game():
     assert games[0]["exe_path"] == "/tmp/game.exe"
     assert games[0]["tags"] == "visual novel, rpg"
     assert games[0]["play_status"] == DEFAULT_PLAY_STATUS
+    assert games[0]["launch_mode"] == DEFAULT_LAUNCH_MODE
+
+
+def test_launch_mode_is_persisted_and_normalized():
+    """Test launch mode defaults, persistence, and invalid-value normalization."""
+    native_id = add_game(
+        title="Native Game", exe_path="/tmp/native.sh", launch_mode="native"
+    )
+    default_id = add_game(title="Default Game", exe_path="/tmp/default.exe")
+    assert native_id is not None
+    assert default_id is not None
+
+    update_game(default_id, {"launch_mode": "wine_proton"})
+
+    games_by_id = {game["id"]: game for game in get_all_games()}
+    assert games_by_id[native_id]["launch_mode"] == "native"
+    assert games_by_id[default_id]["launch_mode"] == "wine_proton"
+
+    update_game(native_id, {"launch_mode": "unsupported"})
+    games_by_id = {game["id"]: game for game in get_all_games()}
+    assert games_by_id[native_id]["launch_mode"] == DEFAULT_LAUNCH_MODE
+
+    assert normalize_launch_mode(None) == DEFAULT_LAUNCH_MODE
+    assert normalize_launch_mode("") == DEFAULT_LAUNCH_MODE
+    assert normalize_launch_mode("unsupported") == DEFAULT_LAUNCH_MODE
+
+
+def test_init_db_migrates_legacy_games_without_launch_mode():
+    """Test existing databases gain launch_mode with the safe default."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE games")
+    cursor.execute("""
+        CREATE TABLE games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            f95_url TEXT,
+            exe_path TEXT NOT NULL,
+            version TEXT,
+            progress TEXT DEFAULT '',
+            developer TEXT DEFAULT '',
+            last_played TIMESTAMP,
+            cover_image_path TEXT
+        )
+    """)
+    cursor.execute(
+        "INSERT INTO games (title, exe_path) VALUES (?, ?)",
+        ("Legacy Native", "/tmp/legacy.sh"),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(games)")
+    columns = [row[1] for row in cursor.fetchall()]
+    cursor.execute("SELECT launch_mode FROM games WHERE title = ?", ("Legacy Native",))
+    row = cursor.fetchone()
+    conn.close()
+
+    assert "launch_mode" in columns
+    assert row is not None
+    assert row[0] == DEFAULT_LAUNCH_MODE
+
+
+def test_init_db_normalizes_invalid_stored_launch_modes():
+    """Test migration startup cleans invalid launch_mode values in-place."""
+    game_id = add_game(title="Invalid Mode", exe_path="/tmp/invalid.exe")
+    assert game_id is not None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET launch_mode = ? WHERE id = ?",
+        ("broken_mode", game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["launch_mode"] == DEFAULT_LAUNCH_MODE
 
 
 def test_add_game_with_version():

@@ -2,6 +2,8 @@
 import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../../services/api";
+import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
+import type { LaunchMode } from "../../utils/launchMode";
 
 interface AddGamePayload {
   title: string;
@@ -13,6 +15,7 @@ interface AddGamePayload {
   rating: string;
   developer: string;
   engine: string;
+  launch_mode: LaunchMode;
 }
 
 const props = defineProps<{ modelValue: boolean }>();
@@ -33,6 +36,7 @@ const tags = ref("");
 const rating = ref("");
 const developer = ref("");
 const engine = ref("");
+const launchMode = ref<LaunchMode>("auto");
 
 const readQueryValue = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -95,6 +99,7 @@ const close = () => {
   rating.value = "";
   developer.value = "";
   engine.value = "";
+  launchMode.value = "auto";
   emit("update:modelValue", false);
 };
 
@@ -115,6 +120,7 @@ const save = () => {
     rating: rating.value,
     developer: developer.value,
     engine: engine.value,
+    launch_mode: launchMode.value,
   });
 };
 </script>
@@ -220,6 +226,26 @@ const save = () => {
           />
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             Required for checking game updates automatically.
+          </p>
+        </div>
+
+        <div>
+          <label
+            class="block text-sm font-medium mb-1.5"
+            style="color: var(--text-secondary)"
+            >Launch Mode</label
+          >
+          <select v-model="launchMode" class="modal-input w-full !py-3 text-sm">
+            <option
+              v-for="option in LAUNCH_MODE_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+          <p class="text-xs mt-2" style="color: var(--text-muted)">
+            Auto keeps wLib's current detection. Linux Native runs without Wine or Proton.
           </p>
         </div>
       </div>

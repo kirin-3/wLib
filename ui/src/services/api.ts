@@ -4,6 +4,9 @@
  * (e.g., when running in normal browser).
  */
 
+import type { LaunchMode } from "../utils/launchMode";
+export type { LaunchMode } from "../utils/launchMode";
+
 type ApiInvoker = (...args: unknown[]) => Promise<unknown> | unknown;
 
 interface PyWebViewBridge {
@@ -201,6 +204,7 @@ export interface GameRecord {
   auto_inject_ce?: boolean;
   custom_prefix?: string;
   proton_version?: string;
+  launch_mode?: LaunchMode;
   is_favorite?: boolean;
   rating_graphics?: number;
   rating_story?: number;
@@ -317,7 +321,8 @@ class ApiService {
     run_wayland = false,
     auto_inject_ce = false,
     custom_prefix = "",
-    proton_version = ""
+    proton_version = "",
+    launch_mode: LaunchMode = "auto"
   ): Promise<AddGameResponse> {
     return this.invoke(
       "add_game",
@@ -335,6 +340,7 @@ class ApiService {
       auto_inject_ce,
       custom_prefix,
       proton_version,
+      launch_mode,
     );
   }
 
@@ -406,7 +412,8 @@ class ApiService {
     run_wayland = false,
     auto_inject_ce = false,
     custom_prefix = "",
-    proton_version = ""
+    proton_version = "",
+    launch_mode: LaunchMode = "auto"
   ): Promise<LaunchGameResponse> {
     return this.invoke(
       "launch_game",
@@ -418,6 +425,7 @@ class ApiService {
       auto_inject_ce,
       custom_prefix,
       proton_version,
+      launch_mode,
     );
   }
 
