@@ -235,11 +235,20 @@ export interface GameRecord {
   launch_targets?: LaunchTarget[];
 }
 
+export interface RpgmakerLinuxRunnerStatus {
+  available: boolean;
+  path: string;
+  source: string;
+  configured_path: string;
+  error: string;
+}
+
 export interface SettingsPayload {
   proton_path?: string;
   wine_prefix_path?: string;
   enable_logging?: boolean;
   playwright_browsers_path?: string;
+  rpgmaker_linux_runner_path?: string;
 }
 
 export interface SettingsResponse {
@@ -247,6 +256,8 @@ export interface SettingsResponse {
   wine_prefix_path: string;
   enable_logging: boolean;
   playwright_browsers_path: string;
+  rpgmaker_linux_runner_path: string;
+  rpgmaker_linux_runner_status: RpgmakerLinuxRunnerStatus;
 }
 
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
@@ -256,6 +267,14 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   wine_prefix_path: "",
   enable_logging: false,
   playwright_browsers_path: "~/.cache/ms-playwright",
+  rpgmaker_linux_runner_path: "",
+  rpgmaker_linux_runner_status: {
+    available: false,
+    path: "",
+    source: "",
+    configured_path: "",
+    error: "RPGMaker Linux runner is not installed or configured.",
+  },
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -309,6 +328,14 @@ const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
 
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const rpgmakerRunnerPath =
+    typeof source.rpgmaker_linux_runner_path === "string"
+      ? source.rpgmaker_linux_runner_path
+      : DEFAULT_MOCK_SETTINGS.rpgmaker_linux_runner_path;
+  const rpgmakerRunnerStatus = normalizeMockRpgmakerLinuxStatus(
+    source.rpgmaker_linux_runner_status,
+    rpgmakerRunnerPath,
+  );
 
   return {
     proton_path: typeof source.proton_path === "string" ? source.proton_path : DEFAULT_MOCK_SETTINGS.proton_path,
@@ -324,6 +351,40 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.playwright_browsers_path === "string"
         ? source.playwright_browsers_path
         : DEFAULT_MOCK_SETTINGS.playwright_browsers_path,
+    rpgmaker_linux_runner_path: rpgmakerRunnerPath,
+    rpgmaker_linux_runner_status: rpgmakerRunnerStatus,
+  };
+};
+
+const normalizeMockRpgmakerLinuxStatus = (
+  value: unknown,
+  configuredPath: string,
+): RpgmakerLinuxRunnerStatus => {
+  const source = isRecord(value) ? value : {};
+  const path =
+    typeof source.path === "string" ? source.path : configuredPath.trim();
+  const available =
+    typeof source.available === "boolean" ? source.available : !!path.trim();
+
+  return {
+    available,
+    path: available ? path : "",
+    source:
+      typeof source.source === "string"
+        ? source.source
+        : available
+          ? "configured"
+          : "",
+    configured_path:
+      typeof source.configured_path === "string"
+        ? source.configured_path
+        : configuredPath,
+    error:
+      typeof source.error === "string"
+        ? source.error
+        : available
+          ? ""
+          : DEFAULT_MOCK_SETTINGS.rpgmaker_linux_runner_status.error,
   };
 };
 
@@ -657,7 +718,18 @@ class ApiService {
       case "get_settings":
         return readMockSettings();
       case "save_settings": {
-        const nextSettings = normalizeMockSettings(args[0]);
+        const payload = isRecord(args[0]) ? args[0] : {};
+        const mergedSettings: Record<string, unknown> = {
+          ...readMockSettings(),
+          ...payload,
+        };
+        if (
+          Object.prototype.hasOwnProperty.call(payload, "rpgmaker_linux_runner_path") &&
+          !Object.prototype.hasOwnProperty.call(payload, "rpgmaker_linux_runner_status")
+        ) {
+          delete mergedSettings.rpgmaker_linux_runner_status;
+        }
+        const nextSettings = normalizeMockSettings(mergedSettings);
         writeMockSettings(nextSettings);
         return { success: true, mock: true };
       }

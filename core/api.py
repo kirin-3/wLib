@@ -8,7 +8,11 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
-from core.database import init_db, normalize_launch_mode
+from core.database import (
+    RPGMAKER_LINUX_RUNNER_SETTING,
+    init_db,
+    normalize_launch_mode,
+)
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.launcher import Launcher
 from core.scraper import Scraper
@@ -2618,21 +2622,36 @@ class Api:
         playwright_path = get_setting_fn("playwright_browsers_path")
         if not isinstance(playwright_path, str) or not playwright_path.strip():
             playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+        rpgmaker_linux_runner_path = str(
+            get_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING) or ""
+        )
 
         return {
             "proton_path": str(get_setting_fn("proton_path") or ""),
             "wine_prefix_path": str(get_setting_fn("wine_prefix_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "playwright_browsers_path": playwright_path,
+            "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
+            "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
+                rpgmaker_linux_runner_path
+            ),
         }
 
     def save_settings(self, settings: Mapping[str, object]) -> dict[str, bool]:
-        from core.database import update_setting
+        from core.database import get_setting, update_setting
 
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
         update_setting_fn = cast(Callable[[str, str], None], update_setting)
 
-        raw_playwright_path = settings.get(
-            "playwright_browsers_path", DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+        def get_payload_or_existing(key: str, default: str = "") -> str:
+            if key in settings:
+                return str(settings.get(key, "") or "")
+            return str(get_setting_fn(key) or default)
+
+        raw_playwright_path = (
+            settings.get("playwright_browsers_path")
+            if "playwright_browsers_path" in settings
+            else get_setting_fn("playwright_browsers_path")
         )
         if isinstance(raw_playwright_path, str):
             playwright_path = raw_playwright_path.strip()
@@ -2640,15 +2659,26 @@ class Api:
             playwright_path = str(raw_playwright_path or "").strip()
         if not playwright_path:
             playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
+        rpgmaker_linux_runner_path = str(
+            get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
+        ).strip()
+        raw_enable_logging = (
+            settings.get("enable_logging")
+            if "enable_logging" in settings
+            else get_setting_fn("enable_logging")
+        )
+        enable_logging = (
+            "true"
+            if raw_enable_logging is True
+            or str(raw_enable_logging).strip().lower() == "true"
+            else "false"
+        )
 
-        update_setting_fn("proton_path", str(settings.get("proton_path", "") or ""))
-        update_setting_fn(
-            "wine_prefix_path", str(settings.get("wine_prefix_path", "") or "")
-        )
-        update_setting_fn(
-            "enable_logging", "true" if settings.get("enable_logging") else "false"
-        )
+        update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
+        update_setting_fn("wine_prefix_path", get_payload_or_existing("wine_prefix_path"))
+        update_setting_fn("enable_logging", enable_logging)
         update_setting_fn("playwright_browsers_path", playwright_path)
+        update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
         return {"success": True}
 
     def browse_file(self, start_path: str = "") -> str:

@@ -1,8 +1,17 @@
 import subprocess
 import os
-from typing import Protocol
+import shutil
+from typing import Protocol, TypedDict
 
-from .database import get_setting, normalize_launch_mode
+from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
+
+
+class RpgmakerLinuxRunnerStatus(TypedDict):
+    available: bool
+    path: str
+    source: str
+    configured_path: str
+    error: str
 
 
 class ExitCallback(Protocol):
@@ -12,6 +21,109 @@ class ExitCallback(Protocol):
 class Launcher:
     def __init__(self):
         pass
+
+    def _resolve_runner_candidate_path(self, raw_path: str) -> str:
+        expanded_path = os.path.expanduser(raw_path.strip())
+        if os.sep not in expanded_path and not expanded_path.startswith("."):
+            path_match = shutil.which(expanded_path)
+            if path_match:
+                return os.path.abspath(path_match)
+        return os.path.abspath(expanded_path)
+
+    def _validate_runner_candidate(self, raw_path: str) -> tuple[bool, str, str]:
+        candidate_path = self._resolve_runner_candidate_path(raw_path)
+        if not os.path.isfile(candidate_path):
+            return (
+                False,
+                candidate_path,
+                f"RPGMaker Linux runner was not found at {candidate_path}",
+            )
+        if not os.access(candidate_path, os.X_OK):
+            return (
+                False,
+                candidate_path,
+                f"RPGMaker Linux runner is not executable: {candidate_path}",
+            )
+        return True, candidate_path, ""
+
+    def _read_upstream_custom_runner_path(self) -> str:
+        config_path = os.path.expanduser("~/.config/defrpgmakerlinuxpath.txt")
+        try:
+            with open(config_path, encoding="utf-8") as config_file:
+                configured_base = config_file.readline().strip()
+        except OSError:
+            return ""
+
+        if not configured_base:
+            return ""
+
+        base_path = os.path.abspath(os.path.expanduser(configured_base.rstrip(os.sep)))
+        return os.path.join(
+            base_path,
+            "nwjs",
+            "nwjs",
+            "packagefiles",
+            "nwjsstart-cicpoffs.sh",
+        )
+
+    def get_rpgmaker_linux_runner_status(
+        self, configured_path: object | None = None
+    ) -> RpgmakerLinuxRunnerStatus:
+        if configured_path is None:
+            configured_path = get_setting(RPGMAKER_LINUX_RUNNER_SETTING)
+
+        configured_runner_path = str(configured_path or "").strip()
+        if configured_runner_path:
+            valid, resolved_path, error = self._validate_runner_candidate(
+                configured_runner_path
+            )
+            return {
+                "available": valid,
+                "path": resolved_path if valid else "",
+                "source": "configured",
+                "configured_path": configured_runner_path,
+                "error": error,
+            }
+
+        candidates: list[tuple[str, str]] = []
+        path_runner = shutil.which("rpgmaker-linux")
+        if path_runner:
+            candidates.append(("path", path_runner))
+        candidates.extend(
+            [
+                ("local-bin", "~/.local/bin/rpgmaker-linux"),
+                (
+                    "default-install",
+                    "~/desktopapps/nwjs/nwjs/packagefiles/nwjsstart-cicpoffs.sh",
+                ),
+            ]
+        )
+        custom_runner = self._read_upstream_custom_runner_path()
+        if custom_runner:
+            candidates.append(("custom-install", custom_runner))
+
+        seen_paths: set[str] = set()
+        for source, raw_path in candidates:
+            valid, resolved_path, _error = self._validate_runner_candidate(raw_path)
+            if resolved_path in seen_paths:
+                continue
+            seen_paths.add(resolved_path)
+            if valid:
+                return {
+                    "available": True,
+                    "path": resolved_path,
+                    "source": source,
+                    "configured_path": "",
+                    "error": "",
+                }
+
+        return {
+            "available": False,
+            "path": "",
+            "source": "",
+            "configured_path": "",
+            "error": "RPGMaker Linux runner is not installed or configured.",
+        }
 
     def launch(
         self,
@@ -238,6 +350,48 @@ class Launcher:
                 _ = clean_env.pop(var, None)
             return clean_env
 
+        def without_appimage_env(env_vars: dict[str, str]) -> dict[str, str]:
+            clean_env = env_vars.copy()
+            for var in (
+                "APPIMAGE",
+                "APPDIR",
+                "ARGV0",
+                "APPIMAGE_SILENT_INSTALL",
+                "OWD",
+                "APPIMAGE_EXTRACT_AND_RUN",
+            ):
+                _ = clean_env.pop(var, None)
+
+            if "LD_LIBRARY_PATH_ORIG" in clean_env:
+                clean_env["LD_LIBRARY_PATH"] = clean_env["LD_LIBRARY_PATH_ORIG"]
+            else:
+                _ = clean_env.pop("LD_LIBRARY_PATH", None)
+            return clean_env
+
+        def build_host_tool_env(
+            env_vars: dict[str, str], strip_wine_env: bool = True
+        ) -> dict[str, str]:
+            clean_env = without_appimage_env(env_vars)
+            if strip_wine_env:
+                clean_env = without_wine_proton_env(clean_env)
+            return clean_env
+
+        def execute_rpgmaker_linux_runner() -> dict[str, object]:
+            runner_status = self.get_rpgmaker_linux_runner_status()
+            if not runner_status["available"]:
+                return {
+                    "success": False,
+                    "error": runner_status["error"]
+                    or "RPGMaker Linux runner is not available.",
+                }
+
+            runner_game_dir = os.path.dirname(os.path.abspath(exe_path))
+            base_cmd = [runner_status["path"], "--gamepath", runner_game_dir]
+
+            command = build_command(base_cmd, args)
+            print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
+            return execute_process(command, build_host_tool_env(env))
+
         def execute_html_game(strip_wine_env: bool = False) -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
             abs_path = os.path.abspath(exe_path)
@@ -246,29 +400,9 @@ class Launcher:
             print(f"Opening HTML game in default browser: {file_url}")
             try:
                 # Use clean environment without Wine/Proton/AppImage variables that might interfere
-                clean_env = os.environ.copy()
-
-                # Remove AppImage-specific environment variables to ensure xdg-open
-                # runs on the host system, not within AppImage isolation
-                appimage_vars = [
-                    "APPIMAGE",
-                    "APPDIR",
-                    "ARGV0",
-                    "APPIMAGE_SILENT_INSTALL",
-                    "OWD",
-                    "APPIMAGE_EXTRACT_AND_RUN",
-                ]
-                for var in appimage_vars:
-                    _ = clean_env.pop(var, None)
-
-                if strip_wine_env:
-                    clean_env = without_wine_proton_env(clean_env)
-
-                # Reset LD_LIBRARY_PATH to avoid AppImage library interference
-                if "LD_LIBRARY_PATH_ORIG" in clean_env:
-                    clean_env["LD_LIBRARY_PATH"] = clean_env["LD_LIBRARY_PATH_ORIG"]
-                elif "LD_LIBRARY_PATH" in clean_env:
-                    del clean_env["LD_LIBRARY_PATH"]
+                clean_env = build_host_tool_env(
+                    os.environ.copy(), strip_wine_env=strip_wine_env
+                )
 
                 _ = subprocess.Popen(
                     command,
@@ -341,6 +475,9 @@ class Launcher:
             native_result = execute_host_native(strict_native=launch_mode == "native")
             if native_result is not None:
                 return native_result
+
+        if launch_mode == "rpgmaker_linux":
+            return execute_rpgmaker_linux_runner()
 
         # 5. Fallback to Wine / Proton execution for Windows executables
         proton_path = proton_version if proton_version else get_setting("proton_path")

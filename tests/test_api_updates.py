@@ -11,6 +11,7 @@ import pytest
 
 from core.api import Api
 from core.database import (
+    RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
     add_game,
     add_game_launch_target,
@@ -66,6 +67,35 @@ def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
     assert result["success"] is True
     assert captured["exe_path"] == "/tmp/game.exe"
     assert captured["launch_mode"] == "auto"
+
+
+def test_api_launch_game_passes_rpgmaker_linux_launch_mode(monkeypatch):
+    api = Api()
+    captured: dict[str, object] = {}
+
+    def fake_launch(
+        exe_path,
+        command_line_args="",
+        run_japanese_locale=False,
+        run_wayland=False,
+        auto_inject_ce=False,
+        custom_prefix="",
+        proton_version="",
+        launch_mode="auto",
+        on_exit_callback=None,
+    ):
+        captured["exe_path"] = exe_path
+        captured["launch_mode"] = launch_mode
+        captured["on_exit_callback"] = on_exit_callback
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", fake_launch)
+
+    result = api.launch_game(1, "/tmp/game.exe", launch_mode="rpgmaker_linux")
+
+    assert result["success"] is True
+    assert captured["exe_path"] == "/tmp/game.exe"
+    assert captured["launch_mode"] == "rpgmaker_linux"
 
 
 def test_api_launch_target_crud_and_reorder():
@@ -142,6 +172,39 @@ def test_api_launch_target_validation_errors():
     not_found_delete = api.delete_launch_target(9999)
     assert not_found_update["error_code"] == "target_not_found"
     assert not_found_delete["error_code"] == "target_not_found"
+
+
+def test_api_settings_persist_rpgmaker_linux_runner_path(tmp_path):
+    runner_path = tmp_path / "rpgmaker-linux"
+    runner_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    runner_path.chmod(0o755)
+
+    api = Api()
+    first_save = api.save_settings(
+        {
+            "proton_path": "/opt/proton",
+            "wine_prefix_path": "/tmp/wlib-prefix",
+            "enable_logging": True,
+            "playwright_browsers_path": "/tmp/ms-playwright",
+        }
+    )
+    assert first_save["success"] is True
+
+    result = api.save_settings({"rpgmaker_linux_runner_path": str(runner_path)})
+
+    assert result["success"] is True
+    assert get_setting("proton_path") == "/opt/proton"
+    assert get_setting("wine_prefix_path") == "/tmp/wlib-prefix"
+    assert get_setting("enable_logging") == "true"
+    assert get_setting("playwright_browsers_path") == "/tmp/ms-playwright"
+    assert get_setting(RPGMAKER_LINUX_RUNNER_SETTING) == str(runner_path)
+
+    settings = api.get_settings()
+    status = cast(dict[str, object], settings["rpgmaker_linux_runner_status"])
+    assert settings["rpgmaker_linux_runner_path"] == str(runner_path)
+    assert status["available"] is True
+    assert status["path"] == str(runner_path)
+    assert status["source"] == "configured"
 
 
 def test_api_launch_game_uses_selected_target_path_and_parent_playtime(monkeypatch):

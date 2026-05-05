@@ -141,6 +141,7 @@ def test_launch_command_substitution(
         "STEAM_COMPAT_DATA_PATH": "/tmp/steam-compat",
         "STEAM_COMPAT_CLIENT_INSTALL_PATH": "/tmp/steam-client",
     },
+    clear=True,
 )
 def test_launch_native_mode_uses_host_binary_without_wine_settings(
     mock_get_setting, mock_popen, mock_access, mock_exists
@@ -250,6 +251,152 @@ def test_launch_native_mode_rejects_non_executable_target(
 
     assert result["success"] is False
     assert "host-native file" in str(result.get("error", ""))
+    mock_popen.assert_not_called()
+
+
+@patch("core.launcher.shutil.which")
+@patch("os.path.isfile")
+@patch("os.access")
+@patch("core.launcher.get_setting")
+def test_rpgmaker_linux_runner_status_detects_path_install(
+    mock_get_setting, mock_access, mock_isfile, mock_which
+):
+    mock_get_setting.return_value = ""
+    mock_which.return_value = "/usr/local/bin/rpgmaker-linux"
+    mock_isfile.side_effect = lambda path: path == "/usr/local/bin/rpgmaker-linux"
+    mock_access.return_value = True
+
+    status = Launcher().get_rpgmaker_linux_runner_status()
+
+    assert status["available"] is True
+    assert status["path"] == "/usr/local/bin/rpgmaker-linux"
+    assert status["source"] == "path"
+
+
+@patch("os.path.exists")
+@patch("os.path.isfile")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch.dict(
+    "os.environ",
+    {
+        "APPIMAGE": "/tmp/wLib.AppImage",
+        "LD_LIBRARY_PATH": "/tmp/.mount_wLib/usr/lib",
+        "WINEPREFIX": "/tmp/from-env",
+        "WINEDLLOVERRIDES": "winhttp=n,b",
+        "STEAM_COMPAT_DATA_PATH": "/tmp/steam-compat",
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH": "/tmp/steam-client",
+    },
+    clear=True,
+)
+def test_launch_rpgmaker_linux_runner_uses_game_directory_and_clean_env(
+    mock_get_setting, mock_popen, mock_access, mock_isfile, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/games/foo/Game.exe"
+    mock_isfile.side_effect = lambda path: path == "/opt/rpgmaker-linux"
+    mock_access.return_value = True
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "rpgmaker_linux_runner_path": "/opt/rpgmaker-linux",
+        }.get(key, "")
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        "/games/foo/Game.exe",
+        run_japanese_locale=True,
+        launch_mode="rpgmaker_linux",
+    )
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    args, kwargs = mock_popen.call_args
+    assert args[0] == [
+        "/opt/rpgmaker-linux",
+        "--gamepath",
+        "/games/foo",
+    ]
+    env = kwargs["env"]
+    assert env["LC_ALL"] == "ja_JP.UTF-8"
+    assert "WINEPREFIX" not in env
+    assert "WINEDLLOVERRIDES" not in env
+    assert "STEAM_COMPAT_DATA_PATH" not in env
+    assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
+    assert "APPIMAGE" not in env
+    assert "LD_LIBRARY_PATH" not in env
+
+
+@patch("os.path.exists")
+@patch("os.path.isfile")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_rpgmaker_linux_runner_supports_substitution_and_runner_args(
+    mock_get_setting, mock_popen, mock_access, mock_isfile, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/games/foo/Game.exe"
+    mock_isfile.side_effect = lambda path: path == "/opt/rpgmaker-linux"
+    mock_access.return_value = True
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "rpgmaker_linux_runner_path": "/opt/rpgmaker-linux",
+        }.get(key, "")
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        "/games/foo/Game.exe",
+        command_line_args="gamemoderun %command% --mounttype cicpoffs --nwjsversion 0.40.0",
+        launch_mode="rpgmaker_linux",
+    )
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == [
+        "gamemoderun",
+        "/opt/rpgmaker-linux",
+        "--gamepath",
+        "/games/foo",
+        "--mounttype",
+        "cicpoffs",
+        "--nwjsversion",
+        "0.40.0",
+    ]
+
+
+@patch("os.path.exists")
+@patch("os.path.isfile")
+@patch("subprocess.Popen")
+@patch("core.launcher.shutil.which")
+@patch("core.launcher.get_setting")
+def test_launch_rpgmaker_linux_runner_fails_when_missing(
+    mock_get_setting, mock_which, mock_popen, mock_isfile, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/games/foo/Game.exe"
+    mock_isfile.return_value = False
+    mock_which.return_value = None
+
+    def get_setting_side_effect(key):
+        return {"enable_logging": "false", "rpgmaker_linux_runner_path": ""}.get(
+            key, ""
+        )
+
+    mock_get_setting.side_effect = get_setting_side_effect
+
+    with patch.object(Launcher, "_read_upstream_custom_runner_path", return_value=""):
+        result = Launcher().launch(
+            "/games/foo/Game.exe", launch_mode="rpgmaker_linux"
+        )
+
+    assert result["success"] is False
+    assert "not installed or configured" in str(result.get("error", ""))
     mock_popen.assert_not_called()
 
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import {
   IconAutomation,
   IconDeviceFloppyFilled,
@@ -17,13 +17,18 @@ import {
 } from "../utils/motionPreference";
 import type {
   InstallProgressStatus,
+  RpgmakerLinuxRunnerStatus,
   SettingsResponse,
   SystemDepsCommandResponse,
 } from "../services/api";
 
+const RPGMAKER_LINUX_REPO_URL =
+  "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
+
 const protonPath = ref("");
 const prefixPath = ref("");
 const playwrightPath = ref("~/.cache/ms-playwright");
+const rpgmakerLinuxRunnerPath = ref("");
 const enableLogging = ref(false);
 const animationsEnabled = ref(motionEnabled.value);
 const installingDeps = ref(false);
@@ -64,10 +69,33 @@ const settingsLoaded = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+const defaultRpgmakerLinuxRunnerStatus: RpgmakerLinuxRunnerStatus = {
+  available: false,
+  path: "",
+  source: "",
+  configured_path: "",
+  error: "RPGMaker Linux runner is not installed or configured.",
+};
+const rpgmakerLinuxRunnerStatus = ref<RpgmakerLinuxRunnerStatus>({
+  ...defaultRpgmakerLinuxRunnerStatus,
+});
+const rpgmakerLinuxRunnerAvailable = computed(
+  () => rpgmakerLinuxRunnerStatus.value.available,
+);
+const rpgmakerLinuxRunnerStatusText = computed(() => {
+  if (rpgmakerLinuxRunnerStatus.value.available) {
+    return `Detected: ${rpgmakerLinuxRunnerStatus.value.path}`;
+  }
+  return rpgmakerLinuxRunnerStatus.value.error || "Not detected";
+});
+
 const applySettings = (data: SettingsResponse) => {
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
   playwrightPath.value = data.playwright_browsers_path || "~/.cache/ms-playwright";
+  rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
+  rpgmakerLinuxRunnerStatus.value =
+    data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
   enableLogging.value = !!data.enable_logging;
 };
 
@@ -136,6 +164,29 @@ const browsePrefix = async () => {
   } catch (e) {
     console.error("Browse prefix error", e);
     alert("Error browsing directory: " + String(e));
+  }
+};
+
+const browseRpgmakerLinuxRunner = async () => {
+  try {
+    const p = await api.browseRunnerFile(rpgmakerLinuxRunnerPath.value || "");
+    if (p) {
+      rpgmakerLinuxRunnerPath.value = p;
+    }
+  } catch (e) {
+    console.error("Browse RPGMaker Linux runner error", e);
+    alert("Error browsing file: " + String(e));
+  }
+};
+
+const openRpgmakerLinuxRepo = async () => {
+  try {
+    const result = await api.openInBrowser(RPGMAKER_LINUX_REPO_URL);
+    if (result && result.success === false) {
+      window.open(RPGMAKER_LINUX_REPO_URL, "_blank", "noopener");
+    }
+  } catch (_error) {
+    window.open(RPGMAKER_LINUX_REPO_URL, "_blank", "noopener");
   }
 };
 
@@ -300,7 +351,7 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, playwrightPath, enableLogging, animationsEnabled], () => {
+watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, enableLogging, animationsEnabled], () => {
   if (saving.value) return;
   saveMessage.value = "";
   saveError.value = "";
@@ -333,6 +384,7 @@ const saveSettings = async () => {
       proton_path: protonPath.value,
       wine_prefix_path: prefixPath.value,
       playwright_browsers_path: playwrightPath.value,
+      rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
       enable_logging: enableLogging.value,
     });
 
@@ -465,6 +517,61 @@ const saveSettings = async () => {
                 The location where game dependencies and save files will be
                 isolated.
               </p>
+            </div>
+
+            <div
+              class="p-4 rounded-lg"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              <div class="flex flex-col gap-3">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+                      RPGMaker Linux Runner
+                    </h4>
+                    <p class="text-xs mt-1" style="color: var(--text-muted)">
+                      Optional native-port runner for RPG Maker, TyranoBuilder,
+                      Godot, Construct, and Nscripter games. Install it manually
+                      from the upstream project.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    @click="openRpgmakerLinuxRepo"
+                    class="settings-btn ui-action-btn shrink-0"
+                  >
+                    Open GitHub
+                  </button>
+                </div>
+
+                <div class="flex gap-3">
+                  <input
+                    v-model="rpgmakerLinuxRunnerPath"
+                    type="text"
+                    placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
+                    class="settings-input flex-1"
+                  />
+                  <button
+                    @click="browseRpgmakerLinuxRunner"
+                    class="settings-btn ui-action-btn"
+                  >
+                    <IconFolderOpen class="ui-action-icon" />
+                    Browse
+                  </button>
+                </div>
+
+                <p
+                  class="copyable-feedback text-xs"
+                  :class="rpgmakerLinuxRunnerAvailable ? 'text-green-400' : 'text-yellow-400'"
+                >
+                  {{ rpgmakerLinuxRunnerStatusText }}
+                </p>
+                <p class="text-xs" style="color: var(--text-muted)">
+                  wLib only launches the external tool. It does not run the
+                  upstream installer, updater, exporter, bug reporter, or patch
+                  commands.
+                </p>
+              </div>
             </div>
 
             <div>

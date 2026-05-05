@@ -57,7 +57,7 @@ flowchart TD
     DB <--> SQLITE
     SCRAPER <-->|Playwright Persistent Session| BROWSER_SESSION
     SCRAPER <-->|Playwright Sync| F95
-    LAUNCHER -->|Subprocess / Native / Wine / Proton| FS
+    LAUNCHER -->|Subprocess / Native / Wine / Proton / RPGMaker Linux| FS
     
     EXT <-->|CORS HTTP| EXT_SERVER
     EXT_SERVER -.->|UI Event Bus| UI

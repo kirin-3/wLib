@@ -57,7 +57,7 @@ Stores the library records and their associated configuration flags.
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection on launch. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix path override. |
 | `proton_version` | `TEXT` | Per-game Proton path override. |
-| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, or `wine_proton`. Defaults and invalid values normalize to `auto`. |
+| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, or `rpgmaker_linux`. Defaults and invalid values normalize to `auto`. |
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
@@ -87,3 +87,5 @@ A simple generic key-value store for application-wide persistence.
 |--------|------|-------------|
 | `key` | `TEXT` | Primary Key string matching a setting name (e.g. `proton_path`). |
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
+
+Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, `playwright_browsers_path`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.

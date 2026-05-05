@@ -21,6 +21,7 @@ import { api } from "../../services/api";
 import type {
   GameRecord,
   LaunchTarget,
+  RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   SaveLocation,
 } from "../../services/api";
@@ -120,6 +121,9 @@ const useCustomPrefix = ref(false);
 const availableRunners = ref<RunnerInfo[]>([]);
 const loadingRunners = ref(false);
 const runnersLoaded = ref(false);
+const rpgmakerLinuxRunnerAvailable = ref(false);
+const rpgmakerLinuxRunnerLoaded = ref(false);
+const rpgmakerLinuxRunnerError = ref("");
 const ceInstalled = ref(false);
 const showJapaneseLocaleInfo = ref(false);
 const showWaylandInfo = ref(false);
@@ -158,6 +162,20 @@ const engineDropdownRef = ref<HTMLElement | null>(null);
 const statuses = PLAY_STATUS_OPTIONS;
 const isNativeLaunchMode = computed(
   () => !usesWineProtonControls(launchMode.value),
+);
+const launchModeOptions = computed(() =>
+  LAUNCH_MODE_OPTIONS.filter(
+    (option) =>
+      option.value !== "rpgmaker_linux" ||
+      rpgmakerLinuxRunnerAvailable.value ||
+      launchMode.value === "rpgmaker_linux",
+  ),
+);
+const rpgmakerLinuxModeUnavailable = computed(
+  () =>
+    launchMode.value === "rpgmaker_linux" &&
+    rpgmakerLinuxRunnerLoaded.value &&
+    !rpgmakerLinuxRunnerAvailable.value,
 );
 
 const averagePersonalRating = computed(() => {
@@ -340,8 +358,11 @@ watch(
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
+      rpgmakerLinuxRunnerLoaded.value = false;
+      rpgmakerLinuxRunnerError.value = "";
       void Promise.all([
         loadCheatEngineStatus(),
+        loadRpgmakerLinuxRunnerStatus(),
         loadExecutableModifiedTime(),
         loadLaunchTargets(),
       ]);
@@ -380,7 +401,7 @@ watch(
 watch(
   () => [useCustomPrefix.value, launchMode.value] as const,
   async ([enabled, mode]) => {
-    if (!enabled || mode === "native" || runnersLoaded.value || loadingRunners.value) {
+    if (!enabled || !usesWineProtonControls(mode) || runnersLoaded.value || loadingRunners.value) {
       return;
     }
     loadingRunners.value = true;
@@ -436,6 +457,24 @@ const browseExe = async () => {
   } catch (e) {
     console.error("Failed to browse file", e);
     alert("Error browsing file: " + String(e));
+  }
+};
+
+const syncRpgmakerLinuxRunnerStatus = (status: RpgmakerLinuxRunnerStatus | undefined) => {
+  rpgmakerLinuxRunnerAvailable.value = !!status?.available;
+  rpgmakerLinuxRunnerError.value = status?.error || "";
+  rpgmakerLinuxRunnerLoaded.value = true;
+};
+
+const loadRpgmakerLinuxRunnerStatus = async () => {
+  try {
+    const settings = await api.getSettings();
+    syncRpgmakerLinuxRunnerStatus(settings?.rpgmaker_linux_runner_status);
+  } catch (e) {
+    console.error("Failed to load RPGMaker Linux runner status", e);
+    rpgmakerLinuxRunnerAvailable.value = false;
+    rpgmakerLinuxRunnerError.value = "Failed to check RPGMaker Linux runner status.";
+    rpgmakerLinuxRunnerLoaded.value = true;
   }
 };
 
@@ -1292,7 +1331,7 @@ const openInBrowser = async () => {
                 <label class="modal-label">Runtime Mode</label>
                 <select v-model="launchMode" class="modal-input w-full">
                   <option
-                    v-for="option in LAUNCH_MODE_OPTIONS"
+                    v-for="option in launchModeOptions"
                     :key="option.value"
                     :value="option.value"
                   >
@@ -1300,7 +1339,15 @@ const openInBrowser = async () => {
                   </option>
                 </select>
                 <p class="text-xs mt-2" style="color: var(--text-muted)">
-                  Linux Native runs the selected file directly without Wine or Proton.
+                  Linux Native runs the selected file directly. RPGMaker Linux uses the external native-port runner when installed.
+                </p>
+                <p
+                  v-if="rpgmakerLinuxModeUnavailable"
+                  class="text-xs mt-2 text-yellow-400"
+                >
+                  This game is set to RPGMaker Linux, but the runner is not detected.
+                  Install it or set the runner path in Settings before launching.
+                  {{ rpgmakerLinuxRunnerError }}
                 </p>
               </div>
 

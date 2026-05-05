@@ -33,17 +33,17 @@ The `Api` class acts as the single point of entry for the Vue frontend. All meth
 - **Concurrency**: UI calls are technically asynchronous on the JS side but block the pywebview worker pool on the Python side. The `Api` class heavily uses background thread spawning (`threading.Thread`) for long tasks (like downloading updates or mass-scraping metadata) so the UI doesn't freeze.
 - **Event Emitter**: Contains wrapper helpers to dispatch Global UI Events back to Vue using `webview.evaluate_js()`.
 - **Extension Sync Metadata**: Tracks whether startup extension synchronization actually updated the installed browser files so the frontend can show a toast prompting the user to reload the addon.
-- **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or unsupported values normalize to `auto`.
+- **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or unsupported values normalize to `auto`; supported values are `auto`, `native`, `wine_proton`, and `rpgmaker_linux`.
 - **Launch Target Contract**: Exposes CRUD and reordering methods for additional game launch targets. `get_games()` returns each game's extra `launch_targets`, while the canonical default executable remains `games.exe_path`.
 
 ### `core/launcher.py` (Process Management)
 This module handles the complexities of launching games on Linux.
 - **Environment Overrides**: Depending on the settings enabled for a specific game (e.g. `run_wayland`, `run_japanese_locale`), the launcher injects OS-level environment variables (`LC_ALL=ja_JP.UTF-8`, `SDL_VIDEODRIVER=wayland`) directly into the `env` dictionary passed to `subprocess`.
-- **Launch Modes**: `auto` preserves extension/executable detection, `native` runs supported Linux host targets without Wine/Proton settings, and `wine_proton` forces the compatibility-runtime branch.
+- **Launch Modes**: `auto` preserves extension/executable detection, `native` runs supported Linux host targets without Wine/Proton settings, `wine_proton` forces the compatibility-runtime branch, and `rpgmaker_linux` invokes an externally installed `rpgmaker-linux` runner with `--gamepath` resolved from the selected executable directory.
 - **Launch Targets**: Alternate targets reuse the same launcher entrypoint as the default executable; only the selected executable path changes. Playtime remains keyed to the parent `game_id`.
 - **Wine & Proton**: Prepends the configured `proton_path` or `wine` binary when compatibility mode is selected or auto-detection falls through to a Windows-style target, ensuring the proper `WINEPREFIX` or Proton compatibility path is enforced.
 - **Cheat Engine Integration**: Implements logic to auto-start `lunarengine-x86_64.exe` natively, passing a Lua injection script to map directly to the game's PID.
-- **Extended RPGMaker Support**: Implements enhanced NW.js support for RPGMaker MV/MZ with additional runtime fixes and DLL dependency handling.
+- **RPGMaker Tooling**: Implements enhanced Wine/NW.js fixes for RPGMaker MV/MZ and can optionally launch through the external `rpgmakermlinux-cicpoffs` runner when users install/configure it themselves. wLib links to the upstream project but does not bundle, install, update, export, bug-report, or run mutation-oriented upstream commands automatically.
 - **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played.
 
 ### `core/scraper.py` (Playwright Engine)

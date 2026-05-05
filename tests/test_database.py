@@ -5,6 +5,7 @@ from typing import cast
 from core.database import (
     DEFAULT_PLAY_STATUS,
     DEFAULT_LAUNCH_MODE,
+    RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
     get_connection,
     add_game,
@@ -69,6 +70,14 @@ def test_database_initialization():
 
     cursor.execute("PRAGMA foreign_keys")
     assert cursor.fetchone()[0] == 1
+
+    cursor.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (RPGMAKER_LINUX_RUNNER_SETTING,),
+    )
+    runner_setting = cursor.fetchone()
+    assert runner_setting is not None
+    assert runner_setting[0] == ""
 
     conn.close()
 
@@ -201,14 +210,21 @@ def test_launch_mode_is_persisted_and_normalized():
     native_id = add_game(
         title="Native Game", exe_path="/tmp/native.sh", launch_mode="native"
     )
+    rpgmaker_id = add_game(
+        title="RPGMaker Linux Game",
+        exe_path="/tmp/rpgmaker/Game.exe",
+        launch_mode="rpgmaker_linux",
+    )
     default_id = add_game(title="Default Game", exe_path="/tmp/default.exe")
     assert native_id is not None
+    assert rpgmaker_id is not None
     assert default_id is not None
 
     update_game(default_id, {"launch_mode": "wine_proton"})
 
     games_by_id = {game["id"]: game for game in get_all_games()}
     assert games_by_id[native_id]["launch_mode"] == "native"
+    assert games_by_id[rpgmaker_id]["launch_mode"] == "rpgmaker_linux"
     assert games_by_id[default_id]["launch_mode"] == "wine_proton"
 
     update_game(native_id, {"launch_mode": "unsupported"})
@@ -217,6 +233,7 @@ def test_launch_mode_is_persisted_and_normalized():
 
     assert normalize_launch_mode(None) == DEFAULT_LAUNCH_MODE
     assert normalize_launch_mode("") == DEFAULT_LAUNCH_MODE
+    assert normalize_launch_mode("rpgmaker_linux") == "rpgmaker_linux"
     assert normalize_launch_mode("unsupported") == DEFAULT_LAUNCH_MODE
 
 

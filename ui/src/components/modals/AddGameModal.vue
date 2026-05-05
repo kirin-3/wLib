@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../../services/api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
@@ -37,6 +37,24 @@ const rating = ref("");
 const developer = ref("");
 const engine = ref("");
 const launchMode = ref<LaunchMode>("auto");
+const rpgmakerLinuxRunnerAvailable = ref(false);
+const launchModeOptions = computed(() =>
+  LAUNCH_MODE_OPTIONS.filter(
+    (option) =>
+      option.value !== "rpgmaker_linux" || rpgmakerLinuxRunnerAvailable.value,
+  ),
+);
+
+const loadRpgmakerLinuxRunnerStatus = async () => {
+  try {
+    const settings = await api.getSettings();
+    rpgmakerLinuxRunnerAvailable.value =
+      !!settings?.rpgmaker_linux_runner_status?.available;
+  } catch (e) {
+    console.error("Failed to load RPGMaker Linux runner status", e);
+    rpgmakerLinuxRunnerAvailable.value = false;
+  }
+};
 
 const readQueryValue = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -84,6 +102,15 @@ watch(
     }
   },
   { immediate: true },
+);
+
+watch(
+  () => props.modelValue,
+  (isOpen) => {
+    if (isOpen) {
+      void loadRpgmakerLinuxRunnerStatus();
+    }
+  },
 );
 
 const close = () => {
@@ -237,7 +264,7 @@ const save = () => {
           >
           <select v-model="launchMode" class="modal-input w-full !py-3 text-sm">
             <option
-              v-for="option in LAUNCH_MODE_OPTIONS"
+              v-for="option in launchModeOptions"
               :key="option.value"
               :value="option.value"
             >
@@ -245,7 +272,7 @@ const save = () => {
             </option>
           </select>
           <p class="text-xs mt-2" style="color: var(--text-muted)">
-            Auto keeps wLib's current detection. Linux Native runs without Wine or Proton.
+            Auto keeps wLib's current detection. Linux Native and RPGMaker Linux run without Wine or Proton.
           </p>
         </div>
       </div>

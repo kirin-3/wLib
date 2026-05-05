@@ -15,10 +15,13 @@ DB_PATH = os.path.join(DATA_DIR, "wlib.db")
 
 DEFAULT_PLAY_STATUS = "Not Started"
 DEFAULT_LAUNCH_MODE = "auto"
+RPGMAKER_LINUX_LAUNCH_MODE = "rpgmaker_linux"
+RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
 CANONICAL_LAUNCH_MODES = (
     DEFAULT_LAUNCH_MODE,
     "native",
     "wine_proton",
+    RPGMAKER_LINUX_LAUNCH_MODE,
 )
 CANONICAL_PLAY_STATUSES = (
     DEFAULT_PLAY_STATUS,
@@ -265,6 +268,9 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('playwright_browsers_path', ?)",
             (os.path.expanduser("~/.cache/ms-playwright"),),
         )
+        _ = cursor.execute(
+            f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"
+        )
 
         # Safely migrate existing DBs by adding new columns
         _ = cursor.execute("PRAGMA table_info(games)")
@@ -315,8 +321,9 @@ def init_db() -> None:
             )
 
         _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
+        launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
         _ = cursor.execute(
-            "UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN (?, ?, ?)",
+            f"UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN ({launch_mode_placeholders})",
             (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
         )
 

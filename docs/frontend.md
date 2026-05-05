@@ -18,7 +18,7 @@ The wLib UI is a Vue 3 SPA built with the Composition API, TypeScript, and Vite.
 The UI runs inside PyWebView and calls backend methods via `window.pywebview.api`.
 
 - **Typed API surface**: `ApiService` exposes typed methods and shared response interfaces used by views/components.
-- **Launch mode typing**: `LaunchMode` is shared through `ui/src/utils/launchMode.ts` and the API bridge so Add Game, Game Detail, quick launch, and modal launch send the same runtime mode values.
+- **Launch mode typing**: `LaunchMode` is shared through `ui/src/utils/launchMode.ts` and the API bridge so Add Game, Game Detail, quick launch, and modal launch send the same runtime mode values, including the optional `rpgmaker_linux` external-runner mode.
 - **Launch target typing**: `LaunchTarget` is part of `GameRecord`; `ApiService` mirrors backend methods for listing, creating, updating, deleting, and reordering additional game launch targets.
 - **Mock fallback**: when `window.pywebview` is unavailable (for browser-only UI work at `http://localhost:5173`), API calls return structured mock responses to keep the app functional.
 - **Startup extension status**: `App.vue` reads startup sync status so the UI can notify users when extension files were refreshed.
@@ -31,7 +31,7 @@ wLib uses `vue-router` for top-level views:
 
 - **Library View**: game browsing, filtering, sorting, quick launch, add/edit modals, per-game launch mode selection, and conditional launch-target selection for multi-part games.
 - **Updates View**: single and bulk update checks plus app release checks.
-- **Settings View**: launcher/runtime settings, dependency install status, scraper session controls.
+- **Settings View**: launcher/runtime settings, optional RPGMaker Linux runner path/status, dependency install status, scraper session controls.
 - **Extension View**: extension service status and folder shortcuts.
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
