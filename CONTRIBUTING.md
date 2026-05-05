@@ -28,6 +28,15 @@ wLib consists of a Python 3 backend and a Vue 3 + TypeScript frontend.
 - Linux environment (tested heavily on Arch/CachyOS)
 - Playwright dependencies (installed automatically on first run, but may need system packages)
 
+### GPU & Rendering Notes
+
+wLib includes automatic GPU detection and a crash guard system:
+
+- **GPU Detection**: The AppImage probes your GPU on startup using `glxinfo` and `/sys/class/drm/`
+- **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically uses software rendering via `QT_QUICK_BACKEND=software`
+- **Renderer Diagnostics**: GPU detection results are logged to `~/.local/share/wLib/renderer-diagnostics.log`
+- **Manual Override**: Set `WLIB_QPA_PLATFORM=xcb` or `QT_QUICK_BACKEND=software` to override automatic detection
+
 ### Setup
 
 #### 1. Python Backend
@@ -55,13 +64,23 @@ To develop, you should run the frontend and backend simultaneously in two separa
 cd ui
 npm run dev
 ```
+*This starts the Vite dev server on `http://localhost:5173` with hot module replacement enabled.*
 
 **Terminal 2 (Backend):**
 Ensure your virtual environment is activated, then run:
 ```bash
 DEV_MODE=1 python main.py
 ```
-*Setting `DEV_MODE=1` instructs the Python backend to load the frontend from the Vite development server (`http://localhost:5173`) instead of the compiled static files, enabling Hot Module Replacement (HMR).*
+*Setting `DEV_MODE=1` instructs the Python backend to load the frontend from the Vite development server instead of the compiled static files in `ui/dist/`, enabling Hot Module Replacement (HMR).*
+
+**Backend Initialization:** On startup, `main.py`:
+1. Configures the Qt runtime environment and GPU detection
+2. Sets up SSL certificates for secure scraping
+3. Initializes the SQLite database with WAL mode
+4. Syncs browser extension files to `~/.local/share/wLib/extension/`
+5. Installs Playwright Chromium browsers if missing
+6. Starts the extension HTTP server on `127.0.0.1:8183`
+7. Launches the PyWebView window
 
 ## 🧪 Testing and Linting
 
@@ -95,6 +114,18 @@ python scripts/smoke_backend.py
 black .
 ruff check .
 ```
+
+### Smoke Backend Test
+
+The smoke test (`scripts/smoke_backend.py`) verifies backend initialization without opening the UI:
+
+- Runs in an isolated temporary HOME directory
+- Tests Qt platform configuration
+- Verifies Playwright browser path setup
+- Exercises extension file synchronization
+- Does not require a display or GUI session
+
+Use it for quick CI checks or to verify backend changes before running the full app.
 
 ### Frontend Code
 ```bash
@@ -156,6 +187,17 @@ When reporting a bug, please include:
 - Expected vs. actual behavior.
 - Linux distribution, version, and Desktop Environment (Wayland/X11).
 - Terminal output logs (run the app from the terminal to capture errors).
+
+### Debug Logs & Diagnostics
+
+wLib generates several diagnostic files:
+
+- **Renderer Diagnostics**: `~/.local/share/wLib/renderer-diagnostics.log` - GPU detection and Qt backend selection
+- **AppImage Launch Log**: `~/.local/share/wLib/appimage-launch.log` - AppImage-specific launch context
+- **Browser Session**: `~/.local/share/wLib/browser_session/` - Persistent Playwright browser profile for F95Zone
+- **Extension Files**: `~/.local/share/wLib/extension/` - Installed browser extension copies
+
+Enable debug logging in **Settings → Debug Logging** for verbose application logs.
 
 ## 💡 Where to Help?
 Check our issues page! We are always looking for help with:

@@ -47,11 +47,13 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 - **Wayland Support** — Force `SDL_VIDEODRIVER=wayland` with a single toggle.
 - **Cheat Engine Injection** — Auto-downloads and seamlessly injects Lunar Engine (a Cheat Engine fork) securely into running Windows games.
 - **Dependency Installers** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RTPs.
+- **RPGMaker RTP & DLL Installers** — Automated installation of RPGMaker RTPs and DLL dependencies for complete game compatibility.
 
 ### 🌐 F95Zone Integration & Automation
 - **Automated Update Checker** — Tracks your local version against the latest releases by scraping F95Zone threads.
 - **Cloudflare Bypass** — Intelligently resolves Cloudflare Anti-Bot challenges using Microsoft Playwright to ensure scraping remains reliable.
 - **Browser Extension** — A custom Chrome/Firefox extension that injects "Add to wLib" and "Open in wLib" buttons directly onto F95Zone pages.
+- **Persistent Browser Sessions** — F95Zone login sessions are saved under `~/.local/share/wLib/browser_session` so you stay logged in across restarts.
 
 > [!TIP]
 > wLib includes an **In-App Updater** for its own releases, meaning you can download the latest AppImage and view changelogs directly from the settings page!
@@ -99,6 +101,14 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 > [!NOTE]
 > The `wlib.sh` launcher script automatically creates a Python virtual environment and installs all missing **pip** dependencies for you. You only need to ensure the system-level packages listed above are installed.
+
+### GPU & Rendering
+
+wLib includes automatic GPU detection and a crash guard system for cross-distro compatibility:
+
+- **GPU Detection**: On startup, the AppImage probes your GPU using `glxinfo` and `/sys/class/drm/` to determine hardware acceleration availability
+- **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically falls back to software rendering via `QT_QUICK_BACKEND=software`
+- **Renderer Diagnostics**: All GPU detection results and Qt backend choices are logged to `~/.local/share/wLib/renderer-diagnostics.log` and `~/.local/share/wLib/appimage-launch.log`
 
 ### Install System Packages
 
@@ -188,6 +198,16 @@ cd ui
 npm run typecheck
 npm run build
 ```
+
+### Quick Backend Verification
+
+Use the smoke backend test to verify your environment without opening the UI:
+
+```bash
+python scripts/smoke_backend.py
+```
+
+This runs extension sync and Qt/Playwright initialization in an isolated temporary directory.
 
 > [!NOTE]
 > Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).

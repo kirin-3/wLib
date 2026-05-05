@@ -11,6 +11,7 @@ flowchart TD
     classDef backend fill:#4584b6,stroke:#333,stroke-width:2px,color:#fff;
     classDef storage fill:#f39c12,stroke:#333,stroke-width:2px,color:#fff;
     classDef external fill:#95a5a6,stroke:#333,stroke-width:2px,color:#fff;
+    classDef diagnostics fill:#9b59b6,stroke:#333,stroke-width:2px,color:#fff;
 
     %% Components
     subgraph "Frontend Context (Webview)"
@@ -25,11 +26,15 @@ flowchart TD
         SCRAPER[core/scraper.py]:::backend
         LAUNCHER[core/launcher.py]:::backend
         EXT_SERVER[Extension HTTPServer]:::backend
+        RENDERER[Renderer Diagnostics]:::diagnostics
+        SSL[SSL Certificate Config]:::diagnostics
     end
 
     subgraph "Local OS & Storage"
         SQLITE[(SQLite DB)]:::storage
         FS[Filesystem / Games]:::storage
+        BROWSER_SESSION[Browser Session]:::storage
+        DIAG_LOG[Renderer Diagnostics Log]:::storage
     end
 
     subgraph "External Systems"
@@ -46,13 +51,19 @@ flowchart TD
     API_PY --> LAUNCHER
     MAIN --> API_PY
     MAIN -.-> EXT_SERVER
+    MAIN --> RENDERER
+    MAIN --> SSL
 
     DB <--> SQLITE
+    SCRAPER <-->|Playwright Persistent Session| BROWSER_SESSION
     SCRAPER <-->|Playwright Sync| F95
     LAUNCHER -->|Subprocess / Native / Wine / Proton| FS
     
     EXT <-->|CORS HTTP| EXT_SERVER
     EXT_SERVER -.->|UI Event Bus| UI
+    
+    RENDERER --> DIAG_LOG
+    RENDERER -.->|WebGL Probe| UI
 ```
 
 ## Tech Stack Overview
@@ -70,10 +81,12 @@ wLib operates across two distinct contexts that never directly share memory:
 
 1. **Python Backend Process (`main.py`)**:
    - Manages the entire lifecycle of the application.
+   - Configures SSL certificates and Qt runtime environment.
    - Bootstraps the local SQLite database.
    - Ensures Microsoft Playwright's Chromium binaries are available on the user's system.
    - Starts the `http.server` daemon thread for the browser extension.
    - Instantiates the `pywebview` window and maps a Python class object (`Api`) to the JavaScript runtime.
+   - Performs renderer diagnostics with GPU detection and crash guard management.
 
 2. **TypeScript UI Context (Vue / Vite)**:
    - Runs purely inside the WebView constraint and lacks direct Node.js or native filesystem access.
@@ -83,3 +96,15 @@ wLib operates across two distinct contexts that never directly share memory:
 ## The `DEV_MODE=1` Loop
 
 When executing in development mode (`DEV_MODE=1`), the Python backend skips loading the static built Vue files `ui/dist/`. Instead, it forcefully navigates the Webview frame to `http://localhost:5173`, allowing Vite's Hot Module Replacement (HMR) to work perfectly alongside the native Python app.
+
+## Renderer Diagnostics System
+
+wLib includes a comprehensive renderer diagnostics system for cross-distro GPU compatibility:
+
+- **GPU Detection**: Probes GPU capabilities using `glxinfo`, `/sys/class/drm/`, and environment variables to determine hardware acceleration availability
+- **Crash Guard**: Maintains `~/.local/share/wLib/.gpu_crash_guard` to automatically fall back to software rendering after a GPU crash
+- **Diagnostic Logging**: Logs Qt backend selection, GPU detection reason, renderer details, and WebGL probe results to `~/.local/share/wLib/renderer-diagnostics.log`
+- **Browser Renderer Probe**: Executes WebGL detector scripts in the PyWebView to capture the browser's GPU renderer information
+- **AppImage Integration**: The AppRun script performs parallel GPU detection and logs launch context to `~/.local/share/wLib/appimage-launch.log`
+
+This system ensures wLib works reliably across diverse Linux configurations with varying GPU drivers and display servers.
