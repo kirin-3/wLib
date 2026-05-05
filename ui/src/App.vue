@@ -3,6 +3,7 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   IconBrandGithub,
+  IconDatabaseExport,
   IconLayout2,
   IconMoon,
   IconPlayerTrackNext,
@@ -237,6 +238,25 @@ onUnmounted(() => {
           </router-link>
 
           <router-link
+            to="/import-export"
+            :title="isNavCollapsed ? 'Import / Export' : ''"
+            :aria-label="isNavCollapsed ? 'Import / Export' : undefined"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium w-full text-left',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
+            active-class="nav-active"
+            exact-active-class="nav-active"
+          >
+            <IconDatabaseExport class="shrink-0" :size="18" />
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Import / Export</span
+            >
+          </router-link>
+
+          <router-link
             to="/extension"
             :title="isNavCollapsed ? 'Extension' : ''"
             :class="[
@@ -365,6 +385,7 @@ onUnmounted(() => {
         </transition>
       </router-view>
     </main>
+
   </div>
 </template>
 

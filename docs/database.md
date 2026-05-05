@@ -89,3 +89,14 @@ A simple generic key-value store for application-wide persistence.
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
 
 Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, `playwright_browsers_path`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+
+## JSON Migration Backups
+
+wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db` directly. This avoids WAL sidecar issues, schema drift, and local primary-key coupling when moving a library between machines.
+
+- **Format metadata**: Exports include `format`, `format_version`, `exported_at`, app metadata, and the selected optional sections.
+- **Always-included game metadata**: Every exported game includes title, developer, engine, tags, F95 URL, local/latest version fields, and cover reference.
+- **Optional sections**: Users can include user state (play status, ratings, notes, favorites, playtime, timestamps), launch configuration, executable paths, additional launch targets, general settings, and machine-specific path settings.
+- **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous.
+- **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
+- **Excluded data**: Browser sessions/cookies, webview storage, downloaded runtimes, Playwright binaries, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.

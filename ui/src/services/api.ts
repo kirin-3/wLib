@@ -194,6 +194,77 @@ export interface LaunchTargetsResponse extends ApiBasicResponse {
   targets: LaunchTarget[];
 }
 
+export type LibraryBackupSection =
+  | "user_state"
+  | "launch_config"
+  | "executable_paths"
+  | "launch_targets"
+  | "settings_general"
+  | "settings_paths";
+
+export interface LibraryBackupOptions {
+  sections: LibraryBackupSection[];
+}
+
+export interface LibraryBackupWarning {
+  type: string;
+  scope: string;
+  message: string;
+  field?: string;
+  title?: string;
+  path?: string;
+}
+
+export interface LibraryBackupCounts {
+  total_games: number;
+  matched_games: number;
+  new_games: number;
+  ambiguous_games: number;
+  warnings: number;
+}
+
+export interface LibraryBackupManifest {
+  format?: string;
+  format_version?: number;
+  exported_at?: string;
+  app?: Record<string, unknown>;
+  selected_sections?: LibraryBackupSection[];
+}
+
+export interface LibraryBackupAmbiguousGame {
+  title: string;
+  reason: string;
+  candidate_count: number;
+}
+
+export interface LibraryBackupExportResponse extends ApiBasicResponse {
+  success: boolean;
+  path?: string;
+  selected_sections?: LibraryBackupSection[];
+  game_count?: number;
+}
+
+export interface LibraryBackupInspectResponse extends ApiBasicResponse {
+  success: boolean;
+  manifest?: LibraryBackupManifest;
+  available_sections?: LibraryBackupSection[];
+  counts?: LibraryBackupCounts;
+  warnings?: LibraryBackupWarning[];
+  ambiguous_games?: LibraryBackupAmbiguousGame[];
+}
+
+export interface LibraryBackupImportResponse extends ApiBasicResponse {
+  success: boolean;
+  created?: number;
+  updated?: number;
+  skipped?: number;
+  ambiguous?: number;
+  warnings?: number;
+  warning_records?: LibraryBackupWarning[];
+  settings_updated?: number;
+  selected_sections?: LibraryBackupSection[];
+}
+
 export interface SaveLocation {
   path: string;
   type: string;
@@ -618,12 +689,42 @@ class ApiService {
     return this.invoke<ApiBasicResponse>("save_settings", settings);
   }
 
+  async exportLibraryBackup(
+    options: LibraryBackupOptions,
+    destinationPath: string
+  ): Promise<LibraryBackupExportResponse> {
+    return this.invoke<LibraryBackupExportResponse>(
+      "export_library_backup",
+      options,
+      destinationPath,
+    );
+  }
+
+  async inspectLibraryBackup(path: string): Promise<LibraryBackupInspectResponse> {
+    return this.invoke<LibraryBackupInspectResponse>("inspect_library_backup", path);
+  }
+
+  async importLibraryBackup(
+    path: string,
+    options: LibraryBackupOptions
+  ): Promise<LibraryBackupImportResponse> {
+    return this.invoke<LibraryBackupImportResponse>(
+      "import_library_backup",
+      path,
+      options,
+    );
+  }
+
   async browseFile(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_file", startPath);
   }
 
   async browseRunnerFile(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_runner_file", startPath);
+  }
+
+  async browseBackupFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_backup_file", startPath);
   }
 
   async browseDirectory(startPath = ""): Promise<string> {
@@ -733,8 +834,74 @@ class ApiService {
         writeMockSettings(nextSettings);
         return { success: true, mock: true };
       }
+      case "export_library_backup": {
+        const options = isRecord(args[0]) ? args[0] : {};
+        const sections = Array.isArray(options.sections)
+          ? (options.sections as LibraryBackupSection[])
+          : [];
+        const path = typeof args[1] === "string" && args[1].trim()
+          ? args[1].trim().endsWith(".json")
+            ? args[1].trim()
+            : `${args[1].trim()}.json`
+          : "~/wlib-library-export.json";
+        return {
+          success: true,
+          mock: true,
+          path,
+          selected_sections: sections,
+          game_count: 0,
+        };
+      }
+      case "inspect_library_backup":
+        return {
+          success: true,
+          mock: true,
+          manifest: {
+            format: "wlib.library_migration",
+            format_version: 1,
+            exported_at: new Date().toISOString(),
+            app: { name: "wLib", version: "mock" },
+            selected_sections: ["user_state", "launch_config", "launch_targets"],
+          },
+          available_sections: ["user_state", "launch_config", "launch_targets"],
+          counts: {
+            total_games: 0,
+            matched_games: 0,
+            new_games: 0,
+            ambiguous_games: 0,
+            warnings: 1,
+          },
+          warnings: [
+            {
+              type: "cover_references",
+              scope: "library",
+              message:
+                "Browser mock preview only. Desktop imports validate real paths and cover references.",
+            },
+          ],
+          ambiguous_games: [],
+        };
+      case "import_library_backup": {
+        const options = isRecord(args[1]) ? args[1] : {};
+        const sections = Array.isArray(options.sections)
+          ? (options.sections as LibraryBackupSection[])
+          : [];
+        return {
+          success: true,
+          mock: true,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          ambiguous: 0,
+          warnings: 0,
+          warning_records: [],
+          settings_updated: 0,
+          selected_sections: sections,
+        };
+      }
       case "browse_file":
       case "browse_runner_file":
+      case "browse_backup_file":
       case "browse_directory":
         return "";
       case "get_available_runners":

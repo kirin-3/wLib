@@ -1202,6 +1202,65 @@ class Api:
 
         return get_all_games()
 
+    def _backup_error_payload(self, error: Exception) -> dict[str, object]:
+        from core.library_backup import BackupValidationError
+
+        if isinstance(error, BackupValidationError):
+            return {
+                "success": False,
+                "error": str(error),
+                "error_code": error.error_code,
+            }
+        return {"success": False, "error": str(error), "error_code": "backup_error"}
+
+    def export_library_backup(
+        self,
+        options: Mapping[str, object] | None = None,
+        destination_path: str = "",
+    ) -> dict[str, object]:
+        from core.library_backup import write_library_backup
+
+        try:
+            payload = write_library_backup(
+                destination_path,
+                dict(options or {}),
+                app_version=APP_VERSION,
+            )
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        return {"success": True, **payload}
+
+    def inspect_library_backup(self, path: str) -> dict[str, object]:
+        from core.library_backup import inspect_library_backup
+
+        try:
+            payload = inspect_library_backup(path)
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        return {"success": True, **payload}
+
+    def import_library_backup(
+        self, path: str, options: Mapping[str, object] | None = None
+    ) -> dict[str, object]:
+        import sqlite3
+
+        from core.library_backup import import_library_backup
+
+        try:
+            payload = import_library_backup(path, dict(options or {}))
+        except sqlite3.IntegrityError as exc:
+            return {
+                "success": False,
+                "error": f"Import could not be applied safely: {exc}",
+                "error_code": "import_conflict",
+            }
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        return {"success": True, **payload}
+
     def add_game(
         self,
         title: str,
@@ -2700,6 +2759,22 @@ class Api:
     def browse_runner_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select a Proton or Wine executable."""
         file_types = ("Runner Binaries (*)",)
+
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
+    def browse_backup_file(self, start_path: str = "") -> str:
+        """Opens a native file dialog to select a wLib JSON backup."""
+        file_types = (
+            "wLib JSON Backups (*.json)",
+            "All files (*.*)",
+        )
 
         if sys.platform.startswith("linux"):
             return self._browse_linux_dialog(

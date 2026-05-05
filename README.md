@@ -36,6 +36,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 ### 🎮 Library & Organization
 - **Smart Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status.
 - **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
+- **Portable JSON Migration** — Export and import your library, playtime, launch options, and selected settings with one JSON file.
 - **Dark & Light Themes** — Toggle instantly between a polished dark mode and a clean light interface.
 
 ### 🚀 Advanced Launcher

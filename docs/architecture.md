@@ -23,6 +23,7 @@ flowchart TD
         MAIN[main.py App Core]:::backend
         API_PY[core/api.py]:::backend
         DB[core/database.py]:::backend
+        BACKUP[core/library_backup.py]:::backend
         SCRAPER[core/scraper.py]:::backend
         LAUNCHER[core/launcher.py]:::backend
         EXT_SERVER[Extension HTTPServer]:::backend
@@ -47,6 +48,8 @@ flowchart TD
     API_TS <-->|pywebview bridge| API_PY
     
     API_PY <--> DB
+    API_PY --> BACKUP
+    BACKUP <--> DB
     API_PY --> SCRAPER
     API_PY --> LAUNCHER
     MAIN --> API_PY

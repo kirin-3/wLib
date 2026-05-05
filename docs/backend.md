@@ -35,6 +35,15 @@ The `Api` class acts as the single point of entry for the Vue frontend. All meth
 - **Extension Sync Metadata**: Tracks whether startup extension synchronization actually updated the installed browser files so the frontend can show a toast prompting the user to reload the addon.
 - **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or unsupported values normalize to `auto`; supported values are `auto`, `native`, `wine_proton`, and `rpgmaker_linux`.
 - **Launch Target Contract**: Exposes CRUD and reordering methods for additional game launch targets. `get_games()` returns each game's extra `launch_targets`, while the canonical default executable remains `games.exe_path`.
+- **Library Migration Contract**: Exposes `export_library_backup`, `inspect_library_backup`, and `import_library_backup` for one-file JSON migration. Import uses an inspect-before-write flow and backup-wins field merges for selected sections.
+
+### `core/library_backup.py` (JSON Migration)
+This module serializes and imports semantic library backups without copying the raw SQLite database.
+- **Format**: Writes one JSON document with `format`, `format_version`, export timestamp, selected sections, game metadata, optional game sections, and selected settings groups.
+- **Always-included metadata**: Every exported game includes title, developer, engine, tags, F95 URL, version fields, and cover reference so records remain identifiable after migration.
+- **Import matching**: Matches games by normalized F95 thread identity first, then by normalized title/developer only when there is exactly one local match. Ambiguous fallback matches are skipped and reported.
+- **Merge behavior**: Matched games receive backup values for always-included metadata and selected optional sections. Unselected sections preserve local values. Playtime is overwritten from the backup when user state is imported, never summed.
+- **Safety boundaries**: The JSON export excludes scraper browser sessions, cookies, webview storage, downloaded runtimes, Playwright browser binaries, extension copies, caches, and diagnostics.
 
 ### `core/launcher.py` (Process Management)
 This module handles the complexities of launching games on Linux.
