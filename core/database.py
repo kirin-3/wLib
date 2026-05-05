@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from datetime import datetime
-from typing import cast
+from typing import TypedDict, cast
 
 from core.f95zone import normalize_thread_url, thread_urls_match
 
@@ -49,6 +49,16 @@ _LEGACY_RECOVERABLE_PLAY_STATUSES = {
 }
 
 _CANONICAL_LAUNCH_MODE_SET = set(CANONICAL_LAUNCH_MODES)
+
+
+class LaunchTarget(TypedDict):
+    id: int
+    game_id: int
+    label: str
+    exe_path: str
+    sort_order: int
+    created_at: str
+    updated_at: str
 
 
 def _normalize_status_key(value: object) -> str:
@@ -135,6 +145,39 @@ def _find_matching_game_row(
     return None
 
 
+def _row_to_launch_target(row: sqlite3.Row) -> LaunchTarget:
+    return {
+        "id": int(str(cast(object, row["id"]))),
+        "game_id": int(str(cast(object, row["game_id"]))),
+        "label": str(cast(object, row["label"])),
+        "exe_path": str(cast(object, row["exe_path"])),
+        "sort_order": int(str(cast(object, row["sort_order"]))),
+        "created_at": str(cast(object, row["created_at"] or "")),
+        "updated_at": str(cast(object, row["updated_at"] or "")),
+    }
+
+
+def _normalize_launch_target_label(label: object) -> str:
+    normalized = str(label or "").strip()
+    if not normalized:
+        raise ValueError("Launch target label is required")
+    return normalized
+
+
+def _normalize_launch_target_path(exe_path: object) -> str:
+    normalized = str(exe_path or "").strip()
+    if not normalized:
+        raise ValueError("Launch target executable path is required")
+    return normalized
+
+
+def _coerce_sort_order(sort_order: object) -> int:
+    try:
+        return max(0, int(str(sort_order)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def find_game_by_f95_url(
     url: object, exclude_id: int | None = None
 ) -> dict[str, object] | None:
@@ -186,6 +229,22 @@ def init_db() -> None:
                 value TEXT NOT NULL
             )
         """)
+
+        _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_launch_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                exe_path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            )
+        """)
+        _ = cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
+        )
 
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('proton_path', '')"
@@ -328,16 +387,177 @@ def add_game(
     return game_id
 
 
+def get_game_launch_target(target_id: int) -> LaunchTarget | None:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        _ = cursor.execute(
+            "SELECT * FROM game_launch_targets WHERE id = ?",
+            (target_id,),
+        )
+        row = cast(sqlite3.Row | None, cursor.fetchone())
+    return _row_to_launch_target(row) if row is not None else None
+
+
+def list_game_launch_targets(game_id: int) -> list[LaunchTarget]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        _ = cursor.execute(
+            "SELECT * FROM game_launch_targets WHERE game_id = ? ORDER BY sort_order ASC, id ASC",
+            (game_id,),
+        )
+        rows = cast(list[sqlite3.Row], cursor.fetchall())
+    return [_row_to_launch_target(row) for row in rows]
+
+
+def list_launch_targets_for_games(
+    game_ids: Sequence[int],
+) -> dict[int, list[LaunchTarget]]:
+    normalized_ids = [int(game_id) for game_id in game_ids]
+    targets_by_game: dict[int, list[LaunchTarget]] = {
+        game_id: [] for game_id in normalized_ids
+    }
+    if not normalized_ids:
+        return targets_by_game
+
+    placeholders = ",".join("?" for _ in normalized_ids)
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        _ = cursor.execute(
+            f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
+            tuple(normalized_ids),
+        )
+        rows = cast(list[sqlite3.Row], cursor.fetchall())
+
+    for row in rows:
+        target = _row_to_launch_target(row)
+        targets_by_game.setdefault(target["game_id"], []).append(target)
+    return targets_by_game
+
+
+def add_game_launch_target(
+    game_id: int,
+    label: object,
+    exe_path: object,
+    sort_order: object | None = None,
+) -> LaunchTarget:
+    target_label = _normalize_launch_target_label(label)
+    target_path = _normalize_launch_target_path(exe_path)
+    now_iso = datetime.now().isoformat()
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if sort_order is None:
+            _ = cursor.execute(
+                "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM game_launch_targets WHERE game_id = ?",
+                (game_id,),
+            )
+            row = cast(tuple[object, ...] | None, cursor.fetchone())
+            target_order = int(str(row[0] if row is not None else 0))
+        else:
+            target_order = _coerce_sort_order(sort_order)
+
+        _ = cursor.execute(
+            "INSERT INTO game_launch_targets (game_id, label, exe_path, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (game_id, target_label, target_path, target_order, now_iso, now_iso),
+        )
+        target_id = cursor.lastrowid
+        _ = cursor.execute(
+            "SELECT * FROM game_launch_targets WHERE id = ?",
+            (target_id,),
+        )
+        target = _row_to_launch_target(cast(sqlite3.Row, cursor.fetchone()))
+        conn.commit()
+    return target
+
+
+def update_game_launch_target(
+    target_id: int, fields: Mapping[str, object]
+) -> LaunchTarget | None:
+    safe_fields: dict[str, object] = {}
+    if "label" in fields:
+        safe_fields["label"] = _normalize_launch_target_label(fields["label"])
+    if "exe_path" in fields:
+        safe_fields["exe_path"] = _normalize_launch_target_path(fields["exe_path"])
+    if "sort_order" in fields:
+        safe_fields["sort_order"] = _coerce_sort_order(fields["sort_order"])
+
+    if not safe_fields:
+        return get_game_launch_target(target_id)
+
+    safe_fields["updated_at"] = datetime.now().isoformat()
+    set_clause = ", ".join([f"{key} = ?" for key in safe_fields.keys()])
+    values = tuple(safe_fields.values()) + (target_id,)
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        _ = cursor.execute(
+            f"UPDATE game_launch_targets SET {set_clause} WHERE id = ?",
+            values,
+        )
+        if cursor.rowcount == 0:
+            return None
+        _ = cursor.execute(
+            "SELECT * FROM game_launch_targets WHERE id = ?",
+            (target_id,),
+        )
+        target = _row_to_launch_target(cast(sqlite3.Row, cursor.fetchone()))
+        conn.commit()
+    return target
+
+
+def delete_game_launch_target(target_id: int) -> bool:
+    with closing(get_connection()) as conn:
+        cursor = conn.cursor()
+        _ = cursor.execute("DELETE FROM game_launch_targets WHERE id = ?", (target_id,))
+        deleted = cursor.rowcount > 0
+        conn.commit()
+    return deleted
+
+
+def reorder_game_launch_targets(
+    game_id: int, target_ids: Sequence[int]
+) -> list[LaunchTarget]:
+    normalized_ids = [int(target_id) for target_id in target_ids]
+    if len(set(normalized_ids)) != len(normalized_ids):
+        raise ValueError("Launch target order contains duplicate targets")
+
+    existing = list_game_launch_targets(game_id)
+    existing_ids = {target["id"] for target in existing}
+    if set(normalized_ids) != existing_ids:
+        raise ValueError("Launch target order must include all targets for the game")
+
+    now_iso = datetime.now().isoformat()
+    with closing(get_connection()) as conn:
+        cursor = conn.cursor()
+        for sort_order, target_id in enumerate(normalized_ids):
+            _ = cursor.execute(
+                "UPDATE game_launch_targets SET sort_order = ?, updated_at = ? WHERE id = ? AND game_id = ?",
+                (sort_order, now_iso, target_id, game_id),
+            )
+        conn.commit()
+    return list_game_launch_targets(game_id)
+
+
 def get_all_games() -> list[dict[str, object]]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         _ = cursor.execute("SELECT * FROM games ORDER BY title ASC")
         games = cast(list[sqlite3.Row], cursor.fetchall())
+    targets_by_game = list_launch_targets_for_games(
+        [int(str(cast(object, game["id"]))) for game in games]
+    )
     result: list[dict[str, object]] = []
     for game in games:
         game_dict = {str(key): cast(object, game[key]) for key in game.keys()}
         game_dict["launch_mode"] = normalize_launch_mode(game_dict.get("launch_mode"))
+        game_id = int(str(game_dict["id"]))
+        game_dict["launch_targets"] = targets_by_game.get(game_id, [])
         result.append(game_dict)
     return result
 

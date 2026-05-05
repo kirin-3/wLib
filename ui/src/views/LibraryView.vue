@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  IconChevronDown,
   IconColumns2Filled,
   IconDeviceGamepad2,
   IconDeviceGamepad2Filled,
@@ -18,7 +19,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import type { GameRecord, LaunchMode } from "../services/api";
+import type { GameRecord, LaunchMode, LaunchTarget } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 import {
@@ -68,6 +69,13 @@ interface PlaytimeTickDetail {
   delta?: number;
 }
 
+interface EffectiveLaunchTarget {
+  id: string;
+  label: string;
+  exe_path: string;
+  isDefault: boolean;
+}
+
 const readQueryValue = (value: unknown): string => {
   if (Array.isArray(value)) {
     return typeof value[0] === "string" ? value[0] : "";
@@ -81,6 +89,7 @@ const games = ref<GameRecord[]>([]);
 const showAddModal = ref(false);
 const showDetailModal = ref(false);
 const selectedGame = ref<GameRecord | null>(null);
+const openLaunchTargetMenuId = ref<number | null>(null);
 
 // Search & Filter state
 const searchQuery = ref("");
@@ -372,6 +381,38 @@ const getGamePlayStatusMeta = (game: GameRecord) => {
   return getPlayStatusMeta(game.play_status, game.status);
 };
 
+const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
+  return [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+};
+
+const getEffectiveLaunchTargets = (game: GameRecord): EffectiveLaunchTarget[] => [
+  {
+    id: `default-${game.id}`,
+    label: "Default",
+    exe_path: game.exe_path,
+    isDefault: true,
+  },
+  ...sortLaunchTargets(game.launch_targets || []).map((target) => ({
+    id: `target-${target.id}`,
+    label: target.label,
+    exe_path: target.exe_path,
+    isDefault: false,
+  })),
+];
+
+const hasAdditionalLaunchTargets = (game: GameRecord): boolean => {
+  return (game.launch_targets || []).length > 0;
+};
+
+const closeLaunchTargetMenus = () => {
+  openLaunchTargetMenuId.value = null;
+};
+
+const toggleLaunchTargetMenu = (game: GameRecord) => {
+  openLaunchTargetMenuId.value =
+    openLaunchTargetMenuId.value === game.id ? null : game.id;
+};
+
 const loadGames = async () => {
   try {
     const data = await api.getGames();
@@ -405,6 +446,10 @@ const handleGameDeleted = async () => {
   clearModalUpdateState();
   showDetailModal.value = false;
   selectedGame.value = null;
+  await loadGames();
+};
+
+const handleLaunchTargetsChanged = async () => {
   await loadGames();
 };
 
@@ -471,11 +516,11 @@ const launchFromModal = async (game: GameRecord) => {
   }
 };
 
-const launchGameFast = async (game: GameRecord) => {
+const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
   try {
     const result = await api.launchGame(
       game.id,
-      game.exe_path,
+      exePath,
       game.command_line_args || "",
       game.run_japanese_locale || false,
       game.run_wayland || false,
@@ -490,6 +535,14 @@ const launchGameFast = async (game: GameRecord) => {
   } catch (e) {
     console.error("Launch failed", e);
   }
+};
+
+const launchSelectedTarget = async (
+  game: GameRecord,
+  target: EffectiveLaunchTarget,
+) => {
+  closeLaunchTargetMenus();
+  await launchGameFast(game, target.exe_path);
 };
 
 // Handle incoming extension import
@@ -623,6 +676,7 @@ onMounted(() => {
 
   window.addEventListener("wlib-refresh-library", loadGames);
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
+  document.addEventListener("click", closeLaunchTargetMenus);
   onWebviewReady(() => {
     loadGames();
   });
@@ -631,6 +685,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("wlib-refresh-library", loadGames);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
+  document.removeEventListener("click", closeLaunchTargetMenus);
   if (updateNoticeTimeout) {
     clearTimeout(updateNoticeTimeout);
   }
@@ -1027,6 +1082,7 @@ onUnmounted(() => {
             class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
           >
             <button
+              @click.stop="launchGameFast(game)"
               class="card-overlay-play-btn rounded-full p-4 transform scale-90 group-hover:scale-100"
             >
               <IconPlayerPlayFilled class="w-6 h-6" />
@@ -1072,13 +1128,40 @@ onUnmounted(() => {
             >
               {{ game.title }}
             </h3>
-            <button
-              @click.stop="launchGameFast(game)"
-              class="compact-play-btn rounded-md p-2 shrink-0 active:scale-95"
-              :title="`Play ${game.title}`"
-            >
-              <IconPlayerPlayFilled class="w-3.5 h-3.5" />
-            </button>
+            <div class="relative flex shrink-0">
+              <button
+                @click.stop="launchGameFast(game)"
+                class="compact-play-btn rounded-md p-2 shrink-0 active:scale-95"
+                :title="`Play ${game.title}`"
+              >
+                <IconPlayerPlayFilled class="w-3.5 h-3.5" />
+              </button>
+              <button
+                v-if="hasAdditionalLaunchTargets(game)"
+                @click.stop="toggleLaunchTargetMenu(game)"
+                class="compact-target-toggle rounded-md px-1.5 shrink-0 active:scale-95"
+                :title="`Choose launch target for ${game.title}`"
+              >
+                <IconChevronDown class="w-3.5 h-3.5" />
+              </button>
+              <div
+                v-if="openLaunchTargetMenuId === game.id"
+                class="launch-target-menu launch-target-menu--compact"
+                @click.stop
+              >
+                <button
+                  v-for="target in getEffectiveLaunchTargets(game)"
+                  :key="target.id"
+                  class="launch-target-menu-item"
+                  @click.stop="launchSelectedTarget(game, target)"
+                >
+                  <span>{{ target.label }}</span>
+                  <span v-if="target.isDefault" class="launch-target-menu-note">
+                    Default
+                  </span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1181,13 +1264,40 @@ onUnmounted(() => {
               <component :is="getGamePlayStatusMeta(game).icon" class="ui-status-icon" />
               <span class="truncate">{{ getGamePlayStatusMeta(game).label }}</span>
             </div>
-            <button
-              @click.stop="launchGameFast(game)"
-              class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold active:scale-95 shrink-0"
-            >
-              <IconPlayerPlayFilled class="ui-action-icon" />
-              <span class="hidden md:inline">Play</span>
-            </button>
+            <div class="relative flex shrink-0">
+              <button
+                @click.stop="launchGameFast(game)"
+                class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold active:scale-95 shrink-0"
+              >
+                <IconPlayerPlayFilled class="ui-action-icon" />
+                <span class="hidden md:inline">Play</span>
+              </button>
+              <button
+                v-if="hasAdditionalLaunchTargets(game)"
+                @click.stop="toggleLaunchTargetMenu(game)"
+                class="target-menu-toggle ui-action-btn px-2 py-2 rounded-lg text-xs font-bold active:scale-95 shrink-0"
+                :title="`Choose launch target for ${game.title}`"
+              >
+                <IconChevronDown class="ui-action-icon" />
+              </button>
+              <div
+                v-if="openLaunchTargetMenuId === game.id"
+                class="launch-target-menu"
+                @click.stop
+              >
+                <button
+                  v-for="target in getEffectiveLaunchTargets(game)"
+                  :key="target.id"
+                  class="launch-target-menu-item"
+                  @click.stop="launchSelectedTarget(game, target)"
+                >
+                  <span>{{ target.label }}</span>
+                  <span v-if="target.isDefault" class="launch-target-menu-note">
+                    Default
+                  </span>
+                </button>
+              </div>
+            </div>
             <div
               v-if="layoutMode === 'list'"
               class="hidden sm:inline-flex w-28 justify-end text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis"
@@ -1212,6 +1322,7 @@ onUnmounted(() => {
       @deleted="handleGameDeleted"
       @launch="launchFromModal"
       @check-updates="handleModalUpdateCheck"
+      @targets-changed="handleLaunchTargetsChanged"
     />
   </div>
   </div>
@@ -1244,6 +1355,58 @@ onUnmounted(() => {
 }
 .play-btn:hover {
   filter: brightness(1.15);
+}
+
+.target-menu-toggle {
+  margin-left: 0.35rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.target-menu-toggle:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+
+.launch-target-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  min-width: 11rem;
+  max-width: 16rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border-hover);
+  border-radius: 0.5rem;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.launch-target-menu--compact {
+  bottom: calc(100% + 0.4rem);
+}
+
+.launch-target-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.4rem;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.launch-target-menu-item:hover {
+  background: var(--bg-raised);
+}
+
+.launch-target-menu-note {
+  color: var(--text-muted);
+  font-size: 0.68rem;
 }
 
 .library-primary-btn {
@@ -1324,6 +1487,18 @@ onUnmounted(() => {
 }
 
 .compact-play-btn:hover {
+  background: rgba(17, 24, 39, 0.78);
+  border-color: rgba(255, 255, 255, 0.42);
+}
+
+.compact-target-toggle {
+  margin-left: 0.25rem;
+  background: rgba(17, 24, 39, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: #f8fafc;
+}
+
+.compact-target-toggle:hover {
   background: rgba(17, 24, 39, 0.78);
   border-color: rgba(255, 255, 255, 0.42);
 }

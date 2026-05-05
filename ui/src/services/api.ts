@@ -174,6 +174,26 @@ export interface ExecutableModifiedTimeResponse extends ApiBasicResponse {
   modified_at: string | null;
 }
 
+export interface LaunchTarget {
+  id: number;
+  game_id: number;
+  label: string;
+  exe_path: string;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface LaunchTargetResponse extends ApiBasicResponse {
+  success: boolean;
+  target?: LaunchTarget;
+}
+
+export interface LaunchTargetsResponse extends ApiBasicResponse {
+  success: boolean;
+  targets: LaunchTarget[];
+}
+
 export interface SaveLocation {
   path: string;
   type: string;
@@ -212,6 +232,7 @@ export interface GameRecord {
   rating_gameplay?: number;
   thread_main_post_last_edit_at?: string | null;
   thread_main_post_checked_at?: string | null;
+  launch_targets?: LaunchTarget[];
 }
 
 export interface SettingsPayload {
@@ -229,11 +250,61 @@ export interface SettingsResponse {
 }
 
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
+const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   proton_path: "",
   wine_prefix_path: "",
   enable_logging: false,
   playwright_browsers_path: "~/.cache/ms-playwright",
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null;
+};
+
+const normalizeMockLaunchTarget = (value: unknown): LaunchTarget | null => {
+  if (!isRecord(value)) return null;
+  const id = Number(value.id);
+  const gameId = Number(value.game_id);
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  const exePath = typeof value.exe_path === "string" ? value.exe_path.trim() : "";
+  const sortOrder = Number(value.sort_order);
+  if (!Number.isFinite(id) || !Number.isFinite(gameId) || !label || !exePath) {
+    return null;
+  }
+  return {
+    id,
+    game_id: gameId,
+    label,
+    exe_path: exePath,
+    sort_order: Number.isFinite(sortOrder) ? Math.max(0, Math.trunc(sortOrder)) : 0,
+    created_at: typeof value.created_at === "string" ? value.created_at : "",
+    updated_at: typeof value.updated_at === "string" ? value.updated_at : "",
+  };
+};
+
+const readMockLaunchTargets = (): LaunchTarget[] => {
+  try {
+    const raw = localStorage.getItem(MOCK_LAUNCH_TARGETS_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed)
+      ? parsed.map(normalizeMockLaunchTarget).filter((target): target is LaunchTarget => target !== null)
+      : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const writeMockLaunchTargets = (targets: LaunchTarget[]): void => {
+  try {
+    localStorage.setItem(MOCK_LAUNCH_TARGETS_STORAGE_KEY, JSON.stringify(targets));
+  } catch (_error) {
+    // Ignore browser mock persistence failures and keep the desktop contract unchanged.
+  }
+};
+
+const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
+  return targets.reduce((max, target) => Math.max(max, target.id), 0) + 1;
 };
 
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
@@ -437,6 +508,47 @@ class ApiService {
     return this.invoke<ExecutableModifiedTimeResponse>("get_executable_modified_time", exe_path);
   }
 
+  async getLaunchTargets(game_id: number): Promise<LaunchTarget[]> {
+    return this.invoke<LaunchTarget[]>("get_launch_targets", game_id);
+  }
+
+  async createLaunchTarget(
+    game_id: number,
+    label: string,
+    exe_path: string,
+    sort_order: number | null = null
+  ): Promise<LaunchTargetResponse> {
+    return this.invoke<LaunchTargetResponse>(
+      "create_launch_target",
+      game_id,
+      label,
+      exe_path,
+      sort_order,
+    );
+  }
+
+  async updateLaunchTarget(
+    target_id: number,
+    fields: Partial<Pick<LaunchTarget, "label" | "exe_path" | "sort_order">>
+  ): Promise<LaunchTargetResponse> {
+    return this.invoke<LaunchTargetResponse>("update_launch_target", target_id, fields);
+  }
+
+  async deleteLaunchTarget(target_id: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("delete_launch_target", target_id);
+  }
+
+  async reorderLaunchTargets(
+    game_id: number,
+    target_ids: number[]
+  ): Promise<LaunchTargetsResponse> {
+    return this.invoke<LaunchTargetsResponse>(
+      "reorder_launch_targets",
+      game_id,
+      target_ids,
+    );
+  }
+
   async getSettings(): Promise<SettingsResponse> {
     return this.invoke<SettingsResponse>("get_settings");
   }
@@ -613,6 +725,140 @@ class ApiService {
         return { installed: false, path: "" };
       case "get_executable_modified_time":
         return { success: false, modified_at: null, mock: true, error: "Executable timestamps require the desktop app runtime." };
+      case "get_launch_targets": {
+        const gameId = Number(args[0]);
+        return readMockLaunchTargets()
+          .filter((target) => target.game_id === gameId)
+          .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+      }
+      case "create_launch_target": {
+        const gameId = Number(args[0]);
+        const label = typeof args[1] === "string" ? args[1].trim() : "";
+        const exePath = typeof args[2] === "string" ? args[2].trim() : "";
+        if (!Number.isFinite(gameId) || !label || !exePath) {
+          return {
+            success: false,
+            mock: true,
+            error: "Launch target label and executable path are required.",
+            error_code: "invalid_target",
+          };
+        }
+        const targets = readMockLaunchTargets();
+        const requestedOrder = Number(args[3]);
+        const fallbackOrder = targets
+          .filter((target) => target.game_id === gameId)
+          .reduce((max, target) => Math.max(max, target.sort_order + 1), 0);
+        const now = new Date().toISOString();
+        const target: LaunchTarget = {
+          id: nextMockLaunchTargetId(targets),
+          game_id: gameId,
+          label,
+          exe_path: exePath,
+          sort_order: Number.isFinite(requestedOrder) ? Math.max(0, Math.trunc(requestedOrder)) : fallbackOrder,
+          created_at: now,
+          updated_at: now,
+        };
+        writeMockLaunchTargets([...targets, target]);
+        return { success: true, mock: true, target };
+      }
+      case "update_launch_target": {
+        const targetId = Number(args[0]);
+        const fields = isRecord(args[1]) ? args[1] : {};
+        const targets = readMockLaunchTargets();
+        const index = targets.findIndex((target) => target.id === targetId);
+        if (index === -1) {
+          return {
+            success: false,
+            mock: true,
+            error: "Launch target was not found.",
+            error_code: "target_not_found",
+          };
+        }
+
+        const existingTarget = targets[index];
+        if (!existingTarget) {
+          return {
+            success: false,
+            mock: true,
+            error: "Launch target was not found.",
+            error_code: "target_not_found",
+          };
+        }
+
+        const nextTarget: LaunchTarget = { ...existingTarget };
+        if (Object.prototype.hasOwnProperty.call(fields, "label")) {
+          const label = typeof fields.label === "string" ? fields.label.trim() : "";
+          if (!label) {
+            return { success: false, mock: true, error: "Launch target label is required.", error_code: "invalid_target" };
+          }
+          nextTarget.label = label;
+        }
+        if (Object.prototype.hasOwnProperty.call(fields, "exe_path")) {
+          const exePath = typeof fields.exe_path === "string" ? fields.exe_path.trim() : "";
+          if (!exePath) {
+            return { success: false, mock: true, error: "Launch target executable path is required.", error_code: "invalid_target" };
+          }
+          nextTarget.exe_path = exePath;
+        }
+        if (Object.prototype.hasOwnProperty.call(fields, "sort_order")) {
+          const sortOrder = Number(fields.sort_order);
+          nextTarget.sort_order = Number.isFinite(sortOrder) ? Math.max(0, Math.trunc(sortOrder)) : nextTarget.sort_order;
+        }
+        nextTarget.updated_at = new Date().toISOString();
+        targets[index] = nextTarget;
+        writeMockLaunchTargets(targets);
+        return { success: true, mock: true, target: nextTarget };
+      }
+      case "delete_launch_target": {
+        const targetId = Number(args[0]);
+        const targets = readMockLaunchTargets();
+        const nextTargets = targets.filter((target) => target.id !== targetId);
+        if (nextTargets.length === targets.length) {
+          return {
+            success: false,
+            mock: true,
+            error: "Launch target was not found.",
+            error_code: "target_not_found",
+          };
+        }
+        writeMockLaunchTargets(nextTargets);
+        return { success: true, mock: true };
+      }
+      case "reorder_launch_targets": {
+        const gameId = Number(args[0]);
+        const targetIds = Array.isArray(args[1]) ? args[1].map((id) => Number(id)) : [];
+        const targets = readMockLaunchTargets();
+        const gameTargets = targets.filter((target) => target.game_id === gameId);
+        const existingIds = new Set(gameTargets.map((target) => target.id));
+        const requestedIds = new Set(targetIds);
+        const validOrder =
+          targetIds.length === gameTargets.length &&
+          requestedIds.size === targetIds.length &&
+          targetIds.every((targetId) => existingIds.has(targetId));
+        if (!validOrder) {
+          return {
+            success: false,
+            mock: true,
+            error: "Launch target order must include all targets for the game.",
+            error_code: "invalid_target_order",
+          };
+        }
+        const orderById = new Map(targetIds.map((targetId, index) => [targetId, index]));
+        const now = new Date().toISOString();
+        const nextTargets = targets.map((target) =>
+          target.game_id === gameId
+            ? { ...target, sort_order: orderById.get(target.id) ?? target.sort_order, updated_at: now }
+            : target,
+        );
+        writeMockLaunchTargets(nextTargets);
+        return {
+          success: true,
+          mock: true,
+          targets: nextTargets
+            .filter((target) => target.game_id === gameId)
+            .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
+        };
+      }
       case "find_save_files":
         return [];
       default:

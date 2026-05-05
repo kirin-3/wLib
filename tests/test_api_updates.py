@@ -10,7 +10,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.api import Api
-from core.database import init_db, add_game, get_all_games, get_setting
+from core.database import (
+    init_db,
+    add_game,
+    add_game_launch_target,
+    get_all_games,
+    get_setting,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +66,144 @@ def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
     assert result["success"] is True
     assert captured["exe_path"] == "/tmp/game.exe"
     assert captured["launch_mode"] == "auto"
+
+
+def test_api_launch_target_crud_and_reorder():
+    api = Api()
+    game_id = add_game(title="Multi Part", exe_path="/tmp/main.exe")
+    other_id = add_game(title="Other", exe_path="/tmp/other.exe")
+    assert game_id is not None
+    assert other_id is not None
+
+    first = api.create_launch_target(game_id, "Part 1", "/tmp/part1.exe")
+    second = api.create_launch_target(game_id, "Part 2", "/tmp/part2.exe")
+    other = api.create_launch_target(other_id, "Other", "/tmp/other-part.exe")
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert other["success"] is True
+
+    first_target = cast(dict[str, object], first["target"])
+    second_target = cast(dict[str, object], second["target"])
+    other_target = cast(dict[str, object], other["target"])
+
+    update = api.update_launch_target(
+        int(str(second_target["id"])),
+        {"label": "Season 2", "exe_path": "/tmp/s2.exe"},
+    )
+    assert update["success"] is True
+    updated_target = cast(dict[str, object], update["target"])
+    assert updated_target["label"] == "Season 2"
+    assert updated_target["exe_path"] == "/tmp/s2.exe"
+
+    invalid_reorder = api.reorder_launch_targets(
+        game_id, [first_target["id"], other_target["id"]]
+    )
+    assert invalid_reorder["success"] is False
+    assert invalid_reorder["error_code"] == "invalid_target_order"
+
+    reorder = api.reorder_launch_targets(
+        game_id, [second_target["id"], first_target["id"]]
+    )
+    assert reorder["success"] is True
+    reordered_targets = cast(list[dict[str, object]], reorder["targets"])
+    assert [target["label"] for target in reordered_targets] == [
+        "Season 2",
+        "Part 1",
+    ]
+
+    listed = api.get_launch_targets(game_id)
+    assert [target["label"] for target in listed] == ["Season 2", "Part 1"]
+
+    delete = api.delete_launch_target(int(str(first_target["id"])))
+    assert delete["success"] is True
+    assert [target["label"] for target in api.get_launch_targets(game_id)] == [
+        "Season 2"
+    ]
+
+
+def test_api_launch_target_validation_errors():
+    api = Api()
+    game_id = add_game(title="Invalid Target", exe_path="/tmp/main.exe")
+    assert game_id is not None
+
+    blank_label = api.create_launch_target(game_id, " ", "/tmp/part.exe")
+    blank_path = api.create_launch_target(game_id, "Part", " ")
+    missing_parent = api.create_launch_target(9999, "Part", "/tmp/part.exe")
+
+    assert blank_label["success"] is False
+    assert blank_label["error_code"] == "invalid_target"
+    assert blank_path["success"] is False
+    assert blank_path["error_code"] == "invalid_target"
+    assert missing_parent["success"] is False
+    assert missing_parent["error_code"] == "game_not_found"
+
+    not_found_update = api.update_launch_target(9999, {"label": "Missing"})
+    not_found_delete = api.delete_launch_target(9999)
+    assert not_found_update["error_code"] == "target_not_found"
+    assert not_found_delete["error_code"] == "target_not_found"
+
+
+def test_api_launch_game_uses_selected_target_path_and_parent_playtime(monkeypatch):
+    api = Api()
+    game_id = add_game(title="Multi Part", exe_path="/tmp/main.exe")
+    assert game_id is not None
+    target = add_game_launch_target(game_id, "Part 2", "/tmp/part2.exe")
+    captured: dict[str, object] = {}
+
+    def fake_launch(
+        exe_path,
+        command_line_args="",
+        run_japanese_locale=False,
+        run_wayland=False,
+        auto_inject_ce=False,
+        custom_prefix="",
+        proton_version="",
+        launch_mode="auto",
+        on_exit_callback=None,
+    ):
+        captured["exe_path"] = exe_path
+        captured["command_line_args"] = command_line_args
+        captured["run_japanese_locale"] = run_japanese_locale
+        captured["run_wayland"] = run_wayland
+        captured["auto_inject_ce"] = auto_inject_ce
+        captured["custom_prefix"] = custom_prefix
+        captured["proton_version"] = proton_version
+        captured["launch_mode"] = launch_mode
+        captured["on_exit_callback"] = on_exit_callback
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", fake_launch)
+
+    result = api.launch_game(
+        game_id,
+        target["exe_path"],
+        "--fullscreen",
+        True,
+        True,
+        True,
+        "/tmp/prefix",
+        "/tmp/proton",
+        "wine_proton",
+    )
+
+    assert result["success"] is True
+    assert captured["exe_path"] == "/tmp/part2.exe"
+    assert captured["command_line_args"] == "--fullscreen"
+    assert captured["run_japanese_locale"] is True
+    assert captured["run_wayland"] is True
+    assert captured["auto_inject_ce"] is True
+    assert captured["custom_prefix"] == "/tmp/prefix"
+    assert captured["proton_version"] == "/tmp/proton"
+    assert captured["launch_mode"] == "wine_proton"
+
+    on_exit = captured["on_exit_callback"]
+    assert callable(on_exit)
+    on_exit(42, True)
+
+    game = get_all_games()[0]
+    assert game["playtime_seconds"] == 42
+    assert game["last_played"]
 
 
 def test_check_for_updates_rejects_unknown_version(monkeypatch):

@@ -1,17 +1,33 @@
 # pyright: reportMissingImports=false
 import pytest
 import os
+from typing import cast
 from core.database import (
     DEFAULT_PLAY_STATUS,
     DEFAULT_LAUNCH_MODE,
     init_db,
     get_connection,
     add_game,
+    add_game_launch_target,
+    delete_game,
+    delete_game_launch_target,
     find_game_by_f95_url,
+    list_game_launch_targets,
     update_game,
+    update_game_launch_target,
     get_all_games,
     normalize_launch_mode,
+    reorder_game_launch_targets,
 )
+
+
+def assert_raises_value_error(message: str, callback):
+    try:
+        callback()
+    except ValueError as exc:
+        assert message in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +49,7 @@ def test_database_initialization():
     tables = [row[0] for row in cursor.fetchall()]
     assert "games" in tables
     assert "settings" in tables
+    assert "game_launch_targets" in tables
 
     # Check if the migration columns were added
     cursor.execute("PRAGMA table_info(games)")
@@ -42,6 +59,13 @@ def test_database_initialization():
     assert "thread_main_post_last_edit_at" in columns
     assert "thread_main_post_checked_at" in columns
     assert "launch_mode" in columns
+
+    cursor.execute("PRAGMA table_info(game_launch_targets)")
+    target_columns = [row[1] for row in cursor.fetchall()]
+    assert "game_id" in target_columns
+    assert "label" in target_columns
+    assert "exe_path" in target_columns
+    assert "sort_order" in target_columns
 
     cursor.execute("PRAGMA foreign_keys")
     assert cursor.fetchone()[0] == 1
@@ -63,6 +87,113 @@ def test_add_and_get_game():
     assert games[0]["tags"] == "visual novel, rpg"
     assert games[0]["play_status"] == DEFAULT_PLAY_STATUS
     assert games[0]["launch_mode"] == DEFAULT_LAUNCH_MODE
+    assert games[0]["launch_targets"] == []
+
+
+def test_launch_targets_crud_ordering_and_game_payload():
+    """Test additional launch targets stay ordered under their parent game."""
+    game_id = add_game(title="Multi Part", exe_path="/tmp/main.exe")
+    assert game_id is not None
+
+    part_one = add_game_launch_target(game_id, "Part 1", "/tmp/part1.exe")
+    part_two = add_game_launch_target(game_id, "Part 2", "/tmp/part2.exe")
+    bonus = add_game_launch_target(game_id, "Bonus", "/tmp/bonus.exe")
+
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Part 1",
+        "Part 2",
+        "Bonus",
+    ]
+
+    updated = update_game_launch_target(
+        part_two["id"], {"label": "Season 2", "exe_path": "/tmp/s2.exe"}
+    )
+    assert updated is not None
+    assert updated["label"] == "Season 2"
+    assert updated["exe_path"] == "/tmp/s2.exe"
+
+    reordered = reorder_game_launch_targets(
+        game_id, [bonus["id"], part_one["id"], part_two["id"]]
+    )
+    assert [target["label"] for target in reordered] == [
+        "Bonus",
+        "Part 1",
+        "Season 2",
+    ]
+
+    game = get_all_games()[0]
+    assert game["exe_path"] == "/tmp/main.exe"
+    launch_targets = cast(list[dict[str, object]], game["launch_targets"])
+    assert [target["label"] for target in launch_targets] == [
+        "Bonus",
+        "Part 1",
+        "Season 2",
+    ]
+
+    assert delete_game_launch_target(part_one["id"]) is True
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Bonus",
+        "Season 2",
+    ]
+
+
+def test_launch_targets_validate_required_fields():
+    """Test launch target labels and paths must be non-empty."""
+    game_id = add_game(title="Invalid Target", exe_path="/tmp/main.exe")
+    assert game_id is not None
+
+    assert_raises_value_error(
+        "label", lambda: add_game_launch_target(game_id, "   ", "/tmp/part.exe")
+    )
+    assert_raises_value_error(
+        "path", lambda: add_game_launch_target(game_id, "Part", "   ")
+    )
+
+    target = add_game_launch_target(game_id, "Part", "/tmp/part.exe")
+
+    assert_raises_value_error(
+        "label", lambda: update_game_launch_target(target["id"], {"label": ""})
+    )
+    assert_raises_value_error(
+        "path", lambda: update_game_launch_target(target["id"], {"exe_path": ""})
+    )
+
+
+def test_launch_targets_are_deleted_with_parent_game():
+    """Test deleting a parent game cascades to its additional targets."""
+    game_id = add_game(title="Delete Parent", exe_path="/tmp/main.exe")
+    assert game_id is not None
+    add_game_launch_target(game_id, "Part 1", "/tmp/part1.exe")
+    add_game_launch_target(game_id, "Part 2", "/tmp/part2.exe")
+
+    delete_game(game_id)
+
+    assert list_game_launch_targets(game_id) == []
+
+
+def test_reorder_launch_targets_rejects_missing_or_foreign_targets():
+    """Test reordering requires exactly the parent game's additional targets."""
+    game_id = add_game(title="Source", exe_path="/tmp/source.exe")
+    other_id = add_game(title="Other", exe_path="/tmp/other.exe")
+    assert game_id is not None
+    assert other_id is not None
+    first = add_game_launch_target(game_id, "First", "/tmp/first.exe")
+    second = add_game_launch_target(game_id, "Second", "/tmp/second.exe")
+    other = add_game_launch_target(other_id, "Other", "/tmp/other-part.exe")
+
+    assert_raises_value_error(
+        "include all targets", lambda: reorder_game_launch_targets(game_id, [first["id"]])
+    )
+    assert_raises_value_error(
+        "include all targets",
+        lambda: reorder_game_launch_targets(game_id, [first["id"], other["id"]]),
+    )
+    assert_raises_value_error(
+        "duplicate",
+        lambda: reorder_game_launch_targets(
+            game_id, [first["id"], first["id"], second["id"]]
+        ),
+    )
 
 
 def test_launch_mode_is_persisted_and_normalized():

@@ -87,12 +87,23 @@ class ScraperResponse(TypedDict, total=False):
     thread_main_post_checked_at: str
 
 
+class LaunchTargetRecord(TypedDict):
+    id: int
+    game_id: int
+    label: str
+    exe_path: str
+    sort_order: int
+    created_at: str
+    updated_at: str
+
+
 class GameRecord(TypedDict):
     id: int
     title: str
     version: str
     f95_url: str
     launch_mode: NotRequired[str]
+    launch_targets: NotRequired[list[LaunchTargetRecord]]
     thread_main_post_last_edit_at: NotRequired[str | None]
     thread_main_post_checked_at: NotRequired[str | None]
 
@@ -143,7 +154,7 @@ normalize_thread_url: Callable[[str], str] = cast(
     Callable[[str], str], cast(object, _normalize_thread_url)
 )
 
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
 KOMODO_RTP_DOWNLOAD_HOSTS = {"dl.komodo.jp"}
@@ -1327,6 +1338,111 @@ class Api:
 
         return {"success": True}
 
+    def get_launch_targets(self, game_id: int) -> list[dict[str, object]]:
+        from core.database import list_game_launch_targets
+
+        list_targets_fn = cast(
+            Callable[[int], list[dict[str, object]]], list_game_launch_targets
+        )
+
+        return list_targets_fn(game_id)
+
+    def create_launch_target(
+        self,
+        game_id: int,
+        label: str,
+        exe_path: str,
+        sort_order: int | None = None,
+    ) -> dict[str, object]:
+        import sqlite3
+
+        from core.database import add_game_launch_target
+
+        add_target_fn = cast(
+            Callable[[int, object, object, object | None], dict[str, object]],
+            add_game_launch_target,
+        )
+
+        try:
+            target = add_target_fn(game_id, label, exe_path, sort_order)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc), "error_code": "invalid_target"}
+        except sqlite3.IntegrityError:
+            return {
+                "success": False,
+                "error": "Parent game was not found",
+                "error_code": "game_not_found",
+            }
+
+        return {"success": True, "target": target}
+
+    def update_launch_target(
+        self, target_id: int, fields: Mapping[str, object] | None
+    ) -> dict[str, object]:
+        from core.database import update_game_launch_target
+
+        update_target_fn = cast(
+            Callable[[int, Mapping[str, object]], dict[str, object] | None],
+            update_game_launch_target,
+        )
+
+        try:
+            target = update_target_fn(target_id, dict(fields or {}))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc), "error_code": "invalid_target"}
+
+        if target is None:
+            return {
+                "success": False,
+                "error": "Launch target was not found",
+                "error_code": "target_not_found",
+            }
+
+        return {"success": True, "target": target}
+
+    def delete_launch_target(self, target_id: int) -> dict[str, object]:
+        from core.database import delete_game_launch_target
+
+        delete_target_fn = cast(Callable[[int], bool], delete_game_launch_target)
+
+        if not delete_target_fn(target_id):
+            return {
+                "success": False,
+                "error": "Launch target was not found",
+                "error_code": "target_not_found",
+            }
+
+        return {"success": True}
+
+    def reorder_launch_targets(
+        self, game_id: int, target_ids: object
+    ) -> dict[str, object]:
+        from core.database import reorder_game_launch_targets
+
+        reorder_targets_fn = cast(
+            Callable[[int, Sequence[int]], list[dict[str, object]]],
+            reorder_game_launch_targets,
+        )
+
+        if isinstance(target_ids, str) or not isinstance(target_ids, Sequence):
+            return {
+                "success": False,
+                "error": "Launch target order must be a list of target IDs",
+                "error_code": "invalid_target_order",
+            }
+
+        try:
+            normalized_ids = [int(str(target_id)) for target_id in target_ids]
+            targets = reorder_targets_fn(game_id, normalized_ids)
+        except (TypeError, ValueError) as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_code": "invalid_target_order",
+            }
+
+        return {"success": True, "targets": targets}
+
     # ==========================
     # Scraper API
     # ==========================
@@ -1735,9 +1851,9 @@ class Api:
                     ):
                         _ = self._update_thread_edit_metadata_for_url(url, result_dict)
                         remote_version = str(result_dict.get("version") or "").strip()
-                        from core.database import get_connection
-
                         import sqlite3
+
+                        from core.database import get_connection
 
                         get_connection_fn: Callable[[], sqlite3.Connection] = (
                             get_connection

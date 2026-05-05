@@ -20,6 +20,7 @@ import {
 import { api } from "../../services/api";
 import type {
   GameRecord,
+  LaunchTarget,
   RunnerInfo,
   SaveLocation,
 } from "../../services/api";
@@ -91,6 +92,7 @@ const emit = defineEmits<{
   deleted: [];
   launch: [payload: GameRecord];
   "check-updates": [gameId: number];
+  "targets-changed": [];
 }>();
 
 // Editable fields
@@ -127,6 +129,18 @@ const executableModifiedAt = ref<string | null>(null);
 const loadingExecutableModifiedAt = ref(false);
 const executableModifiedKnown = ref(false);
 const executableModifiedRequestId = ref(0);
+const launchTargets = ref<LaunchTarget[]>([]);
+const newTargetLabel = ref("");
+const newTargetPath = ref("");
+const showAddLaunchTarget = ref(false);
+const editingTargetId = ref<number | null>(null);
+const editTargetLabel = ref("");
+const editTargetPath = ref("");
+const loadingLaunchTargets = ref(false);
+const savingTargetId = ref<number | null>(null);
+const deletingTargetId = ref<number | null>(null);
+const addingLaunchTarget = ref(false);
+const reorderingLaunchTargets = ref(false);
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref("");
@@ -167,6 +181,29 @@ const hasUpdate = computed(() => {
 const syncReadonlyMetadata = (game: GameRecord | null) => {
   latestVersion.value = game?.latest_version || "";
   f95Rating.value = game?.rating || "";
+};
+
+const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
+  return targets
+    .map((target) => ({ ...target }))
+    .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+};
+
+const syncLaunchTargets = (game: GameRecord | null) => {
+  launchTargets.value = sortLaunchTargets(game?.launch_targets || []);
+};
+
+const resetLaunchTargetForms = () => {
+  showAddLaunchTarget.value = false;
+  editingTargetId.value = null;
+  newTargetLabel.value = "";
+  newTargetPath.value = "";
+  editTargetLabel.value = "";
+  editTargetPath.value = "";
+};
+
+const isCurrentGame = (gameId: number): boolean => {
+  return props.modelValue && props.game?.id === gameId;
 };
 
 const normalizeEngine = (value: string | null | undefined): EngineOption => {
@@ -268,6 +305,7 @@ watch(
         showWaylandInfo.value = false;
         showCheatEngineInfo.value = false;
         tagsExpanded.value = false;
+        resetLaunchTargetForms();
         if (typeof g.tags === "string" && g.tags) {
           tags.value = g.tags
             .split(",")
@@ -281,6 +319,7 @@ watch(
           tags.value = [];
         }
         syncReadonlyMetadata(g);
+        syncLaunchTargets(g);
 
         ratingGraphics.value = g.rating_graphics || 0;
         ratingStory.value = g.rating_story || 0;
@@ -301,14 +340,31 @@ watch(
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
-      void Promise.all([loadCheatEngineStatus(), loadExecutableModifiedTime()]);
+      void Promise.all([
+        loadCheatEngineStatus(),
+        loadExecutableModifiedTime(),
+        loadLaunchTargets(),
+      ]);
     } else {
       engineMenuOpen.value = false;
       executableModifiedAt.value = null;
       executableModifiedKnown.value = false;
       loadingExecutableModifiedAt.value = false;
+      loadingLaunchTargets.value = false;
+      launchTargets.value = [];
+      resetLaunchTargetForms();
     }
   },
+);
+
+watch(
+  () => props.game?.launch_targets,
+  () => {
+    if (props.modelValue) {
+      syncLaunchTargets(props.game);
+    }
+  },
+  { deep: true },
 );
 
 watch(
@@ -380,6 +436,213 @@ const browseExe = async () => {
   } catch (e) {
     console.error("Failed to browse file", e);
     alert("Error browsing file: " + String(e));
+  }
+};
+
+const loadLaunchTargets = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  loadingLaunchTargets.value = true;
+  try {
+    const targets = await api.getLaunchTargets(gameId);
+    if (isCurrentGame(gameId)) {
+      launchTargets.value = sortLaunchTargets(targets || []);
+    }
+  } catch (e) {
+    console.error("Failed to load launch targets", e);
+    if (isCurrentGame(gameId)) {
+      syncLaunchTargets(props.game);
+    }
+  } finally {
+    if (isCurrentGame(gameId)) {
+      loadingLaunchTargets.value = false;
+    }
+  }
+};
+
+const browseNewTargetPath = async () => {
+  try {
+    const p = await api.browseFile(newTargetPath.value || exePath.value || "");
+    if (p) newTargetPath.value = p;
+  } catch (e) {
+    console.error("Failed to browse launch target", e);
+    alert("Error browsing file: " + String(e));
+  }
+};
+
+const browseEditTargetPath = async () => {
+  try {
+    const p = await api.browseFile(editTargetPath.value || exePath.value || "");
+    if (p) editTargetPath.value = p;
+  } catch (e) {
+    console.error("Failed to browse launch target", e);
+    alert("Error browsing file: " + String(e));
+  }
+};
+
+const startAddLaunchTarget = () => {
+  editingTargetId.value = null;
+  editTargetLabel.value = "";
+  editTargetPath.value = "";
+  showAddLaunchTarget.value = true;
+};
+
+const cancelAddLaunchTarget = () => {
+  showAddLaunchTarget.value = false;
+  newTargetLabel.value = "";
+  newTargetPath.value = "";
+};
+
+const startEditLaunchTarget = (target: LaunchTarget) => {
+  showAddLaunchTarget.value = false;
+  editingTargetId.value = target.id;
+  editTargetLabel.value = target.label;
+  editTargetPath.value = target.exe_path;
+};
+
+const cancelEditLaunchTarget = () => {
+  editingTargetId.value = null;
+  editTargetLabel.value = "";
+  editTargetPath.value = "";
+};
+
+const addLaunchTarget = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const label = newTargetLabel.value.trim();
+  const path = newTargetPath.value.trim();
+  if (!label || !path) {
+    alert("Launch target label and executable path are required.");
+    return;
+  }
+
+  addingLaunchTarget.value = true;
+  try {
+    const res = await api.createLaunchTarget(
+      gameId,
+      label,
+      path,
+      launchTargets.value.length,
+    );
+    if (res && res.success === false) {
+      alert("Failed to add launch target: " + (res.error || "Unknown error"));
+      return;
+    }
+    if (res.target && isCurrentGame(gameId)) {
+      launchTargets.value = sortLaunchTargets([...launchTargets.value, res.target]);
+      cancelAddLaunchTarget();
+    }
+    emit("targets-changed");
+  } catch (e) {
+    console.error("Failed to add launch target", e);
+    alert("Error adding launch target: " + String(e));
+  } finally {
+    addingLaunchTarget.value = false;
+  }
+};
+
+const saveLaunchTarget = async (target: LaunchTarget) => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const label = editTargetLabel.value.trim();
+  const path = editTargetPath.value.trim();
+  if (!label || !path) {
+    alert("Launch target label and executable path are required.");
+    return;
+  }
+
+  savingTargetId.value = target.id;
+  try {
+    const res = await api.updateLaunchTarget(target.id, {
+      label,
+      exe_path: path,
+      sort_order: target.sort_order,
+    });
+    if (res && res.success === false) {
+      alert("Failed to save launch target: " + (res.error || "Unknown error"));
+      return;
+    }
+    if (res.target && isCurrentGame(gameId)) {
+      launchTargets.value = sortLaunchTargets(
+        launchTargets.value.map((item) => (item.id === res.target?.id ? res.target : item)),
+      );
+      cancelEditLaunchTarget();
+    }
+    emit("targets-changed");
+  } catch (e) {
+    console.error("Failed to save launch target", e);
+    alert("Error saving launch target: " + String(e));
+  } finally {
+    savingTargetId.value = null;
+  }
+};
+
+const deleteLaunchTarget = async (target: LaunchTarget) => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  if (!confirm(`Remove launch target "${target.label}"?`)) return;
+  deletingTargetId.value = target.id;
+  try {
+    const res = await api.deleteLaunchTarget(target.id);
+    if (res && res.success === false) {
+      alert("Failed to remove launch target: " + (res.error || "Unknown error"));
+      return;
+    }
+    if (isCurrentGame(gameId)) {
+      launchTargets.value = launchTargets.value.filter((item) => item.id !== target.id);
+      if (editingTargetId.value === target.id) {
+        cancelEditLaunchTarget();
+      }
+    }
+    emit("targets-changed");
+  } catch (e) {
+    console.error("Failed to remove launch target", e);
+    alert("Error removing launch target: " + String(e));
+  } finally {
+    deletingTargetId.value = null;
+  }
+};
+
+const moveLaunchTarget = async (index: number, direction: -1 | 1) => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const nextIndex = index + direction;
+  if (nextIndex < 0 || nextIndex >= launchTargets.value.length) return;
+
+  const reordered = [...launchTargets.value];
+  const [target] = reordered.splice(index, 1);
+  if (!target) return;
+  reordered.splice(nextIndex, 0, target);
+  launchTargets.value = reordered.map((item, sortOrder) => ({
+    ...item,
+    sort_order: sortOrder,
+  }));
+
+  reorderingLaunchTargets.value = true;
+  try {
+    const res = await api.reorderLaunchTargets(
+      gameId,
+      launchTargets.value.map((item) => item.id),
+    );
+    if (res && res.success === false) {
+      alert("Failed to reorder launch targets: " + (res.error || "Unknown error"));
+      if (isCurrentGame(gameId)) {
+        await loadLaunchTargets();
+      }
+      return;
+    }
+    if (isCurrentGame(gameId)) {
+      launchTargets.value = sortLaunchTargets(res.targets || []);
+    }
+    emit("targets-changed");
+  } catch (e) {
+    console.error("Failed to reorder launch targets", e);
+    alert("Error reordering launch targets: " + String(e));
+    if (isCurrentGame(gameId)) {
+      await loadLaunchTargets();
+    }
+  } finally {
+    reorderingLaunchTargets.value = false;
   }
 };
 
@@ -474,12 +737,12 @@ const deleteGame = async () => {
   }
 };
 
-const launchGame = () => {
+const buildLaunchPayload = (targetPath: string): GameRecord | null => {
   if (props.game) {
-    const payload: GameRecord = {
+    return {
       ...props.game,
       title: title.value,
-      exe_path: exePath.value,
+      exe_path: targetPath,
       f95_url: f95Url.value,
       version: version.value,
       command_line_args: commandLineArgs.value,
@@ -497,8 +760,18 @@ const launchGame = () => {
         !isNativeLaunchMode.value && useCustomPrefix.value ? protonVersion.value : "",
       launch_mode: launchMode.value,
     };
-    emit("launch", payload);
   }
+  return null;
+};
+
+const launchGame = () => {
+  const payload = buildLaunchPayload(exePath.value);
+  if (payload) emit("launch", payload);
+};
+
+const launchTarget = (target: LaunchTarget) => {
+  const payload = buildLaunchPayload(target.exe_path);
+  if (payload) emit("launch", payload);
 };
 
 const requestUpdateCheck = () => {
@@ -767,6 +1040,163 @@ const openInBrowser = async () => {
               <button @click="browseExe" class="modal-btn ui-action-btn">
                 <IconFolderOpenFilled class="ui-action-icon" />
                 Browse
+              </button>
+            </div>
+          </div>
+
+          <div class="col-span-2">
+            <label class="modal-label">Launch Targets</label>
+            <div class="launch-target-panel">
+              <div class="launch-target-row launch-target-card">
+                <div class="launch-target-main">
+                  <div class="launch-target-name">Default</div>
+                  <div class="launch-target-path" :title="exePath">
+                    {{ exePath || "No executable selected" }}
+                  </div>
+                </div>
+                <button @click="launchGame" class="launch-target-action ui-action-btn">
+                  <IconPlayerPlayFilled class="ui-action-icon" />
+                  Play
+                </button>
+              </div>
+
+              <div v-if="loadingLaunchTargets" class="launch-target-empty">
+                Loading launch targets...
+              </div>
+
+              <div
+                v-for="(target, index) in launchTargets"
+                :key="target.id"
+                class="launch-target-card"
+              >
+                <div v-if="editingTargetId === target.id" class="launch-target-form">
+                  <label class="launch-target-field">
+                    <span class="launch-target-field-label">Label</span>
+                    <input
+                      v-model="editTargetLabel"
+                      type="text"
+                      class="modal-input w-full"
+                      placeholder="Part 2"
+                    />
+                  </label>
+                  <div class="launch-target-field launch-target-field-path">
+                    <span class="launch-target-field-label">Path</span>
+                    <div class="launch-target-path-input">
+                      <input
+                        v-model="editTargetPath"
+                        type="text"
+                        class="modal-input flex-1 min-w-0 font-mono"
+                        placeholder="/path/to/part2.exe"
+                      />
+                      <button @click="browseEditTargetPath" class="modal-btn">
+                        Browse
+                      </button>
+                    </div>
+                  </div>
+                  <div class="launch-target-form-actions">
+                    <button @click="cancelEditLaunchTarget" class="modal-btn">
+                      Cancel
+                    </button>
+                    <button
+                      @click="saveLaunchTarget(target)"
+                      :disabled="savingTargetId === target.id"
+                      class="modal-btn ui-action-btn disabled:opacity-50"
+                    >
+                      {{ savingTargetId === target.id ? "Saving..." : "Save Target" }}
+                    </button>
+                  </div>
+                </div>
+
+                <div v-else class="launch-target-row">
+                  <div class="launch-target-main">
+                    <div class="launch-target-name">{{ target.label }}</div>
+                    <div class="launch-target-path" :title="target.exe_path">
+                      {{ target.exe_path }}
+                    </div>
+                  </div>
+                  <div class="launch-target-actions">
+                    <div class="launch-target-order-actions">
+                      <button
+                        @click="moveLaunchTarget(index, -1)"
+                        :disabled="index === 0 || reorderingLaunchTargets"
+                        class="launch-target-order-btn disabled:opacity-50"
+                        title="Move up"
+                      >
+                        Up
+                      </button>
+                      <button
+                        @click="moveLaunchTarget(index, 1)"
+                        :disabled="index === launchTargets.length - 1 || reorderingLaunchTargets"
+                        class="launch-target-order-btn disabled:opacity-50"
+                        title="Move down"
+                      >
+                        Down
+                      </button>
+                    </div>
+                    <button @click="launchTarget(target)" class="launch-target-action ui-action-btn">
+                      <IconPlayerPlayFilled class="ui-action-icon" />
+                      Play
+                    </button>
+                    <button @click="startEditLaunchTarget(target)" class="launch-target-action">
+                      Edit
+                    </button>
+                    <button
+                      @click="deleteLaunchTarget(target)"
+                      :disabled="deletingTargetId === target.id"
+                      class="launch-target-action text-red-400 disabled:opacity-50"
+                    >
+                      {{ deletingTargetId === target.id ? "Removing..." : "Remove" }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="showAddLaunchTarget" class="launch-target-card">
+                <div class="launch-target-form">
+                  <label class="launch-target-field">
+                    <span class="launch-target-field-label">Label</span>
+                    <input
+                      v-model="newTargetLabel"
+                      type="text"
+                      class="modal-input w-full"
+                      placeholder="Part 2"
+                    />
+                  </label>
+                  <div class="launch-target-field launch-target-field-path">
+                    <span class="launch-target-field-label">Path</span>
+                    <div class="launch-target-path-input">
+                      <input
+                        v-model="newTargetPath"
+                        type="text"
+                        class="modal-input flex-1 min-w-0 font-mono"
+                        placeholder="/path/to/part2.exe"
+                      />
+                      <button @click="browseNewTargetPath" class="modal-btn">
+                        Browse
+                      </button>
+                    </div>
+                  </div>
+                  <div class="launch-target-form-actions">
+                    <button @click="cancelAddLaunchTarget" class="modal-btn">
+                      Cancel
+                    </button>
+                    <button
+                      @click="addLaunchTarget"
+                      :disabled="addingLaunchTarget"
+                      class="modal-btn ui-action-btn disabled:opacity-50"
+                    >
+                      {{ addingLaunchTarget ? "Adding..." : "Add Target" }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                v-else
+                @click="startAddLaunchTarget"
+                class="launch-target-add-button"
+              >
+                + Add launch target
               </button>
             </div>
           </div>
@@ -1374,6 +1804,167 @@ const openInBrowser = async () => {
 }
 .modal-btn:hover {
   background: var(--border-hover);
+}
+
+.launch-target-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-surface);
+}
+
+.launch-target-card {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg-raised);
+}
+
+.launch-target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.6rem;
+}
+
+.launch-target-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.launch-target-form {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(14rem, 1.6fr);
+  gap: 0.6rem;
+  padding: 0.65rem;
+}
+
+.launch-target-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.launch-target-field-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.launch-target-field-path {
+  min-width: 0;
+}
+
+.launch-target-path-input {
+  display: flex;
+  min-width: 0;
+  gap: 0.4rem;
+}
+
+.launch-target-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.launch-target-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.launch-target-path,
+.launch-target-empty {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.launch-target-empty {
+  padding: 0.4rem 0.6rem;
+}
+
+.launch-target-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.launch-target-action,
+.launch-target-order-btn,
+.launch-target-add-button {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-hover);
+  color: var(--text-primary);
+  border-radius: 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.launch-target-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  padding: 0.4rem 0.6rem;
+}
+
+.launch-target-order-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.launch-target-order-btn {
+  min-height: 2rem;
+  padding: 0.35rem 0.45rem;
+  color: var(--text-secondary);
+}
+
+.launch-target-add-button {
+  align-self: flex-start;
+  min-height: 2rem;
+  padding: 0.4rem 0.65rem;
+  color: var(--text-secondary);
+}
+
+.launch-target-action:hover:not(:disabled),
+.launch-target-order-btn:hover:not(:disabled),
+.launch-target-add-button:hover:not(:disabled) {
+  background: var(--border-hover);
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .launch-target-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .launch-target-form {
+    grid-template-columns: 1fr;
+  }
+
+  .launch-target-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .launch-target-form-actions {
+    justify-content: flex-start;
+  }
 }
 
 .summary-card {
