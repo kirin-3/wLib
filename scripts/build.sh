@@ -7,9 +7,11 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 VERSION="${1:-dev}"
+SIGNED_FIREFOX_XPI="${WLIB_SIGNED_FIREFOX_XPI:-${2:-}}"
 APP_NAME="wLib"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
+STAGED_EXTENSION_DIR="$BUILD_DIR/extension"
 PACKAGE_NAME="${APP_NAME}-${VERSION}-linux-x86_64"
 
 echo "🔨 Building $APP_NAME $VERSION"
@@ -17,6 +19,21 @@ echo "🔨 Building $APP_NAME $VERSION"
 # ── Clean ──
 rm -rf "$BUILD_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR/$PACKAGE_NAME" "$DIST_DIR"
+
+# ── Stage Browser Extension ──
+echo "🧩 Staging browser extension..."
+cp -R "$PROJECT_DIR/extension" "$STAGED_EXTENSION_DIR"
+rm -rf "$STAGED_EXTENSION_DIR/firefox"
+
+if [ -n "$SIGNED_FIREFOX_XPI" ]; then
+    if [ ! -f "$SIGNED_FIREFOX_XPI" ]; then
+        echo "Signed Firefox XPI not found: $SIGNED_FIREFOX_XPI" >&2
+        exit 1
+    fi
+
+    mkdir -p "$STAGED_EXTENSION_DIR/firefox"
+    cp "$SIGNED_FIREFOX_XPI" "$STAGED_EXTENSION_DIR/firefox/wLib.xpi"
+fi
 
 # ── Build Vue Frontend ──
 echo "📦 Building frontend..."
@@ -37,7 +54,7 @@ pyinstaller --noconfirm --onedir \
     --name "wlib-bin" \
     --add-data "core:core" \
     --add-data "ui/dist:ui/dist" \
-    --add-data "extension:extension" \
+    --add-data "$STAGED_EXTENSION_DIR:extension" \
     --add-data "wlib.png:." \
     --collect-data "certifi" \
     --hidden-import "core" \

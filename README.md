@@ -231,12 +231,13 @@ If the bundled extension version changes, wLib shows a startup toast telling you
 
 ### Firefox
 
-1. Open a new tab and navigate to `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on**.
+1. Open Firefox **Add-ons and themes**.
+2. Click the gear icon and choose **Install Add-on From File...**.
 3. Select the file: `~/.local/share/wLib/extension/firefox/wLib.xpi`.
+4. Confirm the installation when Firefox prompts you.
 
 > [!WARNING]
-> Do NOT load the raw `extension/` directory directly in Firefox. Firefox requires the generated `.xpi` archive natively. Note that because Firefox enforces manifest strictness, temporary add-ons must be reloaded after each browser restart.
+> Do NOT load the raw `extension/` directory directly in Firefox. Release builds include a signed `.xpi` for normal Firefox installation; local development builds may generate an unsigned fallback XPI for smoke checks.
 
 ## 🐛 Reporting Bugs
 

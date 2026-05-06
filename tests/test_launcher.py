@@ -428,8 +428,9 @@ def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
     mock_abspath.return_value = "/home/user/games/index.html"
     mock_popen.return_value = MagicMock()
 
-    launcher = Launcher()
-    result = launcher.launch("/home/user/games/index.html")
+    with patch("core.launcher.get_setting", return_value="false"):
+        launcher = Launcher()
+        result = launcher.launch("/home/user/games/index.html")
 
     assert result["success"] is True
     mock_popen.assert_called_once()
@@ -446,8 +447,9 @@ def test_launch_html_game_htm_extension(mock_abspath, mock_popen, mock_exists):
     mock_abspath.return_value = "/home/user/games/game.htm"
     mock_popen.return_value = MagicMock()
 
-    launcher = Launcher()
-    result = launcher.launch("/home/user/games/game.htm")
+    with patch("core.launcher.get_setting", return_value="false"):
+        launcher = Launcher()
+        result = launcher.launch("/home/user/games/game.htm")
 
     assert result["success"] is True
     mock_popen.assert_called_once()
@@ -464,8 +466,9 @@ def test_launch_html_game_case_insensitive(mock_abspath, mock_popen, mock_exists
     mock_abspath.return_value = "/home/user/games/INDEX.HTML"
     mock_popen.return_value = MagicMock()
 
-    launcher = Launcher()
-    result = launcher.launch("/home/user/games/INDEX.HTML")
+    with patch("core.launcher.get_setting", return_value="false"):
+        launcher = Launcher()
+        result = launcher.launch("/home/user/games/INDEX.HTML")
 
     assert result["success"] is True
     mock_popen.assert_called_once()
@@ -496,9 +499,10 @@ def test_launch_html_no_playtime_tracking(mock_popen, mock_exists):
         nonlocal callback_called
         callback_called = True
 
-    result = launcher.launch(
-        "/home/user/games/index.html", on_exit_callback=test_callback
-    )
+    with patch("core.launcher.get_setting", return_value="false"):
+        result = launcher.launch(
+            "/home/user/games/index.html", on_exit_callback=test_callback
+        )
 
     assert result["success"] is True
     # Callback should not be triggered for HTML games
@@ -524,8 +528,9 @@ def test_launch_html_from_appimage(mock_abspath, mock_popen, mock_exists):
     mock_abspath.return_value = "/home/user/games/index.html"
     mock_popen.return_value = MagicMock()
 
-    launcher = Launcher()
-    result = launcher.launch("/home/user/games/index.html")
+    with patch("core.launcher.get_setting", return_value="false"):
+        launcher = Launcher()
+        result = launcher.launch("/home/user/games/index.html")
 
     assert result["success"] is True
     mock_popen.assert_called_once()

@@ -1161,6 +1161,178 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     assert (firefox_dir / "wLib.xpi").is_file()
 
 
+def test_sync_extension_files_copies_bundled_signed_firefox_xpi(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    bundled_dir = tmp_path / "bundled-extension"
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    signed_xpi = b"signed-firefox-xpi"
+    real_expanduser = os.path.expanduser
+
+    bundled_dir.mkdir()
+    (bundled_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "name": "wLib",
+                "version": "2.0.0",
+                "background": {
+                    "service_worker": "background.js",
+                    "scripts": ["background.js"],
+                    "type": "module",
+                },
+            }
+        )
+    )
+    (bundled_dir / "background.js").write_text("")
+    (bundled_dir / "content.js").write_text("signed-bundle-content")
+    (bundled_dir / "firefox").mkdir()
+    (bundled_dir / "firefox" / "wLib.xpi").write_bytes(signed_xpi)
+
+    monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert (firefox_dir / "wLib.xpi").read_bytes() == signed_xpi
+    assert not (chrome_dir / "firefox").exists()
+
+    chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
+    assert "scripts" not in chrome_manifest["background"]
+
+
+def test_sync_extension_files_replaces_changed_bundled_signed_firefox_xpi(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    bundled_dir = tmp_path / "bundled-extension"
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    real_expanduser = os.path.expanduser
+
+    bundled_dir.mkdir()
+    (bundled_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "name": "wLib",
+                "version": "2.0.0",
+                "background": {
+                    "service_worker": "background.js",
+                    "scripts": ["background.js"],
+                    "type": "module",
+                },
+            }
+        )
+    )
+    (bundled_dir / "background.js").write_text("")
+    (bundled_dir / "content.js").write_text("updated-signed-bundle-content")
+    (bundled_dir / "firefox").mkdir()
+    (bundled_dir / "firefox" / "wLib.xpi").write_bytes(b"new-signed-xpi")
+
+    chrome_dir.mkdir(parents=True)
+    firefox_dir.mkdir(parents=True)
+    (chrome_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "2.0.0",
+                "background": {
+                    "service_worker": "background.js",
+                },
+            }
+        )
+    )
+    (chrome_dir / "content.js").write_text("old-content")
+    (firefox_dir / "wLib.xpi").write_bytes(b"old-xpi")
+
+    monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert result.get("reason") == "signed-firefox-xpi-changed"
+    assert (firefox_dir / "wLib.xpi").read_bytes() == b"new-signed-xpi"
+    assert (chrome_dir / "content.js").read_text() == "updated-signed-bundle-content"
+
+
+def test_sync_extension_files_generates_unsigned_firefox_fallback(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    bundled_dir = tmp_path / "bundled-extension"
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    real_expanduser = os.path.expanduser
+
+    bundled_dir.mkdir()
+    (bundled_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "name": "wLib",
+                "version": "2.0.0",
+                "background": {
+                    "service_worker": "background.js",
+                    "scripts": ["background.js"],
+                    "type": "module",
+                },
+            }
+        )
+    )
+    (bundled_dir / "background.js").write_text("")
+    (bundled_dir / "content.js").write_text("fallback-bundle-content")
+    (bundled_dir / "firefox").mkdir()
+    (bundled_dir / "firefox" / "ignored.txt").write_text("not packaged")
+
+    monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
+    monkeypatch.setattr(
+        "os.path.expanduser",
+        lambda path: (
+            str(persistent_dir)
+            if path == "~/.local/share/wLib/extension"
+            else real_expanduser(path)
+        ),
+    )
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert not (chrome_dir / "firefox").exists()
+
+    with zipfile.ZipFile(firefox_dir / "wLib.xpi") as firefox_xpi:
+        xpi_names = set(firefox_xpi.namelist())
+        firefox_manifest = json.loads(firefox_xpi.read("manifest.json").decode())
+
+    assert "manifest.json" in xpi_names
+    assert "firefox/ignored.txt" not in xpi_names
+    assert firefox_manifest["background"]["scripts"] == ["background.js"]
+
+
 def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_path):
     api = Api()
     persistent_dir = tmp_path / "extension"

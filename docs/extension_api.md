@@ -70,9 +70,11 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
 The packaged extension files used by browsers live in `~/.local/share/wLib/extension/`:
 
 - `chrome/`: unpacked extension directory for Chromium-based browsers
-- `firefox/wLib.xpi`: generated archive for Firefox temporary installs
+- `firefox/wLib.xpi`: signed Firefox archive in release builds, or an unsigned generated fallback in local development builds
 
-wLib updates that directory automatically on startup when the bundled manifest version changes or the installed files are missing. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed so the user knows to reload the browser addon.
+wLib updates that directory automatically on startup when the bundled manifest version changes, the bundled signed Firefox archive changes, or the installed files are missing. Release builds copy the signed Firefox XPI bundled with the app; local development builds generate an unsigned fallback XPI when no signed artifact is bundled. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed so the user knows to reload the browser addon.
+
+Firefox users install release XPIs through **Add-ons and themes** using **Install Add-on From File**. The `about:debugging` temporary add-on flow is only relevant to local development and is not the normal release installation path.
 
 ## Thread Widget Behavior
 

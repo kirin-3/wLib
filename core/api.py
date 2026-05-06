@@ -546,6 +546,17 @@ class Api:
             cast(object, dict(self._startup_extension_sync_status)),
         )
 
+    def _write_unsigned_firefox_xpi(self, source_dir: str, target_path: str) -> None:
+        import zipfile
+
+        with zipfile.ZipFile(target_path, "w", zipfile.ZIP_DEFLATED) as xpi:
+            for root, dirs, files in os.walk(source_dir):
+                dirs[:] = sorted(d for d in dirs if d != "firefox")
+                for filename in sorted(files):
+                    file_path = os.path.join(root, filename)
+                    archive_name = os.path.relpath(file_path, source_dir)
+                    xpi.write(file_path, archive_name)
+
     def sync_extension_files(self) -> ExtensionSyncStatus:
         import shutil
 
@@ -555,6 +566,8 @@ class Api:
         firefox_dir = os.path.join(persistent_ext_dir, "firefox")
         bundled_manifest = os.path.join(bundled_ext_dir, "manifest.json")
         installed_manifest = os.path.join(chrome_dir, "manifest.json")
+        bundled_firefox_xpi = os.path.join(bundled_ext_dir, "firefox", "wLib.xpi")
+        installed_firefox_xpi = os.path.join(firefox_dir, "wLib.xpi")
 
         try:
             bundled_version = self._read_manifest_version(bundled_manifest)
@@ -562,7 +575,7 @@ class Api:
             needs_copy = False
             reason = "up-to-date"
             if not os.path.isdir(chrome_dir) or not os.path.isfile(
-                os.path.join(firefox_dir, "wLib.xpi")
+                installed_firefox_xpi
             ):
                 needs_copy = True
                 reason = "missing-installed-files"
@@ -575,12 +588,25 @@ class Api:
                     needs_copy = True
                     reason = "missing-installed-manifest"
 
+                if not needs_copy and os.path.isfile(bundled_firefox_xpi):
+                    import filecmp
+
+                    if not filecmp.cmp(
+                        bundled_firefox_xpi, installed_firefox_xpi, shallow=False
+                    ):
+                        needs_copy = True
+                        reason = "signed-firefox-xpi-changed"
+
             if needs_copy and os.path.isdir(bundled_ext_dir):
                 if os.path.exists(persistent_ext_dir):
                     shutil.rmtree(persistent_ext_dir)
                 os.makedirs(persistent_ext_dir, exist_ok=True)
 
-                _ = shutil.copytree(bundled_ext_dir, chrome_dir)
+                _ = shutil.copytree(
+                    bundled_ext_dir,
+                    chrome_dir,
+                    ignore=shutil.ignore_patterns("firefox"),
+                )
 
                 chrome_manifest_path = os.path.join(chrome_dir, "manifest.json")
                 import json
@@ -601,9 +627,12 @@ class Api:
                         json.dump(chrome_manifest, f, indent=4)
 
                 os.makedirs(firefox_dir, exist_ok=True)
-                xpi_path = os.path.join(firefox_dir, "wLib")
-                _ = shutil.make_archive(xpi_path, "zip", bundled_ext_dir)
-                os.rename(xpi_path + ".zip", xpi_path + ".xpi")
+                if os.path.isfile(bundled_firefox_xpi):
+                    _ = shutil.copy2(bundled_firefox_xpi, installed_firefox_xpi)
+                else:
+                    self._write_unsigned_firefox_xpi(
+                        bundled_ext_dir, installed_firefox_xpi
+                    )
                 installed_version = self._read_manifest_version(chrome_manifest_path)
 
             return {

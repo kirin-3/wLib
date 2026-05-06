@@ -43,6 +43,7 @@ node_modules/
 .agent/
 .kilocode/
 .opencode/
+.codex/
 AGENTS.md
 *.sublime-project
 *.sublime-workspace

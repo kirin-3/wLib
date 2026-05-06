@@ -77,6 +77,35 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Lint Firefox extension
+        run: npx --yes web-ext@10.1.0 lint --source-dir=extension
+
+      - name: Sign Firefox extension
+        id: sign_firefox
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.JWT_USER }}
+          WEB_EXT_API_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+
+          SIGNED_DIR="$RUNNER_TEMP/wlib-firefox-signed"
+          rm -rf "$SIGNED_DIR"
+          mkdir -p "$SIGNED_DIR"
+
+          npx --yes web-ext@10.1.0 sign \
+            --source-dir=extension \
+            --artifacts-dir="$SIGNED_DIR" \
+            --channel=unlisted \
+            --no-input
+
+          XPI_PATH="$(find "$SIGNED_DIR" -maxdepth 1 -type f -name '*.xpi' | sort | tail -n 1)"
+          if [ -z "$XPI_PATH" ]; then
+            echo "No signed Firefox XPI produced by web-ext" >&2
+            exit 1
+          fi
+
+          echo "xpi_path=$XPI_PATH" >> "$GITHUB_OUTPUT"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -94,6 +123,8 @@ jobs:
             libxkbcommon-x11-0
 
       - name: Build packages
+        env:
+          WLIB_SIGNED_FIREFOX_XPI: ${{ steps.sign_firefox.outputs.xpi_path }}
         run: |
           chmod +x scripts/build.sh
           bash scripts/build.sh "${{ steps.version.outputs.version }}"

@@ -234,16 +234,15 @@ onUnmounted(() => {
             style="color: var(--text-secondary)"
           >
             <li>
-              Open
-              <code class="ext-code text-orange-400"
-                >about:debugging#/runtime/this-firefox</code
+              Open Firefox
+              <span class="font-medium" style="color: var(--text-primary)"
+                >Add-ons and themes</span
               >
-              in Firefox
             </li>
             <li>
-              Click
+              Click the gear icon and choose
               <span class="font-medium" style="color: var(--text-primary)"
-                >Load Temporary Add-on</span
+                >Install Add-on From File...</span
               >
             </li>
             <li>
@@ -253,11 +252,11 @@ onUnmounted(() => {
               >
               directly
             </li>
-            <li>The extension will remain active until Firefox is restarted</li>
+            <li>Confirm the installation when Firefox prompts you</li>
           </ol>
           <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
-            Note: Firefox requires the XPI temporary add-on and it must be
-            reloaded each time the browser restarts.
+            Note: Release builds include a signed XPI for normal Firefox
+            installation.
           </p>
         </div>
       </section>
