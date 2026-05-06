@@ -12,13 +12,16 @@ import threading
 import time
 from typing import TYPE_CHECKING, Callable, Protocol, cast, override
 
-from core.api import Api
+from core.api import APP_VERSION, Api
 from core.f95zone import normalize_thread_url
 
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
 playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 APP_DATA_DIR = os.path.expanduser("~/.local/share/wLib")
 PYWEBVIEW_STORAGE_DIR_NAME = "webview"
+PYWEBVIEW_CACHE_VERSION_MARKER = ".webview-cache-version"
+PACKAGED_WEBVIEW_CACHE_DIR_NAME = "wlib-bin"
+PACKAGED_EXECUTABLE_NAME = "wlib-bin"
 PYWEBVIEW_HTTP_PORT = 42001
 RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log")
 
@@ -100,6 +103,71 @@ class RendererDiagnosticsWindow(Protocol):
 webview: WebviewModule | None = None
 
 window_ref: Window | None = None
+
+
+def get_packaged_webview_cache_path() -> str:
+    cache_home = (os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if not cache_home:
+        cache_home = os.path.expanduser("~/.cache")
+
+    return os.path.join(
+        os.path.abspath(os.path.expanduser(cache_home)), PACKAGED_WEBVIEW_CACHE_DIR_NAME
+    )
+
+
+def get_webview_cache_version_marker_path() -> str:
+    return os.path.join(APP_DATA_DIR, PYWEBVIEW_CACHE_VERSION_MARKER)
+
+
+def is_packaged_wlib_runtime() -> bool:
+    return bool(getattr(sys, "frozen", False)) and (
+        os.path.basename(sys.executable) == PACKAGED_EXECUTABLE_NAME
+    )
+
+
+def ensure_packaged_webview_cache_fresh() -> None:
+    if not is_packaged_wlib_runtime():
+        print("[wLib] Skipping WebView cache cleanup: not packaged wlib-bin runtime")
+        return
+
+    cache_path = get_packaged_webview_cache_path()
+    marker_path = get_webview_cache_version_marker_path()
+    recorded_version = ""
+
+    try:
+        with open(marker_path, encoding="utf-8") as marker_file:
+            recorded_version = marker_file.read().strip()
+    except FileNotFoundError:
+        recorded_version = ""
+    except Exception as e:
+        print(f"[wLib] Failed to read WebView cache version marker: {e}")
+
+    if recorded_version == APP_VERSION:
+        print(f"[wLib] WebView cache already fresh for version {APP_VERSION}")
+        return
+
+    print(
+        "[wLib] Clearing packaged WebView cache "
+        + f"(previous_version={recorded_version or '<none>'}, "
+        + f"current_version={APP_VERSION}, path={cache_path})"
+    )
+
+    try:
+        if os.path.exists(cache_path):
+            shutil.rmtree(cache_path)
+    except Exception as e:
+        print(f"[wLib] Failed to clear packaged WebView cache at {cache_path}: {e}")
+        return
+
+    try:
+        os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+        with open(marker_path, "w", encoding="utf-8") as marker_file:
+            _ = marker_file.write(APP_VERSION + "\n")
+    except Exception as e:
+        print(f"[wLib] Failed to write WebView cache version marker: {e}")
+        return
+
+    print(f"[wLib] Packaged WebView cache is fresh for version {APP_VERSION}")
 
 
 def configure_playwright_browsers_path() -> str:
@@ -834,6 +902,7 @@ def main() -> None:
     global window_ref, DEV_MODE
 
     _ = configure_qt_runtime_environment()
+    ensure_packaged_webview_cache_fresh()
     webview_module = load_webview_module()
 
     if webview_module is None:

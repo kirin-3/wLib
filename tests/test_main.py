@@ -1,3 +1,4 @@
+import builtins
 from io import BytesIO
 from email.message import Message
 import os
@@ -9,6 +10,21 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import main
+
+
+def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
+    app_data_dir = tmp_path / "data"
+    cache_home = tmp_path / "cache"
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
+    return {
+        "app_data_dir": app_data_dir,
+        "cache_path": cache_home / main.PACKAGED_WEBVIEW_CACHE_DIR_NAME,
+        "marker_path": app_data_dir / main.PYWEBVIEW_CACHE_VERSION_MARKER,
+        "webview_storage": app_data_dir / main.PYWEBVIEW_STORAGE_DIR_NAME,
+    }
 
 
 def _make_extension_handler(path, matching_game=None, headers=None):
@@ -113,6 +129,204 @@ def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
     assert result is True
     run_mock.assert_called_once()
     assert run_mock.call_args.args[0] == install_cmd
+
+
+def test_get_packaged_webview_cache_path_uses_xdg_cache_home(monkeypatch, tmp_path):
+    cache_home = tmp_path / "xdg-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+
+    cache_path = main.get_packaged_webview_cache_path()
+
+    assert cache_path == os.path.join(
+        str(cache_home), main.PACKAGED_WEBVIEW_CACHE_DIR_NAME
+    )
+
+
+def test_ensure_packaged_webview_cache_fresh_clears_first_launch_cache(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    (paths["cache_path"] / "stale-cache").write_text("old", encoding="utf-8")
+    paths["webview_storage"].mkdir(parents=True)
+    (paths["webview_storage"] / "prefs").write_text("keep", encoding="utf-8")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert not paths["cache_path"].exists()
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+    assert (paths["webview_storage"] / "prefs").read_text(encoding="utf-8") == "keep"
+
+
+def test_ensure_packaged_webview_cache_fresh_updates_changed_version(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    (paths["cache_path"] / "old-cache").write_text("old", encoding="utf-8")
+    paths["marker_path"].parent.mkdir(parents=True)
+    paths["marker_path"].write_text("0.0.1\n", encoding="utf-8")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert not paths["cache_path"].exists()
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+
+
+def test_ensure_packaged_webview_cache_fresh_preserves_unchanged_version_cache(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    cache_file = paths["cache_path"] / "current-cache"
+    cache_file.write_text("current", encoding="utf-8")
+    paths["marker_path"].parent.mkdir(parents=True)
+    paths["marker_path"].write_text(main.APP_VERSION + "\n", encoding="utf-8")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert cache_file.read_text(encoding="utf-8") == "current"
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+
+
+def test_ensure_packaged_webview_cache_fresh_skips_source_runtime(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    cache_file = paths["cache_path"] / "source-cache"
+    cache_file.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(main.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(main.sys, "executable", sys.executable)
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert cache_file.read_text(encoding="utf-8") == "keep"
+    assert not paths["marker_path"].exists()
+
+
+def test_ensure_packaged_webview_cache_fresh_skips_unexpected_frozen_executable(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    cache_file = paths["cache_path"] / "other-cache"
+    cache_file.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(main.sys, "executable", "/tmp/other-bin")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert cache_file.read_text(encoding="utf-8") == "keep"
+    assert not paths["marker_path"].exists()
+
+
+def test_ensure_packaged_webview_cache_fresh_marks_missing_cache_success(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert not paths["cache_path"].exists()
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+
+
+def test_ensure_packaged_webview_cache_fresh_keeps_marker_on_delete_failure(
+    monkeypatch, tmp_path, capsys
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    paths["marker_path"].parent.mkdir(parents=True)
+    paths["marker_path"].write_text("0.0.1\n", encoding="utf-8")
+
+    def fail_rmtree(path: str) -> None:
+        raise OSError(f"locked: {path}")
+
+    monkeypatch.setattr(main.shutil, "rmtree", fail_rmtree)
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    output = capsys.readouterr().out
+    assert "Failed to clear packaged WebView cache" in output
+    assert paths["cache_path"].exists()
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == "0.0.1"
+
+
+def test_ensure_packaged_webview_cache_fresh_continues_on_marker_write_failure(
+    monkeypatch, tmp_path, capsys
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True)
+    (paths["cache_path"] / "stale-cache").write_text("old", encoding="utf-8")
+    real_open = builtins.open
+
+    def fail_marker_write(path, mode="r", *args, **kwargs):
+        if os.fspath(path) == str(paths["marker_path"]) and "w" in mode:
+            raise OSError("read-only marker")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fail_marker_write)
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    output = capsys.readouterr().out
+    assert "Failed to write WebView cache version marker" in output
+    assert not paths["cache_path"].exists()
+    assert not paths["marker_path"].exists()
+
+
+def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
+    call_order: list[str] = []
+    fake_window = MagicMock()
+    fake_webview = MagicMock()
+    fake_webview.create_window.return_value = fake_window
+
+    class FakeApi:
+        def sync_extension_files(self):
+            return {"success": True}
+
+        def set_startup_extension_sync_status(self, _status):
+            return None
+
+        def set_window(self, _window):
+            return None
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "configure_playwright_browsers_path", lambda: "")
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(
+        main,
+        "ensure_packaged_webview_cache_fresh",
+        lambda: call_order.append("cleanup"),
+    )
+    monkeypatch.setattr(
+        main,
+        "load_webview_module",
+        lambda: call_order.append("load_webview") or fake_webview,
+    )
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "collect_renderer_environment_snapshot", lambda dev_mode: {})
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _module: {})
+    monkeypatch.setattr(main, "Api", FakeApi)
+    monkeypatch.setattr(main, "ensure_playwright_browsers_async", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        main, "start_webview", lambda *_args, **_kwargs: call_order.append("start")
+    )
+    monkeypatch.setattr(main, "DEV_MODE", False)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    assert call_order[:2] == ["cleanup", "load_webview"]
 
 
 def test_get_webview_storage_path_creates_directory(monkeypatch, tmp_path):
