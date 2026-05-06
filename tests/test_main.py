@@ -183,15 +183,30 @@ def test_renderer_log_targets_include_appimage_log(monkeypatch, tmp_path):
     assert main._renderer_log_targets() == [str(renderer_log), str(appimage_log)]
 
 
-def test_log_renderer_diagnostics_writes_renderer_and_appimage_logs(
+def test_renderer_log_targets_include_shared_launcher_log(monkeypatch, tmp_path):
+    renderer_log = tmp_path / "renderer-diagnostics.log"
+    launch_log = tmp_path / "wlib-launch.log"
+    appimage_log = tmp_path / "appimage-launch.log"
+    monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
+    monkeypatch.setenv("WLIB_LAUNCH_LOG", str(launch_log))
+    monkeypatch.setenv("WLIB_APPIMAGE_LAUNCH_LOG", str(appimage_log))
+
+    assert main._renderer_log_targets() == [
+        str(renderer_log),
+        str(launch_log),
+        str(appimage_log),
+    ]
+
+
+def test_log_renderer_diagnostics_writes_renderer_and_launcher_logs(
     monkeypatch, tmp_path, capsys
 ):
     app_data_dir = tmp_path / "appdata"
     renderer_log = app_data_dir / "renderer-diagnostics.log"
-    appimage_log = tmp_path / "appimage-launch.log"
+    launch_log = tmp_path / "wlib-launch.log"
     monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
     monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
-    monkeypatch.setenv("WLIB_APPIMAGE_LAUNCH_LOG", str(appimage_log))
+    monkeypatch.setenv("WLIB_LAUNCH_LOG", str(launch_log))
 
     main.log_renderer_diagnostics(
         "startup",
@@ -206,7 +221,7 @@ def test_log_renderer_diagnostics_writes_renderer_and_appimage_logs(
     assert "Renderer diagnostics (startup)" in output
     assert "qt_qpa_platform=xcb" in output
     assert "qt_quick_backend=opengl" in renderer_log.read_text(encoding="utf-8")
-    assert "qt_quick_backend=opengl" in appimage_log.read_text(encoding="utf-8")
+    assert "qt_quick_backend=opengl" in launch_log.read_text(encoding="utf-8")
 
 
 def test_collect_renderer_environment_snapshot_reports_crash_guard(

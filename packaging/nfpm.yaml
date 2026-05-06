@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: wlib
+arch: amd64
+platform: linux
+version: "${WLIB_PACKAGE_VERSION}"
+version_schema: semver
+release: "${WLIB_PACKAGE_RELEASE:-1}"
+section: games
+priority: optional
+maintainer: "wLib Maintainers <maintainers@example.invalid>"
+description: |
+  Modern Linux game manager for F95Zone.
+vendor: kirin-3
+homepage: "https://github.com/kirin-3/wLib"
+license: MIT
+
+contents:
+  - src: "${WLIB_PACKAGE_SOURCE}"
+    dst: /opt/wlib
+    type: tree
+    expand: true
+
+  - src: /opt/wlib/wlib
+    dst: /usr/bin/wlib
+    type: symlink
+
+  - src: "${WLIB_PACKAGE_SOURCE}/wlib.desktop"
+    dst: /usr/share/applications/wlib.desktop
+    expand: true
+
+  - src: "${WLIB_PACKAGE_SOURCE}/icon.svg"
+    dst: /usr/share/icons/hicolor/scalable/apps/wlib.svg
+    expand: true
+
+  - src: "${WLIB_PACKAGE_SOURCE}/wlib.png"
+    dst: /usr/share/pixmaps/wlib.png
+    expand: true
+
+  - src: ./LICENSE
+    dst: /usr/share/doc/wlib/LICENSE
+
+overrides:
+  deb:
+    depends:
+      - ca-certificates
+      - libgtk-3-0
+      - libxcb-xkb1
+      - libxcb-shape0
+      - libxcb-icccm4
+      - libxcb-cursor0
+      - libxcb-image0
+      - libxcb-keysyms1
+      - libxcb-util1
+      - libxcb-render-util0
+      - libxkbcommon-x11-0
+      - mesa-utils
+      - wine
+      - winetricks
+  rpm:
+    depends:
+      - ca-certificates
+      - gtk3
+      - libxkbcommon-x11
+      - mesa-demos
+      - wine
+      - winetricks
+      - xcb-util-image
+      - xcb-util-keysyms
+      - xcb-util-renderutil
+      - xcb-util-wm

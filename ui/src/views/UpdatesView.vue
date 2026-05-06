@@ -3,7 +3,6 @@ import { ref, onMounted, onUnmounted, computed } from "vue";
 import {
   IconArrowUp,
   IconClockUp,
-  IconDownload,
   IconExternalLink,
   IconInfoCircle,
   IconLoader2,
@@ -12,7 +11,6 @@ import {
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import type {
-  AppReleaseAsset,
   GameRecord,
   UpdateStatusResponse,
 } from "../services/api";
@@ -23,7 +21,6 @@ interface AppUpdateState {
   version: string;
   changelogHtml: string;
   url: string;
-  assets: AppReleaseAsset[];
 }
 
 const games = ref<GameRecord[]>([]);
@@ -196,7 +193,6 @@ onMounted(() => {
             version: release.version,
             changelogHtml: DOMPurify.sanitize(changelogHtml),
             url: release.url || "",
-            assets: release.assets || [],
           };
         }
       }
@@ -306,23 +302,11 @@ onUnmounted(() => {
           <div class="flex gap-2 shrink-0">
             <button
               @click="openInBrowser(appUpdate.url)"
-              class="update-btn ui-action-btn"
-            >
-              <IconExternalLink class="ui-action-icon" />
-              Release Notes
-            </button>
-            <button
-              v-for="asset in appUpdate.assets.filter(
-                (a) =>
-                  a.name.endsWith('.AppImage') || a.name.endsWith('.tar.gz'),
-              )"
-              :key="asset.name"
-              @click="openInBrowser(asset.url)"
               class="ui-action-btn text-white px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0"
               style="background: var(--brand); box-shadow: var(--shadow-brand)"
             >
-              <IconDownload class="ui-action-icon" />
-              {{ asset.name.endsWith(".AppImage") ? ".AppImage" : ".tar.gz" }}
+              <IconExternalLink class="ui-action-icon" />
+              Latest release
             </button>
           </div>
         </div>

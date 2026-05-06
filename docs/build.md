@@ -1,8 +1,8 @@
 # Build & Packaging
 
-The official method of distribution for wLib is a self-contained GNU/Linux `AppImage`, bundled via the automated script `scripts/build.sh`.
+wLib ships Linux binary release artifacts through `scripts/build.sh`: AppImage, tar.gz, `.deb`, `.rpm`, and AUR `wlib-bin` metadata.
 
-The packaging pipeline seamlessly integrates the Python backend and the Vue frontend into a single, generic distribution archive (`tar.gz`) alongside the AppImage.
+The packaging pipeline integrates the Python backend, Vue frontend, bundled browser extension, release launcher, desktop file, icon, and license into one staged PyInstaller folder. Every release format is then produced from that same staged folder.
 
 ## Continuous Verification
 
@@ -37,19 +37,32 @@ When the build script executes, it follows these precise steps:
    - Executes PyInstaller against `main.py` to freeze the Python environment.
    - Uses `--add-data` explicitly to bundle the entire `ui/dist/` web root, the browser `extension/` assets, and application icons directly alongside the binary.
    - Outputs a standard dynamic binary folder into `dist/wlib-bin/`.
-3. **Library Cleanup (Crucial for AppImages)**: 
+3. **Library Cleanup (Crucial for Binary Releases)**:
    - PyInstaller often aggressively scoops up core system libraries (`libstdc++`, `libvulkan`, `libdrm`, `GLib`, `GTK`) that should instead be provided by the host OS.
    - `build.sh` explicitly strips and deletes these bundled low-level libraries from the PyInstaller output. This ensures the application respects the host's Mesa/Nvidia drivers and doesn't crash on driver mismatch.
-4. **AppImage Assembly**:
-   - Uses `appimagetool` to convert the `dist/wlib-bin/` directory structure into a single executable `.AppImage` file.
+4. **Release Staging**:
+   - Copies the PyInstaller output into `build/wLib-<version>-linux-x86_64/`.
+   - Adds `wlib`, the shared release launcher from `packaging/wlib-launcher`.
+   - Adds `wlib.desktop`, `wlib.png`, `icon.svg`, and `LICENSE`.
+5. **Artifact Creation**:
+   - Creates `dist/wLib-<version>-linux-x86_64.tar.gz` from the staged folder.
+   - When `nfpm` is available, or when `WLIB_BUILD_NATIVE_PACKAGES=1`, creates `.deb` and `.rpm` from `packaging/nfpm.yaml`.
+   - When the version is release-like, or when `WLIB_BUILD_AUR=1`, generates AUR `PKGBUILD` and `.SRCINFO` under `dist/aur/`.
+   - Uses `appimagetool` to convert an AppDir copy of the staged folder into a single executable `.AppImage`.
 
-## AppRun EntryPoint
+## Shared Release Launcher
 
-Inside the generated AppImage, execution begins at an `AppRun` bash script wrapper instead of directly hitting the Python binary. This script acts as a safety layer for cross-distro GPU compatibility:
+Release execution begins at the shared `wlib` bash launcher instead of directly hitting `wlib-bin`.
+
+- tar.gz users run `./wlib` from the extracted folder.
+- Native package users run `/usr/bin/wlib`, which resolves to `/opt/wlib/wlib`.
+- AppImage users run `AppRun`, which delegates to the staged `wlib` launcher with AppImage-specific environment variables.
+
+This script acts as a safety layer for cross-distro GPU compatibility:
 
 ### GPU Detection Pipeline
 
-The `AppRun` script executes a multi-stage GPU detection pipeline:
+The shared launcher executes a multi-stage GPU detection pipeline:
 
 1. **Environment Variable Checks**: Respects `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe|softpipe` for forced software rendering
 2. **Crash Guard Check**: If `~/.local/share/wLib/.gpu_crash_guard` exists from a previous crash, automatically falls back to software rendering
@@ -66,7 +79,7 @@ The `AppRun` script executes a multi-stage GPU detection pipeline:
 
 ### Renderer Diagnostics Logging
 
-The AppRun script logs comprehensive launch context to `~/.local/share/wLib/appimage-launch.log`:
+The shared launcher logs comprehensive launch context to `~/.local/share/wLib/wlib-launch.log` by default. AppImage launches continue to log to `~/.local/share/wLib/appimage-launch.log`:
 
 - Session type (X11/Wayland) and display server variables
 - Qt platform selection source and renderer backend choice
@@ -77,11 +90,49 @@ The Python backend mirrors this information to `~/.local/share/wLib/renderer-dia
 
 ### Environment Restoration
 
-Before launching the Python binary, `AppRun`:
+Before launching the Python binary, the shared launcher:
 
 - Restores the host's `LD_LIBRARY_PATH` from `LD_LIBRARY_PATH_ORIG` to prevent bundled libraries from shadowing host GPU drivers
 - Configures SSL certificates from bundled certifi or system paths
-- Sets `WLIB_APPIMAGE_LAUNCH_LOG` for Python-side diagnostic mirroring
+- Sets `WLIB_LAUNCH_LOG` for Python-side diagnostic mirroring
+- Sets `WLIB_APPIMAGE_LAUNCH_LOG` as a compatibility alias for AppImage launches
+
+## Native Package Builds
+
+Native package builds use nFPM.
+
+```bash
+# Build AppImage/tar.gz and, if nfpm is installed, native packages
+bash scripts/build.sh "1.2.0"
+
+# Force native package generation and fail if nfpm is unavailable
+WLIB_BUILD_NATIVE_PACKAGES=1 \
+WLIB_MAINTAINER="Kirin <maintainer@example.com>" \
+bash scripts/build.sh "1.2.0"
+```
+
+nFPM reads `packaging/nfpm.yaml` and receives these environment variables from the build script:
+
+- `WLIB_PACKAGE_SOURCE`: staged release folder path.
+- `WLIB_PACKAGE_VERSION`: package-manager version without a leading `v`.
+- `WLIB_PACKAGE_RELEASE`: package revision, default `1`.
+- `WLIB_MAINTAINER`: maintainer metadata for deb/rpm packages.
+
+## AUR Metadata
+
+The AUR package is `wlib-bin` because it repackages a prebuilt upstream binary release.
+
+```bash
+WLIB_MAINTAINER="Kirin <maintainer@example.com>" \
+scripts/generate-aur-package.sh "v1.2.0"
+```
+
+The script expects the matching release tarball in `dist/`, computes its SHA-256 checksum, and writes:
+
+- `dist/aur/PKGBUILD`
+- `dist/aur/.SRCINFO`
+
+It does not publish to the AUR automatically.
 
 ## Manual Build Example
 
@@ -92,4 +143,11 @@ If you want to produce a release build locally:
 bash scripts/build.sh "1.2.0"
 ```
 
-The resulting artifacts (`wLib-1.2.0-x86_64.AppImage` and `wLib-1.2.0.tar.gz`) will be placed in the `dist/` directory.
+The resulting artifacts are placed in `dist/`. With nFPM available, the output includes:
+
+- `wLib-1.2.0-linux-x86_64.AppImage`
+- `wLib-1.2.0-linux-x86_64.tar.gz`
+- `wLib-1.2.0-linux-x86_64.deb`
+- `wLib-1.2.0-linux-x86_64.rpm`
+- `dist/aur/PKGBUILD`
+- `dist/aur/.SRCINFO`

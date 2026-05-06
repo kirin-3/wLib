@@ -233,6 +233,9 @@ def _format_renderer_log_value(value: object) -> str:
 
 def _renderer_log_targets() -> list[str]:
     targets = [RENDERER_DIAGNOSTICS_LOG]
+    launch_log = (os.environ.get("WLIB_LAUNCH_LOG") or "").strip()
+    if launch_log and launch_log not in targets:
+        targets.append(launch_log)
     appimage_log = (os.environ.get("WLIB_APPIMAGE_LAUNCH_LOG") or "").strip()
     if appimage_log and appimage_log not in targets:
         targets.append(appimage_log)
@@ -284,6 +287,7 @@ def collect_renderer_environment_snapshot(*, dev_mode: bool) -> dict[str, object
         "gpu_crash_guard_path": crash_guard_path,
         "gpu_crash_guard_present": os.path.isfile(crash_guard_path),
         "renderer_log": RENDERER_DIAGNOSTICS_LOG,
+        "launch_log": os.environ.get("WLIB_LAUNCH_LOG") or "",
         "appimage_launch_log": os.environ.get("WLIB_APPIMAGE_LAUNCH_LOG") or "",
     }
 

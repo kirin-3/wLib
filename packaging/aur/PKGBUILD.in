@@ -1,0 +1,56 @@
+# Maintainer: @WLIB_MAINTAINER@
+
+pkgname=wlib-bin
+pkgver=@PKGVER@
+pkgrel=1
+pkgdesc="Modern Linux game manager for F95Zone"
+arch=('x86_64')
+url="https://github.com/kirin-3/wLib"
+license=('MIT')
+depends=(
+  'ca-certificates'
+  'gtk3'
+  'libxkbcommon-x11'
+  'mesa-utils'
+  'wine'
+  'winetricks'
+  'xcb-util-image'
+  'xcb-util-keysyms'
+  'xcb-util-renderutil'
+  'xcb-util-wm'
+)
+optdepends=(
+  'firefox: Firefox extension support'
+  'chromium: Chromium extension support'
+  'proton-ge-custom-bin: Proton-GE runtime support'
+)
+provides=('wlib')
+conflicts=('wlib')
+options=('!strip')
+
+source=(
+  "${pkgname}-${pkgver}.tar.gz::https://github.com/kirin-3/wLib/releases/download/@RELEASE_TAG@/wLib-@ARTIFACT_VERSION@-linux-x86_64.tar.gz"
+)
+sha256sums=('@TARBALL_SHA256@')
+
+package() {
+  install -dm755 "${pkgdir}/opt/wlib"
+  cp -a "${srcdir}/wLib-@ARTIFACT_VERSION@-linux-x86_64/." "${pkgdir}/opt/wlib/"
+
+  install -dm755 "${pkgdir}/usr/bin"
+  ln -s /opt/wlib/wlib "${pkgdir}/usr/bin/wlib"
+
+  install -Dm644 "${pkgdir}/opt/wlib/wlib.desktop" \
+    "${pkgdir}/usr/share/applications/wlib.desktop"
+
+  install -Dm644 "${pkgdir}/opt/wlib/icon.svg" \
+    "${pkgdir}/usr/share/icons/hicolor/scalable/apps/wlib.svg"
+
+  if [[ -f "${pkgdir}/opt/wlib/wlib.png" ]]; then
+    install -Dm644 "${pkgdir}/opt/wlib/wlib.png" \
+      "${pkgdir}/usr/share/pixmaps/wlib.png"
+  fi
+
+  install -Dm644 "${pkgdir}/opt/wlib/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

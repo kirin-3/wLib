@@ -57,7 +57,7 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 - **Persistent Browser Sessions** — F95Zone login sessions are saved under `~/.local/share/wLib/browser_session` so you stay logged in across restarts.
 
 > [!TIP]
-> wLib includes an **In-App Updater** for its own releases, meaning you can download the latest AppImage and view changelogs directly from the settings page!
+> wLib can check for newer GitHub releases and open the latest release page directly from the Updates view.
 
 ## 📸 Screenshots
 
@@ -94,22 +94,22 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 | Dependency | Required | Purpose |
 |------------|----------|---------|
-| **Python 3.12+** | ✅ | Backend runtime |
+| **Python 3.12+** | ⚙️ Source/dev only | Backend runtime when running from source |
 | **Node.js 18+** | ⚙️ Build only | Compiles the Vue frontend |
 | **Wine** | ✅ | Runs Windows game executables |
 | **Winetricks** | ✅ | Installs Windows DLLs and runtime libraries |
 | **GTK 3 / PyGObject** | ✅ | Native UI integration (file dialogs, system tray) |
 
 > [!NOTE]
-> The `wlib.sh` launcher script automatically creates a Python virtual environment and installs all missing **pip** dependencies for you. You only need to ensure the system-level packages listed above are installed.
+> Binary releases bundle Python dependencies. The source-tree `wlib.sh` launcher creates a Python virtual environment and installs missing **pip** dependencies when running from source.
 
 ### GPU & Rendering
 
 wLib includes automatic GPU detection and a crash guard system for cross-distro compatibility:
 
-- **GPU Detection**: On startup, the AppImage probes your GPU using `glxinfo` and `/sys/class/drm/` to determine hardware acceleration availability
+- **GPU Detection**: On startup, release launchers probe your GPU using `glxinfo` and `/sys/class/drm/` to determine hardware acceleration availability
 - **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically falls back to software rendering via `QT_QUICK_BACKEND=software`
-- **Renderer Diagnostics**: All GPU detection results and Qt backend choices are logged to `~/.local/share/wLib/renderer-diagnostics.log` and `~/.local/share/wLib/appimage-launch.log`
+- **Renderer Diagnostics**: GPU detection results and Qt backend choices are logged to `~/.local/share/wLib/renderer-diagnostics.log` and the active launcher log.
 
 ### Install System Packages
 
@@ -141,7 +141,7 @@ sudo pacman -S python python-gobject gtk3 wine winetricks nodejs npm
 
 ## 🚀 Installation
 
-### Option 1: AppImage (Recommended)
+### Option 1: AppImage
 
 Download the latest `.AppImage` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
 
@@ -153,15 +153,37 @@ chmod +x wLib-*.AppImage
 > [!IMPORTANT]
 > Some AppImages require FUSE to run. If your distribution doesn't have it enabled by default (like Ubuntu 22.04+), install `libfuse2`.
 
-### Option 2: tar.gz Archive
+### Option 2: Native Packages
+
+Download the latest `.deb` or `.rpm` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
+
+```bash
+# Debian / Ubuntu / Mint
+sudo apt install ./wLib-*-linux-x86_64.deb
+
+# Fedora / RPM-family
+sudo dnf install ./wLib-*-linux-x86_64.rpm
+```
+
+Native packages install wLib under `/opt/wlib` and expose the `wlib` command through `/usr/bin/wlib`.
+
+### Option 3: AUR
+
+Arch users can install the binary release package as `wlib-bin` after the generated AUR metadata is published:
+
+```bash
+paru -S wlib-bin
+```
+
+### Option 4: tar.gz Archive
 
 ```bash
 tar xzf wLib-*-linux-x86_64.tar.gz
 cd wLib-*/
-./wlib.sh
+./wlib
 ```
 
-### Option 3: Run from Source
+### Option 5: Run from Source
 
 ```bash
 git clone https://github.com/kirin-3/wLib.git
