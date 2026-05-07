@@ -195,6 +195,7 @@ export interface LaunchTargetsResponse extends ApiBasicResponse {
 }
 
 export type LibraryBackupSection =
+  | "metadata"
   | "user_state"
   | "launch_config"
   | "executable_paths"
@@ -863,7 +864,12 @@ class ApiService {
             app: { name: "wLib", version: "mock" },
             selected_sections: ["user_state", "launch_config", "launch_targets"],
           },
-          available_sections: ["user_state", "launch_config", "launch_targets"],
+          available_sections: [
+            "metadata",
+            "user_state",
+            "launch_config",
+            "launch_targets",
+          ],
           counts: {
             total_games: 0,
             matched_games: 0,
@@ -886,6 +892,14 @@ class ApiService {
         const sections = Array.isArray(options.sections)
           ? (options.sections as LibraryBackupSection[])
           : [];
+        if (sections.length === 0) {
+          return {
+            success: false,
+            mock: true,
+            error: "Select at least one section to import.",
+            error_code: "empty_selection",
+          };
+        }
         return {
           success: true,
           mock: true,

@@ -64,6 +64,7 @@ overrides:
       - mesa-demos
       - wine
       - winetricks
+      - xcb-util-cursor
       - xcb-util-image
       - xcb-util-keysyms
       - xcb-util-renderutil

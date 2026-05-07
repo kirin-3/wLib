@@ -19,11 +19,15 @@ def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setattr(main.sys, "frozen", True, raising=False)
     monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
+    webview_storage = app_data_dir / main.PYWEBVIEW_STORAGE_DIR_NAME
     return {
         "app_data_dir": app_data_dir,
-        "cache_path": cache_home / main.PACKAGED_WEBVIEW_CACHE_DIR_NAME,
+        "cache_path": cache_home
+        / main.QTWEBENGINE_CACHE_DIR_NAME
+        / main.PYWEBVIEW_QT_PROFILE_NAME,
+        "legacy_cache_path": cache_home / main.PACKAGED_WEBVIEW_CACHE_DIR_NAME,
         "marker_path": app_data_dir / main.PYWEBVIEW_CACHE_VERSION_MARKER,
-        "webview_storage": app_data_dir / main.PYWEBVIEW_STORAGE_DIR_NAME,
+        "webview_storage": webview_storage,
     }
 
 
@@ -142,13 +146,30 @@ def test_get_packaged_webview_cache_path_uses_xdg_cache_home(monkeypatch, tmp_pa
     )
 
 
+def test_get_packaged_webview_profile_cache_paths_uses_qt_profile_cache_location(
+    monkeypatch, tmp_path
+):
+    cache_home = tmp_path / "xdg-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+
+    cache_paths = main.get_packaged_webview_profile_cache_paths()
+
+    assert cache_paths == [
+        os.path.join(
+            str(cache_home),
+            main.QTWEBENGINE_CACHE_DIR_NAME,
+            main.PYWEBVIEW_QT_PROFILE_NAME,
+        )
+    ]
+
+
 def test_ensure_packaged_webview_cache_fresh_clears_first_launch_cache(
     monkeypatch, tmp_path
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     (paths["cache_path"] / "stale-cache").write_text("old", encoding="utf-8")
-    paths["webview_storage"].mkdir(parents=True)
+    paths["webview_storage"].mkdir(parents=True, exist_ok=True)
     (paths["webview_storage"] / "prefs").write_text("keep", encoding="utf-8")
 
     main.ensure_packaged_webview_cache_fresh()
@@ -158,13 +179,29 @@ def test_ensure_packaged_webview_cache_fresh_clears_first_launch_cache(
     assert (paths["webview_storage"] / "prefs").read_text(encoding="utf-8") == "keep"
 
 
+def test_ensure_packaged_webview_cache_fresh_clears_legacy_cache(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
+    (paths["cache_path"] / "profile-cache").write_text("old", encoding="utf-8")
+    paths["legacy_cache_path"].mkdir(parents=True, exist_ok=True)
+    (paths["legacy_cache_path"] / "legacy-cache").write_text("old", encoding="utf-8")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert not paths["cache_path"].exists()
+    assert not paths["legacy_cache_path"].exists()
+    assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+
+
 def test_ensure_packaged_webview_cache_fresh_updates_changed_version(
     monkeypatch, tmp_path
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     (paths["cache_path"] / "old-cache").write_text("old", encoding="utf-8")
-    paths["marker_path"].parent.mkdir(parents=True)
+    paths["marker_path"].parent.mkdir(parents=True, exist_ok=True)
     paths["marker_path"].write_text("0.0.1\n", encoding="utf-8")
 
     main.ensure_packaged_webview_cache_fresh()
@@ -177,10 +214,10 @@ def test_ensure_packaged_webview_cache_fresh_preserves_unchanged_version_cache(
     monkeypatch, tmp_path
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     cache_file = paths["cache_path"] / "current-cache"
     cache_file.write_text("current", encoding="utf-8")
-    paths["marker_path"].parent.mkdir(parents=True)
+    paths["marker_path"].parent.mkdir(parents=True, exist_ok=True)
     paths["marker_path"].write_text(main.APP_VERSION + "\n", encoding="utf-8")
 
     main.ensure_packaged_webview_cache_fresh()
@@ -193,7 +230,7 @@ def test_ensure_packaged_webview_cache_fresh_skips_source_runtime(
     monkeypatch, tmp_path
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     cache_file = paths["cache_path"] / "source-cache"
     cache_file.write_text("keep", encoding="utf-8")
     monkeypatch.setattr(main.sys, "frozen", False, raising=False)
@@ -209,7 +246,7 @@ def test_ensure_packaged_webview_cache_fresh_skips_unexpected_frozen_executable(
     monkeypatch, tmp_path
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     cache_file = paths["cache_path"] / "other-cache"
     cache_file.write_text("keep", encoding="utf-8")
     monkeypatch.setattr(main.sys, "executable", "/tmp/other-bin")
@@ -231,12 +268,25 @@ def test_ensure_packaged_webview_cache_fresh_marks_missing_cache_success(
     assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
 
 
+def test_ensure_packaged_webview_cache_fresh_keeps_marker_when_cache_unknown(
+    monkeypatch, tmp_path, capsys
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    monkeypatch.setattr(main, "get_packaged_webview_profile_cache_paths", lambda: [])
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    output = capsys.readouterr().out
+    assert "Failed to identify packaged WebView profile cache paths" in output
+    assert not paths["marker_path"].exists()
+
+
 def test_ensure_packaged_webview_cache_fresh_keeps_marker_on_delete_failure(
     monkeypatch, tmp_path, capsys
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
-    paths["marker_path"].parent.mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
+    paths["marker_path"].parent.mkdir(parents=True, exist_ok=True)
     paths["marker_path"].write_text("0.0.1\n", encoding="utf-8")
 
     def fail_rmtree(path: str) -> None:
@@ -256,7 +306,7 @@ def test_ensure_packaged_webview_cache_fresh_continues_on_marker_write_failure(
     monkeypatch, tmp_path, capsys
 ):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
-    paths["cache_path"].mkdir(parents=True)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
     (paths["cache_path"] / "stale-cache").write_text("old", encoding="utf-8")
     real_open = builtins.open
 
@@ -273,6 +323,38 @@ def test_ensure_packaged_webview_cache_fresh_continues_on_marker_write_failure(
     assert "Failed to write WebView cache version marker" in output
     assert not paths["cache_path"].exists()
     assert not paths["marker_path"].exists()
+
+
+def test_extract_native_renderer_details_includes_profile_cache_path():
+    class FakeProfile:
+        def persistentStoragePath(self):
+            return "/tmp/wlib-storage"
+
+        def cachePath(self):
+            return "/tmp/wlib-cache"
+
+        def httpUserAgent(self):
+            return "Fake User Agent"
+
+    class FakePage:
+        def profile(self):
+            return FakeProfile()
+
+    class FakeWebView:
+        def page(self):
+            return FakePage()
+
+    class FakeNativeWindow:
+        webview = FakeWebView()
+
+    window = MagicMock()
+    window.native = FakeNativeWindow()
+
+    details = main._extract_native_renderer_details(window)
+
+    assert details["qt_profile_storage_path"] == "/tmp/wlib-storage"
+    assert details["qt_profile_cache_path"] == "/tmp/wlib-cache"
+    assert details["qt_profile_http_user_agent"] == "Fake User Agent"
 
 
 def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):

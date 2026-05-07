@@ -69,6 +69,14 @@ const sectionOptions: SectionOption[] = [
     icon: IconFolderCog,
   },
 ];
+const metadataSectionOption: SectionOption = {
+  id: "metadata",
+  label: "Game metadata",
+  description:
+    "Updates title, developer, engine, tags, F95 URL, versions, and cover reference.",
+  icon: IconDatabaseExport,
+};
+const importSectionOptions: SectionOption[] = [metadataSectionOption, ...sectionOptions];
 
 const defaultExportSections: LibraryBackupSection[] = [
   "user_state",
@@ -100,7 +108,12 @@ const importWarnings = computed<LibraryBackupWarning[]>(
   () => inspectResult.value?.warnings || [],
 );
 const availableImportOptions = computed(() => {
-  return sectionOptions.filter((item) => availableImportSections.value.includes(item.id));
+  return importSectionOptions.filter((item) =>
+    availableImportSections.value.includes(item.id),
+  );
+});
+const canImportSelected = computed(() => {
+  return Boolean(inspectResult.value) && importSections.value.length > 0;
 });
 
 const isSelected = (sections: LibraryBackupSection[], id: LibraryBackupSection) => {
@@ -201,6 +214,10 @@ const runImport = async () => {
   if (importing.value || !inspectResult.value) return;
   importMessage.value = "";
   importError.value = "";
+  if (importSections.value.length === 0) {
+    importError.value = "Select at least one section to import.";
+    return;
+  }
   importing.value = true;
 
   try {
@@ -424,7 +441,7 @@ const runImport = async () => {
             v-else
             type="button"
             class="backup-primary"
-            :disabled="importing || !inspectResult"
+            :disabled="importing || !canImportSelected"
             @click="runImport"
           >
             <IconLoader2 v-if="importing" class="backup-spinner" />

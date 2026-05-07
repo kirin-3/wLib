@@ -21,6 +21,7 @@ from core.f95zone import normalize_thread_url, thread_urls_match
 BACKUP_FORMAT = "wlib.library_migration"
 BACKUP_FORMAT_VERSION = 1
 
+SECTION_METADATA = "metadata"
 SECTION_USER_STATE = "user_state"
 SECTION_LAUNCH_CONFIG = "launch_config"
 SECTION_EXECUTABLE_PATHS = "executable_paths"
@@ -43,6 +44,7 @@ DEFAULT_EXPORT_SECTIONS = (
     SECTION_LAUNCH_TARGETS,
     SECTION_SETTINGS_GENERAL,
 )
+SUPPORTED_IMPORT_SECTIONS = (SECTION_METADATA, *SUPPORTED_SECTIONS)
 
 METADATA_FIELDS = (
     "title",
@@ -161,36 +163,47 @@ def _normalize_identity_text(value: object) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
+def _section_option(options: Mapping[str, object] | None) -> tuple[bool, object]:
+    option_map = _coerce_mapping(options or {})
+    for key in ("sections", "selected_sections", "include_sections"):
+        if key in option_map:
+            return True, option_map.get(key)
+    return False, None
+
+
 def _select_sections(
     options: Mapping[str, object] | None,
     *,
     default_sections: Sequence[str],
     available_sections: Sequence[str] | None = None,
+    supported_sections: Sequence[str] = SUPPORTED_SECTIONS,
+    reject_empty_selection: bool = False,
 ) -> set[str]:
-    supported = set(SUPPORTED_SECTIONS)
+    supported = set(supported_sections)
     if available_sections is not None:
         supported &= set(available_sections)
 
-    selected: set[str] = set()
-    option_map = _coerce_mapping(options or {})
-    raw_sections = (
-        option_map.get("sections")
-        or option_map.get("selected_sections")
-        or option_map.get("include_sections")
-    )
+    has_section_option, raw_sections = _section_option(options)
+    selected: set[str]
 
-    if isinstance(raw_sections, Mapping):
-        section_map = cast(Mapping[object, object], raw_sections)
-        for key, enabled in section_map.items():
-            if _coerce_bool(enabled):
-                selected.add(str(key))
-    else:
-        selected.update(str(section) for section in _coerce_sequence(raw_sections))
-
-    if not selected:
+    if not has_section_option:
         selected = set(default_sections)
+    else:
+        selected = set()
+        if isinstance(raw_sections, Mapping):
+            section_map = cast(Mapping[object, object], raw_sections)
+            for key, enabled in section_map.items():
+                if _coerce_bool(enabled):
+                    selected.add(str(key))
+        else:
+            selected.update(str(section) for section in _coerce_sequence(raw_sections))
 
-    return selected & supported
+    selected &= supported
+    if reject_empty_selection and has_section_option and not selected:
+        raise BackupValidationError(
+            "Select at least one section to import.", "empty_selection"
+        )
+    return selected
 
 
 def _pick_fields(source: Mapping[str, object], fields: Sequence[str]) -> dict[str, object]:
@@ -377,7 +390,14 @@ def _available_backup_sections(backup: Mapping[str, object]) -> list[str]:
     selected = set(
         str(section) for section in _coerce_sequence(backup.get("selected_sections"))
     )
-    available = [section for section in SUPPORTED_SECTIONS if section in selected]
+    available: list[str] = []
+    if any(
+        _game_section(_coerce_mapping(game), SECTION_METADATA)
+        for game in _coerce_sequence(backup.get("games"))
+    ):
+        available.append(SECTION_METADATA)
+
+    available.extend(section for section in SUPPORTED_SECTIONS if section in selected)
 
     settings = _coerce_mapping(backup.get("settings"))
     if "general" in settings and SECTION_SETTINGS_GENERAL not in available:
@@ -625,9 +645,16 @@ def _normalized_fields(
 
 
 def _import_fields_for_game(
-    imported_game: Mapping[str, object], sections: set[str]
+    imported_game: Mapping[str, object],
+    sections: set[str],
+    *,
+    include_metadata: bool,
 ) -> dict[str, object]:
-    fields = _normalized_fields(_game_section(imported_game, "metadata"), METADATA_FIELDS)
+    fields: dict[str, object] = {}
+    if include_metadata:
+        fields.update(
+            _normalized_fields(_game_section(imported_game, SECTION_METADATA), METADATA_FIELDS)
+        )
 
     if SECTION_USER_STATE in sections:
         fields.update(
@@ -755,6 +782,8 @@ def import_library_backup(
         options,
         default_sections=available_sections,
         available_sections=available_sections,
+        supported_sections=SUPPORTED_IMPORT_SECTIONS,
+        reject_empty_selection=True,
     )
     plan = _build_import_plan(backup)
     warnings = _build_backup_warnings(backup)
@@ -777,13 +806,22 @@ def import_library_backup(
                     skipped += 1
                     continue
 
-                fields = _import_fields_for_game(imported_game, sections)
                 if status == "matched":
+                    fields = _import_fields_for_game(
+                        imported_game,
+                        sections,
+                        include_metadata=SECTION_METADATA in sections,
+                    )
                     local_id = int(str(item.get("local_id", 0)))
                     _update_game_row(cursor, local_id, fields)
                     game_id = local_id
                     updated += 1
                 else:
+                    fields = _import_fields_for_game(
+                        imported_game,
+                        sections,
+                        include_metadata=True,
+                    )
                     game_id = _insert_game(cursor, fields)
                     created += 1
 

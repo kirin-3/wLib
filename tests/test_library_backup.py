@@ -21,6 +21,7 @@ from core.database import (
 from core.library_backup import (
     BACKUP_FORMAT,
     BACKUP_FORMAT_VERSION,
+    SECTION_METADATA,
     SECTION_EXECUTABLE_PATHS,
     SECTION_LAUNCH_CONFIG,
     SECTION_LAUNCH_TARGETS,
@@ -193,6 +194,7 @@ def test_inspect_validates_format_and_matches_games(tmp_path):
     assert counts["matched_games"] == 2
     assert counts["new_games"] == 1
     assert counts["ambiguous_games"] == 1
+    assert SECTION_METADATA in cast(list[str], result["available_sections"])
     assert cast(list[dict[str, object]], result["ambiguous_games"])[0]["title"] == "Ambiguous"
 
     invalid_path = tmp_path / "invalid.json"
@@ -294,9 +296,10 @@ def test_import_merges_backup_values_and_preserves_unselected_fields(tmp_path):
 
     game = get_all_games()[0]
     assert game["id"] == local_id
-    assert game["title"] == "New Title"
-    assert game["developer"] == "New Dev"
-    assert game["engine"] == "Ren'Py"
+    assert game["title"] == "Old Title"
+    assert game["developer"] == "Old Dev"
+    assert game["engine"] == "Unity"
+    assert game["f95_url"] == "https://f95zone.to/threads/old.333/"
     assert game["play_status"] == "Waiting For Update"
     assert game["progress"] == "Imported progress"
     assert game["playtime_seconds"] == 99
@@ -309,6 +312,174 @@ def test_import_merges_backup_values_and_preserves_unselected_fields(tmp_path):
     assert targets[0]["label"] == "Imported Target"
     assert targets[0]["game_id"] == local_id
     assert targets[0]["id"] != 999
+
+
+def test_import_rejects_empty_section_list_without_writes(tmp_path):
+    api = Api()
+    local_id = add_game(
+        title="Keep Local",
+        exe_path="/tmp/local/game.sh",
+        f95_url="https://f95zone.to/threads/keep.444/",
+        developer="Local Dev",
+    )
+    assert local_id is not None
+    update_setting("enable_logging", "false")
+
+    backup_path = write_backup(
+        tmp_path / "empty-sections.json",
+        {
+            **base_backup(
+                [
+                    {
+                        "metadata": {
+                            "title": "Backup Title",
+                            "developer": "Backup Dev",
+                            "f95_url": "https://f95zone.to/threads/keep.444/",
+                        },
+                        SECTION_USER_STATE: {
+                            "play_status": "completed",
+                            "progress": "Imported progress",
+                        },
+                    }
+                ]
+            ),
+            "settings": {"general": {"enable_logging": "true"}},
+        },
+    )
+
+    result = api.import_library_backup(str(backup_path), {"sections": []})
+
+    assert result["success"] is False
+    assert result["error_code"] == "empty_selection"
+    game = get_all_games()[0]
+    assert game["title"] == "Keep Local"
+    assert game["developer"] == "Local Dev"
+    assert game["play_status"] == "Not Started"
+    assert game["progress"] == ""
+    assert get_setting("enable_logging") == "false"
+
+
+def test_import_rejects_all_disabled_section_map_without_writes(tmp_path):
+    api = Api()
+    local_id = add_game(
+        title="Map Local",
+        exe_path="/tmp/local/map.sh",
+        f95_url="https://f95zone.to/threads/map.445/",
+    )
+    assert local_id is not None
+
+    backup_path = write_backup(
+        tmp_path / "disabled-map.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Map Backup",
+                        "f95_url": "https://f95zone.to/threads/map.445/",
+                    },
+                    SECTION_USER_STATE: {"progress": "Should not import"},
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(
+        str(backup_path),
+        {
+            "sections": {
+                SECTION_METADATA: False,
+                SECTION_USER_STATE: False,
+            }
+        },
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "empty_selection"
+    game = get_all_games()[0]
+    assert game["title"] == "Map Local"
+    assert game["progress"] == ""
+
+
+def test_import_selected_metadata_updates_matched_game(tmp_path):
+    api = Api()
+    local_id = add_game(
+        title="Old Metadata",
+        exe_path="/tmp/local/metadata.sh",
+        f95_url="https://f95zone.to/threads/meta.446/",
+        developer="Old Dev",
+        engine="Unity",
+    )
+    assert local_id is not None
+
+    backup_path = write_backup(
+        tmp_path / "metadata-import.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "New Metadata",
+                        "developer": "New Dev",
+                        "engine": "Ren'Py",
+                        "tags": "tag-a",
+                        "f95_url": "https://f95zone.to/threads/meta.446/",
+                        "version": "2.0",
+                        "latest_version": "2.1",
+                        "cover_image_path": "https://img.example/meta.jpg",
+                    },
+                    SECTION_USER_STATE: {
+                        "progress": "Should stay local unless selected",
+                    },
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path), {"sections": [SECTION_METADATA]})
+
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["title"] == "New Metadata"
+    assert game["developer"] == "New Dev"
+    assert game["engine"] == "Ren'Py"
+    assert game["tags"] == "tag-a"
+    assert game["version"] == "2.0"
+    assert game["latest_version"] == "2.1"
+    assert game["cover_image_path"] == "https://img.example/meta.jpg"
+    assert game["progress"] == ""
+
+
+def test_import_new_game_uses_metadata_without_metadata_section(tmp_path):
+    api = Api()
+    backup_path = write_backup(
+        tmp_path / "new-game.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Created From Metadata",
+                        "developer": "New Dev",
+                        "engine": "Godot",
+                        "f95_url": "https://f95zone.to/threads/new-game.447/",
+                    },
+                    SECTION_USER_STATE: {
+                        "play_status": "playing",
+                        "progress": "Chapter 2",
+                    },
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path), {"sections": [SECTION_USER_STATE]})
+
+    assert result["success"] is True
+    assert result["created"] == 1
+    game = get_all_games()[0]
+    assert game["title"] == "Created From Metadata"
+    assert game["developer"] == "New Dev"
+    assert game["engine"] == "Godot"
+    assert game["play_status"] == "Playing"
+    assert game["progress"] == "Chapter 2"
 
 
 def test_import_invalid_file_does_not_partially_write(tmp_path):

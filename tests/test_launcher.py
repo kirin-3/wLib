@@ -22,6 +22,7 @@ def test_launch_native_script(mock_get_setting, mock_popen, mock_access, mock_ex
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["/opt/game/run.sh", "--test", "mode"]
+    assert kwargs["cwd"] == "/opt/game"
 
 
 @patch("os.path.exists")
@@ -41,6 +42,7 @@ def test_launch_java_archive(mock_get_setting, mock_popen, mock_exists):
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["java", "-jar", "/home/user/game.jar", "-Xmx1G"]
+    assert kwargs["cwd"] == "/home/user"
 
 
 @patch("os.path.exists")
@@ -85,6 +87,7 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
         # It should append "proton_compat" to avoid colliding with the standard wine prefix
         assert "proton_compat" in env["STEAM_COMPAT_DATA_PATH"]
         assert env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] == "/tmp/wlib"
+        assert kwargs["cwd"] == "/tmp"
 
 
 @patch("os.path.exists")
@@ -136,10 +139,15 @@ def test_launch_command_substitution(
 @patch.dict(
     "os.environ",
     {
+        "APPIMAGE": "/tmp/wLib.AppImage",
+        "LD_LIBRARY_PATH": "/tmp/.mount_wLib/usr/lib",
+        "LD_LIBRARY_PATH_ORIG": "/usr/lib:/opt/lib",
         "WINEPREFIX": "/tmp/from-env",
         "WINEDLLOVERRIDES": "winhttp=n,b",
         "STEAM_COMPAT_DATA_PATH": "/tmp/steam-compat",
         "STEAM_COMPAT_CLIENT_INSTALL_PATH": "/tmp/steam-client",
+        "STEAM_COMPAT_INSTALL_PATH": "/tmp/install",
+        "UMU_ID": "from-env",
     },
     clear=True,
 )
@@ -171,11 +179,78 @@ def test_launch_native_mode_uses_host_binary_without_wine_settings(
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["gamemoderun", "/opt/game/Game.x86_64", "--fullscreen"]
+    assert kwargs["cwd"] == "/opt/game"
     env = kwargs["env"]
+    assert "APPIMAGE" not in env
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib:/opt/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in env
     assert "WINEPREFIX" not in env
     assert "WINEDLLOVERRIDES" not in env
     assert "STEAM_COMPAT_DATA_PATH" not in env
     assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
+    assert "STEAM_COMPAT_INSTALL_PATH" not in env
+    assert "UMU_ID" not in env
+
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch.dict(
+    "os.environ",
+    {
+        "APPDIR": "/tmp/.mount_wLib",
+        "ARGV0": "/tmp/wLib.AppImage",
+        "LD_LIBRARY_PATH": "/tmp/.mount_wLib/usr/lib",
+        "LD_LIBRARY_PATH_ORIG": "/usr/lib",
+        "WINEPREFIX": "/tmp/from-env",
+        "STEAM_COMPAT_DATA_PATH": "/tmp/steam-compat",
+    },
+    clear=True,
+)
+def test_launch_auto_detect_native_script_uses_clean_host_environment(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    mock_exists.return_value = True
+    mock_access.return_value = True
+    mock_get_setting.return_value = "false"
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch("/opt/game/run.sh")
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["/opt/game/run.sh"]
+    env = kwargs["env"]
+    assert "APPDIR" not in env
+    assert "ARGV0" not in env
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in env
+    assert "WINEPREFIX" not in env
+    assert "STEAM_COMPAT_DATA_PATH" not in env
+
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+def test_launch_command_substitution_applies_leading_environment_assignments(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    mock_exists.return_value = True
+    mock_access.return_value = True
+    mock_get_setting.return_value = "false"
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        "/opt/game/run.sh",
+        command_line_args="MESA_GLTHREAD=true gamemoderun %command% --fullscreen",
+    )
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["gamemoderun", "/opt/game/run.sh", "--fullscreen"]
+    assert kwargs["env"]["MESA_GLTHREAD"] == "true"
 
 
 @patch("os.path.exists")
@@ -232,7 +307,53 @@ def test_launch_wine_proton_mode_forces_compat_runtime(
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["wine", "/opt/game/run.sh"]
+    assert kwargs["cwd"] == "/opt/game"
     assert kwargs["env"]["WINEPREFIX"] == "/tmp/wlib-prefix"
+
+
+@patch("os.path.exists")
+@patch("os.path.isdir")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch.dict(
+    "os.environ",
+    {
+        "APPIMAGE": "/tmp/wLib.AppImage",
+        "LD_LIBRARY_PATH": "/tmp/.mount_wLib/usr/lib",
+        "LD_LIBRARY_PATH_ORIG": "/usr/lib",
+    },
+    clear=True,
+)
+def test_launch_wine_proton_mode_uses_host_environment(
+    mock_get_setting, mock_popen, mock_access, mock_isdir, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/opt/game/game.exe"
+    mock_isdir.return_value = False
+    mock_access.return_value = False
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "proton_path": "/opt/GE-Proton/proton",
+            "wine_prefix_path": "/tmp/wlib-prefix",
+        }.get(key)
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch("/opt/game/game.exe", launch_mode="wine_proton")
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["/opt/GE-Proton/proton", "run", "/opt/game/game.exe"]
+    env = kwargs["env"]
+    assert "APPIMAGE" not in env
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in env
+    assert env["STEAM_COMPAT_DATA_PATH"] == "/tmp/wlib-prefix"
+    assert env["STEAM_COMPAT_INSTALL_PATH"] == "/opt/game"
+    assert env["UMU_ID"] == "wlib"
 
 
 @patch("os.path.exists")
@@ -320,6 +441,7 @@ def test_launch_rpgmaker_linux_runner_uses_game_directory_and_clean_env(
         "--gamepath",
         "/games/foo",
     ]
+    assert kwargs["cwd"] == "/games/foo"
     env = kwargs["env"]
     assert env["LC_ALL"] == "ja_JP.UTF-8"
     assert "WINEPREFIX" not in env
@@ -436,6 +558,7 @@ def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["xdg-open", "file:///home/user/games/index.html"]
+    assert kwargs["cwd"] == "/home/user/games"
 
 
 @patch("os.path.exists")
@@ -455,6 +578,7 @@ def test_launch_html_game_htm_extension(mock_abspath, mock_popen, mock_exists):
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["xdg-open", "file:///home/user/games/game.htm"]
+    assert kwargs["cwd"] == "/home/user/games"
 
 
 @patch("os.path.exists")
@@ -474,6 +598,7 @@ def test_launch_html_game_case_insensitive(mock_abspath, mock_popen, mock_exists
     mock_popen.assert_called_once()
     args, kwargs = mock_popen.call_args
     assert args[0] == ["xdg-open", "file:///home/user/games/INDEX.HTML"]
+    assert kwargs["cwd"] == "/home/user/games"
 
 
 def test_launch_html_file_not_found():

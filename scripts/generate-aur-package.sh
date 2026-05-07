@@ -70,6 +70,7 @@ pkgbase = wlib-bin
 	depends = mesa-utils
 	depends = wine
 	depends = winetricks
+	depends = xcb-util-cursor
 	depends = xcb-util-image
 	depends = xcb-util-keysyms
 	depends = xcb-util-renderutil

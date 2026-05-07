@@ -1,5 +1,6 @@
 import subprocess
 import os
+import re
 import shutil
 from typing import Protocol, TypedDict
 
@@ -153,6 +154,7 @@ class Launcher:
             print(f"Error: Executable not found at {exe_path}")
             return {"success": False, "error": f"Executable not found at {exe_path}"}
 
+        exe_path = os.path.abspath(exe_path)
         launch_mode = normalize_launch_mode(launch_mode)
 
         env = os.environ.copy()
@@ -181,6 +183,11 @@ class Launcher:
             args = shlex.split(command_line_args)
         except ValueError as exc:
             return {"success": False, "error": f"Invalid command line arguments: {exc}"}
+
+        if "%command%" in args:
+            while args and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", args[0]):
+                key, value = args.pop(0).split("=", 1)
+                env[key] = value
 
         ext = os.path.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
@@ -217,7 +224,11 @@ class Launcher:
                     log_file = open(log_path, "w")
                     try:
                         game_proc = subprocess.Popen(
-                            cmd, env=env_vars, stdout=log_file, stderr=subprocess.STDOUT
+                            cmd,
+                            env=env_vars,
+                            stdout=log_file,
+                            stderr=subprocess.STDOUT,
+                            cwd=game_dir,
                         )
                     except Exception:
                         log_file.close()
@@ -237,6 +248,7 @@ class Launcher:
                         env=env_vars,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        cwd=game_dir,
                     )
 
                 if is_wine_executable and run_ce:
@@ -346,12 +358,27 @@ class Launcher:
                 "PROTON_LOG_DIR",
                 "STEAM_COMPAT_DATA_PATH",
                 "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+                "STEAM_COMPAT_INSTALL_PATH",
+                "UMU_ID",
             ):
                 _ = clean_env.pop(var, None)
             return clean_env
 
         def without_appimage_env(env_vars: dict[str, str]) -> dict[str, str]:
             clean_env = env_vars.copy()
+            appimage_context = any(
+                var in clean_env
+                for var in (
+                    "APPIMAGE",
+                    "APPDIR",
+                    "ARGV0",
+                    "APPIMAGE_SILENT_INSTALL",
+                    "OWD",
+                    "APPIMAGE_EXTRACT_AND_RUN",
+                    "LD_LIBRARY_PATH_ORIG",
+                )
+            ) or "/.mount_" in clean_env.get("LD_LIBRARY_PATH", "")
+
             for var in (
                 "APPIMAGE",
                 "APPDIR",
@@ -363,8 +390,8 @@ class Launcher:
                 _ = clean_env.pop(var, None)
 
             if "LD_LIBRARY_PATH_ORIG" in clean_env:
-                clean_env["LD_LIBRARY_PATH"] = clean_env["LD_LIBRARY_PATH_ORIG"]
-            else:
+                clean_env["LD_LIBRARY_PATH"] = clean_env.pop("LD_LIBRARY_PATH_ORIG")
+            elif appimage_context:
                 _ = clean_env.pop("LD_LIBRARY_PATH", None)
             return clean_env
 
@@ -409,6 +436,7 @@ class Launcher:
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    cwd=os.path.dirname(abs_path),
                 )
                 return {"success": True}
             except Exception as e:
@@ -416,7 +444,7 @@ class Launcher:
                 return {"success": False, "error": str(e)}
 
         def execute_host_native(strict_native: bool) -> dict[str, object] | None:
-            process_env = without_wine_proton_env(env) if strict_native else env
+            process_env = build_host_tool_env(env)
 
             # 1. Native Shell Script (e.g. Ren'Py)
             if ext == ".sh":
@@ -480,6 +508,7 @@ class Launcher:
             return execute_rpgmaker_linux_runner()
 
         # 5. Fallback to Wine / Proton execution for Windows executables
+        env = without_appimage_env(env)
         proton_path = proton_version if proton_version else get_setting("proton_path")
         wine_prefix = (
             custom_prefix if custom_prefix else get_setting("wine_prefix_path")
@@ -539,6 +568,8 @@ class Launcher:
 
             env["STEAM_COMPAT_DATA_PATH"] = wine_prefix
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/tmp/wlib"
+            env["STEAM_COMPAT_INSTALL_PATH"] = game_dir
+            _ = env.setdefault("UMU_ID", "wlib")
         else:
             # If the selected prefix is actually a Proton prefix (contains pfx subfolder),
             # standard Wine must point directly to the pfx subfolder

@@ -22,6 +22,8 @@ PYWEBVIEW_STORAGE_DIR_NAME = "webview"
 PYWEBVIEW_CACHE_VERSION_MARKER = ".webview-cache-version"
 PACKAGED_WEBVIEW_CACHE_DIR_NAME = "wlib-bin"
 PACKAGED_EXECUTABLE_NAME = "wlib-bin"
+QTWEBENGINE_CACHE_DIR_NAME = "QtWebEngine"
+PYWEBVIEW_QT_PROFILE_NAME = "pywebview"
 PYWEBVIEW_HTTP_PORT = 42001
 RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log")
 
@@ -78,6 +80,8 @@ class RendererEvents(Protocol):
 class RuntimeQtProfile(Protocol):
     def persistentStoragePath(self) -> str: ...
 
+    def cachePath(self) -> str: ...
+
     def httpUserAgent(self) -> str: ...
 
 
@@ -115,6 +119,29 @@ def get_packaged_webview_cache_path() -> str:
     )
 
 
+def get_qtwebengine_cache_root() -> str:
+    cache_home = (os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if not cache_home:
+        cache_home = os.path.expanduser("~/.cache")
+
+    return os.path.join(
+        os.path.abspath(os.path.expanduser(cache_home)), QTWEBENGINE_CACHE_DIR_NAME
+    )
+
+
+def get_webview_storage_path(*, create: bool = True) -> str:
+    storage_path = os.path.join(APP_DATA_DIR, PYWEBVIEW_STORAGE_DIR_NAME)
+    if create:
+        os.makedirs(storage_path, exist_ok=True)
+    return storage_path
+
+
+def get_packaged_webview_profile_cache_paths() -> list[str]:
+    return [
+        os.path.join(get_qtwebengine_cache_root(), PYWEBVIEW_QT_PROFILE_NAME),
+    ]
+
+
 def get_webview_cache_version_marker_path() -> str:
     return os.path.join(APP_DATA_DIR, PYWEBVIEW_CACHE_VERSION_MARKER)
 
@@ -125,12 +152,22 @@ def is_packaged_wlib_runtime() -> bool:
     )
 
 
+def _clear_webview_cache_path(cache_path: str) -> None:
+    if not os.path.exists(cache_path):
+        return
+    if os.path.isdir(cache_path):
+        shutil.rmtree(cache_path)
+        return
+    os.remove(cache_path)
+
+
 def ensure_packaged_webview_cache_fresh() -> None:
     if not is_packaged_wlib_runtime():
         print("[wLib] Skipping WebView cache cleanup: not packaged wlib-bin runtime")
         return
 
-    cache_path = get_packaged_webview_cache_path()
+    profile_cache_paths = get_packaged_webview_profile_cache_paths()
+    legacy_cache_path = get_packaged_webview_cache_path()
     marker_path = get_webview_cache_version_marker_path()
     recorded_version = ""
 
@@ -146,18 +183,37 @@ def ensure_packaged_webview_cache_fresh() -> None:
         print(f"[wLib] WebView cache already fresh for version {APP_VERSION}")
         return
 
+    if not profile_cache_paths:
+        print("[wLib] Failed to identify packaged WebView profile cache paths")
+        return
+
     print(
         "[wLib] Clearing packaged WebView cache "
         + f"(previous_version={recorded_version or '<none>'}, "
-        + f"current_version={APP_VERSION}, path={cache_path})"
+        + f"current_version={APP_VERSION}, "
+        + f"profile_paths={profile_cache_paths}, legacy_path={legacy_cache_path})"
     )
 
+    active_cache_path = ""
     try:
-        if os.path.exists(cache_path):
-            shutil.rmtree(cache_path)
+        for cache_path in profile_cache_paths:
+            active_cache_path = cache_path
+            _clear_webview_cache_path(cache_path)
     except Exception as e:
-        print(f"[wLib] Failed to clear packaged WebView cache at {cache_path}: {e}")
+        print(
+            "[wLib] Failed to clear packaged WebView cache at "
+            + f"{active_cache_path or '<unknown>'}: {e}"
+        )
         return
+
+    try:
+        if legacy_cache_path not in profile_cache_paths:
+            _clear_webview_cache_path(legacy_cache_path)
+    except Exception as e:
+        print(
+            "[wLib] Failed to clear legacy packaged WebView cache at "
+            + f"{legacy_cache_path}: {e}"
+        )
 
     try:
         os.makedirs(os.path.dirname(marker_path), exist_ok=True)
@@ -431,6 +487,11 @@ def _extract_native_renderer_details(
             details["qt_profile_storage_path_error"] = str(e)
 
         try:
+            details["qt_profile_cache_path"] = native_profile.cachePath()
+        except Exception as e:
+            details["qt_profile_cache_path_error"] = str(e)
+
+        try:
             details["qt_profile_http_user_agent"] = native_profile.httpUserAgent()
         except Exception as e:
             details["qt_profile_http_user_agent_error"] = str(e)
@@ -561,12 +622,6 @@ def load_webview_module() -> WebviewModule | None:
         webview = None
 
     return webview
-
-
-def get_webview_storage_path() -> str:
-    storage_path = os.path.join(APP_DATA_DIR, PYWEBVIEW_STORAGE_DIR_NAME)
-    os.makedirs(storage_path, exist_ok=True)
-    return storage_path
 
 
 def start_webview(
