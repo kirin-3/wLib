@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 function normalizeCheckPayload(data) {
     const payload = {
         exists: Boolean(data && data.exists),

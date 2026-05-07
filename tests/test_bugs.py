@@ -1,4 +1,5 @@
 # pyright: reportMissingImports=false
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 Bug-finding tests for wLib application.
 These tests identify edge cases, vulnerabilities, and logic errors.

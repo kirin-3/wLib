@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,7 +64,7 @@ pkgbase = wlib-bin
 	pkgrel = 1
 	url = https://github.com/kirin-3/wLib
 	arch = x86_64
-	license = MIT
+	license = GPL-3.0-or-later
 	depends = ca-certificates
 	depends = gtk3
 	depends = libxkbcommon-x11

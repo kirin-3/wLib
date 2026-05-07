@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 with open("core/api.py", "r") as f:
     content = f.read()
 

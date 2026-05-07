@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import { PLAY_STATUSES } from "./playStatus.ts";
 
 export type LayoutMode = "grid" | "list" | "compact";

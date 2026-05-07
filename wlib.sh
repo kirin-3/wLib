@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # wLib Launcher — finds or creates a venv, installs deps, and runs the app.
 set -e
 

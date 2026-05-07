@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: wlib
 arch: amd64
 platform: linux
@@ -12,7 +13,7 @@ description: |
   Modern Linux game manager for F95Zone.
 vendor: kirin-3
 homepage: "https://github.com/kirin-3/wLib"
-license: MIT
+license: GPL-3.0-or-later
 
 contents:
   - src: "${WLIB_PACKAGE_SOURCE}"

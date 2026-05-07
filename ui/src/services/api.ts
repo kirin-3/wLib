@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /**
  * A wrapper service to communicate with the Python backend via PyWebView.
  * It gracefully falls back to mock data if the webview object isn't injected

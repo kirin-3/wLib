@@ -1,4 +1,5 @@
 # pyright: reportMissingImports=false
+# SPDX-License-Identifier: GPL-3.0-or-later
 from unittest.mock import patch, MagicMock
 from core.launcher import Launcher
 

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3%2B-blue.svg" alt="License: GPLv3 or later" /></a>
   <img src="https://img.shields.io/badge/platform-Linux-lightgrey.svg" alt="Platform: Linux" />
   <img src="https://img.shields.io/badge/python-3.12+-yellow.svg" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/vue-3-brightgreen.svg" alt="Vue 3" />
@@ -279,4 +279,4 @@ Please read the [Contributing Guide](CONTRIBUTING.md) to initialize your dev env
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU General Public License v3.0 or later](LICENSE).

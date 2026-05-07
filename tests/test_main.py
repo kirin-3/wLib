@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 import builtins
 from io import BytesIO
 from email.message import Message

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 const WLIB_UPDATES_PAGE_PATH = '/sam/latest_alpha/';
 const WLIB_THREAD_ROOT_ID = 'wlib-extension-root';
 const WLIB_TILE_BADGE_SELECTOR = '.wlib-library-badge';

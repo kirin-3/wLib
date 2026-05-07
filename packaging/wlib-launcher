@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Shared launcher for wLib binary release artifacts.
 
 SELF_PATH="$(readlink -f "$0")"

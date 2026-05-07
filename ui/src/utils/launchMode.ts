@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 export const DEFAULT_LAUNCH_MODE = "auto";
 
 export const LAUNCH_MODE_OPTIONS = [
