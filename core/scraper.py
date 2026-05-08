@@ -393,6 +393,16 @@ class Scraper:
     def _error(self, code: str, message: str) -> ScraperResult:
         return {"success": False, "code": code, "error": message}
 
+    def _should_continue_batch(
+        self,
+        callback: BatchResultCallback | None,
+        url: str,
+        result: ScraperResult,
+    ) -> bool:
+        if callback is None:
+            return True
+        return callback(url, result)
+
     def _is_non_actionable_version(self, version: object) -> bool:
         if version is None:
             return True
@@ -761,118 +771,119 @@ class Scraper:
                     f"count={len(urls)}, headless={headless}, include_metadata={include_metadata}",
                 )
 
-                for i, url in enumerate(urls):
-                    page = context.new_page()
-                    try:
-                        if not self._is_valid_thread_url(url):
-                            self._log_scrape_stage(url, "invalid-url")
-                            result = self._error("invalid_url", "Invalid thread URL")
-                            results[url] = result
-                            page.close()
-                            if callback:
-                                if not callback(url, result):
-                                    break
-                            continue
-
-                        try:
-                            self._log_scrape_stage(
-                                url, "batch-navigate", f"index={i + 1}/{len(urls)}"
-                            )
-                            page.goto(
-                                url.strip(),
-                                wait_until="domcontentloaded",
-                                timeout=60000,
-                            )
-                            self._log_scrape_stage(url, "batch-navigated")
-                        except Exception:
-                            self._log_scrape_stage(url, "navigation-timeout")
-                            result = self._error(
-                                "navigation_timeout",
-                                "Timed out while loading thread page",
-                            )
-                            results[url] = result
-                            page.close()
-                            if callback and not callback(url, result):
-                                break
-                            if i < len(urls) - 1:
-                                import time
-
-                                time.sleep(delay_seconds)
-                            continue
-
-                        try:
-                            page.wait_for_selector("h1.p-title-value", timeout=60000)
-                            self._log_scrape_stage(url, "title-ready")
-                        except Exception:
-                            page_issue = self._classify_page_issue(page)
-                            if page_issue:
-                                self._log_scrape_stage(
-                                    url,
-                                    "page-issue",
-                                    str(page_issue.get("code") or "unknown"),
-                                )
-                                result = self._error(
-                                    page_issue["code"], page_issue["error"]
-                                )
-                            else:
-                                self._log_scrape_stage(url, "title-missing")
-                                result = self._error(
-                                    "title_not_found",
-                                    "Could not find thread title on page",
-                                )
-                            results[url] = result
-                            page.close()
-                            if callback and not callback(url, result):
-                                break
-                            if i < len(urls) - 1:
-                                import time
-
-                                time.sleep(delay_seconds)
-                            continue
-
-                        title, version = self._extract_version_from_page(page)
-                        self._log_scrape_stage(
-                            url,
-                            "version-extracted",
-                            f"title={title!r}, version={version!r}",
+                try:
+                    for i, url in enumerate(urls):
+                        page = context.new_page()
+                        result: ScraperResult = self._error(
+                            "scraper_error", "No scraper result produced"
                         )
+                        try:
+                            if not self._is_valid_thread_url(url):
+                                self._log_scrape_stage(url, "invalid-url")
+                                result = self._error("invalid_url", "Invalid thread URL")
+                            else:
+                                try:
+                                    self._log_scrape_stage(
+                                        url,
+                                        "batch-navigate",
+                                        f"index={i + 1}/{len(urls)}",
+                                    )
+                                    page.goto(
+                                        url.strip(),
+                                        wait_until="domcontentloaded",
+                                        timeout=60000,
+                                    )
+                                    self._log_scrape_stage(url, "batch-navigated")
+                                except Exception:
+                                    self._log_scrape_stage(url, "navigation-timeout")
+                                    result = self._error(
+                                        "navigation_timeout",
+                                        "Timed out while loading thread page",
+                                    )
+                                else:
+                                    try:
+                                        page.wait_for_selector(
+                                            "h1.p-title-value", timeout=60000
+                                        )
+                                        self._log_scrape_stage(url, "title-ready")
+                                    except Exception:
+                                        page_issue = self._classify_page_issue(page)
+                                        if page_issue:
+                                            self._log_scrape_stage(
+                                                url,
+                                                "page-issue",
+                                                str(page_issue.get("code") or "unknown"),
+                                            )
+                                            result = self._error(
+                                                page_issue["code"], page_issue["error"]
+                                            )
+                                        else:
+                                            self._log_scrape_stage(url, "title-missing")
+                                            result = self._error(
+                                                "title_not_found",
+                                                "Could not find thread title on page",
+                                            )
+                                    else:
+                                        try:
+                                            title, version = (
+                                                self._extract_version_from_page(page)
+                                            )
+                                            self._log_scrape_stage(
+                                                url,
+                                                "version-extracted",
+                                                f"title={title!r}, version={version!r}",
+                                            )
 
-                        if self._is_non_actionable_version(version):
-                            self._log_scrape_stage(url, "version-non-actionable")
-                            result = self._error(
-                                "extract_failed",
-                                "Could not extract a usable version from thread",
-                            )
-                        else:
-                            result = cast(
-                                ScraperResultDict,
-                                {
-                                    "success": True,
-                                    "title": title,
-                                    "version": str(version).strip(),
-                                },
-                            )
-                            if include_metadata:
-                                self._log_scrape_stage(url, "metadata-extract")
-                                result.update(self._extract_metadata_from_page(page))
-                            self._log_scrape_stage(url, "done", "success")
-                    except Exception as e:
-                        self._log_scrape_stage(url, "error", str(e))
-                        result = self._error("scraper_error", str(e))
+                                            if self._is_non_actionable_version(version):
+                                                self._log_scrape_stage(
+                                                    url, "version-non-actionable"
+                                                )
+                                                result = self._error(
+                                                    "extract_failed",
+                                                    "Could not extract a usable version from thread",
+                                                )
+                                            else:
+                                                result = cast(
+                                                    ScraperResultDict,
+                                                    {
+                                                        "success": True,
+                                                        "title": title,
+                                                        "version": str(version).strip(),
+                                                    },
+                                                )
+                                                if include_metadata:
+                                                    self._log_scrape_stage(
+                                                        url, "metadata-extract"
+                                                    )
+                                                    result.update(
+                                                        self._extract_metadata_from_page(
+                                                            page
+                                                        )
+                                                    )
+                                                self._log_scrape_stage(
+                                                    url, "done", "success"
+                                                )
+                                        except Exception as e:
+                                            self._log_scrape_stage(url, "error", str(e))
+                                            result = self._error("scraper_error", str(e))
+                        finally:
+                            try:
+                                page.close()
+                            except Exception:
+                                pass
 
-                    results[url] = result
-                    page.close()
+                        results[url] = result
 
-                    if callback:
-                        if not callback(url, result):
-                            break  # cancel if callback returns False
+                        if not self._should_continue_batch(callback, url, result):
+                            break
 
-                    if i < len(urls) - 1:
-                        import time
-
-                        time.sleep(delay_seconds)
-
-                context.close()
+                        if i < len(urls) - 1:
+                            time.sleep(delay_seconds)
+                finally:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
         except Exception as e:
             results["__batch_error__"] = self._error(
                 "batch_failed", f"Playwright batch check failed: {e}"

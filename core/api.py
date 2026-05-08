@@ -3070,26 +3070,47 @@ class Api:
     # ==========================
     # Cheat Engine API
     # ==========================
+    def _find_cheat_engine_executable(self, install_dir: str) -> str:
+        import os
+
+        candidates = (
+            os.path.join(install_dir, "Lunar Engine", "lunarengine-x86_64.exe"),
+            os.path.join(install_dir, "lunarengine-x86_64.exe"),
+        )
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        return ""
+
     def is_cheat_engine_installed(self) -> dict[str, object]:
         """Checks if Cheat Engine (Lunar Engine) is installed in the wLib data directory."""
         import os
 
         ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
-        # We look for the 64-bit Lunar Engine executable inside the extracted folder
-        # The zip extracts into a "Lunar Engine" subfolder usually, or directly containing it.
-        # Let's search for "lunarengine-x86_64.exe" or "cheatengine-x86_64.exe"
-        extracted_folder = os.path.join(ce_dir, "Lunar Engine")
-        if os.path.exists(os.path.join(extracted_folder, "lunarengine-x86_64.exe")):
-            return {
-                "installed": True,
-                "path": os.path.join(extracted_folder, "lunarengine-x86_64.exe"),
-            }
-        if os.path.exists(os.path.join(ce_dir, "lunarengine-x86_64.exe")):
-            return {
-                "installed": True,
-                "path": os.path.join(ce_dir, "lunarengine-x86_64.exe"),
-            }
+        executable_path = self._find_cheat_engine_executable(ce_dir)
+        if executable_path:
+            return {"installed": True, "path": executable_path}
         return {"installed": False, "path": ""}
+
+    def _restore_cheat_engine_backup(
+        self, ce_dir: str, backup_dir: str | None
+    ) -> str:
+        if not backup_dir:
+            return ""
+
+        import os
+        import shutil
+
+        if not os.path.exists(backup_dir):
+            return ""
+
+        try:
+            if os.path.exists(ce_dir):
+                shutil.rmtree(ce_dir)
+            _ = shutil.move(backup_dir, ce_dir)
+        except Exception as e:
+            return f"failed to restore previous Cheat Engine install: {e}"
+        return ""
 
     def download_cheat_engine(self) -> dict[str, object]:
         """
@@ -3098,19 +3119,25 @@ class Api:
         """
         import os
         import shutil
+        import tempfile
         import urllib.request
         import zipfile
 
         url = "https://github.com/visibou/lunarengine/releases/download/v.7.2/Lunar.Engine.zip"
         ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
-        zip_path = os.path.join(ce_dir, "ce.zip")
+        parent_dir = os.path.dirname(ce_dir)
+        stage_dir: str | None = None
+        backup_dir: str | None = None
+        replacement_finished = False
 
         try:
-            # Clean up old directory if exists
-            if os.path.exists(ce_dir):
-                shutil.rmtree(ce_dir)
-
-            os.makedirs(ce_dir, exist_ok=True)
+            os.makedirs(parent_dir, exist_ok=True)
+            stage_dir = tempfile.mkdtemp(
+                prefix="CheatEngine-download-", dir=parent_dir
+            )
+            extract_dir = os.path.join(stage_dir, "install")
+            os.makedirs(extract_dir, exist_ok=True)
+            zip_path = os.path.join(stage_dir, "ce.zip")
 
             print(f"Downloading Cheat Engine from {url}...")
 
@@ -3123,22 +3150,69 @@ class Api:
             ):
                 _ = out_file.write(response.read())
 
-            print(f"Extracting Cheat Engine to {ce_dir}...")
+            print(f"Extracting Cheat Engine to staging directory {extract_dir}...")
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                zip_ref.extractall(ce_dir)
+                zip_ref.extractall(extract_dir)
 
             os.remove(zip_path)  # cleanup
 
-            # Verify install
-            check = self.is_cheat_engine_installed()
-            if check["installed"]:
-                print("Cheat Engine successfully installed!")
-                return {"success": True, "path": check["path"]}
-            else:
+            staged_executable = self._find_cheat_engine_executable(extract_dir)
+            if not staged_executable:
                 return {
                     "success": False,
                     "error": "Extracted successfully but could not find lunarengine-x86_64.exe",
                 }
 
+            if os.path.exists(ce_dir):
+                backup_dir = tempfile.mkdtemp(
+                    prefix="CheatEngine-backup-", dir=parent_dir
+                )
+                os.rmdir(backup_dir)
+                _ = shutil.move(ce_dir, backup_dir)
+
+            _ = shutil.move(extract_dir, ce_dir)
+
+            check = self.is_cheat_engine_installed()
+            if check["installed"]:
+                print("Cheat Engine successfully installed!")
+                cleanup_errors: list[str] = []
+                for cleanup_path in (backup_dir, stage_dir):
+                    if not cleanup_path or not os.path.exists(cleanup_path):
+                        continue
+                    try:
+                        shutil.rmtree(cleanup_path)
+                    except Exception as cleanup_error:
+                        cleanup_errors.append(str(cleanup_error))
+
+                replacement_finished = True
+                if cleanup_errors:
+                    return {
+                        "success": False,
+                        "path": check["path"],
+                        "error": "Cheat Engine installed but cleanup failed: "
+                        + "; ".join(cleanup_errors),
+                    }
+                return {"success": True, "path": check["path"]}
+
+            restore_error = self._restore_cheat_engine_backup(ce_dir, backup_dir)
+            backup_dir = None
+            error = "Extracted successfully but could not find lunarengine-x86_64.exe"
+            if restore_error:
+                error = f"{error}; {restore_error}"
+            return {
+                "success": False,
+                "error": error,
+            }
+
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            restore_error = self._restore_cheat_engine_backup(ce_dir, backup_dir)
+            error = str(e)
+            if restore_error:
+                error = f"{error}; {restore_error}"
+            return {"success": False, "error": error}
+        finally:
+            if not replacement_finished and stage_dir and os.path.exists(stage_dir):
+                try:
+                    shutil.rmtree(stage_dir)
+                except Exception:
+                    pass

@@ -6,6 +6,94 @@ from typing import cast
 from core.scraper import PageLike, Scraper
 
 
+class _FakeBatchPage:
+    def __init__(
+        self,
+        title_text: str = "Example Game [v1.0]",
+        goto_error: Exception | None = None,
+        selector_error: Exception | None = None,
+        content_text: str = "",
+    ):
+        self.title_text = title_text
+        self.goto_error = goto_error
+        self.selector_error = selector_error
+        self.content_text = content_text
+        self.closed = False
+
+    def query_selector(self, selector):
+        return object() if selector == "h1.p-title-value" else None
+
+    def evaluate(self, expression, arg=None):
+        _ = (expression, arg)
+        return self.title_text
+
+    def title(self):
+        return self.title_text
+
+    def content(self):
+        return self.content_text
+
+    def goto(self, *args, **kwargs):
+        _ = (args, kwargs)
+        if self.goto_error is not None:
+            raise self.goto_error
+
+    def bring_to_front(self):
+        return None
+
+    def wait_for_event(self, event, *, timeout):
+        _ = (event, timeout)
+        return None
+
+    def wait_for_selector(self, selector, *, timeout):
+        _ = (selector, timeout)
+        if self.selector_error is not None:
+            raise self.selector_error
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeBatchContext:
+    def __init__(self, pages):
+        self._pages = list(pages)
+        self.pages = []
+        self.new_page_calls = 0
+        self.closed = False
+
+    def new_page(self):
+        page = self._pages[self.new_page_calls]
+        self.new_page_calls += 1
+        return page
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeSyncPlaywright:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        _ = (exc_type, exc_value, traceback)
+        return None
+
+
+def _configure_batch_scraper(monkeypatch, scraper, pages):
+    context = _FakeBatchContext(pages)
+    monkeypatch.setattr(
+        scraper,
+        "_load_sync_playwright",
+        lambda: lambda: _FakeSyncPlaywright(),
+    )
+    monkeypatch.setattr(
+        scraper,
+        "_launch_persistent_browser_context",
+        lambda _playwright, headless: context,
+    )
+    return context
+
+
 def test_extract_version_from_title():
     scraper = Scraper()
 
@@ -270,6 +358,99 @@ def test_get_thread_version_dependency_missing(monkeypatch):
     assert result["success"] is False
     assert result["code"] == "dependency_missing"
     assert "Playwright" in str(result["error"])
+
+
+def test_get_multiple_thread_versions_callback_exception_after_invalid_url(
+    monkeypatch,
+):
+    scraper = Scraper()
+    context = _configure_batch_scraper(monkeypatch, scraper, [_FakeBatchPage()])
+
+    def callback(url, result):
+        _ = (url, result)
+        raise RuntimeError("callback exploded")
+
+    result = scraper.get_multiple_thread_versions(["not-a-thread"], callback=callback)
+
+    invalid_result = result["not-a-thread"]
+    batch_error = result["__batch_error__"]
+    assert invalid_result["success"] is False
+    assert invalid_result["code"] == "invalid_url"
+    assert batch_error["code"] == "batch_failed"
+    assert "callback exploded" in str(batch_error["error"])
+    assert context.closed is True
+
+
+def test_get_multiple_thread_versions_callback_exception_after_navigation_failure(
+    monkeypatch,
+):
+    scraper = Scraper()
+    url = "https://f95zone.to/threads/example.1/"
+    page = _FakeBatchPage(goto_error=RuntimeError("navigation failed"))
+    _ = _configure_batch_scraper(monkeypatch, scraper, [page])
+
+    def callback(callback_url, result):
+        _ = (callback_url, result)
+        raise RuntimeError("callback failed after navigation")
+
+    result = scraper.get_multiple_thread_versions([url], callback=callback)
+
+    thread_result = result[url]
+    batch_error = result["__batch_error__"]
+    assert thread_result["success"] is False
+    assert thread_result["code"] == "navigation_timeout"
+    assert batch_error["code"] == "batch_failed"
+    assert "callback failed after navigation" in str(batch_error["error"])
+    assert page.closed is True
+
+
+def test_get_multiple_thread_versions_callback_exception_after_success(monkeypatch):
+    scraper = Scraper()
+    url = "https://f95zone.to/threads/example.1/"
+    _ = _configure_batch_scraper(monkeypatch, scraper, [_FakeBatchPage()])
+
+    def callback(callback_url, result):
+        _ = (callback_url, result)
+        raise RuntimeError("callback failed after success")
+
+    result = scraper.get_multiple_thread_versions([url], callback=callback)
+
+    thread_result = result[url]
+    batch_error = result["__batch_error__"]
+    assert thread_result["success"] is True
+    assert thread_result["version"] == "1.0"
+    assert batch_error["code"] == "batch_failed"
+    assert "callback failed after success" in str(batch_error["error"])
+
+
+def test_get_multiple_thread_versions_callback_false_cancels_batch(monkeypatch):
+    scraper = Scraper()
+    first_url = "https://f95zone.to/threads/first.1/"
+    second_url = "https://f95zone.to/threads/second.2/"
+    context = _configure_batch_scraper(
+        monkeypatch,
+        scraper,
+        [
+            _FakeBatchPage("First Game [v1.0]"),
+            _FakeBatchPage("Second Game [v2.0]"),
+        ],
+    )
+
+    callbacks = []
+
+    def callback(callback_url, result):
+        callbacks.append((callback_url, result))
+        return False
+
+    result = scraper.get_multiple_thread_versions(
+        [first_url, second_url], callback=callback
+    )
+
+    assert list(result.keys()) == [first_url]
+    assert len(callbacks) == 1
+    assert callbacks[0][0] == first_url
+    assert context.new_page_calls == 1
+    assert "__batch_error__" not in result
 
 
 def test_normalize_cover_image_url_upgrades_thumb_path():

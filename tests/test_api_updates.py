@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import io
 import json
 import os
 import ssl
@@ -21,6 +22,21 @@ from core.database import (
 )
 
 
+class _FakeDownloadResponse:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        _ = (exc_type, exc_value, traceback)
+        return None
+
+
 @pytest.fixture(autouse=True)
 def setup_test_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test_wlib_api.db"
@@ -29,6 +45,34 @@ def setup_test_db(tmp_path, monkeypatch):
     yield
     if os.path.exists(db_file):
         os.remove(db_file)
+
+
+def _zip_bytes(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def _redirect_cheat_engine_dir(monkeypatch, tmp_path):
+    ce_dir = tmp_path / "home" / ".local" / "share" / "wLib" / "CheatEngine"
+    real_expanduser = os.path.expanduser
+
+    def fake_expanduser(path):
+        if path == "~/.local/share/wLib/CheatEngine":
+            return str(ce_dir)
+        return real_expanduser(path)
+
+    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+    return ce_dir
+
+
+def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
+    executable = ce_dir / "Lunar Engine" / "lunarengine-x86_64.exe"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(content)
+    return executable
 
 
 def test_api_add_game_persists_launch_mode():
@@ -173,6 +217,73 @@ def test_api_launch_target_validation_errors():
     not_found_delete = api.delete_launch_target(9999)
     assert not_found_update["error_code"] == "target_not_found"
     assert not_found_delete["error_code"] == "target_not_found"
+
+
+def test_download_cheat_engine_preserves_existing_install_on_download_failure(
+    monkeypatch, tmp_path
+):
+    ce_dir = _redirect_cheat_engine_dir(monkeypatch, tmp_path)
+    existing_executable = _write_existing_cheat_engine(ce_dir)
+
+    def failing_urlopen(*_args, **_kwargs):
+        raise URLError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", failing_urlopen)
+
+    result = Api().download_cheat_engine()
+
+    assert result["success"] is False
+    assert "network down" in str(result["error"])
+    assert existing_executable.read_bytes() == b"old engine"
+    assert not list(ce_dir.parent.glob("CheatEngine-download-*"))
+
+
+def test_download_cheat_engine_preserves_existing_install_when_verification_fails(
+    monkeypatch, tmp_path
+):
+    ce_dir = _redirect_cheat_engine_dir(monkeypatch, tmp_path)
+    existing_executable = _write_existing_cheat_engine(ce_dir)
+    archive_data = _zip_bytes({"readme.txt": b"missing executable"})
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: _FakeDownloadResponse(archive_data),
+    )
+
+    result = Api().download_cheat_engine()
+
+    assert result["success"] is False
+    assert "lunarengine-x86_64.exe" in str(result["error"])
+    assert existing_executable.read_bytes() == b"old engine"
+    assert not list(ce_dir.parent.glob("CheatEngine-download-*"))
+
+
+def test_download_cheat_engine_replaces_install_after_verified_download(
+    monkeypatch, tmp_path
+):
+    ce_dir = _redirect_cheat_engine_dir(monkeypatch, tmp_path)
+    old_executable = _write_existing_cheat_engine(ce_dir)
+    old_marker = ce_dir / "old-marker.txt"
+    old_marker.write_text("old install", encoding="utf-8")
+    archive_data = _zip_bytes(
+        {"Lunar Engine/lunarengine-x86_64.exe": b"new engine"}
+    )
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: _FakeDownloadResponse(archive_data),
+    )
+
+    result = Api().download_cheat_engine()
+
+    assert result["success"] is True
+    installed_path = str(result["path"])
+    assert installed_path.endswith("Lunar Engine/lunarengine-x86_64.exe")
+    assert os.path.exists(installed_path)
+    assert old_executable.read_bytes() == b"new engine"
+    assert not old_marker.exists()
+    assert not list(ce_dir.parent.glob("CheatEngine-download-*"))
+    assert not list(ce_dir.parent.glob("CheatEngine-backup-*"))
 
 
 def test_api_settings_persist_rpgmaker_linux_runner_path(tmp_path):
