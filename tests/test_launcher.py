@@ -235,6 +235,38 @@ def test_launch_auto_detect_native_script_uses_clean_host_environment(
 @patch("os.access")
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting")
+@patch("core.launcher.sys.executable", "/opt/wlib/wlib-bin")
+@patch.dict(
+    "os.environ",
+    {
+        "LD_LIBRARY_PATH": "/opt/wlib/_internal:/vendor/lib",
+        "WINEPREFIX": "/tmp/from-env",
+        "PATH": "/usr/bin:/bin",
+    },
+    clear=True,
+)
+def test_launch_native_mode_strips_pyinstaller_runtime_library_path(
+    mock_get_setting, mock_popen, mock_access, mock_exists
+):
+    mock_exists.return_value = True
+    mock_access.return_value = True
+    mock_get_setting.return_value = "false"
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch("/opt/game/Game.x86_64", launch_mode="native")
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["/opt/game/Game.x86_64"]
+    env = kwargs["env"]
+    assert env["LD_LIBRARY_PATH"] == "/vendor/lib"
+    assert "WINEPREFIX" not in env
+
+
+@patch("os.path.exists")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
 def test_launch_command_substitution_applies_leading_environment_assignments(
     mock_get_setting, mock_popen, mock_access, mock_exists
 ):
@@ -358,6 +390,47 @@ def test_launch_wine_proton_mode_uses_host_environment(
 
 
 @patch("os.path.exists")
+@patch("os.path.isdir")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch("core.launcher.sys.executable", "/opt/wlib/wlib-bin")
+@patch.dict(
+    "os.environ",
+    {
+        "LD_LIBRARY_PATH": "/opt/wlib/_internal",
+        "PATH": "/usr/bin:/bin",
+    },
+    clear=True,
+)
+def test_launch_wine_proton_mode_strips_pyinstaller_runtime_library_path(
+    mock_get_setting, mock_popen, mock_access, mock_isdir, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/opt/game/game.exe"
+    mock_isdir.return_value = False
+    mock_access.return_value = False
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "proton_path": "",
+            "wine_prefix_path": "/tmp/wlib-prefix",
+        }.get(key)
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch("/opt/game/game.exe", launch_mode="wine_proton")
+
+    assert result["success"] is True
+    args, kwargs = mock_popen.call_args
+    assert args[0] == ["wine", "/opt/game/game.exe"]
+    env = kwargs["env"]
+    assert "LD_LIBRARY_PATH" not in env
+    assert env["WINEPREFIX"] == "/tmp/wlib-prefix"
+
+
+@patch("os.path.exists")
 @patch("os.access")
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting")
@@ -451,6 +524,48 @@ def test_launch_rpgmaker_linux_runner_uses_game_directory_and_clean_env(
     assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
     assert "APPIMAGE" not in env
     assert "LD_LIBRARY_PATH" not in env
+
+
+@patch("os.path.exists")
+@patch("os.path.isfile")
+@patch("os.access")
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting")
+@patch("core.launcher.sys.executable", "/opt/wlib/wlib-bin")
+@patch.dict(
+    "os.environ",
+    {
+        "LD_LIBRARY_PATH": "/opt/wlib/_internal:/usr/local/lib",
+        "WINEPREFIX": "/tmp/from-env",
+        "PATH": "/usr/bin:/bin",
+    },
+    clear=True,
+)
+def test_launch_rpgmaker_linux_runner_strips_pyinstaller_runtime_library_path(
+    mock_get_setting, mock_popen, mock_access, mock_isfile, mock_exists
+):
+    mock_exists.side_effect = lambda path: path == "/games/foo/Game.exe"
+    mock_isfile.side_effect = lambda path: path == "/opt/rpgmaker-linux"
+    mock_access.return_value = True
+
+    def get_setting_side_effect(key):
+        return {
+            "enable_logging": "false",
+            "rpgmaker_linux_runner_path": "/opt/rpgmaker-linux",
+        }.get(key, "")
+
+    mock_get_setting.side_effect = get_setting_side_effect
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch("/games/foo/Game.exe", launch_mode="rpgmaker_linux")
+
+    assert result["success"] is True
+    mock_popen.assert_called_once()
+    _args, kwargs = mock_popen.call_args
+    env = kwargs["env"]
+    assert env["LD_LIBRARY_PATH"] == "/usr/local/lib"
+    assert "LD_LIBRARY_PATH_ORIG" not in env
+    assert "WINEPREFIX" not in env
 
 
 @patch("os.path.exists")

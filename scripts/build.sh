@@ -253,7 +253,7 @@ echo "🖼  Creating AppImage..."
 
 APPDIR="$BUILD_DIR/${APP_NAME}.AppDir"
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
 
 # Copy the full app into the AppDir
 cp -r "$BUILD_DIR/$PACKAGE_NAME"/* "$APPDIR/usr/bin/"
@@ -262,12 +262,19 @@ cp -r "$BUILD_DIR/$PACKAGE_NAME"/* "$APPDIR/usr/bin/"
 cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
 cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/"
 
-# Use the official SVG icon
+# Install both PNG and SVG icons for desktop integration. AppImage thumbnailers
+# expect .DirIcon to be a PNG even when the desktop icon also has an SVG source.
+if [ -f "$PROJECT_DIR/wlib.png" ]; then
+    mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+    cp "$PROJECT_DIR/wlib.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/wlib.png"
+    cp "$PROJECT_DIR/wlib.png" "$APPDIR/wlib.png"
+    cp "$PROJECT_DIR/wlib.png" "$APPDIR/.DirIcon"
+fi
+
 if [ -f "$PROJECT_DIR/icon.svg" ]; then
     mkdir -p "$APPDIR/usr/share/icons/hicolor/scalable/apps"
     cp "$PROJECT_DIR/icon.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/wlib.svg"
     cp "$PROJECT_DIR/icon.svg" "$APPDIR/wlib.svg"
-    cp "$PROJECT_DIR/icon.svg" "$APPDIR/.DirIcon"
 fi
 
 # AppRun — the entry point for the AppImage

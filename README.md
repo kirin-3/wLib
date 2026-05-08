@@ -17,7 +17,7 @@
 
 ---
 
-wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Linux-native, Wine, or Proton modes, and tracks updates seamlessly by scraping F95Zone thread pages.
+wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Linux-native, Wine, Proton, or optional RPGMaker Linux runner modes, and tracks updates seamlessly by scraping F95Zone thread pages.
 
 ## 🐧 Why wLib?
 
@@ -27,7 +27,7 @@ wLib was inspired by tools like **xLibrary** and other Windows-centric game mana
 |:--|:--|
 | 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable. |
 | 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight, native webview shell. |
-| 🍷 **First-class Wine & Proton** | Built-in support for Wine, Proton-GE, and native Linux runtimes out of the box. |
+| 🍷 **First-class Launching** | Built-in support for Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows. |
 
 If you've been looking for a game manager that truly belongs on Linux, wLib is for you.
 
@@ -37,11 +37,12 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 - **Smart Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status.
 - **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
 - **Portable JSON Migration** — Export and import your library, playtime, launch options, and selected settings with one JSON file.
+- **Additional Launch Targets** — Add named executables for multi-part games while keeping one canonical default launch path.
 - **Dark & Light Themes** — Toggle instantly between a polished dark mode and a clean light interface.
 
 ### 🚀 Advanced Launcher
 - **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
-- **Launch Modes** — Choose Auto Detect, Linux Native, or Wine / Proton per game. Native mode runs supported Linux targets directly without Wine or Proton.
+- **Launch Modes** — Choose Auto Detect, Linux Native, Wine / Proton, or RPGMaker Linux per game. Native mode runs supported Linux targets directly without Wine or Proton; RPGMaker Linux uses an external runner you install or configure.
 - **Wine / Proton Integration** — Support for Wine, Proton, native Linux binaries, shell scripts, and even `.jar` files safely.
 - **Engine Auto-Configuration** — Automatically applies environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
 - **Japanese Locale Mode** — Run games strictly with `LC_ALL=ja_JP.UTF-8` locale for parsing untranslated Japanese titles correctly.

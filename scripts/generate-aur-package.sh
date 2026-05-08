@@ -19,6 +19,12 @@ if [[ ! "$PKGVER" =~ ^[0-9][0-9A-Za-z._+~]*$ ]]; then
     exit 1
 fi
 
+PKGREL="${WLIB_AUR_PKGREL:-1}"
+if [[ ! "$PKGREL" =~ ^[1-9][0-9]*([.][1-9][0-9]*)?$ ]]; then
+    echo "AUR pkgrel must be a positive numeric release; got: $PKGREL" >&2
+    exit 1
+fi
+
 RELEASE_TAG="${VERSION}"
 if [[ "$RELEASE_TAG" != v* ]]; then
     RELEASE_TAG="v${RELEASE_TAG}"
@@ -52,6 +58,7 @@ sed_escape() {
 sed \
     -e "s|@WLIB_MAINTAINER@|$(sed_escape "$MAINTAINER")|g" \
     -e "s|@PKGVER@|$(sed_escape "$PKGVER")|g" \
+    -e "s|@PKGREL@|$(sed_escape "$PKGREL")|g" \
     -e "s|@RELEASE_TAG@|$(sed_escape "$RELEASE_TAG")|g" \
     -e "s|@ARTIFACT_VERSION@|$(sed_escape "$ARTIFACT_VERSION")|g" \
     -e "s|@TARBALL_SHA256@|$(sed_escape "$SHA256")|g" \
@@ -61,12 +68,13 @@ cat > "$SRCINFO_OUT" << SRCINFO
 pkgbase = wlib-bin
 	pkgdesc = Modern Linux game manager for F95Zone
 	pkgver = ${PKGVER}
-	pkgrel = 1
+	pkgrel = ${PKGREL}
 	url = https://github.com/kirin-3/wLib
 	arch = x86_64
 	license = GPL-3.0-or-later
 	depends = ca-certificates
 	depends = gtk3
+	depends = hicolor-icon-theme
 	depends = libxkbcommon-x11
 	depends = mesa-utils
 	depends = wine

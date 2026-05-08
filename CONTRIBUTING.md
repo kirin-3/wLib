@@ -143,6 +143,7 @@ Before making architectural changes, reviewing our internal documentation is hig
 - [Frontend Details](docs/frontend.md)
 - [Database & Schema](docs/database.md)
 - [Browser Extension API](docs/extension_api.md)
+- [Build & Packaging](docs/build.md)
 
 ## 📝 Commit Messages
 
@@ -178,7 +179,7 @@ docs: update installation instructions for Fedora
 - [ ] Tests pass locally (`pytest`).
 - [ ] The app launches headless Chromium (Playwright) successfully.
 - [ ] UI changes work elegantly in both Dark and Light themes.
-- [ ] Added documentation for any new features or schema changes.
+- [ ] Added documentation and migration coverage for any new features, schema changes, settings, or frontend/backend API contracts.
 
 ## 🐛 Reporting Issues
 

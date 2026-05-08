@@ -3,7 +3,7 @@
 
 pkgname=wlib-bin
 pkgver=@PKGVER@
-pkgrel=1
+pkgrel=@PKGREL@
 pkgdesc="Modern Linux game manager for F95Zone"
 arch=('x86_64')
 url="https://github.com/kirin-3/wLib"
@@ -11,6 +11,7 @@ license=('GPL-3.0-or-later')
 depends=(
   'ca-certificates'
   'gtk3'
+  'hicolor-icon-theme'
   'libxkbcommon-x11'
   'mesa-utils'
   'wine'
@@ -48,10 +49,11 @@ package() {
   install -Dm644 "${pkgdir}/opt/wlib/icon.svg" \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/wlib.svg"
 
-  if [[ -f "${pkgdir}/opt/wlib/wlib.png" ]]; then
-    install -Dm644 "${pkgdir}/opt/wlib/wlib.png" \
-      "${pkgdir}/usr/share/pixmaps/wlib.png"
-  fi
+  install -Dm644 "${pkgdir}/opt/wlib/wlib.png" \
+    "${pkgdir}/usr/share/icons/hicolor/256x256/apps/wlib.png"
+
+  install -Dm644 "${pkgdir}/opt/wlib/wlib.png" \
+    "${pkgdir}/usr/share/pixmaps/wlib.png"
 
   install -Dm644 "${pkgdir}/opt/wlib/LICENSE" \
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"

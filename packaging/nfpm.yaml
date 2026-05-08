@@ -34,6 +34,10 @@ contents:
     expand: true
 
   - src: "${WLIB_PACKAGE_SOURCE}/wlib.png"
+    dst: /usr/share/icons/hicolor/256x256/apps/wlib.png
+    expand: true
+
+  - src: "${WLIB_PACKAGE_SOURCE}/wlib.png"
     dst: /usr/share/pixmaps/wlib.png
     expand: true
 

@@ -3,6 +3,7 @@ import subprocess
 import os
 import re
 import shutil
+import sys
 from typing import Protocol, TypedDict
 
 from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
@@ -365,7 +366,39 @@ class Launcher:
                 _ = clean_env.pop(var, None)
             return clean_env
 
-        def without_appimage_env(env_vars: dict[str, str]) -> dict[str, str]:
+        def is_packaged_runtime_library_path(raw_path: str) -> bool:
+            path = raw_path.strip()
+            if not path:
+                return True
+
+            expanded_path = os.path.expanduser(path)
+            if "/.mount_" in path or "/.mount_" in expanded_path:
+                return True
+
+            normalized_path = os.path.abspath(expanded_path)
+            runtime_dirs: set[str] = set()
+            meipass = str(getattr(sys, "_MEIPASS", "") or "").strip()
+            if meipass:
+                runtime_dirs.add(os.path.abspath(os.path.expanduser(meipass)))
+
+            executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+            runtime_dirs.add(os.path.join(executable_dir, "_internal"))
+            if normalized_path in runtime_dirs:
+                return True
+
+            if os.path.basename(normalized_path) != "_internal":
+                return False
+
+            try:
+                runtime_files = os.listdir(normalized_path)
+            except OSError:
+                return False
+
+            return "base_library.zip" in runtime_files or any(
+                entry.startswith("libpython") for entry in runtime_files
+            )
+
+        def without_packaged_runtime_env(env_vars: dict[str, str]) -> dict[str, str]:
             clean_env = env_vars.copy()
             appimage_context = any(
                 var in clean_env
@@ -390,16 +423,32 @@ class Launcher:
             ):
                 _ = clean_env.pop(var, None)
 
-            if "LD_LIBRARY_PATH_ORIG" in clean_env:
-                clean_env["LD_LIBRARY_PATH"] = clean_env.pop("LD_LIBRARY_PATH_ORIG")
-            elif appimage_context:
+            original_library_path = str(
+                clean_env.pop("LD_LIBRARY_PATH_ORIG", "") or ""
+            ).strip()
+            if original_library_path:
+                clean_env["LD_LIBRARY_PATH"] = original_library_path
+            else:
+                library_path = str(clean_env.get("LD_LIBRARY_PATH") or "")
+                library_paths = [
+                    entry
+                    for entry in library_path.split(os.pathsep)
+                    if entry
+                    and not is_packaged_runtime_library_path(entry)
+                ]
+                if library_paths:
+                    clean_env["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+                elif appimage_context or library_path:
+                    _ = clean_env.pop("LD_LIBRARY_PATH", None)
+
+            if appimage_context and not str(clean_env.get("LD_LIBRARY_PATH") or ""):
                 _ = clean_env.pop("LD_LIBRARY_PATH", None)
             return clean_env
 
         def build_host_tool_env(
             env_vars: dict[str, str], strip_wine_env: bool = True
         ) -> dict[str, str]:
-            clean_env = without_appimage_env(env_vars)
+            clean_env = without_packaged_runtime_env(env_vars)
             if strip_wine_env:
                 clean_env = without_wine_proton_env(clean_env)
             return clean_env
@@ -509,7 +558,7 @@ class Launcher:
             return execute_rpgmaker_linux_runner()
 
         # 5. Fallback to Wine / Proton execution for Windows executables
-        env = without_appimage_env(env)
+        env = without_packaged_runtime_env(env)
         proton_path = proton_version if proton_version else get_setting("proton_path")
         wine_prefix = (
             custom_prefix if custom_prefix else get_setting("wine_prefix_path")

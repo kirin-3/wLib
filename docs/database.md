@@ -15,8 +15,10 @@ Upon startup in `core/database.py`, the engine executes `PRAGMA journal_mode=WAL
 - **Thread Safety**: Essential for wLib's multi-threaded architecture where the UI, extension server, and scraper all access the database concurrently
 
 ## Schema Versioning
-wLib avoids heavyweight migration libraries like Alembic in favor of a lightweight auto-patching approach. 
-The `init_db()` function programmatically inspects `PRAGMA table_info(games)` during boot. If the application updates require new columns, `init_db` automatically executes `ALTER TABLE` statements conditionally to bring the schema up to date. It also performs additive data normalization for evolved fields such as `play_status`, allowing older stored values to be mapped into the current canonical status set during startup.
+wLib avoids heavyweight migration libraries like Alembic in favor of a lightweight auto-patching approach.
+The `init_db()` function creates missing tables and indexes, inserts missing default settings with `INSERT OR IGNORE`, and programmatically inspects `PRAGMA table_info(games)` during boot. If the application updates require new columns, `init_db` automatically executes `ALTER TABLE` statements conditionally to bring the schema up to date. It also performs additive data normalization for evolved fields such as `play_status` and `launch_mode`, allowing older stored values to be mapped into the current canonical sets during startup.
+
+For example, the `0.3.3` to `0.3.4` upgrade adds `games.launch_mode`, the `game_launch_targets` table/index, and the `rpgmaker_linux_runner_path` setting without rewriting existing game rows or settings.
 
 ### Play Status Normalization
 
