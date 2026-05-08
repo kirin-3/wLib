@@ -96,7 +96,7 @@ const openLaunchTargetMenuId = ref<number | null>(null);
 const searchQuery = ref("");
 const filterStatuses = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterStatuses]);
 const filterCollection = ref<FilterCollection>(DEFAULT_LIBRARY_VIEW_STATE.filterCollection);
-const filterEngines = ref<string[]>([]);
+const filterEngines = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterEngines]);
 const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
@@ -179,13 +179,16 @@ const toggleFilter = (arr: string[], val: string) => {
   else arr.splice(idx, 1);
 };
 
+const normalizeEngineFilterValue = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
 // Derived unique values for filter pills
 const uniqueEngines = computed(() => {
-  const set = new Set(
-    games.value
-      .map((g) => g.engine)
-      .filter((engine): engine is string => typeof engine === "string" && !!engine),
-  );
+  const set = new Set<string>();
+  games.value.forEach((g) => {
+    const engine = normalizeEngineFilterValue(g.engine);
+    if (engine) set.add(engine);
+  });
   return [...set].sort();
 });
 
@@ -207,6 +210,7 @@ const activeFilterCount = computed(
   () =>
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
+    (filterEngines.value.length > 0 ? 1 : 0) +
     (filterTags.value.length > 0 ? 1 : 0),
 );
 const clearFilters = () => {
@@ -223,6 +227,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   sortDir.value = state.sortDir;
   filterCollection.value = state.filterCollection;
   filterStatuses.value = [...state.filterStatuses];
+  filterEngines.value = [...state.filterEngines];
   filterTags.value = [...state.filterTags];
   isFiltersCollapsed.value = state.isFiltersCollapsed;
   filterSections.value = { ...state.filterSections };
@@ -235,6 +240,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     sortDir: sortDir.value,
     filterCollection: filterCollection.value,
     filterStatuses: filterStatuses.value,
+    filterEngines: filterEngines.value,
     filterTags: filterTags.value,
     isFiltersCollapsed: isFiltersCollapsed.value,
     filterSections: filterSections.value,
@@ -291,7 +297,9 @@ const filteredGames = computed(() => {
     });
   }
   if (filterEngines.value.length) {
-    result = result.filter((g) => filterEngines.value.includes(g.engine || ""));
+    result = result.filter((g) =>
+      filterEngines.value.includes(normalizeEngineFilterValue(g.engine)),
+    );
   }
   if (filterTags.value.length) {
     result = result.filter((g) => {
@@ -645,6 +653,7 @@ watch(
     sortDir,
     filterCollection,
     filterStatuses,
+    filterEngines,
     filterTags,
     isFiltersCollapsed,
     filterSections,
@@ -654,6 +663,17 @@ watch(
   },
   { deep: true },
 );
+
+watch(uniqueEngines, (engines) => {
+  const normalizedEngines = normalizeLibraryViewState(
+    { filterEngines: filterEngines.value },
+    { validEngines: engines },
+  ).filterEngines;
+
+  if (!sameStringArray(normalizedEngines, filterEngines.value)) {
+    filterEngines.value = normalizedEngines;
+  }
+});
 
 watch(uniqueTags, (tags) => {
   const normalizedTags = normalizeLibraryViewState(
@@ -771,6 +791,51 @@ onUnmounted(() => {
                 <span>{{ s.label }}</span>
               </span>
             </label>
+          </div>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('engines')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Engines</span>
+            <span class="text-sm">{{ filterSections.engines ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="filterSections.engines" class="mt-3">
+            <div class="mb-2 flex justify-end">
+              <button
+                v-if="filterEngines.length"
+                @click="filterEngines = []"
+                class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal transition-colors"
+                style="color: var(--text-muted)"
+              >
+                Clear
+              </button>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="engine in uniqueEngines"
+                :key="engine"
+                @click="toggleFilter(filterEngines, engine)"
+                class="filter-tag-btn px-2.5 py-1 rounded-full text-[11px] font-medium"
+                :style="
+                  filterEngines.includes(engine)
+                    ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
+                    : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
+                "
+              >
+                {{ engine }}
+              </button>
+              <div
+                v-if="!uniqueEngines.length"
+                class="text-xs italic"
+                style="color: var(--text-muted)"
+              >
+                No engines found
+              </div>
+            </div>
           </div>
         </div>
 

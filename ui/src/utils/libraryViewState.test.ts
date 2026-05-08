@@ -51,11 +51,13 @@ test("normalizeLibraryViewState falls back on invalid static values", () => {
     sortDir: "sideways",
     filterCollection: "FavoritesOnly",
     filterStatuses: ["Playing", "Unknown", "Playing", 7],
+    filterEngines: ["  Ren'Py  ", "", "Unity", "Unity", 4],
     filterTags: ["  sci-fi  ", "", "tagged", 4],
     isFiltersCollapsed: "sometimes",
     filterSections: {
       collections: false,
       status: "yes",
+      engines: "no",
     },
   });
 
@@ -64,6 +66,7 @@ test("normalizeLibraryViewState falls back on invalid static values", () => {
   assert.equal(state.sortDir, "asc");
   assert.equal(state.filterCollection, "All");
   assert.deepEqual(state.filterStatuses, ["Playing"]);
+  assert.deepEqual(state.filterEngines, ["Ren'Py", "Unity"]);
   assert.deepEqual(state.filterTags, ["sci-fi", "tagged"]);
   assert.equal(state.isFiltersCollapsed, true);
   assert.deepEqual(state.filterSections, {
@@ -89,6 +92,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   assert.deepEqual(restored.state.filterSections, {
     collections: false,
     status: true,
+    engines: true,
     tags: false,
   });
 
@@ -101,7 +105,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   assert.notEqual(storage.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
 });
 
-test("readLibraryViewState prefers current blob and prunes unsupported tags", () => {
+test("readLibraryViewState prefers current blob and prunes unsupported engines and tags", () => {
   const storage = new MemoryStorage();
   const state: LibraryViewState = {
     version: 1,
@@ -110,20 +114,31 @@ test("readLibraryViewState prefers current blob and prunes unsupported tags", ()
     sortDir: "desc",
     filterCollection: "Favorites",
     filterStatuses: ["Completed"],
+    filterEngines: ["keep-engine", "drop-engine"],
     filterTags: ["keep", "drop"],
     isFiltersCollapsed: false,
-    filterSections: { collections: true, status: false, tags: true },
+    filterSections: { collections: true, status: false, engines: false, tags: true },
   };
 
   saveLibraryViewState(storage, state);
-  const restored = readLibraryViewState(storage, { validTags: ["keep"] });
+  const restored = readLibraryViewState(storage, {
+    validEngines: ["keep-engine"],
+    validTags: ["keep"],
+  });
 
   assert.equal(restored.source, "current");
   assert.equal(restored.state.layoutMode, "list");
   assert.equal(restored.state.sortBy, "rating");
   assert.equal(restored.state.filterCollection, "Favorites");
   assert.deepEqual(restored.state.filterStatuses, ["Completed"]);
+  assert.deepEqual(restored.state.filterEngines, ["keep-engine"]);
   assert.deepEqual(restored.state.filterTags, ["keep"]);
+  assert.deepEqual(restored.state.filterSections, {
+    collections: true,
+    status: false,
+    engines: false,
+    tags: true,
+  });
 });
 
 test("normalizeLibraryViewState preserves the expanded supported status set", () => {

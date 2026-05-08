@@ -15,6 +15,7 @@ export type FilterCollection = "All" | "Favorites";
 export interface FilterSections {
   collections: boolean;
   status: boolean;
+  engines: boolean;
   tags: boolean;
 }
 
@@ -25,6 +26,7 @@ export interface LibraryViewState {
   sortDir: SortDir;
   filterCollection: FilterCollection;
   filterStatuses: string[];
+  filterEngines: string[];
   filterTags: string[];
   isFiltersCollapsed: boolean;
   filterSections: FilterSections;
@@ -38,6 +40,7 @@ interface LibraryViewStateResult {
 }
 
 interface NormalizeLibraryViewStateOptions {
+  validEngines?: Iterable<string>;
   validTags?: Iterable<string>;
 }
 
@@ -52,6 +55,7 @@ export const LIBRARY_PLAY_STATUSES = PLAY_STATUSES;
 export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   collections: true,
   status: true,
+  engines: true,
   tags: true,
 };
 
@@ -62,6 +66,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   sortDir: "asc",
   filterCollection: "All",
   filterStatuses: [],
+  filterEngines: [],
   filterTags: [],
   isFiltersCollapsed: true,
   filterSections: { ...DEFAULT_FILTER_SECTIONS },
@@ -154,6 +159,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
       typeof source?.status === "boolean"
         ? source.status
         : DEFAULT_FILTER_SECTIONS.status,
+    engines:
+      typeof source?.engines === "boolean"
+        ? source.engines
+        : DEFAULT_FILTER_SECTIONS.engines,
     tags:
       typeof source?.tags === "boolean"
         ? source.tags
@@ -193,6 +202,11 @@ export const normalizeLibraryViewState = (
     VALID_STATUS_VALUES,
   );
 
+  const filterEngines = filterAllowedValues(
+    normalizeStringArray(source.filterEngines),
+    options.validEngines,
+  );
+
   const filterTags = filterAllowedValues(normalizeStringArray(source.filterTags), options.validTags);
 
   return {
@@ -202,6 +216,7 @@ export const normalizeLibraryViewState = (
     sortDir,
     filterCollection,
     filterStatuses,
+    filterEngines,
     filterTags,
     isFiltersCollapsed:
       typeof source.isFiltersCollapsed === "boolean"
