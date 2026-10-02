@@ -23,14 +23,14 @@ wLib is a Linux and Windows desktop application for managing, launching, and upd
 
 On Windows, Auto Detect launches `.exe` files directly, `.bat`/`.cmd` files through `cmd.exe`, `.jar` files through `java -jar` (Java must be on `PATH`), and `.html`/`.htm` files in the default browser. HTML games do not support playtime tracking. Wine/Proton, Winetricks/RTP installers, Wayland, the RPGMaker Linux runner, and Cheat Engine injection are Linux-only; their controls are hidden on Windows. Imported per-game launch options are preserved, but an unavailable launch mode must be changed to Auto Detect before launching on Windows.
 
-## 🐧 Why wLib?
+## 💡 Why wLib?
 
-wLib was inspired by tools like **xLibrary** and other Windows-centric game managers. However, wLib is built from the ground up to be:
+wLib was inspired by tools like **xLibrary** and other Windows-only game managers. Unlike them, wLib is built from the ground up to be:
 
 | | |
 |:--|:--|
 | 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable. |
-| 🖥️ **Native Desktop App** | Python + Vue in a PyWebView Qt WebEngine shell on Linux and Windows. |
+| 🖥️ **Cross-Platform Desktop App** | Python + Vue in a PyWebView Qt WebEngine shell, with native releases for Linux and Windows. |
 | 🍷 **First-class Launching** | Native Windows launching plus Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows on Linux. |
 
 The same library can move between Linux and Windows through semantic JSON import/export. Platform-specific launch settings are preserved but only offered where supported.
