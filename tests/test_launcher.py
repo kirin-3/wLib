@@ -42,6 +42,45 @@ def test_custom_command(monkeypatch, command, expected, env_value):
         assert env.get("FOO") == env_value
 
 
+def test_custom_command_keeps_user_wine_variables(monkeypatch):
+    # The host's WINEPREFIX is stripped, but one the user typed must survive.
+    monkeypatch.setenv("WINEPREFIX", "/bad/prefix")
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        result = Launcher().launch(
+            "/opt/game/game.exe",
+            "WINEPREFIX=/my/pfx STEAM_COMPAT_DATA_PATH=/my/compat proton run %command%",
+            launch_mode="custom",
+        )
+    assert result["success"] is True
+    assert popen.call_args.args[0] == ["proton", "run", "/opt/game/game.exe"]
+    env = popen.call_args.kwargs["env"]
+    assert env["WINEPREFIX"] == "/my/pfx"
+    assert env["STEAM_COMPAT_DATA_PATH"] == "/my/compat"
+
+
+def test_user_dll_overrides_come_after_defaults(monkeypatch):
+    # Wine keeps the last entry per DLL, so the user's value must come last to win.
+    monkeypatch.delenv("WINEDLLOVERRIDES", raising=False)
+    with (patch("os.path.exists", side_effect=lambda path: path == "/opt/game/game.exe"),
+          patch("os.makedirs"),
+          patch("core.launcher.get_setting", return_value=""),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        result = Launcher().launch(
+            "/opt/game/game.exe",
+            "WINEDLLOVERRIDES=winhttp=b %command%",
+            launch_mode="wine_proton",
+        )
+    assert result["success"] is True
+    assert (
+        popen.call_args.kwargs["env"]["WINEDLLOVERRIDES"]
+        == "mscoree=n,b;msvcrt=b,n;winhttp=n,b;winhttp=b"
+    )
+
+
 def test_custom_command_is_unsupported_on_windows(monkeypatch):
     monkeypatch.setattr("core.launcher.is_windows", lambda: True)
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
@@ -118,6 +157,79 @@ def test_stop_wine_prefix_and_process_group(monkeypatch, runner, layout, expecte
         killpg.assert_called_with(123, signal.SIGTERM)
         thread.call_args.kwargs["target"]()
         killpg.assert_called_with(123, signal.SIGKILL)
+
+
+def test_stop_skips_wineserver_kill_while_prefix_is_shared(monkeypatch):
+    import signal
+    launcher = Launcher()
+    kill_info = ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix"})
+    launcher._running[1] = RunningGame(MagicMock(pid=123), kill_info)
+    launcher._running[2] = RunningGame(MagicMock(pid=456), kill_info)
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg, raising=False)
+    with patch("subprocess.run") as run, patch("threading.Thread"):
+        assert launcher.stop(1)["success"]
+        run.assert_not_called()
+        killpg.assert_called_with(123, signal.SIGTERM)
+        del launcher._running[1]
+        assert launcher.stop(2)["success"]
+        assert run.call_args.args[0] == ["/usr/bin/wineserver", "-k"]
+
+
+def test_wine_paths_expand_home_like_installers(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/u")
+    with (patch("os.path.exists", side_effect=lambda path: path == "/opt/game/game.exe"),
+          patch("os.path.isdir", return_value=False),
+          patch("core.launcher.get_setting", return_value=""),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        result = Launcher().launch(
+            "/opt/game/game.exe",
+            custom_prefix="~/pfx",
+            proton_version="~/wine/bin/wine",
+            launch_mode="wine_proton",
+        )
+    assert result["success"] is True
+    assert popen.call_args.args[0][0] == "/home/u/wine/bin/wine"
+    assert popen.call_args.kwargs["env"]["WINEPREFIX"] == "/home/u/pfx"
+
+
+@pytest.mark.parametrize("exe_path, header", [
+    ("/opt/game/game.sh", b"#!/bin/sh"),
+    ("/opt/game/Game.x86_64", b"\x7fELF"),
+])
+def test_non_executable_native_files_ask_for_chmod_instead_of_wine(exe_path, header):
+    with (patch("os.path.exists", return_value=True),
+          patch("os.access", return_value=False),
+          patch("builtins.open", mock_open(read_data=header)),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen") as popen):
+        result = Launcher().launch(exe_path)
+    assert result["success"] is False
+    assert "chmod +x" in result["error"]
+    popen.assert_not_called()
+
+
+def test_logging_falls_back_to_temp_dir_for_read_only_game_folder():
+    import posixpath
+    import tempfile
+    opened = []
+
+    def fake_open(path, *_args, **_kwargs):
+        if path.startswith("/opt/game/"):
+            raise PermissionError(path)
+        opened.append(path)
+        return MagicMock()
+
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", side_effect=lambda key: "true" if key == "enable_logging" else "false"),
+          patch("builtins.open", side_effect=fake_open),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        result = Launcher().launch("/opt/game/game.jar")
+    assert result["success"] is True
+    assert opened == [posixpath.join(tempfile.gettempdir(), "game_wlib.log")]
+    popen.assert_called_once()
 
 
 def test_stop_native_missing_and_windows_error(monkeypatch):
@@ -592,6 +704,7 @@ def test_launch_does_not_elevate_other_errors(monkeypatch, windows, winerror):
     error.winerror = winerror
     with (
         patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
         patch("core.launcher.get_setting", return_value="false"),
         patch("subprocess.Popen", side_effect=error),
         patch("core.launcher._ElevatedProcess") as elevate,

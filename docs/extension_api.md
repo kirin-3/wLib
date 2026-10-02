@@ -16,6 +16,8 @@ Requests without an `Origin` header remain supported for local service checks an
 
 *Any standard domain (e.g., `https://google.com`) executing `fetch('http://localhost:8183/')` will immediately encounter a CORS rejection.*
 
+Pages can still fire a header-less `GET` without an `Origin` (for example `<img src="http://127.0.0.1:8183/api/open?...">`). Because `GET /api/open` has a side effect, it additionally requires an allowed extension `Origin` or the `X-wLib-Extension` header, which the extension background worker always sends. Pages cannot add that header without a CORS preflight, and preflights from non-extension origins are rejected.
+
 Because of that restriction, the extension does not call `GET /api/check` directly from the F95Zone page context. The content script sends a message to the extension background worker, and the worker performs the request from the extension origin.
 
 ## REST API Endpoints
@@ -39,6 +41,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={f95_url}`**
 Requests that the OS brings the wLib window to the foreground and opens the modal to the specified game.
+- **Requires:** an extension `Origin` or the `X-wLib-Extension: 1` header; otherwise HTTP 403.
 - **Action:** Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
 - **Response:**
   ```json
@@ -60,6 +63,7 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
   }
   ```
 - **Action:** Emits `wlib-extension-add` payload to the Vue frontend, which catches the event and displays the UI form pre-populated with the data above.
+- **Errors:** `{"success": false, "error": "..."}` with HTTP 400 for an invalid body or `Content-Length` (limit 1 MB), or HTTP 503 while the app window is not ready yet.
 - **Response:**
   ```json
   {
@@ -70,6 +74,8 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
 ## Installed Extension Files
 
 Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
+
+The scraper's `_extract_version_from_title` mirrors these title rules exactly (both parsers are tested against `tests/version_title_cases.json`), so a version stored by the extension is not later reported as an update. Hyphenated releases such as `[v1.0.0-beta2]` are kept whole. 1.0.7 also sends `X-wLib-Extension` on open and add requests and reports wLib's `{"success": false}` replies as failures instead of success.
 
 The packaged extension files used by browsers live under `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows by default. **Open Extension Folder** resolves the actual location, including any `WLIB_DATA_DIR` override:
 

@@ -452,25 +452,31 @@ def _match_imported_game(
         return {"status": "new", "game": imported_game, "title": title}
 
     title_key, developer_key = _fallback_identity_key(metadata)
-    if title_key and developer_key:
+    # Manually added games have no developer; their executable identifies them.
+    exe_key = _coerce_text(
+        _game_section(imported_game, SECTION_EXECUTABLE_PATHS).get("exe_path")
+    ).strip()
+    second_key = "developer" if developer_key else "executable"
+    if title_key and (developer_key or exe_key):
         fallback_matches = [
             game
             for game in local_games
             if _fallback_identity_key(game) == (title_key, developer_key)
+            and (developer_key or _coerce_text(game.get("exe_path")).strip() == exe_key)
         ]
         if len(fallback_matches) == 1:
             return {
                 "status": "matched",
                 "game": imported_game,
                 "local_id": int(str(fallback_matches[0].get("id", 0))),
-                "match_type": "title_developer",
+                "match_type": f"title_{second_key}",
             }
         if len(fallback_matches) > 1:
             return {
                 "status": "ambiguous",
                 "game": imported_game,
                 "title": title,
-                "reason": "Multiple local games share this title and developer.",
+                "reason": f"Multiple local games share this title and {second_key}.",
                 "candidate_count": len(fallback_matches),
             }
 

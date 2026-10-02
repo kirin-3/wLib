@@ -555,8 +555,8 @@ function injectUI(gameInfo) {
             chrome.runtime.sendMessage({
                 action: 'openWLib',
                 url: gameInfo.url
-            }, () => {
-                if (chrome.runtime.lastError) {
+            }, (response) => {
+                if (chrome.runtime.lastError || !response?.success) {
                     statusEl.textContent = 'Error: Make sure wLib is open.';
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
@@ -592,7 +592,7 @@ function injectUI(gameInfo) {
                         setTimeout(() => container.remove(), 300);
                     }, 3000);
                 } else {
-                    statusEl.textContent = 'Failed to add to database.';
+                    statusEl.textContent = 'Error: Make sure wLib is open.';
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                 }

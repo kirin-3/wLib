@@ -25,7 +25,8 @@ interface AddGamePayload {
   command_line_args: string;
 }
 
-const props = defineProps<{ modelValue: boolean }>();
+// saving: the parent is still adding (it fetches F95 metadata, which can take minutes).
+const props = defineProps<{ modelValue: boolean; saving?: boolean }>();
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   save: [payload: AddGamePayload];
@@ -154,7 +155,7 @@ const browseExe = async () => {
 };
 
 const save = () => {
-  if (!title.value || !exePath.value) return;
+  if (!title.value || !exePath.value || props.saving) return;
   emit("save", {
     title: title.value,
     exe_path: exePath.value,
@@ -314,11 +315,11 @@ const save = () => {
         </button>
         <button
           @click="save"
-          :disabled="!title || !exePath"
+          :disabled="!title || !exePath || saving"
           class="text-white px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); box-shadow: var(--shadow-brand)"
         >
-          Save to Library
+          {{ saving ? "Adding…" : "Save to Library" }}
         </button>
       </div>
     </div>

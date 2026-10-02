@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import json
 import os
 from pathlib import Path
 from typing import cast
@@ -142,6 +143,14 @@ def test_extract_version_from_title():
     assert scraper._extract_version_from_title("Game Title [Dev]") == "Unknown"
     assert scraper._extract_version_from_title("Just the Title") == "Unknown"
     assert scraper._extract_version_from_title(None) == "Unknown"
+
+
+def test_title_versions_match_extension_parser():
+    # Shared with tests/extension_version.test.cjs so both parsers stay identical.
+    cases_path = Path(__file__).with_name("version_title_cases.json")
+    scraper = Scraper()
+    for title, version in json.loads(cases_path.read_text(encoding="utf-8")):
+        assert scraper._extract_version_from_title(title) == version, title
 
 
 def test_extract_version_from_title_real_f95_formats():

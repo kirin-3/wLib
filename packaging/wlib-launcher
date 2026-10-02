@@ -6,8 +6,23 @@ SELF_PATH="$(readlink -f "$0")"
 SELF_DIR="$(dirname "$SELF_PATH")"
 APP_DIR="${WLIB_APP_DIR:-$SELF_DIR}"
 LAUNCHER_NAME="${WLIB_LAUNCHER_NAME:-Release}"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
-LOG_FILE="${WLIB_LAUNCH_LOG:-$DATA_DIR/wlib-launch.log}"
+if [ -n "${WLIB_DATA_DIR:-}" ]; then
+    DATA_DIR="$WLIB_DATA_DIR"
+else
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+    # Same fallback as get_data_dir(): keep a pre-XDG library. Resolve before any
+    # mkdir below, or creating the XDG folder would hide the existing library.
+    if [ ! -d "$DATA_DIR" ] && [ -d "$HOME/.local/share/wLib" ]; then
+        DATA_DIR="$HOME/.local/share/wLib"
+    fi
+fi
+export WLIB_DATA_DIR="$DATA_DIR"
+if [ "$LAUNCHER_NAME" = "AppImage" ]; then
+    DEFAULT_LOG_NAME="appimage-launch.log"
+else
+    DEFAULT_LOG_NAME="wlib-launch.log"
+fi
+LOG_FILE="${WLIB_LAUNCH_LOG:-$DATA_DIR/$DEFAULT_LOG_NAME}"
 LOG_DIR="$(dirname "$LOG_FILE")"
 
 mkdir -p "$DATA_DIR"
@@ -56,7 +71,7 @@ log_launch_context() {
     } >> "$LOG_FILE"
 }
 
-GPU_CRASH_GUARD="${XDG_DATA_HOME:-$HOME/.local/share}/wLib/.gpu_crash_guard"
+GPU_CRASH_GUARD="$DATA_DIR/.gpu_crash_guard"
 GPU_SOFTWARE_FROM_CRASH_GUARD=0
 GPU_RENDER_MODE="software"
 GPU_DETECTION_REASON="uninitialized"

@@ -165,6 +165,19 @@ def test_export_reports_invalid_destination(tmp_path):
     assert result["error_code"] == "invalid_destination"
 
 
+def test_reimport_matches_games_without_url_or_developer(tmp_path):
+    api = Api()
+    add_game(title="Manual Game", exe_path="/games/manual/game.exe")
+    add_game(title="Manual Game", exe_path="/games/other/game.exe")
+    exported = api.export_library_backup({}, str(tmp_path / "backup.json"))
+
+    result = api.import_library_backup(str(exported["path"]))
+
+    assert result["success"] is True
+    assert (result["created"], result["updated"]) == (0, 2)
+    assert len(get_all_games()) == 2
+
+
 def test_inspect_validates_format_and_matches_games(tmp_path):
     api = Api()
     add_game(

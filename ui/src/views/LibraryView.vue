@@ -570,12 +570,19 @@ watch(
         urlsMatchByThreadIdentity(g.f95_url, queryUrl),
       );
       if (match) openDetail(match);
+      // Consume the request: an identical route push is ignored as a duplicate,
+      // so a leftover query would swallow the next "Open in wLib" for this game.
+      void router.replace({ path: "/", query: {} });
     }
   },
   { immediate: true },
 );
 
+const addingGame = ref(false);
+
 const handleAddGame = async (gameData: AddGamePayload) => {
+  if (addingGame.value) return;
+  addingGame.value = true;
   try {
     const result = await api.addGame(
       gameData.title,
@@ -607,6 +614,8 @@ const handleAddGame = async (gameData: AddGamePayload) => {
     }
   } catch (e) {
     console.error("Failed to add game", e);
+  } finally {
+    addingGame.value = false;
   }
 };
 
@@ -743,11 +752,11 @@ onUnmounted(() => {
           <div v-show="filterSections.collections" class="space-y-1 mt-3">
             <button
               @click="filterCollection = 'All'"
-              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
               :style="
                 filterCollection === 'All'
                   ? 'background: var(--bg-raised); color: var(--text-primary)'
-                  : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
+                  : 'color: var(--text-secondary)'
               "
             >
               <IconLayoutGridFilled class="w-4 h-4" />
@@ -755,11 +764,11 @@ onUnmounted(() => {
             </button>
             <button
               @click="filterCollection = 'Favorites'"
-              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
               :style="
                 filterCollection === 'Favorites'
                   ? 'background: var(--bg-raised); color: var(--text-primary)'
-                  : 'color: var(--text-secondary); hover:background: var(--bg-overlay)'
+                  : 'color: var(--text-secondary)'
               "
             >
               <IconStarFilled class="w-4 h-4" />
@@ -1387,7 +1396,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <AddGameModal v-model="showAddModal" @save="handleAddGame" />
+    <AddGameModal v-model="showAddModal" :saving="addingGame" @save="handleAddGame" />
     <GameDetailModal
       v-model="showDetailModal"
       :game="selectedGame"

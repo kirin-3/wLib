@@ -1897,6 +1897,21 @@ def test_install_rpgmaker_dependencies_reports_background_failure(
     assert status["dlls_installed"] is False
 
 
+def test_installs_refuse_to_run_in_parallel(monkeypatch, tmp_path):
+    api = Api()
+    prefix_path = str(tmp_path / "prefix")
+    thread = MagicMock()  # never starts, so the first install stays "running"
+    monkeypatch.setattr("shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr("core.api.threading.Thread", thread)
+
+    assert api.install_rpgmaker_dependencies(prefix_path, "")["success"] is True
+    for install in (api.install_rpgmaker_dependencies, api.install_rpgmaker_rtp):
+        result = install(prefix_path, "")
+        assert result["success"] is False
+        assert "already running" in str(result["error"])
+    thread.assert_called_once()
+
+
 def test_open_url_with_targeted_tls_fallback_retries_komodo_with_intermediate(
     monkeypatch,
 ):
@@ -1989,6 +2004,65 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
     assert result["success"] is True
     assert "official RPG Maker file host" in error_text
     assert "https://www.rpgmakerweb.com/run-time-package" in error_text
+
+
+def test_install_rpgmaker_rtp_recovers_from_interrupted_download(monkeypatch, tmp_path):
+    api = Api()
+    rtp_dir = tmp_path / "rtp"
+    rtp_dir.mkdir()
+    # What an interrupted download used to leave behind, forever.
+    (rtp_dir / "vxace_rtp.zip").write_bytes(b"")
+    (rtp_dir / "VX_Ace").mkdir()  # half-extracted folder without the installer
+    packages = api._get_rtp_packages()[:1]
+    downloads: list[str] = []
+
+    class RunInline:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    def fake_open(request, timeout=30):
+        downloads.append(request.full_url)
+        return io.BytesIO(_zip_bytes({"Setup.exe": b"MZ"}))
+
+    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
+    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
+    monkeypatch.setattr("subprocess.run", MagicMock())
+    monkeypatch.setattr(api, "_get_rtp_packages", lambda: packages)
+    monkeypatch.setattr(api, "_open_url_with_targeted_tls_fallback", fake_open)
+
+    _ = api.install_rpgmaker_rtp(str(tmp_path / "prefix"), "")  # drops the stale folder
+    _ = api.install_rpgmaker_rtp(str(tmp_path / "prefix"), "")
+
+    assert len(downloads) == 1
+    assert zipfile.is_zipfile(rtp_dir / "vxace_rtp.zip")
+    assert (rtp_dir / "VX_Ace" / "Setup.exe").is_file()
+    assert not list(rtp_dir.glob("*.part"))
+
+
+def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
+    api = Api()
+    proton = tmp_path / "GE-Proton" / "proton"
+    (proton.parent / "files" / "bin").mkdir(parents=True)
+    (proton.parent / "files" / "bin" / "wine").write_text("")
+    proton.write_text("")
+    fresh = tmp_path / "fresh"
+    plain_wine = tmp_path / "plain"
+    (plain_wine / "drive_c").mkdir(parents=True)
+
+    env, target = api._build_runtime_install_env(str(fresh), str(proton))
+    # A fresh prefix gets Proton's layout, so the launcher later runs in the same pfx.
+    assert env["WINEPREFIX"] == target["resolved_prefix"] == str(fresh / "pfx")
+    assert env["STEAM_COMPAT_DATA_PATH"] == str(fresh)
+    assert env["WINE"] == str(proton.parent / "files" / "bin" / "wine")
+
+    env, _ = api._build_runtime_install_env(str(plain_wine), str(proton))
+    # Same isolation rule as the launcher for an existing plain Wine prefix.
+    assert env["STEAM_COMPAT_DATA_PATH"] == str(plain_wine / "proton_compat")
+    assert env["WINEPREFIX"] == str(plain_wine / "proton_compat" / "pfx")
 
 
 def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatch):

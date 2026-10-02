@@ -6,7 +6,7 @@ import ssl
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from contextlib import closing, suppress
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
 from core.database import (
@@ -29,7 +29,7 @@ from core.host_platform import (
     open_windows_system_target,
     unsupported_on_host,
 )
-from core.launcher import Launcher
+from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
 
 if TYPE_CHECKING:
@@ -288,17 +288,18 @@ class Api:
             base_prefix = get_default_wine_prefix()
         base_prefix = os.path.abspath(os.path.expanduser(base_prefix))
 
-        proton_path_to_use = str(proton_source or "").strip()
+        proton_path_to_use = os.path.expanduser(str(proton_source or "").strip())
         is_proton = bool(
             proton_path_to_use
             and "proton" in os.path.basename(proton_path_to_use).lower()
         )
 
-        resolved_prefix = base_prefix
+        # Mirror the launcher's layout so installs land in the prefix games run in.
         if is_proton:
+            resolved_prefix = os.path.join(proton_compat_data_path(base_prefix), "pfx")
+        else:
             pfx_path = os.path.join(base_prefix, "pfx")
-            if os.path.isdir(pfx_path):
-                resolved_prefix = pfx_path
+            resolved_prefix = pfx_path if os.path.isdir(pfx_path) else base_prefix
 
         return {
             "base_prefix": base_prefix,
@@ -312,14 +313,19 @@ class Api:
     ) -> tuple[dict[str, str], RuntimeInstallTarget]:
         target = self._resolve_runtime_install_target(prefix_path, proton_path)
         env = os.environ.copy()
-
-        os.makedirs(target["base_prefix"], exist_ok=True)
+        env["WINEPREFIX"] = target["resolved_prefix"]
         if target["is_proton"]:
-            env["WINEPREFIX"] = target["resolved_prefix"]
-            env["STEAM_COMPAT_DATA_PATH"] = target["base_prefix"]
+            env["STEAM_COMPAT_DATA_PATH"] = os.path.dirname(target["resolved_prefix"])
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/tmp/wlib"
-        else:
-            env["WINEPREFIX"] = target["resolved_prefix"]
+            # winetricks must drive Proton's own Wine, not whatever `wine` is on PATH.
+            for layout in ("files", "dist"):
+                bin_dir = os.path.join(
+                    os.path.dirname(target["proton_path"]), layout, "bin"
+                )
+                if os.path.isfile(os.path.join(bin_dir, "wine")):
+                    env["WINE"] = os.path.join(bin_dir, "wine")
+                    env["WINESERVER"] = os.path.join(bin_dir, "wineserver")
+                    break
 
         os.makedirs(env["WINEPREFIX"], exist_ok=True)
         return env, target
@@ -2488,6 +2494,9 @@ class Api:
         )
 
         with self._status_lock:
+            # winetricks verbs run wineserver -k/-w, which would break a parallel install.
+            if self._deps_install_status["running"] or self._rtp_install_status["running"]:
+                return {"success": False, "error": "Another install is already running. Wait for it to finish."}
             self._deps_install_status = {
                 "running": True,
                 "done": 0,
@@ -2585,7 +2594,12 @@ class Api:
                 extract_path = os.path.join(rtp_dir, rtp_name.replace(" ", "_"))
 
                 print(f"Downloading {rtp_name} RTP...")
-                if not os.path.exists(download_path):
+                # Earlier builds could leave an empty file behind after a failed download.
+                if (
+                    not os.path.isfile(download_path)
+                    or os.path.getsize(download_path) == 0
+                ):
+                    part_path = f"{download_path}.part"
                     try:
                         req = urllib.request.Request(
                             str(rtp["url"]), headers={"User-Agent": "Mozilla/5.0"}
@@ -2594,9 +2608,10 @@ class Api:
                             self._open_url_with_targeted_tls_fallback(
                                 req, timeout=30
                             ) as response,
-                            open(download_path, "wb") as out_file,
+                            open(part_path, "wb") as out_file,
                         ):
-                            _ = out_file.write(response.read())
+                            shutil.copyfileobj(response, out_file)
+                        os.replace(part_path, download_path)
                     except Exception as e:
                         formatted_error = self._format_rtp_download_error(
                             str(rtp["url"]), e
@@ -2612,10 +2627,17 @@ class Api:
                 else:
                     print(f"Extracting {rtp_name} RTP...")
                     if not os.path.exists(extract_path):
+                        staging_path = f"{extract_path}.part"
                         try:
+                            shutil.rmtree(staging_path, ignore_errors=True)
                             with zipfile.ZipFile(download_path, "r") as zf:
-                                zf.extractall(extract_path)
+                                zf.extractall(staging_path)
+                            os.replace(staging_path, extract_path)
                         except Exception as e:
+                            # Start clean next time: re-download and re-extract.
+                            shutil.rmtree(staging_path, ignore_errors=True)
+                            with suppress(OSError):
+                                os.remove(download_path)
                             failures.append(f"{rtp_name}: extract failed ({e})")
                             print(f"Failed to extract {rtp_name} RTP: {e}")
                             continue
@@ -2630,6 +2652,8 @@ class Api:
                             break
 
                 if setup_exe is None:
+                    # Likely a half-extracted folder from an earlier build; redo it next time.
+                    shutil.rmtree(extract_path, ignore_errors=True)
                     failures.append(f"{rtp_name}: installer executable not found")
                     continue
 
@@ -2682,6 +2706,8 @@ class Api:
                 )
 
         with self._status_lock:
+            if self._deps_install_status["running"] or self._rtp_install_status["running"]:
+                return {"success": False, "error": "Another install is already running. Wait for it to finish."}
             self._rtp_install_status = {
                 "running": True,
                 "done": 0,

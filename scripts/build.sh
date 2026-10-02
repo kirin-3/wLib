@@ -289,7 +289,6 @@ SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export PATH="$SELF_DIR/usr/bin:$PATH"
 export WLIB_APP_DIR="$SELF_DIR/usr/bin"
 export WLIB_LAUNCHER_NAME="AppImage"
-export WLIB_LAUNCH_LOG="${XDG_DATA_HOME:-$HOME/.local/share}/wLib/appimage-launch.log"
 exec "$SELF_DIR/usr/bin/wlib" "$@"
 APPRUN_EOF
 chmod +x "$APPDIR/AppRun"

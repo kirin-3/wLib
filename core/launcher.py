@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import signal
 import threading
 import time
@@ -26,6 +27,28 @@ from .host_platform import (
 
 def _host_path_module():
     return ntpath if is_windows() else posixpath
+
+
+def _is_elf(path: str) -> bool:
+    try:
+        with open(path, "rb") as file:
+            return file.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def proton_compat_data_path(prefix: str) -> str:
+    """STEAM_COMPAT_DATA_PATH for a configured prefix (Proton's Wine prefix is <it>/pfx).
+
+    A plain Wine prefix (drive_c without pfx) is never reused by Proton, which
+    gets an isolated proton_compat subdirectory instead.
+    """
+    path_module = _host_path_module()
+    if os.path.isdir(path_module.join(prefix, "drive_c")) and not os.path.isdir(
+        path_module.join(prefix, "pfx")
+    ):
+        return path_module.join(prefix, "proton_compat")
+    return prefix
 
 
 def _split_windows_command_line(command_line: str) -> list[str]:
@@ -206,6 +229,13 @@ class Launcher:
         with self._running_lock:
             running = self._running.get(game_id)
             proc = running.proc if running is not None else None
+            prefix = running.kill_info[1].get("WINEPREFIX") if running and running.kill_info else None
+            # wineserver -k ends every process in the prefix, so spare games that share it.
+            prefix_shared = any(
+                other.kill_info is not None and other.kill_info[1].get("WINEPREFIX") == prefix
+                for other_id, other in self._running.items()
+                if other_id != game_id
+            )
         if running is None:
             return {"success": False, "code": "not_running", "error": "Game is not running"}
         if proc is None:
@@ -223,7 +253,7 @@ class Launcher:
                         "error": "Could not stop the game. It may require administrator rights; close the game itself.",
                     }
             else:
-                if running.kill_info:
+                if running.kill_info and not prefix_shared:
                     wineserver, env = running.kill_info
                     try:
                         _ = subprocess.run(
@@ -438,10 +468,13 @@ class Launcher:
         except ValueError as exc:
             return {"success": False, "error": f"Invalid command line arguments: {exc}"}
 
+        # Explicit VAR=value prefixes; host-env cleanup must never strip these.
+        user_env: dict[str, str] = {}
         if "%command%" in args or launch_mode == "custom":
             while args and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", args[0]):
                 key, value = args.pop(0).split("=", 1)
-                env[key] = value
+                user_env[key] = value
+        env.update(user_env)
 
         ext = path_module.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
@@ -480,8 +513,15 @@ class Launcher:
             try:
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
+                    try:
+                        log_file = open(log_path, "w")
+                    except OSError:
+                        # Read-only game folder: log to the temp dir instead of failing the launch.
+                        log_path = path_module.join(
+                            tempfile.gettempdir(), path_module.basename(log_path)
+                        )
+                        log_file = open(log_path, "w")
                     print(f"Debug logging enabled. Outputting to {log_path}")
-                    log_file = open(log_path, "w")
 
                 try:
                     game_proc = subprocess.Popen(
@@ -717,6 +757,7 @@ class Launcher:
             clean_env = without_packaged_runtime_env(env_vars)
             if strip_wine_env:
                 clean_env = without_wine_proton_env(clean_env)
+            clean_env.update(user_env)
             return clean_env
 
         def execute_rpgmaker_linux_runner() -> dict[str, object]:
@@ -777,16 +818,18 @@ class Launcher:
         def execute_host_native(strict_native: bool) -> dict[str, object] | None:
             process_env = build_host_tool_env(env)
 
+            # Unzipping often drops the exec bit; Wine can't run these either.
+            if (ext == ".sh" or _is_elf(exe_path)) and not os.access(exe_path, os.X_OK):
+                return {
+                    "success": False,
+                    "error": (
+                        f"{exe_path} is not executable. Run chmod +x on it, "
+                        "then launch again."
+                    ),
+                }
+
             # 1. Native Shell Script (e.g. Ren'Py)
             if ext == ".sh":
-                if strict_native and not os.access(exe_path, os.X_OK):
-                    return {
-                        "success": False,
-                        "error": (
-                            "Linux Native launch mode requires executable "
-                            f"permission for {exe_path}"
-                        ),
-                    }
                 command = build_command([exe_path], args)
                 print(f"Executing shell script natively: {' '.join(command)}")
                 return execute_process(command, process_env)
@@ -886,9 +929,12 @@ class Launcher:
 
         # 5. Fallback to Wine / Proton execution for Windows executables
         env = without_packaged_runtime_env(env)
-        proton_path = proton_version if proton_version else get_setting("proton_path")
-        wine_prefix = (
-            custom_prefix if custom_prefix else get_setting("wine_prefix_path")
+        # Expand "~" like the dependency/RTP installers so both use the same prefix.
+        proton_path = path_module.expanduser(
+            (proton_version or get_setting("proton_path") or "").strip()
+        )
+        wine_prefix = path_module.expanduser(
+            (custom_prefix or get_setting("wine_prefix_path") or "").strip()
         )
 
         if not wine_prefix:
@@ -906,13 +952,9 @@ class Launcher:
         base_cmd.append(exe_path)
         command = build_command(base_cmd, args)
 
-        # Apply global DLL overrides required for various titles
-        global_overrides = "mscoree=n,b;msvcrt=b,n;winhttp=n,b"
-        existing_overrides = env.get("WINEDLLOVERRIDES", "")
-        if existing_overrides:
-            env["WINEDLLOVERRIDES"] = f"{existing_overrides};{global_overrides}"
-        else:
-            env["WINEDLLOVERRIDES"] = global_overrides
+        # Global DLL overrides required for various titles. Defaults go first:
+        # Wine keeps the last entry per DLL, so the user's own overrides win.
+        dll_overrides = ["mscoree=n,b;msvcrt=b,n;winhttp=n,b"]
 
         # Auto-detect engines for specific launcher arguments
         # RPGMaker MV / MZ (NW.js Chromium)
@@ -922,25 +964,22 @@ class Launcher:
             print(
                 "Detected RPGMaker MV/MZ. Applying winegstreamer override and NW.js flags..."
             )
-            existing_overrides = env.get("WINEDLLOVERRIDES", "")
-            additional_overrides = "winegstreamer=d"
-            if existing_overrides:
-                env["WINEDLLOVERRIDES"] = f"{existing_overrides};{additional_overrides}"
-            else:
-                env["WINEDLLOVERRIDES"] = additional_overrides
+            dll_overrides.append("winegstreamer=d")
             # Add NW.js/Chromium flags for better Wine compatibility
             command.extend(["--disable-gpu-sandbox", "--no-sandbox"])
 
+        if env.get("WINEDLLOVERRIDES"):
+            dll_overrides.append(env["WINEDLLOVERRIDES"])
+        env["WINEDLLOVERRIDES"] = ";".join(dll_overrides)
+
         # Proton and Wine prefix handling
         if is_proton:
-            # Prevent proton from polluting a standard wine prefix
-            if os.path.isdir(
-                path_module.join(wine_prefix, "drive_c")
-            ) and not os.path.isdir(path_module.join(wine_prefix, "pfx")):
+            compat_path = proton_compat_data_path(wine_prefix)
+            if compat_path != wine_prefix:
                 print(
                     "Warning: Standard Wine prefix detected. Creating isolated proton directory."
                 )
-                wine_prefix = path_module.join(wine_prefix, "proton_compat")
+                wine_prefix = compat_path
                 os.makedirs(wine_prefix, exist_ok=True)
 
             env["STEAM_COMPAT_DATA_PATH"] = wine_prefix

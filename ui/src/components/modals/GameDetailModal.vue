@@ -112,7 +112,6 @@ const f95Url = ref("");
 const version = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
-const status = ref("");
 const playStatus = ref<PlayStatus>(DEFAULT_PLAY_STATUS);
 const isFavorite = ref(false);
 const tags = ref<string[]>([]);
@@ -334,7 +333,6 @@ watch(
         version.value = g.version || "";
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
-        status.value = g.status || "";
         playStatus.value = normalizePlayStatus(g.play_status, g.status);
         isFavorite.value = !!g.is_favorite;
         engine.value = normalizeEngine(g.engine);
@@ -805,7 +803,6 @@ const save = async () => {
       version: version.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
-      status: status.value,
       play_status: playStatus.value,
       is_favorite: isFavorite.value ? 1 : 0,
       tags: tags.value.join(", "),

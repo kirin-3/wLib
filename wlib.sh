@@ -5,7 +5,17 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+if [ -n "${WLIB_DATA_DIR:-}" ]; then
+    DATA_DIR="$WLIB_DATA_DIR"
+else
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
+    # Same fallback as get_data_dir(): keep a pre-XDG library. Resolve before the
+    # mkdir below, or creating the XDG folder would hide the existing library.
+    if [ ! -d "$DATA_DIR" ] && [ -d "$HOME/.local/share/wLib" ]; then
+        DATA_DIR="$HOME/.local/share/wLib"
+    fi
+fi
+export WLIB_DATA_DIR="$DATA_DIR"
 mkdir -p "$DATA_DIR"
 
 if [ -w "$SCRIPT_DIR" ]; then

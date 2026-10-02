@@ -139,6 +139,8 @@ const loadSettings = async () => {
       cePath.value = ceCheck?.path || "";
 
       await pollInstallStatus();
+      // An install started before leaving this page is still running; keep tracking it.
+      if (installingDeps.value || installingRtps.value) startPolling();
 
       const sysDeps = await api.getSystemDepsCommand();
       if (sysDeps) systemDeps.value = sysDeps;

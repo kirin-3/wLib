@@ -27,7 +27,7 @@ For example, the `0.3.3` to `0.3.4` upgrade adds `games.launch_mode`, the `game_
 The `play_status` field supports canonical values `Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`, plus custom values. Unknown non-empty names are trimmed and capped at 40 characters before legacy fallback, preserving custom statuses during saves, startup migration, and backup import. During startup, `init_db()` normalizes legacy values:
 
 - Empty or NULL values → `Not Started`
-- Legacy `status` field values are migrated to `play_status`
+- Legacy `status` field values are migrated to `play_status`, then cleared so the migration runs once and later user choices are kept
 - New games default to `Not Started` automatically
 
 This ensures consistent status values across the UI and API responses.
@@ -65,7 +65,7 @@ Stores the library records and their associated configuration flags.
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
-| `status` | `TEXT` | Legacy status field (migrated to `play_status`). |
+| `status` | `TEXT` | Legacy status field (migrated to `play_status`, then cleared on startup). |
 | `play_status` | `TEXT` | Canonical or custom status, at most 40 characters. New games default to `Not Started`; legacy values are normalized during startup. |
 | `is_favorite` | `BOOLEAN` | Favorite flag for library filtering. |
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |

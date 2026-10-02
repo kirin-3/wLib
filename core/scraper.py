@@ -95,6 +95,17 @@ class BatchResultCallback(Protocol):
     def __call__(self, url: str, result: ScraperResult) -> bool: ...
 
 
+_BRACKETED_VERSION_RE = re.compile(
+    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$",
+    re.I,
+)
+_CHAPTER_VERSION_RE = re.compile(
+    r"^(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)",
+    re.I,
+)
+_BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
+
+
 # Chromium refuses to open one profile twice, and every scraper entry point
 # shares the persistent browser_session profile.
 _BROWSER_SESSION_LOCK = threading.Lock()
@@ -170,31 +181,30 @@ class Scraper:
         )
 
     def _extract_version_from_title(self, title: object) -> str:
+        # Same rules, in the same order, as extractGameInfo() in extension/content.js:
+        # the extension stores the version when a game is added and this compares
+        # against it later, so any difference shows as a false "update available".
         if not isinstance(title, str):
             return "Unknown"
 
-        # Multi-pass version extraction from F95Zone titles
-        # Pass 1: Bracketed version [v1.0], [1.0.2], [Version 2.1]
-        match = re.search(
-            r"\[(?:v|version\s*)?((\d+[\d.]*[a-zA-Z]?)(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)\]",
-            title,
-            re.I,
-        )
-        if not match:
-            # Pass 2: Chapter/Episode/Season formats [Ch.3], [Ep.5], [S2 E3], [Part 3]
-            match = re.search(
-                r"\[(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)??\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)\]",
-                title,
-                re.I,
-            )
-        if not match:
-            # Pass 3: Bare version not in brackets "Game Name v1.0.2"
-            match = re.search(r"\bv(\d+[\d.]*[a-zA-Z]?)\b", title, re.I)
-
-        if match:
-            return next((g for g in match.groups() if g is not None), "Unknown")
-        # Pass 4: F95 titles also use non-numeric releases, e.g. [Final] [Dev].
+        title = re.sub(r"^\[[^\]]+\]\s*", "", title.strip())
         brackets = cast(list[str], re.findall(r"\[([^\]]*)\]", title))
+        for bracket in brackets:
+            inner = bracket.strip()
+            # [v1.0], [1.0.2], [Version 2.1], [v2.0 Beta]
+            match = _BRACKETED_VERSION_RE.match(inner)
+            if match:
+                return match.group(1).strip()
+            # [Ch.3], [Ep. 3 v1.1], [S2 E3], [Part 3]: keep the whole release label.
+            if _CHAPTER_VERSION_RE.match(inner):
+                return inner
+
+        # Bare version outside brackets: "Game Name v1.0.2 [Dev]"
+        match = _BARE_VERSION_RE.search(title)
+        if match:
+            return match.group(1)
+        # Anything else in the first of two brackets, e.g. [Final] [Dev] or
+        # [v1.0-beta2] [Dev]; kept whole so suffix-only releases still differ.
         if len(brackets) >= 2:
             return brackets[0].strip() or "Unknown"
         return "Unknown"

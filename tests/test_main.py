@@ -143,6 +143,23 @@ def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
     assert run_mock.call_args.args[0] == install_cmd
 
 
+def test_ensure_playwright_browsers_runs_installer_over_stale_revision(
+    monkeypatch, tmp_path
+):
+    # A Chromium left by an older Playwright must not short-circuit the install.
+    (tmp_path / "chromium-1000").mkdir()
+    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
+    monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
+    monkeypatch.setattr(
+        main, "_get_playwright_install_command", lambda: ["playwright", "install"]
+    )
+    run_mock = MagicMock()
+    monkeypatch.setattr(main.subprocess, "run", run_mock)
+
+    assert main.ensure_playwright_browsers() is True
+    run_mock.assert_called_once()
+
+
 def test_get_packaged_webview_cache_path_uses_xdg_cache_home(monkeypatch, tmp_path):
     cache_home = tmp_path / "xdg-cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
@@ -664,6 +681,62 @@ def test_extension_request_validates_host_and_origin(
         connection.close()
 
 
+@pytest.mark.parametrize(
+    "headers,status",
+    [
+        ({}, 403),  # what <img src="http://127.0.0.1:8183/api/open?..."> sends
+        ({"X-wLib-Extension": "1"}, 200),
+        ({"Origin": "chrome-extension://wlib"}, 200),
+    ],
+)
+def test_extension_open_requires_extension_origin_or_header(
+    monkeypatch, extension_server, headers, status
+):
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    monkeypatch.setattr(
+        main.ExtensionRequestHandler, "_find_matching_game", lambda _self, _url: None
+    )
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.request(
+            "GET",
+            "/api/open?url=https://f95zone.to/threads/demo.123/",
+            headers={"Host": "localhost:8183", **headers},
+        )
+        response = connection.getresponse()
+        _ = response.read()
+        assert response.status == status
+        assert window.evaluate_js.called is (status == 200)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "window,content_length,status",
+    [
+        (MagicMock(), "abc", 400),
+        (MagicMock(), "-1", 400),
+        (None, "2", 503),
+    ],
+)
+def test_extension_add_always_replies_with_failure(
+    monkeypatch, extension_server, window, content_length, status
+):
+    monkeypatch.setattr(main, "window_ref", window)
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.putrequest("POST", "/api/add", skip_host=True)
+        connection.putheader("Host", "localhost:8183")
+        connection.putheader("Content-Length", content_length)
+        connection.endheaders(b"{}")
+        response = connection.getresponse()
+        assert response.status == status
+        assert json.loads(response.read())["success"] is False
+    finally:
+        connection.close()
+
+
 def test_extension_check_remains_responsive_while_open_waits(
     monkeypatch, extension_server
 ):
@@ -686,7 +759,10 @@ def test_extension_check_remains_responsive_while_open_waits(
     def request(path):
         address, port = extension_server.server_address
         with urlopen(
-            Request(f"http://{address}:{port}{path}", headers={"Host": "localhost:8183"}),
+            Request(
+                f"http://{address}:{port}{path}",
+                headers={"Host": "localhost:8183", "X-wLib-Extension": "1"},
+            ),
             timeout=3,
         ) as response:
             return json.loads(response.read())

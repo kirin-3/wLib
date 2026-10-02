@@ -35,6 +35,8 @@ RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log"
 
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
+EXTENSION_REQUEST_HEADER = "X-wLib-Extension"
+MAX_EXTENSION_BODY_BYTES = 1024 * 1024
 renderer_log_lock = threading.Lock()
 
 if TYPE_CHECKING:
@@ -704,7 +706,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if allowed_origin:
             self.send_header("Access-Control-Allow-Origin", allowed_origin)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Allow-Headers", f"Content-Type, {EXTENSION_REQUEST_HEADER}"
+        )
 
     def _reject_origin(self) -> None:
         self.send_response(403)
@@ -754,6 +758,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             _ = self.wfile.write(json.dumps(check_payload).encode())
         elif self.path.startswith("/api/open"):
             from urllib.parse import urlparse, parse_qs
+
+            # Any web page can fire this GET without an Origin (e.g. <img src>);
+            # require an allowed Origin or the header only the extension sends.
+            if not allowed_origin and not self.headers.get(EXTENSION_REQUEST_HEADER):
+                self._reject_origin()
+                return
 
             query = parse_qs(urlparse(self.path).query)
             game_url = query.get("url", [""])[0]
@@ -810,10 +820,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/add":
-            content_length = int(self.headers.get("Content-Length", "0"))
-            post_data = self.rfile.read(content_length)
-
+            status = 200
+            response: dict[str, object] = {"success": True}
             try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if not 0 <= content_length <= MAX_EXTENSION_BODY_BYTES:
+                    raise ValueError("Invalid Content-Length")
+                post_data = self.rfile.read(content_length)
                 payload = cast(object, json.loads(post_data.decode("utf-8")))
 
                 # We have the payload. Send it to the Vue frontend via PyWebView javascript evaluation
@@ -827,20 +840,18 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     ).decode("utf-8")
                     js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-add', {{ detail: JSON.parse(decodeURIComponent(escape(atob('{b64_json}')))) }}));"
                     _ = active_window.evaluate_js(js_code)
-
-                self.send_response(200)
-                self._send_cors_headers(allowed_origin)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                _ = self.wfile.write(b'{"success": true}')
+                else:
+                    status = 503
+                    response = {"success": False, "error": "Application window is not ready"}
             except Exception as e:
-                self.send_response(400)
-                self._send_cors_headers(allowed_origin)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                _ = self.wfile.write(
-                    json.dumps({"success": False, "error": str(e)}).encode()
-                )
+                status = 400
+                response = {"success": False, "error": str(e)}
+
+            self.send_response(status)
+            self._send_cors_headers(allowed_origin)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(json.dumps(response).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -902,8 +913,7 @@ def _get_playwright_install_command() -> list[str] | None:
 
 
 def ensure_playwright_browsers() -> bool:
-    """Ensure Playwright chromium browser is installed."""
-    chromium_path = os.path.join(playwright_browsers_path, "chromium-*")
+    """Ensure the Chromium build this Playwright version expects is installed."""
     import glob
 
     try:
@@ -914,13 +924,15 @@ def ensure_playwright_browsers() -> bool:
         )
         return False
 
-    if glob.glob(chromium_path):
-        return True
-
+    # Any chromium-* folder may be an older revision left by a previous wLib, so
+    # always let the installer decide; it is a no-op when the right one exists.
+    has_any_chromium = bool(
+        glob.glob(os.path.join(playwright_browsers_path, "chromium-*"))
+    )
     install_cmd = _get_playwright_install_command()
     if not install_cmd:
         print("[wLib] Could not locate a Playwright installer command in this build.")
-        return False
+        return has_any_chromium
 
     if getattr(sys, "frozen", False) and _is_same_executable(
         install_cmd[0], sys.executable
@@ -928,9 +940,9 @@ def ensure_playwright_browsers() -> bool:
         print(
             "[wLib] Refusing to run Playwright installer via app executable to avoid recursive relaunch."
         )
-        return False
+        return has_any_chromium
 
-    print("Installing Playwright chromium browser...")
+    print("Checking Playwright chromium browser (installs only if missing)...")
     try:
         _ = subprocess.run(
             install_cmd,
@@ -938,7 +950,7 @@ def ensure_playwright_browsers() -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        print("Playwright chromium installed successfully.")
+        print("Playwright chromium is ready.")
         return True
     except Exception as e:
         print(f"Failed to install Playwright chromium: {e}")

@@ -179,6 +179,25 @@ def test_launch_targets_crud_ordering_and_game_payload():
     ]
 
 
+def test_launch_targets_load_past_old_sqlite_parameter_limit(monkeypatch):
+    import sqlite3
+    import core.database as database
+
+    game_id = add_game(title="Last", exe_path="/tmp/main.exe")
+    assert game_id is not None
+    _ = add_game_launch_target(game_id, "Part 2", "/tmp/part2.exe")
+
+    def old_sqlite_connection():
+        conn = get_connection()
+        _ = conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+        return conn
+
+    monkeypatch.setattr(database, "get_connection", old_sqlite_connection)
+    targets = database.list_launch_targets_for_games([*range(100000, 101199), game_id])
+    assert len(targets) == 1200
+    assert [target["label"] for target in targets[game_id]] == ["Part 2"]
+
+
 def test_launch_targets_validate_required_fields():
     """Test launch target labels and paths must be non-empty."""
     game_id = add_game(title="Invalid Target", exe_path="/tmp/main.exe")
@@ -452,6 +471,13 @@ def test_init_db_recovers_legacy_statuses_and_preserves_existing_plan_to_play():
     assert games_by_id[abandoned_game_id]["play_status"] == "Abandoned"
     assert games_by_id[planned_game_id]["play_status"] == "Plan to Play"
     assert games_by_id[missing_game_id]["play_status"] == DEFAULT_PLAY_STATUS
+    assert games_by_id[waiting_game_id]["status"] == ""
+
+    # Recovery is one-time: a status the user picks later survives restarts.
+    update_game(waiting_game_id, {"play_status": "On Hold"})
+    init_db()
+    games_by_id = {game["id"]: game for game in get_all_games()}
+    assert games_by_id[waiting_game_id]["play_status"] == "On Hold"
 
 
 def test_update_game_normalizes_legacy_play_status_values():

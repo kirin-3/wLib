@@ -133,6 +133,11 @@ def _normalize_game_play_statuses(
                 (normalized_status, row["id"]),
             )
 
+    if has_legacy_status:
+        # Recover once, then drop the legacy value so it can't override
+        # statuses the user picks later.
+        _ = cursor.execute("UPDATE games SET status = '' WHERE status != ''")
+
 
 def _find_matching_game_row(
     cursor: sqlite3.Cursor, url: object, exclude_id: int | None = None
@@ -437,15 +442,19 @@ def list_launch_targets_for_games(
     if not normalized_ids:
         return targets_by_game
 
-    placeholders = ",".join("?" for _ in normalized_ids)
+    rows: list[sqlite3.Row] = []
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        _ = cursor.execute(
-            f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
-            tuple(normalized_ids),
-        )
-        rows = cast(list[sqlite3.Row], cursor.fetchall())
+        # SQLite before 3.32 allows only 999 parameters per statement.
+        for start in range(0, len(normalized_ids), 500):
+            chunk = normalized_ids[start : start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            _ = cursor.execute(
+                f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
+                tuple(chunk),
+            )
+            rows.extend(cast(list[sqlite3.Row], cursor.fetchall()))
 
     for row in rows:
         target = _row_to_launch_target(row)
