@@ -4,6 +4,7 @@ import io
 import json
 import os
 import ssl
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import cast
@@ -79,6 +80,63 @@ def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(content)
     return executable
+
+
+@pytest.mark.parametrize("member_name", ["GE-Proton-test/proton", "../escaped"])
+def test_download_proton_ge_streams_and_filters_tar(monkeypatch, tmp_path, member_name):
+    payload = b"proton executable"
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
+        member = tarfile.TarInfo(member_name)
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    class ChunkedResponse(io.BytesIO):
+        def read(self, size=-1):
+            assert size > 0, "tarball reads must be bounded"
+            return super().read(min(size, 32))
+
+    release = {
+        "tag_name": "GE-Proton-test",
+        "assets": [
+            {
+                "name": "GE-Proton-test.tar.gz",
+                "browser_download_url": "https://example.com/GE-Proton-test.tar.gz",
+            }
+        ],
+    }
+    responses = iter(
+        [
+            io.BytesIO(json.dumps(release).encode()),
+            ChunkedResponse(archive_buffer.getvalue()),
+        ]
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *_args, **_kwargs: next(responses)
+    )
+    install_dir = tmp_path / "proton"
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(install_dir))
+    real_join = os.path.join
+    monkeypatch.setattr(
+        "core.api.os.path.join",
+        lambda path, *parts: real_join(
+            str(tmp_path) if path == "/tmp" else path, *parts
+        ),
+    )
+
+    result = Api().download_proton_ge()
+
+    if member_name == "../escaped":
+        assert result["success"] is False
+        assert "outside" in str(result["error"])
+        assert not (tmp_path / "escaped").exists()
+        assert get_setting("proton_path") == ""
+    else:
+        executable = install_dir / member_name
+        assert result == {"success": True, "path": str(executable)}
+        assert executable.read_bytes() == payload
+        assert get_setting("proton_path") == str(executable)
+        assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
 
 
 def test_api_add_game_persists_launch_mode():

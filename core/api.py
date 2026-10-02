@@ -158,7 +158,7 @@ class WebviewModule(Protocol):
 class URLResponse(Protocol):
     status: int
 
-    def read(self) -> bytes: ...
+    def read(self, size: int = -1) -> bytes: ...
 
 
 class URLResponseContext(Protocol):
@@ -2702,6 +2702,7 @@ class Api:
 
         import json
         import os
+        import shutil
         import tarfile
         import urllib.request
 
@@ -2762,14 +2763,14 @@ class Api:
                 ) as response,
                 open(tar_path, "wb") as out_file,
             ):
-                _ = out_file.write(response.read())
+                shutil.copyfileobj(response, out_file)
 
             print(f"Extracting {tar_path}...")
             with tarfile.open(tar_path, "r:gz") as tar:
                 members = tar.getmembers()
                 # Find the root extracted folder name (usually GE-Proton-X)
                 root_dir = members[0].name.split("/")[0]
-                tar.extractall(path=wlib_share_dir)
+                tar.extractall(path=wlib_share_dir, filter="tar")
 
             os.remove(tar_path)
 
