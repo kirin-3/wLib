@@ -12,7 +12,7 @@ Backend changes are validated separately from release packaging through `.github
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
 - It creates a fresh virtual environment, installs `requirements-dev.txt`, and runs `bash scripts/check-python-clean.sh`.
 - The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
-- The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 20.
+- The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22 (unit tests need `--experimental-strip-types`, Node 22.6+).
 
 ## Windows Build Pipeline (`scripts/build-windows.ps1`)
 
