@@ -386,10 +386,11 @@ onUnmounted(() => {
             <button
               v-else
               @click="cancelCheck"
-              class="ui-action-btn bg-red-600/20 hover:bg-red-600/30 text-red-400 px-5 py-2 rounded-lg text-sm font-bold transition-all border border-red-500/30"
+              :disabled="status.cancelling"
+              class="ui-action-btn bg-red-600/20 hover:bg-red-600/30 text-red-400 px-5 py-2 rounded-lg text-sm font-bold transition-all border border-red-500/30 disabled:opacity-60 disabled:cursor-wait"
             >
               <IconX class="ui-action-icon" />
-              Cancel
+              {{ status.cancelling ? "Cancelling…" : "Cancel" }}
             </button>
           </div>
         </div>

@@ -35,9 +35,10 @@ def test_linux_paths_preserve_xdg_defaults(tmp_path):
     cache_home = tmp_path / "cache"
     env = {"XDG_DATA_HOME": str(data_home), "XDG_CACHE_HOME": str(cache_home)}
 
-    assert get_data_dir(platform="linux", environ=env) == os.path.join(
-        str(data_home), "wLib"
-    )
+    # Isolated home: a real ~/.local/share/wLib would win as the legacy library.
+    assert get_data_dir(
+        platform="linux", environ=env, home=str(tmp_path / "home")
+    ) == os.path.join(str(data_home), "wLib")
     assert get_cache_root(platform="linux", environ=env) == str(cache_home)
     assert get_playwright_browsers_path(
         platform="linux", environ=env
@@ -51,6 +52,23 @@ def test_linux_paths_preserve_home_fallbacks(tmp_path):
     assert get_playwright_browsers_path(
         platform="linux", environ={}, home=str(tmp_path)
     ) == os.path.join(str(tmp_path), ".cache", "ms-playwright")
+
+
+def test_linux_xdg_data_home_keeps_existing_legacy_library(tmp_path):
+    home = tmp_path / "home"
+    legacy_dir = home / ".local" / "share" / "wLib"
+    legacy_dir.mkdir(parents=True)
+    xdg_home = tmp_path / "xdg-data"
+    env = {"XDG_DATA_HOME": str(xdg_home)}
+
+    assert get_data_dir(platform="linux", environ=env, home=str(home)) == str(
+        legacy_dir
+    )
+
+    (xdg_home / "wLib").mkdir(parents=True)
+    assert get_data_dir(platform="linux", environ=env, home=str(home)) == str(
+        xdg_home / "wLib"
+    )
 
 
 def test_explicit_path_overrides_isolate_smoke_runtime(tmp_path):

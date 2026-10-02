@@ -93,6 +93,7 @@ export interface BulkUpdateResultItem {
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
   running: boolean;
+  cancelling?: boolean;
   total: number;
   checked: number;
   current: string;

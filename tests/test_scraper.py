@@ -632,3 +632,60 @@ def test_reset_browser_session_clears_profile(tmp_path):
     assert result["success"] is True
     assert os.path.isdir(scraper.user_data_dir)
     assert os.listdir(scraper.user_data_dir) == []
+
+
+def test_browser_session_entry_points_fail_fast_while_profile_in_use(tmp_path):
+    from core import scraper as scraper_module
+
+    scraper = Scraper()
+    scraper.user_data_dir = str(tmp_path / "browser_session")
+    url = "https://f95zone.to/threads/example.1/"
+
+    with scraper_module._BROWSER_SESSION_LOCK:
+        assert scraper.get_thread_version(url)["code"] == "busy"
+        assert scraper.get_thread_metadata(url)["code"] == "busy"
+        assert scraper.open_login_session()["code"] == "busy"
+        assert scraper.reset_browser_session()["code"] == "busy"
+        batch = scraper.get_multiple_thread_versions([url])
+        assert batch["__batch_error__"]["code"] == "busy"
+
+    assert scraper.reset_browser_session()["success"] is True
+
+
+def test_classify_page_issue_ignores_guest_header_login_link():
+    scraper = Scraper()
+
+    class FakePage:
+        def __init__(self, title_text, content_text):
+            self.title_text = title_text
+            self.content_text = content_text
+
+        def title(self):
+            return self.title_text
+
+        def content(self):
+            return self.content_text
+
+    def classify(title_text, content_text):
+        page = FakePage(title_text, content_text)
+        return scraper._classify_page_issue(cast(PageLike, cast(object, page)))
+
+    guest_header = '<a href="/login/" class="p-navgroup-link--logIn">Log in</a>'
+    cf_script = '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
+
+    deleted_thread = classify(
+        "Oops! We ran into some problems. | F95zone",
+        f"{guest_header}{cf_script}<div>The requested thread could not be found.</div>",
+    )
+    assert deleted_thread is not None
+    assert deleted_thread["code"] == "not_found"
+
+    assert classify("Example | F95zone", f"{guest_header}<div>No title</div>") is None
+
+    login_prompt = classify("Error | F95zone", "You must be logged-in to do that.")
+    assert login_prompt is not None
+    assert login_prompt["code"] == "login_required"
+
+    login_page = classify("Log in | F95zone", guest_header)
+    assert login_page is not None
+    assert login_page["code"] == "login_required"

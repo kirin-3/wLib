@@ -231,6 +231,7 @@ class Api:
         self.scraper: Scraper = Scraper()
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
+        self._update_cancelled: bool = False
         self._update_total: int = 0
         self._update_checked: int = 0
         self._update_current: str = ""
@@ -1884,9 +1885,17 @@ class Api:
 
     def open_in_browser(self, url: str) -> OpenPathResult:
         """Opens a URL in the user's default browser."""
+        from urllib.parse import urlparse
+
         normalized_url = str(url or "").strip()
         if not normalized_url:
             return {"success": False, "error": "URL is required"}
+
+        # Stored URLs can come from imports; never hand a local path or other
+        # scheme to os.startfile/xdg-open, which would run or open it.
+        parsed_url = urlparse(normalized_url)
+        if parsed_url.scheme.lower() not in ("http", "https") or not parsed_url.netloc:
+            return {"success": False, "error": "Only http(s) URLs can be opened"}
 
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
@@ -1900,10 +1909,6 @@ class Api:
 
     def check_all_updates(self) -> dict[str, object]:
         """Start a background thread to check all games for updates."""
-        with self._update_lock:
-            if getattr(self, "_update_running", False):
-                return {"success": False, "error": "Update check already in progress"}
-
         from core.database import get_all_games
 
         all_games_raw = get_all_games()
@@ -1926,8 +1931,13 @@ class Api:
                 }
             )
 
+        # Check-and-set in one critical section. _update_running stays True
+        # until the worker exits (even after cancel), so runs never overlap.
         with self._update_lock:
+            if self._update_running:
+                return {"success": False, "error": "Update check already in progress"}
             self._update_running = True
+            self._update_cancelled = False
             self._update_total = len(games_with_url)
             self._update_checked = 0
             self._update_current = ""
@@ -1967,7 +1977,7 @@ class Api:
                         return True
 
                     with self._update_lock:
-                        if not self._update_running:
+                        if self._update_cancelled:
                             return False  # Stop checking
                         self._update_current = game["title"]
 
@@ -2113,6 +2123,7 @@ class Api:
         with self._update_lock:
             return {
                 "running": getattr(self, "_update_running", False),
+                "cancelling": self._update_running and self._update_cancelled,
                 "total": getattr(self, "_update_total", 0),
                 "checked": getattr(self, "_update_checked", 0),
                 "current": getattr(self, "_update_current", ""),
@@ -2123,7 +2134,7 @@ class Api:
     def cancel_update_check(self) -> dict[str, bool]:
         """Cancel an in-progress bulk update check."""
         with self._update_lock:
-            self._update_running = False
+            self._update_cancelled = True
         return {"success": True}
 
     def get_executable_modified_time(

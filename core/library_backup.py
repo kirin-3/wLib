@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -18,6 +19,7 @@ from core.database import (
     normalize_play_status,
 )
 from core.f95zone import normalize_thread_url, thread_urls_match
+from core.host_platform import is_windows
 
 BACKUP_FORMAT = "wlib.library_migration"
 BACKUP_FORMAT_VERSION = 1
@@ -507,6 +509,15 @@ def _path_warning(
     )
 
 
+def _is_host_path_setting(value: str) -> bool:
+    """False for a path written for the other OS, e.g. /home/... on Windows."""
+    if "/" not in value and "\\" not in value:
+        return True  # empty, or a bare command such as "wine"
+    if is_windows():
+        return bool(ntpath.splitdrive(value)[0])  # C:\... or \\server\share
+    return value.startswith(("/", "~"))
+
+
 def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
     has_cover_reference = False
@@ -551,11 +562,24 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
     settings = _coerce_mapping(backup.get("settings"))
     path_settings = _coerce_mapping(settings.get("paths"))
     for key in PATH_SETTINGS_KEYS:
+        path_text = _coerce_text(path_settings.get(key)).strip()
+        if not _is_host_path_setting(path_text):
+            warnings.append(
+                {
+                    "type": "foreign_path",
+                    "scope": "setting",
+                    "field": key,
+                    "title": "",
+                    "path": path_text,
+                    "message": f"{key} is not a valid path on this system and will not be imported: {path_text}",
+                }
+            )
+            continue
         _path_warning(
             warnings,
             scope="setting",
             field=key,
-            path=path_settings.get(key),
+            path=path_text,
         )
 
     if has_cover_reference:
@@ -766,6 +790,8 @@ def _import_setting_groups(
             if key not in group:
                 continue
             value = _coerce_text(group.get(key))
+            if group_name == "paths" and not _is_host_path_setting(value.strip()):
+                continue
             _ = cursor.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
                 (key, value, value),

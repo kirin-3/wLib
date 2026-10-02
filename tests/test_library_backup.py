@@ -315,6 +315,49 @@ def test_import_merges_backup_values_and_preserves_unselected_fields(tmp_path):
     assert targets[0]["id"] != 999
 
 
+@pytest.mark.parametrize(
+    ("host_is_windows", "foreign_path", "native_path"),
+    [
+        (False, r"C:\Users\me\AppData\Local\wLib\playwright", "/opt/ms-playwright"),
+        (True, "/home/me/.cache/ms-playwright", r"D:\Games\Proton\proton"),
+    ],
+)
+def test_import_skips_path_settings_from_other_os(
+    tmp_path, monkeypatch, host_is_windows, foreign_path, native_path
+):
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: host_is_windows)
+    api = Api()
+    update_setting("playwright_browsers_path", "local-playwright")
+    backup_path = write_backup(
+        tmp_path / "import.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "paths": {
+                    "playwright_browsers_path": foreign_path,
+                    "proton_path": native_path,
+                    "wine_prefix_path": "",
+                }
+            },
+        },
+    )
+
+    inspect = api.inspect_library_backup(str(backup_path))
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_SETTINGS_PATHS]}
+    )
+
+    assert result["success"] is True
+    assert get_setting("playwright_browsers_path") == "local-playwright"
+    assert get_setting("proton_path") == native_path
+    assert result["settings_updated"] == 2
+    warnings = cast(list[dict[str, object]], inspect["warnings"])
+    assert any(
+        w["type"] == "foreign_path" and w["field"] == "playwright_browsers_path"
+        for w in warnings
+    )
+
+
 def test_import_rejects_empty_section_list_without_writes(tmp_path):
     api = Api()
     local_id = add_game(

@@ -67,9 +67,16 @@ def get_data_dir(
         if not base:
             base = os.path.join(_home(home), "AppData", "Local")
     else:
-        base = str(env.get("XDG_DATA_HOME") or "").strip()
-        if not base:
-            base = os.path.join(_home(home), ".local", "share")
+        legacy_dir = os.path.join(_home(home), ".local", "share", "wLib")
+        xdg_home = str(env.get("XDG_DATA_HOME") or "").strip()
+        if not xdg_home:
+            return legacy_dir
+        xdg_dir = os.path.abspath(os.path.join(os.path.expanduser(xdg_home), "wLib"))
+        # Releases before XDG support always used ~/.local/share/wLib; keep
+        # using an existing library there instead of starting empty.
+        if not os.path.isdir(xdg_dir) and os.path.isdir(legacy_dir):
+            return legacy_dir
+        return xdg_dir
     return os.path.abspath(os.path.join(os.path.expanduser(base), "wLib"))
 
 

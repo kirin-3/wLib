@@ -1157,6 +1157,27 @@ def test_open_in_browser_returns_error_when_no_opener_found(monkeypatch):
     assert result == {"success": False, "error": "No browser opener found"}
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        r"C:\Users\Public\evil.exe",
+        r"\\attacker\share\evil.exe",
+        "/usr/bin/xterm",
+        "file:///C:/evil.exe",
+        "javascript:alert(1)",
+    ],
+)
+def test_open_in_browser_rejects_non_web_urls(monkeypatch, url):
+    api = Api()
+    opener = MagicMock()
+    monkeypatch.setattr(api, "_open_with_system_handler", opener)
+
+    result = api.open_in_browser(url)
+
+    assert result["success"] is False
+    opener.assert_not_called()
+
+
 def test_open_in_browser_returns_launch_error(monkeypatch):
     api = Api()
 
@@ -1768,3 +1789,47 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
     assert result["success"] is True
     assert "official RPG Maker file host" in error_text
     assert "https://www.rpgmakerweb.com/run-time-package" in error_text
+
+
+def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatch):
+    import threading
+    import time
+
+    api = Api()
+    _ = add_game(
+        title="Game",
+        exe_path="/tmp/game.sh",
+        f95_url="https://f95zone.to/threads/game.1/",
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    callback_results: list[bool] = []
+
+    def fake_batch(urls, headless, delay, include_metadata, callback):
+        _ = (headless, delay, include_metadata)
+        entered.set()
+        assert release.wait(5)
+        callback_results.append(callback(urls[0], {"success": True, "version": "2.0"}))
+        return {}
+
+    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+
+    assert api.check_all_updates()["success"] is True
+    assert entered.wait(5)
+    assert api.cancel_update_check()["success"] is True
+
+    status = api.get_update_status()
+    assert status["running"] is True
+    assert status["cancelling"] is True
+    # The old worker still owns the browser profile, so a restart must wait.
+    assert api.check_all_updates()["success"] is False
+
+    release.set()
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    status = api.get_update_status()
+    assert status["running"] is False
+    assert status["cancelling"] is False
+    assert callback_results == [False]
