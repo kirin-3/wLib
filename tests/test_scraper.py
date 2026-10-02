@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+from pathlib import Path
 from typing import cast
 
 from core.scraper import PageLike, Scraper
@@ -576,7 +577,7 @@ def test_open_login_session_waits_for_user_close(monkeypatch):
 
     assert result["success"] is True
     assert fake_playwright.launch_kwargs["headless"] is False
-    assert fake_playwright.launch_kwargs["user_data_dir"].endswith("/browser_session")
+    assert Path(fake_playwright.launch_kwargs["user_data_dir"]).name == "browser_session"
     assert fake_playwright.launch_kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
     assert "APPIMAGE" not in fake_playwright.launch_kwargs["env"]
     assert "APPDIR" not in fake_playwright.launch_kwargs["env"]

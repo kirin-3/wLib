@@ -17,6 +17,7 @@ def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     app_data_dir = tmp_path / "data"
     cache_home = tmp_path / "cache"
     monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
+    monkeypatch.setattr(main, "get_cache_root", lambda: str(cache_home))
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setattr(main.sys, "frozen", True, raising=False)
     monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
@@ -139,6 +140,7 @@ def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
 def test_get_packaged_webview_cache_path_uses_xdg_cache_home(monkeypatch, tmp_path):
     cache_home = tmp_path / "xdg-cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    monkeypatch.setattr("core.host_platform.sys.platform", "linux")
 
     cache_path = main.get_packaged_webview_cache_path()
 
@@ -152,6 +154,7 @@ def test_get_packaged_webview_profile_cache_paths_uses_qt_profile_cache_location
 ):
     cache_home = tmp_path / "xdg-cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    monkeypatch.setattr("core.host_platform.sys.platform", "linux")
 
     cache_paths = main.get_packaged_webview_profile_cache_paths()
 

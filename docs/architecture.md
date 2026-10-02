@@ -76,7 +76,7 @@ flowchart TD
 - **Frontend Framework**: Vue 3 (Composition API) + TypeScript + Vite + TailwindCSS
 - **Database**: SQLite3 (Local file-based database)
 - **Web Automation**: Microsoft Playwright (Sync API for background scraping)
-- **Packaging**: PyInstaller and release scripts for AppImage, tar.gz, `.deb`, `.rpm`, and AUR metadata
+- **Packaging**: PyInstaller and release scripts for Linux AppImage/tar.gz/DEB/RPM/AUR plus Windows x64 portable ZIP and per-user MSI
 
 ## Process Isolation & Communication
 

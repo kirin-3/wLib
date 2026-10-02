@@ -1,12 +1,84 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-import subprocess
+import ntpath
 import os
+import posixpath
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from typing import Protocol, TypedDict
 
 from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
+from .host_platform import (
+    get_cheat_engine_dir,
+    get_default_wine_prefix,
+    is_windows,
+    open_windows_system_target,
+)
+
+
+def _host_path_module():
+    return ntpath if is_windows() else posixpath
+
+
+def _split_windows_command_line(command_line: str) -> list[str]:
+    """Split arguments using the quoting rules used by Windows applications."""
+    arguments: list[str] = []
+    index = 0
+    length = len(command_line)
+
+    while True:
+        while index < length and command_line[index] in " \t":
+            index += 1
+        if index >= length:
+            return arguments
+
+        argument: list[str] = []
+        in_quotes = False
+        while index < length:
+            character = command_line[index]
+            if character in " \t" and not in_quotes:
+                break
+
+            if character == "\\":
+                slash_start = index
+                while index < length and command_line[index] == "\\":
+                    index += 1
+                slash_count = index - slash_start
+                if index >= length or command_line[index] != '"':
+                    argument.extend("\\" * slash_count)
+                    continue
+
+                argument.extend("\\" * (slash_count // 2))
+                if slash_count % 2:
+                    argument.append('"')
+                    index += 1
+                    continue
+
+                if in_quotes and index + 1 < length and command_line[index + 1] == '"':
+                    argument.append('"')
+                    index += 2
+                else:
+                    in_quotes = not in_quotes
+                    index += 1
+                continue
+
+            if character == '"':
+                if in_quotes and index + 1 < length and command_line[index + 1] == '"':
+                    argument.append('"')
+                    index += 2
+                else:
+                    in_quotes = not in_quotes
+                    index += 1
+                continue
+
+            argument.append(character)
+            index += 1
+
+        if in_quotes:
+            raise ValueError("No closing quotation")
+        arguments.append("".join(argument))
 
 
 class RpgmakerLinuxRunnerStatus(TypedDict):
@@ -26,12 +98,13 @@ class Launcher:
         pass
 
     def _resolve_runner_candidate_path(self, raw_path: str) -> str:
-        expanded_path = os.path.expanduser(raw_path.strip())
-        if os.sep not in expanded_path and not expanded_path.startswith("."):
+        path_module = _host_path_module()
+        expanded_path = path_module.expanduser(raw_path.strip())
+        if path_module.sep not in expanded_path and not expanded_path.startswith("."):
             path_match = shutil.which(expanded_path)
             if path_match:
-                return os.path.abspath(path_match)
-        return os.path.abspath(expanded_path)
+                return path_module.abspath(path_match)
+        return path_module.abspath(expanded_path)
 
     def _validate_runner_candidate(self, raw_path: str) -> tuple[bool, str, str]:
         candidate_path = self._resolve_runner_candidate_path(raw_path)
@@ -50,7 +123,8 @@ class Launcher:
         return True, candidate_path, ""
 
     def _read_upstream_custom_runner_path(self) -> str:
-        config_path = os.path.expanduser("~/.config/defrpgmakerlinuxpath.txt")
+        path_module = _host_path_module()
+        config_path = path_module.expanduser("~/.config/defrpgmakerlinuxpath.txt")
         try:
             with open(config_path, encoding="utf-8") as config_file:
                 configured_base = config_file.readline().strip()
@@ -60,8 +134,10 @@ class Launcher:
         if not configured_base:
             return ""
 
-        base_path = os.path.abspath(os.path.expanduser(configured_base.rstrip(os.sep)))
-        return os.path.join(
+        base_path = path_module.abspath(
+            path_module.expanduser(configured_base.rstrip(path_module.sep))
+        )
+        return path_module.join(
             base_path,
             "nwjs",
             "nwjs",
@@ -72,6 +148,15 @@ class Launcher:
     def get_rpgmaker_linux_runner_status(
         self, configured_path: object | None = None
     ) -> RpgmakerLinuxRunnerStatus:
+        if is_windows():
+            return {
+                "available": False,
+                "path": "",
+                "source": "",
+                "configured_path": str(configured_path or "").strip(),
+                "error": "RPGMaker Linux runner is only available on Linux.",
+            }
+
         if configured_path is None:
             configured_path = get_setting(RPGMAKER_LINUX_RUNNER_SETTING)
 
@@ -156,25 +241,27 @@ class Launcher:
             print(f"Error: Executable not found at {exe_path}")
             return {"success": False, "error": f"Executable not found at {exe_path}"}
 
-        exe_path = os.path.abspath(exe_path)
+        # Keep path semantics tied to the selected host capability, not to the
+        # Python process running the tests. This also lets Windows CI exercise
+        # the Linux compatibility path without rewriting POSIX paths.
+        path_module = _host_path_module()
+        exe_path = path_module.abspath(exe_path)
         launch_mode = normalize_launch_mode(launch_mode)
 
         env = os.environ.copy()
 
         # Apply Japanese locale to the environment if requested
-        if run_japanese_locale:
+        if run_japanese_locale and not is_windows():
             print("Applying Japanese locale (ja_JP.UTF-8)")
             env["LC_ALL"] = "ja_JP.UTF-8"
             env["LANG"] = "ja_JP.UTF-8"
 
         # Apply Wayland compatibility environment variables if requested
-        if run_wayland:
+        if run_wayland and not is_windows():
             print("Applying Wayland compatibility mode")
             env["MESA_VK_WSI_PRESENT_MODE"] = "immediate"
             env["vk_xwayland_wait_ready"] = "false"
             env["SDL_VIDEODRIVER"] = ""
-
-        import shlex
 
         if command_line_args is None:
             command_line_args = ""
@@ -182,7 +269,11 @@ class Launcher:
             command_line_args = str(command_line_args)
 
         try:
-            args = shlex.split(command_line_args)
+            args = (
+                _split_windows_command_line(command_line_args)
+                if is_windows()
+                else shlex.split(command_line_args, posix=True)
+            )
         except ValueError as exc:
             return {"success": False, "error": f"Invalid command line arguments: {exc}"}
 
@@ -191,9 +282,9 @@ class Launcher:
                 key, value = args.pop(0).split("=", 1)
                 env[key] = value
 
-        ext = os.path.splitext(exe_path)[1].lower()
+        ext = path_module.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
-        game_dir = os.path.dirname(exe_path)
+        game_dir = path_module.dirname(exe_path)
 
         # Helper to apply Steam-style %command% substitution
         def build_command(base_cmd: list[str], user_args: list[str]) -> list[str]:
@@ -221,7 +312,7 @@ class Launcher:
             start_time = time.time()
             try:
                 if enable_logging:
-                    log_path = os.path.splitext(exe_path)[0] + "_wlib.log"
+                    log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     print(f"Debug logging enabled. Outputting to {log_path}")
                     log_file = open(log_path, "w")
                     try:
@@ -263,20 +354,20 @@ class Launcher:
                         )
                         time.sleep(5)
 
-                        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
-                        ce_exe = os.path.join(
+                        ce_dir = get_cheat_engine_dir()
+                        ce_exe = path_module.join(
                             ce_dir, "Lunar Engine", "lunarengine-x86_64.exe"
                         )
                         if not os.path.exists(ce_exe):
-                            ce_exe = os.path.join(ce_dir, "lunarengine-x86_64.exe")
+                            ce_exe = path_module.join(ce_dir, "lunarengine-x86_64.exe")
 
                         if os.path.exists(ce_exe):
                             # Write autorun lua script to auto-attach
-                            autorun_dir = os.path.join(
-                                os.path.dirname(ce_exe), "autorun"
+                            autorun_dir = path_module.join(
+                                path_module.dirname(ce_exe), "autorun"
                             )
                             os.makedirs(autorun_dir, exist_ok=True)
-                            lua_script = os.path.join(
+                            lua_script = path_module.join(
                                 autorun_dir, "wlib_autoattach.lua"
                             )
                             with open(lua_script, "w") as f:
@@ -371,22 +462,24 @@ class Launcher:
             if not path:
                 return True
 
-            expanded_path = os.path.expanduser(path)
+            expanded_path = path_module.expanduser(path)
             if "/.mount_" in path or "/.mount_" in expanded_path:
                 return True
 
-            normalized_path = os.path.abspath(expanded_path)
+            normalized_path = path_module.abspath(expanded_path)
             runtime_dirs: set[str] = set()
             meipass = str(getattr(sys, "_MEIPASS", "") or "").strip()
             if meipass:
-                runtime_dirs.add(os.path.abspath(os.path.expanduser(meipass)))
+                runtime_dirs.add(
+                    path_module.abspath(path_module.expanduser(meipass))
+                )
 
-            executable_dir = os.path.dirname(os.path.abspath(sys.executable))
-            runtime_dirs.add(os.path.join(executable_dir, "_internal"))
+            executable_dir = path_module.dirname(path_module.abspath(sys.executable))
+            runtime_dirs.add(path_module.join(executable_dir, "_internal"))
             if normalized_path in runtime_dirs:
                 return True
 
-            if os.path.basename(normalized_path) != "_internal":
+            if path_module.basename(normalized_path) != "_internal":
                 return False
 
             try:
@@ -432,12 +525,14 @@ class Launcher:
                 library_path = str(clean_env.get("LD_LIBRARY_PATH") or "")
                 library_paths = [
                     entry
-                    for entry in library_path.split(os.pathsep)
+                    for entry in library_path.split(path_module.pathsep)
                     if entry
                     and not is_packaged_runtime_library_path(entry)
                 ]
                 if library_paths:
-                    clean_env["LD_LIBRARY_PATH"] = os.pathsep.join(library_paths)
+                    clean_env["LD_LIBRARY_PATH"] = path_module.pathsep.join(
+                        library_paths
+                    )
                 elif appimage_context or library_path:
                     _ = clean_env.pop("LD_LIBRARY_PATH", None)
 
@@ -462,7 +557,7 @@ class Launcher:
                     or "RPGMaker Linux runner is not available.",
                 }
 
-            runner_game_dir = os.path.dirname(os.path.abspath(exe_path))
+            runner_game_dir = path_module.dirname(path_module.abspath(exe_path))
             base_cmd = [runner_status["path"], "--gamepath", runner_game_dir]
 
             command = build_command(base_cmd, args)
@@ -471,8 +566,23 @@ class Launcher:
 
         def execute_html_game(strip_wine_env: bool = False) -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
-            abs_path = os.path.abspath(exe_path)
-            file_url = f"file://{abs_path}"
+            abs_path = path_module.abspath(exe_path)
+            normalized_url_path = abs_path.replace(chr(92), "/")
+            file_url = (
+                f"file:///{normalized_url_path.lstrip('/')}"
+                if is_windows()
+                else f"file://{normalized_url_path}"
+            )
+            if is_windows():
+                opened, error = open_windows_system_target(abs_path)
+                if opened:
+                    print(f"Opening HTML game in default browser: {file_url}")
+                    return {"success": True}
+                return {
+                    "success": False,
+                    "error": f"Failed to open HTML game: {error}",
+                }
+
             command = ["xdg-open", file_url]
             print(f"Opening HTML game in default browser: {file_url}")
             try:
@@ -486,7 +596,7 @@ class Launcher:
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    cwd=os.path.dirname(abs_path),
+                    cwd=path_module.dirname(abs_path),
                 )
                 return {"success": True}
             except Exception as e:
@@ -549,6 +659,46 @@ class Launcher:
 
             return None
 
+        if is_windows():
+            if launch_mode != "auto":
+                return {
+                    "success": False,
+                    "error": (
+                        f"Launch mode '{launch_mode}' is only available on Linux. "
+                        "Choose Auto Detect to launch this game directly on Windows."
+                    ),
+                    "code": "unsupported_platform",
+                }
+
+            process_env = without_wine_proton_env(env)
+            if ext == ".exe":
+                return execute_process(
+                    build_command([exe_path], args), process_env
+                )
+            if ext in (".bat", ".cmd"):
+                command_processor = os.environ.get("COMSPEC") or "cmd.exe"
+                base_command = [
+                    command_processor,
+                    "/d",
+                    "/s",
+                    "/c",
+                    "call",
+                    exe_path,
+                ]
+                return execute_process(
+                    build_command(base_command, args), process_env
+                )
+            if ext == ".jar":
+                return execute_process(
+                    build_command(["java", "-jar", exe_path], args), process_env
+                )
+            if ext in (".html", ".htm"):
+                return execute_html_game(strip_wine_env=True)
+            return {
+                "success": False,
+                "error": f"Unsupported Windows game target: {exe_path}",
+            }
+
         if launch_mode in ("auto", "native"):
             native_result = execute_host_native(strict_native=launch_mode == "native")
             if native_result is not None:
@@ -567,10 +717,10 @@ class Launcher:
         if not wine_prefix:
             # We must supply a prefix for Proton to function at all.
             # If the user didn't set one, use a default wLib specific one
-            wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
+            wine_prefix = get_default_wine_prefix()
             os.makedirs(wine_prefix, exist_ok=True)
 
-        is_proton = proton_path and "proton" in os.path.basename(proton_path).lower()
+        is_proton = proton_path and "proton" in path_module.basename(proton_path).lower()
 
         base_cmd = [proton_path] if proton_path else ["wine"]
         if is_proton:
@@ -589,8 +739,8 @@ class Launcher:
 
         # Auto-detect engines for specific launcher arguments
         # RPGMaker MV / MZ (NW.js Chromium)
-        if os.path.exists(os.path.join(game_dir, "nw.dll")) and os.path.exists(
-            os.path.join(game_dir, "www")
+        if os.path.exists(path_module.join(game_dir, "nw.dll")) and os.path.exists(
+            path_module.join(game_dir, "www")
         ):
             print(
                 "Detected RPGMaker MV/MZ. Applying winegstreamer override and NW.js flags..."
@@ -608,12 +758,12 @@ class Launcher:
         if is_proton:
             # Prevent proton from polluting a standard wine prefix
             if os.path.isdir(
-                os.path.join(wine_prefix, "drive_c")
-            ) and not os.path.isdir(os.path.join(wine_prefix, "pfx")):
+                path_module.join(wine_prefix, "drive_c")
+            ) and not os.path.isdir(path_module.join(wine_prefix, "pfx")):
                 print(
                     "Warning: Standard Wine prefix detected. Creating isolated proton directory."
                 )
-                wine_prefix = os.path.join(wine_prefix, "proton_compat")
+                wine_prefix = path_module.join(wine_prefix, "proton_compat")
                 os.makedirs(wine_prefix, exist_ok=True)
 
             env["STEAM_COMPAT_DATA_PATH"] = wine_prefix
@@ -623,8 +773,8 @@ class Launcher:
         else:
             # If the selected prefix is actually a Proton prefix (contains pfx subfolder),
             # standard Wine must point directly to the pfx subfolder
-            if os.path.isdir(os.path.join(wine_prefix, "pfx")):
-                wine_prefix = os.path.join(wine_prefix, "pfx")
+            if os.path.isdir(path_module.join(wine_prefix, "pfx")):
+                wine_prefix = path_module.join(wine_prefix, "pfx")
 
             env["WINEPREFIX"] = wine_prefix
 
@@ -636,7 +786,7 @@ class Launcher:
         print(
             f"Executing via Wine/Proton: {' '.join(command)} with prefix {wine_prefix}"
         )
-        game_exe_name = os.path.basename(exe_path)
+        game_exe_name = path_module.basename(exe_path)
         return execute_process(
             command,
             env,

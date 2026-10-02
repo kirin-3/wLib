@@ -24,6 +24,7 @@ from core.database import (
     update_setting,
 )
 from core.launcher import Launcher
+from core.host_platform import get_playwright_browsers_path
 from core.scraper import Scraper
 
 
@@ -32,6 +33,7 @@ def setup_test_db(tmp_path, monkeypatch):
     """Fixture to provide a clean database for each test."""
     db_file = tmp_path / "test_wlib_bugs.db"
     monkeypatch.setattr("core.database.DB_PATH", str(db_file))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     init_db()
     yield
     if os.path.exists(db_file):
@@ -648,7 +650,7 @@ def test_settings_table_default_values():
         "enable_logging": "false",
         "auto_update_check": "weekly",
         "last_update_check": "",
-        "playwright_browsers_path": os.path.expanduser("~/.cache/ms-playwright"),
+        "playwright_browsers_path": get_playwright_browsers_path(),
     }
 
     for key, expected_value in expected_settings.items():

@@ -9,8 +9,9 @@ from datetime import datetime
 from typing import TypedDict, cast
 
 from core.f95zone import normalize_thread_url, thread_urls_match
+from core.host_platform import get_data_dir, get_playwright_browsers_path
 
-DATA_DIR = os.path.expanduser("~/.local/share/wLib")
+DATA_DIR = get_data_dir()
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
 
@@ -267,7 +268,7 @@ def init_db() -> None:
         )
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('playwright_browsers_path', ?)",
-            (os.path.expanduser("~/.cache/ms-playwright"),),
+            (get_playwright_browsers_path(),),
         )
         _ = cursor.execute(
             f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"

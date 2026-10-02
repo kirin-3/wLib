@@ -23,6 +23,7 @@ The UI runs inside PyWebView and calls backend methods via `window.pywebview.api
 - **Library migration typing**: `LibraryBackupSection`, export options, inspect responses, warnings, and import result interfaces mirror the backend JSON migration API.
 - **Mock fallback**: when `window.pywebview` is unavailable (for browser-only UI work at `http://localhost:5173`), API calls return structured mock responses to keep the app functional.
 - **Startup extension status**: `App.vue` reads startup sync status so the UI can notify users when extension files were refreshed.
+- **Platform capabilities**: `getPlatformCapabilities()` is cached once per desktop session. Conservative fallback capabilities expose only Auto Detect and hide platform-specific mutation actions if the backend contract cannot be loaded.
 
 Always route backend calls through `ui/src/services/api.ts`; do not call `window.pywebview.api` directly from view components.
 
@@ -32,7 +33,7 @@ wLib uses `vue-router` for top-level views:
 
 - **Library View**: game browsing, filtering, sorting, quick launch, add/edit modals, per-game launch mode selection, and conditional launch-target selection for multi-part games.
 - **Updates View**: single and bulk update checks plus app release checks.
-- **Settings View**: launcher/runtime settings, optional RPGMaker Linux runner path/status, dependency install status, and scraper session controls.
+- **Settings View**: platform-aware launcher/runtime settings and scraper controls. Windows hides Wine/Proton, prefix, Wayland, RPGMaker Linux runner, and Cheat Engine actions while preserving imported values; Linux retains the full runtime UI.
 - **Import / Export View**: top-level left-navigation route for JSON library/settings migration.
 - **Extension View**: extension service status and folder shortcuts.
 

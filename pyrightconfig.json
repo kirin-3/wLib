@@ -11,9 +11,7 @@
     "dist",
     "node_modules",
     ".venv",
-    "venv",
-    ".ubuntuvenv",
-    "test_venv"
+    "venv"
   ],
   "venvPath": ".",
   "venv": ".venv",

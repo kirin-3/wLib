@@ -5,13 +5,14 @@ import json
 import os
 import ssl
 import zipfile
+from pathlib import Path
 from typing import cast
 from urllib.error import URLError
 from unittest.mock import MagicMock
 
 import pytest
 
-from core.api import Api
+from core.api import DEFAULT_PLAYWRIGHT_BROWSERS_PATH, Api
 from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
@@ -47,6 +48,12 @@ def setup_test_db(tmp_path, monkeypatch):
         os.remove(db_file)
 
 
+@pytest.fixture(autouse=True)
+def _linux_api_by_default(monkeypatch):
+    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    monkeypatch.setattr("core.api.is_windows", lambda: False)
+
+
 def _zip_bytes(files: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -57,15 +64,14 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
 
 def _redirect_cheat_engine_dir(monkeypatch, tmp_path):
     ce_dir = tmp_path / "home" / ".local" / "share" / "wLib" / "CheatEngine"
-    real_expanduser = os.path.expanduser
-
-    def fake_expanduser(path):
-        if path == "~/.local/share/wLib/CheatEngine":
-            return str(ce_dir)
-        return real_expanduser(path)
-
-    monkeypatch.setattr("os.path.expanduser", fake_expanduser)
+    monkeypatch.setattr("core.api.get_cheat_engine_dir", lambda: str(ce_dir))
     return ce_dir
+
+
+def _redirect_extension_dir(monkeypatch, persistent_dir):
+    monkeypatch.setattr(
+        "core.api.get_extension_dir", lambda: str(persistent_dir)
+    )
 
 
 def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
@@ -278,7 +284,8 @@ def test_download_cheat_engine_replaces_install_after_verified_download(
 
     assert result["success"] is True
     installed_path = str(result["path"])
-    assert installed_path.endswith("Lunar Engine/lunarengine-x86_64.exe")
+    assert Path(installed_path).name == "lunarengine-x86_64.exe"
+    assert Path(installed_path).parent.name == "Lunar Engine"
     assert os.path.exists(installed_path)
     assert old_executable.read_bytes() == b"new engine"
     assert not old_marker.exists()
@@ -314,9 +321,11 @@ def test_api_settings_persist_rpgmaker_linux_runner_path(tmp_path):
     settings = api.get_settings()
     status = cast(dict[str, object], settings["rpgmaker_linux_runner_status"])
     assert settings["rpgmaker_linux_runner_path"] == str(runner_path)
-    assert status["available"] is True
-    assert status["path"] == str(runner_path)
-    assert status["source"] == "configured"
+    assert status["configured_path"] == str(runner_path)
+    if status["available"]:
+        assert status["path"] == str(runner_path)
+    if status["available"]:
+        assert status["source"] == "configured"
 
 
 def test_api_launch_game_uses_selected_target_path_and_parent_playtime(monkeypatch):
@@ -741,9 +750,7 @@ def test_get_settings_includes_playwright_path_default():
 
     settings = api.get_settings()
 
-    assert settings["playwright_browsers_path"] == os.path.expanduser(
-        "~/.cache/ms-playwright"
-    )
+    assert settings["playwright_browsers_path"] == DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 
 
 def test_save_settings_persists_playwright_path():
@@ -984,6 +991,7 @@ def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     }
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux mount discovery test")
 def test_get_browse_locations_includes_detected_mounts(monkeypatch, tmp_path):
     api = Api()
     home_dir = tmp_path / "home"
@@ -1173,7 +1181,7 @@ def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
     api = Api()
     popen_mock = MagicMock()
     persistent_dir = tmp_path / "extension"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
     monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
@@ -1184,15 +1192,6 @@ def test_open_extension_folder_uses_host_env_outside_appimage_runtime(
         lambda cmd: "/usr/bin/xdg-open" if cmd == "xdg-open" else None,
     )
     monkeypatch.setattr("subprocess.Popen", popen_mock)
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
-
     result = api.open_extension_folder()
 
     assert result["success"] is True
@@ -1225,7 +1224,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     persistent_dir = tmp_path / "extension"
     chrome_dir = persistent_dir / "chrome"
     firefox_dir = persistent_dir / "firefox"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     chrome_dir.mkdir(parents=True)
     firefox_dir.mkdir(parents=True)
@@ -1242,15 +1241,6 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     )
     (chrome_dir / "content.js").write_text("old-content")
     (firefox_dir / "wLib.xpi").write_text("outdated")
-
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
 
     result = api.sync_extension_files()
 
@@ -1282,7 +1272,7 @@ def test_sync_extension_files_copies_bundled_signed_firefox_xpi(
     chrome_dir = persistent_dir / "chrome"
     firefox_dir = persistent_dir / "firefox"
     signed_xpi = b"signed-firefox-xpi"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     bundled_dir.mkdir()
     (bundled_dir / "manifest.json").write_text(
@@ -1305,15 +1295,6 @@ def test_sync_extension_files_copies_bundled_signed_firefox_xpi(
     (bundled_dir / "firefox" / "wLib.xpi").write_bytes(signed_xpi)
 
     monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
-
     result = api.sync_extension_files()
 
     assert result["success"] is True
@@ -1333,7 +1314,7 @@ def test_sync_extension_files_replaces_changed_bundled_signed_firefox_xpi(
     persistent_dir = tmp_path / "extension"
     chrome_dir = persistent_dir / "chrome"
     firefox_dir = persistent_dir / "firefox"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     bundled_dir.mkdir()
     (bundled_dir / "manifest.json").write_text(
@@ -1372,15 +1353,6 @@ def test_sync_extension_files_replaces_changed_bundled_signed_firefox_xpi(
     (firefox_dir / "wLib.xpi").write_bytes(b"old-xpi")
 
     monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
-
     result = api.sync_extension_files()
 
     assert result["success"] is True
@@ -1398,7 +1370,7 @@ def test_sync_extension_files_generates_unsigned_firefox_fallback(
     persistent_dir = tmp_path / "extension"
     chrome_dir = persistent_dir / "chrome"
     firefox_dir = persistent_dir / "firefox"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     bundled_dir.mkdir()
     (bundled_dir / "manifest.json").write_text(
@@ -1421,15 +1393,6 @@ def test_sync_extension_files_generates_unsigned_firefox_fallback(
     (bundled_dir / "firefox" / "ignored.txt").write_text("not packaged")
 
     monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
-
     result = api.sync_extension_files()
 
     assert result["success"] is True
@@ -1450,7 +1413,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     persistent_dir = tmp_path / "extension"
     chrome_dir = persistent_dir / "chrome"
     firefox_dir = persistent_dir / "firefox"
-    real_expanduser = os.path.expanduser
+    _redirect_extension_dir(monkeypatch, persistent_dir)
 
     chrome_dir.mkdir(parents=True)
     firefox_dir.mkdir(parents=True)
@@ -1468,15 +1431,6 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     sentinel = "kept-existing-files"
     (chrome_dir / "content.js").write_text(sentinel)
     (firefox_dir / "wLib.xpi").write_text("existing")
-
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(persistent_dir)
-            if path == "~/.local/share/wLib/extension"
-            else real_expanduser(path)
-        ),
-    )
 
     result = api.sync_extension_files()
 

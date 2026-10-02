@@ -15,6 +15,20 @@ from core.database import (
     normalize_launch_mode,
 )
 from core.f95zone import normalize_thread_url as _normalize_thread_url
+from core.host_platform import (
+    PlatformCapabilities,
+    get_cheat_engine_dir,
+    get_default_wine_prefix,
+    get_extension_dir,
+    get_platform_capabilities as resolve_platform_capabilities,
+    get_playwright_browsers_path,
+    get_proton_dir,
+    get_rtp_dir,
+    is_linux,
+    is_windows,
+    open_windows_system_target,
+    unsupported_on_host,
+)
 from core.launcher import Launcher
 from core.scraper import Scraper
 
@@ -159,8 +173,8 @@ normalize_thread_url: Callable[[str], str] = cast(
     Callable[[str], str], cast(object, _normalize_thread_url)
 )
 
-APP_VERSION = "0.3.4"
-DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
+APP_VERSION = "0.3.5"
+DEFAULT_PLAYWRIGHT_BROWSERS_PATH = get_playwright_browsers_path()
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
 KOMODO_RTP_DOWNLOAD_HOSTS = {"dl.komodo.jp"}
 KOMODO_SECTIGO_INTERMEDIATE_CERT_PEM = """-----BEGIN CERTIFICATE-----
@@ -207,7 +221,7 @@ class Api:
         self._startup_extension_sync_status: ExtensionSyncStatus = {
             "success": True,
             "updated": False,
-            "path": os.path.expanduser("~/.local/share/wLib/extension"),
+            "path": get_extension_dir(),
             "bundled_version": "",
             "installed_version": "",
             "reason": "not-run",
@@ -251,6 +265,9 @@ class Api:
     def set_window(self, window: Window | None) -> None:
         self.window = window
 
+    def get_platform_capabilities(self) -> PlatformCapabilities:
+        return resolve_platform_capabilities()
+
     def _resolve_runtime_install_target(
         self, prefix_path: str | None = None, proton_path: str | None = None
     ) -> RuntimeInstallTarget:
@@ -267,7 +284,7 @@ class Api:
 
         base_prefix = str(prefix_source or "").strip()
         if not base_prefix:
-            base_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
+            base_prefix = get_default_wine_prefix()
         base_prefix = os.path.abspath(os.path.expanduser(base_prefix))
 
         proton_path_to_use = str(proton_source or "").strip()
@@ -503,7 +520,7 @@ class Api:
         )
 
     def _get_persistent_extension_dir(self) -> str:
-        return os.path.expanduser("~/.local/share/wLib/extension")
+        return get_extension_dir()
 
     def _coerce_string_key_dict(self, payload: object) -> dict[str, object] | None:
         if not isinstance(payload, dict):
@@ -672,6 +689,12 @@ class Api:
     def _open_with_system_handler(
         self, target: str, missing_opener_error: str
     ) -> OpenPathResult:
+        if is_windows():
+            opened, error = open_windows_system_target(target)
+            if opened:
+                return {"success": True}
+            return {"success": False, "error": error or missing_opener_error}
+
         import shutil
         import subprocess
 
@@ -1132,12 +1155,31 @@ class Api:
         locations.append({"path": normalized_path, "label": label, "source": source})
 
     def _get_browse_locations(self) -> list[BrowseLocation]:
-        import pwd
-
         locations: list[BrowseLocation] = []
         seen_paths: set[str] = set()
         home_dir = os.path.expanduser("~")
         downloads_dir = os.path.join(home_dir, "Downloads")
+
+        if is_windows():
+            self._append_browse_location(
+                locations, seen_paths, home_dir, "Home", "home"
+            )
+            for folder_name in ("Desktop", "Documents", "Downloads", "Saved Games"):
+                self._append_browse_location(
+                    locations,
+                    seen_paths,
+                    os.path.join(home_dir, folder_name),
+                    folder_name,
+                    "user-folder",
+                )
+            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                root = f"{letter}:\\"
+                self._append_browse_location(
+                    locations, seen_paths, root, f"{letter}:", "drive"
+                )
+            return locations
+
+        import pwd
 
         try:
             username = pwd.getpwuid(os.getuid()).pw_name
@@ -2200,6 +2242,9 @@ class Api:
     # ==========================
     def get_available_runners(self) -> dict[str, object]:
         """Scan ~/.local/share/wLib/proton/ for available proton versions and return them."""
+        if not is_linux():
+            return {"success": True, "runners": []}
+
         import os
         import shutil
 
@@ -2209,7 +2254,7 @@ class Api:
         if shutil.which("wine"):
             runners.append({"name": "System Wine", "path": "wine"})
 
-        proton_dir = os.path.expanduser("~/.local/share/wLib/proton")
+        proton_dir = get_proton_dir()
         if os.path.exists(proton_dir):
             for entry in os.listdir(proton_dir):
                 full_path = os.path.join(proton_dir, entry)
@@ -2276,6 +2321,9 @@ class Api:
         """
         Runs winetricks to install the common dependencies needed for RPGMaker/Unity visual novels.
         """
+        if not is_linux():
+            return unsupported_on_host("Winetricks dependency installation")
+
         import shutil
         import subprocess
 
@@ -2375,6 +2423,9 @@ class Api:
         Downloads and installs RPG Maker VX Ace, VX, XP, and 2003 RTPs into the configured wine prefix.
         Currently downloads the official zips and triggers their setup.exe silently.
         """
+        if not is_linux():
+            return unsupported_on_host("Wine-prefix RPG Maker RTP installation")
+
         import shutil
         import subprocess
         import urllib.request
@@ -2402,7 +2453,7 @@ class Api:
 
         # We run this in a background thread so we don't block the UI returning 'success' immediately
         def _download_and_install():
-            rtp_dir = os.path.expanduser("~/.local/share/wLib/rtp")
+            rtp_dir = get_rtp_dir()
             os.makedirs(rtp_dir, exist_ok=True)
 
             failures: list[str] = []
@@ -2527,6 +2578,17 @@ class Api:
         self, prefix_path: str | None = None, proton_path: str | None = None
     ) -> dict[str, object]:
         """Returns the current status of background DLL and RTP installs, plus whether they've previously completed."""
+        if not is_linux():
+            return {
+                "success": False,
+                "error": "Wine/Proton runtime installers are only available on Linux.",
+                "code": "unsupported_platform",
+                "deps": {},
+                "rtps": {},
+                "dlls_installed": False,
+                "rtps_installed": False,
+            }
+
         with self._status_lock:
             deps_status = dict(
                 getattr(
@@ -2566,6 +2628,16 @@ class Api:
 
     def get_system_deps_command(self) -> dict[str, object]:
         """Detects the system package manager and returns the command to install 32-bit GStreamer/multimedia dependencies."""
+        if not is_linux():
+            return {
+                "detected": False,
+                "package_manager": "unsupported",
+                "distro": "Windows",
+                "command": "",
+                "error": "Linux multimedia dependencies are not used on Windows.",
+                "code": "unsupported_platform",
+            }
+
         import shutil
 
         commands = {
@@ -2614,6 +2686,9 @@ class Api:
         """
         Downloads the latest Proton-GE release and extracts it to the local share directory.
         """
+        if not is_linux():
+            return unsupported_on_host("Proton-GE installation")
+
         import json
         import os
         import tarfile
@@ -2658,7 +2733,7 @@ class Api:
                     "error": "Could not find a valid release tarball.",
                 }
 
-            wlib_share_dir = os.path.expanduser("~/.local/share/wLib/proton")
+            wlib_share_dir = get_proton_dir()
             os.makedirs(wlib_share_dir, exist_ok=True)
 
             tar_path = os.path.join("/tmp", f"{release_name}.tar.gz")
@@ -2773,8 +2848,15 @@ class Api:
     def browse_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select an executable or HTML game."""
         file_types = (
-            "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
-            "All files (*.*)",
+            (
+                "Windows Game Files (*.exe;*.bat;*.cmd;*.jar;*.html;*.htm)",
+                "All files (*.*)",
+            )
+            if is_windows()
+            else (
+                "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
+                "All files (*.*)",
+            )
         )
 
         if sys.platform.startswith("linux"):
@@ -2888,7 +2970,13 @@ class Api:
                     break  # Don't duplicate the game_dir
 
         # ── 2. Check Ren'Py native save path (~/.renpy/) ──
-        renpy_base = os.path.expanduser("~/.renpy")
+        if is_windows():
+            roaming_app_data = str(os.environ.get("APPDATA") or "").strip()
+            renpy_base = (
+                os.path.join(roaming_app_data, "RenPy") if roaming_app_data else ""
+            )
+        else:
+            renpy_base = os.path.expanduser("~/.renpy")
         if os.path.isdir(renpy_base):
             # Try to match by game name or title
             for entry in os.listdir(renpy_base):
@@ -2904,9 +2992,53 @@ class Api:
                             {
                                 "path": candidate,
                                 "type": "Ren'Py",
-                                "description": f"Ren'Py native save folder: ~/.renpy/{entry}",
+                                "description": f"Ren'Py native save folder: {candidate}",
                             }
                         )
+
+        if is_windows():
+            user_home = os.path.expanduser("~")
+            native_roots = [
+                (str(os.environ.get("APPDATA") or ""), "AppData Roaming"),
+                (str(os.environ.get("LOCALAPPDATA") or ""), "AppData Local"),
+                (
+                    os.path.join(user_home, "AppData", "LocalLow"),
+                    "AppData LocalLow",
+                ),
+                (os.path.join(user_home, "Documents"), "Documents"),
+                (os.path.join(user_home, "Saved Games"), "Saved Games"),
+            ]
+            for root, label in native_roots:
+                if not root or not os.path.isdir(root):
+                    continue
+                try:
+                    for entry in os.listdir(root):
+                        entry_lower = entry.lower()
+                        title_words = title_clean.lower().split() if title_clean else []
+                        significant_words = [word for word in title_words if len(word) >= 3]
+                        matched = bool(
+                            (game_name and game_name.lower() in entry_lower)
+                            or any(word in entry_lower for word in significant_words)
+                        )
+                        candidate = os.path.join(root, entry)
+                        if matched and os.path.isdir(candidate):
+                            results.append(
+                                {
+                                    "path": candidate,
+                                    "type": f"Windows ({label})",
+                                    "description": f"{label}/{entry}",
+                                }
+                            )
+                except PermissionError:
+                    continue
+
+            seen_windows: set[str] = set()
+            unique_windows: list[SaveLocation] = []
+            for result in results:
+                if result["path"] not in seen_windows:
+                    seen_windows.add(result["path"])
+                    unique_windows.append(result)
+            return unique_windows
 
         # ── 3. Check Wine prefix AppData folders ──
         wine_prefix = (
@@ -2915,7 +3047,7 @@ class Api:
             else str(get_setting_fn("wine_prefix_path") or "")
         )
         if not wine_prefix:
-            wine_prefix = os.path.expanduser("~/.local/share/wLib/prefix")
+            wine_prefix = get_default_wine_prefix()
 
         proton_path = (
             proton_version
@@ -3084,9 +3216,10 @@ class Api:
 
     def is_cheat_engine_installed(self) -> dict[str, object]:
         """Checks if Cheat Engine (Lunar Engine) is installed in the wLib data directory."""
-        import os
+        if not is_linux():
+            return {"installed": False, "path": "", "supported": False}
 
-        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
+        ce_dir = get_cheat_engine_dir()
         executable_path = self._find_cheat_engine_executable(ce_dir)
         if executable_path:
             return {"installed": True, "path": executable_path}
@@ -3117,6 +3250,9 @@ class Api:
         Downloads a safe, portable build of Cheat Engine (Lunar Engine v7.2).
         Lunar Engine is an undetected CE fork that works perfectly in Wine.
         """
+        if not is_linux():
+            return unsupported_on_host("Cheat Engine injection support")
+
         import os
         import shutil
         import tempfile
@@ -3124,7 +3260,7 @@ class Api:
         import zipfile
 
         url = "https://github.com/visibou/lunarengine/releases/download/v.7.2/Lunar.Engine.zip"
-        ce_dir = os.path.expanduser("~/.local/share/wLib/CheatEngine")
+        ce_dir = get_cheat_engine_dir()
         parent_dir = os.path.dirname(ce_dir)
         stage_dir: str | None = None
         backup_dir: str | None = None

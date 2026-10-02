@@ -22,16 +22,20 @@ import { api } from "../../services/api";
 import type {
   GameRecord,
   LaunchTarget,
+  PlatformCapabilities,
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   SaveLocation,
 } from "../../services/api";
+import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
-  LAUNCH_MODE_OPTIONS,
+  getLaunchModeOptions,
   normalizeLaunchMode,
+  resolveLaunchRuntimeOverrides,
   usesWineProtonControls,
 } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
+import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import {
   DEFAULT_PLAY_STATUS,
   getPlayStatusMeta,
@@ -118,6 +122,9 @@ const autoInjectCe = ref(false);
 const customPrefix = ref("");
 const protonVersion = ref("");
 const launchMode = ref<LaunchMode>("auto");
+const platformCapabilities = ref<PlatformCapabilities>({
+  ...CONSERVATIVE_PLATFORM_CAPABILITIES,
+});
 const useCustomPrefix = ref(false);
 const availableRunners = ref<RunnerInfo[]>([]);
 const loadingRunners = ref(false);
@@ -164,12 +171,16 @@ const statuses = PLAY_STATUS_OPTIONS;
 const isNativeLaunchMode = computed(
   () => !usesWineProtonControls(launchMode.value),
 );
+const showWineProtonControls = computed(
+  () =>
+    platformCapabilities.value.wine_proton &&
+    usesWineProtonControls(launchMode.value),
+);
 const launchModeOptions = computed(() =>
-  LAUNCH_MODE_OPTIONS.filter(
-    (option) =>
-      option.value !== "rpgmaker_linux" ||
-      rpgmakerLinuxRunnerAvailable.value ||
-      launchMode.value === "rpgmaker_linux",
+  getLaunchModeOptions(
+    platformCapabilities.value,
+    rpgmakerLinuxRunnerAvailable.value,
+    launchMode.value,
   ),
 );
 const rpgmakerLinuxModeUnavailable = computed(
@@ -177,6 +188,9 @@ const rpgmakerLinuxModeUnavailable = computed(
     launchMode.value === "rpgmaker_linux" &&
     rpgmakerLinuxRunnerLoaded.value &&
     !rpgmakerLinuxRunnerAvailable.value,
+);
+const launchModeUnavailableOnPlatform = computed(
+  () => !platformCapabilities.value.launch_modes.includes(launchMode.value),
 );
 
 const averagePersonalRating = computed(() => {
@@ -356,17 +370,30 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (open) {
+      platformCapabilities.value = await loadPlatformCapabilities();
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
       rpgmakerLinuxRunnerLoaded.value = false;
       rpgmakerLinuxRunnerError.value = "";
-      void Promise.all([
-        loadCheatEngineStatus(),
-        loadRpgmakerLinuxRunnerStatus(),
-        loadExecutableModifiedTime(),
-        loadLaunchTargets(),
-      ]);
+      const loaders = [loadExecutableModifiedTime(), loadLaunchTargets()];
+      if (platformCapabilities.value.cheat_engine_injection) {
+        loaders.push(loadCheatEngineStatus());
+      } else {
+        ceInstalled.value = false;
+      }
+      if (platformCapabilities.value.rpgmaker_linux) {
+        loaders.push(loadRpgmakerLinuxRunnerStatus());
+      } else {
+        syncRpgmakerLinuxRunnerStatus({
+          available: false,
+          path: "",
+          source: "",
+          configured_path: "",
+          error: "RPGMaker Linux is unavailable on this platform.",
+        });
+      }
+      void Promise.all(loaders);
     } else {
       engineMenuOpen.value = false;
       executableModifiedAt.value = null;
@@ -402,7 +429,13 @@ watch(
 watch(
   () => [useCustomPrefix.value, launchMode.value] as const,
   async ([enabled, mode]) => {
-    if (!enabled || !usesWineProtonControls(mode) || runnersLoaded.value || loadingRunners.value) {
+    if (
+      !platformCapabilities.value.wine_proton ||
+      !enabled ||
+      !usesWineProtonControls(mode) ||
+      runnersLoaded.value ||
+      loadingRunners.value
+    ) {
       return;
     }
     loadingRunners.value = true;
@@ -727,11 +760,25 @@ const save = async () => {
       is_favorite: isFavorite.value ? 1 : 0,
       tags: tags.value.join(", "),
       engine: normalizeEngine(engine.value),
-      run_japanese_locale: runJapaneseLocale.value,
-      run_wayland: runWayland.value,
-      auto_inject_ce: autoInjectCe.value,
-      custom_prefix: useCustomPrefix.value ? customPrefix.value : "",
-      proton_version: useCustomPrefix.value ? protonVersion.value : "",
+      run_japanese_locale: platformCapabilities.value.wine_proton
+        ? runJapaneseLocale.value
+        : !!props.game.run_japanese_locale,
+      run_wayland: platformCapabilities.value.wayland
+        ? runWayland.value
+        : !!props.game.run_wayland,
+      auto_inject_ce: platformCapabilities.value.cheat_engine_injection
+        ? autoInjectCe.value
+        : !!props.game.auto_inject_ce,
+      custom_prefix: platformCapabilities.value.wine_proton
+        ? useCustomPrefix.value
+          ? customPrefix.value
+          : ""
+        : props.game.custom_prefix || "",
+      proton_version: platformCapabilities.value.wine_proton
+        ? useCustomPrefix.value
+          ? protonVersion.value
+          : ""
+        : props.game.proton_version || "",
       launch_mode: launchMode.value,
       latest_version: latestVersion.value,
       rating_graphics: ratingGraphics.value,
@@ -779,6 +826,15 @@ const deleteGame = async () => {
 
 const buildLaunchPayload = (targetPath: string): GameRecord | null => {
   if (props.game) {
+    const runtimeOverrides = resolveLaunchRuntimeOverrides({
+      wineProtonSupported: platformCapabilities.value.wine_proton,
+      usesWineProtonRuntime: !isNativeLaunchMode.value,
+      useCustomPrefix: useCustomPrefix.value,
+      customPrefix: customPrefix.value,
+      protonVersion: protonVersion.value,
+      storedCustomPrefix: props.game.custom_prefix || "",
+      storedProtonVersion: props.game.proton_version || "",
+    });
     return {
       ...props.game,
       title: title.value,
@@ -791,13 +847,17 @@ const buildLaunchPayload = (targetPath: string): GameRecord | null => {
       is_favorite: !!isFavorite.value,
       tags: tags.value.join(", "),
       engine: normalizeEngine(engine.value),
-      run_japanese_locale: !!runJapaneseLocale.value,
-      run_wayland: !!runWayland.value,
-      auto_inject_ce: !isNativeLaunchMode.value && !!autoInjectCe.value,
-      custom_prefix:
-        !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
-      proton_version:
-        !isNativeLaunchMode.value && useCustomPrefix.value ? protonVersion.value : "",
+      run_japanese_locale: platformCapabilities.value.wine_proton
+        ? !!runJapaneseLocale.value
+        : !!props.game.run_japanese_locale,
+      run_wayland: platformCapabilities.value.wayland
+        ? !!runWayland.value
+        : !!props.game.run_wayland,
+      auto_inject_ce: platformCapabilities.value.cheat_engine_injection
+        ? !isNativeLaunchMode.value && !!autoInjectCe.value
+        : !!props.game.auto_inject_ce,
+      custom_prefix: runtimeOverrides.custom_prefix,
+      proton_version: runtimeOverrides.proton_version,
       launch_mode: launchMode.value,
     };
   }
@@ -1340,7 +1400,19 @@ const openInBrowser = async () => {
                   </option>
                 </select>
                 <p class="text-xs mt-2" style="color: var(--text-muted)">
-                  Linux Native runs the selected file directly. RPGMaker Linux uses the external native-port runner when installed.
+                  {{
+                    platformCapabilities.platform === "windows"
+                      ? "Auto Detect launches Windows games directly without Wine or Proton."
+                      : "Linux Native runs the selected file directly. RPGMaker Linux uses the external native-port runner when installed."
+                  }}
+                </p>
+                <p
+                  v-if="launchModeUnavailableOnPlatform"
+                  class="text-xs mt-2 text-yellow-400"
+                >
+                  This stored launch mode is unavailable on
+                  {{ platformCapabilities.platform }}. Choose Auto Detect to
+                  launch on this platform; the value is preserved until you save.
                 </p>
                 <p
                   v-if="rpgmakerLinuxModeUnavailable"
@@ -1352,7 +1424,11 @@ const openInBrowser = async () => {
                 </p>
               </div>
 
-              <div class="rounded-md px-2 py-1" style="background: var(--bg-surface)">
+              <div
+                v-if="platformCapabilities.wine_proton"
+                class="rounded-md px-2 py-1"
+                style="background: var(--bg-surface)"
+              >
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium" style="color: var(--text-primary)">
                     Run with Japanese Locale
@@ -1383,7 +1459,11 @@ const openInBrowser = async () => {
                 </p>
               </div>
 
-              <div class="rounded-md px-2 py-1" style="background: var(--bg-surface)">
+              <div
+                v-if="platformCapabilities.wayland"
+                class="rounded-md px-2 py-1"
+                style="background: var(--bg-surface)"
+              >
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium" style="color: var(--text-primary)">
                     Run in Wayland Compatibility Mode
@@ -1415,7 +1495,10 @@ const openInBrowser = async () => {
               </div>
 
               <div
-                v-if="!isNativeLaunchMode"
+                v-if="
+                  platformCapabilities.cheat_engine_injection &&
+                  !isNativeLaunchMode
+                "
                 class="rounded-md px-2 py-1 transition-colors"
                 :style="
                   ceInstalled
@@ -1467,7 +1550,7 @@ const openInBrowser = async () => {
           </div>
 
           <!-- Advanced Launch Options -->
-          <div v-if="!isNativeLaunchMode" class="col-span-2 mt-2">
+          <div v-if="showWineProtonControls" class="col-span-2 mt-2">
             <div
               class="flex items-center justify-between p-3 rounded-lg"
               style="

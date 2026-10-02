@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="wLib"
+    Manufacturer="wLib Project"
+    Version="$(ProductVersion)"
+    UpgradeCode="ECB1D2B7-1B92-470A-BF78-6E18825C99B8"
+    Scope="perUser"
+    InstallerVersion="500"
+    Language="1033">
+
+    <SummaryInformation Description="wLib game library manager" Manufacturer="wLib Project" />
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of wLib is already installed."
+      Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPPRODUCTICON" Value="wLib.exe" />
+    <!-- Unset by default: the UI checkbox treats any value as checked. -->
+    <Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch wLib" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <CustomAction
+      Id="LaunchWLib"
+      Directory="INSTALLFOLDER"
+      ExeCommand="&quot;[INSTALLFOLDER]wLib.exe&quot;"
+      Impersonate="yes"
+      Return="asyncNoWait" />
+    <SetProperty
+      Id="ARPINSTALLLOCATION"
+      Value="[INSTALLFOLDER]"
+      After="CostFinalize" />
+    <Icon Id="wLib.exe" SourceFile="$(PayloadDir)\wLib.exe" />
+
+    <StandardDirectory Id="PerUserProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="wLib" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="WLibProgramMenuFolder" Name="wLib" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <ComponentGroup Id="WLibPayload" Directory="INSTALLFOLDER">
+      <Files Include="$(PayloadDir)\**">
+        <Exclude Files="$(PayloadDir)\**\*.pdb" />
+      </Files>
+    </ComponentGroup>
+
+    <Component
+      Id="WLibStartMenuShortcut"
+      Guid="91698144-5E0E-4951-81C7-345AD7E3E72D"
+      Directory="INSTALLFOLDER">
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\wLib\wLib"
+        Name="InstallPath"
+        Type="string"
+        Value="[INSTALLFOLDER]"
+        KeyPath="yes" />
+      <Shortcut
+        Id="WLibStartMenuShortcutLink"
+        Directory="WLibProgramMenuFolder"
+        Name="wLib"
+        Description="Open wLib"
+        Target="[INSTALLFOLDER]wLib.exe"
+        WorkingDirectory="INSTALLFOLDER"
+        Icon="wLib.exe" />
+      <RemoveFolder Id="RemoveWLibProgramMenuFolder" Directory="WLibProgramMenuFolder" On="uninstall" />
+    </Component>
+
+    <Component
+      Id="WLibDesktopShortcut"
+      Guid="D0E6C9C5-D64D-44D3-B2C8-DD7435C043FA"
+      Directory="INSTALLFOLDER"
+      Condition="INSTALLDESKTOPSHORTCUT = 1">
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\wLib\wLib"
+        Name="DesktopShortcut"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+      <Shortcut
+        Id="WLibDesktopShortcutLink"
+        Directory="DesktopFolder"
+        Name="wLib"
+        Description="Open wLib"
+        Target="[INSTALLFOLDER]wLib.exe"
+        WorkingDirectory="INSTALLFOLDER"
+        Icon="wLib.exe" />
+    </Component>
+
+    <!-- WixUI_Minimal-style flow plus a shortcut page; no license/directory pages. -->
+    <UI Id="WLibUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Dialog Id="WLibShortcutDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Shortcuts" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="A Start Menu shortcut is always created." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="60" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a desktop shortcut" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+      </Dialog>
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="WLibShortcutDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="WLibShortcutDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="WLibShortcutDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WLibShortcutDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchWLib" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+    <UIRef Id="WixUI_Common" />
+
+    <Feature Id="WLibFeature" Title="wLib" Level="1">
+      <ComponentGroupRef Id="WLibPayload" />
+      <ComponentRef Id="WLibStartMenuShortcut" />
+      <ComponentRef Id="WLibDesktopShortcut" />
+    </Feature>
+  </Package>
+</Wix>

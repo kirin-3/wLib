@@ -16,10 +16,10 @@ example_extensions/
 plans/
 colors.md
 GITHUB_WORKFLOW.md
-.ubuntuvenv/
 .playwright-cli/
 AGENTS.md
 lancedb/
+forum-media/
 
 # Dependency directories
 node_modules/
@@ -80,6 +80,5 @@ coverage/
 .idea
 .ruff_cache
 __pycache__/
-test_venv/
 .pytest_cache/
 AGENTS.md

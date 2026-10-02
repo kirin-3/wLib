@@ -5,19 +5,23 @@
 <h1 align="center">wLib</h1>
 
 <p align="center">
-  <b>A modern Linux game manager for F95Zone</b>
+  <b>A cross-platform desktop game manager for F95Zone</b>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3%2B-blue.svg" alt="License: GPLv3 or later" /></a>
-  <img src="https://img.shields.io/badge/platform-Linux-lightgrey.svg" alt="Platform: Linux" />
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg" alt="Platform: Linux and Windows" />
   <img src="https://img.shields.io/badge/python-3.12+-yellow.svg" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/vue-3-brightgreen.svg" alt="Vue 3" />
 </p>
 
 ---
 
-wLib is a native Linux desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell, launches games through Linux-native, Wine, Proton, or optional RPGMaker Linux runner modes, and tracks updates seamlessly by scraping F95Zone thread pages.
+wLib is a Linux and Windows desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell and tracks updates by scraping F95Zone thread pages. Linux supports native, Wine, Proton, and optional RPGMaker Linux runner modes. Windows launches supported game targets directly and does not require Wine, Proton, or Winetricks.
+
+## Platform behavior
+
+On Windows, Auto Detect launches `.exe`, `.bat`, `.cmd`, `.jar`, and HTML targets through native Windows processes and shell associations. Wine/Proton, Winetricks/RTP installers, Wayland, the RPGMaker Linux runner, and Cheat Engine injection are Linux-only; their controls are hidden on Windows and imported values are preserved without being executed.
 
 ## 🐧 Why wLib?
 
@@ -29,7 +33,7 @@ wLib was inspired by tools like **xLibrary** and other Windows-centric game mana
 | 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight, native webview shell. |
 | 🍷 **First-class Launching** | Built-in support for Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows. |
 
-If you've been looking for a game manager that truly belongs on Linux, wLib is for you.
+The same library can move between Linux and Windows through semantic JSON import/export. Platform-specific launch settings are preserved but only offered where supported.
 
 ## ✨ Features
 
@@ -93,6 +97,8 @@ If you've been looking for a game manager that truly belongs on Linux, wLib is f
 
 ### System Dependencies
 
+Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, or Winetricks. The first scraper use may download Playwright Chromium into `%LOCALAPPDATA%\wLib\playwright`.
+
 | Dependency | Required | Purpose |
 |------------|----------|---------|
 | **Python 3.12+** | ⚙️ Source/dev only | Backend runtime when running from source |
@@ -142,7 +148,18 @@ sudo pacman -S python python-gobject gtk3 wine winetricks nodejs npm
 
 ## 🚀 Installation
 
-### Option 1: AppImage
+### Windows x64: MSI or Portable ZIP
+
+Download either Windows artifact from the [Releases](https://github.com/kirin-3/wLib/releases) page:
+
+- `wLib-<version>-windows-x64.msi` installs per-user under `%LOCALAPPDATA%\Programs\wLib`, adds a Start Menu shortcut (desktop shortcut optional), and supports upgrades, repair, and clean uninstall.
+- `wLib-<version>-windows-x64-portable.zip` can be extracted anywhere and run with `wLib.exe`.
+
+The MSI removes only installed program files and shortcuts. Library data, settings, scraper sessions, and Playwright browsers under `%LOCALAPPDATA%\wLib` remain after uninstall. SHA-256 hashes are published beside the artifacts.
+
+Windows builds are currently unsigned, so Windows SmartScreen shows "Windows protected your PC" on first launch. Click **More info → Run anyway**. If you downloaded the portable ZIP, you can instead right-click it before extracting, open **Properties**, and tick **Unblock**. Verify the download against the published SHA-256 hashes if you want to be sure it is the official build.
+
+### Linux Option 1: AppImage
 
 Download the latest `.AppImage` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
 
@@ -154,7 +171,7 @@ chmod +x wLib-*.AppImage
 > [!IMPORTANT]
 > Some AppImages require FUSE to run. If your distribution doesn't have it enabled by default (like Ubuntu 22.04+), install `libfuse2`.
 
-### Option 2: Native Packages
+### Linux Option 2: Native Packages
 
 Download the latest `.deb` or `.rpm` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
 
@@ -168,7 +185,7 @@ sudo dnf install ./wLib-*-linux-x86_64.rpm
 
 Native packages install wLib under `/opt/wlib` and expose the `wlib` command through `/usr/bin/wlib`.
 
-### Option 3: AUR
+### Linux Option 3: AUR
 
 Arch users can install the binary release package as `wlib-bin` after the generated AUR metadata is published:
 
@@ -176,7 +193,7 @@ Arch users can install the binary release package as `wlib-bin` after the genera
 paru -S wlib-bin
 ```
 
-### Option 4: tar.gz Archive
+### Linux Option 4: tar.gz Archive
 
 ```bash
 tar xzf wLib-*-linux-x86_64.tar.gz
@@ -184,7 +201,7 @@ cd wLib-*/
 ./wlib
 ```
 
-### Option 5: Run from Source
+### Run from Source
 
 ```bash
 git clone https://github.com/kirin-3/wLib.git
@@ -196,6 +213,8 @@ cd ui && npm install && npm run typecheck && npm run build && cd ..
 # Launch (auto-creates venv and installs Python deps)
 ./wlib.sh
 ```
+
+On Windows, use Python 3.12, install `requirements-windows.txt`, build `ui/`, and run `python main.py`. Build release artifacts with `scripts\build-windows.ps1`; see [docs/build.md](docs/build.md).
 
 ## 🛠️ Development
 
@@ -240,7 +259,7 @@ This runs extension sync and Qt/Playwright initialization in an isolated tempora
 
 wLib includes a browser extension that adds quick-action buttons directly to F95Zone thread pages. These buttons communicate securely with your running wLib app over a local HTTP server on port `8183`.
 
-The app synchronizes the browser extension files into `~/.local/share/wLib/extension/` on startup and again when you use the Extension page's **Open Extension Folder** button.
+The app synchronizes browser extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows, and exposes the resolved folder through **Open Extension Folder**.
 
 If the bundled extension version changes, wLib shows a startup toast telling you to reload the browser addon so the new files take effect.
 

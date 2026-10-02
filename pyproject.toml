@@ -5,12 +5,15 @@ include = ["*.py"]
 exclude = [
   ".git",
   ".venv",
-  ".ubuntuvenv",
   "venv",
-  "test_venv",
   "build",
   "dist",
   "ui/dist",
   "ui/node_modules",
 ]
 force-exclude = true
+
+[tool.ruff.lint]
+# Keep Ruff's historical default rule set explicit so tool upgrades do not
+# silently opt this established codebase into unrelated preview rule families.
+select = ["E4", "E7", "E9", "F"]

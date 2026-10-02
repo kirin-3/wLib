@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import {
   IconActivityHeartbeat,
   IconFolderOpen,
@@ -9,12 +9,33 @@ import {
   IconPuzzle,
   IconRefresh,
 } from "@tabler/icons-vue";
-import { api, onWebviewReady } from "../services/api";
+import {
+  api,
+  CONSERVATIVE_PLATFORM_CAPABILITIES,
+  onWebviewReady,
+  type PlatformCapabilities,
+} from "../services/api";
+import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 
 type ConnectionStatus = "checking" | "connected" | "disconnected";
 
 const connectionStatus = ref<ConnectionStatus>("checking");
 const lastCheck = ref("");
+const platformCapabilities = ref<PlatformCapabilities>({
+  ...CONSERVATIVE_PLATFORM_CAPABILITIES,
+});
+const extensionDirectory = computed(
+  () => platformCapabilities.value.extension_dir || "the wLib extension data folder",
+);
+const extensionPath = (child: string) => {
+  const root = platformCapabilities.value.extension_dir;
+  if (!root) return child;
+  const separator = platformCapabilities.value.platform === "windows" ? "\\" : "/";
+  const normalizedChild = child.replace(/[\\/]/g, separator);
+  return `${root.replace(/[\\/]$/, "")}${separator}${normalizedChild}`;
+};
+const chromeExtensionDirectory = computed(() => extensionPath("chrome"));
+const firefoxExtensionFile = computed(() => extensionPath("firefox/wLib.xpi"));
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 const checkConnection = async () => {
@@ -44,7 +65,8 @@ const openExtensionFolder = async () => {
 };
 
 onMounted(() => {
-  onWebviewReady(() => {
+  onWebviewReady(async () => {
+    platformCapabilities.value = await loadPlatformCapabilities();
     checkConnection();
     pollInterval = setInterval(checkConnection, 10000);
   });
@@ -146,9 +168,9 @@ onUnmounted(() => {
 
         <p class="text-sm mb-4" style="color: var(--text-secondary)">
           The browser extension is synced into
-          <code class="ext-code" style="color: var(--brand)"
-            >~/.local/share/wLib/extension/</code
-          >
+          <code class="ext-code" style="color: var(--brand)">{{
+            extensionDirectory
+          }}</code>
           on app startup and again when you use
           <span style="color: var(--text-primary)">Open Extension Folder</span>.
           Use the synced files there, not the repo-root
@@ -210,9 +232,9 @@ onUnmounted(() => {
             </li>
             <li>
               Select the
-              <code class="ext-code text-blue-400"
-                >~/.local/share/wLib/extension/chrome/</code
-              >
+              <code class="ext-code text-blue-400">{{
+                chromeExtensionDirectory
+              }}</code>
               folder
             </li>
             <li>The wLib extension icon should appear in your toolbar</li>
@@ -248,9 +270,9 @@ onUnmounted(() => {
             </li>
             <li>
               Select
-              <code class="ext-code text-orange-400"
-                >~/.local/share/wLib/extension/firefox/wLib.xpi</code
-              >
+              <code class="ext-code text-orange-400">{{
+                firefoxExtensionFile
+              }}</code>
               directly
             </li>
             <li>Confirm the installation when Firefox prompts you</li>

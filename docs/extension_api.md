@@ -3,7 +3,7 @@
 wLib bundles an optional companion web extension that integrates deeply with F95Zone in standard desktop browsers (Firefox, Chrome). To facilitate instantaneous data transfer without requiring cloud synchronization, wLib runs a background REST server.
 
 ## The Local Daemon
-Inside `main.py`, a daemon thread launches `start_extension_server()`, binding `http.server.HTTPServer` to `127.0.0.1:8183`. On startup, the app also synchronizes the bundled browser extension files into `~/.local/share/wLib/extension/` so the installed unpacked/XPI copy tracks the version shipped with the app.
+Inside `main.py`, a daemon thread launches `start_extension_server()`, binding `http.server.HTTPServer` to `127.0.0.1:8183`. On startup, the app synchronizes bundled extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows so the installed unpacked/XPI copy tracks the app version.
 
 ## CORS Restrictions (Security Model)
 Because the daemon binds to `localhost`, any website visited by the user *could* theoretically perform background requests against it.

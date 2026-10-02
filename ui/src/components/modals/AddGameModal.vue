@@ -2,9 +2,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { api } from "../../services/api";
-import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
+import {
+  api,
+  CONSERVATIVE_PLATFORM_CAPABILITIES,
+  type PlatformCapabilities,
+} from "../../services/api";
+import { getLaunchModeOptions } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
+import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 
 interface AddGamePayload {
   title: string;
@@ -39,14 +44,23 @@ const developer = ref("");
 const engine = ref("");
 const launchMode = ref<LaunchMode>("auto");
 const rpgmakerLinuxRunnerAvailable = ref(false);
+const platformCapabilities = ref<PlatformCapabilities>({
+  ...CONSERVATIVE_PLATFORM_CAPABILITIES,
+});
 const launchModeOptions = computed(() =>
-  LAUNCH_MODE_OPTIONS.filter(
-    (option) =>
-      option.value !== "rpgmaker_linux" || rpgmakerLinuxRunnerAvailable.value,
+  getLaunchModeOptions(
+    platformCapabilities.value,
+    rpgmakerLinuxRunnerAvailable.value,
+    launchMode.value,
   ),
 );
 
 const loadRpgmakerLinuxRunnerStatus = async () => {
+  platformCapabilities.value = await loadPlatformCapabilities();
+  if (!platformCapabilities.value.rpgmaker_linux) {
+    rpgmakerLinuxRunnerAvailable.value = false;
+    return;
+  }
   try {
     const settings = await api.getSettings();
     rpgmakerLinuxRunnerAvailable.value =

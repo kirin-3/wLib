@@ -1,6 +1,6 @@
 # Build & Packaging
 
-wLib ships Linux binary release artifacts through `scripts/build.sh`: AppImage, tar.gz, `.deb`, `.rpm`, and AUR `wlib-bin` metadata.
+wLib ships Linux artifacts through `scripts/build.sh` and Windows x64 artifacts through `scripts/build-windows.ps1`. Windows output is a portable ZIP plus a per-user MSI, both derived from one canonical PyInstaller onedir payload.
 
 The packaging pipeline integrates the Python backend, Vue frontend, bundled browser extension, release launcher, desktop file, icon, and license into one staged PyInstaller folder. Every release format is then produced from that same staged folder.
 
@@ -8,10 +8,39 @@ The packaging pipeline integrates the Python backend, Vue frontend, bundled brow
 
 Backend changes are validated separately from release packaging through `.github/workflows/python-checks.yml`.
 
-- The workflow runs on pull requests, pushes to `main`, and manual dispatches.
+- The workflow runs on pull requests, pushes to `main`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
 - It creates a fresh virtual environment, installs `requirements-dev.txt`, and runs `bash scripts/check-python-clean.sh`.
 - The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
+- The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 20.
+
+## Windows Build Pipeline (`scripts/build-windows.ps1`)
+
+Requirements are Windows x64, Python 3.12, Node 20+, and WiX 6.0.2 (`dotnet tool install --global wix --version 6.0.2`). Run:
+
+```powershell
+.\scripts\build-windows.ps1 -Version 1.2.0
+```
+
+The script validates the MSI-compatible version, installs `requirements-windows.txt`, runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, Playwright's driver, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading Chromium.
+
+The canonical directory produces:
+
+- `wLib-<version>-windows-x64-portable.zip`
+- `wLib-<version>-windows-x64.msi`
+- `wLib-<version>-windows-x64-SHA256SUMS.txt`
+
+The MSI installs per-user beneath `%LOCALAPPDATA%\Programs\wLib`, creates a Start Menu shortcut, and never targets `%LOCALAPPDATA%\wLib` user data. Its setup wizard (WiX UI extension, added automatically by the build script) offers an unchecked desktop-shortcut option and a "Launch wLib" option on the finish page; silent installs can pass `INSTALLDESKTOPSHORTCUT=1`. Validate install, repair, major upgrade, installed smoke, uninstall, shortcut cleanup, and data retention with:
+
+```powershell
+.\scripts\test-windows-msi.ps1 -MsiPath .\dist\windows\wLib-1.2.0-windows-x64.msi
+```
+
+Authenticode signing is optional. Set `WLIB_SIGNING_CERT_PATH` to a PFX, optionally set `WLIB_SIGNING_CERT_PASSWORD`, and optionally override `WLIB_SIGNING_TIMESTAMP_URL`. Credentials are read only from the environment; unsigned builds emit a warning. Cross-compiling Windows releases from Linux is unsupported.
+
+### Windows release qualification
+
+The initial pipeline has been exercised on Windows 11 x64 with source/frozen smoke tests, normal UI startup, portable ZIP creation, and silent MSI install/repair/major-upgrade/uninstall. GitHub's `windows-2022` runner provides clean x64 packaging coverage. Before calling a release broadly Windows 10-qualified, repeat the visible UI and game-launch checks on a clean, fully patched Windows 10 x64 machine; that manual hardware/OS pass is not represented by the Server 2022 runner. Chromium still requires network access on first scraper use, and unsigned local artifacts will trigger Windows publisher warnings.
 
 ### Smoke Backend Test
 

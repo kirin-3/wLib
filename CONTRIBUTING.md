@@ -41,11 +41,11 @@ wLib includes automatic GPU detection and a crash guard system:
 
 #### 1. Python Backend
 Set up a `.venv` virtual environment with Python 3.12 and install the development dependencies:
-```bash
-python -m venv .venv
-source .venv/bin/activate
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python --version  # should report Python 3.12.x
-pip install -r requirements-dev.txt
+python -m pip install -r requirements-dev.txt -r requirements-windows.txt
 ```
 
 #### 2. Vue 3 Frontend

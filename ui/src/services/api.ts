@@ -6,7 +6,9 @@
  */
 
 import type { LaunchMode } from "../utils/launchMode";
+import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 export type { LaunchMode } from "../utils/launchMode";
+export { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 
 type ApiInvoker = (...args: unknown[]) => Promise<unknown> | unknown;
 
@@ -316,6 +318,23 @@ export interface RpgmakerLinuxRunnerStatus {
   error: string;
 }
 
+export type HostPlatform = "linux" | "windows" | "unsupported";
+
+export interface PlatformCapabilities {
+  platform: HostPlatform;
+  native_windows_launch: boolean;
+  wine_proton: boolean;
+  runtime_installers: boolean;
+  wayland: boolean;
+  rpgmaker_linux: boolean;
+  cheat_engine_injection: boolean;
+  launch_modes: LaunchMode[];
+  data_dir: string;
+  cache_dir: string;
+  playwright_browsers_path: string;
+  extension_dir: string;
+}
+
 export interface SettingsPayload {
   proton_path?: string;
   wine_prefix_path?: string;
@@ -339,7 +358,7 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   proton_path: "",
   wine_prefix_path: "",
   enable_logging: false,
-  playwright_browsers_path: "~/.cache/ms-playwright",
+  playwright_browsers_path: "",
   rpgmaker_linux_runner_path: "",
   rpgmaker_linux_runner_status: {
     available: false,
@@ -687,6 +706,10 @@ class ApiService {
     return this.invoke<SettingsResponse>("get_settings");
   }
 
+  async getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return this.invoke<PlatformCapabilities>("get_platform_capabilities");
+  }
+
   async saveSettings(settings: SettingsPayload): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("save_settings", settings);
   }
@@ -941,6 +964,8 @@ class ApiService {
           dlls_installed: false,
           rtps_installed: false,
         };
+      case "get_platform_capabilities":
+        return { ...CONSERVATIVE_PLATFORM_CAPABILITIES };
       case "get_system_deps_command":
         return {
           detected: false,
@@ -968,7 +993,7 @@ class ApiService {
           success: true,
           mock: true,
           updated: false,
-          path: "~/.local/share/wLib/extension",
+          path: "",
           bundled_version: "",
           installed_version: "",
           reason: "mock",

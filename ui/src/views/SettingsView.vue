@@ -18,17 +18,20 @@ import {
 } from "../utils/motionPreference";
 import type {
   InstallProgressStatus,
+  PlatformCapabilities,
   RpgmakerLinuxRunnerStatus,
   SettingsResponse,
   SystemDepsCommandResponse,
 } from "../services/api";
+import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../services/api";
+import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
 
 const protonPath = ref("");
 const prefixPath = ref("");
-const playwrightPath = ref("~/.cache/ms-playwright");
+const playwrightPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
 const enableLogging = ref(false);
 const animationsEnabled = ref(motionEnabled.value);
@@ -67,6 +70,12 @@ const sessionError = ref("");
 const saveMessage = ref("");
 const saveError = ref("");
 const settingsLoaded = ref(false);
+const platformCapabilities = ref<PlatformCapabilities>({
+  ...CONSERVATIVE_PLATFORM_CAPABILITIES,
+});
+const supportsLinuxRuntimes = computed(
+  () => platformCapabilities.value.runtime_installers,
+);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -93,7 +102,10 @@ const rpgmakerLinuxRunnerStatusText = computed(() => {
 const applySettings = (data: SettingsResponse) => {
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
-  playwrightPath.value = data.playwright_browsers_path || "~/.cache/ms-playwright";
+  playwrightPath.value =
+    data.playwright_browsers_path ||
+    platformCapabilities.value.playwright_browsers_path ||
+    "";
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
@@ -102,6 +114,7 @@ const applySettings = (data: SettingsResponse) => {
 
 const loadSettings = async () => {
   try {
+    platformCapabilities.value = await loadPlatformCapabilities();
     const data = await api.getSettings();
     if (data) {
       applySettings(data);
@@ -109,14 +122,16 @@ const loadSettings = async () => {
 
     animationsEnabled.value = motionEnabled.value;
 
-    const ceCheck = await api.isCheatEngineInstalled();
-    ceInstalled.value = !!ceCheck?.installed;
-    cePath.value = ceCheck?.path || "";
+    if (supportsLinuxRuntimes.value) {
+      const ceCheck = await api.isCheatEngineInstalled();
+      ceInstalled.value = !!ceCheck?.installed;
+      cePath.value = ceCheck?.path || "";
 
-    await pollInstallStatus();
+      await pollInstallStatus();
 
-    const sysDeps = await api.getSystemDepsCommand();
-    if (sysDeps) systemDeps.value = sysDeps;
+      const sysDeps = await api.getSystemDepsCommand();
+      if (sysDeps) systemDeps.value = sysDeps;
+    }
   } catch (e) {
     console.error("Failed to load settings", e);
   } finally {
@@ -125,6 +140,7 @@ const loadSettings = async () => {
 };
 
 const pollInstallStatus = async () => {
+  if (!supportsLinuxRuntimes.value) return;
   try {
     const s = await api.getInstallStatus(prefixPath.value, protonPath.value);
     if (s) {
@@ -364,7 +380,7 @@ watch(animationsEnabled, (enabled) => {
 });
 
 watch([protonPath, prefixPath], () => {
-  if (!settingsLoaded.value) return;
+  if (!settingsLoaded.value || !supportsLinuxRuntimes.value) return;
   if (pollTimer) return;
   if (statusRefreshTimer) clearTimeout(statusRefreshTimer);
   statusRefreshTimer = setTimeout(() => {
@@ -404,7 +420,7 @@ const saveSettings = async () => {
 
     applySettings(persistedSettings);
     animationsEnabled.value = motionEnabled.value;
-    await pollInstallStatus();
+    if (supportsLinuxRuntimes.value) await pollInstallStatus();
     saveMessage.value = "Settings saved.";
   } catch (e) {
     console.error("Failed to save settings", e);
@@ -445,11 +461,23 @@ const saveSettings = async () => {
             style="color: var(--text-primary)"
           >
             <IconAutomation class="ui-section-icon" />
-            Proton & Wine Environment
+            {{
+              supportsLinuxRuntimes
+                ? "Proton & Wine Environment"
+                : "Windows Environment"
+            }}
           </h3>
 
           <div class="space-y-5">
-            <div>
+            <div
+              v-if="platformCapabilities.platform === 'windows'"
+              class="p-4 rounded-lg text-sm"
+              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            >
+              Windows games launch directly. Proton, Wine, Winetricks, Wine
+              prefixes, and Linux runtime installers are not used on Windows.
+            </div>
+            <div v-if="supportsLinuxRuntimes">
               <label
                 class="block text-sm font-medium mb-1.5 flex justify-between items-center"
                 style="color: var(--text-secondary)"
@@ -496,7 +524,7 @@ const saveSettings = async () => {
               </p>
             </div>
 
-            <div>
+            <div v-if="supportsLinuxRuntimes">
               <label
                 class="block text-sm font-medium mb-1.5"
                 style="color: var(--text-secondary)"
@@ -521,6 +549,7 @@ const saveSettings = async () => {
             </div>
 
             <div
+              v-if="platformCapabilities.rpgmaker_linux"
               class="p-4 rounded-lg"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
@@ -584,7 +613,10 @@ const saveSettings = async () => {
               <input
                 v-model="playwrightPath"
                 type="text"
-                placeholder="~/.cache/ms-playwright"
+                :placeholder="
+                  platformCapabilities.playwright_browsers_path ||
+                  'Managed by wLib for this platform'
+                "
                 class="settings-input w-full"
               />
               <p class="text-xs mt-2" style="color: var(--text-muted)">
@@ -649,8 +681,11 @@ const saveSettings = async () => {
                   Enable Debug Logging
                 </h4>
                 <p class="text-xs mt-1" style="color: var(--text-muted)">
-                  Saves Wine/Proton launch output to a .log file next to the
-                  game executable to help troubleshoot black screens.
+                  {{
+                    supportsLinuxRuntimes
+                      ? "Saves Wine/Proton launch output to a .log file next to the game executable."
+                      : "Saves native launch output to a .log file next to the game executable."
+                  }}
                 </p>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
@@ -699,7 +734,7 @@ const saveSettings = async () => {
 
             <hr style="border-color: var(--border)" class="my-4" />
 
-            <div>
+            <div v-if="supportsLinuxRuntimes">
               <h4
                 class="text-sm font-bold mb-2"
                 style="color: var(--text-primary)"

@@ -1,7 +1,18 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
-from unittest.mock import patch, MagicMock
-from core.launcher import Launcher
+import subprocess
+import sys
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from core.launcher import Launcher, _split_windows_command_line
+
+
+@pytest.fixture(autouse=True)
+def _linux_launcher_by_default(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
 
 
 @patch("os.path.exists")
@@ -131,6 +142,202 @@ def test_launch_command_substitution(
 
     args, kwargs = mock_popen.call_args
     assert args[0] == ["/opt/game/run.sh", "-developer"]
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_auto_launches_executable_directly(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        r"C:\Games\Visual Novel\game.exe",
+        command_line_args='--profile "日本 語"',
+    )
+
+    assert result["success"] is True
+    command = mock_popen.call_args.args[0]
+    kwargs = mock_popen.call_args.kwargs
+    assert command == [
+        r"C:\Games\Visual Novel\game.exe",
+        "--profile",
+        "日本 語",
+    ]
+    assert kwargs["cwd"] == r"C:\Games\Visual Novel"
+    assert "WINEPREFIX" not in kwargs["env"]
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_batch_uses_explicit_command_processor(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(r"C:\Games\start.cmd", command_line_args="--safe")
+
+    assert result["success"] is True
+    assert mock_popen.call_args.args[0] == [
+        r"C:\Windows\System32\cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        "call",
+        r"C:\Games\start.cmd",
+        "--safe",
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--profile", "Player One"],
+        ["--name", 'a "quoted" value'],
+        ["--directory", "C:\\path with spaces\\"],
+        ["--empty", ""],
+        ["--unicode", "日本 語"],
+    ],
+)
+def test_windows_command_line_parser_round_trips_standard_quoting(arguments):
+    encoded = subprocess.list2cmdline(arguments)
+
+    assert _split_windows_command_line(encoded) == arguments
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires cmd.exe")
+def test_windows_batch_path_with_spaces_launches_successfully(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setattr("core.launcher.get_setting", lambda _key: "false")
+    game_directory = tmp_path / "Visual Novel"
+    game_directory.mkdir()
+    marker = game_directory / "launched.txt"
+    batch_file = game_directory / "start game.cmd"
+    batch_file.write_text(
+        f'@echo launched>"{marker}"\n',
+        encoding="utf-8",
+    )
+
+    result = Launcher().launch(str(batch_file))
+
+    deadline = time.monotonic() + 5
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert result["success"] is True
+    assert marker.read_text(encoding="utf-8").strip() == "launched"
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_command_substitution_preserves_wrapper_order(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        r"C:\Games\game.exe", command_line_args="wrapper %command% --debug"
+    )
+
+    assert result["success"] is True
+    assert mock_popen.call_args.args[0] == [
+        "wrapper",
+        r"C:\Games\game.exe",
+        "--debug",
+    ]
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_rejects_imported_linux_launch_mode(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+
+    result = Launcher().launch(r"C:\Games\game.exe", launch_mode="wine_proton")
+
+    assert result["success"] is False
+    assert result["code"] == "unsupported_platform"
+    assert "only available on Linux" in str(result["error"])
+    mock_popen.assert_not_called()
+
+
+@patch("os.path.exists", return_value=True)
+@patch("core.launcher.open_windows_system_target", return_value=(True, ""))
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_html_uses_system_association(
+    mock_get_setting, mock_open, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+
+    result = Launcher().launch(r"C:\Games\index.html")
+
+    assert result["success"] is True
+    mock_open.assert_called_once_with(r"C:\Games\index.html")
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_jar_uses_java_with_appended_arguments(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    mock_popen.return_value = MagicMock()
+
+    result = Launcher().launch(
+        r"C:\Games\日本語\game.jar",
+        command_line_args='--profile "Player One"',
+    )
+
+    assert result["success"] is True
+    assert mock_popen.call_args.args[0] == [
+        "java",
+        "-jar",
+        r"C:\Games\日本語\game.jar",
+        "--profile",
+        "Player One",
+    ]
+    assert mock_popen.call_args.kwargs["cwd"] == r"C:\Games\日本語"
+
+
+@patch("os.path.exists", return_value=True)
+@patch("subprocess.Popen")
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_launch_reports_periodic_and_final_playtime(
+    mock_get_setting, mock_popen, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    process = MagicMock()
+    process.poll.side_effect = [None, 0]
+    process.wait.side_effect = [subprocess.TimeoutExpired("game", 60)]
+    mock_popen.return_value = process
+    callbacks: list[tuple[int, bool]] = []
+
+    def run_thread_immediately(*, target, daemon):
+        assert daemon is True
+        target()
+        return MagicMock()
+
+    monkeypatch.setattr("threading.Thread", run_thread_immediately)
+    monkeypatch.setattr("time.time", MagicMock(side_effect=[100.0, 161.0, 165.0]))
+
+    result = Launcher().launch(
+        r"C:\Games\game.exe",
+        on_exit_callback=lambda delta, final=True: callbacks.append((delta, final)),
+    )
+
+    assert result["success"] is True
+    assert callbacks == [(61, False), (4, True)]
 
 
 @patch("os.path.exists")

@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import functools
 import os
 import re
 import shutil
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import TracebackType
 from typing import Protocol, TypeAlias, cast
 from urllib.parse import urlparse
+
+from .host_platform import get_browser_session_dir
 
 
 ScraperResultValue: TypeAlias = bool | str | list[str]
@@ -91,12 +95,41 @@ class BatchResultCallback(Protocol):
     def __call__(self, url: str, result: ScraperResult) -> bool: ...
 
 
+# Chromium refuses to open one profile twice, and every scraper entry point
+# shares the persistent browser_session profile.
+_BROWSER_SESSION_LOCK = threading.Lock()
+
+
+def _browser_session_busy_error() -> ScraperResult:
+    return {
+        "success": False,
+        "code": "busy",
+        "error": "Another F95Zone browser session is already running. Try again when it finishes.",
+    }
+
+
+def _exclusive_browser_session[**P, R](
+    on_busy: Callable[[ScraperResult], R],
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    def decorate(method: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(method)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            if not _BROWSER_SESSION_LOCK.acquire(blocking=False):
+                return on_busy(_browser_session_busy_error())
+            try:
+                return method(*args, **kwargs)
+            finally:
+                _BROWSER_SESSION_LOCK.release()
+
+        return wrapper
+
+    return decorate
+
+
 class Scraper:
     def __init__(self) -> None:
         # Store browser session in the user's data dir so login persists across installations
-        self.user_data_dir: str = os.path.expanduser(
-            "~/.local/share/wLib/browser_session"
-        )
+        self.user_data_dir: str = get_browser_session_dir()
 
     def _log_scrape_stage(self, url: str, stage: str, detail: str = "") -> None:
         target_url = str(url or "").strip() or "<unknown-url>"
@@ -422,6 +455,18 @@ class Scraper:
 
         combined = f"{page_title}\n{page_content}"
 
+        # Checked first: 404 pages also carry Cloudflare scripts and the guest
+        # "Log in" header, and retrying them headed cannot help.
+        not_found_markers = (
+            "requested thread could not be found",
+            "requested page could not be found",
+        )
+        if any(marker in combined for marker in not_found_markers):
+            return {
+                "code": "not_found",
+                "error": "Thread not found; it may have been deleted or moved",
+            }
+
         blocked_markers = (
             "just a moment",
             "checking your browser",
@@ -436,13 +481,17 @@ class Scraper:
                 "error": "Blocked by anti-bot challenge while loading thread",
             }
 
-        login_markers = (
-            "log in",
-            "login",
-            "sign in",
+        # Every guest page header says "Log in", so only trust the page title
+        # or XenForo's explicit login prompt in the body.
+        title_login_markers = ("log in", "login", "sign in")
+        content_login_markers = (
+            "you must be logged-in",
             "you must be logged in",
+            'action="/login/login"',
         )
-        if any(marker in combined for marker in login_markers):
+        if any(marker in page_title for marker in title_login_markers) or any(
+            marker in page_content for marker in content_login_markers
+        ):
             return {
                 "code": "login_required",
                 "error": "Login is required to access this thread",
@@ -468,6 +517,7 @@ class Scraper:
             "Run: python -m pip install playwright && python -m playwright install chromium"
         )
 
+    @_exclusive_browser_session(lambda busy: busy)
     def open_login_session(
         self, login_url: str = "https://f95zone.to/login/"
     ) -> ScraperResult:
@@ -517,6 +567,7 @@ class Scraper:
             except Exception:
                 pass
 
+    @_exclusive_browser_session(lambda busy: busy)
     def reset_browser_session(self) -> ScraperResult:
         try:
             if os.path.exists(self.user_data_dir):
@@ -526,6 +577,7 @@ class Scraper:
         except Exception as e:
             return self._error("session_reset_failed", str(e))
 
+    @_exclusive_browser_session(lambda busy: busy)
     def get_thread_version(
         self,
         url: str,
@@ -643,6 +695,7 @@ class Scraper:
             except Exception:
                 pass
 
+    @_exclusive_browser_session(lambda busy: busy)
     def get_thread_metadata(
         self,
         url: str,
@@ -736,6 +789,7 @@ class Scraper:
             except Exception:
                 pass
 
+    @_exclusive_browser_session(lambda busy: {"__batch_error__": busy})
     def get_multiple_thread_versions(
         self,
         urls: Sequence[str],

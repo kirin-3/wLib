@@ -5,16 +5,16 @@ The core strength of wLib relies on its native Python backend, divided primarily
 ## Bootstrapping in `main.py`
 `main.py` acts as the primary orchestrator. Upon launch, it executes these sequential steps:
 
-1. **Environment Setup**: Parses command-line arguments and sets up `~/.local/share/wLib` directories.
+1. **Environment Setup**: Parses command-line arguments and resolves platform paths (`~/.local/share/wLib` on Linux, `%LOCALAPPDATA%\wLib` on Windows).
 2. **SSL Certificate Configuration**: Configures SSL certificates from bundled certifi or system paths for secure scraping (`configure_ssl_certificates()`)
 3. **Qt Runtime Configuration**: Detects session type (X11/Wayland) and configures Qt platform plugins (`configure_qt_runtime_environment()`)
 4. **Database Initialization**: Calls `core.database.init_db()` to create/migrate the SQLite schema.
-5. **Extension Sync**: Copies the bundled browser extension assets into `~/.local/share/wLib/extension/` when the installed files are missing or the bundled manifest version changed.
-6. **Playwright Preflight**: Silently fires a `playwright install chromium` subprocess if the required browsers aren't found in `~/.cache/ms-playwright`.
+5. **Extension Sync**: Copies bundled extension assets into the platform user-data directory when files are missing or the bundled manifest version changed.
+6. **Playwright Preflight**: Runs the packaged Playwright driver when Chromium is absent (`~/.cache/ms-playwright` on Linux, `%LOCALAPPDATA%\wLib\playwright` on Windows).
 7. **Daemon Threads**: Starts the HTTP extension proxy server (`start_extension_server()`) in a daemonized background thread to prevent blocking the main GUI loop.
 8. **WebView Launch**: Binds the `core.api.Api` instance to `pywebview` and enters the blocking UI loop.
 
-`main.py` also exposes a small maintenance CLI path: `python main.py --install-playwright-if-needed` runs the Playwright browser preflight without starting the desktop UI.
+`main.py` also exposes maintenance CLI paths: `--install-playwright-if-needed` runs browser preflight, while `--smoke-test` validates imports, database initialization, bundled assets, and driver resolution without opening the UI or downloading a browser.
 
 ### Renderer Diagnostics System
 
@@ -46,11 +46,12 @@ This module serializes and imports semantic library backups without copying the 
 - **Safety boundaries**: The JSON export excludes scraper browser sessions, cookies, webview storage, downloaded runtimes, Playwright browser binaries, extension copies, caches, and diagnostics.
 
 ### `core/launcher.py` (Process Management)
-This module handles the complexities of launching games on Linux.
+This module handles native host launching and Linux compatibility runtimes.
 - **Environment Overrides**: Depending on the settings enabled for a specific game (e.g. `run_wayland`, `run_japanese_locale`), the launcher injects OS-level environment variables (`LC_ALL=ja_JP.UTF-8`, `SDL_VIDEODRIVER=wayland`) directly into the `env` dictionary passed to `subprocess`.
-- **Launch Modes**: `auto` preserves extension/executable detection, `native` runs supported Linux host targets without Wine/Proton settings, `wine_proton` forces the compatibility-runtime branch, and `rpgmaker_linux` invokes an externally installed `rpgmaker-linux` runner with `--gamepath` resolved from the selected executable directory.
+- **Launch Modes**: Windows exposes `auto`, which dispatches `.exe`, `.bat`, `.cmd`, `.jar`, and HTML targets directly. Linux additionally supports `native`, `wine_proton`, and `rpgmaker_linux`.
 - **Launch Targets**: Alternate targets reuse the same launcher entrypoint as the default executable; only the selected executable path changes. Playtime remains keyed to the parent `game_id`.
 - **Wine & Proton**: Prepends the configured `proton_path` or `wine` binary when compatibility mode is selected or auto-detection falls through to a Windows-style target, ensuring the proper `WINEPREFIX` or Proton compatibility path is enforced.
+- **Capability Boundary**: Windows rejects Wine/Proton, Winetricks/RTP installers, Wayland, RPGMaker Linux runner, and Cheat Engine injection before any download, mutation, or subprocess action. Imported values remain stored for later use on Linux.
 - **Cheat Engine Integration**: Implements logic to auto-start `lunarengine-x86_64.exe` natively, passing a Lua injection script to map directly to the game's PID.
 - **RPGMaker Tooling**: Implements enhanced Wine/NW.js fixes for RPGMaker MV/MZ and can optionally launch through the external `rpgmakermlinux-cicpoffs` runner when users install/configure it themselves. wLib links to the upstream project but does not bundle, install, update, export, bug-report, or run mutation-oriented upstream commands automatically.
 - **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played.
@@ -58,7 +59,7 @@ This module handles the complexities of launching games on Linux.
 ### `core/scraper.py` (Playwright Engine)
 Responsibile for fetching and parsing data from F95Zone.
 - **Headless Operations**: Uses `playwright.sync_api` to spin up headless Chromium instances.
-- **Persistent Browser Sessions**: Maintains a persistent browser profile under `~/.local/share/wLib/browser_session/` that preserves F95Zone login cookies, localStorage, and session state across restarts. The session directory is reused across scraper invocations to maintain authentication.
+- **Persistent Browser Sessions**: Maintains a persistent browser profile below the resolved platform data directory (`browser_session/`) so login cookies, localStorage, and session state survive restarts.
 - **Cloudflare Bypass**: Implements resilient `page.wait_for_selector()` heuristics to intelligently wait out or detect Cloudflare turnstiles, and identifies login-wall blocks to bubble up authentication errors to the UI.
 - **DOM Parsing**: Compiles metadata (title, version, image URLs, developer) by executing query selectors on the rendered HTML structure.
 - **Environment Cleanup**: Strips AppImage-specific environment variables (`APPIMAGE`, `APPDIR`, `LD_LIBRARY_PATH`) before launching Playwright to prevent library conflicts with the bundled Chromium binaries.

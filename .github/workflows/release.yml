@@ -16,8 +16,45 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  extension:
+    name: Validate and Sign Extension
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Lint Firefox extension
+        run: npx --yes web-ext@10.1.0 lint --source-dir=extension
+
+      - name: Sign Firefox extension
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.JWT_USER }}
+          WEB_EXT_API_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wlib-extension"
+          npx --yes web-ext@10.1.0 sign \
+            --source-dir=extension \
+            --artifacts-dir="$RUNNER_TEMP/wlib-extension" \
+            --channel=unlisted \
+            --no-input
+          test -n "$(find "$RUNNER_TEMP/wlib-extension" -maxdepth 1 -name '*.xpi' -print -quit)"
+
+      - name: Upload validated extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlib-validated-extension
+          path: ${{ runner.temp }}/wlib-extension/*.xpi
+
+  linux:
     name: Build Linux Packages
+    needs: extension
     runs-on: ubuntu-22.04
     env:
       NFPM_VERSION: v2.46.3
@@ -32,41 +69,16 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate changelog from commits
-        id: changelog
-        run: |
-          set -euo pipefail
-
-          VERSION="${{ steps.version.outputs.version }}"
-          REPO_URL="https://github.com/${{ github.repository }}"
-
-          PREV_TAG="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)"
-
-          if [ -n "$PREV_TAG" ]; then
-            COMMIT_RANGE="${PREV_TAG}..${VERSION}"
-            COMPARE_LINE="[Full Changelog](${REPO_URL}/compare/${PREV_TAG}...${VERSION})"
-          else
-            COMMIT_RANGE="$VERSION"
-            COMPARE_LINE="Full changelog unavailable (first tagged release)."
-          fi
-
-          COMMITS="$(git log "$COMMIT_RANGE" --no-merges --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))' || true)"
-
-          if [ -z "$COMMITS" ]; then
-            COMMITS="- No user-facing commits found in this range."
-          fi
-
-          {
-            echo "commits<<EOF"
-            echo "$COMMITS"
-            echo "EOF"
-            echo "compare_line=$COMPARE_LINE"
-          } >> "$GITHUB_OUTPUT"
+      - name: Download validated extension
+        uses: actions/download-artifact@v4
+        with:
+          name: wlib-validated-extension
+          path: ${{ runner.temp }}/wlib-extension
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -95,130 +107,199 @@ jobs:
         env:
           WLIB_MAINTAINER: ${{ vars.WLIB_MAINTAINER }}
         run: |
-          set -euo pipefail
           if [ -z "${WLIB_MAINTAINER:-}" ]; then
             echo "Set repository variable WLIB_MAINTAINER before publishing native packages." >&2
             exit 1
           fi
 
-      - name: Lint Firefox extension
-        run: npx --yes web-ext@10.1.0 lint --source-dir=extension
-
-      - name: Sign Firefox extension
-        id: sign_firefox
-        env:
-          WEB_EXT_API_KEY: ${{ secrets.JWT_USER }}
-          WEB_EXT_API_SECRET: ${{ secrets.JWT_SECRET }}
-        run: |
-          set -euo pipefail
-
-          SIGNED_DIR="$RUNNER_TEMP/wlib-firefox-signed"
-          rm -rf "$SIGNED_DIR"
-          mkdir -p "$SIGNED_DIR"
-
-          npx --yes web-ext@10.1.0 sign \
-            --source-dir=extension \
-            --artifacts-dir="$SIGNED_DIR" \
-            --channel=unlisted \
-            --no-input
-
-          XPI_PATH="$(find "$SIGNED_DIR" -maxdepth 1 -type f -name '*.xpi' | sort | tail -n 1)"
-          if [ -z "$XPI_PATH" ]; then
-            echo "No signed Firefox XPI produced by web-ext" >&2
-            exit 1
-          fi
-
-          echo "xpi_path=$XPI_PATH" >> "$GITHUB_OUTPUT"
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            ca-certificates \
-            libfuse2 \
-            libxcb-xkb1 \
-            libxcb-shape0 \
-            libxcb-icccm4 \
-            libxcb-cursor0 \
-            libxcb-image0 \
-            libxcb-keysyms1 \
-            libxcb-util1 \
-            libxcb-render-util0 \
-            libxkbcommon-x11-0
+            ca-certificates libfuse2 libxcb-xkb1 libxcb-shape0 \
+            libxcb-icccm4 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 \
+            libxcb-util1 libxcb-render-util0 libxkbcommon-x11-0
 
       - name: Build packages
         env:
-          WLIB_SIGNED_FIREFOX_XPI: ${{ steps.sign_firefox.outputs.xpi_path }}
-          WLIB_BUILD_NATIVE_PACKAGES: "1"
-          WLIB_BUILD_AUR: "1"
+          WLIB_BUILD_NATIVE_PACKAGES: '1'
+          WLIB_BUILD_AUR: '1'
           WLIB_REQUIRE_PACKAGE_METADATA: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
           WLIB_MAINTAINER: ${{ vars.WLIB_MAINTAINER }}
         run: |
+          export WLIB_SIGNED_FIREFOX_XPI="$(find "$RUNNER_TEMP/wlib-extension" -maxdepth 1 -name '*.xpi' -print -quit)"
           chmod +x scripts/build.sh
           bash scripts/build.sh "${{ steps.version.outputs.version }}"
 
-      - name: Upload artifacts
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wLib-${{ steps.version.outputs.version }}-linux
-          path: dist/**
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: wLib ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: false
-          generate_release_notes: false
-          files: |
+          include-hidden-files: true
+          path: |
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
             dist/*.rpm
             dist/aur/PKGBUILD
             dist/aur/.SRCINFO
+
+  windows:
+    name: Build Windows Packages
+    needs: extension
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        shell: pwsh
+        run: |
+          $raw = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ github.event.inputs.version }}'
+          } else {
+            '${{ github.ref_name }}'
+          }
+          "version=$($raw.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Download validated extension
+        uses: actions/download-artifact@v4
+        with:
+          name: wlib-validated-extension
+          path: ${{ runner.temp }}/wlib-extension
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements-windows.txt
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+
+      - name: Configure optional Authenticode certificate
+        shell: pwsh
+        env:
+          WLIB_SIGNING_CERT_BASE64: ${{ secrets.WLIB_SIGNING_CERT_BASE64 }}
+          WLIB_SIGNING_CERT_PASSWORD: ${{ secrets.WLIB_SIGNING_CERT_PASSWORD }}
+          WLIB_SIGNING_TIMESTAMP_URL: ${{ vars.WLIB_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ($env:WLIB_SIGNING_CERT_BASE64) {
+            $certificate = Join-Path $env:RUNNER_TEMP 'wlib-signing.pfx'
+            [IO.File]::WriteAllBytes(
+              $certificate,
+              [Convert]::FromBase64String($env:WLIB_SIGNING_CERT_BASE64)
+            )
+            "WLIB_SIGNING_CERT_PATH=$certificate" >> $env:GITHUB_ENV
+            "WLIB_SIGNING_CERT_PASSWORD=$env:WLIB_SIGNING_CERT_PASSWORD" >> $env:GITHUB_ENV
+            "WLIB_SIGNING_TIMESTAMP_URL=$env:WLIB_SIGNING_TIMESTAMP_URL" >> $env:GITHUB_ENV
+          }
+
+      - name: Build and smoke Windows packages
+        shell: pwsh
+        run: |
+          $xpi = Get-ChildItem "$env:RUNNER_TEMP\wlib-extension\*.xpi" | Select-Object -First 1
+          .\scripts\build-windows.ps1 `
+            -Version '${{ steps.version.outputs.version }}' `
+            -SignedFirefoxXpi $xpi.FullName
+
+      - name: Validate MSI lifecycle
+        shell: pwsh
+        run: |
+          .\scripts\test-windows-msi.ps1 `
+            -MsiPath ".\dist\windows\wLib-${{ steps.version.outputs.version }}-windows-x64.msi"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wLib-${{ steps.version.outputs.version }}-windows
+          path: |
+            dist/windows/*.zip
+            dist/windows/*.msi
+            dist/windows/*SHA256SUMS.txt
+
+  publish:
+    name: Publish Tagged Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wLib-*-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.ref_name }}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          PREV_TAG="$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || true)"
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${VERSION}"
+            COMPARE="[Full Changelog](${REPO_URL}/compare/${PREV_TAG}...${VERSION})"
+          else
+            RANGE="$VERSION"
+            COMPARE="Full changelog unavailable (first tagged release)."
+          fi
+          COMMITS="$(git log "$RANGE" --no-merges --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))' || true)"
+          [ -n "$COMMITS" ] || COMMITS='- No user-facing commits found in this range.'
+          {
+            echo 'commits<<EOF'
+            echo "$COMMITS"
+            echo 'EOF'
+            echo "compare=$COMPARE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: wLib ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          files: release-artifacts/**
           body: |
-            ## 📝 Changes
+            ## Changes
 
             ${{ steps.changelog.outputs.commits }}
+
+            ## Downloads
+
+            - Windows x64: per-user MSI or portable ZIP (with SHA-256 checksums)
+            - Linux x86_64: AppImage, tarball, DEB, RPM, and AUR metadata
+
+            Windows launches `.exe`, `.bat`, `.cmd`, and `.jar` games natively.
+            Wine, Proton, Winetricks, Wayland, and Linux runtime installers are Linux-only.
 
             ## License
 
             Starting with v0.3.4, wLib is licensed under GPL-3.0-or-later.
 
-            ## 📦 Downloads
-
-            | File | Description |
-            |------|-------------|
-            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.AppImage` | Portable single-file build |
-            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.tar.gz` | Extractable binary folder, run `./wlib` |
-            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.deb` | Debian/Ubuntu/Mint package |
-            | `wLib-${{ steps.version.outputs.version }}-linux-x86_64.rpm` | Fedora/RPM-family package |
-            | `PKGBUILD` / `.SRCINFO` | AUR `wlib-bin` metadata generated from this release |
-
-            ### Quick Start
-            ```bash
-            # AppImage
-            chmod +x wLib-*.AppImage
-            ./wLib-*.AppImage
-
-            # tar.gz
-            tar xzf wLib-*.tar.gz
-            cd wLib-*/
-            ./wlib
-
-            # Debian/Ubuntu
-            sudo apt install ./wLib-*.deb
-
-            # Fedora/RPM-family
-            sudo dnf install ./wLib-*.rpm
-            ```
-
-            ### Requirements
-            - Wine and Winetricks for Windows game launching
-            - GTK/XCB/Qt host libraries required by the packaged desktop runtime
-            - Mesa utilities for launcher GPU probing
-
             ### Full Changelog
-            ${{ steps.changelog.outputs.compare_line }}
+
+            ${{ steps.changelog.outputs.compare }}

@@ -15,14 +15,19 @@ from typing import TYPE_CHECKING, Callable, Protocol, cast, override
 
 from core.api import APP_VERSION, Api
 from core.f95zone import normalize_thread_url
+from core.host_platform import (
+    get_cache_root,
+    get_data_dir,
+    get_playwright_browsers_path,
+)
 
-DEFAULT_PLAYWRIGHT_BROWSERS_PATH = os.path.expanduser("~/.cache/ms-playwright")
+DEFAULT_PLAYWRIGHT_BROWSERS_PATH = get_playwright_browsers_path()
 playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
-APP_DATA_DIR = os.path.expanduser("~/.local/share/wLib")
+APP_DATA_DIR = get_data_dir()
 PYWEBVIEW_STORAGE_DIR_NAME = "webview"
 PYWEBVIEW_CACHE_VERSION_MARKER = ".webview-cache-version"
 PACKAGED_WEBVIEW_CACHE_DIR_NAME = "wlib-bin"
-PACKAGED_EXECUTABLE_NAME = "wlib-bin"
+PACKAGED_EXECUTABLE_NAMES = {"wlib-bin", "wlib"}
 QTWEBENGINE_CACHE_DIR_NAME = "QtWebEngine"
 PYWEBVIEW_QT_PROFILE_NAME = "pywebview"
 PYWEBVIEW_HTTP_PORT = 42001
@@ -111,23 +116,11 @@ window_ref: Window | None = None
 
 
 def get_packaged_webview_cache_path() -> str:
-    cache_home = (os.environ.get("XDG_CACHE_HOME") or "").strip()
-    if not cache_home:
-        cache_home = os.path.expanduser("~/.cache")
-
-    return os.path.join(
-        os.path.abspath(os.path.expanduser(cache_home)), PACKAGED_WEBVIEW_CACHE_DIR_NAME
-    )
+    return os.path.join(get_cache_root(), PACKAGED_WEBVIEW_CACHE_DIR_NAME)
 
 
 def get_qtwebengine_cache_root() -> str:
-    cache_home = (os.environ.get("XDG_CACHE_HOME") or "").strip()
-    if not cache_home:
-        cache_home = os.path.expanduser("~/.cache")
-
-    return os.path.join(
-        os.path.abspath(os.path.expanduser(cache_home)), QTWEBENGINE_CACHE_DIR_NAME
-    )
+    return os.path.join(get_cache_root(), QTWEBENGINE_CACHE_DIR_NAME)
 
 
 def get_webview_storage_path(*, create: bool = True) -> str:
@@ -149,7 +142,8 @@ def get_webview_cache_version_marker_path() -> str:
 
 def is_packaged_wlib_runtime() -> bool:
     return bool(getattr(sys, "frozen", False)) and (
-        os.path.basename(sys.executable) == PACKAGED_EXECUTABLE_NAME
+        os.path.splitext(os.path.basename(sys.executable))[0].lower()
+        in PACKAGED_EXECUTABLE_NAMES
     )
 
 
@@ -947,6 +941,57 @@ def ensure_playwright_browsers_async() -> None:
     thread.start()
 
 
+def get_bundle_root() -> str:
+    if getattr(sys, "frozen", False):
+        return str(
+            getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        )
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def run_packaged_smoke_test() -> int:
+    """Validate a source or frozen runtime without opening the desktop UI."""
+    diagnostics: dict[str, object] = {
+        "success": False,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "executable": sys.executable,
+        "bundle_root": get_bundle_root(),
+        "data_dir": APP_DATA_DIR,
+    }
+    try:
+        for module_name in ("certifi", "playwright", "webview"):
+            _ = importlib.import_module(module_name)
+
+        from core.database import init_db
+
+        init_db()
+        bundle_root = get_bundle_root()
+        required_assets = (
+            os.path.join(bundle_root, "ui", "dist", "index.html"),
+            os.path.join(bundle_root, "extension", "manifest.json"),
+            os.path.join(bundle_root, "wlib.png"),
+        )
+        missing_assets = [path for path in required_assets if not os.path.isfile(path)]
+        if missing_assets:
+            raise FileNotFoundError(
+                "Missing packaged assets: " + ", ".join(missing_assets)
+            )
+
+        diagnostics.update(
+            {
+                "success": True,
+                "assets": list(required_assets),
+                "playwright_install_command": _get_playwright_install_command(),
+            }
+        )
+        print(json.dumps(diagnostics, ensure_ascii=False))
+        return 0
+    except Exception as error:
+        diagnostics["error"] = str(error)
+        print(json.dumps(diagnostics, ensure_ascii=False), file=sys.stderr)
+        return 1
+
+
 def main() -> None:
     _ = configure_ssl_certificates()
     _ = configure_playwright_browsers_path()
@@ -985,12 +1030,7 @@ def main() -> None:
         )
 
     # Resolve base path for bundled assets (PyInstaller vs dev source)
-    if getattr(sys, "frozen", False):
-        script_dir = getattr(
-            sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))
-        )
-    else:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = get_bundle_root()
 
     url = os.path.join(script_dir, "ui", "dist", "index.html")
     vite_process = None
@@ -1020,7 +1060,7 @@ def main() -> None:
 
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wlib.png")
+    icon_path = os.path.join(script_dir, "wlib.png")
     start_webview(
         webview_module,
         dev_mode=DEV_MODE,
@@ -1033,4 +1073,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--smoke-test" in sys.argv:
+        raise SystemExit(run_packaged_smoke_test())
     main()
