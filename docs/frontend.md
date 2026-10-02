@@ -25,6 +25,8 @@ The UI runs inside PyWebView and calls backend methods via `window.pywebview.api
 - **Startup extension status**: `App.vue` reads startup sync status so the UI can notify users when extension files were refreshed.
 - **Platform capabilities**: `getPlatformCapabilities()` is cached once per desktop session. Conservative fallback capabilities expose only Auto Detect and hide platform-specific mutation actions if the backend contract cannot be loaded.
 
+Windows capabilities offer Auto Detect and native Windows targets. The shared launch-mode UI retains an imported Linux mode with an **Unavailable on this platform** label so users can switch it to Auto Detect; saving other fields preserves hidden per-game runtime values. Extension paths come from the backend and use Windows separators when appropriate.
+
 Always route backend calls through `ui/src/services/api.ts`; do not call `window.pywebview.api` directly from view components.
 
 ## State & Routing

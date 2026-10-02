@@ -4,8 +4,10 @@ wLib manages all relational states locally via a single SQLite database file.
 
 **Location**: `~/.local/share/wLib/wlib.db` on Linux or `%LOCALAPPDATA%\wLib\wlib.db` on Windows. `WLIB_DATA_DIR` overrides the root for isolated smoke and packaging tests.
 
+Both platforms use the same schema and additive migrations. Windows MSI and portable ZIP builds share the same database location; MSI uninstall preserves user data. See [Platform Paths](architecture.md#platform-paths) for data-directory overrides and Linux XDG behavior.
+
 ## Engine Configuration
-Upon startup in `core/database.py`, the engine executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). This is crucial because `pywebview`, the `HTTPServer` extension daemon, and the Playwright scraper all operate on independent threads. `WAL` mode prevents `sqlite3.OperationalError: database is locked` exceptions by allowing concurrent readers alongside a single active writer.
+Upon startup in `core/database.py`, the engine executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). This is crucial because `pywebview`, the extension server, and the Playwright scraper all operate on independent threads. `WAL` mode allows concurrent readers alongside a single active writer.
 
 ### WAL Mode Advantages
 
@@ -54,12 +56,12 @@ Stores the library records and their associated configuration flags.
 | `rating_fappability` | `REAL` | Fappability rating (0-5). |
 | `rating_gameplay` | `REAL` | Gameplay rating (0-5). |
 | `command_line_args` | `TEXT` | Custom launch arguments. |
-| `run_japanese_locale` | `BOOLEAN` | Overrides `LC_ALL` to Japanese. |
-| `run_wayland` | `BOOLEAN` | Forces Wayland compatibility mode. |
-| `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection on launch. |
-| `custom_prefix` | `TEXT` | Per-game Wine prefix path override. |
-| `proton_version` | `TEXT` | Per-game Proton path override. |
-| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, or `rpgmaker_linux`. Defaults and invalid values normalize to `auto`. |
+| `run_japanese_locale` | `BOOLEAN` | Overrides `LC_ALL` to Japanese on Linux; preserved but ignored on Windows. |
+| `run_wayland` | `BOOLEAN` | Applies Linux Wayland compatibility settings; preserved but ignored on Windows. |
+| `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
+| `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
+| `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
+| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, or `rpgmaker_linux`. Defaults and invalid values normalize to `auto`; Windows launches support only `auto`. |
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
@@ -102,3 +104,4 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 - **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
 - **Excluded data**: Browser sessions/cookies, webview storage, downloaded runtimes, Playwright binaries, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
+- **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Playwright path imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.

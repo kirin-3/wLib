@@ -7,10 +7,10 @@ The core strength of wLib relies on its native Python backend, divided primarily
 
 1. **Environment Setup**: Parses command-line arguments and resolves platform paths (`~/.local/share/wLib` on Linux, `%LOCALAPPDATA%\wLib` on Windows).
 2. **SSL Certificate Configuration**: Configures SSL certificates from bundled certifi or system paths for secure scraping (`configure_ssl_certificates()`)
-3. **Qt Runtime Configuration**: Detects session type (X11/Wayland) and configures Qt platform plugins (`configure_qt_runtime_environment()`)
+3. **Qt Runtime Configuration**: Detects Linux session type (X11/Wayland) and configures Qt platform plugins; on Windows, leaves native platform selection to Qt unless explicitly overridden (`configure_qt_runtime_environment()`). Both platforms start PyWebView with `gui="qt"`.
 4. **Database Initialization**: Calls `core.database.init_db()` to create/migrate the SQLite schema.
 5. **Extension Sync**: Copies bundled extension assets into the platform user-data directory when files are missing or the bundled manifest version changed.
-6. **Playwright Preflight**: Runs the packaged Playwright driver when Chromium is absent (`~/.cache/ms-playwright` on Linux, `%LOCALAPPDATA%\wLib\playwright` on Windows).
+6. **Playwright Preflight**: Runs the packaged Playwright driver in a background thread when Chromium is absent (`~/.cache/ms-playwright` on Linux, `%LOCALAPPDATA%\wLib\playwright` on Windows), keeping UI startup responsive.
 7. **Daemon Threads**: Starts the HTTP extension proxy server (`start_extension_server()`) in a daemonized background thread to prevent blocking the main GUI loop.
 8. **WebView Launch**: Binds the `core.api.Api` instance to `pywebview` and enters the blocking UI loop.
 
@@ -18,7 +18,7 @@ The core strength of wLib relies on its native Python backend, divided primarily
 
 ### Renderer Diagnostics System
 
-`main.py` includes a comprehensive renderer diagnostics system for troubleshooting GPU and Qt issues:
+`main.py` logs Qt and WebGL renderer details under the resolved data directory on both platforms: `~/.local/share/wLib/renderer-diagnostics.log` on Linux or `%LOCALAPPDATA%\wLib\renderer-diagnostics.log` on Windows. The Linux release launcher supplies the GPU probe and crash-guard context described below; Windows uses Qt's native selection.
 
 - **GPU Detection**: Probes GPU capabilities using `glxinfo`, `/sys/class/drm/`, and environment variables
 - **Crash Guard**: Implements `~/.local/share/wLib/.gpu_crash_guard` to auto-fallback to software rendering after GPU crashes
@@ -27,6 +27,10 @@ The core strength of wLib relies on its native Python backend, divided primarily
 - **AppImage Mirroring**: AppImage launches mirror diagnostic context to `~/.local/share/wLib/appimage-launch.log`
 
 ## Core Modules
+
+### `core/host_platform.py` (Host Paths and Capabilities)
+
+Centralizes Linux/Windows detection, data/cache/browser/extension paths, and platform capabilities. `Api.get_platform_capabilities()` exposes these through `getPlatformCapabilities()` in the frontend bridge. Linux-only runtime installers return `success: false` with `code: "unsupported_platform"` before starting downloads or subprocesses on Windows. Windows file/folder and HTML opening uses system associations. See [Platform Paths](architecture.md#platform-paths) for defaults and environment overrides.
 
 ### `core/api.py` (The API Bridge)
 The `Api` class acts as the single point of entry for the Vue frontend. All methods defined without a leading underscore (e.g. `get_games`, `launch_game`) are automatically serialized into Promises on the `window.pywebview.api` object.
@@ -44,17 +48,18 @@ This module serializes and imports semantic library backups without copying the 
 - **Import matching**: Matches games by normalized F95 thread identity first, then by normalized title/developer only when there is exactly one local match. Ambiguous fallback matches are skipped and reported.
 - **Merge behavior**: Matched games receive backup values for always-included metadata and selected optional sections. Unselected sections preserve local values. Playtime is overwritten from the backup when user state is imported, never summed.
 - **Safety boundaries**: The JSON export excludes scraper browser sessions, cookies, webview storage, downloaded runtimes, Playwright browser binaries, extension copies, caches, and diagnostics.
+- **Cross-platform paths**: Inspection reports missing executable paths and foreign global path settings. Import skips global settings whose path syntax belongs to the other OS; per-game paths and launch options remain available to edit after migration.
 
 ### `core/launcher.py` (Process Management)
 This module handles native host launching and Linux compatibility runtimes.
-- **Environment Overrides**: Depending on the settings enabled for a specific game (e.g. `run_wayland`, `run_japanese_locale`), the launcher injects OS-level environment variables (`LC_ALL=ja_JP.UTF-8`, `SDL_VIDEODRIVER=wayland`) directly into the `env` dictionary passed to `subprocess`.
-- **Launch Modes**: Windows exposes `auto`, which dispatches `.exe`, `.bat`, `.cmd`, `.jar`, and HTML targets directly. Linux additionally supports `native`, `wine_proton`, and `rpgmaker_linux`.
+- **Environment Overrides (Linux)**: Per-game Japanese locale and Wayland settings modify the `env` dictionary passed to `subprocess`. Windows ignores these flags and removes Wine/Proton environment variables from native launch environments.
+- **Launch Modes**: Windows exposes `auto`: `.exe` runs directly, `.bat`/`.cmd` uses `cmd.exe`, `.jar` uses `java -jar` with Java on `PATH`, and `.html`/`.htm` opens in the default browser. Linux additionally supports `native`, `wine_proton`, and `rpgmaker_linux`. Windows command-line arguments use Windows quoting rules.
 - **Launch Targets**: Alternate targets reuse the same launcher entrypoint as the default executable; only the selected executable path changes. Playtime remains keyed to the parent `game_id`.
 - **Wine & Proton**: Prepends the configured `proton_path` or `wine` binary when compatibility mode is selected or auto-detection falls through to a Windows-style target, ensuring the proper `WINEPREFIX` or Proton compatibility path is enforced.
-- **Capability Boundary**: Windows rejects Wine/Proton, Winetricks/RTP installers, Wayland, RPGMaker Linux runner, and Cheat Engine injection before any download, mutation, or subprocess action. Imported values remain stored for later use on Linux.
-- **Cheat Engine Integration**: Implements logic to auto-start `lunarengine-x86_64.exe` natively, passing a Lua injection script to map directly to the game's PID.
+- **Capability Boundary**: Windows rejects Linux-only launch modes and runtime installation/injection APIs before runtime actions. Imported per-game options remain stored; Windows launches ignore Linux-only flags, prefixes, and Proton paths. An imported Linux launch mode must be changed to `auto` before launching.
+- **Cheat Engine Integration (Linux)**: Starts `lunarengine-x86_64.exe` through Wine/Proton, passing a Lua injection script to map directly to the game's PID.
 - **RPGMaker Tooling**: Implements enhanced Wine/NW.js fixes for RPGMaker MV/MZ and can optionally launch through the external `rpgmakermlinux-cicpoffs` runner when users install/configure it themselves. wLib links to the upstream project but does not bundle, install, update, export, bug-report, or run mutation-oriented upstream commands automatically.
-- **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played.
+- **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played. HTML/browser targets do not support process-based playtime tracking on either platform.
 
 ### `core/scraper.py` (Playwright Engine)
 Responsibile for fetching and parsing data from F95Zone.
@@ -71,8 +76,8 @@ Responsibile for fetching and parsing data from F95Zone.
 - **Initial rollout scope**: `tests/` are intentionally excluded from type checking for now so backend diagnostics stay focused on application code.
 - **Baseline tracking**: `.basedpyright/baseline.json` is currently empty. It remains in the repo so future typing rollouts can use the same incremental workflow without changing tool paths.
 - **Linting**: `ruff` is configured repo-wide for Python files so tests, utility scripts, and backend modules share the same baseline lint rules.
-- **Runtime smoke check**: `scripts/smoke_backend.py` imports the backend, configures runtime helpers, imports `pywebview`, and exercises extension sync inside a temporary HOME directory so it does not touch a contributor's real app data.
-- **Local wrappers**: `bash scripts/check-python.sh` runs `ruff`, `basedpyright`, the smoke check, and `pytest` in the active environment. `bash scripts/check-python-clean.sh` recreates that workflow from a fresh Python 3.12 virtual environment.
+- **Runtime smoke check**: `scripts/smoke_backend.py` imports the backend, configures runtime helpers, imports `pywebview`, and exercises extension sync with a temporary HOME/browser path. Windows also needs an explicit temporary `WLIB_DATA_DIR` because `HOME` does not override `%LOCALAPPDATA%`; see the [PowerShell smoke example](../CONTRIBUTING.md#smoke-backend-test).
+- **Local checks**: Linux wrappers `bash scripts/check-python.sh` and `bash scripts/check-python-clean.sh` run `ruff`, `basedpyright`, the smoke check, and `pytest` in an active or fresh Python 3.12 environment. On Windows, install `requirements-dev.txt` plus `requirements-windows.txt` and run the same tools directly in PowerShell.
 
 ## SSL Certificate Configuration
 
@@ -83,4 +88,4 @@ Responsibile for fetching and parsing data from F95Zone.
 3. **Environment Variable Setup**: Sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE` to the selected certificate bundle
 4. **AppImage Configuration**: The AppRun script performs parallel certificate setup for the AppImage runtime context
 
-This ensures scraping works reliably across different Linux distributions without depending on system certificate configurations.
+Windows releases bundle certifi and use the same certificate-selection flow. The `/etc/ssl/...` fallbacks and AppImage setup apply to Linux; HTTPS verification remains enabled on both platforms.

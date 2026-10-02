@@ -8,27 +8,50 @@ The packaging pipeline integrates the Python backend, Vue frontend, bundled brow
 
 Backend changes are validated separately from release packaging through `.github/workflows/python-checks.yml`.
 
-- The workflow runs on pull requests, pushes to `main`, and manual dispatches on Ubuntu and Windows runners.
+- The workflow runs on pull requests, pushes to `master`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
-- It creates a fresh virtual environment, installs `requirements-dev.txt`, and runs `bash scripts/check-python-clean.sh`.
+- The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment and installs `requirements-dev.txt`.
 - The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
-- The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22 (unit tests need `--experimental-strip-types`, Node 22.6+).
+- The Windows job creates `.venv` and runs those tools directly in PowerShell; the Bash wrappers assume Linux virtual-environment paths.
+- The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22. For local development, use Node 22.12+ to meet both Vite and unit-test requirements.
+
+## Release Automation
+
+`.github/workflows/release.yml` first validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums.
+
+Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
 
 ## Windows Build Pipeline (`scripts/build-windows.ps1`)
 
-Requirements are Windows x64, Python 3.12, Node 20+, and WiX 6.0.2 (`dotnet tool install --global wix --version 6.0.2`). Run:
+Build on Windows x64 with 64-bit Python 3.12 and npm. The current Vite build needs Node 20.19+ or 22.12+; Node 22.12+ also supports the frontend unit tests. MSI builds additionally need the .NET SDK and WiX 6.0.2 on `PATH`. From the repository root in PowerShell:
 
 ```powershell
-.\scripts\build-windows.ps1 -Version 1.2.0
+py -3.12 -m venv .venv
+dotnet tool install --global wix --version 6.0.2
+.\scripts\build-windows.ps1 -Version 1.2.0 -Python .\.venv\Scripts\python.exe
 ```
 
 The script validates the MSI-compatible version, installs `requirements-windows.txt`, runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, Playwright's driver, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading Chromium.
 
-The canonical directory produces:
+Intermediate files are recreated under `build/windows/`; the canonical payload is `build/windows/frozen/wLib/`. Artifacts are written to `dist/windows/` by default:
 
 - `wLib-<version>-windows-x64-portable.zip`
 - `wLib-<version>-windows-x64.msi`
 - `wLib-<version>-windows-x64-SHA256SUMS.txt`
+
+Build options:
+
+| Option | Behavior |
+|--------|----------|
+| `-Version 1.2.0` | Three numeric parts without a `v` prefix; defaults to `APP_VERSION` in `core/api.py` when omitted |
+| `-Python <path>` | Python interpreter used for dependency installation and PyInstaller; defaults to `python` |
+| `-SignedFirefoxXpi <path>` | Bundles an existing signed Firefox XPI; omitting it creates an unsigned local fallback |
+| `-OutputDirectory <path>` | Overrides `dist/windows/` |
+| `-SkipDependencies` | Reuses already-installed Python dependencies |
+| `-SkipFrontend` | Reuses an existing `ui/dist/` build |
+| `-SkipMsi` | Builds only the portable ZIP and checksums; does not require WiX |
+
+Keep the whole extracted portable folder, including `_internal/`, beside `wLib.exe`. Both ZIP and MSI launches use `%LOCALAPPDATA%\wLib` for user data and browser downloads, so the portable ZIP does not store the library in its extraction directory.
 
 The MSI installs per-user beneath `%LOCALAPPDATA%\Programs\wLib`, creates a Start Menu shortcut, and never targets `%LOCALAPPDATA%\wLib` user data. Its setup wizard (WiX UI extension, added automatically by the build script) offers an unchecked desktop-shortcut option and a "Launch wLib" option on the finish page; silent installs can pass `INSTALLDESKTOPSHORTCUT=1`. Validate install, repair, major upgrade, installed smoke, uninstall, shortcut cleanup, and data retention with:
 
@@ -36,25 +59,26 @@ The MSI installs per-user beneath `%LOCALAPPDATA%\Programs\wLib`, creates a Star
 .\scripts\test-windows-msi.ps1 -MsiPath .\dist\windows\wLib-1.2.0-windows-x64.msi
 ```
 
-Authenticode signing is optional. Set `WLIB_SIGNING_CERT_PATH` to a PFX, optionally set `WLIB_SIGNING_CERT_PASSWORD`, and optionally override `WLIB_SIGNING_TIMESTAMP_URL`. Credentials are read only from the environment; unsigned builds emit a warning. Cross-compiling Windows releases from Linux is unsupported.
+Run the lifecycle check after a full local build, in a Windows account without an existing wLib MSI installation. It uses the canonical frozen payload and WiX to build a higher-version MSI, writes logs under `build/windows/msi-lifecycle/`, and refuses to replace an existing installation.
+
+Authenticode signing is optional and requires `signtool.exe` on `PATH` (from the Windows SDK). Set `WLIB_SIGNING_CERT_PATH` to a PFX, optionally set `WLIB_SIGNING_CERT_PASSWORD`, and optionally override `WLIB_SIGNING_TIMESTAMP_URL`. Credentials are read only from the environment; unsigned builds emit a warning. Cross-compiling Windows releases from Linux is unsupported.
 
 ### Windows release qualification
 
-The initial pipeline has been exercised on Windows 11 x64 with source/frozen smoke tests, normal UI startup, portable ZIP creation, and silent MSI install/repair/major-upgrade/uninstall. GitHub's `windows-2022` runner provides clean x64 packaging coverage. Before calling a release broadly Windows 10-qualified, repeat the visible UI and game-launch checks on a clean, fully patched Windows 10 x64 machine; that manual hardware/OS pass is not represented by the Server 2022 runner. Chromium still requires network access on first scraper use, and unsigned local artifacts will trigger Windows publisher warnings.
+The initial pipeline has been exercised on Windows 11 x64 with source/frozen smoke tests, normal UI startup, portable ZIP creation, and silent MSI install/repair/major-upgrade/uninstall. GitHub's `windows-2022` runner provides clean x64 packaging coverage. Before calling a release broadly Windows 10-qualified, repeat the visible UI and game-launch checks on a clean, fully patched Windows 10 x64 machine; that manual hardware/OS pass is not represented by the Server 2022 runner. Chromium requires network access when downloaded in the background on first startup, and unsigned local artifacts may show Windows publisher warnings.
 
 ### Smoke Backend Test
 
 The smoke test (`scripts/smoke_backend.py`) is a lightweight verification tool that:
 
 - Runs backend initialization without opening the UI
-- Uses an isolated temporary HOME directory to avoid touching user data
+- Uses a temporary HOME directory and browser path; on Windows, also set `WLIB_DATA_DIR` to a temporary directory to avoid touching `%LOCALAPPDATA%\wLib`
 - Tests Qt platform configuration and Playwright browser path setup
 - Exercises extension file synchronization
-- Verifies SSL certificate configuration
 
-Use it for quick CI checks or to verify backend changes before running the full app. For local use, contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.
+Use it for quick CI checks or to verify backend changes before running the full app. See the [PowerShell smoke example](../CONTRIBUTING.md#smoke-backend-test) for Windows isolation. Linux contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.
 
-## Build Pipeline (`scripts/build.sh`)
+## Linux Build Pipeline (`scripts/build.sh`)
 
 When the build script executes, it follows these precise steps:
 

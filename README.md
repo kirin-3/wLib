@@ -21,7 +21,7 @@ wLib is a Linux and Windows desktop application for managing, launching, and upd
 
 ## Platform behavior
 
-On Windows, Auto Detect launches `.exe`, `.bat`, `.cmd`, `.jar`, and HTML targets through native Windows processes and shell associations. Wine/Proton, Winetricks/RTP installers, Wayland, the RPGMaker Linux runner, and Cheat Engine injection are Linux-only; their controls are hidden on Windows and imported values are preserved without being executed.
+On Windows, Auto Detect launches `.exe` files directly, `.bat`/`.cmd` files through `cmd.exe`, `.jar` files through `java -jar` (Java must be on `PATH`), and `.html`/`.htm` files in the default browser. HTML games do not support playtime tracking. Wine/Proton, Winetricks/RTP installers, Wayland, the RPGMaker Linux runner, and Cheat Engine injection are Linux-only; their controls are hidden on Windows. Imported per-game launch options are preserved, but an unavailable launch mode must be changed to Auto Detect before launching on Windows.
 
 ## 🐧 Why wLib?
 
@@ -30,8 +30,8 @@ wLib was inspired by tools like **xLibrary** and other Windows-centric game mana
 | | |
 |:--|:--|
 | 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable. |
-| 🐧 **Native to Linux** | No Electron, no heavy frameworks. Just Python + Vue in a lightweight, native webview shell. |
-| 🍷 **First-class Launching** | Built-in support for Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows. |
+| 🖥️ **Native Desktop App** | Python + Vue in a PyWebView Qt WebEngine shell on Linux and Windows. |
+| 🍷 **First-class Launching** | Native Windows launching plus Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows on Linux. |
 
 The same library can move between Linux and Windows through semantic JSON import/export. Platform-specific launch settings are preserved but only offered where supported.
 
@@ -46,20 +46,19 @@ The same library can move between Linux and Windows through semantic JSON import
 
 ### 🚀 Advanced Launcher
 - **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
-- **Launch Modes** — Choose Auto Detect, Linux Native, Wine / Proton, or RPGMaker Linux per game. Native mode runs supported Linux targets directly without Wine or Proton; RPGMaker Linux uses an external runner you install or configure.
-- **Wine / Proton Integration** — Support for Wine, Proton, native Linux binaries, shell scripts, and even `.jar` files safely.
-- **Engine Auto-Configuration** — Automatically applies environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
-- **Japanese Locale Mode** — Run games strictly with `LC_ALL=ja_JP.UTF-8` locale for parsing untranslated Japanese titles correctly.
-- **Wayland Support** — Force `SDL_VIDEODRIVER=wayland` with a single toggle.
-- **Cheat Engine Injection** — Auto-downloads and seamlessly injects Lunar Engine (a Cheat Engine fork) securely into running Windows games.
-- **Dependency Installers** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RTPs.
-- **RPGMaker RTP & DLL Installers** — Automated installation of RPGMaker RTPs and DLL dependencies for complete game compatibility.
+- **Launch Modes** — Auto Detect on both platforms; Linux also offers Linux Native, Wine / Proton, and RPGMaker Linux with an external runner you install or configure.
+- **Wine / Proton Integration (Linux)** — Support for Wine, Proton, native Linux binaries, and shell scripts. Both platforms can launch `.jar` files with Java installed.
+- **Engine Auto-Configuration (Linux)** — Automatically applies Wine environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
+- **Japanese Locale Mode (Linux)** — Sets `LC_ALL=ja_JP.UTF-8`; this environment override is not applied to native Windows launches.
+- **Wayland Support (Linux)** — Applies Wayland compatibility settings with a single toggle.
+- **Cheat Engine Injection (Linux)** — Auto-downloads and injects Lunar Engine (a Cheat Engine fork) into games running through Wine/Proton.
+- **Dependency Installers (Linux)** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RPGMaker RTPs/DLLs. On Windows, install any game-required runtimes using their native installers.
 
 ### 🌐 F95Zone Integration & Automation
 - **Automated Update Checker** — Tracks your local version against the latest releases by scraping F95Zone threads.
 - **Cloudflare Bypass** — Intelligently resolves Cloudflare Anti-Bot challenges using Microsoft Playwright to ensure scraping remains reliable.
 - **Browser Extension** — A custom Chrome/Firefox extension that injects "Add to wLib" and "Open in wLib" buttons directly onto F95Zone pages.
-- **Persistent Browser Sessions** — F95Zone login sessions are saved under `~/.local/share/wLib/browser_session` so you stay logged in across restarts.
+- **Persistent Browser Sessions** — F95Zone login sessions are saved under `~/.local/share/wLib/browser_session` on Linux or `%LOCALAPPDATA%\wLib\browser_session` on Windows so you stay logged in across restarts.
 
 > [!TIP]
 > wLib can check for newer GitHub releases and open the latest release page directly from the Updates view.
@@ -97,28 +96,31 @@ The same library can move between Linux and Windows through semantic JSON import
 
 ### System Dependencies
 
-Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, or Winetricks. The first scraper use may download Playwright Chromium into `%LOCALAPPDATA%\wLib\playwright`.
+Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, Winetricks, or GTK. Chromium is downloaded in the background on first startup if missing, into `%LOCALAPPDATA%\wLib\playwright`, so network access is needed before scraping.
 
-| Dependency | Required | Purpose |
-|------------|----------|---------|
-| **Python 3.12+** | ⚙️ Source/dev only | Backend runtime when running from source |
-| **Node.js 18+** | ⚙️ Build only | Compiles the Vue frontend |
-| **Wine** | ✅ | Runs Windows game executables |
-| **Winetricks** | ✅ | Installs Windows DLLs and runtime libraries |
-| **GTK 3 / PyGObject** | ✅ | Native UI integration (file dialogs, system tray) |
+| Dependency | Platform / when needed | Purpose |
+|------------|------------------------|---------|
+| **Python 3.12** | Linux and Windows, source/dev only | Backend development and CI toolchain |
+| **Node.js 22.12+ and npm** | Linux and Windows, source/frontend builds only | Compiles the Vue frontend and runs unit tests |
+| **Wine / Proton** | Linux, Windows game launches | Runs Windows game executables on Linux |
+| **Winetricks** | Linux, optional runtime installers | Installs DLLs and runtime libraries into Wine prefixes |
+| **GTK 3 / PyGObject** | Linux desktop integration | Optional native desktop integrations; Windows uses its native dialogs |
+| **Java** | Either platform, `.jar` games only | Provides the `java` command used by the launcher |
 
 > [!NOTE]
 > Binary releases bundle Python dependencies. The source-tree `wlib.sh` launcher creates a Python virtual environment and installs missing **pip** dependencies when running from source.
 
 ### GPU & Rendering
 
-wLib includes automatic GPU detection and a crash guard system for cross-distro compatibility:
+wLib uses Qt WebEngine on both platforms. Linux release launchers include automatic GPU detection and a crash guard system for cross-distro compatibility:
 
 - **GPU Detection**: On startup, release launchers probe your GPU using `glxinfo` and `/sys/class/drm/` to determine hardware acceleration availability
 - **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically falls back to software rendering via `QT_QUICK_BACKEND=software`
 - **Renderer Diagnostics**: GPU detection results and Qt backend choices are logged to `~/.local/share/wLib/renderer-diagnostics.log` and the active launcher log.
 
-### Install System Packages
+Windows lets Qt select the native platform and renderer, and writes diagnostics to `%LOCALAPPDATA%\wLib\renderer-diagnostics.log`. Linux `xcb`/Wayland overrides and the shell launcher's GPU crash guard do not apply to Windows.
+
+### Install Linux System Packages
 
 <details>
 <summary><b>Ubuntu / Debian</b></summary>
@@ -155,7 +157,7 @@ Download either Windows artifact from the [Releases](https://github.com/kirin-3/
 - `wLib-<version>-windows-x64.msi` installs per-user under `%LOCALAPPDATA%\Programs\wLib`, adds a Start Menu shortcut (desktop shortcut optional), and supports upgrades, repair, and clean uninstall.
 - `wLib-<version>-windows-x64-portable.zip` can be extracted anywhere and run with `wLib.exe`.
 
-The MSI removes only installed program files and shortcuts. Library data, settings, scraper sessions, and Playwright browsers under `%LOCALAPPDATA%\wLib` remain after uninstall. SHA-256 hashes are published beside the artifacts.
+The MSI removes only installed program files and shortcuts. Library data, settings, scraper sessions, and Playwright browsers under `%LOCALAPPDATA%\wLib` remain after uninstall. The portable ZIP uses that same data directory; its library is not stored beside `wLib.exe`. SHA-256 hashes are published beside the artifacts.
 
 Windows builds are currently unsigned, so Windows SmartScreen shows "Windows protected your PC" on first launch. Click **More info → Run anyway**. If you downloaded the portable ZIP, you can instead right-click it before extracting, open **Properties**, and tick **Unblock**. Verify the download against the published SHA-256 hashes if you want to be sure it is the official build.
 
@@ -201,7 +203,7 @@ cd wLib-*/
 ./wlib
 ```
 
-### Run from Source
+### Run from Source on Linux
 
 ```bash
 git clone https://github.com/kirin-3/wLib.git
@@ -214,13 +216,32 @@ cd ui && npm install && npm run typecheck && npm run build && cd ..
 ./wlib.sh
 ```
 
-On Windows, use Python 3.12, install `requirements-windows.txt`, build `ui/`, and run `python main.py`. Build release artifacts with `scripts\build-windows.ps1`; see [docs/build.md](docs/build.md).
+### Run from Source on Windows (PowerShell)
+
+Install Python 3.12, Git, and Node.js 22.12+ with npm, then run:
+
+```powershell
+git clone https://github.com/kirin-3/wLib.git
+Set-Location wLib
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
+
+Set-Location ui
+npm ci
+npm run typecheck
+npm run build
+Set-Location ..
+
+.\.venv\Scripts\python.exe main.py
+```
+
+Build Windows release artifacts with `scripts\build-windows.ps1`; see [Build & Packaging](docs/build.md). For contributor dependencies and checks, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🛠️ Development
 
 ### Dev Mode with Hot Reload
 
-For active development, wLib supports a Vite dev server with hot module replacement:
+For active development on Linux, wLib supports a Vite dev server with hot module replacement:
 
 ```bash
 # Terminal 1: Start the Vite dev server
@@ -234,6 +255,8 @@ DEV_MODE=1 python main.py
 
 This connects PyWebView natively to `http://localhost:5173` so you receive instant frontend updates without a separate rebuild step.
 
+On Windows, `npm run dev` works for browser-only frontend development with mock API responses. Desktop `DEV_MODE` currently invokes `npm` directly and can fail with `WinError 2` when Node provides only `npm.cmd`; use the source-run steps above to rebuild `ui/dist/` and test the real desktop bridge. See the [contributing guide](CONTRIBUTING.md#running-the-app-locally) for platform-specific commands.
+
 Before submitting frontend changes, run:
 
 ```bash
@@ -244,13 +267,13 @@ npm run build
 
 ### Quick Backend Verification
 
-Use the smoke backend test to verify your environment without opening the UI:
+Use the smoke backend test to verify your environment without opening the UI. On Windows, first set `WLIB_DATA_DIR` to a temporary directory; changing `HOME` alone does not isolate `%LOCALAPPDATA%`. The [contributing guide](CONTRIBUTING.md#smoke-backend-test) includes a PowerShell example that restores the environment afterward.
 
 ```bash
 python scripts/smoke_backend.py
 ```
 
-This runs extension sync and Qt/Playwright initialization in an isolated temporary directory.
+This runs extension sync and Qt/Playwright initialization with temporary HOME and browser paths.
 
 > [!NOTE]
 > Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).
@@ -268,14 +291,14 @@ If the bundled extension version changes, wLib shows a startup toast telling you
 1. Open your Chromium-based browser.
 2. Navigate to `chrome://extensions/`.
 3. Enable **Developer mode** in the top right.
-4. Click **Load unpacked** and select the newly extracted folder: `~/.local/share/wLib/extension/chrome/`.
+4. Click **Load unpacked** and select `chrome/` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/chrome/` on Linux or `%LOCALAPPDATA%\wLib\extension\chrome` on Windows.
 5. Visit any F95Zone thread to see the wLib integration buttons!
 
 ### Firefox
 
 1. Open Firefox **Add-ons and themes**.
 2. Click the gear icon and choose **Install Add-on From File...**.
-3. Select the file: `~/.local/share/wLib/extension/firefox/wLib.xpi`.
+3. Select `firefox/wLib.xpi` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/firefox/wLib.xpi` on Linux or `%LOCALAPPDATA%\wLib\extension\firefox\wLib.xpi` on Windows.
 4. Confirm the installation when Firefox prompts you.
 
 > [!WARNING]
@@ -287,8 +310,9 @@ Found a bug? Please [open an issue](https://github.com/kirin-3/wLib/issues/new?t
 
 - **Steps to reproduce** the issue
 - **Expected vs actual behavior**
-- Your **Linux distribution**, version, and display server (X11/Wayland)
-- Your **Wine/Proton version** (if game-launch related)
+- Your **operating system and version**: Windows version/build or Linux distribution and display server (X11/Wayland)
+- Your **installation format** (Windows MSI/portable ZIP, Linux package/AppImage, or source)
+- Your **Wine/Proton version** (Linux compatibility launches only)
 - Any **error logs** (enable logging in Settings → Debug Logging)
 
 ## 🤝 Contributing
