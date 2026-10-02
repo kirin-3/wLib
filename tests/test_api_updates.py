@@ -1891,3 +1891,33 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     assert status["running"] is False
     assert status["cancelling"] is False
     assert callback_results == [False]
+
+
+def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
+    import time
+
+    api = Api()
+    titles_by_url = {
+        f"https://f95zone.to/threads/game-{n}.{n}/": f"Game {n}" for n in (1, 2, 3)
+    }
+    for url, title in titles_by_url.items():
+        _ = add_game(title=title, exe_path="/tmp/game.sh", f95_url=url)
+    seen: list[tuple[str, str]] = []
+
+    def fake_batch(urls, headless, delay, include_metadata, callback):
+        _ = (headless, delay, include_metadata)
+        for url in urls:
+            seen.append((titles_by_url[url], str(api.get_update_status()["current"])))
+            _ = callback(url, {"success": True, "version": "2.0"})
+        seen.append(("", str(api.get_update_status()["current"])))
+        return {}
+
+    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+
+    assert api.check_all_updates()["success"] is True
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(seen) == 4
+    assert all(expected == current for expected, current in seen)

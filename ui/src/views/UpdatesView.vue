@@ -11,6 +11,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
+import { isNewerVersion } from "../utils/appVersion";
 import type {
   GameRecord,
   UpdateStatusResponse,
@@ -187,7 +188,7 @@ onMounted(() => {
 
       const release = await api.check_app_updates();
       if (release && release.success && release.version) {
-        if (release.version !== currentVersion.value) {
+        if (isNewerVersion(release.version, currentVersion.value)) {
           const rendered = marked.parse(release.changelog || "No changelog provided.");
           const changelogHtml = typeof rendered === "string" ? rendered : await rendered;
           appUpdate.value = {
@@ -211,14 +212,6 @@ onMounted(() => {
       startPolling();
     } else if (s) {
       status.value = s;
-    }
-    try {
-      const autoResult = await api.maybeAutoCheck();
-      if (autoResult && autoResult.triggered) {
-        startPolling();
-      }
-    } catch (e) {
-      console.error("Auto-check trigger failed", e);
     }
   });
 });

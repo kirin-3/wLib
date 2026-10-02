@@ -1940,11 +1940,16 @@ class Api:
             self._update_cancelled = False
             self._update_total = len(games_with_url)
             self._update_checked = 0
-            self._update_current = ""
+            # The callback fires after a game finishes, so show the game being checked now.
+            self._update_current = games_with_url[0]["title"] if games_with_url else ""
             self._update_results = []
             self._update_delay_seconds = self._get_bulk_check_delay_seconds()
 
         games_by_url = {g["f95_url"]: g for g in games_with_url}
+        next_title_by_url = {
+            g["f95_url"]: nxt["title"]
+            for g, nxt in zip(games_with_url, games_with_url[1:])
+        }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
 
         # Record the check timestamp
@@ -1979,7 +1984,6 @@ class Api:
                     with self._update_lock:
                         if self._update_cancelled:
                             return False  # Stop checking
-                        self._update_current = game["title"]
 
                     result_dict = self._coerce_string_key_dict(result)
                     if result_dict is None:
@@ -2043,6 +2047,7 @@ class Api:
                             }
                         )
                         self._update_checked += 1
+                        self._update_current = next_title_by_url.get(url, "")
                     return True
 
                 get_multiple_thread_versions_fn = cast(

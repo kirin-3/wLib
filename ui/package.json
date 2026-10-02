@@ -6,7 +6,7 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
-    "test:unit": "node --experimental-strip-types --test src/utils/launchMode.test.ts src/utils/libraryViewState.test.ts src/utils/platformPolicy.test.ts",
+    "test:unit": "node --experimental-strip-types --test src/utils/launchMode.test.ts src/utils/libraryViewState.test.ts src/utils/platformPolicy.test.ts src/utils/appVersion.test.ts",
     "typecheck": "vue-tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview"

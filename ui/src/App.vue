@@ -15,6 +15,7 @@ import {
   IconSun,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "./services/api";
+import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 
 interface StartupToast {
@@ -138,12 +139,19 @@ onMounted(() => {
       const release = await api.check_app_updates();
       if (release && release.success && release.version) {
         latestVersion.value = release.version;
-        if (release.version !== currentVersion.value) {
+        if (isNewerVersion(release.version, currentVersion.value)) {
           hasAppUpdate.value = true;
         }
       }
     } catch (e) {
       console.error("Failed to check for app updates globally", e);
+    }
+
+    // Run the scheduled (weekly/monthly) game update check regardless of the open view.
+    try {
+      await api.maybeAutoCheck();
+    } catch (e) {
+      console.error("Auto-check trigger failed", e);
     }
   });
 });

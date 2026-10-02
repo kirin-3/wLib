@@ -15,7 +15,9 @@ export const loadPlatformCapabilities = async (): Promise<PlatformCapabilities> 
   pendingCapabilities = api
     .getPlatformCapabilities()
     .then((capabilities) => {
-      cachedCapabilities = capabilities;
+      // Called before pywebview injects its API, invoke() returns the browser mock;
+      // don't cache that or Wine/Proton stay hidden for the whole session.
+      if (window.pywebview?.api) cachedCapabilities = capabilities;
       return capabilities;
     })
     .catch((error: unknown) => {
