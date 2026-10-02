@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Callable, Protocol, cast, override
+from typing import IO, TYPE_CHECKING, Callable, Protocol, cast, override
 
 from core.api import APP_VERSION, Api
 from core.f95zone import normalize_thread_url
@@ -663,11 +663,22 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         }:
             return True
 
+        self._discard_request_body()
         self.send_response(403)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         _ = self.wfile.write(b'{"success": false, "error": "Host not allowed"}')
         return False
+
+    def _discard_request_body(self) -> None:
+        # Closing with unread request data makes the OS reset the connection
+        # (always on Windows), so the client sees an abort instead of our reply.
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return
+        if 0 < length <= MAX_EXTENSION_BODY_BYTES:
+            _ = self.rfile.read(length)
 
     def _find_matching_game(self, url: object) -> dict[str, object] | None:
         if not isinstance(url, str) or not url.strip():
@@ -711,6 +722,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _reject_origin(self) -> None:
+        self._discard_request_body()
         self.send_response(403)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -857,13 +869,34 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-def start_extension_server() -> None:
+class ExtensionServer(ThreadingHTTPServer):
+    # The port doubles as the single-instance lock. Windows SO_REUSEADDR would
+    # let a second wLib bind it while the first is still listening.
+    allow_reuse_address: bool = sys.platform != "win32"
+
+
+def bind_extension_server() -> ThreadingHTTPServer | None:
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", 8183), ExtensionRequestHandler)
-        print("Starting extension HTTP receiver on port 8183...")
-        server.serve_forever()
-    except Exception as e:
+        return ExtensionServer(("127.0.0.1", 8183), ExtensionRequestHandler)
+    except OSError as e:
         print(f"Failed to start extension HTTP server: {e}")
+        return None
+
+
+def focus_running_instance() -> bool:
+    """Ask a wLib already holding port 8183 to show its window; False if it isn't wLib."""
+    import urllib.request
+
+    request = urllib.request.Request(
+        "http://127.0.0.1:8183/api/open", headers={EXTENSION_REQUEST_HEADER: "1"}
+    )
+    # Never route this loopback call through a configured HTTP proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with cast(IO[bytes], opener.open(request, timeout=3)) as response:
+            return "success" in json.loads(response.read())
+    except (OSError, ValueError):
+        return False
 
 
 def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
@@ -1032,6 +1065,12 @@ def main() -> None:
 
     global window_ref, DEV_MODE
 
+    # A second copy would share the database and browser profile.
+    extension_server = bind_extension_server()
+    if extension_server is None and focus_running_instance():
+        print("[wLib] wLib is already running; showing its window instead.")
+        return
+
     _ = configure_qt_runtime_environment()
     ensure_packaged_webview_cache_fresh()
     webview_module = load_webview_module()
@@ -1086,7 +1125,9 @@ def main() -> None:
     ensure_playwright_browsers_async()
 
     # Start the extension background server in a daemon thread
-    threading.Thread(target=start_extension_server, daemon=True).start()
+    if extension_server is not None:
+        print("Starting extension HTTP receiver on port 8183...")
+        threading.Thread(target=extension_server.serve_forever, daemon=True).start()
 
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically

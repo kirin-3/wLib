@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import hashlib
 import os
 import ssl
 import sys
@@ -74,17 +75,6 @@ class BrowseBackend(TypedDict):
     env: dict[str, str]
     continue_on_cancel_error: NotRequired[bool]
     cancel_error_markers: NotRequired[tuple[str, ...]]
-
-
-class BrowseLocation(TypedDict):
-    path: str
-    label: str
-    source: str
-
-
-class BrowseLocationsResponse(TypedDict):
-    success: bool
-    locations: list[BrowseLocation]
 
 
 class ExtensionServiceStatus(TypedDict):
@@ -174,6 +164,8 @@ normalize_thread_url: Callable[[str], str] = cast(
 )
 
 APP_VERSION = "0.3.5"
+# Lunar.Engine.zip from visibou/lunarengine v.7.2 (uploaded 2020-11-29, 29738666 bytes).
+LUNAR_ENGINE_SHA256 = "c208f52ca1873007df3f7ef71b61f3c2870a58ad0ddadff7944785f6bf36de23"
 DEFAULT_PLAYWRIGHT_BROWSERS_PATH = get_playwright_browsers_path()
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
 KOMODO_RTP_DOWNLOAD_HOSTS = {"dl.komodo.jp"}
@@ -239,6 +231,8 @@ class Api:
         self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
         self._update_lock: threading.Lock = threading.Lock()
         self._status_lock: threading.Lock = threading.Lock()
+        self._app_release: dict[str, object] | None = None
+        self._app_release_lock: threading.Lock = threading.Lock()
         self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
@@ -1063,171 +1057,6 @@ class Api:
 
         return ""
 
-    def _iter_proc_mounts(self) -> list[tuple[str, str, str]]:
-        import re
-
-        def decode_mount_value(value: str) -> str:
-            def replace_octal(match: re.Match[str]) -> str:
-                return chr(int(match.group(1), 8))
-
-            return re.sub(r"\\([0-7]{3})", replace_octal, value)
-
-        mount_entries: list[tuple[str, str, str]] = []
-
-        try:
-            with open("/proc/mounts", "r", encoding="utf-8") as mounts_file:
-                for line in mounts_file:
-                    parts = line.split()
-                    if len(parts) < 3:
-                        continue
-                    mount_entries.append(
-                        (
-                            decode_mount_value(parts[0]),
-                            decode_mount_value(parts[1]),
-                            decode_mount_value(parts[2]),
-                        )
-                    )
-        except OSError:
-            return []
-
-        return mount_entries
-
-    def _is_user_relevant_mount(
-        self, source: str, mount_point: str, fs_type: str
-    ) -> bool:
-        skipped_fs = {
-            "autofs",
-            "cgroup",
-            "cgroup2",
-            "configfs",
-            "debugfs",
-            "devpts",
-            "devtmpfs",
-            "fusectl",
-            "hugetlbfs",
-            "mqueue",
-            "nsfs",
-            "overlay",
-            "proc",
-            "pstore",
-            "ramfs",
-            "securityfs",
-            "squashfs",
-            "sysfs",
-            "tmpfs",
-            "tracefs",
-        }
-        if fs_type in skipped_fs:
-            return False
-
-        skipped_prefixes = (
-            "/app",
-            "/dev",
-            "/proc",
-            "/run/credentials",
-            "/run/user",
-            "/snap",
-            "/sys",
-            "/var/lib/docker",
-            "/var/lib/flatpak",
-        )
-        if mount_point in ("/", "/boot", "/boot/efi"):
-            return False
-        if mount_point.startswith(skipped_prefixes):
-            return False
-
-        if mount_point.startswith(("/run/media/", "/media/", "/mnt/")):
-            return True
-
-        if source.startswith(("/dev/", "//")) and mount_point.startswith("/"):
-            return True
-
-        return False
-
-    def _append_browse_location(
-        self,
-        locations: list[BrowseLocation],
-        seen_paths: set[str],
-        path: str,
-        label: str,
-        source: str,
-    ) -> None:
-        normalized_path = self._normalize_selected_path(path)
-        if not normalized_path or normalized_path in seen_paths:
-            return
-        if not os.path.isdir(normalized_path):
-            return
-
-        seen_paths.add(normalized_path)
-        locations.append({"path": normalized_path, "label": label, "source": source})
-
-    def _get_browse_locations(self) -> list[BrowseLocation]:
-        locations: list[BrowseLocation] = []
-        seen_paths: set[str] = set()
-        home_dir = os.path.expanduser("~")
-        downloads_dir = os.path.join(home_dir, "Downloads")
-
-        if is_windows():
-            self._append_browse_location(
-                locations, seen_paths, home_dir, "Home", "home"
-            )
-            for folder_name in ("Desktop", "Documents", "Downloads", "Saved Games"):
-                self._append_browse_location(
-                    locations,
-                    seen_paths,
-                    os.path.join(home_dir, folder_name),
-                    folder_name,
-                    "user-folder",
-                )
-            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                root = f"{letter}:\\"
-                self._append_browse_location(
-                    locations, seen_paths, root, f"{letter}:", "drive"
-                )
-            return locations
-
-        import pwd
-
-        try:
-            username = pwd.getpwuid(os.getuid()).pw_name
-        except Exception:
-            username = os.environ.get("USER", "")
-
-        self._append_browse_location(locations, seen_paths, home_dir, "Home", "home")
-        self._append_browse_location(
-            locations, seen_paths, downloads_dir, "Downloads", "downloads"
-        )
-        self._append_browse_location(
-            locations,
-            seen_paths,
-            os.path.join("/run/media", username) if username else "",
-            "Removable Media",
-            "common-root",
-        )
-        self._append_browse_location(
-            locations,
-            seen_paths,
-            os.path.join("/media", username) if username else "",
-            "Media",
-            "common-root",
-        )
-        self._append_browse_location(
-            locations, seen_paths, "/mnt", "Mounted Drives", "common-root"
-        )
-
-        for source, mount_point, fs_type in self._iter_proc_mounts():
-            if not self._is_user_relevant_mount(source, mount_point, fs_type):
-                continue
-            label = os.path.basename(mount_point.rstrip(os.sep)) or mount_point
-            self._append_browse_location(
-                locations, seen_paths, mount_point, label, "mount"
-            )
-
-        return locations
-
-    def get_browse_locations(self) -> BrowseLocationsResponse:
-        return {"success": True, "locations": self._get_browse_locations()}
-
     def open_extension_folder(self) -> ExtensionSyncStatus | OpenPathResult:
         sync_result = self.sync_extension_files()
         if sync_result.get("success") is False:
@@ -1960,26 +1789,6 @@ class Api:
         }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
 
-        # Record the check timestamp
-        from datetime import datetime
-
-        from core.database import get_connection
-
-        conn = None
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            _ = cursor.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES ('last_update_check', ?)",
-                (datetime.now().isoformat(),),
-            )
-            conn.commit()
-        except Exception as e:
-            print(f"[wLib] Failed to update last_update_check setting: {e}")
-        finally:
-            if conn is not None:
-                conn.close()
-
         def run_checks() -> None:
             try:
                 urls = [game["f95_url"] for game in games_with_url]
@@ -2114,6 +1923,19 @@ class Api:
                                 }
                             )
                         self._update_checked = len(games_with_url)
+
+                # Record only finished runs; a closed app or cancel retries at next startup.
+                with self._update_lock:
+                    cancelled = self._update_cancelled
+                if not cancelled:
+                    from datetime import datetime
+
+                    from core.database import update_setting
+
+                    try:
+                        update_setting("last_update_check", datetime.now().isoformat())
+                    except Exception as e:
+                        print(f"[wLib] Failed to update last_update_check setting: {e}")
             finally:
                 with self._update_lock:
                     self._update_checked = self._update_total
@@ -2837,6 +2659,7 @@ class Api:
         import os
         import shutil
         import tarfile
+        import tempfile
         import urllib.request
 
         try:
@@ -2859,6 +2682,7 @@ class Api:
                 data = {}
 
             download_url = ""
+            checksum_url = ""
             release_name = str(data.get("tag_name") or "proton-ge")
             assets = data.get("assets")
             for asset_obj in (
@@ -2868,20 +2692,38 @@ class Api:
                 if not asset:
                     continue
                 asset_name = str(asset.get("name") or "")
-                if asset_name.endswith(".tar.gz"):
-                    download_url = str(asset.get("browser_download_url") or "")
-                    break
+                asset_url = str(asset.get("browser_download_url") or "")
+                if asset_name.endswith(".tar.gz") and not download_url:
+                    download_url = asset_url
+                elif asset_name.endswith(".sha512sum"):
+                    checksum_url = asset_url
 
             if not download_url:
                 return {
                     "success": False,
                     "error": "Could not find a valid release tarball.",
                 }
+            if not checksum_url:
+                return {
+                    "success": False,
+                    "error": "Release has no .sha512sum file to verify the download.",
+                }
 
             wlib_share_dir = get_proton_dir()
             os.makedirs(wlib_share_dir, exist_ok=True)
 
-            tar_path = os.path.join("/tmp", f"{release_name}.tar.gz")
+            tar_path = os.path.join(tempfile.gettempdir(), f"{release_name}.tar.gz")
+
+            # The .sha512sum file reads "<hash>  <tarball name>".
+            checksum_req = urllib.request.Request(
+                checksum_url, headers={"User-Agent": "wLib"}
+            )
+            with cast(
+                URLResponseContext,
+                urllib.request.urlopen(checksum_req, context=ctx, timeout=30),
+            ) as response:
+                checksum_text = response.read().decode("utf-8", "replace")
+            expected_sha512 = (checksum_text.split() or [""])[0].lower()
 
             print(f"Downloading {release_name} from {download_url}...")
             # We must use urlopen with our context here instead of urlretrieve
@@ -2897,6 +2739,15 @@ class Api:
                 open(tar_path, "wb") as out_file,
             ):
                 shutil.copyfileobj(response, out_file)
+
+            with open(tar_path, "rb") as tar_file:
+                actual_sha512 = hashlib.file_digest(tar_file, "sha512").hexdigest()
+            if actual_sha512 != expected_sha512:
+                os.remove(tar_path)
+                return {
+                    "success": False,
+                    "error": "Downloaded GE-Proton archive failed its SHA-512 check.",
+                }
 
             print(f"Extracting {tar_path}...")
             with tarfile.open(tar_path, "r:gz") as tar:
@@ -3322,6 +3173,16 @@ class Api:
             self.window.toggle_inspect()
 
     def check_app_updates(self) -> dict[str, object]:
+        """Latest wLib release, fetched once per session (GitHub allows 60 anonymous calls/hour)."""
+        with self._app_release_lock:
+            if self._app_release is None:
+                result = self._fetch_app_release()
+                if not result.get("success"):
+                    return result
+                self._app_release = result
+            return dict(self._app_release)
+
+    def _fetch_app_release(self) -> dict[str, object]:
         """Fetches the latest release from the kirin-3/wLib GitHub repository."""
         import json
         import logging
@@ -3465,6 +3326,13 @@ class Api:
                 open(zip_path, "wb") as out_file,
             ):
                 _ = out_file.write(response.read())
+
+            with open(zip_path, "rb") as zip_file:
+                if hashlib.file_digest(zip_file, "sha256").hexdigest() != LUNAR_ENGINE_SHA256:
+                    return {
+                        "success": False,
+                        "error": "Downloaded Cheat Engine archive failed its SHA-256 check.",
+                    }
 
             print(f"Extracting Cheat Engine to staging directory {extract_dir}...")
             with zipfile.ZipFile(zip_path, "r") as zip_ref:

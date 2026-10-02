@@ -61,30 +61,6 @@ def test_windows_system_handler_is_used(monkeypatch, tmp_path):
     assert opened == [str(target)]
 
 
-def test_windows_browse_locations_include_user_folders_and_drives(monkeypatch):
-    home = r"C:\Users\Tester"
-    existing = {
-        home,
-        os.path.join(home, "Desktop"),
-        os.path.join(home, "Downloads"),
-        "C:\\",
-        "D:\\",
-    }
-    monkeypatch.setattr("core.api.os.path.expanduser", lambda _path: home)
-    monkeypatch.setattr("core.api.os.path.isdir", lambda path: path in existing)
-    monkeypatch.setattr(
-        Api, "_normalize_selected_path", lambda _self, path: path
-    )
-
-    locations = Api().get_browse_locations()["locations"]
-    paths = {entry["path"] for entry in locations}
-
-    assert home in paths
-    assert os.path.join(home, "Desktop") in paths
-    assert os.path.join(home, "Downloads") in paths
-    assert {"C:\\", "D:\\"}.issubset(paths)
-
-
 def test_windows_game_picker_includes_every_supported_target(monkeypatch):
     captured_file_types: tuple[str, ...] = ()
 

@@ -13,6 +13,8 @@ from core.launcher import Launcher, RunningGame, _ElevatedProcess, _split_window
 @pytest.fixture(autouse=True)
 def _linux_launcher_by_default(monkeypatch):
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    # Tests that don't patch settings must not read the user's real database.
+    monkeypatch.setattr("core.launcher.get_setting", lambda _key: None)
 
 
 @pytest.mark.parametrize("command, expected, env_value", [

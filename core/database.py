@@ -207,7 +207,6 @@ def find_game_by_f95_url(
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
-    _ = conn.execute("PRAGMA journal_mode=WAL;")
     _ = conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
@@ -216,6 +215,8 @@ def init_db() -> None:
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
+        # WAL is stored in the database file, so setting it once covers every connection.
+        _ = conn.execute("PRAGMA journal_mode=WAL;")
         cursor = conn.cursor()
 
         # Create the Games table
@@ -585,15 +586,6 @@ def get_all_games() -> list[dict[str, object]]:
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
         result.append(game_dict)
     return result
-
-
-def update_game_version(game_id: int, version: str) -> None:
-    with closing(get_connection()) as conn:
-        cursor = conn.cursor()
-        _ = cursor.execute(
-            "UPDATE games SET version = ? WHERE id = ?", (version, game_id)
-        )
-        conn.commit()
 
 
 def delete_game(game_id: int) -> None:

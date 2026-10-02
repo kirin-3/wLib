@@ -19,7 +19,6 @@ from core.database import (
     get_setting,
     init_db,
     update_game,
-    update_game_version,
     update_playtime,
     update_setting,
 )
@@ -541,15 +540,6 @@ def test_database_with_duplicate_f95_urls():
         assert False, "Expected sqlite3.IntegrityError for duplicate f95_url"
     except sqlite3.IntegrityError:
         pass
-
-
-def test_update_game_version_with_nonexistent_id():
-    """Test updating version for a game that doesn't exist."""
-    # Should not raise, but also should not update anything
-    update_game_version(99999, "1.0")
-
-    # Should complete without error
-    assert True
 
 
 def test_delete_game_with_nonexistent_id():

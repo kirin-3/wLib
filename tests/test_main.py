@@ -10,6 +10,7 @@ import json
 import threading
 from typing import cast
 from unittest.mock import MagicMock
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -427,6 +428,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     monkeypatch.setattr(main, "Api", FakeApi)
     monkeypatch.setattr(main, "ensure_playwright_browsers_async", lambda: None)
     monkeypatch.setattr(main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(main, "bind_extension_server", MagicMock())
     monkeypatch.setattr(
         main, "start_webview", lambda *_args, **_kwargs: call_order.append("start")
     )
@@ -729,7 +731,9 @@ def test_extension_add_always_replies_with_failure(
         connection.putrequest("POST", "/api/add", skip_host=True)
         connection.putheader("Host", "localhost:8183")
         connection.putheader("Content-Length", content_length)
-        connection.endheaders(b"{}")
+        # No body when the length is invalid: the server can't read it, and
+        # unread data makes Windows reset the connection before the reply.
+        connection.endheaders(b"{}" if content_length == "2" else None)
         response = connection.getresponse()
         assert response.status == status
         assert json.loads(response.read())["success"] is False
@@ -779,13 +783,57 @@ def test_extension_check_remains_responsive_while_open_waits(
         assert pending_open.result(timeout=3) == {"success": True}
 
 
-def test_start_extension_server_uses_threaded_loopback_server(monkeypatch):
+def test_bind_extension_server_uses_threaded_loopback_server(monkeypatch):
     server_factory = MagicMock()
-    monkeypatch.setattr(main, "ThreadingHTTPServer", server_factory)
+    monkeypatch.setattr(main, "ExtensionServer", server_factory)
 
-    main.start_extension_server()
-
+    assert main.bind_extension_server() is server_factory.return_value
     server_factory.assert_called_once_with(
         ("127.0.0.1", 8183), main.ExtensionRequestHandler
     )
-    server_factory.return_value.serve_forever.assert_called_once_with()
+
+
+def test_second_instance_cannot_share_the_extension_port():
+    first = main.ExtensionServer(("127.0.0.1", 0), main.ExtensionRequestHandler)
+    try:
+        with pytest.raises(OSError):
+            main.ExtensionServer(first.server_address, main.ExtensionRequestHandler)
+    finally:
+        first.server_close()
+
+
+def test_main_focuses_running_instance_instead_of_starting(monkeypatch):
+    load_webview = MagicMock()
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "configure_playwright_browsers_path", lambda: "")
+    monkeypatch.setattr(main, "bind_extension_server", lambda: None)
+    monkeypatch.setattr(main, "focus_running_instance", lambda: True)
+    monkeypatch.setattr(main, "load_webview_module", load_webview)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    load_webview.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        (b'{"success": true}', True),
+        (b'{"success": false, "error": "Application window is not ready"}', True),
+        (b"<html>other app</html>", False),
+        (URLError("refused"), False),
+    ],
+)
+def test_focus_running_instance_only_trusts_wlib_replies(monkeypatch, reply, expected):
+    opener = MagicMock()
+    if isinstance(reply, Exception):
+        opener.open.side_effect = reply
+    else:
+        opener.open.return_value = BytesIO(reply)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: opener)
+
+    assert main.focus_running_instance() is expected
+    request = opener.open.call_args.args[0]
+    assert request.full_url == "http://127.0.0.1:8183/api/open"
+    assert request.get_header("X-wlib-extension") == "1"

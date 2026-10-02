@@ -7,7 +7,7 @@ wLib manages all relational states locally via a single SQLite database file.
 Both platforms use the same schema and additive migrations. Windows MSI and portable ZIP builds share the same database location; MSI uninstall preserves user data. See [Platform Paths](architecture.md#platform-paths) for data-directory overrides and Linux XDG behavior.
 
 ## Engine Configuration
-Upon startup in `core/database.py`, the engine executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). This is crucial because `pywebview`, the extension server, and the Playwright scraper all operate on independent threads. `WAL` mode allows concurrent readers alongside a single active writer.
+Upon startup, `init_db()` in `core/database.py` executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). The mode is stored in the database file, so later connections inherit it. This is crucial because `pywebview`, the extension server, and the Playwright scraper all operate on independent threads. `WAL` mode allows concurrent readers alongside a single active writer.
 
 ### WAL Mode Advantages
 

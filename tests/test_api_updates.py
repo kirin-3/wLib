@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import hashlib
 import io
 import json
 import os
@@ -198,8 +199,13 @@ def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
     return executable
 
 
-@pytest.mark.parametrize("member_name", ["GE-Proton-test/proton", "../escaped"])
-def test_download_proton_ge_streams_and_filters_tar(monkeypatch, tmp_path, member_name):
+@pytest.mark.parametrize(
+    "member_name, checksum_ok",
+    [("GE-Proton-test/proton", True), ("../escaped", True), ("GE-Proton-test/proton", False)],
+)
+def test_download_proton_ge_streams_and_filters_tar(
+    monkeypatch, tmp_path, member_name, checksum_ok
+):
     payload = b"proton executable"
     archive_buffer = io.BytesIO()
     with tarfile.open(fileobj=archive_buffer, mode="w:gz") as archive:
@@ -218,12 +224,18 @@ def test_download_proton_ge_streams_and_filters_tar(monkeypatch, tmp_path, membe
             {
                 "name": "GE-Proton-test.tar.gz",
                 "browser_download_url": "https://example.com/GE-Proton-test.tar.gz",
-            }
+            },
+            {
+                "name": "GE-Proton-test.sha512sum",
+                "browser_download_url": "https://example.com/GE-Proton-test.sha512sum",
+            },
         ],
     }
+    digest = hashlib.sha512(archive_buffer.getvalue() if checksum_ok else b"other").hexdigest()
     responses = iter(
         [
             io.BytesIO(json.dumps(release).encode()),
+            io.BytesIO(f"{digest}  GE-Proton-test.tar.gz".encode()),
             ChunkedResponse(archive_buffer.getvalue()),
         ]
     )
@@ -232,17 +244,17 @@ def test_download_proton_ge_streams_and_filters_tar(monkeypatch, tmp_path, membe
     )
     install_dir = tmp_path / "proton"
     monkeypatch.setattr("core.api.get_proton_dir", lambda: str(install_dir))
-    real_join = os.path.join
-    monkeypatch.setattr(
-        "core.api.os.path.join",
-        lambda path, *parts: real_join(
-            str(tmp_path) if path == "/tmp" else path, *parts
-        ),
-    )
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
 
     result = Api().download_proton_ge()
 
-    if member_name == "../escaped":
+    if not checksum_ok:
+        assert result["success"] is False
+        assert "SHA-512" in str(result["error"])
+        assert not (install_dir / member_name).exists()
+        assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
+        assert get_setting("proton_path") == ""
+    elif member_name == "../escaped":
         assert result["success"] is False
         assert "outside" in str(result["error"])
         assert not (tmp_path / "escaped").exists()
@@ -430,6 +442,9 @@ def test_download_cheat_engine_preserves_existing_install_when_verification_fail
     ce_dir = _redirect_cheat_engine_dir(monkeypatch, tmp_path)
     existing_executable = _write_existing_cheat_engine(ce_dir)
     archive_data = _zip_bytes({"readme.txt": b"missing executable"})
+    monkeypatch.setattr(
+        "core.api.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
+    )
 
     monkeypatch.setattr(
         "urllib.request.urlopen",
@@ -444,6 +459,27 @@ def test_download_cheat_engine_preserves_existing_install_when_verification_fail
     assert not list(ce_dir.parent.glob("CheatEngine-download-*"))
 
 
+def test_download_cheat_engine_rejects_archive_with_wrong_checksum(
+    monkeypatch, tmp_path
+):
+    ce_dir = _redirect_cheat_engine_dir(monkeypatch, tmp_path)
+    existing_executable = _write_existing_cheat_engine(ce_dir)
+    archive_data = _zip_bytes(
+        {"Lunar Engine/lunarengine-x86_64.exe": b"tampered engine"}
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: _FakeDownloadResponse(archive_data),
+    )
+
+    result = Api().download_cheat_engine()
+
+    assert result["success"] is False
+    assert "SHA-256" in str(result["error"])
+    assert existing_executable.read_bytes() == b"old engine"
+    assert not list(ce_dir.parent.glob("CheatEngine-download-*"))
+
+
 def test_download_cheat_engine_replaces_install_after_verified_download(
     monkeypatch, tmp_path
 ):
@@ -453,6 +489,9 @@ def test_download_cheat_engine_replaces_install_after_verified_download(
     old_marker.write_text("old install", encoding="utf-8")
     archive_data = _zip_bytes(
         {"Lunar Engine/lunarengine-x86_64.exe": b"new engine"}
+    )
+    monkeypatch.setattr(
+        "core.api.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
     )
 
     monkeypatch.setattr(
@@ -1191,72 +1230,6 @@ def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     }
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Linux mount discovery test")
-def test_get_browse_locations_includes_detected_mounts(monkeypatch, tmp_path):
-    api = Api()
-    home_dir = tmp_path / "home"
-    downloads_dir = home_dir / "Downloads"
-    removable_root = tmp_path / "run" / "media" / "tester"
-    mounted_drive = removable_root / "USB Drive"
-    mounted_other = tmp_path / "mnt" / "Games"
-
-    downloads_dir.mkdir(parents=True)
-    mounted_drive.mkdir(parents=True)
-    mounted_other.mkdir(parents=True)
-
-    monkeypatch.setattr("core.api.os.getuid", lambda: 1000)
-
-    class FakePwdEntry:
-        pw_name = "tester"
-
-    monkeypatch.setattr("pwd.getpwuid", lambda _uid: FakePwdEntry())
-
-    real_expanduser = os.path.expanduser
-    monkeypatch.setattr(
-        "core.api.os.path.expanduser",
-        lambda path: str(home_dir) if path == "~" else real_expanduser(path),
-    )
-    monkeypatch.setattr(
-        api,
-        "_iter_proc_mounts",
-        lambda: [
-            ("/dev/sdb1", str(mounted_drive), "ext4"),
-            ("tmpfs", "/run/user/1000", "tmpfs"),
-            ("/dev/sdc1", str(mounted_other), "exfat"),
-        ],
-    )
-
-    locations = api.get_browse_locations()["locations"]
-    location_paths = {entry["path"] for entry in locations}
-
-    assert str(home_dir) in location_paths
-    assert str(downloads_dir) in location_paths
-    assert str(mounted_drive) in location_paths
-    assert str(mounted_other) in location_paths
-    assert "/run/user/1000" not in location_paths
-
-
-def test_iter_proc_mounts_decodes_escaped_paths(monkeypatch):
-    api = Api()
-    mount_data = "/dev/sdb1 /run/media/tester/USB\\040Drive ext4 rw 0 0\n"
-
-    class FakeMountsFile:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def __iter__(self):
-            return iter([mount_data])
-
-    monkeypatch.setattr("builtins.open", lambda *_args, **_kwargs: FakeMountsFile())
-
-    mounts = api._iter_proc_mounts()
-
-    assert mounts == [("/dev/sdb1", "/run/media/tester/USB Drive", "ext4")]
-
-
 def test_open_scraper_login_session_delegates_to_scraper(monkeypatch):
     api = Api()
 
@@ -1967,7 +1940,6 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
     api = Api()
     prefix_path = tmp_path / "prefix"
     rtp_dir = tmp_path / "rtp-cache"
-    real_expanduser = os.path.expanduser
 
     class FakeThread:
         def __init__(self, target=None, daemon=None):
@@ -1989,12 +1961,7 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
             URLError(ssl.SSLCertVerificationError("certificate verify failed"))
         ),
     )
-    monkeypatch.setattr(
-        "os.path.expanduser",
-        lambda path: (
-            str(rtp_dir) if path == "~/.local/share/wLib/rtp" else real_expanduser(path)
-        ),
-    )
+    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
 
     result = api.install_rpgmaker_rtp(str(prefix_path), "")
     status = api.get_install_status(str(prefix_path), "")
@@ -2090,6 +2057,8 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
 
     assert api.check_all_updates()["success"] is True
     assert entered.wait(5)
+    # Closing the app now must not count as a finished check.
+    assert api.get_auto_check_setting()["last_check"] == ""
     assert api.cancel_update_check()["success"] is True
 
     status = api.get_update_status()
@@ -2107,6 +2076,7 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     assert status["running"] is False
     assert status["cancelling"] is False
     assert callback_results == [False]
+    assert api.get_auto_check_setting()["last_check"] == ""
 
 
 def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
@@ -2137,3 +2107,26 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
 
     assert len(seen) == 4
     assert all(expected == current for expected, current in seen)
+    assert api.get_auto_check_setting()["last_check"]
+
+
+def test_check_app_updates_fetches_github_once_per_session(monkeypatch):
+    api = Api()
+    calls: list[str] = []
+
+    class FakeResponse(io.BytesIO):
+        status = 200
+
+    def fake_urlopen(request, timeout=0):
+        _ = timeout
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise URLError("offline")
+        return FakeResponse(json.dumps({"tag_name": "v9.9.9", "assets": []}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert api.check_app_updates()["success"] is False  # failures are retried
+    assert api.check_app_updates()["version"] == "v9.9.9"
+    assert api.check_app_updates()["version"] == "v9.9.9"
+    assert len(calls) == 2

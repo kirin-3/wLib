@@ -179,31 +179,36 @@ const formatLastCheck = computed(() => {
   }
 });
 
+// Not awaited by onMounted: the GitHub call can take up to 10 s and must not
+// delay showing a running update check.
+const loadAppUpdate = async () => {
+  try {
+    appUpdateLoading.value = true;
+    const versionInfo = await api.get_app_version();
+    currentVersion.value = versionInfo?.version || "";
+
+    const release = await api.check_app_updates();
+    if (release && release.success && release.version) {
+      if (isNewerVersion(release.version, currentVersion.value)) {
+        const rendered = marked.parse(release.changelog || "No changelog provided.");
+        const changelogHtml = typeof rendered === "string" ? rendered : await rendered;
+        appUpdate.value = {
+          version: release.version,
+          changelogHtml: DOMPurify.sanitize(changelogHtml),
+          url: release.url || "",
+        };
+      }
+    }
+  } catch (e) {
+    console.error("Failed to check app updates", e);
+  } finally {
+    appUpdateLoading.value = false;
+  }
+};
+
 onMounted(() => {
   onWebviewReady(async () => {
-    try {
-      appUpdateLoading.value = true;
-      const versionInfo = await api.get_app_version();
-      currentVersion.value = versionInfo?.version || "";
-
-      const release = await api.check_app_updates();
-      if (release && release.success && release.version) {
-        if (isNewerVersion(release.version, currentVersion.value)) {
-          const rendered = marked.parse(release.changelog || "No changelog provided.");
-          const changelogHtml = typeof rendered === "string" ? rendered : await rendered;
-          appUpdate.value = {
-            version: release.version,
-            changelogHtml: DOMPurify.sanitize(changelogHtml),
-            url: release.url || "",
-          };
-        }
-      }
-    } catch (e) {
-      console.error("Failed to check app updates", e);
-    } finally {
-      appUpdateLoading.value = false;
-    }
-
+    void loadAppUpdate();
     await loadGames();
     await loadAutoCheckSetting();
     const s = await api.getUpdateStatus();
