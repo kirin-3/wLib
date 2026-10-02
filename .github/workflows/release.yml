@@ -315,3 +315,52 @@ jobs:
             ### Full Changelog
 
             ${{ steps.changelog.outputs.compare }}
+
+  aur:
+    name: Publish AUR Package
+    # Stable tags only; pre-release tags such as v1.2.3-rc1 stay off the AUR.
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    needs: publish
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wLib-${{ github.ref_name }}-linux
+          path: linux-artifacts
+
+      - name: Push PKGBUILD and .SRCINFO to wlib-bin
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          WLIB_MAINTAINER: ${{ vars.WLIB_MAINTAINER }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY is not set; skipping AUR publish."
+            exit 0
+          fi
+          PKGVER="${GITHUB_REF_NAME#v}"
+          AUR_SRC="$(dirname "$(find linux-artifacts -name PKGBUILD -print -quit)")"
+          grep -qx "pkgver=${PKGVER}" "$AUR_SRC/PKGBUILD"
+
+          install -dm700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          # Pinned ED25519 host key; fingerprint SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4
+          # as published on https://aur.archlinux.org/.
+          echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > "$HOME/.ssh/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+
+          git clone ssh://aur@aur.archlinux.org/wlib-bin.git aur-repo
+          cp "$AUR_SRC/PKGBUILD" "$AUR_SRC/.SRCINFO" aur-repo/
+          cd aur-repo
+          git config user.name "${{ github.repository_owner }}"
+          git config user.email "$WLIB_MAINTAINER"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR already has wlib-bin ${PKGVER}."
+            exit 0
+          fi
+          git commit -m "Update wlib-bin to ${PKGVER}"
+          git push origin HEAD:master
