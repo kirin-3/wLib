@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_PACKAGING = REPOSITORY_ROOT / "packaging" / "windows"
@@ -74,6 +76,10 @@ def test_windows_build_rejects_four_part_msi_versions():
     assert "(?:\\.[0-9]+)?$" not in build_script
 
 
+@pytest.mark.skipif(
+    not (REPOSITORY_ROOT / "ui" / "dist" / "index.html").is_file(),
+    reason="smoke mode requires the built UI (cd ui && npm run build)",
+)
 def test_source_smoke_mode_uses_isolated_data_directory(tmp_path):
     smoke_data = tmp_path / "data"
     env = os.environ.copy()

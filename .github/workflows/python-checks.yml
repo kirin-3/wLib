@@ -74,20 +74,30 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
+      # pwsh only reports the last command's exit code; make every native
+      # command failure stop the step.
       - name: Install Python dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      - name: Run backend checks
         run: |
-          ruff check .
-          basedpyright
-          pytest
-          python scripts/smoke_backend.py
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv .venv
+          .venv\Scripts\python -m pip install -r requirements-dev.txt
 
+      # Built first: the source smoke-mode test needs ui/dist.
       - name: Run frontend checks
         working-directory: ui
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           npm ci
           npm run test:unit
           npm run typecheck
           npm run build
+
+      # pyrightconfig.json resolves imports from ./.venv.
+      - name: Run backend checks
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          .venv\Scripts\Activate.ps1
+          ruff check .
+          basedpyright
+          pytest
+          python scripts/smoke_backend.py
