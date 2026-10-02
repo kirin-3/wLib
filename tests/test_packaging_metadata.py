@@ -57,6 +57,14 @@ def test_appimage_build_stages_icon_assets_for_desktop_integration():
     assert 'cp "$PROJECT_DIR/icon.svg" "$APPDIR/.DirIcon"' not in build_script
 
 
+def test_appimage_build_keeps_qt_xcb_util_libs_and_catalog_name():
+    build_script = (PROJECT_ROOT / "scripts/build.sh").read_text(encoding="utf-8")
+
+    for lib in ("cursor", "icccm", "image", "keysyms", "render-util", "util"):
+        assert f'! -name "libxcb-{lib}.so*"' in build_script
+    assert 'APPIMAGE_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"' in build_script
+
+
 def test_package_metadata_declares_gplv3_or_later_license():
     nfpm_config = (PROJECT_ROOT / "packaging/nfpm.yaml").read_text(encoding="utf-8")
     pkgbuild_template = (PROJECT_ROOT / "packaging/aur/PKGBUILD.in").read_text(

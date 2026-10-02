@@ -14,6 +14,7 @@ BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
 STAGED_EXTENSION_DIR="$BUILD_DIR/extension"
 PACKAGE_NAME="${APP_NAME}-${VERSION}-linux-x86_64"
+APPIMAGE_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
 PACKAGE_VERSION="${VERSION#v}"
 WLIB_BUILD_NATIVE_PACKAGES="${WLIB_BUILD_NATIVE_PACKAGES:-auto}"
 WLIB_BUILD_AUR="${WLIB_BUILD_AUR:-auto}"
@@ -197,7 +198,11 @@ pyinstaller --noconfirm --onedir \
 echo "🧹 Removing conflicting bundled system libraries..."
 find dist/wlib-bin -name "libstdc++.so.6" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgcc_s.so.1" -exec rm -f {} + || true
-find dist/wlib-bin -name "libxcb*" -exec rm -f {} + || true
+# Keep the xcb-util family Qt's xcb plugin needs: unrelated to GPU drivers and missing on many distros.
+find dist/wlib-bin -name "libxcb*" \
+    ! -name "libxcb-cursor.so*" ! -name "libxcb-icccm.so*" ! -name "libxcb-image.so*" \
+    ! -name "libxcb-keysyms.so*" ! -name "libxcb-render-util.so*" ! -name "libxcb-util.so*" \
+    -exec rm -f {} + || true
 find dist/wlib-bin -name "libEGL*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libGLESv2*" -exec rm -f {} + || true
 find dist/wlib-bin -name "libvulkan*" -exec rm -f {} + || true
@@ -300,15 +305,15 @@ fi
 
 # Build the AppImage
 cd "$DIST_DIR"
-ARCH=$(uname -m) "$APPIMAGETOOL" "$APPDIR" "${PACKAGE_NAME}.AppImage" 2>/dev/null || {
+ARCH=$(uname -m) "$APPIMAGETOOL" "$APPDIR" "${APPIMAGE_NAME}" 2>/dev/null || {
     # If FUSE is not available (common in CI), extract and run
     echo "   FUSE not available, extracting appimagetool..."
     cd "$BUILD_DIR"
     "$APPIMAGETOOL" --appimage-extract >/dev/null 2>&1
     cd "$DIST_DIR"
-    ARCH=$(uname -m) "$BUILD_DIR/squashfs-root/AppRun" "$APPDIR" "${PACKAGE_NAME}.AppImage"
+    ARCH=$(uname -m) "$BUILD_DIR/squashfs-root/AppRun" "$APPDIR" "${APPIMAGE_NAME}"
 }
-echo "   ✅ $DIST_DIR/${PACKAGE_NAME}.AppImage"
+echo "   ✅ $DIST_DIR/${APPIMAGE_NAME}"
 
 echo ""
 echo "🎉 Build complete! Artifacts in $DIST_DIR/"

@@ -198,7 +198,7 @@ bash scripts/build.sh "1.2.0"
 
 The resulting artifacts are placed in `dist/`. With nFPM available, the output includes:
 
-- `wLib-1.2.0-linux-x86_64.AppImage`
+- `wLib-1.2.0-x86_64.AppImage`
 - `wLib-1.2.0-linux-x86_64.tar.gz`
 - `wLib-1.2.0-linux-x86_64.deb`
 - `wLib-1.2.0-linux-x86_64.rpm`
