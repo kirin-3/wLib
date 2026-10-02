@@ -3027,7 +3027,7 @@ class Api:
                     for entry in os.listdir(root):
                         entry_lower = entry.lower()
                         title_words = title_clean.lower().split() if title_clean else []
-                        significant_words = [word for word in title_words if len(word) >= 3]
+                        significant_words = [word for word in title_words if len(word) >= 4]
                         matched = bool(
                             (game_name and game_name.lower() in entry_lower)
                             or any(word in entry_lower for word in significant_words)
@@ -3106,13 +3106,13 @@ class Api:
                             )
                             game_name_lower = game_name.lower() if game_name else ""
 
-                            # Match if any significant title word (3+ chars) appears in folder name
+                            # Match if any significant title word (4+ chars) appears in folder name
                             matched = False
                             if game_name_lower and game_name_lower in entry_lower:
                                 matched = True
                             elif title_words:
                                 significant_words = [
-                                    w for w in title_words if len(w) >= 3
+                                    w for w in title_words if len(w) >= 4
                                 ]
                                 if significant_words and any(
                                     w in entry_lower for w in significant_words

@@ -118,3 +118,31 @@ def test_windows_renpy_save_discovery_uses_appdata(monkeypatch, tmp_path):
     )
 
     assert any(entry["path"] == str(save_dir) for entry in results)
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_save_discovery_ignores_short_title_words(monkeypatch, tmp_path, windows):
+    prefix = tmp_path / "prefix"
+    appdata = (
+        tmp_path / "Roaming"
+        if windows
+        else prefix / "drive_c" / "users" / "player" / "AppData" / "Roaming"
+    )
+    for name in ("TheTool", "Candy", "CatCache", "MOON-Saves", "run-data"):
+        (appdata / name).mkdir(parents=True)
+    monkeypatch.setattr("core.api.is_windows", lambda: windows)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+
+    results = Api().find_save_files(
+        exe_path=str(tmp_path / "run.exe"),
+        title="The Cat and Moon",
+        custom_prefix=str(prefix),
+    )
+
+    assert {os.path.normpath(entry["path"]) for entry in results} == {
+        str(appdata / "MOON-Saves"),
+        str(appdata / "run-data"),
+    }
