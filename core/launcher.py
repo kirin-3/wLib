@@ -7,7 +7,8 @@ import shlex
 import shutil
 import subprocess
 import sys
-from typing import Protocol, TypedDict
+from collections.abc import Callable
+from typing import Protocol, TypedDict, cast, final
 
 from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
 from .host_platform import (
@@ -91,6 +92,89 @@ class RpgmakerLinuxRunnerStatus(TypedDict):
 
 class ExitCallback(Protocol):
     def __call__(self, delta: int, is_final: bool = True) -> object: ...
+
+
+class _ElevatedProcess:
+    """Keep the ShellExecuteEx process handle usable by the playtime tracker."""
+
+    def __init__(self, command: list[str], cwd: str):
+        import _winapi
+        import ctypes
+        import weakref
+        from ctypes import wintypes
+
+        @final
+        class ShellExecuteInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("fMask", wintypes.ULONG),
+                ("hwnd", wintypes.HWND),
+                ("lpVerb", wintypes.LPCWSTR),
+                ("lpFile", wintypes.LPCWSTR),
+                ("lpParameters", wintypes.LPCWSTR),
+                ("lpDirectory", wintypes.LPCWSTR),
+                ("nShow", ctypes.c_int),
+                ("hInstApp", wintypes.HINSTANCE),
+                ("lpIDList", ctypes.c_void_p),
+                ("lpClass", wintypes.LPCWSTR),
+                ("hkeyClass", wintypes.HKEY),
+                ("dwHotKey", wintypes.DWORD),
+                ("hIcon", wintypes.HANDLE),
+                ("hProcess", wintypes.HANDLE),
+            ]
+
+        info = ShellExecuteInfo(
+            cbSize=ctypes.sizeof(ShellExecuteInfo),
+            fMask=0x40 | 0x100 | 0x400,  # NOCLOSEPROCESS | NOASYNC | FLAG_NO_UI
+            lpVerb="runas",
+            lpFile=command[0],
+            lpParameters=subprocess.list2cmdline(command[1:]),
+            lpDirectory=cwd,
+            nShow=1,  # SW_SHOWNORMAL
+        )
+        # Windows-only stdlib symbols are absent from Linux type-checking stubs.
+        load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+        win_error = cast(Callable[[], OSError], getattr(ctypes, "WinError"))
+        shell_execute = load_dll("shell32", use_last_error=True).ShellExecuteExW
+        shell_execute.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+        shell_execute.restype = wintypes.BOOL
+        if not cast(int, shell_execute(ctypes.byref(info))):
+            raise win_error()
+        handle = cast(int | None, info.hProcess)
+        if not handle:
+            raise OSError("Windows did not return a process handle for the game.")
+
+        self._handle: int = handle
+        self.args: list[str] = command
+        self.returncode: int | None = None
+        # Keep the handle open while any tracking/logging thread is using it.
+        close_handle = cast(Callable[[int], None], getattr(_winapi, "CloseHandle"))
+        _ = weakref.finalize(self, close_handle, self._handle)
+
+    def wait(self, timeout: float | None = None) -> int:
+        import _winapi
+
+        if self.returncode is None:
+            wait = cast(
+                Callable[[int, int], int], getattr(_winapi, "WaitForSingleObject")
+            )
+            exit_code = cast(
+                Callable[[int], int], getattr(_winapi, "GetExitCodeProcess")
+            )
+            milliseconds = (
+                0xFFFFFFFF if timeout is None else max(0, int(timeout * 1000))
+            )
+            result = wait(self._handle, milliseconds)
+            if result == 0x102:  # WAIT_TIMEOUT
+                raise subprocess.TimeoutExpired(self.args, timeout or 0)
+            self.returncode = exit_code(self._handle)
+        return self.returncode
+
+    def poll(self) -> int | None:
+        try:
+            return self.wait(timeout=0)
+        except subprocess.TimeoutExpired:
+            return None
 
 
 class Launcher:
@@ -309,40 +393,46 @@ class Launcher:
             import time
             import threading
 
-            start_time = time.time()
+            log_file = None
             try:
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     print(f"Debug logging enabled. Outputting to {log_path}")
                     log_file = open(log_path, "w")
-                    try:
-                        game_proc = subprocess.Popen(
-                            cmd,
-                            env=env_vars,
-                            stdout=log_file,
-                            stderr=subprocess.STDOUT,
-                            cwd=game_dir,
-                        )
-                    except Exception:
-                        log_file.close()
-                        raise
 
+                try:
+                    game_proc = subprocess.Popen(
+                        cmd,
+                        env=env_vars,
+                        stdout=log_file if log_file is not None else subprocess.DEVNULL,
+                        stderr=(
+                            subprocess.STDOUT
+                            if log_file is not None
+                            else subprocess.DEVNULL
+                        ),
+                        cwd=game_dir,
+                    )
+                except OSError as exc:
+                    if not is_windows() or getattr(exc, "winerror", None) != 740:
+                        raise
+                    # ShellExecuteEx cannot redirect stdout/stderr across elevation.
+                    if log_file is not None:
+                        _ = log_file.write(
+                            "Game requires administrator rights; elevated output cannot be captured.\n"
+                        )
+                        log_file.close()
+                        log_file = None
+                    game_proc = _ElevatedProcess(cmd, game_dir)
+
+                # Do not count time spent waiting for UAC approval as playtime.
+                start_time = time.time()
+                if log_file is not None:
                     # Ensure the file gets closed when process finishes in the background
                     def track_log_file():
                         _ = game_proc.wait()
                         log_file.close()
 
-                    import threading
-
                     threading.Thread(target=track_log_file, daemon=True).start()
-                else:
-                    game_proc = subprocess.Popen(
-                        cmd,
-                        env=env_vars,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        cwd=game_dir,
-                    )
 
                 if is_wine_executable and run_ce:
                     # Spawn CE in a background thread after a delay
@@ -433,11 +523,13 @@ class Launcher:
 
                     threading.Thread(target=track_playtime_thread, daemon=True).start()
 
-                if not enable_logging and not on_exit_callback:
+                if log_file is None and not on_exit_callback:
                     threading.Thread(target=game_proc.wait, daemon=True).start()
 
                 return {"success": True}
             except Exception as e:
+                if log_file is not None:
+                    log_file.close()
                 print(f"Error launching game: {e}")
                 return {"success": False, "error": str(e)}
 

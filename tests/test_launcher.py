@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.launcher import Launcher, _split_windows_command_line
+from core.launcher import Launcher, _ElevatedProcess, _split_windows_command_line
 
 
 @pytest.fixture(autouse=True)
@@ -313,14 +313,22 @@ def test_windows_jar_uses_java_with_appended_arguments(
 @patch("os.path.exists", return_value=True)
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting", return_value="false")
+@pytest.mark.parametrize(
+    "elevated, logging", [(False, False), (True, False), (True, True)]
+)
 def test_windows_launch_reports_periodic_and_final_playtime(
-    mock_get_setting, mock_popen, mock_exists, monkeypatch
+    mock_get_setting, mock_popen, mock_exists, monkeypatch, elevated, logging
 ):
     monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    mock_get_setting.return_value = "true" if logging else "false"
     process = MagicMock()
     process.poll.side_effect = [None, 0]
     process.wait.side_effect = [subprocess.TimeoutExpired("game", 60)]
     mock_popen.return_value = process
+    if elevated:
+        error = OSError("Elevation required")
+        error.winerror = 740
+        mock_popen.side_effect = error
     callbacks: list[tuple[int, bool]] = []
 
     def run_thread_immediately(*, target, daemon):
@@ -329,15 +337,158 @@ def test_windows_launch_reports_periodic_and_final_playtime(
         return MagicMock()
 
     monkeypatch.setattr("threading.Thread", run_thread_immediately)
-    monkeypatch.setattr("time.time", MagicMock(side_effect=[100.0, 161.0, 165.0]))
+    clock = MagicMock(side_effect=[100.0, 161.0, 165.0])
+    monkeypatch.setattr("time.time", clock)
 
-    result = Launcher().launch(
-        r"C:\Games\game.exe",
-        on_exit_callback=lambda delta, final=True: callbacks.append((delta, final)),
-    )
+    def elevated_process(*_args):
+        clock.assert_not_called()  # Start timing after the elevation prompt returns.
+        return process
+
+    with (
+        patch("core.launcher._ElevatedProcess", side_effect=elevated_process) as elevate,
+        patch("builtins.open") as open_log,
+    ):
+        result = Launcher().launch(
+            r"C:\Games\game.exe",
+            on_exit_callback=lambda delta, final=True: callbacks.append((delta, final)),
+        )
 
     assert result["success"] is True
     assert callbacks == [(61, False), (4, True)]
+    if elevated:
+        elevate.assert_called_once_with([r"C:\Games\game.exe"], r"C:\Games")
+    else:
+        elevate.assert_not_called()
+    if logging:
+        open_log.return_value.close.assert_called_once()
+        assert "cannot be captured" in open_log.return_value.write.call_args.args[0]
+
+
+@pytest.mark.parametrize("windows, winerror", [(True, 5), (True, 2), (False, 740)])
+def test_launch_does_not_elevate_other_errors(monkeypatch, windows, winerror):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: windows)
+    error = OSError("Launch failed")
+    error.winerror = winerror
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen", side_effect=error),
+        patch("core.launcher._ElevatedProcess") as elevate,
+    ):
+        result = Launcher().launch(r"C:\Games\game.exe" if windows else "/game.sh")
+
+    assert result == {"success": False, "error": "Launch failed"}
+    elevate.assert_not_called()
+
+
+def test_windows_elevation_cancellation_does_not_track_playtime(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    elevation_required = OSError("Elevation required")
+    elevation_required.winerror = 740
+    cancelled = OSError("The operation was canceled by the user")
+    cancelled.winerror = 1223
+    callback = MagicMock()
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen", side_effect=elevation_required),
+        patch("core.launcher._ElevatedProcess", side_effect=cancelled),
+        patch("threading.Thread") as thread,
+    ):
+        result = Launcher().launch(r"C:\Games\game.exe", on_exit_callback=callback)
+
+    assert result == {"success": False, "error": str(cancelled)}
+    callback.assert_not_called()
+    thread.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "shell_result, handle", [(True, 0x12345678), (False, 0), (True, 0)]
+)
+def test_elevated_process_preserves_arguments_and_owns_handle(
+    monkeypatch, shell_result, handle
+):
+    import ctypes
+
+    command = [r"C:\Games\日本 語\game.exe", "", "Player One", 'a "quote"', "C:\\dir\\"]
+    directory = r"C:\Games\日本 語"
+    winapi = MagicMock()
+    winapi.WaitForSingleObject.side_effect = [0x102, 0x102, 0]
+    winapi.GetExitCodeProcess.return_value = 17
+    monkeypatch.setitem(sys.modules, "_winapi", winapi)
+
+    def shell_execute(pointer):
+        info = pointer._obj
+        assert info.cbSize == ctypes.sizeof(info)
+        assert info.fMask == 0x40 | 0x100 | 0x400
+        assert info.lpVerb == "runas"
+        assert info.lpFile == command[0]
+        assert _split_windows_command_line(info.lpParameters) == command[1:]
+        assert info.lpDirectory == directory
+        assert info.nShow == 1
+        info.hProcess = handle
+        return shell_result
+
+    shell32 = MagicMock()
+    shell32.ShellExecuteExW.side_effect = shell_execute
+    with (
+        patch("ctypes.WinDLL", return_value=shell32, create=True) as load_dll,
+        patch("ctypes.WinError", return_value=OSError("UAC canceled"), create=True),
+    ):
+        if not shell_result or not handle:
+            with pytest.raises(
+                OSError, match="UAC canceled" if not shell_result else "handle"
+            ):
+                _ElevatedProcess(command, directory)
+            winapi.CloseHandle.assert_not_called()
+            return
+        process = _ElevatedProcess(command, directory)
+
+    load_dll.assert_called_once_with("shell32", use_last_error=True)
+    assert process.poll() is None
+    with pytest.raises(subprocess.TimeoutExpired):
+        process.wait(timeout=60)
+    assert process.wait() == 17
+    assert process.poll() == 17
+    assert [call.args for call in winapi.WaitForSingleObject.call_args_list] == [
+        (handle, 0),
+        (handle, 60000),
+        (handle, 0xFFFFFFFF),
+    ]
+    winapi.CloseHandle.assert_not_called()
+    del process
+    winapi.CloseHandle.assert_called_once_with(handle)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows process handles")
+def test_elevated_process_native_handle_without_uac(tmp_path):
+    import _winapi
+    import ctypes
+
+    native_execute = ctypes.WinDLL("shell32", use_last_error=True).ShellExecuteExW
+
+    def execute_without_uac(pointer):
+        info = pointer._obj
+        assert info.lpVerb == "runas"
+        info.lpVerb = "open"  # Exercise the real API without prompting for elevation.
+        info.nShow = 0
+        native_execute.argtypes = [ctypes.POINTER(type(info))]
+        native_execute.restype = ctypes.c_int
+        return native_execute(pointer)
+
+    shell32 = MagicMock()
+    shell32.ShellExecuteExW.side_effect = execute_without_uac
+    with patch("ctypes.WinDLL", return_value=shell32):
+        process = _ElevatedProcess(
+            [sys.executable, "-c", "raise SystemExit(23)"], str(tmp_path)
+        )
+
+    assert process.wait(timeout=5) == 23
+    assert process.poll() == 23
+    handle = process._handle
+    del process
+    with pytest.raises(OSError):
+        _winapi.GetExitCodeProcess(handle)
 
 
 @patch("os.path.exists")
