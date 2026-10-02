@@ -481,16 +481,16 @@ class Scraper:
                 "error": "Blocked by anti-bot challenge while loading thread",
             }
 
-        # Every guest page header says "Log in", so only trust the page title
-        # or XenForo's explicit login prompt in the body.
+        # Every guest page header says "Log in", so the bare phrase only counts
+        # in the page title; XenForo's explicit login prompt counts anywhere.
         title_login_markers = ("log in", "login", "sign in")
-        content_login_markers = (
+        prompt_login_markers = (
             "you must be logged-in",
             "you must be logged in",
             'action="/login/login"',
         )
         if any(marker in page_title for marker in title_login_markers) or any(
-            marker in page_content for marker in content_login_markers
+            marker in combined for marker in prompt_login_markers
         ):
             return {
                 "code": "login_required",
