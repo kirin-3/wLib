@@ -3,11 +3,13 @@
 wLib bundles an optional companion web extension that integrates deeply with F95Zone in standard desktop browsers (Firefox, Chrome). To facilitate instantaneous data transfer without requiring cloud synchronization, wLib runs a background REST server.
 
 ## The Local Daemon
-Inside `main.py`, a daemon thread launches `start_extension_server()`, binding `http.server.HTTPServer` to `127.0.0.1:8183`. On startup, the app synchronizes bundled extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows so the installed unpacked/XPI copy tracks the app version.
+Inside `main.py`, a daemon thread launches `start_extension_server()`, binding `http.server.ThreadingHTTPServer` to `127.0.0.1:8183`. Requests run in separate threads so waiting for the UI to process an open/add event does not block library checks. On startup, the app synchronizes bundled extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows so the installed unpacked/XPI copy tracks the app version.
 
 ## CORS Restrictions (Security Model)
 Because the daemon binds to `localhost`, any website visited by the user *could* theoretically perform background requests against it.
-To prevent malicious sites from sniffing or mutating the local database, `ExtensionRequestHandler._get_allowed_origin` rigidly blocks incoming requests unless the `Origin` header matches an exact whitelist:
+Before dispatching any request, the daemon requires exactly one `Host` header matching `localhost:8183` or `127.0.0.1:8183` (case-insensitive). Missing, duplicate, and other Host values receive HTTP 403, preventing DNS rebinding from exposing the library through an external hostname.
+
+Requests without an `Origin` header remain supported for local service checks and extension clients. When an `Origin` is present, `ExtensionRequestHandler._get_allowed_origin` accepts only:
 - `chrome-extension://*`
 - `moz-extension://*`
 - `http://localhost:5173` (Development only)

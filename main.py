@@ -5,7 +5,7 @@ import importlib
 import json
 import os
 import ssl
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
 import subprocess
 import sys
@@ -649,6 +649,24 @@ def start_webview(
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
+    @override
+    def parse_request(self) -> bool:
+        if not super().parse_request():
+            return False
+
+        hosts = self.headers.get_all("Host", [])
+        if len(hosts) == 1 and hosts[0].lower() in {
+            "localhost:8183",
+            "127.0.0.1:8183",
+        }:
+            return True
+
+        self.send_response(403)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        _ = self.wfile.write(b'{"success": false, "error": "Host not allowed"}')
+        return False
+
     def _find_matching_game(self, url: object) -> dict[str, object] | None:
         if not isinstance(url, str) or not url.strip():
             return None
@@ -830,7 +848,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
 def start_extension_server() -> None:
     try:
-        server = HTTPServer(("localhost", 8183), ExtensionRequestHandler)
+        server = ThreadingHTTPServer(("127.0.0.1", 8183), ExtensionRequestHandler)
         print("Starting extension HTTP receiver on port 8183...")
         server.serve_forever()
     except Exception as e:

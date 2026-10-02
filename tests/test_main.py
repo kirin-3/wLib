@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import builtins
+from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 from io import BytesIO
 from email.message import Message
 import os
 import sys
 import json
+import threading
 from typing import cast
 from unittest.mock import MagicMock
+from urllib.request import Request, urlopen
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -582,3 +588,128 @@ def test_extension_check_payload_omits_play_status_for_missing_matches():
     assert json.loads(response_body) == {
         "exists": False,
     }
+
+
+@pytest.fixture
+def extension_server():
+    server = main.ThreadingHTTPServer(
+        ("127.0.0.1", 0), main.ExtensionRequestHandler
+    )
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/api/check?url=https://f95zone.to/threads/demo.123/"),
+        ("POST", "/api/add"),
+        ("OPTIONS", "/api/add"),
+    ],
+)
+@pytest.mark.parametrize(
+    "hosts,origin,dev_mode,status",
+    [
+        (("localhost:8183",), None, False, 200),
+        (("127.0.0.1:8183",), None, False, 200),
+        (("LOCALHOST:8183",), "chrome-extension://wlib", False, 200),
+        (("localhost:8183",), "moz-extension://wlib", False, 200),
+        (("localhost:8183",), "http://localhost:5173", True, 200),
+        (("localhost:8183",), "http://localhost:5173", False, 403),
+        (("localhost:8183",), "https://example.com", True, 403),
+        (("example.com:8183",), None, False, 403),
+        (("example.com:8183",), "chrome-extension://wlib", False, 403),
+        (("localhost",), None, False, 403),
+        (("localhost:8184",), None, True, 403),
+        ((), None, False, 403),
+        (("localhost:8183", "example.com:8183"), None, False, 403),
+    ],
+)
+def test_extension_request_validates_host_and_origin(
+    monkeypatch, extension_server, method, path, hosts, origin, dev_mode, status
+):
+    lookup = MagicMock(return_value={"play_status": "Playing"})
+    window = MagicMock()
+    monkeypatch.setattr(main.ExtensionRequestHandler, "_find_matching_game", lookup)
+    monkeypatch.setattr(main, "window_ref", window)
+    monkeypatch.setattr(main, "DEV_MODE", dev_mode)
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.putrequest(method, path, skip_host=True)
+        for host in hosts:
+            connection.putheader("Host", host)
+        if origin is not None:
+            connection.putheader("Origin", origin)
+        connection.putheader("Content-Length", "2")
+        connection.endheaders(b"{}")
+        response = connection.getresponse()
+        body = response.read()
+        assert response.status == status
+        if status == 403:
+            assert json.loads(body)["success"] is False
+            assert response.getheader("Access-Control-Allow-Origin") is None
+            lookup.assert_not_called()
+            window.evaluate_js.assert_not_called()
+        else:
+            assert response.getheader("Access-Control-Allow-Origin") == origin
+    finally:
+        connection.close()
+
+
+def test_extension_check_remains_responsive_while_open_waits(
+    monkeypatch, extension_server
+):
+    evaluating = threading.Event()
+    release = threading.Event()
+
+    def evaluate_js(_script):
+        evaluating.set()
+        assert release.wait(5)
+
+    window = MagicMock()
+    window.evaluate_js.side_effect = evaluate_js
+    monkeypatch.setattr(main, "window_ref", window)
+    monkeypatch.setattr(
+        main.ExtensionRequestHandler,
+        "_find_matching_game",
+        lambda _self, _url: None,
+    )
+
+    def request(path):
+        address, port = extension_server.server_address
+        with urlopen(
+            Request(f"http://{address}:{port}{path}", headers={"Host": "localhost:8183"}),
+            timeout=3,
+        ) as response:
+            return json.loads(response.read())
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending_open = executor.submit(
+            request, "/api/open?url=https://f95zone.to/threads/demo.123/"
+        )
+        try:
+            assert evaluating.wait(3)
+            assert request("/api/check?url=__ping__") == {"exists": False}
+        finally:
+            release.set()
+        assert pending_open.result(timeout=3) == {"success": True}
+
+
+def test_start_extension_server_uses_threaded_loopback_server(monkeypatch):
+    server_factory = MagicMock()
+    monkeypatch.setattr(main, "ThreadingHTTPServer", server_factory)
+
+    main.start_extension_server()
+
+    server_factory.assert_called_once_with(
+        ("127.0.0.1", 8183), main.ExtensionRequestHandler
+    )
+    server_factory.return_value.serve_forever.assert_called_once_with()
