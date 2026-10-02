@@ -32,7 +32,19 @@ jobs:
       - name: Lint Firefox extension
         run: npx --yes web-ext@10.1.0 lint --source-dir=extension
 
+      # AMO accepts each extension version once, so only tagged releases sign;
+      # manual dry runs package an unsigned XPI instead of burning the version.
+      - name: Build unsigned Firefox extension (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          npx --yes web-ext@10.1.0 build \
+            --source-dir=extension \
+            --artifacts-dir="$RUNNER_TEMP/wlib-extension" \
+            --filename=wlib-unsigned.xpi
+
       - name: Sign Firefox extension
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           WEB_EXT_API_KEY: ${{ secrets.JWT_USER }}
           WEB_EXT_API_SECRET: ${{ secrets.JWT_SECRET }}

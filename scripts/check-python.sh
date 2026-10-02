@@ -45,7 +45,8 @@ echo "==> ruff"
 "$RUFF_BIN" check .
 
 echo "==> basedpyright"
-"$BASEDPYRIGHT_BIN"
+# pyrightconfig expects ./.venv; point at the active interpreter when it is absent (clean CI venv).
+"$BASEDPYRIGHT_BIN" --pythonpath "$(command -v "$PYTHON_BIN")"
 
 echo "==> Backend smoke check"
 "$PYTHON_BIN" scripts/smoke_backend.py
