@@ -102,6 +102,31 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
         assert kwargs["cwd"] == "/tmp"
 
 
+@pytest.mark.parametrize("proton_version", ["", "/usr/bin/proton"])
+def test_launch_logging_limits_wine_debug_output(monkeypatch, proton_version):
+    monkeypatch.setenv("WINEDEBUG", "+all")
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "true" if key == "enable_logging" else "",
+        ),
+        patch("builtins.open"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/tmp/game.exe",
+            custom_prefix="/tmp/prefix",
+            proton_version=proton_version,
+            launch_mode="wine_proton",
+        )
+
+    assert result["success"] is True
+    assert popen.call_args.kwargs["env"]["WINEDEBUG"] == "-all,err+all,warn+all"
+
+
 @patch("os.path.exists")
 @patch("os.access")
 @patch("subprocess.Popen")

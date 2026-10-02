@@ -873,7 +873,7 @@ class Launcher:
         if enable_logging:
             env["PROTON_LOG"] = "1"
             env["PROTON_LOG_DIR"] = game_dir
-            env["WINEDEBUG"] = "+all"
+            env["WINEDEBUG"] = "-all,err+all,warn+all"
 
         print(
             f"Executing via Wine/Proton: {' '.join(command)} with prefix {wine_prefix}"
