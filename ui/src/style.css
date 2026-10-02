@@ -402,6 +402,12 @@ body {
   --ui-status-text: var(--status-abandoned-text);
 }
 
+.ui-status-tone-custom {
+  --ui-status-bg: var(--brand-glow);
+  --ui-status-border: var(--border-active);
+  --ui-status-text: var(--brand);
+}
+
 /* Empty-state utilities */
 .empty-state {
   display: flex;

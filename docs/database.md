@@ -24,7 +24,7 @@ For example, the `0.3.3` to `0.3.4` upgrade adds `games.launch_mode`, the `game_
 
 ### Play Status Normalization
 
-The `play_status` field uses a canonical set of values: `Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`. During startup, `init_db()` normalizes legacy values:
+The `play_status` field supports canonical values `Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`, plus custom values. Unknown non-empty names are trimmed and capped at 40 characters before legacy fallback, preserving custom statuses during saves, startup migration, and backup import. During startup, `init_db()` normalizes legacy values:
 
 - Empty or NULL values → `Not Started`
 - Legacy `status` field values are migrated to `play_status`
@@ -55,18 +55,18 @@ Stores the library records and their associated configuration flags.
 | `rating_story` | `REAL` | Story rating (0-5). |
 | `rating_fappability` | `REAL` | Fappability rating (0-5). |
 | `rating_gameplay` | `REAL` | Gameplay rating (0-5). |
-| `command_line_args` | `TEXT` | Custom launch arguments. |
+| `command_line_args` | `TEXT` | Launch arguments, or the complete command for Linux `custom` mode. |
 | `run_japanese_locale` | `BOOLEAN` | Overrides `LC_ALL` to Japanese on Linux; preserved but ignored on Windows. |
 | `run_wayland` | `BOOLEAN` | Applies Linux Wayland compatibility settings; preserved but ignored on Windows. |
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
 | `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
-| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, or `rpgmaker_linux`. Defaults and invalid values normalize to `auto`; Windows launches support only `auto`. |
+| `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, `rpgmaker_linux`, or `custom`. Defaults and invalid values normalize to `auto`; Windows launches support only `auto`. |
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
 | `status` | `TEXT` | Legacy status field (migrated to `play_status`). |
-| `play_status` | `TEXT` | User-defined status (`Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`). New games default to `Not Started`; older legacy values are normalized during startup. |
+| `play_status` | `TEXT` | Canonical or custom status, at most 40 characters. New games default to `Not Started`; legacy values are normalized during startup. |
 | `is_favorite` | `BOOLEAN` | Favorite flag for library filtering. |
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |
@@ -93,6 +93,8 @@ A simple generic key-value store for application-wide persistence.
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
 
 Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, `playwright_browsers_path`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+
+`custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
 
 ## JSON Migration Backups
 

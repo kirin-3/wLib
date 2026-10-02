@@ -22,14 +22,21 @@ import type {
   RpgmakerLinuxRunnerStatus,
   SettingsResponse,
   SystemDepsCommandResponse,
+  RunnerInfo,
 } from "../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../services/api";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import { validateCustomPlayStatuses } from "../utils/playStatus";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
 
 const protonPath = ref("");
+const availableRunners = ref<RunnerInfo[]>([]);
+const customStatuses = ref<string[]>([]);
+const newStatus = ref("");
+const statusError = ref("");
+const urmPath = ref("");
 const prefixPath = ref("");
 const playwrightPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
@@ -100,6 +107,8 @@ const rpgmakerLinuxRunnerStatusText = computed(() => {
 });
 
 const applySettings = (data: SettingsResponse) => {
+  customStatuses.value = [...(data.custom_play_statuses || [])];
+  urmPath.value = data.urm_rpa_path || "";
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
   playwrightPath.value =
@@ -123,6 +132,8 @@ const loadSettings = async () => {
     animationsEnabled.value = motionEnabled.value;
 
     if (supportsLinuxRuntimes.value) {
+      const runners = await api.getAvailableRunners();
+      availableRunners.value = runners.runners || [];
       const ceCheck = await api.isCheatEngineInstalled();
       ceInstalled.value = !!ceCheck?.installed;
       cePath.value = ceCheck?.path || "";
@@ -368,7 +379,7 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, enableLogging, animationsEnabled], () => {
+watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, enableLogging, animationsEnabled, customStatuses, urmPath], () => {
   if (saving.value) return;
   saveMessage.value = "";
   saveError.value = "";
@@ -391,6 +402,8 @@ watch([protonPath, prefixPath], () => {
 
 const saveSettings = async () => {
   if (saving.value) return;
+  statusError.value = validateCustomPlayStatuses(customStatuses.value);
+  if (statusError.value) return;
 
   saving.value = true;
   saveMessage.value = "";
@@ -403,6 +416,8 @@ const saveSettings = async () => {
       playwright_browsers_path: playwrightPath.value,
       rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
       enable_logging: enableLogging.value,
+      custom_play_statuses: customStatuses.value,
+      urm_rpa_path: urmPath.value,
     });
 
     if (!res || res.success === false) {
@@ -428,6 +443,31 @@ const saveSettings = async () => {
   } finally {
     saving.value = false;
   }
+};
+
+const addStatus = () => {
+  const name = newStatus.value.trim();
+  statusError.value = validateCustomPlayStatuses([...customStatuses.value, name]);
+  if (statusError.value) return;
+  customStatuses.value = [...customStatuses.value, name];
+  newStatus.value = "";
+};
+
+const removeStatus = async (name: string) => {
+  try {
+    const games = await api.getGames();
+    const count = games.filter((game) => game.play_status?.toLowerCase() === name.toLowerCase()).length;
+    if (!confirm(`Remove '${name}'? Saving will reset ${count} game${count === 1 ? '' : 's'} to Not Started.`)) return;
+    customStatuses.value = customStatuses.value.filter((status) => status !== name);
+    statusError.value = "";
+  } catch (error) {
+    statusError.value = String(error);
+  }
+};
+
+const browseUrm = async () => {
+  const path = await api.browseUrmFile(urmPath.value);
+  if (path) urmPath.value = path;
 };
 </script>
 
@@ -507,10 +547,14 @@ const saveSettings = async () => {
               <div class="flex gap-3">
                 <input
                   v-model="protonPath"
+                  list="runner-paths"
                   type="text"
                   placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
                   class="settings-input flex-1"
                 />
+                <datalist id="runner-paths">
+                  <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
+                </datalist>
                 <button @click="browseProton" class="settings-btn ui-action-btn">
                   <IconFolderOpen class="ui-action-icon" />
                   Browse
@@ -963,6 +1007,29 @@ const saveSettings = async () => {
           </div>
         </section>
       </div>
+
+      <section class="px-8 pb-8 space-y-4">
+        <h3 class="text-lg font-semibold" style="color: var(--text-primary)">Play Statuses</h3>
+        <p class="text-xs" style="color: var(--text-muted)">Add custom statuses alongside the built-in choices. Save Changes applies this list.</p>
+        <div class="flex gap-3">
+          <input v-model="newStatus" @keydown.enter.prevent="addStatus" type="text" class="settings-input flex-1" placeholder="Custom status name" aria-label="Custom status name" />
+          <button @click="addStatus" class="settings-btn">Add Status</button>
+        </div>
+        <p v-if="statusError" role="alert" class="text-xs text-red-400">{{ statusError }}</p>
+        <div v-for="name in customStatuses" :key="name" class="flex items-center justify-between gap-3">
+          <span style="color: var(--text-primary)">{{ name }}</span>
+          <button @click="removeStatus(name)" class="settings-btn" :aria-label="`Remove ${name}`">Remove</button>
+        </div>
+      </section>
+      <section class="px-8 pb-8 space-y-3">
+        <h3 class="text-lg font-semibold" style="color: var(--text-primary)">Universal Ren'Py Mod (URM)</h3>
+        <label for="urm-source" class="block text-sm" style="color: var(--text-secondary)">URM source file (.rpa)</label>
+        <div class="flex gap-3">
+          <input id="urm-source" v-model="urmPath" type="text" class="settings-input flex-1" placeholder="/path/to/0x52_URM.rpa" />
+          <button @click="browseUrm" class="settings-btn ui-action-btn"><IconFolderOpen class="ui-action-icon" />Browse</button>
+        </div>
+        <p class="text-xs" style="color: var(--text-muted)">Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.</p>
+      </section>
 
       <div
         class="px-8 py-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"

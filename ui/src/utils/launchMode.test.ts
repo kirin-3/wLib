@@ -13,7 +13,7 @@ import {
 test("launch mode options include user-facing runtime choices", () => {
   assert.deepEqual(
     LAUNCH_MODE_OPTIONS.map((option) => option.value),
-    ["auto", "native", "wine_proton", "rpgmaker_linux"],
+    ["auto", "native", "wine_proton", "rpgmaker_linux", "custom"],
   );
 });
 
@@ -21,6 +21,7 @@ test("normalizeLaunchMode defaults unsupported values to auto", () => {
   assert.equal(normalizeLaunchMode("native"), "native");
   assert.equal(normalizeLaunchMode("wine_proton"), "wine_proton");
   assert.equal(normalizeLaunchMode("rpgmaker_linux"), "rpgmaker_linux");
+  assert.equal(normalizeLaunchMode("custom"), "custom");
   assert.equal(normalizeLaunchMode(""), "auto");
   assert.equal(normalizeLaunchMode("unknown"), "auto");
   assert.equal(normalizeLaunchMode(null), "auto");
@@ -29,6 +30,7 @@ test("normalizeLaunchMode defaults unsupported values to auto", () => {
 test("host-native modes hide Wine and Proton controls", () => {
   assert.equal(usesWineProtonControls("native"), false);
   assert.equal(usesWineProtonControls("rpgmaker_linux"), false);
+  assert.equal(usesWineProtonControls("custom"), false);
   assert.equal(usesWineProtonControls("auto"), true);
   assert.equal(usesWineProtonControls("wine_proton"), true);
   assert.equal(usesWineProtonControls("unsupported"), true);
@@ -74,7 +76,7 @@ test("Linux runner mode requires an available runner", () => {
   );
 });
 
-test("Linux immediate launch clears disabled Wine and Proton overrides", () => {
+test("custom prefix toggle gates only the prefix, preserving the runner", () => {
   const overrides = resolveLaunchRuntimeOverrides({
     wineProtonSupported: true,
     usesWineProtonRuntime: true,
@@ -85,7 +87,7 @@ test("Linux immediate launch clears disabled Wine and Proton overrides", () => {
     storedProtonVersion: "/old/proton",
   });
 
-  assert.deepEqual(overrides, { custom_prefix: "", proton_version: "" });
+  assert.deepEqual(overrides, { custom_prefix: "", proton_version: "/new/proton" });
 });
 
 test("unsupported hosts preserve stored Wine and Proton overrides", () => {

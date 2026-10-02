@@ -1351,6 +1351,7 @@ class Api:
         custom_prefix: str = "",
         proton_version: str = "",
         launch_mode: str = "auto",
+        command_line_args: str = "",
     ) -> dict[str, object]:
         import sqlite3
 
@@ -1381,6 +1382,7 @@ class Api:
                 custom_prefix=custom_prefix,
                 proton_version=proton_version,
                 launch_mode=normalized_launch_mode,
+                command_line_args=command_line_args,
             )
         except sqlite3.IntegrityError:
             return {
@@ -2257,27 +2259,59 @@ class Api:
     # Launcher API
     # ==========================
     def get_available_runners(self) -> dict[str, object]:
-        """Scan ~/.local/share/wLib/proton/ for available proton versions and return them."""
+        """Find Wine/Proton in wLib, Steam and Lutris installations."""
         if not is_linux():
             return {"success": True, "runners": []}
 
         import os
         import shutil
+        from pathlib import Path
 
         runners: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def add_runner(name: str, path: str, resolved_path: str | None = None) -> None:
+            real_path = os.path.realpath(resolved_path or path)
+            if real_path not in seen:
+                seen.add(real_path)
+                runners.append({"name": name, "path": path})
 
         # Check system wine
-        if shutil.which("wine"):
-            runners.append({"name": "System Wine", "path": "wine"})
+        system_wine = shutil.which("wine")
+        if system_wine:
+            add_runner("System Wine", "wine", system_wine)
 
         proton_dir = get_proton_dir()
         if os.path.exists(proton_dir):
-            for entry in os.listdir(proton_dir):
+            for entry in sorted(os.listdir(proton_dir)):
                 full_path = os.path.join(proton_dir, entry)
                 if os.path.isdir(full_path):
                     proton_exec = os.path.join(full_path, "proton")
                     if os.path.exists(proton_exec):
-                        runners.append({"name": entry, "path": proton_exec})
+                        add_runner(entry, proton_exec)
+
+        home = Path(os.path.expanduser("~"))
+        steam_runners: list[Path] = []
+        for root in (
+            ".steam/root", ".steam/steam", ".local/share/Steam",
+            ".var/app/com.valvesoftware.Steam/data/Steam",
+            ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+        ):
+            steam_runners.extend((home / root).glob("compatibilitytools.d/*/proton"))
+            steam_runners.extend((home / root).glob("steamapps/common/Proton*/proton"))
+        for path in sorted(steam_runners, key=lambda path: (path.parent.name, str(path))):
+            if path.is_file():
+                add_runner(f"{path.parent.name} (Steam)", str(path))
+
+        lutris_runners: list[Path] = []
+        for root in (
+            ".local/share/lutris/runners/wine",
+            ".var/app/net.lutris.Lutris/data/lutris/runners/wine",
+        ):
+            lutris_runners.extend((home / root).glob("*/bin/wine"))
+        for path in sorted(lutris_runners, key=lambda path: path.parent.parent.name):
+            if path.is_file():
+                add_runner(f"{path.parent.parent.name} (Lutris)", str(path))
 
         return {"success": True, "runners": runners}
 
@@ -2328,8 +2362,76 @@ class Api:
             proton_version,
             normalize_launch_mode(launch_mode),
             on_exit_callback=on_exit,
+            game_id=game_id,
         )
         return result
+
+    def stop_game(self, game_id: int) -> dict[str, object]:
+        return self.launcher.stop(game_id)
+
+    def get_running_games(self) -> list[int]:
+        return self.launcher.get_running_games()
+
+    def _get_urm_game_dir(self, game_id: int) -> str:
+        from core.database import get_all_games
+
+        game = next((game for game in get_all_games() if game["id"] == game_id), None)
+        if game is None:
+            raise ValueError("Game not found")
+        exe_path = str(game.get("exe_path") or "").strip()
+        if not exe_path:
+            raise ValueError("Game has no executable path")
+        return os.path.dirname(os.path.abspath(exe_path))
+
+    def get_urm_status(self, game_id: int) -> dict[str, object]:
+        from core.database import get_setting
+
+        try:
+            folder = self._get_urm_game_dir(game_id)
+            source = get_setting("urm_rpa_path") or ""
+            renpy = all(os.path.isdir(os.path.join(folder, part)) for part in ("renpy", "game"))
+            return {
+                "success": True,
+                "renpy": renpy,
+                "installed": renpy and os.path.isfile(os.path.join(folder, "game", "0x52_URM.rpa")),
+                "source_configured": source.lower().endswith(".rpa") and os.path.isfile(source),
+            }
+        except (ValueError, OSError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def set_urm_installed(self, game_id: int, installed: object) -> dict[str, object]:
+        import shutil
+        import tempfile
+        from core.database import get_setting
+
+        if not isinstance(installed, bool):
+            return {"success": False, "error": "Installed must be a boolean"}
+        status = self.get_urm_status(game_id)
+        if not status.get("success"):
+            return status
+        if not status.get("renpy"):
+            return {"success": False, "error": "This game folder is not a Ren'Py game"}
+        if installed and not status.get("source_configured"):
+            return {"success": False, "error": "Configure an existing URM .rpa source file in Settings"}
+        temporary = ""
+        try:
+            target = os.path.join(self._get_urm_game_dir(game_id), "game", "0x52_URM.rpa")
+            if installed:
+                with tempfile.NamedTemporaryFile(dir=os.path.dirname(target), delete=False) as file:
+                    temporary = file.name
+                _ = shutil.copyfile(get_setting("urm_rpa_path") or "", temporary)
+                os.replace(temporary, target)
+            elif os.path.lexists(target):
+                os.remove(target)
+            return self.get_urm_status(game_id)
+        except (ValueError, OSError) as exc:
+            return {"success": False, "error": str(exc)}
+        finally:
+            if temporary and os.path.exists(temporary):
+                try:
+                    os.remove(temporary)
+                except OSError as exc:
+                    print(f"Could not remove temporary URM file: {exc}")
 
     def install_rpgmaker_dependencies(
         self, prefix_path: str | None = None, proton_path: str | None = None
@@ -2796,7 +2898,7 @@ class Api:
             return {"success": False, "error": str(e)}
 
     def get_settings(self) -> dict[str, object]:
-        from core.database import get_setting
+        from core.database import get_custom_play_statuses, get_setting
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
@@ -2810,6 +2912,8 @@ class Api:
         return {
             "proton_path": str(get_setting_fn("proton_path") or ""),
             "wine_prefix_path": str(get_setting_fn("wine_prefix_path") or ""),
+            "custom_play_statuses": get_custom_play_statuses(),
+            "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "playwright_browsers_path": playwright_path,
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -2818,8 +2922,32 @@ class Api:
             ),
         }
 
-    def save_settings(self, settings: Mapping[str, object]) -> dict[str, bool]:
-        from core.database import get_setting, update_setting
+    def save_settings(self, settings: Mapping[str, object]) -> dict[str, object]:
+        from core.database import (
+            CANONICAL_PLAY_STATUSES,
+            get_setting,
+            normalize_play_status,
+            update_custom_play_statuses,
+            update_setting,
+        )
+
+        custom_statuses: list[str] = []
+        if "custom_play_statuses" in settings:
+            raw_statuses = settings["custom_play_statuses"]
+            if not isinstance(raw_statuses, list):
+                return {"success": False, "error": "Play statuses must be a list of names"}
+            seen = {status.casefold() for status in CANONICAL_PLAY_STATUSES}
+            for status in cast(list[object], raw_statuses):
+                if not isinstance(status, str) or not 1 <= len(status.strip()) <= 40:
+                    return {"success": False, "error": "Play status names must contain 1–40 characters"}
+                name = status.strip()
+                if name.casefold() in seen:
+                    return {"success": False, "error": f"Play status '{name}' already exists"}
+                # Legacy aliases (e.g. "Replaying") would be rewritten to a built-in status on save.
+                if normalize_play_status(name) != name:
+                    return {"success": False, "error": f"Play status '{name}' is reserved"}
+                seen.add(name.casefold())
+                custom_statuses.append(name)
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         update_setting_fn = cast(Callable[[str, str], None], update_setting)
@@ -2860,7 +2988,16 @@ class Api:
         update_setting_fn("enable_logging", enable_logging)
         update_setting_fn("playwright_browsers_path", playwright_path)
         update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
+        update_setting_fn("urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip())
+        if "custom_play_statuses" in settings:
+            update_custom_play_statuses(custom_statuses)
         return {"success": True}
+
+    def browse_urm_file(self, start_path: str = "") -> str:
+        file_types = ("Ren'Py Archives (*.rpa)",)
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog("file", directory=start_path, file_types=file_types)
+        return self._browse_qt_dialog("file", directory=start_path, file_types=file_types)
 
     def browse_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select an executable or HTML game."""

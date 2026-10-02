@@ -90,3 +90,4 @@ def test_platform_capabilities_hide_linux_mutations_on_windows(monkeypatch, tmp_
     assert capabilities["runtime_installers"] is False
     assert capabilities["rpgmaker_linux"] is False
     assert capabilities["launch_modes"] == ["auto"]
+    assert "custom" in get_platform_capabilities("linux")["launch_modes"]

@@ -3,16 +3,212 @@
 import subprocess
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from core.launcher import Launcher, _ElevatedProcess, _split_windows_command_line
+from core.launcher import Launcher, RunningGame, _ElevatedProcess, _split_windows_command_line
 
 
 @pytest.fixture(autouse=True)
 def _linux_launcher_by_default(monkeypatch):
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+
+
+@pytest.mark.parametrize("command, expected, env_value", [
+    ("onscripter %command%", ["onscripter", "/opt/game/game.exe"], None),
+    ("xsystem35", ["xsystem35"], None),
+    ("FOO=1 xsystem35", ["xsystem35"], "1"),
+    ("FOO=1", None, None),
+    ("", None, None),
+])
+def test_custom_command(monkeypatch, command, expected, env_value):
+    monkeypatch.setenv("WINEPREFIX", "/bad/prefix")
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        result = Launcher().launch("/opt/game/game.exe", command, launch_mode="custom")
+    if expected is None:
+        assert result["success"] is False
+        assert "needs a command" in result["error"]
+        popen.assert_not_called()
+    else:
+        assert result["success"] is True
+        assert popen.call_args.args[0] == expected
+        assert popen.call_args.kwargs["cwd"] == "/opt/game"
+        env = popen.call_args.kwargs["env"]
+        assert "WINEPREFIX" not in env
+        assert env.get("FOO") == env_value
+
+
+def test_custom_command_is_unsupported_on_windows(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
+        result = Launcher().launch(r"C:\Games\game.exe", "xsystem35", launch_mode="custom")
+    assert result["code"] == "unsupported_platform"
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize("logging, callback", [(False, False), (True, False), (False, True)])
+def test_running_registry_duplicate_and_exit(monkeypatch, tmp_path, logging, callback):
+    target = tmp_path / "game.jar"
+    target.touch()
+    process = MagicMock(pid=321)
+    process.poll.return_value = None
+    process.wait.return_value = 0
+    on_exit = MagicMock() if callback else None
+    with (patch("subprocess.Popen", return_value=process) as popen,
+          patch("core.launcher.get_setting", return_value="true" if logging else "false"),
+          patch("builtins.open", mock_open()),
+          patch("threading.Thread") as thread):
+        launcher = Launcher()
+        assert launcher.launch(str(target), game_id=1, on_exit_callback=on_exit)["success"]
+        assert launcher.get_running_games() == [1]
+        assert popen.call_args.kwargs["start_new_session"] is True
+        assert launcher.launch(str(target), game_id=1)["code"] == "already_running"
+        popen.assert_called_once()
+        thread.call_args.kwargs["target"]()
+        assert launcher.get_running_games() == []
+        if on_exit:
+            assert on_exit.call_args.args[1] is True
+
+
+def test_registry_cleanup_preserves_new_process(monkeypatch):
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread") as thread):
+        popen.return_value.poll.return_value = 0
+        launcher = Launcher()
+        launcher.launch("/tmp/game.jar", game_id=1)
+        replacement = RunningGame(MagicMock(pid=456), None)
+        launcher._running[1] = replacement
+        thread.call_args.kwargs["target"]()
+        assert launcher._running[1] is replacement
+
+
+@pytest.mark.parametrize("runner, layout, expected_server, prefix", [
+    ("", None, "/usr/bin/wineserver", "/prefix"),
+    ("wine", None, "/usr/bin/wineserver", "/prefix"),
+    ("/lutris/bin/wine", None, "/lutris/bin/wineserver", "/prefix"),
+    ("/opt/wine/bin/wine", None, "/usr/bin/wineserver", "/prefix"),
+    ("/ge/proton", "files", "/ge/files/bin/wineserver", "/prefix/pfx"),
+    ("/ge/proton", "dist", "/ge/dist/bin/wineserver", "/prefix/pfx"),
+])
+def test_stop_wine_prefix_and_process_group(monkeypatch, runner, layout, expected_server, prefix):
+    import signal
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg, raising=False)
+    with (patch("os.path.exists", return_value=True),
+          patch("os.path.isdir", return_value=False),
+          patch("os.path.isfile", side_effect=lambda path: path == expected_server),
+          patch("core.launcher.shutil.which", return_value="/usr/bin/wineserver"),
+          patch("core.launcher.get_setting", side_effect=lambda key: {"wine_prefix_path": "/prefix", "proton_path": runner}.get(key, "false")),
+          patch("subprocess.Popen", return_value=MagicMock(pid=123)),
+          patch("subprocess.run") as run,
+          patch("threading.Thread") as thread,
+          patch("core.launcher.time.sleep")):
+        launcher = Launcher()
+        assert launcher.launch("/tmp/game.exe", game_id=7)["success"]
+        assert launcher.stop(7)["success"]
+        assert run.call_args.args[0] == [expected_server, "-k"]
+        assert run.call_args.kwargs["env"]["WINEPREFIX"] == prefix
+        killpg.assert_called_with(123, signal.SIGTERM)
+        thread.call_args.kwargs["target"]()
+        killpg.assert_called_with(123, signal.SIGKILL)
+
+
+def test_stop_native_missing_and_windows_error(monkeypatch):
+    launcher = Launcher()
+    assert launcher.stop(1)["code"] == "not_running"
+    launcher._running[1] = RunningGame(MagicMock(pid=123), None)
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with patch("subprocess.run") as run:
+        run.return_value.returncode = 1
+        result = launcher.stop(1)
+        assert result["success"] is False
+        assert "administrator rights" in result["error"]
+        run.assert_called_once()
+        assert run.call_args.args[0] == ["taskkill", "/T", "/F", "/PID", "123"]
+        assert launcher.get_running_games() == [1]
+        run.return_value.returncode = 0
+        assert launcher.stop(1)["success"]
+
+
+def test_html_game_is_untracked():
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen"):
+        launcher = Launcher()
+        assert launcher.launch("/tmp/game.html", game_id=1)["success"]
+        assert launcher.get_running_games() == []
+
+
+def test_stop_native_process_group_without_wineserver(monkeypatch):
+    import signal
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(MagicMock(pid=123), None)
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg, raising=False)
+    with patch("subprocess.run") as run, patch("threading.Thread"):
+        assert launcher.stop(1)["success"]
+    killpg.assert_called_once_with(123, signal.SIGTERM)
+    run.assert_not_called()
+
+
+def test_concurrent_duplicate_launch_starts_only_one_process():
+    import threading
+    original_thread = threading.Thread
+    results = []
+    launcher = Launcher()
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen") as popen,
+          patch("threading.Thread")):
+        workers = [original_thread(target=lambda: results.append(launcher.launch("/tmp/game.jar", game_id=1))) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=2)
+            assert not worker.is_alive()
+        popen.assert_called_once()
+    assert sum(bool(result["success"]) for result in results) == 1
+    assert any(result.get("code") == "already_running" for result in results)
+
+
+def test_slow_start_does_not_hold_registry_lock():
+    import threading
+    original_thread = threading.Thread
+    started, release = threading.Event(), threading.Event()
+
+    def slow_popen(*_args, **_kwargs):  # stands in for a pending UAC prompt
+        started.set()
+        _ = release.wait(timeout=2)
+        return MagicMock(pid=5)
+
+    launcher = Launcher()
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen", side_effect=slow_popen),
+          patch("threading.Thread")):
+        worker = original_thread(target=launcher.launch, args=("/tmp/game.jar",), kwargs={"game_id": 1})
+        worker.start()
+        assert started.wait(timeout=2)
+        assert launcher.get_running_games() == [1]
+        assert launcher.stop(1)["code"] == "starting"
+        release.set()
+        worker.join(timeout=2)
+    proc = launcher._running[1].proc
+    assert proc is not None and proc.pid == 5
+
+
+def test_failed_start_releases_reservation():
+    with (patch("os.path.exists", return_value=True),
+          patch("core.launcher.get_setting", return_value="false"),
+          patch("subprocess.Popen", side_effect=OSError("boom"))):
+        launcher = Launcher()
+        assert launcher.launch("/tmp/game.jar", game_id=1)["success"] is False
+        assert launcher.get_running_games() == []
 
 
 @patch("os.path.exists")
@@ -455,6 +651,7 @@ def test_elevated_process_preserves_arguments_and_owns_handle(
         return shell_result
 
     shell32 = MagicMock()
+    shell32.GetProcessId.return_value = 1234
     shell32.ShellExecuteExW.side_effect = shell_execute
     with (
         patch("ctypes.WinDLL", return_value=shell32, create=True) as load_dll,
@@ -469,7 +666,8 @@ def test_elevated_process_preserves_arguments_and_owns_handle(
             return
         process = _ElevatedProcess(command, directory)
 
-    load_dll.assert_called_once_with("shell32", use_last_error=True)
+    assert load_dll.call_count == 2
+    assert process.pid == 1234
     assert process.poll() is None
     with pytest.raises(subprocess.TimeoutExpired):
         process.wait(timeout=60)

@@ -22,6 +22,7 @@ interface AddGamePayload {
   developer: string;
   engine: string;
   launch_mode: LaunchMode;
+  command_line_args: string;
 }
 
 const props = defineProps<{ modelValue: boolean }>();
@@ -43,6 +44,7 @@ const rating = ref("");
 const developer = ref("");
 const engine = ref("");
 const launchMode = ref<LaunchMode>("auto");
+const commandLineArgs = ref("");
 const rpgmakerLinuxRunnerAvailable = ref(false);
 const platformCapabilities = ref<PlatformCapabilities>({
   ...CONSERVATIVE_PLATFORM_CAPABILITIES,
@@ -142,6 +144,7 @@ const close = () => {
   developer.value = "";
   engine.value = "";
   launchMode.value = "auto";
+  commandLineArgs.value = "";
   emit("update:modelValue", false);
 };
 
@@ -163,6 +166,7 @@ const save = () => {
     developer: developer.value,
     engine: engine.value,
     launch_mode: launchMode.value,
+    command_line_args: commandLineArgs.value,
   });
 };
 </script>
@@ -287,8 +291,13 @@ const save = () => {
             </option>
           </select>
           <p class="text-xs mt-2" style="color: var(--text-muted)">
-            Auto keeps wLib's current detection. Linux Native and RPGMaker Linux run without Wine or Proton.
+            Auto detects the runtime. Custom Command runs your command in the game folder; Linux Native and RPGMaker Linux use native launchers.
           </p>
+        </div>
+        <div>
+          <label for="add-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
+          <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'onscripter %command% or xsystem35' : 'gamemoderun %command% --fullscreen'" />
+          <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
         </div>
       </div>
 

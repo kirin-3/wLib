@@ -14,6 +14,7 @@ import {
   IconLoader2,
   IconPhotoFilled,
   IconPlayerPlayFilled,
+  IconPlayerStopFilled,
   IconRefresh,
   IconZoom,
   IconStarFilled,
@@ -24,7 +25,7 @@ import type { GameRecord, LaunchMode, LaunchTarget } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 import {
-  PLAY_STATUS_OPTIONS,
+  getPlayStatusOptions,
   getPlayStatusMeta,
   normalizePlayStatus,
 } from "../utils/playStatus";
@@ -63,11 +64,13 @@ interface AddGamePayload {
   developer?: string;
   engine?: string;
   launch_mode?: LaunchMode;
+  command_line_args?: string;
 }
 
 interface PlaytimeTickDetail {
   gameId?: number;
   delta?: number;
+  isFinal?: boolean;
 }
 
 interface EffectiveLaunchTarget {
@@ -87,6 +90,8 @@ const readQueryValue = (value: unknown): string => {
 const route = useRoute();
 const router = useRouter();
 const games = ref<GameRecord[]>([]);
+const runningGameIds = ref(new Set<number>());
+const customStatuses = ref<string[]>([]);
 const showAddModal = ref(false);
 const showDetailModal = ref(false);
 const selectedGame = ref<GameRecord | null>(null);
@@ -162,7 +167,10 @@ const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
 };
 
-const allStatuses = PLAY_STATUS_OPTIONS;
+const allStatuses = computed(() => getPlayStatusOptions([
+  ...customStatuses.value,
+  ...games.value.map((game) => normalizePlayStatus(game.play_status, game.status)),
+]));
 
 const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "title", label: "A-Z" },
@@ -291,9 +299,7 @@ const filteredGames = computed(() => {
   }
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
-      return filterStatuses.value.includes(
-        normalizePlayStatus(g.play_status, g.status),
-      );
+      return filterStatuses.value.some((status) => status.toLowerCase() === normalizePlayStatus(g.play_status, g.status).toLowerCase());
     });
   }
   if (filterEngines.value.length) {
@@ -410,7 +416,7 @@ const getEffectiveLaunchTargets = (game: GameRecord): EffectiveLaunchTarget[] =>
 ];
 
 const hasAdditionalLaunchTargets = (game: GameRecord): boolean => {
-  return (game.launch_targets || []).length > 0;
+  return !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0;
 };
 
 const closeLaunchTargetMenus = () => {
@@ -504,27 +510,6 @@ const runSingleGameUpdateCheck = async (game: GameRecord) => {
   }
 };
 
-const launchFromModal = async (game: GameRecord) => {
-  try {
-    const result = await api.launchGame(
-      game.id,
-      game.exe_path,
-      game.command_line_args || "",
-      game.run_japanese_locale || false,
-      game.run_wayland || false,
-      game.auto_inject_ce || false,
-      game.custom_prefix || "",
-      game.proton_version || "",
-      game.launch_mode || "auto",
-    );
-    if (result && !result.success) {
-      alert(`Failed to launch game:\n\n${result.error}`);
-    }
-  } catch (e) {
-    console.error("Launch failed", e);
-  }
-};
-
 const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
   try {
     const result = await api.launchGame(
@@ -540,11 +525,25 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
     );
     if (result && !result.success) {
       alert(`Failed to launch game:\n\n${result.error}`);
+    } else if (result?.success) {
+      // Reconcile with the registry: HTML is untracked and short commands may already have exited.
+      runningGameIds.value = new Set(await api.getRunningGames());
     }
   } catch (e) {
     console.error("Launch failed", e);
   }
 };
+
+const stopGame = async (gameId: number) => {
+  try {
+    const result = await api.stopGame(gameId);
+    if (result.success === false) alert(result.error || "Could not stop game");
+  } catch (error) {
+    alert(String(error));
+  }
+};
+
+const toggleGame = (game: GameRecord) => runningGameIds.value.has(game.id) ? stopGame(game.id) : launchGameFast(game);
 
 const launchSelectedTarget = async (
   game: GameRecord,
@@ -594,6 +593,7 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       "", // custom_prefix
       "", // proton_version
       gameData.launch_mode || "auto",
+      gameData.command_line_args || "",
     );
     if (result && result.success === false) {
       alert(`Failed to add game:\n\n${result.error || "Unknown error"}`);
@@ -629,6 +629,7 @@ const handlePlaytimeTick = (event: Event) => {
   const detail = (event as CustomEvent<PlaytimeTickDetail>).detail || {};
   const gameId = Number(detail.gameId);
   const delta = Number(detail.delta);
+  if (detail.isFinal && Number.isInteger(gameId)) runningGameIds.value.delete(gameId);
   if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta <= 0) return;
 
   const game = games.value.find((g) => g.id === gameId);
@@ -699,7 +700,9 @@ onMounted(() => {
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.addEventListener("click", closeLaunchTargetMenus);
   onWebviewReady(() => {
-    loadGames();
+    void loadGames();
+    void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
+    void api.getSettings().then((settings) => { customStatuses.value = settings.custom_play_statuses || []; }).catch(console.error);
   });
 });
 
@@ -1148,10 +1151,12 @@ onUnmounted(() => {
             class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
           >
             <button
-              @click.stop="launchGameFast(game)"
+              @click.stop="toggleGame(game)"
+              :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
               class="card-overlay-play-btn rounded-full p-4 transform scale-90 group-hover:scale-100"
             >
-              <IconPlayerPlayFilled class="w-6 h-6" />
+              <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="w-6 h-6" />
+              <IconPlayerPlayFilled v-else class="w-6 h-6" />
             </button>
           </div>
 
@@ -1196,11 +1201,12 @@ onUnmounted(() => {
             </h3>
             <div class="relative flex shrink-0">
               <button
-                @click.stop="launchGameFast(game)"
+                @click.stop="toggleGame(game)"
                 class="compact-play-btn rounded-md p-2 shrink-0 active:scale-95"
-                :title="`Play ${game.title}`"
+                :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
               >
-                <IconPlayerPlayFilled class="w-3.5 h-3.5" />
+                <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="w-3.5 h-3.5" />
+                <IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
               </button>
               <button
                 v-if="hasAdditionalLaunchTargets(game)"
@@ -1211,7 +1217,7 @@ onUnmounted(() => {
                 <IconChevronDown class="w-3.5 h-3.5" />
               </button>
               <div
-                v-if="openLaunchTargetMenuId === game.id"
+                v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
                 class="launch-target-menu launch-target-menu--compact"
                 @click.stop
               >
@@ -1332,11 +1338,13 @@ onUnmounted(() => {
             </div>
             <div class="relative flex shrink-0">
               <button
-                @click.stop="launchGameFast(game)"
+                @click.stop="toggleGame(game)"
+                :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                 class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold active:scale-95 shrink-0"
               >
-                <IconPlayerPlayFilled class="ui-action-icon" />
-                <span class="hidden md:inline">Play</span>
+                <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="ui-action-icon" />
+                <IconPlayerPlayFilled v-else class="ui-action-icon" />
+                <span class="hidden md:inline">{{ runningGameIds.has(game.id) ? 'Stop' : 'Play' }}</span>
               </button>
               <button
                 v-if="hasAdditionalLaunchTargets(game)"
@@ -1347,7 +1355,7 @@ onUnmounted(() => {
                 <IconChevronDown class="ui-action-icon" />
               </button>
               <div
-                v-if="openLaunchTargetMenuId === game.id"
+                v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
                 class="launch-target-menu"
                 @click.stop
               >
@@ -1383,10 +1391,12 @@ onUnmounted(() => {
     <GameDetailModal
       v-model="showDetailModal"
       :game="selectedGame"
+      :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
       :update-check-state="modalUpdateState"
       @updated="handleGameUpdated"
       @deleted="handleGameDeleted"
-      @launch="launchFromModal"
+      @launch="launchGameFast"
+      @stop="stopGame"
       @check-updates="handleModalUpdateCheck"
       @targets-changed="handleLaunchTargetsChanged"
     />

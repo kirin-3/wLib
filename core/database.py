@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import os
+import json
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from datetime import datetime
@@ -23,6 +24,7 @@ CANONICAL_LAUNCH_MODES = (
     DEFAULT_LAUNCH_MODE,
     "native",
     "wine_proton",
+    "custom",
     RPGMAKER_LINUX_LAUNCH_MODE,
 )
 CANONICAL_PLAY_STATUSES = (
@@ -97,6 +99,9 @@ def normalize_play_status(
     legacy_status_value = _LEGACY_PLAY_STATUS_MAP.get(normalized_play_status)
     if legacy_status_value is not None:
         return legacy_status_value
+
+    if normalized_play_status:
+        return str(play_status).strip()[:40]
 
     legacy_fallback = _LEGACY_PLAY_STATUS_MAP.get(normalized_legacy_status)
     if legacy_fallback is not None:
@@ -351,6 +356,7 @@ def add_game(
     custom_prefix: str = "",
     proton_version: str = "",
     launch_mode: str = DEFAULT_LAUNCH_MODE,
+    command_line_args: str = "",
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
@@ -370,7 +376,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -389,6 +395,7 @@ def add_game(
                 normalize_launch_mode(launch_mode),
                 now_iso,
                 DEFAULT_PLAY_STATUS,
+                command_line_args,
             ),
         )
         game_id = cursor.lastrowid
@@ -680,5 +687,32 @@ def update_setting(key: str, value: str) -> None:
         _ = cursor.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
             (key, value, value),
+        )
+        conn.commit()
+
+
+def get_custom_play_statuses() -> list[str]:
+    try:
+        statuses = cast(object, json.loads(get_setting("custom_play_statuses") or "[]"))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(statuses, list):
+        return []
+    return [status for status in cast(list[object], statuses) if isinstance(status, str) and status.strip()]
+
+
+def update_custom_play_statuses(statuses: Sequence[str]) -> None:
+    # Match case-insensitively like the reset below, so a case-only rename keeps its games.
+    kept = {status.casefold() for status in statuses}
+    removed = [status for status in get_custom_play_statuses() if status.casefold() not in kept]
+    with closing(get_connection()) as conn:
+        for status in removed:
+            _ = conn.execute(
+                "UPDATE games SET play_status = ? WHERE play_status = ? COLLATE NOCASE",
+                (DEFAULT_PLAY_STATUS, status),
+            )
+        _ = conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("custom_play_statuses", json.dumps(list(statuses))),
         )
         conn.commit()

@@ -19,7 +19,9 @@ from core.database import (
     update_game_launch_target,
     get_all_games,
     normalize_launch_mode,
+    normalize_play_status,
     reorder_game_launch_targets,
+    update_custom_play_statuses,
 )
 
 
@@ -81,6 +83,36 @@ def test_database_initialization():
     assert runner_setting[0] == ""
 
     conn.close()
+
+
+def test_custom_mode_and_status_survive_update_and_startup():
+    assert normalize_launch_mode("custom") == "custom"
+    assert normalize_play_status(" ") == DEFAULT_PLAY_STATUS
+    assert normalize_play_status("x" * 45) == "x" * 40
+    game_id = add_game("Custom", "/tmp/game.exe", launch_mode="custom", command_line_args="xsystem35")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "  Backlog  "})
+    assert get_all_games()[0]["play_status"] == "Backlog"
+    conn = get_connection()
+    conn.execute("UPDATE games SET status = 'completed' WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    init_db()
+    game = get_all_games()[0]
+    assert game["play_status"] == "Backlog"
+    assert game["launch_mode"] == "custom"
+    assert game["command_line_args"] == "xsystem35"
+
+
+def test_custom_status_case_only_rename_keeps_games():
+    game_id = add_game("Renamed", "/tmp/game.exe")
+    assert game_id is not None
+    update_custom_play_statuses(["backlog"])
+    update_game(game_id, {"play_status": "backlog"})
+    update_custom_play_statuses(["Backlog"])
+    assert get_all_games()[0]["play_status"] == "backlog"
+    update_custom_play_statuses([])
+    assert get_all_games()[0]["play_status"] == DEFAULT_PLAY_STATUS
 
 
 def test_add_and_get_game():

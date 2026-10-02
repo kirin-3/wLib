@@ -352,6 +352,11 @@ function extractGameInfo() {
                 }
             }
 
+            if (!info.version && bracketedVersions.length >= 2) {
+                info.version = bracketedVersions[0][1].trim();
+                fullTitleText = fullTitleText.replace(bracketedVersions[0][0], '');
+            }
+
             const devMatch = fullTitleText.match(/\[([^\]]+)\]$/);
             if (devMatch) {
                 info.developer = devMatch[1].trim();

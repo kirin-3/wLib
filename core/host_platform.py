@@ -162,7 +162,7 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
         "wayland": linux,
         "rpgmaker_linux": linux,
         "cheat_engine_injection": linux,
-        "launch_modes": ["auto", "native", "wine_proton", "rpgmaker_linux"]
+        "launch_modes": ["auto", "native", "wine_proton", "rpgmaker_linux", "custom"]
         if linux
         else ["auto"],
         "data_dir": get_data_dir(platform=platform),

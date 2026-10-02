@@ -83,7 +83,6 @@ const VALID_SORT_FIELDS = new Set<SortField>([
 ]);
 const VALID_SORT_DIRECTIONS = new Set<SortDir>(["asc", "desc"]);
 const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>(["All", "Favorites"]);
-const VALID_STATUS_VALUES = new Set<string>(LIBRARY_PLAY_STATUSES);
 
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
@@ -197,10 +196,7 @@ export const normalizeLibraryViewState = (
       ? (source.filterCollection as FilterCollection)
       : DEFAULT_LIBRARY_VIEW_STATE.filterCollection;
 
-  const filterStatuses = filterAllowedValues(
-    normalizeStringArray(source.filterStatuses),
-    VALID_STATUS_VALUES,
-  );
+  const filterStatuses = normalizeStringArray(source.filterStatuses).filter((status) => status.length <= 40);
 
   const filterEngines = filterAllowedValues(
     normalizeStringArray(source.filterEngines),

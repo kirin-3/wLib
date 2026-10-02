@@ -193,6 +193,10 @@ class Scraper:
 
         if match:
             return next((g for g in match.groups() if g is not None), "Unknown")
+        # Pass 4: F95 titles also use non-numeric releases, e.g. [Final] [Dev].
+        brackets = cast(list[str], re.findall(r"\[([^\]]*)\]", title))
+        if len(brackets) >= 2:
+            return brackets[0].strip() or "Unknown"
         return "Unknown"
 
     def _extract_version_from_post(self, page: PageLike) -> str:

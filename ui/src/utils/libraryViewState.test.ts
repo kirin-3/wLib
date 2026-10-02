@@ -65,7 +65,7 @@ test("normalizeLibraryViewState falls back on invalid static values", () => {
   assert.equal(state.sortBy, "title");
   assert.equal(state.sortDir, "asc");
   assert.equal(state.filterCollection, "All");
-  assert.deepEqual(state.filterStatuses, ["Playing"]);
+  assert.deepEqual(state.filterStatuses, ["Playing", "Unknown"]);
   assert.deepEqual(state.filterEngines, ["Ren'Py", "Unity"]);
   assert.deepEqual(state.filterTags, ["sci-fi", "tagged"]);
   assert.equal(state.isFiltersCollapsed, true);
@@ -146,5 +146,5 @@ test("normalizeLibraryViewState preserves the expanded supported status set", ()
     filterStatuses: [...LIBRARY_PLAY_STATUSES, "Unknown"],
   });
 
-  assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES]);
+  assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES, "Unknown"]);
 });

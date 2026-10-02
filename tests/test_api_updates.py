@@ -21,6 +21,8 @@ from core.database import (
     add_game_launch_target,
     get_all_games,
     get_setting,
+    update_game,
+    update_setting,
 )
 
 
@@ -37,6 +39,120 @@ class _FakeDownloadResponse:
     def __exit__(self, exc_type, exc_value, traceback):
         _ = (exc_type, exc_value, traceback)
         return None
+
+
+def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "wlib-proton"))
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/wine" if name == "wine" else None)
+    locations = {
+        "wlib-proton/Managed/proton": "Managed",
+        ".steam/steam/compatibilitytools.d/SteamGE/proton": "SteamGE (Steam)",
+        ".local/share/Steam/steamapps/common/Proton 9/proton": "Proton 9 (Steam)",
+        ".var/app/com.valvesoftware.Steam/data/Steam/compatibilitytools.d/FlatGE/proton": "FlatGE (Steam)",
+        ".var/app/com.valvesoftware.Steam/.local/share/Steam/compatibilitytools.d/OtherGE/proton": "OtherGE (Steam)",
+        ".local/share/lutris/runners/wine/wine-ge/bin/wine": "wine-ge (Lutris)",
+        ".var/app/net.lutris.Lutris/data/lutris/runners/wine/flat-wine/bin/wine": "flat-wine (Lutris)",
+    }
+    for relative in locations:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True)
+        path.touch()
+    result = Api().get_available_runners()
+    runners = result["runners"]
+    assert {runner["name"] for runner in runners} == {"System Wine", *locations.values()}
+    assert {runner["path"] for runner in runners} == {"wine", *(str(tmp_path / relative) for relative in locations)}
+    assert len({os.path.realpath(runner["path"]) for runner in runners}) == len(runners)
+    try:
+        (tmp_path / ".steam/root").symlink_to(tmp_path / ".local/share/Steam", target_is_directory=True)
+    except OSError:
+        # A Windows junction resolves the same way without symlink privileges.
+        import subprocess
+        if os.name != "nt":
+            raise
+        result = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(tmp_path / ".steam/root"), str(tmp_path / ".local/share/Steam")],
+            capture_output=True, check=False,
+        )
+        assert result.returncode == 0
+    runners = Api().get_available_runners()["runners"]
+    assert len(runners) == len(locations) + 1
+
+
+def test_api_running_and_stop_bridge(monkeypatch):
+    api = Api()
+    monkeypatch.setattr(api.launcher, "get_running_games", lambda: [1, 3])
+    monkeypatch.setattr(api.launcher, "stop", lambda game_id: {"success": game_id == 3})
+    assert api.get_running_games() == [1, 3]
+    assert api.stop_game(3) == {"success": True}
+
+
+def test_custom_status_settings_validation_and_removal():
+    api = Api()
+    game_id = add_game("Backlog", "/tmp/game.exe")
+    assert game_id is not None
+    assert api.save_settings({"custom_play_statuses": [" Backlog "]})["success"]
+    assert api.get_settings()["custom_play_statuses"] == ["Backlog"]
+    update_game(game_id, {"play_status": "Backlog"})
+    for invalid in (["backlog", "Backlog"], ["playing"], ["Replaying"], ["in_progress"], [""], ["x" * 41], [7], "Backlog"):
+        assert api.save_settings({"custom_play_statuses": invalid, "proton_path": "must-not-save"})["success"] is False
+        assert api.get_settings()["custom_play_statuses"] == ["Backlog"]
+        assert get_setting("proton_path") != "must-not-save"
+    assert api.save_settings({"custom_play_statuses": []})["success"]
+    assert get_all_games()[0]["play_status"] == "Not Started"
+
+
+def test_urm_install_overwrite_remove_and_errors(tmp_path):
+    folder = tmp_path / "RenPy"
+    (folder / "renpy").mkdir(parents=True)
+    (folder / "game").mkdir()
+    target = folder / "game.exe"
+    target.touch()
+    game_id = add_game("RenPy", str(target))
+    assert game_id is not None
+    api = Api()
+    assert api.get_urm_status(game_id) == {"success": True, "renpy": True, "installed": False, "source_configured": False}
+    assert api.set_urm_installed(game_id, True)["success"] is False
+    source = tmp_path / "mod.rpa"
+    source.write_bytes(b"first")
+    assert api.save_settings({"urm_rpa_path": str(source)})["success"]
+    assert api.get_settings()["urm_rpa_path"] == str(source)
+    installed = folder / "game" / "0x52_URM.rpa"
+    assert api.set_urm_installed(game_id, True)["installed"]
+    assert installed.read_bytes() == b"first"
+    source.write_bytes(b"second")
+    assert api.set_urm_installed(game_id, True)["installed"]
+    assert installed.read_bytes() == b"second"
+    source.unlink()
+    assert api.set_urm_installed(game_id, True)["success"] is False
+    assert installed.read_bytes() == b"second"
+    assert api.set_urm_installed(game_id, False)["installed"] is False
+    assert not installed.exists()
+    assert api.set_urm_installed(game_id, False)["success"]
+    other_id = add_game("Other", str(tmp_path / "game.exe"))
+    assert other_id is not None
+    assert api.get_urm_status(other_id)["renpy"] is False
+    assert api.set_urm_installed(other_id, True)["success"] is False
+    assert api.get_urm_status(999)["success"] is False
+    assert api.set_urm_installed(999, True)["success"] is False
+
+
+def test_urm_failed_copy_preserves_existing_mod(monkeypatch, tmp_path):
+    folder = tmp_path / "RenPy"
+    (folder / "renpy").mkdir(parents=True)
+    (folder / "game").mkdir()
+    installed = folder / "game" / "0x52_URM.rpa"
+    installed.write_bytes(b"old")
+    source = tmp_path / "mod.rpa"
+    source.touch()
+    update_setting("urm_rpa_path", str(source))
+    game_id = add_game("RenPy", str(folder / "game.exe"))
+    monkeypatch.setattr("shutil.copyfile", MagicMock(side_effect=OSError("copy failed")))
+    result = Api().set_urm_installed(game_id, True)
+    assert result["success"] is False
+    assert installed.read_bytes() == b"old"
+    assert list((folder / "game").iterdir()) == [installed]
 
 
 @pytest.fixture(autouse=True)
@@ -139,14 +255,16 @@ def test_download_proton_ge_streams_and_filters_tar(monkeypatch, tmp_path, membe
         assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
 
 
-def test_api_add_game_persists_launch_mode():
+@pytest.mark.parametrize("mode", ["native", "custom"])
+def test_api_add_game_persists_launch_mode(mode):
     api = Api()
 
-    result = api.add_game("Native", "/tmp/native.sh", launch_mode="native")
+    result = api.add_game("Native", "/tmp/native.sh", launch_mode=mode, command_line_args="xsystem35")
 
     assert result["id"] is not None
     games = get_all_games()
-    assert games[0]["launch_mode"] == "native"
+    assert games[0]["launch_mode"] == mode
+    assert games[0]["command_line_args"] == "xsystem35"
 
 
 def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
@@ -163,10 +281,12 @@ def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
         proton_version="",
         launch_mode="auto",
         on_exit_callback=None,
+        game_id=None,
     ):
         captured["exe_path"] = exe_path
         captured["launch_mode"] = launch_mode
         captured["on_exit_callback"] = on_exit_callback
+        captured["game_id"] = game_id
         return {"success": True}
 
     monkeypatch.setattr(api.launcher, "launch", fake_launch)
@@ -176,6 +296,7 @@ def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
     assert result["success"] is True
     assert captured["exe_path"] == "/tmp/game.exe"
     assert captured["launch_mode"] == "auto"
+    assert captured["game_id"] == 1
 
 
 def test_api_launch_game_passes_rpgmaker_linux_launch_mode(monkeypatch):
@@ -192,6 +313,7 @@ def test_api_launch_game_passes_rpgmaker_linux_launch_mode(monkeypatch):
         proton_version="",
         launch_mode="auto",
         on_exit_callback=None,
+        game_id=None,
     ):
         captured["exe_path"] = exe_path
         captured["launch_mode"] = launch_mode
@@ -403,6 +525,7 @@ def test_api_launch_game_uses_selected_target_path_and_parent_playtime(monkeypat
         proton_version="",
         launch_mode="auto",
         on_exit_callback=None,
+        game_id=None,
     ):
         captured["exe_path"] = exe_path
         captured["command_line_args"] = command_line_args
@@ -517,6 +640,25 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["success"] is True
     assert result["version"] == "1.1"
     assert result["has_update"] is True
+
+
+@pytest.mark.parametrize("local_version, has_update", [("b12", True), ("Final", False)])
+def test_check_for_updates_non_numeric_version(monkeypatch, local_version, has_update):
+    api = Api()
+    url = "https://f95zone.to/threads/demo.123/"
+    add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url, version=local_version)
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "version": api.scraper._extract_version_from_title("Demo [Final] [Dev]"),
+        },
+    )
+    result = api.check_for_updates(url)
+    assert result["success"] is True
+    assert result["version"] == "Final"
+    assert result["has_update"] is has_update
 
 
 def test_check_for_updates_retries_blocked_with_headed_mode(monkeypatch):
@@ -1329,7 +1471,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.6"
+    assert chrome_manifest["version"] == "1.0.7"
     assert "scripts" not in chrome_manifest["background"]
     assert (
         "*://f95zone.to/sam/latest_alpha*"
@@ -1500,7 +1642,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.6",
+                "version": "1.0.7",
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -1516,7 +1658,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result.get("updated") is False
     assert result.get("reason") == "up-to-date"
-    assert result.get("installed_version") == "1.0.6"
+    assert result.get("installed_version") == "1.0.7"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 

@@ -34,7 +34,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
   ```
 - **Contract Notes:**
   - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
-  - `playStatus` is optional enrichment for matching games only. When present, it uses the same canonical values as the desktop app (`Not Started`, `Plan to Play`, `Playing`, `Waiting For Update`, `On Hold`, `Completed`, `Abandoned`).
+  - `playStatus` is optional enrichment for matching games only. It may contain a canonical desktop status or a custom name (at most 40 characters).
 
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={f95_url}`**
@@ -68,6 +68,8 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
   ```
 
 ## Installed Extension Files
+
+Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
 
 The packaged extension files used by browsers live under `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows by default. **Open Extension Folder** resolves the actual location, including any `WLIB_DATA_DIR` override:
 

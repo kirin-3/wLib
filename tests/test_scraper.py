@@ -133,10 +133,13 @@ def test_extract_version_from_title():
         == "Chapter 4 v1.2"
     )
 
-    # Missing version completely
+    # First-bracket fallback only applies when a developer bracket is present.
+    assert scraper._extract_version_from_title("Game Title [Final] [Dev]") == "Final"
+    assert scraper._extract_version_from_title("Game Title [b12] [Dev]") == "b12"
     assert (
-        scraper._extract_version_from_title("Game Title [RenPy] [Windows]") == "Unknown"
+        scraper._extract_version_from_title("Game Title [RenPy] [Windows]") == "RenPy"
     )
+    assert scraper._extract_version_from_title("Game Title [Dev]") == "Unknown"
     assert scraper._extract_version_from_title("Just the Title") == "Unknown"
     assert scraper._extract_version_from_title(None) == "Unknown"
 

@@ -12,6 +12,7 @@ import {
   IconLoader2,
   IconPaletteFilled,
   IconPlayerPlayFilled,
+  IconPlayerStopFilled,
   IconRefresh,
   IconStarFilled,
   IconTrashX,
@@ -26,6 +27,7 @@ import type {
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   SaveLocation,
+  UrmStatusResponse,
 } from "../../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
@@ -39,7 +41,7 @@ import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import {
   DEFAULT_PLAY_STATUS,
   getPlayStatusMeta,
-  PLAY_STATUS_OPTIONS,
+  getPlayStatusOptions,
   normalizePlayStatus,
   type PlayStatus,
 } from "../../utils/playStatus";
@@ -90,6 +92,7 @@ const props = defineProps<{
   modelValue: boolean;
   game: GameRecord | null;
   updateCheckState: UpdateCheckState;
+  isRunning?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -99,6 +102,7 @@ const emit = defineEmits<{
   launch: [payload: GameRecord];
   "check-updates": [gameId: number];
   "targets-changed": [];
+  stop: [gameId: number];
 }>();
 
 // Editable fields
@@ -167,7 +171,14 @@ const saving = ref(false);
 const deleting = ref(false);
 const engineDropdownRef = ref<HTMLElement | null>(null);
 
-const statuses = PLAY_STATUS_OPTIONS;
+const customStatuses = ref<string[]>([]);
+const statuses = computed(() => getPlayStatusOptions([...customStatuses.value, playStatus.value]));
+const urmStatus = ref<UrmStatusResponse>({});
+const urmBusy = ref(false);
+const urmError = ref("");
+const runnerOptions = computed(() => protonVersion.value && !availableRunners.value.some((runner) => runner.path === protonVersion.value)
+  ? [...availableRunners.value, { path: protonVersion.value, name: `${protonVersion.value} (custom)` }]
+  : availableRunners.value);
 const isNativeLaunchMode = computed(
   () => !usesWineProtonControls(launchMode.value),
 );
@@ -333,7 +344,7 @@ watch(
         customPrefix.value = g.custom_prefix || "";
         protonVersion.value = g.proton_version || "";
         launchMode.value = normalizeLaunchMode(g.launch_mode);
-        useCustomPrefix.value = !!g.custom_prefix || !!g.proton_version;
+        useCustomPrefix.value = !!g.custom_prefix;
         showJapaneseLocaleInfo.value = false;
         showWaylandInfo.value = false;
         showCheatEngineInfo.value = false;
@@ -376,7 +387,9 @@ watch(
       loadingRunners.value = false;
       rpgmakerLinuxRunnerLoaded.value = false;
       rpgmakerLinuxRunnerError.value = "";
-      const loaders = [loadExecutableModifiedTime(), loadLaunchTargets()];
+      urmStatus.value = {};
+      urmError.value = "";
+      const loaders = [loadExecutableModifiedTime(), loadLaunchTargets(), loadGameExtras()];
       if (platformCapabilities.value.cheat_engine_injection) {
         loaders.push(loadCheatEngineStatus());
       } else {
@@ -427,12 +440,12 @@ watch(
 );
 
 watch(
-  () => [useCustomPrefix.value, launchMode.value] as const,
-  async ([enabled, mode]) => {
+  () => [props.modelValue, showWineProtonControls.value] as const,
+  async ([open, showControls]) => {
     if (
       !platformCapabilities.value.wine_proton ||
-      !enabled ||
-      !usesWineProtonControls(mode) ||
+      !open ||
+      !showControls ||
       runnersLoaded.value ||
       loadingRunners.value
     ) {
@@ -511,6 +524,43 @@ const loadRpgmakerLinuxRunnerStatus = async () => {
     rpgmakerLinuxRunnerLoaded.value = true;
   }
 };
+
+const loadGameExtras = async () => {
+  if (!props.game) return;
+  const gameId = props.game.id;
+  try {
+    const [settings, status] = await Promise.all([api.getSettings(), api.getUrmStatus(gameId)]);
+    if (isCurrentGame(gameId)) {
+      customStatuses.value = settings.custom_play_statuses || [];
+      urmStatus.value = status;
+    }
+  } catch (error) {
+    console.error("Failed to load game settings", error);
+  }
+};
+
+const toggleUrm = async () => {
+  if (!props.game || urmBusy.value) return;
+  const gameId = props.game.id;
+  urmBusy.value = true;
+  urmError.value = "";
+  try {
+    const result = await api.setUrmInstalled(gameId, !urmStatus.value.installed);
+    if (!isCurrentGame(gameId)) return;
+    if (result.success === false) urmError.value = result.error || "Could not update URM";
+    else urmStatus.value = result;
+  } catch (error) {
+    if (isCurrentGame(gameId)) urmError.value = String(error);
+  } finally {
+    urmBusy.value = false;
+  }
+};
+
+// v-model re-syncs the checkbox from urmStatus on re-render, so a failed toggle snaps back.
+const urmInstalled = computed({
+  get: () => !!urmStatus.value.installed,
+  set: () => void toggleUrm(),
+});
 
 const loadLaunchTargets = async () => {
   if (!props.game || typeof props.game.id !== "number") return;
@@ -769,16 +819,17 @@ const save = async () => {
       auto_inject_ce: platformCapabilities.value.cheat_engine_injection
         ? autoInjectCe.value
         : !!props.game.auto_inject_ce,
-      custom_prefix: platformCapabilities.value.wine_proton
-        ? useCustomPrefix.value
-          ? customPrefix.value
-          : ""
-        : props.game.custom_prefix || "",
-      proton_version: platformCapabilities.value.wine_proton
-        ? useCustomPrefix.value
-          ? protonVersion.value
-          : ""
-        : props.game.proton_version || "",
+      ...resolveLaunchRuntimeOverrides({
+        wineProtonSupported: platformCapabilities.value.wine_proton,
+        // Keep hidden prefix/runner values so switching to a non-Wine mode doesn't erase them;
+        // the launcher already ignores them outside Wine/Proton launches.
+        usesWineProtonRuntime: true,
+        useCustomPrefix: useCustomPrefix.value,
+        customPrefix: customPrefix.value,
+        protonVersion: protonVersion.value,
+        storedCustomPrefix: props.game.custom_prefix || "",
+        storedProtonVersion: props.game.proton_version || "",
+      }),
       launch_mode: launchMode.value,
       latest_version: latestVersion.value,
       rating_graphics: ratingGraphics.value,
@@ -865,11 +916,13 @@ const buildLaunchPayload = (targetPath: string): GameRecord | null => {
 };
 
 const launchGame = () => {
+  if (props.isRunning) return;
   const payload = buildLaunchPayload(exePath.value);
   if (payload) emit("launch", payload);
 };
 
 const launchTarget = (target: LaunchTarget) => {
+  if (props.isRunning) return;
   const payload = buildLaunchPayload(target.exe_path);
   if (payload) emit("launch", payload);
 };
@@ -894,7 +947,7 @@ const findSaves = async () => {
       title.value,
       engine.value,
       !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
-      !isNativeLaunchMode.value && useCustomPrefix.value ? protonVersion.value : ""
+      !isNativeLaunchMode.value ? protonVersion.value : ""
     );
     saveResults.value = results || [];
   } catch (e) {
@@ -1154,7 +1207,7 @@ const openInBrowser = async () => {
                     {{ exePath || "No executable selected" }}
                   </div>
                 </div>
-                <button @click="launchGame" class="launch-target-action ui-action-btn">
+                <button v-if="!isRunning" @click="launchGame" class="launch-target-action ui-action-btn">
                   <IconPlayerPlayFilled class="ui-action-icon" />
                   Play
                 </button>
@@ -1233,7 +1286,7 @@ const openInBrowser = async () => {
                         Down
                       </button>
                     </div>
-                    <button @click="launchTarget(target)" class="launch-target-action ui-action-btn">
+                    <button v-if="!isRunning" @click="launchTarget(target)" class="launch-target-action ui-action-btn">
                       <IconPlayerPlayFilled class="ui-action-icon" />
                       Play
                     </button>
@@ -1373,13 +1426,15 @@ const openInBrowser = async () => {
           </div>
 
           <div class="col-span-2">
-            <label class="modal-label">Command Line Arguments</label>
+            <label for="detail-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
             <input
               v-model="commandLineArgs"
+              id="detail-command"
               type="text"
               placeholder="gamemoderun %command% --fullscreen"
               class="modal-input w-full font-mono"
             />
+            <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
           </div>
 
           <div class="col-span-2">
@@ -1403,7 +1458,7 @@ const openInBrowser = async () => {
                   {{
                     platformCapabilities.platform === "windows"
                       ? "Auto Detect launches Windows games directly without Wine or Proton."
-                      : "Linux Native runs the selected file directly. RPGMaker Linux uses the external native-port runner when installed."
+                      : "Linux Native runs the selected file directly. Custom Command runs your command in the game folder. RPGMaker Linux uses the external native-port runner when installed."
                   }}
                 </p>
                 <p
@@ -1560,7 +1615,7 @@ const openInBrowser = async () => {
             >
               <div>
                 <p class="text-sm font-medium" style="color: var(--text-primary)">
-                  Use Custom Wine Prefix & Proton Version
+                  Use Custom Wine Prefix
                 </p>
                 <p class="text-xs" style="color: var(--text-muted)">
                   Isolate this game's save files and dependencies from the global prefix.
@@ -1576,6 +1631,13 @@ const openInBrowser = async () => {
               </label>
             </div>
 
+            <div class="mt-3">
+              <label for="game-runner" class="modal-label">Runner (Wine / Proton)</label>
+              <select id="game-runner" v-model="protonVersion" class="modal-input w-full">
+                <option value="">{{ loadingRunners ? 'Loading runners...' : '(Use Global Default)' }}</option>
+                <option v-for="runner in runnerOptions" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
+              </select>
+            </div>
             <div v-if="useCustomPrefix" class="mt-3 p-4 rounded-lg space-y-4" style="background: var(--bg-inset); border: 1px dashed var(--border);">
               <div>
                 <label class="modal-label">Custom Prefix Path</label>
@@ -1593,26 +1655,6 @@ const openInBrowser = async () => {
                 </div>
               </div>
 
-              <div>
-                <label class="modal-label">Proton Version</label>
-                <select
-                  v-model="protonVersion"
-                  class="modal-input w-full"
-                >
-                  <option v-if="loadingRunners" value="" disabled>
-                    Loading runners...
-                  </option>
-                  <option v-else value="">(Use Global Default)</option>
-                  <option
-                    v-for="runner in availableRunners"
-                    :key="runner.path"
-                    :value="runner.path"
-                  >
-                    {{ runner.name }}
-                  </option>
-                </select>
-              </div>
-
               <div class="pt-2 border-t border-gray-700/50">
                 <button
                   @click="installRtpsToPrefix"
@@ -1624,6 +1666,27 @@ const openInBrowser = async () => {
               </div>
             </div>
           </div>
+        </div>
+
+        <div v-if="urmStatus.renpy" class="rounded-lg p-4 space-y-2" style="background: var(--bg-raised); border: 1px solid var(--border)">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-sm font-medium" style="color: var(--text-primary)">Universal Ren'Py Mod (URM)</span>
+            <label
+              class="relative inline-flex items-center"
+              :class="urmStatus.source_configured && !urmBusy ? 'cursor-pointer' : 'cursor-not-allowed'"
+            >
+              <input
+                type="checkbox"
+                v-model="urmInstalled"
+                :disabled="urmBusy || !urmStatus.source_configured"
+                class="sr-only peer"
+                aria-label="Universal Ren'Py Mod (URM)"
+              />
+              <div class="ui-toggle"></div>
+            </label>
+          </div>
+          <p v-if="!urmStatus.source_configured" class="text-xs" style="color: var(--text-muted)">Configure a URM .rpa source file in Settings to enable this control.</p>
+          <p v-if="urmError" role="alert" class="text-xs text-red-400">{{ urmError }}</p>
         </div>
 
         <div>
@@ -1865,11 +1928,13 @@ const openInBrowser = async () => {
           </div>
           <div class="flex flex-wrap gap-3">
             <button
-              @click="launchGame"
+              @click="isRunning && game ? emit('stop', game.id) : launchGame()"
+              :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
               class="launch-btn ui-action-btn"
             >
-              <IconPlayerPlayFilled class="ui-action-icon" />
-              Play
+              <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else class="ui-action-icon" />
+              {{ isRunning ? 'Stop' : 'Play' }}
             </button>
             <button
               @click="save"

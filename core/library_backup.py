@@ -83,12 +83,13 @@ LAUNCH_CONFIG_FIELDS = (
 )
 EXECUTABLE_PATH_FIELDS = ("exe_path",)
 LAUNCH_TARGET_FIELDS = ("label", "exe_path", "sort_order", "created_at", "updated_at")
-GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check")
+GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_statuses")
 PATH_SETTINGS_KEYS = (
     "proton_path",
     "wine_prefix_path",
     "playwright_browsers_path",
     RPGMAKER_LINUX_RUNNER_SETTING,
+    "urm_rpa_path",
 )
 
 BOOLEAN_GAME_FIELDS = (

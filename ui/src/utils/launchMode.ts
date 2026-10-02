@@ -6,6 +6,7 @@ export const LAUNCH_MODE_OPTIONS = [
   { value: "native", label: "Linux Native" },
   { value: "wine_proton", label: "Wine / Proton" },
   { value: "rpgmaker_linux", label: "RPGMaker Linux" },
+  { value: "custom", label: "Custom Command" },
 ] as const;
 
 export type LaunchMode = (typeof LAUNCH_MODE_OPTIONS)[number]["value"];
@@ -13,7 +14,7 @@ export type LaunchMode = (typeof LAUNCH_MODE_OPTIONS)[number]["value"];
 export const normalizeLaunchMode = (value: unknown): LaunchMode => {
   return value === "native" ||
     value === "wine_proton" ||
-    value === "rpgmaker_linux"
+    value === "rpgmaker_linux" || value === "custom"
     ? value
     : DEFAULT_LAUNCH_MODE;
 };
@@ -52,11 +53,11 @@ export const resolveLaunchRuntimeOverrides = (
       proton_version: input.storedProtonVersion,
     };
   }
-  if (!input.usesWineProtonRuntime || !input.useCustomPrefix) {
+  if (!input.usesWineProtonRuntime) {
     return { custom_prefix: "", proton_version: "" };
   }
   return {
-    custom_prefix: input.customPrefix,
+    custom_prefix: input.useCustomPrefix ? input.customPrefix : "",
     proton_version: input.protonVersion,
   };
 };

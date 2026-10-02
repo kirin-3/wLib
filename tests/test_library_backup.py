@@ -65,6 +65,32 @@ def base_backup(games: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def test_custom_status_and_urm_settings_round_trip(tmp_path):
+    api = Api()
+    game_id = add_game("Custom", "/tmp/game.exe", f95_url="https://f95zone.to/threads/custom.123/", launch_mode="custom", command_line_args="xsystem35")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Backlog"})
+    source_path = str(tmp_path / "URM.rpa")
+    assert api.save_settings({"custom_play_statuses": ["Backlog"], "urm_rpa_path": source_path})["success"]
+    sections = [SECTION_USER_STATE, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]
+    destination = tmp_path / "backup.json"
+    result = api.export_library_backup({"sections": sections}, str(destination))
+    assert result["success"]
+    backup = json.loads(destination.read_text(encoding="utf-8"))
+    assert "urm_rpa_path" not in backup["settings"]["general"]
+    assert backup["settings"]["paths"]["urm_rpa_path"] == source_path
+    update_game(game_id, {"play_status": "Playing", "launch_mode": "auto"})
+    update_setting("custom_play_statuses", "[]")
+    update_setting("urm_rpa_path", "")
+    result = api.import_library_backup(str(destination), {"sections": sections})
+    assert result["success"]
+    game = get_all_games()[0]
+    assert game["play_status"] == "Backlog"
+    assert game["launch_mode"] == "custom"
+    assert api.get_settings()["custom_play_statuses"] == ["Backlog"]
+    assert api.get_settings()["urm_rpa_path"] == source_path
+
+
 def test_export_writes_format_metadata_and_selected_sections(tmp_path):
     api = Api()
     game_id = add_game(

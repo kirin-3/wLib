@@ -6,6 +6,8 @@
  */
 
 import type { LaunchMode } from "../utils/launchMode";
+import { LAUNCH_MODE_OPTIONS } from "../utils/launchMode";
+import { validateCustomPlayStatuses } from "../utils/playStatus";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 export type { LaunchMode } from "../utils/launchMode";
 export { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
@@ -28,6 +30,7 @@ export interface ApiBasicResponse {
   error?: string;
   error_code?: string;
   mock?: boolean;
+  code?: string;
 }
 
 export interface ApiSuccessResponse {
@@ -337,6 +340,8 @@ export interface PlatformCapabilities {
 }
 
 export interface SettingsPayload {
+  custom_play_statuses?: string[];
+  urm_rpa_path?: string;
   proton_path?: string;
   wine_prefix_path?: string;
   enable_logging?: boolean;
@@ -344,7 +349,15 @@ export interface SettingsPayload {
   rpgmaker_linux_runner_path?: string;
 }
 
+export interface UrmStatusResponse extends ApiBasicResponse {
+  renpy?: boolean;
+  installed?: boolean;
+  source_configured?: boolean;
+}
+
 export interface SettingsResponse {
+  custom_play_statuses: string[];
+  urm_rpa_path: string;
   proton_path: string;
   wine_prefix_path: string;
   enable_logging: boolean;
@@ -356,6 +369,8 @@ export interface SettingsResponse {
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
+  custom_play_statuses: [],
+  urm_rpa_path: "",
   proton_path: "",
   wine_prefix_path: "",
   enable_logging: false,
@@ -431,6 +446,8 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
   );
 
   return {
+    custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
+    urm_rpa_path: typeof source.urm_rpa_path === "string" ? source.urm_rpa_path : "",
     proton_path: typeof source.proton_path === "string" ? source.proton_path : DEFAULT_MOCK_SETTINGS.proton_path,
     wine_prefix_path:
       typeof source.wine_prefix_path === "string"
@@ -490,6 +507,15 @@ const readMockSettings = (): SettingsResponse => {
   }
 };
 
+const readMockGames = (): GameRecord[] => {
+  try {
+    const games: unknown = JSON.parse(localStorage.getItem("wlib-mock-games") || "[]");
+    return Array.isArray(games) ? games.filter((game): game is GameRecord => isRecord(game) && typeof game.id === "number" && typeof game.title === "string" && typeof game.exe_path === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
 const writeMockSettings = (settings: SettingsResponse): void => {
   try {
     localStorage.setItem(MOCK_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -512,6 +538,8 @@ class ApiService {
 
   isWebview: boolean;
   _mockWarnings: Set<string>;
+  _mockRunningGames = new Set<number>();
+  _mockUrmInstalled = new Set<number>();
 
   async invoke<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
     const invoker = window.pywebview?.api?.[method];
@@ -547,7 +575,8 @@ class ApiService {
     auto_inject_ce = false,
     custom_prefix = "",
     proton_version = "",
-    launch_mode: LaunchMode = "auto"
+    launch_mode: LaunchMode = "auto",
+    command_line_args = "",
   ): Promise<AddGameResponse> {
     return this.invoke(
       "add_game",
@@ -566,6 +595,7 @@ class ApiService {
       custom_prefix,
       proton_version,
       launch_mode,
+      command_line_args,
     );
   }
 
@@ -656,6 +686,26 @@ class ApiService {
 
   async getAvailableRunners(): Promise<GetAvailableRunnersResponse> {
     return this.invoke<GetAvailableRunnersResponse>("get_available_runners");
+  }
+
+  async stopGame(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("stop_game", gameId);
+  }
+
+  async getRunningGames(): Promise<number[]> {
+    return this.invoke<number[]>("get_running_games");
+  }
+
+  async getUrmStatus(gameId: number): Promise<UrmStatusResponse> {
+    return this.invoke<UrmStatusResponse>("get_urm_status", gameId);
+  }
+
+  async setUrmInstalled(gameId: number, installed: boolean): Promise<UrmStatusResponse> {
+    return this.invoke<UrmStatusResponse>("set_urm_installed", gameId, installed);
+  }
+
+  async browseUrmFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_urm_file", startPath);
   }
 
   async getExecutableModifiedTime(exe_path: string): Promise<ExecutableModifiedTimeResponse> {
@@ -841,11 +891,63 @@ class ApiService {
 
     switch (method) {
       case "get_games":
-        return [];
+        return readMockGames();
+      case "add_game": {
+        const games = readMockGames();
+        const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
+        const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
+          f95_url: String(args[2] || ""), version: String(args[3] || ""),
+          engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
+          command_line_args: String(args[15] || ""), play_status: "Not Started" };
+        localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
+        return { success: true, id, mock: true };
+      }
+      case "update_game": {
+        const games = readMockGames();
+        const fields = isRecord(args[1]) ? args[1] : {};
+        localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((game) => game.id === Number(args[0]) ? { ...game, ...fields } : game)));
+        return { success: true, mock: true };
+      }
+      case "launch_game": {
+        const gameId = Number(args[0]);
+        if (this._mockRunningGames.has(gameId)) return { success: false, code: "already_running", error: "Game is already running" };
+        if (!/\.html?$/i.test(String(args[1])) || args[8] === "custom") this._mockRunningGames.add(gameId);
+        return { success: true, mock: true };
+      }
+      case "get_running_games":
+        return [...this._mockRunningGames];
+      case "stop_game": {
+        const gameId = Number(args[0]);
+        if (!this._mockRunningGames.delete(gameId)) return { success: false, code: "not_running", error: "Game is not running" };
+        window.dispatchEvent(new CustomEvent("wlib-playtime-tick", { detail: { gameId, delta: 0, isFinal: true } }));
+        return { success: true, mock: true };
+      }
+      case "get_urm_status":
+      case "set_urm_installed": {
+        const gameId = Number(args[0]);
+        const game = readMockGames().find((game) => game.id === gameId);
+        if (!game) return { success: false, error: "Game not found" };
+        const renpy = game.engine === "Ren'Py";
+        const sourceConfigured = /\.rpa$/i.test(readMockSettings().urm_rpa_path);
+        if (method === "set_urm_installed") {
+          if (!renpy) return { success: false, error: "This game is not a Ren'Py game" };
+          if (args[1] && !sourceConfigured) return { success: false, error: "Configure a URM source in Settings" };
+          if (args[1]) this._mockUrmInstalled.add(gameId);
+          else this._mockUrmInstalled.delete(gameId);
+        }
+        return { success: true, renpy, installed: this._mockUrmInstalled.has(gameId), source_configured: sourceConfigured };
+      }
       case "get_settings":
         return readMockSettings();
       case "save_settings": {
         const payload = isRecord(args[0]) ? args[0] : {};
+        if (Array.isArray(payload.custom_play_statuses)) {
+          if (!payload.custom_play_statuses.every((name) => typeof name === "string")) return { success: false, error: "Play statuses must be names" };
+          const error = validateCustomPlayStatuses(payload.custom_play_statuses as string[]);
+          if (error) return { success: false, error };
+          const removed = readMockSettings().custom_play_statuses.filter((name) => !(payload.custom_play_statuses as string[]).includes(name));
+          localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().map((game) => removed.some((name) => name.toLowerCase() === game.play_status?.toLowerCase()) ? { ...game, play_status: "Not Started" } : game)));
+        }
         const mergedSettings: Record<string, unknown> = {
           ...readMockSettings(),
           ...payload,
@@ -939,12 +1041,17 @@ class ApiService {
         };
       }
       case "browse_file":
+      case "browse_urm_file":
       case "browse_runner_file":
       case "browse_backup_file":
       case "browse_directory":
         return "";
       case "get_available_runners":
-        return { success: true, mock: true, runners: [] };
+        return { success: true, mock: true, runners: localStorage.getItem("wlib-mock-platform") === "linux" ? [
+          { name: "System Wine", path: "wine" },
+          { name: "GE-Proton (Steam)", path: "/home/user/.local/share/Steam/compatibilitytools.d/GE-Proton/proton" },
+          { name: "wine-ge (Lutris)", path: "/home/user/.local/share/lutris/runners/wine/wine-ge/bin/wine" },
+        ] : [] };
       case "get_update_status":
         return {
           running: false,
@@ -966,6 +1073,11 @@ class ApiService {
           rtps_installed: false,
         };
       case "get_platform_capabilities":
+        if (localStorage.getItem("wlib-mock-platform") === "linux") return {
+          ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", wine_proton: true,
+          runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true,
+          launch_modes: LAUNCH_MODE_OPTIONS.map((option) => option.value),
+        };
         return { ...CONSERVATIVE_PLATFORM_CAPABILITIES };
       case "get_system_deps_command":
         return {
@@ -1153,7 +1265,12 @@ export const api = new ApiService();
 export function onWebviewReady(callback: () => void): void {
   if (window.pywebview) {
     callback();
+  } else if (/QtWebEngine\//.test(navigator.userAgent)) {
+    // Desktop shell (always gui="qt"): the API is injected after load, so wait
+    // instead of running once against mocks and again for real.
+    window.addEventListener("pywebviewready", callback, { once: true });
   } else {
-    window.addEventListener("pywebviewready", callback);
+    // Plain browser (UI-only dev): pywebviewready never fires, so use mocks now.
+    callback();
   }
 }
