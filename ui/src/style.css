@@ -55,6 +55,10 @@
   --success-bg: rgba(34, 197, 94, 0.15);
   --success-border: rgba(34, 197, 94, 0.35);
   --success-text: #4ade80;
+  --danger-bg: rgba(239, 68, 68, 0.15);
+  --danger-border: rgba(239, 68, 68, 0.35);
+  --danger-text: #fca5a5;
+  --warning-text: #facc15;
   --toggle-active: #2f6a49;
 
   --status-not-started-bg: rgba(148, 163, 184, 0.12);
@@ -124,7 +128,16 @@
   --success-bg: rgba(34, 197, 94, 0.12);
   --success-border: rgba(21, 128, 61, 0.3);
   --success-text: #166534;
+  --danger-bg: rgba(239, 68, 68, 0.1);
+  --danger-border: rgba(220, 38, 38, 0.3);
+  --danger-text: #b91c1c;
+  --warning-text: #a16207;
   --toggle-active: #2f855a;
+
+  /* The -400 status utilities are tuned for dark surfaces; darken them on white. */
+  --color-red-400: #b91c1c;
+  --color-green-400: #15803d;
+  --color-yellow-400: #a16207;
 
   --status-not-started-bg: rgba(148, 163, 184, 0.12);
   --status-not-started-border: rgba(148, 163, 184, 0.28);
@@ -200,6 +213,11 @@ body {
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
+}
+
+/* Dialogs take focus on open only so Tab and Esc work; no ring around the whole panel. */
+[role="dialog"]:focus-visible {
+  outline: none;
 }
 
 /* Shared UI utilities */

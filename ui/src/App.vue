@@ -13,16 +13,12 @@ import {
   IconReload,
   IconSettings,
   IconSun,
+  IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "./services/api";
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
-
-interface StartupToast {
-  visible: boolean;
-  title: string;
-  message: string;
-}
+import { dismissToast, notify, toasts } from "./utils/toast";
 
 interface ExtensionEventDetail {
   url: string;
@@ -41,20 +37,8 @@ const currentVersion = ref("");
 const latestVersion = ref("");
 const isDark = ref(true);
 const isNavCollapsed = ref(false);
-const startupToast = ref<StartupToast>({ visible: false, title: "", message: "" });
 const navCollapsedStorageKey = "wlib-nav-collapsed";
-let startupToastTimeout: ReturnType<typeof setTimeout> | null = null;
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
-
-const showStartupToast = (title: string, message: string) => {
-  startupToast.value = { visible: true, title, message };
-  if (startupToastTimeout) {
-    clearTimeout(startupToastTimeout);
-  }
-  startupToastTimeout = setTimeout(() => {
-    startupToast.value = { visible: false, title: "", message: "" };
-  }, 5000);
-};
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
@@ -125,11 +109,12 @@ onMounted(() => {
       const extensionSync = await api.getStartupExtensionSyncStatus();
       if (extensionSync?.success && extensionSync?.updated) {
         const version = extensionSync.installed_version || extensionSync.bundled_version;
-        showStartupToast(
-          "Extension Updated",
+        notify(
           version
             ? `Synced browser extension files to v${version}. Reload the browser addon to pick up the update.`
             : "Synced browser extension files. Reload the browser addon to pick up the update.",
+          "info",
+          "Extension Updated",
         );
       }
 
@@ -159,9 +144,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
-  if (startupToastTimeout) {
-    clearTimeout(startupToastTimeout);
-  }
 });
 </script>
 
@@ -369,24 +351,34 @@ onUnmounted(() => {
 
     <!-- Main Content Area -->
     <main class="flex-1 overflow-y-auto relative">
-      <transition :name="fadeTransitionName">
+      <transition-group
+        :name="fadeTransitionName"
+        tag="div"
+        class="allow-text-selection fixed bottom-5 right-5 z-[60] flex w-full max-w-sm flex-col gap-2"
+      >
         <div
-          v-if="startupToast.visible"
-          class="fixed top-5 right-5 z-50 max-w-sm rounded-xl px-4 py-3 shadow-2xl backdrop-blur-sm"
-          style="
-            background: color-mix(in srgb, var(--bg-surface) 88%, var(--brand) 12%);
-            border: 1px solid var(--brand-deep);
-            color: var(--text-primary);
-          "
+          v-for="toast in toasts"
+          :key="toast.id"
+          :role="toast.type === 'error' ? 'alert' : 'status'"
+          class="toast flex items-start gap-3 rounded-xl px-4 py-3 shadow-2xl backdrop-blur-sm"
+          :class="`toast--${toast.type}`"
         >
-          <p class="text-sm font-semibold" style="color: var(--text-primary)">
-            {{ startupToast.title }}
-          </p>
-          <p class="mt-1 text-xs leading-5" style="color: var(--text-secondary)">
-            {{ startupToast.message }}
-          </p>
+          <div class="min-w-0 flex-1">
+            <p v-if="toast.title" class="text-sm font-semibold">{{ toast.title }}</p>
+            <p class="copyable-feedback text-xs leading-5" :class="toast.title ? 'mt-1' : ''">
+              {{ toast.message }}
+            </p>
+          </div>
+          <button
+            @click="dismissToast(toast.id)"
+            class="theme-toggle -mr-1 rounded-md p-1 shrink-0"
+            title="Dismiss"
+            aria-label="Dismiss notification"
+          >
+            <IconX class="w-4 h-4" />
+          </button>
         </div>
-      </transition>
+      </transition-group>
 
       <router-view v-slot="{ Component }">
         <transition :name="fadeTransitionName" mode="out-in">
@@ -406,6 +398,21 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+.toast {
+  background: color-mix(in srgb, var(--bg-surface) 88%, var(--brand) 12%);
+  border: 1px solid var(--brand-deep);
+  color: var(--text-primary);
+}
+.toast--success {
+  background: color-mix(in srgb, var(--bg-surface) 85%, var(--success-text) 15%);
+  border-color: var(--success-border);
+}
+.toast--error {
+  background: color-mix(in srgb, var(--bg-surface) 85%, var(--danger-text) 15%);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
 }
 
 .app-shell {

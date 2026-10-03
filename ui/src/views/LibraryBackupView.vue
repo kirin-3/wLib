@@ -708,11 +708,11 @@ const runImport = async () => {
 }
 
 .backup-error {
-  color: #f87171;
+  color: var(--danger-text);
 }
 
 .backup-success {
-  color: #4ade80;
+  color: var(--success-text);
 }
 
 .backup-actions {

@@ -16,6 +16,7 @@ import {
   type PlatformCapabilities,
 } from "../services/api";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import { notifyError } from "../utils/toast";
 
 type ConnectionStatus = "checking" | "connected" | "disconnected";
 
@@ -56,11 +57,11 @@ const openExtensionFolder = async () => {
   try {
     const res = await api.openExtensionFolder();
     if (res && res.success === false) {
-      alert("Failed to open extension folder: " + (res.error || "Unknown error"));
+      notifyError("Failed to open extension folder: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Could not open extension folder via API", e);
-    alert("Error opening extension folder: " + String(e));
+    notifyError("Error opening extension folder: " + String(e));
   }
 };
 

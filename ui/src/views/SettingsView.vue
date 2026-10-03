@@ -11,6 +11,7 @@ import {
   IconSettings,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
+import { notifyError } from "../utils/toast";
 import {
   applyMotionPreference,
   motionEnabled,
@@ -181,7 +182,7 @@ const browseProton = async () => {
     }
   } catch (e) {
     console.error("Browse proton error", e);
-    alert("Error browsing file: " + String(e));
+    notifyError("Error browsing file: " + String(e));
   }
 };
 
@@ -193,7 +194,7 @@ const browsePrefix = async () => {
     }
   } catch (e) {
     console.error("Browse prefix error", e);
-    alert("Error browsing directory: " + String(e));
+    notifyError("Error browsing directory: " + String(e));
   }
 };
 
@@ -205,7 +206,7 @@ const browseRpgmakerLinuxRunner = async () => {
     }
   } catch (e) {
     console.error("Browse RPGMaker Linux runner error", e);
-    alert("Error browsing file: " + String(e));
+    notifyError("Error browsing file: " + String(e));
   }
 };
 

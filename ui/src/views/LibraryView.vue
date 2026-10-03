@@ -43,6 +43,7 @@ import {
   type SortDir,
   type SortField,
 } from "../utils/libraryViewState";
+import { notify, notifyError } from "../utils/toast";
 
 interface UpdateNotice {
   type: "" | "success" | "error";
@@ -349,24 +350,12 @@ const filteredGames = computed(() => {
 });
 
 const updatingId = ref<number | null>(null);
-const updateNotice = ref<UpdateNotice>({ type: "", message: "" });
-let updateNoticeTimeout: ReturnType<typeof setTimeout> | null = null;
 const modalUpdateState = ref<ModalUpdateState>({
   running: false,
   type: "",
   message: "",
 });
 let modalUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
-
-const showUpdateNotice = (type: UpdateNotice["type"], message: string) => {
-  updateNotice.value = { type, message };
-  if (updateNoticeTimeout) {
-    clearTimeout(updateNoticeTimeout);
-  }
-  updateNoticeTimeout = setTimeout(() => {
-    updateNotice.value = { type: "", message: "" };
-  }, 3500);
-};
 
 const clearModalUpdateState = () => {
   if (modalUpdateTimeout) {
@@ -524,7 +513,7 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       game.launch_mode || "auto",
     );
     if (result && !result.success) {
-      alert(`Failed to launch game:\n\n${result.error}`);
+      notifyError(`Failed to launch game:\n\n${result.error}`);
     } else if (result?.success) {
       // Reconcile with the registry: HTML is untracked and short commands may already have exited.
       runningGameIds.value = new Set(await api.getRunningGames());
@@ -537,9 +526,9 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
 const stopGame = async (gameId: number) => {
   try {
     const result = await api.stopGame(gameId);
-    if (result.success === false) alert(result.error || "Could not stop game");
+    if (result.success === false) notifyError(result.error || "Could not stop game");
   } catch (error) {
-    alert(String(error));
+    notifyError(String(error));
   }
 };
 
@@ -603,7 +592,7 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       gameData.command_line_args || "",
     );
     if (result && result.success === false) {
-      alert(`Failed to add game:\n\n${result.error || "Unknown error"}`);
+      notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);
       return;
     }
 
@@ -622,7 +611,8 @@ const handleAddGame = async (gameData: AddGamePayload) => {
 const checkUpdate = async (game: GameRecord, event: Event) => {
   event.stopPropagation();
   const feedback = await runSingleGameUpdateCheck(game);
-  showUpdateNotice(feedback.type, feedback.message);
+  if (feedback.type === "error") notifyError(feedback.message);
+  else notify(feedback.message, "success");
 };
 
 const handleModalUpdateCheck = async (gameId: number) => {
@@ -719,9 +709,6 @@ onUnmounted(() => {
   window.removeEventListener("wlib-refresh-library", loadGames);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.removeEventListener("click", closeLaunchTargetMenus);
-  if (updateNoticeTimeout) {
-    clearTimeout(updateNoticeTimeout);
-  }
   if (modalUpdateTimeout) {
     clearTimeout(modalUpdateTimeout);
   }
@@ -951,18 +938,6 @@ onUnmounted(() => {
 
     <!-- Search & Filter Bar -->
     <div v-if="games.length > 0" class="mb-6 space-y-3">
-      <div
-        v-if="updateNotice.message"
-        class="rounded-lg px-3 py-2 text-sm"
-        :style="
-          updateNotice.type === 'error'
-            ? 'background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); color: #fecaca;'
-            : 'background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.35); color: #bbf7d0;'
-        "
-      >
-        {{ updateNotice.message }}
-      </div>
-
       <!-- Search Input -->
       <div class="relative">
         <IconZoom
@@ -1408,6 +1383,7 @@ onUnmounted(() => {
       @stop="stopGame"
       @check-updates="handleModalUpdateCheck"
       @targets-changed="handleLaunchTargetsChanged"
+      @quick-saved="loadGames"
     />
   </div>
   </div>
@@ -1588,10 +1564,11 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.42);
 }
 
+/* Sits on cover art in both themes, so it keeps dark-on-image colors. */
 .rating-badge {
-  background: var(--overlay-scrim);
+  background: var(--overlay-scrim-strong);
   border: 1px solid var(--overlay-border);
-  color: var(--rating-accent);
+  color: #facc15;
 }
 
 .rating-badge svg {

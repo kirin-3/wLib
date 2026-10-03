@@ -11,6 +11,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
+import { notifyError } from "../utils/toast";
 import { isNewerVersion } from "../utils/appVersion";
 import type {
   GameRecord,
@@ -73,11 +74,11 @@ const setFrequency = async (freq: string) => {
   try {
     const res = await api.setAutoCheckSetting(freq);
     if (res && res.success === false) {
-      alert("Failed to set frequency: " + (res.error || "Unknown error"));
+      notifyError("Failed to set frequency: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to set frequency", e);
-    alert("Error setting frequency: " + String(e));
+    notifyError("Error setting frequency: " + String(e));
   }
 };
 
@@ -85,14 +86,14 @@ const startCheck = async () => {
   try {
     const result = await api.checkAllUpdates();
     if (result && result.success === false) {
-      alert("Failed to start check: " + (result.error || "Unknown error"));
+      notifyError("Failed to start check: " + (result.error || "Unknown error"));
     } else if (result && result.success) {
       lastCheckTime.value = new Date().toLocaleTimeString();
       startPolling();
     }
   } catch (e) {
     console.error("Failed to start update check", e);
-    alert("Error starting check: " + String(e));
+    notifyError("Error starting check: " + String(e));
   }
 };
 
@@ -100,11 +101,11 @@ const cancelCheck = async () => {
   try {
     const result = await api.cancelUpdateCheck();
     if (result && result.success === false) {
-      alert("Failed to cancel check: " + (result.error || "Unknown error"));
+      notifyError("Failed to cancel check: " + (result.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to cancel", e);
-    alert("Error cancelling check: " + String(e));
+    notifyError("Error cancelling check: " + String(e));
   }
 };
 
@@ -503,7 +504,7 @@ onUnmounted(() => {
                 v-if="game.f95_url"
                 @click="openInBrowser(game.f95_url)"
                 class="ui-icon-btn p-1.5 rounded-lg transition-all"
-                style="color: #b380cc"
+                style="color: var(--brand)"
                 title="Open F95Zone thread"
               >
                 <IconExternalLink class="ui-action-icon" />

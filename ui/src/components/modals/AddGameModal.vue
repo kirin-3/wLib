@@ -10,6 +10,7 @@ import {
 import { getLaunchModeOptions } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
+import { useModalKeyboard } from "../../utils/modalKeyboard";
 
 interface AddGamePayload {
   title: string;
@@ -149,6 +150,9 @@ const close = () => {
   emit("update:modelValue", false);
 };
 
+const modalRef = ref<HTMLElement | null>(null);
+useModalKeyboard(modalRef, () => props.modelValue, close);
+
 const browseExe = async () => {
   const p = await api.browseFile(exePath.value || "");
   if (p) exePath.value = p;
@@ -185,6 +189,11 @@ const save = () => {
 
     <!-- Modal Content -->
     <div
+      ref="modalRef"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add New Game"
+      tabindex="-1"
       class="modal-content w-full max-w-lg rounded-2xl shadow-2xl relative overflow-hidden transform transition-all flex flex-col max-h-screen"
     >
       <div
@@ -199,6 +208,8 @@ const save = () => {
         </h3>
         <button
           @click="close"
+          aria-label="Close"
+          title="Close (Esc)"
           class="transition-colors"
           style="color: var(--text-muted)"
           onmouseover="this.style.color = 'var(--text-primary)'"

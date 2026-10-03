@@ -20,6 +20,8 @@ import {
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
 import { api } from "../../services/api";
+import { notify, notifyError } from "../../utils/toast";
+import { useModalKeyboard } from "../../utils/modalKeyboard";
 import type {
   GameRecord,
   LaunchTarget,
@@ -71,21 +73,21 @@ const ENGINE_OPTIONS = [
 
 type EngineOption = (typeof ENGINE_OPTIONS)[number];
 
-const ENGINE_STYLES: Record<EngineOption, string> = {
-  ADRIFT: "background: rgba(109, 128, 145, 0.16); border: 1px solid rgba(109, 128, 145, 0.36); color: #bfd2e0",
-  Flash: "background: rgba(189, 93, 56, 0.16); border: 1px solid rgba(189, 93, 56, 0.36); color: #f3b28f",
-  HTML: "background: rgba(191, 125, 54, 0.16); border: 1px solid rgba(191, 125, 54, 0.36); color: #e8c08b",
-  Java: "background: rgba(177, 120, 45, 0.16); border: 1px solid rgba(177, 120, 45, 0.36); color: #f1ca78",
-  Others: "background: var(--bg-overlay); border: 1px solid var(--border); color: var(--text-secondary)",
-  QSP: "background: rgba(125, 82, 156, 0.16); border: 1px solid rgba(125, 82, 156, 0.36); color: #cfb0f0",
-  RAGS: "background: rgba(150, 80, 72, 0.16); border: 1px solid rgba(150, 80, 72, 0.36); color: #e1afa7",
-  RPGM: "background: rgba(179, 128, 204, 0.16); border: 1px solid rgba(179, 128, 204, 0.36); color: #d7b6ea",
-  "Ren'Py": "background: rgba(176, 90, 112, 0.16); border: 1px solid rgba(176, 90, 112, 0.36); color: #e6b0c0",
-  Tads: "background: rgba(104, 127, 83, 0.16); border: 1px solid rgba(104, 127, 83, 0.36); color: #c8ddaf",
-  Unity: "background: rgba(93, 141, 147, 0.16); border: 1px solid rgba(93, 141, 147, 0.36); color: #add9dd",
-  "Unreal Engine": "background: rgba(119, 119, 132, 0.16); border: 1px solid rgba(119, 119, 132, 0.36); color: #d6d6dc",
-  WebGL: "background: rgba(74, 148, 161, 0.16); border: 1px solid rgba(74, 148, 161, 0.36); color: #9fdbe5",
-  "Wolf RPG": "background: rgba(145, 91, 53, 0.16); border: 1px solid rgba(145, 91, 53, 0.36); color: #e2ba93",
+// One hue per engine; the text mixes toward --text-primary so it stays readable in both themes.
+const ENGINE_HUES: Record<Exclude<EngineOption, "Others">, string> = {
+  ADRIFT: "109, 128, 145",
+  Flash: "189, 93, 56",
+  HTML: "191, 125, 54",
+  Java: "177, 120, 45",
+  QSP: "125, 82, 156",
+  RAGS: "150, 80, 72",
+  RPGM: "179, 128, 204",
+  "Ren'Py": "176, 90, 112",
+  Tads: "104, 127, 83",
+  Unity: "93, 141, 147",
+  "Unreal Engine": "119, 119, 132",
+  WebGL: "74, 148, 161",
+  "Wolf RPG": "145, 91, 53",
 };
 
 const props = defineProps<{
@@ -103,6 +105,7 @@ const emit = defineEmits<{
   "check-updates": [gameId: number];
   "targets-changed": [];
   stop: [gameId: number];
+  "quick-saved": [];
 }>();
 
 // Editable fields
@@ -261,7 +264,13 @@ const normalizeEngine = (value: string | null | undefined): EngineOption => {
   return match || "Others";
 };
 
-const getEngineBadgeStyle = (value: EngineOption): string => ENGINE_STYLES[value];
+const getEngineBadgeStyle = (value: EngineOption): string => {
+  if (value === "Others") {
+    return "background: var(--bg-overlay); border: 1px solid var(--border); color: var(--text-secondary)";
+  }
+  const rgb = ENGINE_HUES[value];
+  return `background: rgba(${rgb}, 0.16); border: 1px solid rgba(${rgb}, 0.36); color: color-mix(in srgb, rgb(${rgb}) 55%, var(--text-primary))`;
+};
 
 const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
 
@@ -307,17 +316,37 @@ const summaryItems = computed(() => [
   {
     label: "Thread Updated",
     value: threadMainPostEditedDisplay.value,
-    accent: hasUpdate.value ? "color: #facc15" : "",
+    accent: hasUpdate.value ? "color: var(--warning-text)" : "",
     showStar: false,
   },
 ]);
 
 const ratingCategories = [
-  { label: "Graphics", model: "ratingGraphics", icon: IconPaletteFilled },
-  { label: "Story", model: "ratingStory", icon: IconBookFilled },
-  { label: "Fappability", model: "ratingFappability", icon: IconFlameFilled },
-  { label: "Gameplay", model: "ratingGameplay", icon: IconDeviceGamepad2Filled },
+  { label: "Graphics", field: "rating_graphics", rating: ratingGraphics, icon: IconPaletteFilled },
+  { label: "Story", field: "rating_story", rating: ratingStory, icon: IconBookFilled },
+  { label: "Fappability", field: "rating_fappability", rating: ratingFappability, icon: IconFlameFilled },
+  { label: "Gameplay", field: "rating_gameplay", rating: ratingGameplay, icon: IconDeviceGamepad2Filled },
 ] as const;
+
+// Fields that still need "Save Changes". Status, favorite, ratings and tags save on click.
+const formSnapshot = (): string =>
+  JSON.stringify([
+    title.value,
+    exePath.value,
+    f95Url.value,
+    version.value,
+    commandLineArgs.value,
+    coverImage.value,
+    engine.value,
+    runJapaneseLocale.value,
+    runWayland.value,
+    autoInjectCe.value,
+    useCustomPrefix.value,
+    customPrefix.value,
+    protonVersion.value,
+    launchMode.value,
+  ]);
+const savedSnapshot = ref("");
 
 const lastSyncedId = ref<number | null>(null);
 
@@ -367,6 +396,7 @@ watch(
         ratingStory.value = g.rating_story || 0;
         ratingFappability.value = g.rating_fappability || 0;
         ratingGameplay.value = g.rating_gameplay || 0;
+        savedSnapshot.value = formSnapshot();
       }
     } else if (!isOpen) {
       lastSyncedId.value = null;
@@ -493,6 +523,55 @@ const close = () => {
   emit("update:modelValue", false);
 };
 
+// User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
+const requestClose = () => {
+  if (formSnapshot() !== savedSnapshot.value && !confirm("Discard unsaved changes to this game?")) {
+    return;
+  }
+  close();
+};
+
+const modalRef = ref<HTMLElement | null>(null);
+useModalKeyboard(
+  modalRef,
+  () => props.modelValue && !!props.game,
+  () => {
+    if (engineMenuOpen.value) engineMenuOpen.value = false;
+    else requestClose();
+  },
+);
+
+const saveQuickFields = async (fields: Record<string, unknown>) => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  try {
+    const res = await api.updateGame(props.game.id, fields);
+    if (res && res.success === false) {
+      notifyError("Failed to save: " + (res.error || "Unknown error"));
+      return;
+    }
+    emit("quick-saved");
+  } catch (e) {
+    console.error("Failed to save game", e);
+    notifyError("Error saving: " + String(e));
+  }
+};
+
+const setPlayStatus = (value: PlayStatus) => {
+  if (playStatus.value === value) return;
+  playStatus.value = value;
+  void saveQuickFields({ play_status: value });
+};
+
+const toggleFavorite = () => {
+  isFavorite.value = !isFavorite.value;
+  void saveQuickFields({ is_favorite: isFavorite.value ? 1 : 0 });
+};
+
+const setRating = (category: (typeof ratingCategories)[number], star: number) => {
+  category.rating.value = star;
+  void saveQuickFields({ [category.field]: star });
+};
+
 const browseExe = async () => {
   try {
     const p = await api.browseFile(exePath.value || "");
@@ -501,7 +580,7 @@ const browseExe = async () => {
     }
   } catch (e) {
     console.error("Failed to browse file", e);
-    alert("Error browsing file: " + String(e));
+    notifyError("Error browsing file: " + String(e));
   }
 };
 
@@ -587,7 +666,7 @@ const browseNewTargetPath = async () => {
     if (p) newTargetPath.value = p;
   } catch (e) {
     console.error("Failed to browse launch target", e);
-    alert("Error browsing file: " + String(e));
+    notifyError("Error browsing file: " + String(e));
   }
 };
 
@@ -597,7 +676,7 @@ const browseEditTargetPath = async () => {
     if (p) editTargetPath.value = p;
   } catch (e) {
     console.error("Failed to browse launch target", e);
-    alert("Error browsing file: " + String(e));
+    notifyError("Error browsing file: " + String(e));
   }
 };
 
@@ -633,7 +712,7 @@ const addLaunchTarget = async () => {
   const label = newTargetLabel.value.trim();
   const path = newTargetPath.value.trim();
   if (!label || !path) {
-    alert("Launch target label and executable path are required.");
+    notifyError("Launch target label and executable path are required.");
     return;
   }
 
@@ -646,7 +725,7 @@ const addLaunchTarget = async () => {
       launchTargets.value.length,
     );
     if (res && res.success === false) {
-      alert("Failed to add launch target: " + (res.error || "Unknown error"));
+      notifyError("Failed to add launch target: " + (res.error || "Unknown error"));
       return;
     }
     if (res.target && isCurrentGame(gameId)) {
@@ -656,7 +735,7 @@ const addLaunchTarget = async () => {
     emit("targets-changed");
   } catch (e) {
     console.error("Failed to add launch target", e);
-    alert("Error adding launch target: " + String(e));
+    notifyError("Error adding launch target: " + String(e));
   } finally {
     addingLaunchTarget.value = false;
   }
@@ -668,7 +747,7 @@ const saveLaunchTarget = async (target: LaunchTarget) => {
   const label = editTargetLabel.value.trim();
   const path = editTargetPath.value.trim();
   if (!label || !path) {
-    alert("Launch target label and executable path are required.");
+    notifyError("Launch target label and executable path are required.");
     return;
   }
 
@@ -680,7 +759,7 @@ const saveLaunchTarget = async (target: LaunchTarget) => {
       sort_order: target.sort_order,
     });
     if (res && res.success === false) {
-      alert("Failed to save launch target: " + (res.error || "Unknown error"));
+      notifyError("Failed to save launch target: " + (res.error || "Unknown error"));
       return;
     }
     if (res.target && isCurrentGame(gameId)) {
@@ -692,7 +771,7 @@ const saveLaunchTarget = async (target: LaunchTarget) => {
     emit("targets-changed");
   } catch (e) {
     console.error("Failed to save launch target", e);
-    alert("Error saving launch target: " + String(e));
+    notifyError("Error saving launch target: " + String(e));
   } finally {
     savingTargetId.value = null;
   }
@@ -706,7 +785,7 @@ const deleteLaunchTarget = async (target: LaunchTarget) => {
   try {
     const res = await api.deleteLaunchTarget(target.id);
     if (res && res.success === false) {
-      alert("Failed to remove launch target: " + (res.error || "Unknown error"));
+      notifyError("Failed to remove launch target: " + (res.error || "Unknown error"));
       return;
     }
     if (isCurrentGame(gameId)) {
@@ -718,7 +797,7 @@ const deleteLaunchTarget = async (target: LaunchTarget) => {
     emit("targets-changed");
   } catch (e) {
     console.error("Failed to remove launch target", e);
-    alert("Error removing launch target: " + String(e));
+    notifyError("Error removing launch target: " + String(e));
   } finally {
     deletingTargetId.value = null;
   }
@@ -746,7 +825,7 @@ const moveLaunchTarget = async (index: number, direction: -1 | 1) => {
       launchTargets.value.map((item) => item.id),
     );
     if (res && res.success === false) {
-      alert("Failed to reorder launch targets: " + (res.error || "Unknown error"));
+      notifyError("Failed to reorder launch targets: " + (res.error || "Unknown error"));
       if (isCurrentGame(gameId)) {
         await loadLaunchTargets();
       }
@@ -758,7 +837,7 @@ const moveLaunchTarget = async (index: number, direction: -1 | 1) => {
     emit("targets-changed");
   } catch (e) {
     console.error("Failed to reorder launch targets", e);
-    alert("Error reordering launch targets: " + String(e));
+    notifyError("Error reordering launch targets: " + String(e));
     if (isCurrentGame(gameId)) {
       await loadLaunchTargets();
     }
@@ -775,20 +854,20 @@ const browseCustomPrefix = async () => {
     }
   } catch (e) {
     console.error("Failed to browse directory", e);
-    alert("Error browsing directory: " + String(e));
+    notifyError("Error browsing directory: " + String(e));
   }
 };
 
 const installRtpsToPrefix = async () => {
-  alert("RTP installation has started in the background. It may take several minutes to complete.");
+  notify("RTP installation has started in the background. It may take several minutes to complete.");
   try {
     const res = await api.installRpgmakerRtp(customPrefix.value, protonVersion.value);
     if (res && res.success === false) {
-      alert("Failed to install RTPs: " + (res.error || "Unknown error"));
+      notifyError("Failed to install RTPs: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to install RTPs", e);
-    alert("Error installing RTPs: " + String(e));
+    notifyError("Error installing RTPs: " + String(e));
   }
 };
 
@@ -835,14 +914,15 @@ const save = async () => {
       rating_gameplay: ratingGameplay.value,
     });
     if (res && res.success === false) {
-      alert("Failed to save game: " + (res.error || "Unknown error"));
+      notifyError("Failed to save game: " + (res.error || "Unknown error"));
     } else {
+      savedSnapshot.value = formSnapshot();
       emit("updated");
       close();
     }
   } catch (e) {
     console.error("Failed to save game", e);
-    alert("Error saving game: " + String(e));
+    notifyError("Error saving game: " + String(e));
   } finally {
     saving.value = false;
   }
@@ -859,14 +939,14 @@ const deleteGame = async () => {
   try {
     const res = await api.deleteGame(props.game.id);
     if (res && res.success === false) {
-      alert("Failed to delete game: " + (res.error || "Unknown error"));
+      notifyError("Failed to delete game: " + (res.error || "Unknown error"));
     } else {
       emit("deleted");
       close();
     }
   } catch (e) {
     console.error("Failed to delete", e);
-    alert("Error deleting game: " + String(e));
+    notifyError("Error deleting game: " + String(e));
   } finally {
     deleting.value = false;
   }
@@ -959,24 +1039,26 @@ const openSaveFolder = async (path: string) => {
   try {
     const res = await api.openFolder(path);
     if (res && res.success === false) {
-      alert("Failed to open folder: " + (res.error || "Unknown error"));
+      notifyError("Failed to open folder: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to open folder", e);
-    alert("Error opening folder: " + String(e));
+    notifyError("Error opening folder: " + String(e));
   }
 };
 
 const addTag = () => {
   const t = newTag.value.trim();
+  newTag.value = "";
   if (t && !tags.value.includes(t)) {
     tags.value.push(t);
+    void saveQuickFields({ tags: tags.value.join(", ") });
   }
-  newTag.value = "";
 };
 
 const removeTag = (tag: string) => {
   tags.value = tags.value.filter((t) => t !== tag);
+  void saveQuickFields({ tags: tags.value.join(", ") });
 };
 
 const formatPlaytime = (seconds: number | null | undefined): string => {
@@ -1069,11 +1151,11 @@ const openInBrowser = async () => {
     try {
       const res = await api.openInBrowser(f95Url.value);
       if (res && res.success === false) {
-        alert("Failed to open browser: " + (res.error || "Unknown error"));
+        notifyError("Failed to open browser: " + (res.error || "Unknown error"));
       }
     } catch (e) {
       console.error("Failed to open browser", e);
-      alert("Error opening browser: " + String(e));
+      notifyError("Error opening browser: " + String(e));
     }
   }
 };
@@ -1086,15 +1168,22 @@ const openInBrowser = async () => {
   >
     <div
       class="absolute inset-0 bg-black/80"
-      @click="close"
+      @click="requestClose"
     ></div>
 
     <div
+      ref="modalRef"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="title || 'Game details'"
+      tabindex="-1"
       class="modal-content relative flex max-h-[90vh] w-full max-w-[49rem] flex-col overflow-hidden rounded-xl"
     >
       <div class="absolute right-4 top-4 z-10">
         <button
-          @click="close"
+          @click="requestClose"
+          aria-label="Close"
+          title="Close (Esc)"
           class="modal-close-btn transition-colors"
           style="color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border)"
         >
@@ -1128,11 +1217,11 @@ const openInBrowser = async () => {
 
           <div class="modal-toolbar-group modal-toolbar-group--end">
             <button
-              @click="isFavorite = !isFavorite"
+              @click="toggleFavorite"
               class="modal-toolbar-action ui-action-btn"
               :style="
                 isFavorite
-                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: #facc15'
+                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: var(--rating-accent)'
                   : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
               "
             >
@@ -1164,7 +1253,7 @@ const openInBrowser = async () => {
             <button
               v-for="s in statuses"
               :key="s.value"
-              @click="playStatus = s.value"
+              @click="setPlayStatus(s.value)"
               :class="[statusButtonClasses(s.value), 'w-full']"
             >
               <component :is="s.icon" class="ui-status-icon" />
@@ -1656,7 +1745,7 @@ const openInBrowser = async () => {
                 <button
                   @click="installRtpsToPrefix"
                   class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
-                  style="background: rgba(90, 57, 104, 0.2); color: #b380cc; border: 1px solid rgba(90, 57, 104, 0.4);"
+                  style="background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);"
                 >
                   Install RTPs to this Prefix
                 </button>
@@ -1697,7 +1786,7 @@ const openInBrowser = async () => {
           <div class="grid grid-cols-2 gap-3">
             <div
               v-for="cat in ratingCategories"
-              :key="cat.model"
+              :key="cat.field"
               class="flex items-center gap-3 rounded-lg p-2"
               style="background: var(--bg-raised); border: 1px solid var(--border)"
             >
@@ -1709,28 +1798,14 @@ const openInBrowser = async () => {
                 <button
                   v-for="star in 5"
                   :key="star"
-                  @click="
-                    cat.model === 'ratingGraphics'
-                      ? (ratingGraphics = star)
-                      : cat.model === 'ratingStory'
-                        ? (ratingStory = star)
-                        : cat.model === 'ratingFappability'
-                          ? (ratingFappability = star)
-                          : (ratingGameplay = star)
-                  "
+                  @click="setRating(cat, star)"
+                  :aria-label="`Rate ${cat.label} ${star} of 5`"
                   class="transition-transform hover:scale-110"
                 >
                   <IconStarFilled
                     class="w-5 h-5"
                     :style="
-                      star >
-                      (cat.model === 'ratingGraphics'
-                        ? ratingGraphics
-                        : cat.model === 'ratingStory'
-                          ? ratingStory
-                          : cat.model === 'ratingFappability'
-                            ? ratingFappability
-                            : ratingGameplay)
+                      star > cat.rating.value
                         ? 'color: var(--border)'
                         : 'color: var(--rating-accent)'
                     "
@@ -1740,15 +1815,7 @@ const openInBrowser = async () => {
               <span
                 class="text-xs font-mono ml-auto"
                 style="color: var(--text-muted)"
-                >{{
-                  cat.model === "ratingGraphics"
-                    ? ratingGraphics
-                    : cat.model === "ratingStory"
-                      ? ratingStory
-                      : cat.model === "ratingFappability"
-                        ? ratingFappability
-                        : ratingGameplay
-                }}/5</span
+                >{{ cat.rating.value }}/5</span
               >
             </div>
           </div>
@@ -1897,7 +1964,7 @@ const openInBrowser = async () => {
           class="mb-3 rounded-md border px-3 py-2 text-xs"
           :style="
             updateCheckState.type === 'error'
-              ? 'background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.28); color: #fca5a5'
+              ? 'background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger-text)'
               : 'background: var(--success-bg); border-color: var(--success-border); color: var(--success-text)'
           "
         >
