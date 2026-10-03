@@ -44,6 +44,19 @@ class MemoryStorage implements Storage {
   }
 }
 
+test("new collections and sortable table columns survive persistence", () => {
+  const storage = new MemoryStorage();
+  for (const filterCollection of ["Updates available", "Recently played"]) {
+    for (const sortBy of ["version", "play_status", "engine"]) {
+      saveLibraryViewState(storage, normalizeLibraryViewState({ filterCollection, sortBy, layoutMode: "list" }));
+      const { state } = readLibraryViewState(storage);
+      assert.equal(state.filterCollection, filterCollection);
+      assert.equal(state.sortBy, sortBy);
+      assert.equal(state.layoutMode, "list");
+    }
+  }
+});
+
 test("normalizeLibraryViewState falls back on invalid static values", () => {
   const state = normalizeLibraryViewState({
     layoutMode: "poster",

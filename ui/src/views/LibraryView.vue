@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   IconChevronDown,
+  IconArrowUp,
+  IconClock,
   IconColumns2Filled,
   IconDeviceGamepad2,
   IconDeviceGamepad2Filled,
@@ -13,8 +15,8 @@ import {
   IconLayoutListFilled,
   IconLoader2,
   IconPhotoFilled,
-  IconPlayerPlayFilled,
   IconPlayerStopFilled,
+  IconPlayerPlayFilled,
   IconRefresh,
   IconZoom,
   IconStarFilled,
@@ -44,6 +46,13 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { notify, notifyError } from "../utils/toast";
+import {
+  compareLibraryGames,
+  gameFolder,
+  gameTags,
+  hasAvailableUpdate,
+  matchesGameSearch,
+} from "../utils/libraryGames";
 
 interface UpdateNotice {
   type: "" | "success" | "error";
@@ -97,12 +106,49 @@ const showAddModal = ref(false);
 const showDetailModal = ref(false);
 const selectedGame = ref<GameRecord | null>(null);
 const openLaunchTargetMenuId = ref<number | null>(null);
+const searchInput = ref<HTMLInputElement | null>(null);
+const tagSearchQuery = ref("");
+const markingUpdatedIds = ref(new Set<number>());
+const contextMenu = ref<{ game: GameRecord; x: number; y: number } | null>(
+  null,
+);
+const contextMenuElement = ref<HTMLElement | null>(null);
+let contextMenuTrigger: HTMLElement | null = null;
+
+const tableColumns: Array<{ key: SortField; label: string }> = [
+  { key: "title", label: "Title" },
+  { key: "version", label: "Version" },
+  { key: "play_status", label: "Status" },
+  { key: "engine", label: "Engine" },
+  { key: "playtime_seconds", label: "Playtime" },
+  { key: "last_played", label: "Last played" },
+];
+
+const updateCount = computed(
+  () => games.value.filter(hasAvailableUpdate).length,
+);
+const collections: Array<{
+  value: FilterCollection;
+  label: string;
+  icon: typeof IconClock;
+}> = [
+  { value: "All", label: "All Games", icon: IconLayoutGridFilled },
+  { value: "Favorites", label: "Favorites", icon: IconStarFilled },
+  { value: "Updates available", label: "Updates available", icon: IconArrowUp },
+  { value: "Recently played", label: "Recently played", icon: IconClock },
+];
 
 // Search & Filter state
 const searchQuery = ref("");
-const filterStatuses = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterStatuses]);
-const filterCollection = ref<FilterCollection>(DEFAULT_LIBRARY_VIEW_STATE.filterCollection);
-const filterEngines = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterEngines]);
+const filterStatuses = ref<string[]>([
+  ...DEFAULT_LIBRARY_VIEW_STATE.filterStatuses,
+]);
+const filterCollection = ref<FilterCollection>(
+  DEFAULT_LIBRARY_VIEW_STATE.filterCollection,
+);
+const filterEngines = ref<string[]>([
+  ...DEFAULT_LIBRARY_VIEW_STATE.filterEngines,
+]);
 const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
@@ -119,7 +165,9 @@ const normalizeF95Url = (rawUrl: unknown): string => {
 
   try {
     const parsed = new URL(trimmed);
-    const match = parsed.pathname.match(/^\/threads\/(?:(.+)\.)?(\d+)(?:\/.*)?$/);
+    const match = parsed.pathname.match(
+      /^\/threads\/(?:(.+)\.)?(\d+)(?:\/.*)?$/,
+    );
     if (match) {
       const slug = (match[1] || "").replace(/^\.+|\.+$/g, "");
       parsed.pathname = slug
@@ -156,7 +204,19 @@ const toggleSort = (field: SortField) => {
     sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
   } else {
     sortBy.value = field;
-    sortDir.value = field === "title" ? "asc" : "desc"; // ratings default to high-first
+    sortDir.value = ["title", "version", "play_status", "engine"].includes(
+      field,
+    )
+      ? "asc"
+      : "desc";
+  }
+};
+
+const selectCollection = (collection: FilterCollection) => {
+  filterCollection.value = collection;
+  if (collection === "Recently played") {
+    sortBy.value = "last_played";
+    sortDir.value = "desc";
   }
 };
 
@@ -168,10 +228,14 @@ const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
 };
 
-const allStatuses = computed(() => getPlayStatusOptions([
-  ...customStatuses.value,
-  ...games.value.map((game) => normalizePlayStatus(game.play_status, game.status)),
-]));
+const allStatuses = computed(() =>
+  getPlayStatusOptions([
+    ...customStatuses.value,
+    ...games.value.map((game) =>
+      normalizePlayStatus(game.play_status, game.status),
+    ),
+  ]),
+);
 
 const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "title", label: "A-Z" },
@@ -201,19 +265,21 @@ const uniqueEngines = computed(() => {
   return [...set].sort();
 });
 
-const uniqueTags = computed(() => {
-  const set = new Set<string>();
-  games.value.forEach((g) => {
-    if (g.tags) {
-      const list = typeof g.tags === "string" ? g.tags.split(",") : g.tags;
-      list.forEach((t) => {
-        const trimmed = t.trim();
-        if (trimmed) set.add(trimmed);
-      });
-    }
-  });
-  return [...set].sort();
+const tagCounts = computed(() => {
+  const counts = new Map<string, number>();
+  games.value.forEach((game) =>
+    gameTags(game).forEach((tag) =>
+      counts.set(tag, (counts.get(tag) || 0) + 1),
+    ),
+  );
+  return counts;
 });
+const uniqueTags = computed(() => [...tagCounts.value.keys()].sort());
+const visibleTags = computed(() =>
+  uniqueTags.value.filter((tag) =>
+    tag.toLowerCase().includes(tagSearchQuery.value.trim().toLowerCase()),
+  ),
+);
 
 const activeFilterCount = computed(
   () =>
@@ -255,8 +321,12 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterSections: filterSections.value,
   });
 
-const sameStringArray = (left: readonly string[], right: readonly string[]): boolean =>
-  left.length === right.length && left.every((value, index) => value === right[index]);
+const sameStringArray = (
+  left: readonly string[],
+  right: readonly string[],
+): boolean =>
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
 
 const persistLibraryViewState = () => {
   saveLibraryViewState(localStorage, buildLibraryViewState());
@@ -274,33 +344,25 @@ const restoreLibraryViewState = () => {
 
 const filteredGames = computed(() => {
   let result = [...games.value];
-  const parseF95Rating = (rating: unknown): number => {
-    if (!rating) return 0;
-    const match = String(rating).match(/([\d.]+)/);
-    return match ? parseFloat(match[1] ?? "0") : 0;
-  };
-  const ownRatingAverage = (game: GameRecord): number => {
-    const total =
-      (Number(game.rating_graphics) || 0) +
-      (Number(game.rating_story) || 0) +
-      (Number(game.rating_fappability) || 0) +
-      (Number(game.rating_gameplay) || 0);
-    return total / 4;
-  };
-  const q = searchQuery.value.toLowerCase();
-  if (q) {
-    result = result.filter((g) => {
-      const t = (g.title || "").toLowerCase();
-      const d = (g.developer || "").toLowerCase();
-      return t.includes(q) || d.includes(q);
-    });
-  }
-  if (filterCollection.value === 'Favorites') {
+  if (searchQuery.value.trim())
+    result = result.filter((game) =>
+      matchesGameSearch(game, searchQuery.value),
+    );
+  if (filterCollection.value === "Favorites") {
     result = result.filter((g) => g.is_favorite);
+  }
+  if (filterCollection.value === "Updates available")
+    result = result.filter(hasAvailableUpdate);
+  if (filterCollection.value === "Recently played") {
+    result = result.filter((game) => !!game.last_played);
   }
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
-      return filterStatuses.value.some((status) => status.toLowerCase() === normalizePlayStatus(g.play_status, g.status).toLowerCase());
+      return filterStatuses.value.some(
+        (status) =>
+          status.toLowerCase() ===
+          normalizePlayStatus(g.play_status, g.status).toLowerCase(),
+      );
     });
   }
   if (filterEngines.value.length) {
@@ -309,43 +371,11 @@ const filteredGames = computed(() => {
     );
   }
   if (filterTags.value.length) {
-    result = result.filter((g) => {
-      const gameTags =
-        typeof g.tags === "string"
-          ? g.tags.split(",").map((t) => t.trim())
-          : g.tags || [];
-      // Intersect: require ALL selected tags to be present in the game's tags
-      return filterTags.value.every((ft) => gameTags.includes(ft));
-    });
+    result = result.filter((game) =>
+      filterTags.value.every((tag) => gameTags(game).includes(tag)),
+    );
   }
-  // Sort
-  result.sort((a, b) => {
-    const field = sortBy.value;
-    let va: string | number;
-    let vb: string | number;
-    if (field === "own_rating") {
-      va = ownRatingAverage(a);
-      vb = ownRatingAverage(b);
-    } else if (field === "rating") {
-      va = parseF95Rating(a.rating);
-      vb = parseF95Rating(b.rating);
-    } else if (field === "playtime_seconds") {
-      va = Number(a.playtime_seconds) || 0;
-      vb = Number(b.playtime_seconds) || 0;
-    } else if (field === "last_played") {
-      va = a.last_played ? new Date(a.last_played).getTime() : 0;
-      vb = b.last_played ? new Date(b.last_played).getTime() : 0;
-    } else if (field === "date_added") {
-      va = a.date_added ? new Date(a.date_added).getTime() : 0;
-      vb = b.date_added ? new Date(b.date_added).getTime() : 0;
-    } else {
-      va = String(a.title || "").toLowerCase();
-      vb = String(b.title || "").toLowerCase();
-    }
-    if (va < vb) return sortDir.value === "asc" ? -1 : 1;
-    if (va > vb) return sortDir.value === "asc" ? 1 : -1;
-    return 0;
-  });
+  result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
 });
 
@@ -386,10 +416,14 @@ const getGamePlayStatusMeta = (game: GameRecord) => {
 };
 
 const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
-  return [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  return [...targets].sort(
+    (a, b) => a.sort_order - b.sort_order || a.id - b.id,
+  );
 };
 
-const getEffectiveLaunchTargets = (game: GameRecord): EffectiveLaunchTarget[] => [
+const getEffectiveLaunchTargets = (
+  game: GameRecord,
+): EffectiveLaunchTarget[] => [
   {
     id: `default-${game.id}`,
     label: "Default",
@@ -405,7 +439,9 @@ const getEffectiveLaunchTargets = (game: GameRecord): EffectiveLaunchTarget[] =>
 ];
 
 const hasAdditionalLaunchTargets = (game: GameRecord): boolean => {
-  return !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0;
+  return (
+    !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0
+  );
 };
 
 const closeLaunchTargetMenus = () => {
@@ -417,9 +453,12 @@ const toggleLaunchTargetMenu = (game: GameRecord) => {
     openLaunchTargetMenuId.value === game.id ? null : game.id;
 };
 
+let gamesRequest = 0;
 const loadGames = async () => {
+  const request = ++gamesRequest;
   try {
     const data = await api.getGames();
+    if (request !== gamesRequest) return;
     if (data) {
       games.value = data;
       if (selectedGame.value) {
@@ -434,6 +473,7 @@ const loadGames = async () => {
 };
 
 const openDetail = (game: GameRecord) => {
+  closeContextMenu(false);
   clearModalUpdateState();
   selectedGame.value = game;
   showDetailModal.value = true;
@@ -500,6 +540,7 @@ const runSingleGameUpdateCheck = async (game: GameRecord) => {
 };
 
 const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
+  closeLaunchTargetMenus();
   try {
     const result = await api.launchGame(
       game.id,
@@ -540,6 +581,15 @@ const launchSelectedTarget = async (
 ) => {
   closeLaunchTargetMenus();
   await launchGameFast(game, target.exe_path);
+};
+
+const launchTargetFromSelect = (game: GameRecord, event: Event) => {
+  const select = event.target as HTMLSelectElement;
+  const target = getEffectiveLaunchTargets(game).find(
+    (entry) => entry.id === select.value,
+  );
+  select.value = "";
+  if (target) void launchSelectedTarget(game, target);
 };
 
 // Handle incoming extension import
@@ -608,11 +658,169 @@ const handleAddGame = async (gameData: AddGamePayload) => {
   }
 };
 
-const checkUpdate = async (game: GameRecord, event: Event) => {
-  event.stopPropagation();
+const checkUpdate = async (game: GameRecord) => {
+  if (updatingId.value !== null) return;
   const feedback = await runSingleGameUpdateCheck(game);
   if (feedback.type === "error") notifyError(feedback.message);
   else notify(feedback.message, "success");
+};
+
+const markAsUpdated = async (game: GameRecord) => {
+  if (markingUpdatedIds.value.has(game.id)) return;
+  markingUpdatedIds.value.add(game.id);
+  try {
+    const result = await api.markGameUpdated(game);
+    if (!result.success)
+      throw new Error(result.error || "Could not mark game as updated");
+    notify(
+      `${game.title}: installed version set to ${game.latest_version?.trim()}.`,
+      "success",
+    );
+  } catch (error) {
+    notifyError(String(error));
+  } finally {
+    markingUpdatedIds.value.delete(game.id);
+  }
+};
+
+const closeContextMenu = (restoreFocus = true) => {
+  if (!contextMenu.value) return;
+  contextMenu.value = null;
+  if (restoreFocus) contextMenuTrigger?.focus();
+};
+
+const openContextMenu = async (
+  game: GameRecord,
+  event: MouseEvent | KeyboardEvent,
+) => {
+  if (
+    event instanceof KeyboardEvent &&
+    event.key !== "ContextMenu" &&
+    !(event.shiftKey && event.key === "F10")
+  )
+    return;
+  event.preventDefault();
+  closeLaunchTargetMenus();
+  contextMenuTrigger =
+    (event.target as HTMLElement).closest<HTMLButtonElement>("button") ||
+    (event.currentTarget as HTMLElement);
+  const rect = contextMenuTrigger.getBoundingClientRect();
+  contextMenu.value = {
+    game,
+    x: event instanceof MouseEvent ? event.clientX : rect.left,
+    y: event instanceof MouseEvent ? event.clientY : rect.bottom,
+  };
+  await nextTick();
+  if (!contextMenu.value || !contextMenuElement.value) return;
+  const menu = contextMenuElement.value;
+  contextMenu.value.x = Math.max(
+    8,
+    Math.min(contextMenu.value.x, window.innerWidth - menu.offsetWidth - 8),
+  );
+  contextMenu.value.y = Math.max(
+    8,
+    Math.min(contextMenu.value.y, window.innerHeight - menu.offsetHeight - 8),
+  );
+  menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+};
+
+const handleContextMenuKeyboard = (event: KeyboardEvent) => {
+  if ((event.target as HTMLElement).tagName === "SELECT" && event.key !== "Tab")
+    return;
+  const controls = [
+    ...contextMenuElement.value!.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), select",
+    ),
+  ];
+  const index = controls.indexOf(document.activeElement as HTMLElement);
+  let next: number;
+  if (event.key === "ArrowDown" || (event.key === "Tab" && !event.shiftKey))
+    next = (index + 1) % controls.length;
+  else if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey))
+    next = (index - 1 + controls.length) % controls.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = controls.length - 1;
+  else return;
+  event.preventDefault();
+  controls[next]?.focus();
+};
+
+const runContextAction = async (
+  action:
+    "play" | "folder" | "thread" | "check" | "favorite" | "remove" | "status",
+  status = "",
+) => {
+  const game = contextMenu.value?.game;
+  if (!game) return;
+  closeContextMenu();
+  try {
+    if (action === "play") return await toggleGame(game);
+    if (action === "check") return await checkUpdate(game);
+    if (
+      action === "remove" &&
+      !confirm(`Remove "${game.title}" from your library?`)
+    )
+      return;
+    const result =
+      action === "folder"
+        ? await api.openFolder(gameFolder(game.exe_path))
+        : action === "thread"
+          ? await api.openInBrowser(game.f95_url || "")
+          : action === "remove"
+            ? await api.deleteGame(game.id)
+            : await api.updateGame(
+                game.id,
+                action === "favorite"
+                  ? { is_favorite: !game.is_favorite }
+                  : { play_status: status },
+              );
+    if (!result.success) notifyError(result.error || "Game action failed");
+  } catch (error) {
+    notifyError(String(error));
+  }
+};
+
+const handleDocumentClick = () => {
+  closeLaunchTargetMenus();
+  closeContextMenu(false);
+};
+const handleLibraryScroll = (event: Event) => {
+  if (!contextMenuElement.value?.contains(event.target as Node))
+    closeContextMenu(false);
+};
+const handleLibraryKeyboard = (event: KeyboardEvent) => {
+  if (contextMenu.value && event.key === "Escape") {
+    event.preventDefault();
+    closeContextMenu();
+    return;
+  }
+  if (showAddModal.value || showDetailModal.value || contextMenu.value) return;
+  if (event.key === "Escape" && openLaunchTargetMenuId.value !== null) {
+    closeLaunchTargetMenus();
+    event.preventDefault();
+    return;
+  }
+  const typing = (event.target as HTMLElement).closest(
+    "input, textarea, select, [contenteditable='true']",
+  );
+  if (
+    ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") ||
+    (event.key === "/" &&
+      !typing &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey)
+  ) {
+    if (!searchInput.value) return;
+    event.preventDefault();
+    searchInput.value.focus();
+    searchInput.value.select();
+  }
+};
+
+const formatLastPlayed = (value?: string): string => {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleDateString();
 };
 
 const handleModalUpdateCheck = async (gameId: number) => {
@@ -697,7 +905,10 @@ onMounted(() => {
 
   window.addEventListener("wlib-refresh-library", loadGames);
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
-  document.addEventListener("click", closeLaunchTargetMenus);
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleLibraryKeyboard);
+  document.addEventListener("scroll", handleLibraryScroll, true);
+  window.addEventListener("resize", handleDocumentClick);
   onWebviewReady(() => {
     void loadGames();
     void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
@@ -706,9 +917,13 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  gamesRequest++;
   window.removeEventListener("wlib-refresh-library", loadGames);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
-  document.removeEventListener("click", closeLaunchTargetMenus);
+  document.removeEventListener("click", handleDocumentClick);
+  document.removeEventListener("keydown", handleLibraryKeyboard);
+  document.removeEventListener("scroll", handleLibraryScroll, true);
+  window.removeEventListener("resize", handleDocumentClick);
   if (modalUpdateTimeout) {
     clearTimeout(modalUpdateTimeout);
   }
@@ -719,6 +934,8 @@ onUnmounted(() => {
   <div class="h-full flex overflow-hidden">
     <!-- Smart Collections Sidebar -->
     <aside
+      :inert="isFiltersCollapsed"
+      :aria-hidden="isFiltersCollapsed"
       :class="[
         'filters-pane shrink-0 h-full collapse-width-transition',
         isFiltersCollapsed ? 'w-0 filters-pane-collapsed' : 'w-64',
@@ -738,28 +955,24 @@ onUnmounted(() => {
           </button>
           <div v-show="filterSections.collections" class="space-y-1 mt-3">
             <button
-              @click="filterCollection = 'All'"
-              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
+              v-for="collection in collections"
+              :key="collection.value"
+              @click="selectCollection(collection.value)"
+              :aria-pressed="filterCollection === collection.value"
+              class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
               :style="
-                filterCollection === 'All'
+                filterCollection === collection.value
                   ? 'background: var(--bg-raised); color: var(--text-primary)'
                   : 'color: var(--text-secondary)'
               "
             >
-              <IconLayoutGridFilled class="w-4 h-4" />
-              All Games
-            </button>
-            <button
-              @click="filterCollection = 'Favorites'"
-              class="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
-              :style="
-                filterCollection === 'Favorites'
-                  ? 'background: var(--bg-raised); color: var(--text-primary)'
-                  : 'color: var(--text-secondary)'
-              "
-            >
-              <IconStarFilled class="w-4 h-4" />
-              Favorites
+              <component :is="collection.icon" class="w-4 h-4 shrink-0" />
+              <span>{{ collection.label }}</span>
+              <span
+                v-if="collection.value === 'Updates available'"
+                class="collection-count ml-auto"
+                >{{ updateCount }}</span
+              >
             </button>
           </div>
         </div>
@@ -848,6 +1061,16 @@ onUnmounted(() => {
             <span class="text-sm">{{ filterSections.tags ? "▾" : "▸" }}</span>
           </button>
           <div v-show="filterSections.tags" class="mt-3">
+            <input
+              v-model="tagSearchQuery"
+              type="search"
+              aria-label="Search tags"
+              placeholder="Search tags..."
+              class="library-search-input w-full rounded-lg px-3 py-2 text-xs mb-2"
+            />
+            <p class="text-xs mb-2" style="color: var(--text-muted)">
+              Matches all selected tags.
+            </p>
             <div class="mb-2 flex justify-end">
               <button
                 v-if="filterTags.length"
@@ -858,11 +1081,12 @@ onUnmounted(() => {
                 Clear
               </button>
             </div>
-            <div class="flex flex-wrap gap-1.5">
+            <div class="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto">
               <button
-                v-for="tag in uniqueTags"
+                v-for="tag in visibleTags"
                 :key="tag"
                 @click="toggleFilter(filterTags, tag)"
+                :aria-pressed="filterTags.includes(tag)"
                 class="filter-tag-btn px-2.5 py-1 rounded-full text-[11px] font-medium"
                 :style="
                   filterTags.includes(tag)
@@ -871,13 +1095,14 @@ onUnmounted(() => {
                 "
               >
                 {{ tag }}
+                <span class="ml-1 opacity-70">{{ tagCounts.get(tag) }}</span>
               </button>
               <div
-                v-if="!uniqueTags.length"
+                v-if="!visibleTags.length"
                 class="text-xs italic"
                 style="color: var(--text-muted)"
               >
-                No tags found
+                {{ uniqueTags.length ? "No matching tags" : "No tags found" }}
               </div>
             </div>
           </div>
@@ -886,510 +1111,798 @@ onUnmounted(() => {
     </aside>
 
     <!-- Main Content Area -->
-    <div class="flex-1 p-8 overflow-y-auto flex flex-col relative">
-    <header class="flex justify-between items-center mb-8">
-      <div>
-        <h2
-          class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
-          style="color: var(--text-primary)"
-        >
-          <IconDeviceGamepad2 class="ui-page-heading-icon" />
-          <span>Your Library</span>
-        </h2>
-        <p
-          class="text-sm pl-3"
-          style="
-            color: var(--text-secondary);
-            border-left: 2px solid var(--brand);
-          "
-        >
-          Manage and play your imported games.
-        </p>
-      </div>
-
-      <div class="flex items-center gap-3">
-        <button
-          @click="toggleFiltersPane"
-          class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
-          style="color: var(--text-primary); border: 1px solid var(--border)"
-          :title="isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'"
-        >
-          <IconFilterFilled class="ui-action-icon" />
-          <span>Filters</span>
-          <span
-            v-if="activeFilterCount > 0"
-            class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[10px] font-bold flex items-center justify-center"
-            style="background: var(--brand); color: var(--text-inverse)"
+    <div class="flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
+      <header
+        class="flex flex-wrap gap-3 justify-between items-center mb-5 shrink-0"
+      >
+        <div>
+          <h2
+            class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
+            style="color: var(--text-primary)"
           >
-            {{ activeFilterCount }}
-          </span>
-        </button>
-
-        <button
-          @click="showAddModal = true"
-          class="ui-action-btn library-primary-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
-          style="background: var(--brand); color: var(--text-inverse); box-shadow: var(--shadow-brand)"
-        >
-          <IconLibraryPlus class="ui-action-icon" />
-          Add Game
-        </button>
-      </div>
-    </header>
-
-    <!-- Search & Filter Bar -->
-    <div v-if="games.length > 0" class="mb-6 space-y-3">
-      <!-- Search Input -->
-      <div class="relative">
-        <IconZoom
-          class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
-          style="color: var(--text-muted)"
-        />
-        <input
-          v-model="searchQuery"
-          type="text"
-          placeholder="Search games..."
-          class="library-search-input w-full rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none"
-        />
-      </div>
-
-      <!-- Filter Toggle, Sort & Counter -->
-      <div class="flex items-center gap-3">
-
-        <!-- Sort Buttons -->
-        <div
-          class="flex items-center rounded-lg overflow-hidden"
-          style="border: 1px solid var(--border)"
-        >
-          <button
-            v-for="s in sortOptions"
-            :key="s.key"
-            @click="toggleSort(s.key)"
-            class="library-sort-btn px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
-            :style="
-              sortBy === s.key
-                ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                : 'background: var(--bg-surface); color: var(--text-muted)'
+            <IconDeviceGamepad2 class="ui-page-heading-icon" />
+            <span>Your Library</span>
+          </h2>
+          <p
+            class="text-sm pl-3"
+            style="
+              color: var(--text-secondary);
+              border-left: 2px solid var(--brand);
             "
           >
-            {{ s.label }}
-            <svg
-              v-if="sortBy === s.key"
-              class="w-3 h-3"
-              :class="sortDir === 'desc' ? 'rotate-180' : ''"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.5"
+            Manage and play your imported games.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            @click="showAddModal = true"
+            class="ui-action-btn library-primary-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
+            style="
+              background: var(--brand);
+              color: var(--text-inverse);
+              box-shadow: var(--shadow-brand);
+            "
+          >
+            <IconLibraryPlus class="ui-action-icon" />
+            Add Game
+          </button>
+        </div>
+      </header>
+
+      <!-- Search & Filter Bar -->
+      <div class="mb-4 space-y-3 shrink-0">
+        <div class="flex items-center gap-3">
+          <div class="relative flex-1 min-w-0">
+            <IconZoom
+              class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+              style="color: var(--text-muted)"
+            />
+            <input
+              ref="searchInput"
+              v-model="searchQuery"
+              type="text"
+              aria-label="Search games"
+              placeholder="Search title, developer, tags or engine..."
+              class="library-search-input w-full rounded-lg pl-10 pr-10 py-2.5 text-sm focus:outline-none"
+            />
+            <button
+              v-if="searchQuery"
+              @click="
+                searchQuery = '';
+                searchInput?.focus();
+              "
+              aria-label="Clear search"
+              class="ui-icon-btn absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded"
             >
-              <path d="M12 19V5M5 12l7-7 7 7" />
-            </svg>
+              <IconX class="w-4 h-4" />
+            </button>
+          </div>
+          <button
+            @click="toggleFiltersPane"
+            class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
+            style="color: var(--text-primary); border: 1px solid var(--border)"
+            :aria-expanded="!isFiltersCollapsed"
+            :title="
+              isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'
+            "
+          >
+            <IconFilterFilled class="ui-action-icon" />
+            <span>Filters</span>
+            <span
+              v-if="activeFilterCount > 0"
+              class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[10px] font-bold flex items-center justify-center"
+              style="background: var(--brand); color: var(--text-inverse)"
+            >
+              {{ activeFilterCount }}
+            </span>
           </button>
         </div>
 
-        <button
-          v-if="activeFilterCount > 0"
-          @click="clearFilters"
-          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 border active:scale-95 active:bg-[var(--bg-overlay)]"
-          style="color: var(--text-muted); border-color: var(--border)"
-        >
-          <IconX class="ui-action-icon" />
-          Clear all
-        </button>
-
-        <div class="ml-auto flex items-center gap-4">
-          <span class="text-xs" style="color: var(--text-muted)"
-            >{{ filteredGames.length }} game{{
-              filteredGames.length !== 1 ? "s" : ""
-            }}</span
-          >
-
-          <!-- Layout Toggle -->
+        <!-- Filter Toggle, Sort & Counter -->
+        <div class="flex flex-wrap items-center gap-3">
+          <!-- Sort Buttons -->
           <div
-            class="flex items-center rounded-lg p-1"
-            style="
-              background: var(--bg-surface);
-              border: 1px solid var(--border);
-            "
+            v-if="layoutMode !== 'list'"
+            class="flex flex-wrap items-center rounded-lg overflow-hidden"
+            style="border: 1px solid var(--border)"
           >
             <button
-              @click="layoutMode = 'grid'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+              v-for="s in sortOptions"
+              :key="s.key"
+              @click="toggleSort(s.key)"
+              class="library-sort-btn px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
               :style="
-                layoutMode === 'grid'
+                sortBy === s.key
                   ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
+                  : 'background: var(--bg-surface); color: var(--text-muted)'
               "
-              title="Grid View"
             >
-              <IconColumns2Filled class="ui-action-icon" />
+              {{ s.label }}
+              <svg
+                v-if="sortBy === s.key"
+                class="w-3 h-3"
+                :class="sortDir === 'desc' ? 'rotate-180' : ''"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+              >
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
             </button>
-            <button
-              @click="layoutMode = 'list'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'list'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
+          </div>
+
+          <button
+            v-if="activeFilterCount > 0"
+            @click="clearFilters"
+            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 border active:scale-95 active:bg-[var(--bg-overlay)]"
+            style="color: var(--text-muted); border-color: var(--border)"
+          >
+            <IconX class="ui-action-icon" />
+            Clear all
+          </button>
+
+          <div class="ml-auto flex items-center gap-4">
+            <span class="text-xs" style="color: var(--text-muted)"
+              >{{ filteredGames.length }} game{{
+                filteredGames.length !== 1 ? "s" : ""
+              }}</span
+            >
+
+            <!-- Layout Toggle -->
+            <div
+              class="flex items-center rounded-lg p-1"
+              style="
+                background: var(--bg-surface);
+                border: 1px solid var(--border);
               "
-              title="List View"
             >
-              <IconLayoutListFilled class="ui-action-icon" />
-            </button>
-            <button
-              @click="layoutMode = 'compact'"
-              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                layoutMode === 'compact'
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'color: var(--text-muted)'
-              "
-              title="Compact View"
-            >
-              <IconLayoutGridFilled class="ui-action-icon opacity-90" />
-            </button>
+              <button
+                @click="layoutMode = 'grid'"
+                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+                :style="
+                  layoutMode === 'grid'
+                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                    : 'color: var(--text-muted)'
+                "
+                title="Grid View"
+              >
+                <IconColumns2Filled class="ui-action-icon" />
+              </button>
+              <button
+                @click="layoutMode = 'list'"
+                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+                :style="
+                  layoutMode === 'list'
+                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                    : 'color: var(--text-muted)'
+                "
+                title="List View"
+              >
+                <IconLayoutListFilled class="ui-action-icon" />
+              </button>
+              <button
+                @click="layoutMode = 'compact'"
+                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+                :style="
+                  layoutMode === 'compact'
+                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                    : 'color: var(--text-muted)'
+                "
+                title="Compact View"
+              >
+                <IconLayoutGridFilled class="ui-action-icon opacity-90" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-    </div>
+      <div v-if="games.length === 0" class="empty-state flex-1">
+        <IconDeviceGamepad2Filled class="empty-state-icon" />
+        <h3 class="empty-state-title">Your library is empty</h3>
+        <p class="empty-state-subtext">Add your first game to get started</p>
+        <p class="empty-state-hint">
+          Use the Add Game button above to import your first title.
+        </p>
+      </div>
 
-    <div v-if="games.length === 0" class="empty-state flex-1">
-      <IconDeviceGamepad2Filled class="empty-state-icon" />
-      <h3 class="empty-state-title">Your library is empty</h3>
-      <p class="empty-state-subtext">Add your first game to get started</p>
-      <p class="empty-state-hint">
-        Use the Add Game button above to import your first title.
-      </p>
-    </div>
+      <div v-else-if="filteredGames.length === 0" class="empty-state flex-1">
+        <IconZoom class="empty-state-icon" />
+        <h3 class="empty-state-title">No games found</h3>
+        <p class="empty-state-subtext">Try adjusting your search or filters</p>
+        <button
+          @click="clearFilters"
+          class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-medium border active:scale-95 active:bg-[var(--bg-overlay)]"
+          style="color: var(--text-secondary); border-color: var(--border)"
+        >
+          Clear filters
+        </button>
+      </div>
 
-    <div v-else-if="filteredGames.length === 0" class="empty-state flex-1">
-      <IconZoom class="empty-state-icon" />
-      <h3 class="empty-state-title">No games found</h3>
-      <p class="empty-state-subtext">Try adjusting your search or filters</p>
-      <button
-        @click="clearFilters"
-        class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-medium border active:scale-95 active:bg-[var(--bg-overlay)]"
-        style="color: var(--text-secondary); border-color: var(--border)"
-      >
-        Clear filters
-      </button>
-    </div>
+      <div v-else-if="layoutMode === 'list'" class="library-table-wrap pb-12">
+        <table class="library-table">
+          <caption class="sr-only">
+            Games in your library. Select a column header to sort.
+          </caption>
+          <thead>
+            <tr>
+              <th
+                v-for="column in tableColumns"
+                :key="column.key"
+                scope="col"
+                :aria-sort="
+                  sortBy === column.key
+                    ? sortDir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                "
+              >
+                <button
+                  @click="toggleSort(column.key)"
+                  class="w-full text-left py-3 whitespace-nowrap"
+                >
+                  {{ column.label }}
+                  <span v-if="sortBy === column.key" aria-hidden="true">{{
+                    sortDir === "asc" ? "↑" : "↓"
+                  }}</span>
+                </button>
+              </th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="game in filteredGames"
+              :key="game.id"
+              class="game-row"
+              :class="{ 'is-running': runningGameIds.has(game.id) }"
+              @click="openDetail(game)"
+              @contextmenu="openContextMenu(game, $event)"
+              @keydown="openContextMenu(game, $event)"
+            >
+              <td class="library-table-title">
+                <div class="flex items-center gap-2 min-w-0">
+                  <img
+                    v-if="game.cover_image_path"
+                    :src="game.cover_image_path"
+                    alt=""
+                    class="w-8 h-8 rounded object-cover shrink-0"
+                  />
+                  <button
+                    @click.stop="openDetail(game)"
+                    class="truncate text-left font-semibold"
+                    :title="game.title"
+                  >
+                    {{ game.title }}
+                  </button>
+                  <IconStarFilled
+                    v-if="game.is_favorite"
+                    class="w-3.5 h-3.5 shrink-0 text-yellow-500"
+                    aria-label="Favorite"
+                  />
+                  <span
+                    v-if="runningGameIds.has(game.id)"
+                    class="running-label shrink-0"
+                    >Running</span
+                  >
+                </div>
+              </td>
+              <td>
+                <div class="flex flex-wrap items-center gap-1">
+                  <span class="font-mono text-xs">{{
+                    game.version || "Unknown"
+                  }}</span>
+                  <button
+                    v-if="hasAvailableUpdate(game)"
+                    @click.stop="markAsUpdated(game)"
+                    :disabled="markingUpdatedIds.has(game.id)"
+                    class="update-version-badge rounded px-1.5 py-0.5 text-xs"
+                    :title="`Mark as updated to ${game.latest_version}`"
+                    :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
+                  >
+                    ⬆ {{ game.latest_version }}
+                  </button>
+                </div>
+              </td>
+              <td>
+                <span
+                  class="ui-status-inline whitespace-nowrap"
+                  :class="getGamePlayStatusMeta(game).toneClass"
+                  ><component
+                    :is="getGamePlayStatusMeta(game).icon"
+                    class="ui-status-icon"
+                  />{{ getGamePlayStatusMeta(game).label }}</span
+                >
+              </td>
+              <td class="text-xs">{{ game.engine || "Unknown" }}</td>
+              <td class="whitespace-nowrap text-xs">
+                {{ formatPlaytime(game.playtime_seconds) }}
+              </td>
+              <td
+                class="whitespace-nowrap text-xs"
+                :title="game.last_played || 'Never'"
+              >
+                {{ formatLastPlayed(game.last_played) }}
+              </td>
+              <td>
+                <div class="flex items-center gap-1">
+                  <button
+                    @click.stop="toggleGame(game)"
+                    :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+                    class="play-btn rounded-md p-1.5"
+                  >
+                    <IconPlayerStopFilled
+                      v-if="runningGameIds.has(game.id)"
+                      class="w-4 h-4"
+                    /><IconPlayerPlayFilled v-else class="w-4 h-4" />
+                  </button>
+                  <select
+                    v-if="hasAdditionalLaunchTargets(game)"
+                    aria-label="Choose launch target"
+                    class="table-target-select"
+                    @click.stop
+                    @change="launchTargetFromSelect(game, $event)"
+                  >
+                    <option value="">▾</option>
+                    <option
+                      v-for="target in getEffectiveLaunchTargets(game)"
+                      :key="target.id"
+                      :value="target.id"
+                    >
+                      {{ target.label }}
+                    </option>
+                  </select>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-    <div
-      v-else
-      :class="[
-        'grid gap-4 md:gap-6 pb-12',
-        layoutMode === 'grid'
-          ? 'grid-cols-1 lg:grid-cols-2'
-          : layoutMode === 'compact'
-            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3'
-            : 'grid-cols-1',
-      ]"
-    >
-      <!-- Game Cards Grid -->
       <div
-        v-for="game in filteredGames"
-        :key="game.id"
-        @click="openDetail(game)"
-        class="game-card group rounded-xl overflow-hidden cursor-pointer"
+        v-else
+        class="library-cards grid gap-4 pb-12"
         :class="
-          layoutMode === 'grid'
-            ? 'flex flex-col lg:flex-row w-full h-auto min-h-[14rem] lg:h-56'
-            : layoutMode === 'compact'
-              ? 'relative w-full aspect-[16/9]'
-              : 'flex flex-row items-center w-full h-24 md:h-32 pr-2 md:pr-4'
+          layoutMode === 'compact'
+            ? 'library-cards--compact'
+            : 'library-cards--grid'
         "
       >
-        <!-- Cover Image -->
         <div
+          v-for="game in filteredGames"
+          :key="game.id"
+          @click="openDetail(game)"
+          @keydown.enter.self="openDetail(game)"
+          @keydown.space.self.prevent="openDetail(game)"
+          @keydown="openContextMenu(game, $event)"
+          @contextmenu="openContextMenu(game, $event)"
+          tabindex="0"
+          role="group"
+          :aria-label="`${game.title}. Press Enter for details.`"
+          class="game-card group rounded-xl cursor-pointer relative"
           :class="[
-            layoutMode === 'grid'
-              ? 'w-full lg:flex-1 h-56 lg:h-full'
-              : layoutMode === 'compact'
-                ? 'w-full h-full'
-                : 'w-24 md:w-36 lg:w-48 h-full',
-            'flex items-center justify-center relative shadow-inner overflow-hidden shrink-0',
+            layoutMode === 'compact' ? 'aspect-[16/9]' : 'flex flex-col',
+            { 'is-running': runningGameIds.has(game.id) },
           ]"
-          style="
-            background: linear-gradient(
-              135deg,
-              var(--bg-raised),
-              var(--bg-inset)
-            );
-          "
         >
-          <img
-            v-if="game.cover_image_path"
-            :src="game.cover_image_path"
-            :alt="game.title"
-            class="absolute inset-0 w-full h-full object-cover object-top"
-          />
-          <IconPhotoFilled
-            v-else
-            class="w-12 h-12 transition-colors"
-            style="color: var(--border)"
-          />
-
           <div
-            v-if="layoutMode !== 'compact'"
-            class="card-image-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]"
+            class="flex items-center justify-center relative shadow-inner shrink-0 rounded-t-xl"
+            :class="
+              layoutMode === 'compact'
+                ? 'w-full h-full rounded-b-xl'
+                : 'w-full aspect-[16/9]'
+            "
+            style="
+              background: linear-gradient(
+                135deg,
+                var(--bg-raised),
+                var(--bg-inset)
+              );
+            "
           >
-            <button
-              @click.stop="toggleGame(game)"
-              :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-              class="card-overlay-play-btn rounded-full p-4 transform scale-90 group-hover:scale-100"
-            >
-              <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="w-6 h-6" />
-              <IconPlayerPlayFilled v-else class="w-6 h-6" />
-            </button>
-          </div>
-
-          <!-- Rating Badge (Top Left) -->
-          <div
-            v-if="layoutMode !== 'compact' && game.rating"
-            class="rating-badge absolute top-3 left-3 backdrop-blur-md text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1"
-          >
-            <IconStarFilled class="w-3.5 h-3.5" />
-            {{ game.rating }}
-          </div>
-
-          <!-- Update Button Overlay (Top Right) -->
+            <img
+              v-if="game.cover_image_path"
+              :src="game.cover_image_path"
+              :alt="game.title"
+              class="absolute inset-0 w-full h-full object-cover object-top rounded-t-xl"
+              :class="{ 'rounded-b-xl': layoutMode === 'compact' }"
+            />
+            <IconPhotoFilled
+              v-else
+              class="w-12 h-12"
+              style="color: var(--border)"
+            />
+            <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
+              <span
+                v-if="runningGameIds.has(game.id)"
+                class="running-label"
+                title="Game is running"
+                >● Running</span
+              >
+              <span
+                v-if="game.is_favorite"
+                class="card-indicator"
+                title="Favorite"
+                aria-label="Favorite"
+                ><IconStarFilled class="w-3 h-3 text-yellow-400"
+              /></span>
+              <button
+                v-if="layoutMode === 'compact' && hasAvailableUpdate(game)"
+                @click.stop="markAsUpdated(game)"
+                :disabled="markingUpdatedIds.has(game.id)"
+                class="update-version-badge compact-update-badge rounded px-1.5 py-0.5 text-xs"
+                :title="`Mark as updated to ${game.latest_version}`"
+                :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
+              >
+                ⬆
+              </button>
+            </div>
             <button
               v-if="layoutMode !== 'compact' && game.f95_url"
-              @click.stop="checkUpdate(game, $event)"
-              :disabled="updatingId === game.id"
-              class="update-overlay-btn ui-icon-btn absolute top-3 right-3 p-2 rounded-lg backdrop-blur-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto disabled:opacity-100 disabled:cursor-wait disabled:pointer-events-none"
+              @click.stop="checkUpdate(game)"
+              :disabled="updatingId !== null"
+              :title="`Check updates for ${game.title}`"
+              class="update-overlay-btn ui-icon-btn absolute top-2 right-2 p-1.5 rounded-lg"
             >
               <IconRefresh
                 v-if="updatingId !== game.id"
                 class="ui-action-icon"
-              />
-              <IconLoader2
-                v-else
-                class="ui-action-icon animate-spin"
-                style="color: var(--brand)"
-              />
+              /><IconLoader2 v-else class="ui-action-icon animate-spin" />
             </button>
-
-          <div v-if="layoutMode === 'compact'" class="compact-image-overlay absolute inset-0"></div>
-
-          <div
-            v-if="layoutMode === 'compact'"
-            class="absolute inset-x-0 bottom-0 z-10 p-2 flex items-end justify-between gap-2"
-          >
-            <h3
-              class="compact-title text-xs md:text-sm font-bold leading-tight"
-              :title="game.title"
+            <span
+              v-if="layoutMode !== 'compact' && game.rating"
+              class="rating-badge absolute bottom-2 left-2 text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1"
+              ><IconStarFilled class="w-3 h-3" />{{ game.rating }}</span
             >
-              {{ game.title }}
-            </h3>
-            <div class="relative flex shrink-0">
-              <button
-                @click.stop="toggleGame(game)"
-                class="compact-play-btn rounded-md p-2 shrink-0 active:scale-95"
-                :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+            <div
+              v-if="layoutMode === 'compact'"
+              class="compact-image-overlay absolute inset-0 rounded-xl"
+            ></div>
+            <div
+              v-if="layoutMode === 'compact'"
+              class="absolute inset-x-0 bottom-0 z-10 p-2 flex items-end justify-between gap-2"
+            >
+              <h3
+                class="compact-title text-sm font-bold leading-tight"
+                :title="game.title"
               >
-                <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="w-3.5 h-3.5" />
-                <IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
-              </button>
-              <button
-                v-if="hasAdditionalLaunchTargets(game)"
-                @click.stop="toggleLaunchTargetMenu(game)"
-                class="compact-target-toggle rounded-md px-1.5 shrink-0 active:scale-95"
-                :title="`Choose launch target for ${game.title}`"
-              >
-                <IconChevronDown class="w-3.5 h-3.5" />
-              </button>
-              <div
-                v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
-                class="launch-target-menu launch-target-menu--compact"
-                @click.stop
-              >
+                {{ game.title }}
+              </h3>
+              <div class="relative flex shrink-0">
                 <button
-                  v-for="target in getEffectiveLaunchTargets(game)"
-                  :key="target.id"
-                  class="launch-target-menu-item"
-                  @click.stop="launchSelectedTarget(game, target)"
+                  @click.stop="toggleGame(game)"
+                  class="compact-play-btn rounded-md p-2"
+                  :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                 >
-                  <span>{{ target.label }}</span>
-                  <span v-if="target.isDefault" class="launch-target-menu-note">
-                    Default
-                  </span>
+                  <IconPlayerStopFilled
+                    v-if="runningGameIds.has(game.id)"
+                    class="w-3.5 h-3.5"
+                  /><IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
                 </button>
+                <button
+                  v-if="hasAdditionalLaunchTargets(game)"
+                  @click.stop="toggleLaunchTargetMenu(game)"
+                  class="compact-target-toggle rounded-md px-1.5"
+                  :title="`Choose launch target for ${game.title}`"
+                  :aria-expanded="openLaunchTargetMenuId === game.id"
+                >
+                  <IconChevronDown class="w-3.5 h-3.5" />
+                </button>
+                <div
+                  v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
+                  class="launch-target-menu"
+                  @click.stop
+                >
+                  <button
+                    v-for="target in getEffectiveLaunchTargets(game)"
+                    :key="target.id"
+                    class="launch-target-menu-item"
+                    @click.stop="launchSelectedTarget(game, target)"
+                  >
+                    {{ target.label }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Text Details Area -->
-        <div
-          v-if="layoutMode !== 'compact'"
-          :class="[
-            'p-4 md:p-5 flex shrink-0 min-w-0',
-            layoutMode === 'grid'
-              ? 'flex-col justify-between w-full lg:w-72 xl:w-80 h-full'
-              : 'flex-1 flex-row items-center justify-between gap-4 h-full',
-          ]"
-        >
-          <!-- Left/Top Section (Text & Tags) -->
           <div
-            :class="[
-              'min-w-0 flex flex-col',
-              layoutMode === 'grid' ? '' : 'justify-center h-full',
-            ]"
+            v-if="layoutMode !== 'compact'"
+            class="p-3 flex flex-col flex-1 min-w-0"
           >
             <h3
-              :class="[
-                'font-bold truncate mb-1',
-                layoutMode === 'grid'
-                  ? 'text-lg md:text-xl lg:text-2xl'
-                  : 'text-base md:text-xl',
-              ]"
-              style="color: var(--text-primary)"
+              class="font-bold truncate text-base mb-1"
               :title="game.title"
+              style="color: var(--text-primary)"
             >
               {{ game.title }}
             </h3>
             <p
               v-if="game.developer"
-              :class="[
-                'truncate mb-2 md:mb-3',
-                layoutMode === 'grid'
-                  ? 'text-xs md:text-sm'
-                  : 'text-[10px] md:text-xs',
-              ]"
+              class="truncate text-xs mb-2"
               style="color: var(--text-muted)"
             >
               by {{ game.developer }}
             </p>
-
-            <div
-              :class="[
-                'flex items-center gap-1.5',
-                layoutMode === 'grid' ? 'mt-2' : '',
-              ]"
-            >
-              <div
-                class="flex items-center gap-1.5 px-2 py-0.5 md:py-1 rounded-md"
-                style="
-                  background: var(--bg-raised);
-                  border: 1px solid var(--border);
-                "
-              >
-                <span
-                  class="font-mono text-[10px] md:text-xs font-bold"
-                  style="color: var(--brand)"
-                  >{{ game.version || "Unknown" }}</span
-                >
-              </div>
-              <div
-                v-if="
-                  game.latest_version && game.latest_version !== game.version
-                "
-                class="update-version-badge flex items-center gap-1 px-2 py-0.5 md:py-1 rounded-md font-mono text-[10px] md:text-xs font-bold animate-pulse"
+            <div class="flex flex-wrap items-center gap-1.5 text-xs mb-3">
+              <span class="font-mono" style="color: var(--brand)">{{
+                game.version || "Unknown"
+              }}</span>
+              <button
+                v-if="hasAvailableUpdate(game)"
+                @click.stop="markAsUpdated(game)"
+                :disabled="markingUpdatedIds.has(game.id)"
+                class="update-version-badge rounded px-1.5 py-0.5 font-mono"
+                :title="`Mark as updated to ${game.latest_version}`"
+                :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
               >
                 ⬆ {{ game.latest_version }}
-              </div>
-              <div
+              </button>
+              <span
                 v-if="game.playtime_seconds"
-                class="flex items-center gap-1.5 px-2 py-0.5 md:py-1 rounded-md"
-                style="background: var(--bg-raised); border: 1px solid var(--border);"
+                style="color: var(--text-secondary)"
+                >⏱ {{ formatPlaytime(game.playtime_seconds) }}</span
               >
-                <span class="font-mono text-[10px] md:text-xs font-bold" style="color: var(--text-secondary)">
-                  ⏱ {{ formatPlaytime(game.playtime_seconds) }}
-                </span>
-              </div>
             </div>
-          </div>
-
-          <!-- Right/Bottom Section (Play Button) -->
-          <div
-            :class="[
-              'flex items-center shrink-0',
-              layoutMode === 'grid'
-                ? 'pt-4 justify-between mt-auto'
-                : 'gap-4 md:gap-6',
-            ]"
-          >
-            <div
-              v-if="layoutMode === 'grid'"
-              class="ui-status-chip px-2.5 py-1 text-xs font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[52%]"
-              :class="getGamePlayStatusMeta(game).toneClass"
-              :title="getGamePlayStatusMeta(game).label"
-            >
-              <component :is="getGamePlayStatusMeta(game).icon" class="ui-status-icon" />
-              <span class="truncate">{{ getGamePlayStatusMeta(game).label }}</span>
-            </div>
-            <div class="relative flex shrink-0">
-              <button
-                @click.stop="toggleGame(game)"
-                :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                class="play-btn ui-action-btn px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm font-bold active:scale-95 shrink-0"
+            <div class="flex items-center justify-between gap-2 mt-auto">
+              <span
+                class="ui-status-chip px-2 py-1 text-xs min-w-0"
+                :class="getGamePlayStatusMeta(game).toneClass"
+                :title="getGamePlayStatusMeta(game).label"
+                ><component
+                  :is="getGamePlayStatusMeta(game).icon"
+                  class="ui-status-icon"
+                /><span class="truncate">{{
+                  getGamePlayStatusMeta(game).label
+                }}</span></span
               >
-                <IconPlayerStopFilled v-if="runningGameIds.has(game.id)" class="ui-action-icon" />
-                <IconPlayerPlayFilled v-else class="ui-action-icon" />
-                <span class="hidden md:inline">{{ runningGameIds.has(game.id) ? 'Stop' : 'Play' }}</span>
-              </button>
-              <button
-                v-if="hasAdditionalLaunchTargets(game)"
-                @click.stop="toggleLaunchTargetMenu(game)"
-                class="target-menu-toggle ui-action-btn px-2 py-2 rounded-lg text-xs font-bold active:scale-95 shrink-0"
-                :title="`Choose launch target for ${game.title}`"
-              >
-                <IconChevronDown class="ui-action-icon" />
-              </button>
-              <div
-                v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
-                class="launch-target-menu"
-                @click.stop
-              >
+              <div class="relative flex shrink-0">
                 <button
-                  v-for="target in getEffectiveLaunchTargets(game)"
-                  :key="target.id"
-                  class="launch-target-menu-item"
-                  @click.stop="launchSelectedTarget(game, target)"
+                  @click.stop="toggleGame(game)"
+                  :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+                  class="play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
                 >
-                  <span>{{ target.label }}</span>
-                  <span v-if="target.isDefault" class="launch-target-menu-note">
-                    Default
-                  </span>
+                  <IconPlayerStopFilled
+                    v-if="runningGameIds.has(game.id)"
+                    class="ui-action-icon"
+                  /><IconPlayerPlayFilled v-else class="ui-action-icon" />{{
+                    runningGameIds.has(game.id) ? "Stop" : "Play"
+                  }}
                 </button>
+                <button
+                  v-if="hasAdditionalLaunchTargets(game)"
+                  @click.stop="toggleLaunchTargetMenu(game)"
+                  class="target-menu-toggle ui-action-btn px-1 py-1.5 rounded-lg"
+                  :title="`Choose launch target for ${game.title}`"
+                  :aria-expanded="openLaunchTargetMenuId === game.id"
+                >
+                  <IconChevronDown class="ui-action-icon" />
+                </button>
+                <div
+                  v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
+                  class="launch-target-menu"
+                  @click.stop
+                >
+                  <button
+                    v-for="target in getEffectiveLaunchTargets(game)"
+                    :key="target.id"
+                    class="launch-target-menu-item"
+                    @click.stop="launchSelectedTarget(game, target)"
+                  >
+                    {{ target.label }}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div
-              v-if="layoutMode === 'list'"
-              class="hidden sm:inline-flex w-28 justify-end text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis"
-              :title="getGamePlayStatusMeta(game).label"
-            >
-              <span class="ui-status-inline" :class="getGamePlayStatusMeta(game).toneClass">
-                <component :is="getGamePlayStatusMeta(game).icon" class="ui-status-icon" />
-                <span class="truncate">{{ getGamePlayStatusMeta(game).label }}</span>
-              </span>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <AddGameModal v-model="showAddModal" :saving="addingGame" @save="handleAddGame" />
-    <GameDetailModal
-      v-model="showDetailModal"
-      :game="selectedGame"
-      :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
-      :update-check-state="modalUpdateState"
-      @updated="handleGameUpdated"
-      @deleted="handleGameDeleted"
-      @launch="launchGameFast"
-      @stop="stopGame"
-      @check-updates="handleModalUpdateCheck"
-      @targets-changed="handleLaunchTargetsChanged"
-      @quick-saved="loadGames"
-    />
-  </div>
+      <Teleport to="body">
+        <div
+          v-if="contextMenu"
+          ref="contextMenuElement"
+          role="dialog"
+          :aria-label="`Actions for ${contextMenu.game.title}`"
+          class="game-context-menu"
+          :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+          @click.stop
+          @contextmenu.prevent
+          @keydown="handleContextMenuKeyboard"
+        >
+          <p
+            class="truncate px-2 py-1 text-xs font-bold"
+            :title="contextMenu.game.title"
+          >
+            {{ contextMenu.game.title }}
+          </p>
+          <button @click="runContextAction('play')">
+            {{ runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
+          </button>
+          <button
+            @click="runContextAction('folder')"
+            :disabled="!gameFolder(contextMenu.game.exe_path)"
+          >
+            Open folder
+          </button>
+          <button
+            @click="runContextAction('thread')"
+            :disabled="!contextMenu.game.f95_url"
+          >
+            Open F95 thread
+          </button>
+          <button
+            @click="runContextAction('check')"
+            :disabled="!contextMenu.game.f95_url || updatingId !== null"
+          >
+            Check update
+          </button>
+          <label
+            class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
+            >Set status
+            <select
+              :value="
+                normalizePlayStatus(
+                  contextMenu.game.play_status,
+                  contextMenu.game.status,
+                )
+              "
+              @change="
+                runContextAction(
+                  'status',
+                  ($event.target as HTMLSelectElement).value,
+                )
+              "
+              class="min-w-0 max-w-36 rounded px-1 py-1"
+              style="background: var(--bg-raised); color: var(--text-primary)"
+            >
+              <option
+                v-for="status in allStatuses"
+                :key="status.value"
+                :value="status.value"
+              >
+                {{ status.label }}
+              </option>
+            </select>
+          </label>
+          <button @click="runContextAction('favorite')">
+            {{ contextMenu.game.is_favorite ? "Unfavorite" : "Favorite" }}
+          </button>
+          <button
+            @click="runContextAction('remove')"
+            style="color: var(--danger-text)"
+          >
+            Remove
+          </button>
+        </div>
+      </Teleport>
+
+      <AddGameModal
+        v-model="showAddModal"
+        :saving="addingGame"
+        @save="handleAddGame"
+      />
+      <GameDetailModal
+        v-model="showDetailModal"
+        :game="selectedGame"
+        :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
+        :update-check-state="modalUpdateState"
+        @updated="handleGameUpdated"
+        @deleted="handleGameDeleted"
+        @launch="launchGameFast"
+        @stop="stopGame"
+        @check-updates="handleModalUpdateCheck"
+        @targets-changed="handleLaunchTargetsChanged"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.library-cards--grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+}
+.library-cards--compact {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+}
+.game-card:focus-visible,
+.library-table button:focus-visible,
+.game-context-menu :is(button, select):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
+}
+.game-card.is-running {
+  border-color: var(--brand);
+  box-shadow:
+    0 0 0 2px var(--brand),
+    var(--shadow-card);
+}
+.running-label,
+.collection-count {
+  background: var(--brand);
+  color: var(--text-inverse);
+  border-radius: 0.3rem;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+.card-indicator {
+  background: var(--overlay-scrim-strong);
+  border-radius: 0.3rem;
+  padding: 0.25rem;
+}
+.library-table-wrap {
+  overflow-x: auto;
+}
+.library-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  font-size: 0.8rem;
+}
+.library-table :is(th, td) {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.library-table th {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.library-table-title {
+  max-width: 16rem;
+  min-width: 10rem;
+  color: var(--text-primary);
+}
+.game-row {
+  height: 48px;
+  cursor: pointer;
+}
+.game-row:hover {
+  background: var(--bg-raised);
+}
+.game-row.is-running {
+  background: var(--brand-glow);
+  box-shadow: inset 3px 0 var(--brand);
+}
+.table-target-select {
+  width: 1.5rem;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  border-radius: 0.25rem;
+}
+.game-context-menu {
+  position: fixed;
+  z-index: 100;
+  width: 15rem;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 0.4rem;
+  border: 1px solid var(--border-hover);
+  border-radius: 0.5rem;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+.game-context-menu > button {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border-radius: 0.3rem;
+  text-align: left;
+  font-size: 0.8rem;
+}
+.game-context-menu > button:hover {
+  background: var(--bg-raised);
+}
+.game-context-menu button:disabled,
+.update-version-badge:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
 .game-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -1402,7 +1915,7 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-:global(.motion-off) .game-card:hover {
+:global(.motion-off) .game-card:not(.is-running):hover {
   border-color: var(--border);
   box-shadow: var(--shadow-card);
   transform: none;
@@ -1444,10 +1957,6 @@ onUnmounted(() => {
   box-shadow: var(--shadow-card);
 }
 
-.launch-target-menu--compact {
-  bottom: calc(100% + 0.4rem);
-}
-
 .launch-target-menu-item {
   display: flex;
   align-items: center;
@@ -1463,11 +1972,6 @@ onUnmounted(() => {
 
 .launch-target-menu-item:hover {
   background: var(--bg-raised);
-}
-
-.launch-target-menu-note {
-  color: var(--text-muted);
-  font-size: 0.68rem;
 }
 
 .library-primary-btn {
@@ -1503,21 +2007,6 @@ onUnmounted(() => {
 .filters-checkbox:focus {
   outline: 2px solid var(--brand);
   outline-offset: 1px;
-}
-
-.card-image-overlay {
-  background: var(--overlay-scrim);
-}
-
-.card-overlay-play-btn {
-  background: var(--overlay-control);
-  color: var(--overlay-control-text);
-  transition: transform 0.18s ease, background-color 0.18s ease, color 0.18s ease;
-}
-
-.card-overlay-play-btn:hover {
-  background: var(--overlay-control-hover-bg);
-  color: var(--overlay-control-hover-text);
 }
 
 .compact-image-overlay {
@@ -1578,19 +2067,24 @@ onUnmounted(() => {
 .update-overlay-btn {
   background: var(--overlay-scrim-strong);
   border: 1px solid var(--overlay-border);
-  color: var(--text-secondary);
+  color: var(--overlay-control-text);
   transition: opacity 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }
 
 .update-overlay-btn:hover {
   background: var(--overlay-scrim);
-  color: var(--text-primary);
+  color: var(--overlay-control-text);
 }
 
 .update-version-badge {
   background: var(--success-bg);
   border: 1px solid var(--success-border);
   color: var(--success-text);
+}
+
+.compact-update-badge {
+  background: var(--success-text);
+  color: var(--text-inverse);
 }
 
 .library-sort-btn {

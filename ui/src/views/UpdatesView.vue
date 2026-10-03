@@ -4,6 +4,7 @@ import { ref, onMounted, onUnmounted, computed } from "vue";
 import {
   IconArrowUp,
   IconClockUp,
+  IconCheck,
   IconExternalLink,
   IconInfoCircle,
   IconLoader2,
@@ -11,12 +12,10 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import { notifyError } from "../utils/toast";
+import { notify, notifyError } from "../utils/toast";
+import { hasAvailableUpdate } from "../utils/libraryGames";
 import { isNewerVersion } from "../utils/appVersion";
-import type {
-  GameRecord,
-  UpdateStatusResponse,
-} from "../services/api";
+import type { GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -27,6 +26,25 @@ interface AppUpdateState {
 }
 
 const games = ref<GameRecord[]>([]);
+const markingUpdatedIds = ref(new Set<number>());
+
+const markAsUpdated = async (game: GameRecord) => {
+  if (markingUpdatedIds.value.has(game.id)) return;
+  markingUpdatedIds.value.add(game.id);
+  try {
+    const result = await api.markGameUpdated(game);
+    if (!result.success)
+      throw new Error(result.error || "Could not mark game as updated");
+    notify(
+      `${game.title}: installed version set to ${game.latest_version?.trim()}.`,
+      "success",
+    );
+  } catch (error) {
+    notifyError(String(error));
+  } finally {
+    markingUpdatedIds.value.delete(game.id);
+  }
+};
 const status = ref<UpdateStatusResponse>({
   running: false,
   total: 0,
@@ -45,13 +63,16 @@ const appUpdate = ref<AppUpdateState | null>(null);
 const appUpdateLoading = ref(true);
 const currentVersion = ref("");
 
+let gamesRequest = 0;
 const loadGames = async () => {
+  const request = ++gamesRequest;
   try {
     const res = await api.getGames();
+    if (request !== gamesRequest) return;
     games.value = res || [];
   } catch (e) {
     console.error("Failed to load games", e);
-    games.value = [];
+    if (request === gamesRequest) games.value = [];
   }
 };
 
@@ -86,7 +107,9 @@ const startCheck = async () => {
   try {
     const result = await api.checkAllUpdates();
     if (result && result.success === false) {
-      notifyError("Failed to start check: " + (result.error || "Unknown error"));
+      notifyError(
+        "Failed to start check: " + (result.error || "Unknown error"),
+      );
     } else if (result && result.success) {
       lastCheckTime.value = new Date().toLocaleTimeString();
       startPolling();
@@ -101,7 +124,9 @@ const cancelCheck = async () => {
   try {
     const result = await api.cancelUpdateCheck();
     if (result && result.success === false) {
-      notifyError("Failed to cancel check: " + (result.error || "Unknown error"));
+      notifyError(
+        "Failed to cancel check: " + (result.error || "Unknown error"),
+      );
     }
   } catch (e) {
     console.error("Failed to cancel", e);
@@ -162,12 +187,7 @@ const gamesWithErrors = computed(() => {
 });
 
 const persistedUpdates = computed(() => {
-  return games.value.filter(
-    (g) =>
-      g.latest_version &&
-      g.version &&
-      g.latest_version.trim() !== g.version.trim(),
-  );
+  return games.value.filter(hasAvailableUpdate);
 });
 
 const formatLastCheck = computed(() => {
@@ -191,8 +211,11 @@ const loadAppUpdate = async () => {
     const release = await api.check_app_updates();
     if (release && release.success && release.version) {
       if (isNewerVersion(release.version, currentVersion.value)) {
-        const rendered = marked.parse(release.changelog || "No changelog provided.");
-        const changelogHtml = typeof rendered === "string" ? rendered : await rendered;
+        const rendered = marked.parse(
+          release.changelog || "No changelog provided.",
+        );
+        const changelogHtml =
+          typeof rendered === "string" ? rendered : await rendered;
         appUpdate.value = {
           version: release.version,
           changelogHtml: DOMPurify.sanitize(changelogHtml),
@@ -208,6 +231,7 @@ const loadAppUpdate = async () => {
 };
 
 onMounted(() => {
+  window.addEventListener("wlib-refresh-library", loadGames);
   onWebviewReady(async () => {
     void loadAppUpdate();
     await loadGames();
@@ -223,6 +247,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  gamesRequest++;
+  window.removeEventListener("wlib-refresh-library", loadGames);
   if (pollInterval) clearInterval(pollInterval);
 });
 </script>
@@ -487,6 +513,20 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
+              <button
+                @click="markAsUpdated(game)"
+                :disabled="markingUpdatedIds.has(game.id)"
+                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
+                style="
+                  background: var(--success-bg);
+                  color: var(--success-text);
+                  border: 1px solid var(--success-border);
+                "
+                :title="`Set installed version to ${game.latest_version}`"
+              >
+                <IconCheck class="ui-action-icon" />
+                Mark as updated
+              </button>
               <div class="text-right">
                 <span
                   class="text-xs font-mono"

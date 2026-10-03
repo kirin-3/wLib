@@ -9,6 +9,7 @@ import type { LaunchMode } from "../utils/launchMode";
 import { LAUNCH_MODE_OPTIONS } from "../utils/launchMode";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
+import { hasAvailableUpdate } from "../utils/libraryGames";
 export type { LaunchMode } from "../utils/launchMode";
 export { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 
@@ -560,6 +561,12 @@ class ApiService {
     return this.invoke<GameRecord[]>("get_games");
   }
 
+  private async invokeLibraryChange<T extends ApiBasicResponse>(method: string, ...args: unknown[]): Promise<T> {
+    const result = await this.invoke<T>(method, ...args);
+    if (result?.success) window.dispatchEvent(new Event("wlib-refresh-library"));
+    return result;
+  }
+
   async addGame(
     title: string,
     exe_path: string,
@@ -578,7 +585,7 @@ class ApiService {
     launch_mode: LaunchMode = "auto",
     command_line_args = "",
   ): Promise<AddGameResponse> {
-    return this.invoke(
+    return this.invokeLibraryChange(
       "add_game",
       title,
       exe_path,
@@ -600,11 +607,16 @@ class ApiService {
   }
 
   async deleteGame(id: number): Promise<ApiBasicResponse> {
-    return this.invoke("delete_game", id);
+    return this.invokeLibraryChange("delete_game", id);
   }
 
   async updateGame(id: number, fields: Record<string, unknown>): Promise<ApiBasicResponse> {
-    return this.invoke("update_game", id, fields);
+    return this.invokeLibraryChange("update_game", id, fields);
+  }
+
+  async markGameUpdated(game: GameRecord): Promise<ApiBasicResponse> {
+    if (!hasAvailableUpdate(game)) return { success: false, error: "No newer version is available." };
+    return this.updateGame(game.id, { version: game.latest_version!.trim() });
   }
 
   async openExtensionFolder(): Promise<ExtensionSyncStatus> {
@@ -632,7 +644,7 @@ class ApiService {
   }
 
   async checkForUpdates(url: string): Promise<UpdateCheckResponse> {
-    return this.invoke<UpdateCheckResponse>("check_for_updates", url);
+    return this.invokeLibraryChange<UpdateCheckResponse>("check_for_updates", url);
   }
 
   async checkAllUpdates(): Promise<BulkUpdateStartResponse> {
@@ -906,6 +918,12 @@ class ApiService {
         const games = readMockGames();
         const fields = isRecord(args[1]) ? args[1] : {};
         localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((game) => game.id === Number(args[0]) ? { ...game, ...fields } : game)));
+        return { success: true, mock: true };
+      }
+      case "delete_game": {
+        const gameId = Number(args[0]);
+        localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().filter((game) => game.id !== gameId)));
+        writeMockLaunchTargets(readMockLaunchTargets().filter((target) => target.game_id !== gameId));
         return { success: true, mock: true };
       }
       case "launch_game": {

@@ -5,12 +5,15 @@ export type LayoutMode = "grid" | "list" | "compact";
 export type SortDir = "asc" | "desc";
 export type SortField =
   | "title"
+  | "version"
+  | "play_status"
+  | "engine"
   | "date_added"
   | "last_played"
   | "playtime_seconds"
   | "rating"
   | "own_rating";
-export type FilterCollection = "All" | "Favorites";
+export type FilterCollection = "All" | "Favorites" | "Updates available" | "Recently played";
 
 export interface FilterSections {
   collections: boolean;
@@ -75,6 +78,9 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
 const VALID_LAYOUT_MODES = new Set<LayoutMode>(["grid", "list", "compact"]);
 const VALID_SORT_FIELDS = new Set<SortField>([
   "title",
+  "version",
+  "play_status",
+  "engine",
   "date_added",
   "last_played",
   "playtime_seconds",
@@ -82,7 +88,7 @@ const VALID_SORT_FIELDS = new Set<SortField>([
   "own_rating",
 ]);
 const VALID_SORT_DIRECTIONS = new Set<SortDir>(["asc", "desc"]);
-const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>(["All", "Favorites"]);
+const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>(["All", "Favorites", "Updates available", "Recently played"]);
 
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) {

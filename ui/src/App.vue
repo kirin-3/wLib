@@ -19,6 +19,7 @@ import { api, onWebviewReady } from "./services/api";
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { dismissToast, notify, toasts } from "./utils/toast";
+import { hasAvailableUpdate } from "./utils/libraryGames";
 
 interface ExtensionEventDetail {
   url: string;
@@ -39,6 +40,40 @@ const isDark = ref(true);
 const isNavCollapsed = ref(false);
 const navCollapsedStorageKey = "wlib-nav-collapsed";
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
+const availableUpdateCount = ref(0);
+let updatePollInterval: ReturnType<typeof setInterval> | null = null;
+let lastUpdateProgress = "";
+let pollingUpdates = false;
+let updateCountRequest = 0;
+
+const refreshUpdateCount = async () => {
+  const request = ++updateCountRequest;
+  try {
+    const games = await api.getGames();
+    if (request !== updateCountRequest) return;
+    availableUpdateCount.value = games.filter(hasAvailableUpdate).length;
+  } catch (error) {
+    console.error("Failed to refresh update count", error);
+  }
+};
+
+const pollLibraryUpdates = async () => {
+  if (pollingUpdates) return;
+  pollingUpdates = true;
+  try {
+    const status = await api.getUpdateStatus();
+    if (status.success === false) return;
+    const progress = JSON.stringify([status.running, status.checked, status.total, status.results]);
+    if (progress !== lastUpdateProgress) {
+      lastUpdateProgress = progress;
+      window.dispatchEvent(new Event("wlib-refresh-library"));
+    }
+  } catch (error) {
+    console.error("Failed to refresh update progress", error);
+  } finally {
+    pollingUpdates = false;
+  }
+};
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
@@ -102,9 +137,12 @@ onMounted(() => {
 
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
+  window.addEventListener("wlib-refresh-library", refreshUpdateCount);
 
   // Check for App Updates on Startup
   onWebviewReady(async () => {
+    void refreshUpdateCount();
+    updatePollInterval = setInterval(pollLibraryUpdates, 5000);
     try {
       const extensionSync = await api.getStartupExtensionSyncStatus();
       if (extensionSync?.success && extensionSync?.updated) {
@@ -142,8 +180,11 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  updateCountRequest++;
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
+  window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
+  if (updatePollInterval) clearInterval(updatePollInterval);
 });
 </script>
 
@@ -212,9 +253,10 @@ onUnmounted(() => {
 
           <router-link
             to="/updates"
-            :title="isNavCollapsed ? 'Updates' : ''"
+            :title="`Updates${availableUpdateCount ? ` (${availableUpdateCount} available)` : ''}`"
+            :aria-label="`Updates, ${availableUpdateCount} available`"
             :class="[
-              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              'nav-link relative flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
               isNavCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
@@ -225,6 +267,14 @@ onUnmounted(() => {
               class="whitespace-nowrap transition-opacity duration-150"
               :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Updates</span
+            >
+            <span
+              v-if="availableUpdateCount"
+              class="rounded-full px-1.5 min-w-5 text-center text-[10px] font-bold"
+              :class="isNavCollapsed ? 'absolute -top-1 -right-1' : 'ml-auto'"
+              style="background: var(--brand); color: var(--text-inverse)"
+              aria-hidden="true"
+              >{{ availableUpdateCount }}</span
             >
           </router-link>
 
