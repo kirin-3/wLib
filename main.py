@@ -739,6 +739,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._reject_origin()
             return
 
+        self._discard_request_body()
         self.send_response(200, "ok")
         self._send_cors_headers(allowed_origin)
         self.end_headers()
@@ -749,6 +750,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._reject_origin()
             return
 
+        self._discard_request_body()
         if self.path.startswith("/api/check"):
             from urllib.parse import urlparse, parse_qs
 
