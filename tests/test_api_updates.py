@@ -2121,6 +2121,10 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     status = api.get_update_status()
     assert status["running"] is False
     assert status["cancelling"] is False
+    assert status["checked"] == 0
+    assert status["total"] == 1
+    assert status["outcome"] == "cancelled"
+    assert status["error"] == ""
     assert callback_results == [False]
     assert api.get_auto_check_setting()["last_check"] == ""
 
@@ -2156,7 +2160,10 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
     assert api.get_auto_check_setting()["last_check"]
 
 
-@pytest.mark.parametrize("outcome", ["busy", "failed", "empty", "partial", "success"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["busy", "failed", "empty", "partial", "success", "interrupted", "exception", "cancelled"],
+)
 def test_update_check_timestamp_requires_successful_completion(monkeypatch, outcome):
     import time
 
@@ -2172,6 +2179,14 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
         if outcome == "empty":
             return {}
         for index, url in enumerate(urls):
+            if index == 1:
+                if outcome == "interrupted":
+                    return {}
+                if outcome == "exception":
+                    raise RuntimeError("Browser closed")
+                if outcome == "cancelled":
+                    api.cancel_update_check()
+                    return {}
             if outcome == "failed" or (outcome == "partial" and index == 1):
                 callback(url, {"success": False})
             else:
@@ -2183,7 +2198,19 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
     deadline = time.monotonic() + 5
     while api.get_update_status()["running"] and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert api.get_update_status()["running"] is False
+    status = api.get_update_status()
+    assert status["running"] is False
+    assert status["checked"] == (
+        0 if outcome in {"busy", "empty"}
+        else 1 if outcome in {"interrupted", "exception", "cancelled"}
+        else 2
+    )
+    assert status["outcome"] == (
+        "completed" if outcome == "success"
+        else "cancelled" if outcome == "cancelled"
+        else "failed"
+    )
+    assert bool(status["error"]) == (outcome not in {"success", "cancelled"})
     if outcome == "success":
         assert get_setting("last_update_check") != previous
     else:

@@ -552,7 +552,7 @@ class Launcher:
                     entry.proc = game_proc
 
                 # Do not count time spent waiting for UAC approval as playtime.
-                start_time = time.time()
+                start_time = time.monotonic()
                 if is_wine_executable and run_ce:
                     # Spawn CE in a background thread after a delay
                     def inject_ce():
@@ -622,7 +622,7 @@ class Launcher:
                                 break
                             except subprocess.TimeoutExpired:
                                 pass
-                            now = time.time()
+                            now = time.monotonic()
                             delta = int(now - last_saved_time)
                             last_saved_time = now
                             if on_exit_callback is not None:
@@ -637,7 +637,7 @@ class Launcher:
                                 del self._running[game_id]
                         if log_file is not None:
                             log_file.close()
-                        now = time.time()
+                        now = time.monotonic()
                         if on_exit_callback is not None:
                             _ = on_exit_callback(max(0, int(now - last_saved_time)), True)
 

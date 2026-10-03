@@ -471,7 +471,16 @@ onUnmounted(() => {
         </div>
 
         <p
-          v-if="!status.running && status.total === 0"
+          v-if="!status.running && status.outcome && status.outcome !== 'idle'"
+          class="text-sm"
+          style="color: var(--text-secondary)"
+          role="status"
+        >
+          Check {{ status.outcome }}: {{ status.checked }} / {{ status.total }} games checked.
+          {{ status.error }}
+        </p>
+        <p
+          v-else-if="!status.running && status.total === 0"
           class="text-sm"
           style="color: var(--text-muted)"
         >

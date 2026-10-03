@@ -673,7 +673,10 @@ def test_windows_launch_reports_periodic_and_final_playtime(
 
     monkeypatch.setattr("threading.Thread", run_thread_immediately)
     clock = MagicMock(side_effect=[100.0, 161.0, 165.0])
-    monkeypatch.setattr("time.time", clock)
+    monkeypatch.setattr("time.monotonic", clock)
+    monkeypatch.setattr(
+        "time.time", MagicMock(side_effect=AssertionError("Wall clock used"))
+    )
 
     def elevated_process(*_args):
         clock.assert_not_called()  # Start timing after the elevation prompt returns.

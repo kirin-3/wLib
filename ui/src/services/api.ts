@@ -115,6 +115,7 @@ export interface BulkUpdateResultItem {
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
   running: boolean;
+  outcome?: "idle" | "running" | "completed" | "cancelled" | "failed";
   cancelling?: boolean;
   total: number;
   checked: number;
@@ -1163,6 +1164,8 @@ class ApiService {
       case "get_update_status":
         return {
           running: false,
+          outcome: "idle",
+          error: "",
           total: 0,
           checked: 0,
           current: "",

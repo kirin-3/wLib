@@ -224,6 +224,8 @@ class Api:
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
         self._update_cancelled: bool = False
+        self._update_outcome: str = "idle"
+        self._update_error: str = ""
         self._update_total: int = 0
         self._update_checked: int = 0
         self._update_current: str = ""
@@ -1855,6 +1857,8 @@ class Api:
                 return {"success": False, "error": "Update check already in progress"}
             self._update_running = True
             self._update_cancelled = False
+            self._update_outcome = "running"
+            self._update_error = ""
             self._update_total = len(games_with_url)
             self._update_checked = 0
             # The callback fires after a game finishes, so show the game being checked now.
@@ -1870,6 +1874,8 @@ class Api:
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
 
         def run_checks() -> None:
+            outcome = "failed"
+            error = "Update check interrupted before completion"
             try:
                 urls = [game["f95_url"] for game in games_with_url]
 
@@ -2004,7 +2010,6 @@ class Api:
                                     ),
                                 }
                             )
-                        self._update_checked = len(games_with_url)
 
                 # Only successful, complete runs postpone the next automatic check.
                 with self._update_lock:
@@ -2015,6 +2020,8 @@ class Api:
                         and all(not result["error"] for result in self._update_results)
                     )
                 if completed:
+                    outcome = "completed"
+                    error = ""
                     from datetime import datetime
 
                     from core.database import update_setting
@@ -2023,9 +2030,20 @@ class Api:
                         update_setting("last_update_check", datetime.now().isoformat())
                     except Exception as e:
                         print(f"[wLib] Failed to update last_update_check setting: {e}")
+                elif batch_error:
+                    error = str(
+                        batch_error_payload.get("error") or "Batch update check failed"
+                    )
+                elif any(result["error"] for result in self._update_results):
+                    error = "Some games could not be checked; see results for details"
+            except Exception as e:
+                error = f"Update check failed: {e}"
             finally:
                 with self._update_lock:
-                    self._update_checked = self._update_total
+                    self._update_outcome = (
+                        "cancelled" if self._update_cancelled else outcome
+                    )
+                    self._update_error = "" if self._update_cancelled else error
                     self._update_current = ""
                     self._update_running = False
 
@@ -2046,6 +2064,8 @@ class Api:
             return {
                 "running": getattr(self, "_update_running", False),
                 "cancelling": self._update_running and self._update_cancelled,
+                "outcome": self._update_outcome,
+                "error": self._update_error,
                 "total": getattr(self, "_update_total", 0),
                 "checked": getattr(self, "_update_checked", 0),
                 "current": getattr(self, "_update_current", ""),
