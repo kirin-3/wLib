@@ -1220,18 +1220,18 @@ const openInBrowser = async () => {
               <span v-if="hasUpdate" class="identity-badge update-badge">Update: {{ latestVersion }}</span>
             </div>
           </div>
-          <button
-            @click="isRunning && game ? emit('stop', game.id) : launchGame()"
-            :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
-            class="launch-btn header-launch-btn ui-action-btn"
-          >
-            <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
-            <IconPlayerPlayFilled v-else class="ui-action-icon" />
-            {{ isRunning ? 'Stop' : 'Play' }}
-          </button>
         </div>
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
+            <button
+              @click="isRunning && game ? emit('stop', game.id) : launchGame()"
+              :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
+              class="launch-btn header-launch-btn ui-action-btn"
+            >
+              <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else class="ui-action-icon" />
+              {{ isRunning ? 'Stop' : 'Play' }}
+            </button>
             <button
               v-if="f95Url"
               @click="openInBrowser"
@@ -2055,7 +2055,7 @@ const openInBrowser = async () => {
 
 .game-header {
   display: grid;
-  grid-template-columns: 6rem minmax(0, 1fr) auto;
+  grid-template-columns: 6rem minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
   padding-right: 2.75rem;
@@ -2104,11 +2104,9 @@ const openInBrowser = async () => {
   color: var(--warning-text);
 }
 
-.game-header .header-launch-btn {
+.header-launch-btn {
   justify-content: center;
   min-width: 6.5rem;
-  min-height: 2.875rem;
-  font-size: 1rem;
 }
 
 .detail-header .modal-toolbar {
@@ -2159,7 +2157,6 @@ const openInBrowser = async () => {
   }
 
   .game-cover {
-    grid-row: span 2;
     width: 4.5rem;
     height: 6rem;
   }
@@ -2168,10 +2165,6 @@ const openInBrowser = async () => {
     font-size: 1.125rem;
   }
 
-  .header-launch-btn {
-    grid-column: 2;
-    justify-self: start;
-  }
 }
 
 .modal-content {

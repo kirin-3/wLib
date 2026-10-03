@@ -18,6 +18,7 @@ import {
 import { api, onWebviewReady } from "./services/api";
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
+import { isDarkTheme, setThemePreference } from "./utils/themePreference";
 import { dismissToast, notify, toasts } from "./utils/toast";
 import { hasAvailableUpdate } from "./utils/libraryGames";
 
@@ -36,7 +37,6 @@ const router = useRouter();
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
-const isDark = ref(true);
 const isNavCollapsed = ref(false);
 const navCollapsedStorageKey = "wlib-nav-collapsed";
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
@@ -75,11 +75,15 @@ const pollLibraryUpdates = async () => {
   }
 };
 
-const toggleTheme = () => {
-  isDark.value = !isDark.value;
-  document.documentElement.classList.toggle("light", !isDark.value);
-  localStorage.setItem("wlib-theme", isDark.value ? "dark" : "light");
+// Ctrl+N opens Add Game from any view; LibraryView handles ?action=add.
+const handleGlobalShortcut = (event: KeyboardEvent) => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+  if (event.key.toLowerCase() !== "n" || document.querySelector('[aria-modal="true"]')) return;
+  event.preventDefault();
+  void router.push({ path: "/", query: { action: "add" } });
 };
+
+const toggleTheme = () => setThemePreference(isDarkTheme.value ? "light" : "dark");
 
 const toggleNavCollapse = () => {
   isNavCollapsed.value = !isNavCollapsed.value;
@@ -123,18 +127,12 @@ const handleExtensionOpen = (event: Event) => {
 };
 
 onMounted(() => {
-  // Load saved theme
-  const savedTheme = localStorage.getItem("wlib-theme");
-  if (savedTheme === "light") {
-    isDark.value = false;
-    document.documentElement.classList.add("light");
-  }
-
   const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
   if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
     isNavCollapsed.value = savedNavCollapsed === "true";
   }
 
+  window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
   window.addEventListener("wlib-refresh-library", refreshUpdateCount);
@@ -181,6 +179,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   updateCountRequest++;
+  window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
   window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
@@ -369,9 +368,9 @@ onUnmounted(() => {
           <button
             @click="toggleTheme"
             class="theme-toggle p-1.5 rounded-lg"
-            :title="isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'"
+            :title="isDarkTheme ? 'Switch to Light Mode' : 'Switch to Dark Mode'"
           >
-            <IconSun v-if="isDark" class="w-4 h-4" />
+            <IconSun v-if="isDarkTheme" class="w-4 h-4" />
             <IconMoon v-else class="w-4 h-4" />
           </button>
 

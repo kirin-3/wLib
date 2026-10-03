@@ -1,24 +1,33 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
+import { onBeforeRouteLeave } from "vue-router";
 import {
+  IconAdjustments,
   IconAutomation,
+  IconBook2,
   IconDeviceFloppyFilled,
   IconDownloadFilled,
   IconFolderOpen,
+  IconKeyboard,
   IconLoader2,
   IconLogout2,
+  IconPalette,
   IconSettings,
+  IconTool,
+  IconUserCircle,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import { notifyError } from "../utils/toast";
+import { notify, notifyError } from "../utils/toast";
+import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
 import {
-  applyMotionPreference,
-  motionEnabled,
-  saveMotionPreference,
-} from "../utils/motionPreference";
+  setThemePreference,
+  themePreference,
+  type ThemePreference,
+} from "../utils/themePreference";
 import type {
   InstallProgressStatus,
+  ProtonDownloadStatus,
   PlatformCapabilities,
   RpgmakerLinuxRunnerStatus,
   SettingsResponse,
@@ -42,7 +51,9 @@ const prefixPath = ref("");
 const playwrightPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
 const enableLogging = ref(false);
-const animationsEnabled = ref(motionEnabled.value);
+const savingLogging = ref(false);
+const protonDownload = ref<ProtonDownloadStatus | null>(null);
+let protonDownloadTimer: ReturnType<typeof setInterval> | null = null;
 const installingDeps = ref(false);
 const installError = ref("");
 const downloadingProton = ref(false);
@@ -75,7 +86,6 @@ const openingLoginSession = ref(false);
 const resettingSession = ref(false);
 const sessionMessage = ref("");
 const sessionError = ref("");
-const saveMessage = ref("");
 const saveError = ref("");
 const settingsLoaded = ref(false);
 const platformCapabilities = ref<PlatformCapabilities>({
@@ -120,6 +130,55 @@ const applySettings = (data: SettingsResponse) => {
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
   enableLogging.value = !!data.enable_logging;
+  savedValues.value = formValues();
+};
+
+// Fields saved with the save bar. Toggles (logging, theme, animations) save on click.
+const formValues = () => ({
+  protonPath: protonPath.value,
+  prefixPath: prefixPath.value,
+  playwrightPath: playwrightPath.value,
+  rpgmakerLinuxRunnerPath: rpgmakerLinuxRunnerPath.value,
+  customStatuses: [...customStatuses.value],
+  urmPath: urmPath.value,
+});
+const savedValues = ref(formValues());
+const hasUnsavedChanges = computed(
+  () => JSON.stringify(formValues()) !== JSON.stringify(savedValues.value),
+);
+
+onBeforeRouteLeave(
+  () => !hasUnsavedChanges.value || confirm("Discard unsaved settings changes?"),
+);
+
+const themeOptions: { value: ThemePreference; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
+const shortcuts = [
+  { keys: ["/", "Ctrl+F"], action: "Search the library" },
+  { keys: ["Ctrl+N"], action: "Add a game" },
+  { keys: ["Enter"], action: "Open the focused game" },
+  { keys: ["Shift+F10"], action: "Game actions menu" },
+  { keys: ["Esc"], action: "Close a window or menu" },
+];
+
+const toggleLogging = async () => {
+  if (savingLogging.value) return;
+  const enabled = !enableLogging.value;
+  enableLogging.value = enabled;
+  savingLogging.value = true;
+  try {
+    const res = await api.saveSettings({ enable_logging: enabled });
+    if (!res || res.success === false) throw new Error(res?.error || "Unknown error");
+  } catch (e) {
+    enableLogging.value = !enabled;
+    notifyError("Failed to save debug logging: " + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    savingLogging.value = false;
+  }
 };
 
 const loadSettings = async () => {
@@ -129,8 +188,6 @@ const loadSettings = async () => {
     if (data) {
       applySettings(data);
     }
-
-    animationsEnabled.value = motionEnabled.value;
 
     if (supportsLinuxRuntimes.value) {
       const runners = await api.getAvailableRunners();
@@ -221,14 +278,29 @@ const openRpgmakerLinuxRepo = async () => {
   }
 };
 
+const pollProtonDownload = async () => {
+  try {
+    const status = await api.getProtonDownloadStatus();
+    if (downloadingProton.value && status?.running) protonDownload.value = status;
+  } catch (e) {
+    console.error("Failed to read GE-Proton download status", e);
+  }
+};
+
+const formatMegabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
+
 const downloadProton = async () => {
   downloadingProton.value = true;
   protonError.value = "";
+  protonDownload.value = { running: true, stage: "Starting", done: 0, total: 0 };
+  protonDownloadTimer = setInterval(pollProtonDownload, 500);
   try {
     const result = await api.downloadProtonGe();
     if (result && result.success && result.path) {
+      // The backend already saved proton_path; other unsaved edits stay unsaved.
       protonPath.value = result.path;
-      await saveSettings();
+      savedValues.value = { ...savedValues.value, protonPath: result.path };
+      notify(`GE-Proton installed to ${result.path}.`, "success");
     } else {
       protonError.value = result?.error || "Failed to download Proton.";
     }
@@ -236,6 +308,9 @@ const downloadProton = async () => {
     protonError.value = String(e);
   } finally {
     downloadingProton.value = false;
+    protonDownload.value = null;
+    if (protonDownloadTimer) clearInterval(protonDownloadTimer);
+    protonDownloadTimer = null;
   }
 };
 
@@ -370,6 +445,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  if (protonDownloadTimer) clearInterval(protonDownloadTimer);
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
@@ -382,15 +458,8 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, enableLogging, animationsEnabled, customStatuses, urmPath], () => {
-  if (saving.value) return;
-  saveMessage.value = "";
-  saveError.value = "";
-});
-
-watch(animationsEnabled, (enabled) => {
-  if (!settingsLoaded.value) return;
-  applyMotionPreference(enabled);
+watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath], () => {
+  if (!saving.value) saveError.value = "";
 });
 
 watch([protonPath, prefixPath], () => {
@@ -409,7 +478,6 @@ const saveSettings = async () => {
   if (statusError.value) return;
 
   saving.value = true;
-  saveMessage.value = "";
   saveError.value = "";
 
   try {
@@ -418,7 +486,6 @@ const saveSettings = async () => {
       wine_prefix_path: prefixPath.value,
       playwright_browsers_path: playwrightPath.value,
       rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
-      enable_logging: enableLogging.value,
       custom_play_statuses: customStatuses.value,
       urm_rpa_path: urmPath.value,
     });
@@ -428,8 +495,6 @@ const saveSettings = async () => {
       return;
     }
 
-    saveMotionPreference(animationsEnabled.value);
-
     const persistedSettings = await api.getSettings();
     if (!persistedSettings) {
       saveError.value = "Settings were saved but could not be reloaded.";
@@ -437,9 +502,8 @@ const saveSettings = async () => {
     }
 
     applySettings(persistedSettings);
-    animationsEnabled.value = motionEnabled.value;
     if (supportsLinuxRuntimes.value) await pollInstallStatus();
-    saveMessage.value = "Settings saved.";
+    notify("Settings saved.", "success");
   } catch (e) {
     console.error("Failed to save settings", e);
     saveError.value = "Error saving settings: " + String(e);
@@ -454,6 +518,18 @@ const addStatus = () => {
   if (statusError.value) return;
   customStatuses.value = [...customStatuses.value, name];
   newStatus.value = "";
+};
+
+const discardChanges = () => {
+  const saved = savedValues.value;
+  protonPath.value = saved.protonPath;
+  prefixPath.value = saved.prefixPath;
+  playwrightPath.value = saved.playwrightPath;
+  rpgmakerLinuxRunnerPath.value = saved.rpgmakerLinuxRunnerPath;
+  customStatuses.value = [...saved.customStatuses];
+  urmPath.value = saved.urmPath;
+  statusError.value = "";
+  saveError.value = "";
 };
 
 const removeStatus = async (name: string) => {
@@ -476,7 +552,7 @@ const browseUrm = async () => {
 
 <template>
   <div class="allow-text-selection p-8 max-w-4xl pb-12">
-    <header class="mb-10">
+    <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
         style="color: var(--text-primary)"
@@ -491,570 +567,560 @@ const browseUrm = async () => {
           border-left: 2px solid var(--brand);
         "
       >
-        Configure launch paths and application behavior.
+        Configure launch paths and application behavior. Toggles save right away.
       </p>
     </header>
 
-    <div class="settings-card rounded-xl shadow-lg overflow-hidden">
-      <div class="p-8 space-y-8">
-        <!-- Environment Settings -->
-        <section>
-          <h3
-            class="ui-section-heading text-lg font-semibold mb-4"
-            style="color: var(--text-primary)"
+    <div class="space-y-6">
+      <!-- General -->
+      <section class="settings-card rounded-xl p-6 space-y-5">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconAdjustments class="ui-section-icon" />
+          General
+        </h3>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+              Enable Debug Logging
+            </h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              {{
+                supportsLinuxRuntimes
+                  ? "Saves Wine/Proton launch output to a .log file next to the game executable."
+                  : "Saves native launch output to a .log file next to the game executable."
+              }}
+            </p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              :checked="enableLogging"
+              :disabled="savingLogging"
+              @change="toggleLogging"
+              class="sr-only peer"
+              aria-label="Enable debug logging"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Play Statuses</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Add custom statuses alongside the built-in choices.
+            </p>
+          </div>
+          <div class="flex gap-3">
+            <input
+              v-model="newStatus"
+              @keydown.enter.prevent="addStatus"
+              type="text"
+              class="settings-input flex-1"
+              placeholder="Custom status name"
+              aria-label="Custom status name"
+            />
+            <button @click="addStatus" class="settings-btn">Add Status</button>
+          </div>
+          <p v-if="statusError" role="alert" class="text-xs text-red-400">{{ statusError }}</p>
+          <div
+            v-for="name in customStatuses"
+            :key="name"
+            class="setting-row flex items-center justify-between gap-3 px-4 py-2 rounded-lg"
           >
-            <IconAutomation class="ui-section-icon" />
-            {{
-              supportsLinuxRuntimes
-                ? "Proton & Wine Environment"
-                : "Windows Environment"
-            }}
-          </h3>
+            <span class="text-sm" style="color: var(--text-primary)">{{ name }}</span>
+            <button @click="removeStatus(name)" class="settings-btn" :aria-label="`Remove ${name}`">
+              Remove
+            </button>
+          </div>
+        </div>
 
-          <div class="space-y-5">
+        <div class="space-y-3">
+          <h4 class="ui-section-heading text-sm font-medium" style="color: var(--text-primary)">
+            <IconKeyboard class="w-4 h-4" style="color: var(--text-muted)" />
+            Keyboard Shortcuts
+          </h4>
+          <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
             <div
-              v-if="platformCapabilities.platform === 'windows'"
-              class="p-4 rounded-lg text-sm"
-              style="background: var(--bg-raised); border: 1px solid var(--border)"
+              v-for="shortcut in shortcuts"
+              :key="shortcut.action"
+              class="flex items-center justify-between gap-3"
             >
-              Windows games launch directly. Proton, Wine, Winetricks, Wine
-              prefixes, and Linux runtime installers are not used on Windows.
+              <dt style="color: var(--text-secondary)">{{ shortcut.action }}</dt>
+              <dd class="flex gap-1 shrink-0">
+                <kbd v-for="key in shortcut.keys" :key="key">{{ key }}</kbd>
+              </dd>
             </div>
-            <div v-if="supportsLinuxRuntimes">
-              <label
-                class="block text-sm font-medium mb-1.5 flex justify-between items-center"
-                style="color: var(--text-secondary)"
-              >
-                <span>Proton / Wine Executable Path</span>
-                <button
-                  @click="downloadProton"
-                  :disabled="downloadingProton"
-                  class="ui-action-btn text-xs font-medium disabled:opacity-50"
-                  style="color: var(--brand)"
-                >
-                  <IconLoader2
-                    v-if="downloadingProton"
-                    class="ui-action-icon animate-spin"
-                  />
-                  <IconDownloadFilled
-                    v-else
-                    class="ui-action-icon"
-                  />
-                  {{
-                    downloadingProton
-                      ? "Downloading (Check terminal)..."
-                      : "Auto Download Latest GE-Proton"
-                  }}
-                </button>
-              </label>
-              <div class="flex gap-3">
-                <input
-                  v-model="protonPath"
-                  list="runner-paths"
-                  type="text"
-                  placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
-                  class="settings-input flex-1"
-                />
-                <datalist id="runner-paths">
-                  <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
-                </datalist>
-                <button @click="browseProton" class="settings-btn ui-action-btn">
-                  <IconFolderOpen class="ui-action-icon" />
-                  Browse
-                </button>
-              </div>
-              <p class="text-xs mt-2" style="color: var(--text-muted)">
-                Leave empty to use the system default `wine` command.
-              </p>
-              <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
-                {{ protonError }}
-              </p>
-            </div>
+          </dl>
+        </div>
+      </section>
 
-            <div v-if="supportsLinuxRuntimes">
-              <label
-                class="block text-sm font-medium mb-1.5"
-                style="color: var(--text-secondary)"
-                >Default Wine Prefix Path (WINEPREFIX)</label
-              >
-              <div class="flex gap-3">
-                <input
-                  v-model="prefixPath"
-                  type="text"
-                  placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
-                  class="settings-input flex-1"
-                />
-                <button @click="browsePrefix" class="settings-btn ui-action-btn">
-                  <IconFolderOpen class="ui-action-icon" />
-                  Browse
-                </button>
-              </div>
-              <p class="text-xs mt-2" style="color: var(--text-muted)">
-                The location where game dependencies and save files will be
-                isolated.
-              </p>
-            </div>
+      <!-- Appearance -->
+      <section class="settings-card rounded-xl p-6 space-y-4">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconPalette class="ui-section-icon" />
+          Appearance
+        </h3>
 
-            <div
-              v-if="platformCapabilities.rpgmaker_linux"
-              class="p-4 rounded-lg"
-              style="background: var(--bg-raised); border: 1px solid var(--border)"
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Theme</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              System follows your desktop's light or dark setting.
+            </p>
+          </div>
+          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Theme">
+            <button
+              v-for="option in themeOptions"
+              :key="option.value"
+              type="button"
+              class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              :class="themePreference === option.value ? 'motion-option-active' : ''"
+              :aria-pressed="themePreference === option.value"
+              @click="setThemePreference(option.value)"
             >
-              <div class="flex flex-col gap-3">
-                <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-                      RPGMaker Linux Runner
-                    </h4>
-                    <p class="text-xs mt-1" style="color: var(--text-muted)">
-                      Optional native-port runner for RPG Maker, TyranoBuilder,
-                      Godot, Construct, and Nscripter games. Install it manually
-                      from the upstream project.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    @click="openRpgmakerLinuxRepo"
-                    class="settings-btn ui-action-btn shrink-0"
-                  >
-                    Open GitHub
-                  </button>
-                </div>
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
 
-                <div class="flex gap-3">
-                  <input
-                    v-model="rpgmakerLinuxRunnerPath"
-                    type="text"
-                    placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
-                    class="settings-input flex-1"
-                  />
-                  <button
-                    @click="browseRpgmakerLinuxRunner"
-                    class="settings-btn ui-action-btn"
-                  >
-                    <IconFolderOpen class="ui-action-icon" />
-                    Browse
-                  </button>
-                </div>
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Turn non-essential UI motion on or off. Loading indicators stay visible either way.
+            </p>
+          </div>
+          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Animations">
+            <button
+              type="button"
+              class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              :class="motionEnabled ? 'motion-option-active' : ''"
+              :aria-pressed="motionEnabled"
+              @click="saveMotionPreference(true)"
+            >
+              On
+            </button>
+            <button
+              type="button"
+              class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              :class="!motionEnabled ? 'motion-option-active' : ''"
+              :aria-pressed="!motionEnabled"
+              @click="saveMotionPreference(false)"
+            >
+              Off
+            </button>
+          </div>
+        </div>
+      </section>
 
-                <p
-                  class="copyable-feedback text-xs"
-                  :class="rpgmakerLinuxRunnerAvailable ? 'text-green-400' : 'text-yellow-400'"
-                >
-                  {{ rpgmakerLinuxRunnerStatusText }}
-                </p>
-                <p class="text-xs" style="color: var(--text-muted)">
-                  wLib only launches the external tool. It does not run the
-                  upstream installer, updater, exporter, bug reporter, or patch
-                  commands.
+      <!-- Wine / Proton -->
+      <section class="settings-card rounded-xl p-6 space-y-5">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconAutomation class="ui-section-icon" />
+          {{ supportsLinuxRuntimes ? "Wine / Proton" : "Windows Environment" }}
+        </h3>
+
+        <div
+          v-if="platformCapabilities.platform === 'windows'"
+          class="setting-row p-4 rounded-lg text-sm"
+          style="color: var(--text-secondary)"
+        >
+          Windows games launch directly. Proton, Wine, Winetricks, Wine
+          prefixes, and Linux runtime installers are not used on Windows.
+        </div>
+
+        <div v-if="supportsLinuxRuntimes">
+          <label
+            class="block text-sm font-medium mb-1.5 flex justify-between items-center"
+            style="color: var(--text-secondary)"
+          >
+            <span>Proton / Wine Executable Path</span>
+            <button
+              @click="downloadProton"
+              :disabled="downloadingProton"
+              class="ui-action-btn text-xs font-medium disabled:opacity-50"
+              style="color: var(--brand)"
+            >
+              <IconLoader2 v-if="downloadingProton" class="ui-action-icon animate-spin" />
+              <IconDownloadFilled v-else class="ui-action-icon" />
+              {{ downloadingProton ? "Downloading GE-Proton…" : "Auto Download Latest GE-Proton" }}
+            </button>
+          </label>
+          <div class="flex gap-3">
+            <input
+              v-model="protonPath"
+              list="runner-paths"
+              type="text"
+              placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
+              class="settings-input flex-1"
+            />
+            <datalist id="runner-paths">
+              <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
+            </datalist>
+            <button @click="browseProton" class="settings-btn ui-action-btn">
+              <IconFolderOpen class="ui-action-icon" />
+              Browse
+            </button>
+          </div>
+          <div v-if="protonDownload" class="mt-3 space-y-1.5" role="status">
+            <div class="flex justify-between text-xs" style="color: var(--text-secondary)">
+              <span>{{ protonDownload.stage }}…</span>
+              <span v-if="protonDownload.total" class="font-mono">
+                {{ formatMegabytes(protonDownload.done) }} / {{ formatMegabytes(protonDownload.total) }}
+              </span>
+              <span v-else-if="protonDownload.done" class="font-mono">
+                {{ formatMegabytes(protonDownload.done) }}
+              </span>
+            </div>
+            <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-raised)">
+              <div
+                class="h-1.5 rounded-full transition-all duration-300"
+                :class="{ 'animate-pulse': !protonDownload.total }"
+                style="background: var(--brand)"
+                :style="{
+                  width: protonDownload.total
+                    ? (protonDownload.done / protonDownload.total) * 100 + '%'
+                    : '100%',
+                }"
+              ></div>
+            </div>
+          </div>
+          <p class="text-xs mt-2" style="color: var(--text-muted)">
+            Leave empty to use the system default `wine` command.
+          </p>
+          <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
+            {{ protonError }}
+          </p>
+        </div>
+
+        <div v-if="supportsLinuxRuntimes">
+          <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">
+            Default Wine Prefix Path (WINEPREFIX)
+          </label>
+          <div class="flex gap-3">
+            <input
+              v-model="prefixPath"
+              type="text"
+              placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
+              class="settings-input flex-1"
+            />
+            <button @click="browsePrefix" class="settings-btn ui-action-btn">
+              <IconFolderOpen class="ui-action-icon" />
+              Browse
+            </button>
+          </div>
+          <p class="text-xs mt-2" style="color: var(--text-muted)">
+            The location where game dependencies and save files will be isolated.
+          </p>
+        </div>
+
+        <div v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">
+          <div class="flex flex-col gap-3">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+                  RPGMaker Linux Runner
+                </h4>
+                <p class="text-xs mt-1" style="color: var(--text-muted)">
+                  Optional native-port runner for RPG Maker, TyranoBuilder,
+                  Godot, Construct, and Nscripter games. Install it manually
+                  from the upstream project.
                 </p>
               </div>
+              <button
+                type="button"
+                @click="openRpgmakerLinuxRepo"
+                class="settings-btn ui-action-btn shrink-0"
+              >
+                Open GitHub
+              </button>
             </div>
 
-            <div>
-              <label
-                class="block text-sm font-medium mb-1.5"
-                style="color: var(--text-secondary)"
-                >Playwright Browsers Path</label
-              >
+            <div class="flex gap-3">
               <input
-                v-model="playwrightPath"
+                v-model="rpgmakerLinuxRunnerPath"
                 type="text"
-                :placeholder="
-                  platformCapabilities.playwright_browsers_path ||
-                  'Managed by wLib for this platform'
-                "
-                class="settings-input w-full"
+                placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
+                class="settings-input flex-1"
               />
-              <p class="text-xs mt-2" style="color: var(--text-muted)">
-                This controls where Chromium is installed for scraping. Changes
-                apply after restarting wLib.
-              </p>
+              <button @click="browseRpgmakerLinuxRunner" class="settings-btn ui-action-btn">
+                <IconFolderOpen class="ui-action-icon" />
+                Browse
+              </button>
             </div>
 
-            <div
-              class="p-4 rounded-lg"
-              style="background: var(--bg-raised); border: 1px solid var(--border)"
+            <p
+              class="copyable-feedback text-xs"
+              :class="rpgmakerLinuxRunnerAvailable ? 'text-green-400' : 'text-yellow-400'"
             >
-              <h4 class="text-sm font-medium" style="color: var(--text-primary)">
-                F95 Login Session
-              </h4>
-              <p class="text-xs mt-1" style="color: var(--text-muted)">
-                Use Playwright's persistent browser profile for login-required
-                threads.
-              </p>
-              <div class="flex flex-wrap gap-3 mt-3">
-                <button
-                  @click="openLoginSession"
-                  :disabled="openingLoginSession || resettingSession"
-                  class="settings-btn ui-action-btn disabled:opacity-50"
-                >
-                  <img src="/f95.png" alt="F95" class="ui-action-icon" />
-                  {{
-                    openingLoginSession
-                      ? "Login Window Open..."
-                      : "Open F95 Login Window"
-                  }}
-                </button>
-                <button
-                  @click="resetSession"
-                  :disabled="resettingSession || openingLoginSession"
-                  class="settings-btn ui-action-btn disabled:opacity-50"
-                >
-                  <IconLogout2 class="ui-action-icon" />
-                  {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
-                </button>
-              </div>
-              <p v-if="sessionMessage" class="copyable-feedback text-xs text-green-400 mt-2">
-                {{ sessionMessage }}
-              </p>
-              <p v-if="sessionError" class="copyable-feedback text-xs text-red-400 mt-2">
-                {{ sessionError }}
-              </p>
-            </div>
+              {{ rpgmakerLinuxRunnerStatusText }}
+            </p>
+            <p class="text-xs" style="color: var(--text-muted)">
+              wLib only launches the external tool. It does not run the
+              upstream installer, updater, exporter, bug reporter, or patch
+              commands.
+            </p>
+          </div>
+        </div>
+      </section>
 
+      <!-- Tools -->
+      <section v-if="supportsLinuxRuntimes" class="settings-card rounded-xl p-6 space-y-4">
+        <div>
+          <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+            <IconTool class="ui-section-icon" />
+            Tools
+          </h3>
+          <p class="text-xs mt-1" style="color: var(--text-secondary)">
+            Fix common issues with certain game engines. Installs go into the default prefix above.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-3">
+          <!-- DLL Install Card -->
+          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
             <div
-              class="flex items-center justify-between mt-6 p-4 rounded-lg"
-              style="
-                background: var(--bg-raised);
-                border: 1px solid var(--border);
-              "
-            >
-              <div>
-                <h4
-                  class="text-sm font-medium"
-                  style="color: var(--text-primary)"
+              class="absolute inset-y-0 left-0 w-1"
+              :class="dllsInstalled ? 'bg-green-500' : ''"
+              :style="!dllsInstalled ? 'background: var(--text-muted)' : ''"
+            ></div>
+            <div class="flex items-center justify-between gap-4">
+              <div class="pl-3">
+                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                  RPGMaker / Unity Fix (Winetricks)
+                </h5>
+                <p
+                  v-if="!dllsInstalled && !installingDeps"
+                  class="text-xs mt-1"
+                  style="color: var(--text-muted)"
                 >
-                  Enable Debug Logging
-                </h4>
-                <p class="text-xs mt-1" style="color: var(--text-muted)">
-                  {{
-                    supportsLinuxRuntimes
-                      ? "Saves Wine/Proton launch output to a .log file next to the game executable."
-                      : "Saves native launch output to a .log file next to the game executable."
-                  }}
+                  Installs corefonts, d3d, quartz, wmp9, directshow. Fixes
+                  video decoding black screens.
+                </p>
+                <p v-if="installingDeps" class="text-xs text-yellow-400 mt-1 font-mono">
+                  Installing {{ depsProgress.current }} ({{ depsProgress.done }}/{{
+                    depsProgress.total
+                  }})... This may take 30+ minutes.
+                </p>
+                <p v-if="dllsInstalled && !installingDeps" class="text-xs text-green-400 mt-1 font-mono">
+                  Installed
                 </p>
               </div>
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  v-model="enableLogging"
-                  class="sr-only peer"
-                />
-                <div class="ui-toggle"></div>
-              </label>
-            </div>
-
-            <div
-              class="motion-setting-card flex items-center justify-between mt-4 p-4 rounded-lg gap-4"
-            >
-              <div>
-                <h4
-                  class="text-sm font-medium"
-                  style="color: var(--text-primary)"
-                >
-                  Animations
-                </h4>
-                <p class="text-xs mt-1" style="color: var(--text-muted)">
-                  Turn non-essential UI motion on or off. Loading indicators stay visible either way.
-                </p>
-              </div>
-              <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0">
-                <button
-                  type="button"
-                  class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
-                  :class="animationsEnabled ? 'motion-option-active' : ''"
-                  @click="animationsEnabled = true"
-                >
-                  On
-                </button>
-                <button
-                  type="button"
-                  class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
-                  :class="!animationsEnabled ? 'motion-option-active' : ''"
-                  @click="animationsEnabled = false"
-                >
-                  Off
-                </button>
-              </div>
-            </div>
-
-            <hr style="border-color: var(--border)" class="my-4" />
-
-            <div v-if="supportsLinuxRuntimes">
-              <h4
-                class="text-sm font-bold mb-2"
-                style="color: var(--text-primary)"
+              <button
+                @click="installDeps"
+                :disabled="installingDeps || dllsInstalled"
+                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
               >
-                Advanced Tools
-              </h4>
-              <p class="text-xs mb-4" style="color: var(--text-secondary)">
-                Run these tools to fix common issues with certain game engines.
-              </p>
-
-              <div class="flex flex-col gap-3">
-                <!-- DLL Install Card -->
-                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-                  <div
-                    class="absolute inset-y-0 left-0 w-1"
-                    :class="dllsInstalled ? 'bg-green-500' : ''"
-                    :style="
-                      !dllsInstalled ? 'background: var(--text-muted)' : ''
-                    "
-                  ></div>
-                  <div class="flex items-center justify-between">
-                    <div class="pl-3">
-                      <h5
-                        class="text-sm font-medium"
-                        style="color: var(--text-primary)"
-                      >
-                        RPGMaker / Unity Fix (Winetricks)
-                      </h5>
-                      <p
-                        v-if="!dllsInstalled && !installingDeps"
-                        class="text-xs mt-1"
-                        style="color: var(--text-muted)"
-                      >
-                        Installs corefonts, d3d, quartz, wmp9, directshow. Fixes
-                        video decoding black screens.
-                      </p>
-                      <p
-                        v-if="installingDeps"
-                        class="text-xs text-yellow-400 mt-1 font-mono"
-                      >
-                        Installing {{ depsProgress.current }} ({{
-                          depsProgress.done
-                        }}/{{ depsProgress.total }})... This may take 30+
-                        minutes.
-                      </p>
-                      <p
-                        v-if="dllsInstalled && !installingDeps"
-                        class="text-xs text-green-400 mt-1 font-mono"
-                      >
-                        Installed
-                      </p>
-                    </div>
-                      <button
-                        @click="installDeps"
-                        :disabled="installingDeps || dllsInstalled"
-                        class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
-                      >
-                        <IconLoader2
-                          v-if="installingDeps"
-                          class="ui-action-icon animate-spin"
-                        />
-                      {{
-                        dllsInstalled
-                          ? "Installed"
-                          : installingDeps
-                            ? "Installing..."
-                            : "Install DLLs"
-                      }}
-                    </button>
-                  </div>
-                  <div
-                    v-if="installingDeps && depsProgress.total > 0"
-                    class="mt-3 ml-3"
-                  >
-                    <div
-                      class="w-full rounded-full h-1.5 overflow-hidden"
-                      style="background: var(--bg-raised)"
-                    >
-                      <div
-                        class="h-1.5 rounded-full transition-all duration-500"
-                        style="background: var(--brand)"
-                        :style="{
-                          width:
-                            (depsProgress.done / depsProgress.total) * 100 +
-                            '%',
-                        }"
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- RTP Install Card -->
-                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-                  <div
-                    class="absolute inset-y-0 left-0 w-1"
-                    :class="rtpsInstalled ? 'bg-green-500' : ''"
-                    :style="
-                      !rtpsInstalled ? 'background: var(--text-muted)' : ''
-                    "
-                  ></div>
-                  <div class="flex items-center justify-between">
-                    <div class="pl-3">
-                      <h5
-                        class="text-sm font-medium"
-                        style="color: var(--text-primary)"
-                      >
-                        RPGMaker RTP (VX Ace, VX, XP, 2003)
-                      </h5>
-                      <p
-                        v-if="!rtpsInstalled && !installingRtps"
-                        class="text-xs mt-1"
-                        style="color: var(--text-muted)"
-                      >
-                        Downloads and verifies the official RTP packages for VX
-                        Ace, VX, XP, and 2003 in the default prefix shown above.
-                      </p>
-                      <p
-                        v-if="installingRtps"
-                        class="text-xs text-yellow-400 mt-1 font-mono"
-                      >
-                        Installing {{ rtpProgress.current }} ({{
-                          rtpProgress.done
-                        }}/{{ rtpProgress.total }})...
-                      </p>
-                      <p
-                        v-if="rtpsInstalled && !installingRtps"
-                        class="text-xs text-green-400 mt-1 font-mono"
-                      >
-                        Installed
-                      </p>
-                    </div>
-                      <button
-                        @click="installRtps"
-                        :disabled="installingRtps || rtpsInstalled"
-                        class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
-                      >
-                        <IconLoader2
-                          v-if="installingRtps"
-                          class="ui-action-icon animate-spin"
-                        />
-                      {{
-                        rtpsInstalled
-                          ? "Installed"
-                          : installingRtps
-                            ? "Processing..."
-                            : "Install RTPs"
-                      }}
-                    </button>
-                  </div>
-                  <div
-                    v-if="installingRtps && rtpProgress.total > 0"
-                    class="mt-3 ml-3"
-                  >
-                    <div
-                      class="w-full rounded-full h-1.5 overflow-hidden"
-                      style="background: var(--bg-raised)"
-                    >
-                      <div
-                        class="h-1.5 rounded-full transition-all duration-500"
-                        style="background: var(--brand)"
-                        :style="{
-                          width:
-                            (rtpProgress.done / rtpProgress.total) * 100 + '%',
-                        }"
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Cheat Engine Card -->
-                <div class="tool-card p-4 rounded-lg relative overflow-hidden">
-                  <div
-                    class="absolute inset-y-0 left-0 w-1"
-                    :class="ceInstalled ? 'bg-green-500' : ''"
-                    :style="!ceInstalled ? 'background: var(--text-muted)' : ''"
-                  ></div>
-                  <div class="pl-3">
-                    <h5
-                      class="text-sm font-medium"
-                      style="color: var(--text-primary)"
-                    >
-                      Cheat Engine (Lunar Engine)
-                    </h5>
-                    <p
-                      class="text-xs mt-1"
-                      style="color: var(--text-muted)"
-                      v-if="!ceInstalled"
-                    >
-                      Provides the ability to auto-inject CE when launching
-                      games to modify values.
-                    </p>
-                    <p class="text-xs text-green-400 mt-1 font-mono" v-else>
-                      Installed
-                    </p>
-                  </div>
-                  <button
-                    @click="downloadCe"
-                    :disabled="installingCe || ceInstalled"
-                    class="settings-btn ui-action-btn absolute right-4 top-1/2 -translate-y-1/2 disabled:opacity-50"
-                  >
-                    <IconLoader2
-                      v-if="installingCe"
-                      class="ui-action-icon animate-spin"
-                    />
-                    {{
-                      ceInstalled
-                        ? "Installed"
-                        : installingCe
-                          ? "Downloading..."
-                          : "Install CE"
-                    }}
-                  </button>
-                </div>
-              </div>
-
-              <div class="mt-2 space-y-1">
-                <p v-if="installError" class="copyable-feedback text-xs text-red-400">
-                  {{ installError }}
-                </p>
-                <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">
-                  {{ rtpError }}
-                </p>
-                <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
+                <IconLoader2 v-if="installingDeps" class="ui-action-icon animate-spin" />
+                {{ dllsInstalled ? "Installed" : installingDeps ? "Installing..." : "Install DLLs" }}
+              </button>
+            </div>
+            <div v-if="installingDeps && depsProgress.total > 0" class="mt-3 ml-3">
+              <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
+                <div
+                  class="h-1.5 rounded-full transition-all duration-500"
+                  style="background: var(--brand)"
+                  :style="{ width: (depsProgress.done / depsProgress.total) * 100 + '%' }"
+                ></div>
               </div>
             </div>
           </div>
-        </section>
-      </div>
 
-      <section class="px-8 pb-8 space-y-4">
-        <h3 class="text-lg font-semibold" style="color: var(--text-primary)">Play Statuses</h3>
-        <p class="text-xs" style="color: var(--text-muted)">Add custom statuses alongside the built-in choices. Save Changes applies this list.</p>
-        <div class="flex gap-3">
-          <input v-model="newStatus" @keydown.enter.prevent="addStatus" type="text" class="settings-input flex-1" placeholder="Custom status name" aria-label="Custom status name" />
-          <button @click="addStatus" class="settings-btn">Add Status</button>
+          <!-- RTP Install Card -->
+          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
+            <div
+              class="absolute inset-y-0 left-0 w-1"
+              :class="rtpsInstalled ? 'bg-green-500' : ''"
+              :style="!rtpsInstalled ? 'background: var(--text-muted)' : ''"
+            ></div>
+            <div class="flex items-center justify-between gap-4">
+              <div class="pl-3">
+                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                  RPGMaker RTP (VX Ace, VX, XP, 2003)
+                </h5>
+                <p
+                  v-if="!rtpsInstalled && !installingRtps"
+                  class="text-xs mt-1"
+                  style="color: var(--text-muted)"
+                >
+                  Downloads and verifies the official RTP packages for VX
+                  Ace, VX, XP, and 2003.
+                </p>
+                <p v-if="installingRtps" class="text-xs text-yellow-400 mt-1 font-mono">
+                  Installing {{ rtpProgress.current }} ({{ rtpProgress.done }}/{{
+                    rtpProgress.total
+                  }})...
+                </p>
+                <p v-if="rtpsInstalled && !installingRtps" class="text-xs text-green-400 mt-1 font-mono">
+                  Installed
+                </p>
+              </div>
+              <button
+                @click="installRtps"
+                :disabled="installingRtps || rtpsInstalled"
+                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
+              >
+                <IconLoader2 v-if="installingRtps" class="ui-action-icon animate-spin" />
+                {{ rtpsInstalled ? "Installed" : installingRtps ? "Processing..." : "Install RTPs" }}
+              </button>
+            </div>
+            <div v-if="installingRtps && rtpProgress.total > 0" class="mt-3 ml-3">
+              <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--bg-surface)">
+                <div
+                  class="h-1.5 rounded-full transition-all duration-500"
+                  style="background: var(--brand)"
+                  :style="{ width: (rtpProgress.done / rtpProgress.total) * 100 + '%' }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cheat Engine Card -->
+          <div class="tool-card p-4 rounded-lg relative overflow-hidden">
+            <div
+              class="absolute inset-y-0 left-0 w-1"
+              :class="ceInstalled ? 'bg-green-500' : ''"
+              :style="!ceInstalled ? 'background: var(--text-muted)' : ''"
+            ></div>
+            <div class="flex items-center justify-between gap-4">
+              <div class="pl-3">
+                <h5 class="text-sm font-medium" style="color: var(--text-primary)">
+                  Cheat Engine (Lunar Engine)
+                </h5>
+                <p v-if="!ceInstalled" class="text-xs mt-1" style="color: var(--text-muted)">
+                  Provides the ability to auto-inject CE when launching
+                  games to modify values.
+                </p>
+                <p v-else class="text-xs text-green-400 mt-1 font-mono">Installed</p>
+              </div>
+              <button
+                @click="downloadCe"
+                :disabled="installingCe || ceInstalled"
+                class="settings-btn ui-action-btn shrink-0 disabled:opacity-50"
+              >
+                <IconLoader2 v-if="installingCe" class="ui-action-icon animate-spin" />
+                {{ ceInstalled ? "Installed" : installingCe ? "Downloading..." : "Install CE" }}
+              </button>
+            </div>
+          </div>
         </div>
-        <p v-if="statusError" role="alert" class="text-xs text-red-400">{{ statusError }}</p>
-        <div v-for="name in customStatuses" :key="name" class="flex items-center justify-between gap-3">
-          <span style="color: var(--text-primary)">{{ name }}</span>
-          <button @click="removeStatus(name)" class="settings-btn" :aria-label="`Remove ${name}`">Remove</button>
+
+        <div class="space-y-1">
+          <p v-if="installError" class="copyable-feedback text-xs text-red-400">{{ installError }}</p>
+          <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">{{ rtpError }}</p>
+          <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
         </div>
       </section>
-      <section class="px-8 pb-8 space-y-3">
-        <h3 class="text-lg font-semibold" style="color: var(--text-primary)">Universal Ren'Py Mod (URM)</h3>
-        <label for="urm-source" class="block text-sm" style="color: var(--text-secondary)">URM source file (.rpa)</label>
-        <div class="flex gap-3">
-          <input id="urm-source" v-model="urmPath" type="text" class="settings-input flex-1" placeholder="/path/to/0x52_URM.rpa" />
-          <button @click="browseUrm" class="settings-btn ui-action-btn"><IconFolderOpen class="ui-action-icon" />Browse</button>
+
+      <!-- F95 Account -->
+      <section class="settings-card rounded-xl p-6 space-y-5">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconUserCircle class="ui-section-icon" />
+          F95 Account
+        </h3>
+
+        <div>
+          <h4 class="text-sm font-medium" style="color: var(--text-primary)">Login Session</h4>
+          <p class="text-xs mt-1" style="color: var(--text-muted)">
+            Log in once in wLib's own browser profile so update checks can read
+            login-only threads.
+          </p>
+          <div class="flex flex-wrap gap-3 mt-3">
+            <button
+              @click="openLoginSession"
+              :disabled="openingLoginSession || resettingSession"
+              class="settings-btn ui-action-btn disabled:opacity-50"
+            >
+              <img src="/f95.png" alt="F95" class="ui-action-icon" />
+              {{ openingLoginSession ? "Login Window Open..." : "Open F95 Login Window" }}
+            </button>
+            <button
+              @click="resetSession"
+              :disabled="resettingSession || openingLoginSession"
+              class="settings-btn ui-action-btn disabled:opacity-50"
+            >
+              <IconLogout2 class="ui-action-icon" />
+              {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
+            </button>
+          </div>
+          <p v-if="sessionMessage" class="copyable-feedback text-xs text-green-400 mt-2">
+            {{ sessionMessage }}
+          </p>
+          <p v-if="sessionError" class="copyable-feedback text-xs text-red-400 mt-2">
+            {{ sessionError }}
+          </p>
         </div>
-        <p class="text-xs" style="color: var(--text-muted)">Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.</p>
+
+        <div>
+          <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">
+            Playwright Browsers Path
+          </label>
+          <input
+            v-model="playwrightPath"
+            type="text"
+            :placeholder="platformCapabilities.playwright_browsers_path || 'Managed by wLib for this platform'"
+            class="settings-input w-full"
+          />
+          <p class="text-xs mt-2" style="color: var(--text-muted)">
+            Where Chromium is installed for scraping. Changes apply after restarting wLib.
+          </p>
+        </div>
       </section>
 
+      <!-- Ren'Py -->
+      <section class="settings-card rounded-xl p-6 space-y-3">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconBook2 class="ui-section-icon" />
+          Ren'Py
+        </h3>
+        <label for="urm-source" class="block text-sm font-medium" style="color: var(--text-secondary)">
+          Universal Ren'Py Mod (URM) source file (.rpa)
+        </label>
+        <div class="flex gap-3">
+          <input
+            id="urm-source"
+            v-model="urmPath"
+            type="text"
+            class="settings-input flex-1"
+            placeholder="/path/to/0x52_URM.rpa"
+          />
+          <button @click="browseUrm" class="settings-btn ui-action-btn">
+            <IconFolderOpen class="ui-action-icon" />Browse
+          </button>
+        </div>
+        <p class="text-xs" style="color: var(--text-muted)">
+          Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.
+        </p>
+      </section>
+    </div>
+
+    <!-- Stays at the bottom of the window while there are unsaved changes. -->
+    <div v-if="hasUnsavedChanges" class="sticky bottom-4 z-20 mt-6">
       <div
-        class="px-8 py-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-        style="border-top: 1px solid var(--border); background: var(--bg-inset)"
+        class="save-bar rounded-xl px-5 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        role="region"
+        aria-label="Unsaved changes"
       >
-        <div class="min-h-[1.25rem]">
-          <p v-if="saveError" class="copyable-feedback text-xs text-red-400">
-            {{ saveError }}
-          </p>
-          <p v-else-if="saveMessage" class="copyable-feedback text-xs text-green-400">
-            {{ saveMessage }}
-          </p>
+        <p v-if="saveError" class="copyable-feedback text-xs text-red-400">{{ saveError }}</p>
+        <p v-else class="text-sm font-medium" style="color: var(--text-primary)">
+          You have unsaved changes.
+        </p>
+        <div class="flex gap-2 shrink-0">
+          <button @click="discardChanges" :disabled="saving" class="settings-btn disabled:opacity-50">
+            Discard
+          </button>
+          <button
+            @click="saveSettings"
+            :disabled="saving"
+            class="ui-action-btn text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-wait"
+            style="background: var(--brand); box-shadow: var(--shadow-brand)"
+          >
+            <IconDeviceFloppyFilled class="ui-action-icon" />
+            {{ saving ? "Saving..." : "Save Changes" }}
+          </button>
         </div>
-        <button
-          @click="saveSettings"
-          :disabled="saving"
-          class="ui-action-btn text-white px-6 py-2 rounded-lg text-sm font-medium settings-save-btn disabled:opacity-50 disabled:cursor-wait"
-          style="background: var(--brand); box-shadow: var(--shadow-brand)"
-        >
-          <IconDeviceFloppyFilled class="ui-action-icon" />
-          {{ saving ? "Saving..." : "Save Changes" }}
-        </button>
       </div>
     </div>
   </div>
@@ -1064,6 +1130,28 @@ const browseUrm = async () => {
 .settings-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
+}
+
+.setting-row,
+.motion-toggle {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.save-bar {
+  background: var(--bg-surface);
+  border: 1px solid var(--brand-deep);
+  box-shadow: var(--shadow-modal);
+}
+
+kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-hover);
+  color: var(--text-primary);
 }
 
 .settings-input {
@@ -1098,12 +1186,6 @@ const browseUrm = async () => {
   background: var(--border-hover);
 }
 
-.motion-setting-card,
-.motion-toggle {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-}
-
 .motion-option {
   color: var(--text-secondary);
   transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
@@ -1115,9 +1197,6 @@ const browseUrm = async () => {
   box-shadow: var(--shadow-card);
 }
 
-.settings-save-btn {
-  transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-}
 
 .tool-card {
   background: var(--bg-raised);

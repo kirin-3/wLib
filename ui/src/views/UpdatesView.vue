@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
+import { useRouter } from "vue-router";
 import {
   IconArrowUp,
   IconClockUp,
@@ -25,8 +26,33 @@ interface AppUpdateState {
   url: string;
 }
 
+const router = useRouter();
 const games = ref<GameRecord[]>([]);
 const markingUpdatedIds = ref(new Set<number>());
+const recheckingIds = ref(new Set<number>());
+
+const openGame = (game: GameRecord) => {
+  void router.push({ path: "/", query: { action: "open", f95url: game.f95_url } });
+};
+
+const recheck = async (game: GameRecord) => {
+  if (!game.f95_url || recheckingIds.value.has(game.id)) return;
+  recheckingIds.value.add(game.id);
+  try {
+    const result = await api.checkForUpdates(game.f95_url);
+    if (!result?.success) throw new Error(result?.error || "Update check failed");
+    notify(
+      result.has_update
+        ? `${game.title}: latest version is ${result.version}.`
+        : `${game.title}: no newer version (${result.version}).`,
+      "success",
+    );
+  } catch (error) {
+    notifyError(`${game.title}: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    recheckingIds.value.delete(game.id);
+  }
+};
 
 const markAsUpdated = async (game: GameRecord) => {
   if (markingUpdatedIds.value.has(game.id)) return;
@@ -472,13 +498,17 @@ onUnmounted(() => {
           <div
             v-for="game in persistedUpdates"
             :key="game.id"
-            class="list-item flex items-center justify-between rounded-lg px-4 py-3"
+            class="flex items-center justify-between gap-3 rounded-lg px-4 py-3"
             style="
               background: var(--bg-raised);
               border: 1px solid var(--border);
             "
           >
-            <div class="flex items-center gap-3 min-w-0">
+            <button
+              @click="openGame(game)"
+              class="update-entry flex items-center gap-3 min-w-0 flex-1 text-left rounded-md"
+              :title="`Open ${game.title}`"
+            >
               <img
                 v-if="game.cover_image_path"
                 :src="game.cover_image_path"
@@ -511,7 +541,7 @@ onUnmounted(() => {
                   {{ game.developer }}
                 </p>
               </div>
-            </div>
+            </button>
             <div class="flex items-center gap-3 shrink-0">
               <button
                 @click="markAsUpdated(game)"
@@ -525,7 +555,20 @@ onUnmounted(() => {
                 :title="`Set installed version to ${game.latest_version}`"
               >
                 <IconCheck class="ui-action-icon" />
-                Mark as updated
+                Mark updated
+              </button>
+              <button
+                @click="recheck(game)"
+                :disabled="recheckingIds.has(game.id) || status.running"
+                class="ui-action-btn update-btn !px-2 !py-1.5 disabled:opacity-50"
+                :title="`Check F95Zone again for ${game.title}`"
+              >
+                <IconLoader2
+                  v-if="recheckingIds.has(game.id)"
+                  class="ui-action-icon animate-spin"
+                />
+                <IconReload v-else class="ui-action-icon" />
+                Re-check
               </button>
               <div class="text-right">
                 <span
@@ -644,8 +687,12 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   transition: all 0.15s ease;
 }
-.update-btn:hover {
+.update-btn:hover:not(:disabled) {
   background: var(--border-hover);
+}
+
+.update-entry:hover p:first-child {
+  color: var(--brand) !important;
 }
 
 .changelog-wrapper {

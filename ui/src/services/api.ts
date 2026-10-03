@@ -41,7 +41,25 @@ export interface ApiSuccessResponse {
 export interface AddGameResponse extends ApiBasicResponse {
   id?: number | null;
   title?: string;
-  metadata_updated?: number;
+  metadata_pending?: boolean;
+}
+
+// Title, version and engine guessed from a game's install folder.
+export interface GameGuess {
+  title: string;
+  version: string;
+  engine: string;
+  exe_path: string;
+}
+
+export interface InspectGamePathResponse extends ApiBasicResponse, Partial<GameGuess> {}
+
+export interface ScannedGame extends GameGuess {
+  in_library: boolean;
+}
+
+export interface ScanGamesFolderResponse extends ApiBasicResponse {
+  games?: ScannedGame[];
 }
 
 export interface ExtensionSyncStatus extends ApiBasicResponse {
@@ -114,6 +132,14 @@ export interface MaybeAutoCheckResponse {
   triggered: boolean;
   result?: BulkUpdateStartResponse;
   reason?: string;
+}
+
+// done/total are bytes while downloading; total is 0 when the size is unknown.
+export interface ProtonDownloadStatus {
+  running: boolean;
+  stage: string;
+  done: number;
+  total: number;
 }
 
 export interface InstallProgressStatus {
@@ -313,6 +339,8 @@ export interface GameRecord {
   thread_main_post_last_edit_at?: string | null;
   thread_main_post_checked_at?: string | null;
   launch_targets?: LaunchTarget[];
+  // F95 metadata is still being fetched in the background after adding.
+  metadata_pending?: boolean;
 }
 
 export interface RpgmakerLinuxRunnerStatus {
@@ -540,6 +568,7 @@ class ApiService {
   isWebview: boolean;
   _mockWarnings: Set<string>;
   _mockRunningGames = new Set<number>();
+  _mockPendingMetadata = new Set<number>();
   _mockUrmInstalled = new Set<number>();
 
   async invoke<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
@@ -612,6 +641,33 @@ class ApiService {
 
   async updateGame(id: number, fields: Record<string, unknown>): Promise<ApiBasicResponse> {
     return this.invokeLibraryChange("update_game", id, fields);
+  }
+
+  async inspectGamePath(exePath: string): Promise<InspectGamePathResponse> {
+    return this.invoke<InspectGamePathResponse>("inspect_game_path", exePath);
+  }
+
+  async scanGamesFolder(folder: string): Promise<ScanGamesFolderResponse> {
+    return this.invoke<ScanGamesFolderResponse>("scan_games_folder", folder);
+  }
+
+  // Adds each game without a library refresh per game, then refreshes once.
+  async importGames(games: GameGuess[]): Promise<{ added: number; errors: string[] }> {
+    let added = 0;
+    const errors: string[] = [];
+    for (const game of games) {
+      try {
+        const result = await this.invoke<AddGameResponse>(
+          "add_game", game.title, game.exe_path, "", game.version, "", "", "", "", game.engine,
+        );
+        if (result?.success) added++;
+        else errors.push(`${game.title}: ${result?.error || "Unknown error"}`);
+      } catch (error) {
+        errors.push(`${game.title}: ${String(error)}`);
+      }
+    }
+    if (added) window.dispatchEvent(new Event("wlib-refresh-library"));
+    return { added, errors };
   }
 
   async markGameUpdated(game: GameRecord): Promise<ApiBasicResponse> {
@@ -841,6 +897,10 @@ class ApiService {
     return this.invoke<DownloadProtonResponse>("download_proton_ge");
   }
 
+  async getProtonDownloadStatus(): Promise<ProtonDownloadStatus> {
+    return this.invoke<ProtonDownloadStatus>("get_proton_download_status");
+  }
+
   async openDevTools(): Promise<void> {
     await this.invoke<void>("open_dev_tools");
   }
@@ -903,7 +963,7 @@ class ApiService {
 
     switch (method) {
       case "get_games":
-        return readMockGames();
+        return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
       case "add_game": {
         const games = readMockGames();
         const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
@@ -912,7 +972,16 @@ class ApiService {
           engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), play_status: "Not Started" };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
-        return { success: true, id, mock: true };
+        const metadataPending = !!game.f95_url;
+        if (metadataPending) {
+          // Simulates the backend's background F95 metadata fetch.
+          this._mockPendingMetadata.add(id);
+          setTimeout(() => {
+            this._mockPendingMetadata.delete(id);
+            window.dispatchEvent(new Event("wlib-refresh-library"));
+          }, 3000);
+        }
+        return { success: true, id, mock: true, metadata_pending: metadataPending };
       }
       case "update_game": {
         const games = readMockGames();
@@ -1064,6 +1133,18 @@ class ApiService {
       case "browse_backup_file":
       case "browse_directory":
         return "";
+      case "inspect_game_path": {
+        const folder = String(args[0]).split(/[\/]/).slice(-2, -1)[0] || "";
+        return { success: true, mock: true, title: folder, version: "", engine: "", exe_path: String(args[0]) };
+      }
+      case "scan_games_folder": {
+        const root = String(args[0]).replace(/[\/]+$/, "");
+        const known = new Set(readMockGames().map((game) => game.exe_path));
+        return { success: true, mock: true, games: [
+          { title: "Eternum", version: "0.6", engine: "Ren'Py", exe_path: `${root}/Eternum-0.6-pc/Eternum.exe` },
+          { title: "Quest", version: "1.2", engine: "RPGM", exe_path: `${root}/Quest-1.2/Game.exe` },
+        ].map((game) => ({ ...game, in_library: known.has(game.exe_path) })) };
+      }
       case "get_available_runners":
         return { success: true, mock: true, runners: localStorage.getItem("wlib-mock-platform") === "linux" ? [
           { name: "System Wine", path: "wine" },
@@ -1083,6 +1164,8 @@ class ApiService {
         return { frequency: "weekly", last_check: "" };
       case "maybe_auto_check":
         return { triggered: false, reason: "mock" };
+      case "get_proton_download_status":
+        return { running: false, stage: "", done: 0, total: 0 };
       case "get_install_status":
         return {
           deps: { running: false, done: 0, total: 0, current: "", error: "" },

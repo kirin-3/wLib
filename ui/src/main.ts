@@ -4,8 +4,10 @@ import "./style.css";
 import App from "./App.vue";
 import router from "./router";
 import { loadMotionPreference } from "./utils/motionPreference";
+import { loadThemePreference } from "./utils/themePreference";
 
 loadMotionPreference();
+loadThemePreference();
 
 const app = createApp(App);
 app.use(router);

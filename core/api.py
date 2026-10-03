@@ -233,6 +233,15 @@ class Api:
         self._status_lock: threading.Lock = threading.Lock()
         self._app_release: dict[str, object] | None = None
         self._app_release_lock: threading.Lock = threading.Lock()
+        # Polled by Settings while download_proton_ge runs; done/total are bytes.
+        self._proton_download_status: dict[str, object] = {
+            "running": False,
+            "stage": "",
+            "done": 0,
+            "total": 0,
+        }
+        # Games whose F95 metadata is still being fetched after add_game returned.
+        self._metadata_pending: set[int] = set()
         self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
@@ -1108,7 +1117,39 @@ class Api:
     def get_games(self) -> list[dict[str, object]]:
         from core.database import get_all_games
 
-        return get_all_games()
+        games = get_all_games()
+        pending = set(self._metadata_pending)
+        for game in games:
+            if game.get("id") in pending:
+                game["metadata_pending"] = True
+        return games
+
+    def inspect_game_path(self, exe_path: str) -> dict[str, object]:
+        from core.game_scan import inspect_game_path
+
+        if not exe_path or not os.path.isfile(exe_path):
+            return {"success": False, "error": "File not found"}
+        return {"success": True, **inspect_game_path(exe_path)}
+
+    def scan_games_folder(self, folder: str) -> dict[str, object]:
+        from core.database import get_all_games
+        from core.game_scan import scan_games_folder
+
+        if not folder or not os.path.isdir(folder):
+            return {"success": False, "error": "Folder not found"}
+        known = {
+            os.path.normcase(os.path.abspath(str(game.get("exe_path") or "")))
+            for game in get_all_games()
+        }
+        games = [
+            {
+                **game,
+                "in_library": os.path.normcase(os.path.abspath(game["exe_path"]))
+                in known,
+            }
+            for game in scan_games_folder(folder)
+        ]
+        return {"success": True, "games": games}
 
     def _backup_error_payload(self, error: Exception) -> dict[str, object]:
         from core.library_backup import BackupValidationError
@@ -1226,52 +1267,91 @@ class Api:
                 "error_code": "duplicate_url",
             }
 
-        needs_metadata_backfill = bool(normalized_url) and (
-            self._is_missing_text(engine)
-            or self._is_missing_text(cover_image)
-            or not self._normalize_tags_csv(tags)
-        )
-
-        metadata_updated = 0
-        if normalized_url:
-            metadata_result = self._coerce_string_key_dict(
-                cast(
-                    object,
-                    self.scraper.get_thread_metadata(normalized_url, headless=True),
-                )
+        metadata_pending = bool(normalized_url) and game_id is not None
+        if metadata_pending:
+            assert game_id is not None
+            needs_metadata_backfill = (
+                self._is_missing_text(engine)
+                or self._is_missing_text(cover_image)
+                or not self._normalize_tags_csv(tags)
             )
-            if metadata_result is None:
-                metadata_result = {}
+            # Scraping can take minutes (headed retry on Cloudflare), so the game
+            # is saved now and its card shows a loading state until this finishes.
+            self._metadata_pending.add(game_id)
+            threading.Thread(
+                target=self._fetch_added_game_metadata,
+                args=(game_id, normalized_url, needs_metadata_backfill),
+                daemon=True,
+            ).start()
+
+        return {
+            "success": True,
+            "id": game_id,
+            "title": title,
+            "metadata_pending": metadata_pending,
+        }
+
+    def _fetch_added_game_metadata(
+        self, game_id: int, normalized_url: str, needs_metadata_backfill: bool
+    ) -> None:
+        import time
+
+        try:
+            metadata_result: dict[str, object] = {}
+            # ponytail: polls while another scrape (e.g. Check All) holds the browser
+            # session; a queue would be cleaner if adds pile up.
+            for _ in range(360):
+                metadata_result = (
+                    self._coerce_string_key_dict(
+                        cast(
+                            object,
+                            self.scraper.get_thread_metadata(
+                                normalized_url, headless=True
+                            ),
+                        )
+                    )
+                    or {}
+                )
+                if metadata_result.get("code") != "busy":
+                    break
+                time.sleep(5)
 
             if not metadata_result.get("success") and metadata_result.get("code") in (
                 "blocked",
                 "login_required",
             ):
-                metadata_result = self._coerce_string_key_dict(
-                    cast(
-                        object,
-                        self.scraper.get_thread_metadata(
-                            normalized_url,
-                            headless=False,
-                            timeout_ms=180000,
-                            hold_open_seconds=self._get_headed_retry_hold_seconds(),
-                        ),
+                metadata_result = (
+                    self._coerce_string_key_dict(
+                        cast(
+                            object,
+                            self.scraper.get_thread_metadata(
+                                normalized_url,
+                                headless=False,
+                                timeout_ms=180000,
+                                hold_open_seconds=self._get_headed_retry_hold_seconds(),
+                            ),
+                        )
                     )
+                    or {}
                 )
-                if metadata_result is None:
-                    metadata_result = {}
 
             if metadata_result.get("success"):
                 _ = self._update_thread_edit_metadata_for_url(
                     normalized_url, metadata_result
                 )
                 if needs_metadata_backfill:
-                    metadata_updated = self._backfill_missing_metadata_for_url(
-                        normalized_url,
-                        metadata_result,
+                    _ = self._backfill_missing_metadata_for_url(
+                        normalized_url, metadata_result
                     )
-
-        return {"id": game_id, "title": title, "metadata_updated": metadata_updated}
+        except Exception as e:
+            print(f"Failed to fetch metadata for game {game_id}: {e}")
+        finally:
+            self._metadata_pending.discard(game_id)
+            if self.window:
+                with suppress(Exception):
+                    self.window.evaluate_js(
+                        "window.dispatchEvent(new Event('wlib-refresh-library'))"
+                    )
 
     def delete_game(self, game_id: int) -> dict[str, bool]:
         from core.database import delete_game
@@ -2654,10 +2734,37 @@ class Api:
         """
         if not is_linux():
             return unsupported_on_host("Proton-GE installation")
+        with self._status_lock:
+            if self._proton_download_status["running"]:
+                return {"success": False, "error": "GE-Proton is already downloading."}
+            self._proton_download_status = {
+                "running": True,
+                "stage": "Fetching release info",
+                "done": 0,
+                "total": 0,
+            }
+        try:
+            return self._download_proton_ge()
+        finally:
+            with self._status_lock:
+                self._proton_download_status = {
+                    "running": False,
+                    "stage": "",
+                    "done": 0,
+                    "total": 0,
+                }
 
+    def get_proton_download_status(self) -> dict[str, object]:
+        with self._status_lock:
+            return dict(self._proton_download_status)
+
+    def _set_proton_download_stage(self, stage: str, done: int = 0, total: int = 0) -> None:
+        with self._status_lock:
+            self._proton_download_status.update(stage=stage, done=done, total=total)
+
+    def _download_proton_ge(self) -> dict[str, object]:
         import json
         import os
-        import shutil
         import tarfile
         import tempfile
         import urllib.request
@@ -2738,7 +2845,18 @@ class Api:
                 ) as response,
                 open(tar_path, "wb") as out_file,
             ):
-                shutil.copyfileobj(response, out_file)
+                # http.client.HTTPResponse.length holds Content-Length before reading.
+                length = cast(object, getattr(response, "length", None))
+                total = length if isinstance(length, int) else 0
+                done = 0
+                stage = f"Downloading {release_name}"
+                self._set_proton_download_stage(stage, 0, total)
+                while chunk := response.read(1024 * 1024):
+                    _ = out_file.write(chunk)
+                    done += len(chunk)
+                    self._set_proton_download_stage(stage, done, total)
+
+            self._set_proton_download_stage("Verifying download")
 
             with open(tar_path, "rb") as tar_file:
                 actual_sha512 = hashlib.file_digest(tar_file, "sha512").hexdigest()
@@ -2750,6 +2868,7 @@ class Api:
                 }
 
             print(f"Extracting {tar_path}...")
+            self._set_proton_download_stage("Extracting")
             with tarfile.open(tar_path, "r:gz") as tar:
                 members = tar.getmembers()
                 # Find the root extracted folder name (usually GE-Proton-X)

@@ -13,6 +13,7 @@ import {
   IconLibraryPlus,
   IconLayoutGridFilled,
   IconLayoutListFilled,
+  IconFolderPlus,
   IconLoader2,
   IconPhotoFilled,
   IconPlayerStopFilled,
@@ -25,6 +26,7 @@ import {
 import { api, onWebviewReady } from "../services/api";
 import type { GameRecord, LaunchMode, LaunchTarget } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
+import ImportFolderModal from "../components/modals/ImportFolderModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 import {
   getPlayStatusOptions,
@@ -103,6 +105,7 @@ const games = ref<GameRecord[]>([]);
 const runningGameIds = ref(new Set<number>());
 const customStatuses = ref<string[]>([]);
 const showAddModal = ref(false);
+const showImportModal = ref(false);
 const showDetailModal = ref(false);
 const selectedGame = ref<GameRecord | null>(null);
 const openLaunchTargetMenuId = ref<number | null>(null);
@@ -603,9 +606,14 @@ watch(
       await loadGames();
       showAddModal.value = true;
     }
+    // Ctrl+N from any view (App.vue).
+    if (action === "add") {
+      showAddModal.value = true;
+      void router.replace({ path: "/", query: {} });
+    }
     if (action === "open" && queryUrl) {
-      await loadGames();
-      const match = games.value.find((g) =>
+      // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
+      const match = ((await api.getGames()) || []).find((g) =>
         urlsMatchByThreadIdentity(g.f95_url, queryUrl),
       );
       if (match) openDetail(match);
@@ -794,15 +802,15 @@ const handleLibraryKeyboard = (event: KeyboardEvent) => {
     closeContextMenu();
     return;
   }
-  if (showAddModal.value || showDetailModal.value || contextMenu.value) return;
+  if (showAddModal.value || showImportModal.value || showDetailModal.value || contextMenu.value) return;
   if (event.key === "Escape" && openLaunchTargetMenuId.value !== null) {
     closeLaunchTargetMenus();
     event.preventDefault();
     return;
   }
-  const typing = (event.target as HTMLElement).closest(
-    "input, textarea, select, [contenteditable='true']",
-  );
+  const typing =
+    event.target instanceof Element &&
+    event.target.closest("input, textarea, select, [contenteditable='true']");
   if (
     ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") ||
     (event.key === "/" &&
@@ -1147,6 +1155,19 @@ onUnmounted(() => {
             <IconLibraryPlus class="ui-action-icon" />
             Add Game
           </button>
+          <button
+            @click="showImportModal = true"
+            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
+            style="
+              background: var(--bg-raised);
+              color: var(--text-primary);
+              border: 1px solid var(--border);
+            "
+            title="Add every game in a folder"
+          >
+            <IconFolderPlus class="ui-action-icon" />
+            Import Folder
+          </button>
         </div>
       </header>
 
@@ -1388,6 +1409,12 @@ onUnmounted(() => {
                     class="running-label shrink-0"
                     >Running</span
                   >
+                  <IconLoader2
+                    v-if="game.metadata_pending"
+                    class="w-3.5 h-3.5 shrink-0 animate-spin"
+                    style="color: var(--text-muted)"
+                    aria-label="Fetching F95 info"
+                  />
                 </div>
               </td>
               <td>
@@ -1515,6 +1542,15 @@ onUnmounted(() => {
               class="w-12 h-12"
               style="color: var(--border)"
             />
+            <div
+              v-if="game.metadata_pending"
+              class="metadata-pending absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-xs font-medium"
+              :class="layoutMode === 'compact' ? 'rounded-xl' : 'rounded-t-xl'"
+              role="status"
+            >
+              <IconLoader2 class="w-6 h-6 animate-spin" />
+              Fetching F95 info…
+            </div>
             <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
               <span
                 v-if="runningGameIds.has(game.id)"
@@ -1779,6 +1815,7 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
+      <ImportFolderModal v-model="showImportModal" />
       <AddGameModal
         v-model="showAddModal"
         :saving="addingGame"
@@ -1813,6 +1850,11 @@ onUnmounted(() => {
   outline: 2px solid var(--brand);
   outline-offset: 3px;
 }
+.metadata-pending {
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  color: var(--text-secondary);
+}
+
 .game-card.is-running {
   border-color: var(--brand);
   box-shadow:

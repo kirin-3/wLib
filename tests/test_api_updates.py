@@ -214,6 +214,8 @@ def test_download_proton_ge_streams_and_filters_tar(
         archive.addfile(member, io.BytesIO(payload))
 
     class ChunkedResponse(io.BytesIO):
+        length = len(archive_buffer.getvalue())
+
         def read(self, size=-1):
             assert size > 0, "tarball reads must be bounded"
             return super().read(min(size, 32))
@@ -246,7 +248,21 @@ def test_download_proton_ge_streams_and_filters_tar(
     monkeypatch.setattr("core.api.get_proton_dir", lambda: str(install_dir))
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
 
-    result = Api().download_proton_ge()
+    api = Api()
+    stages = []
+    original_set_stage = api._set_proton_download_stage
+
+    def record_stage(stage, done=0, total=0):
+        stages.append((stage, done, total, api.get_proton_download_status()["running"]))
+        original_set_stage(stage, done, total)
+
+    monkeypatch.setattr(api, "_set_proton_download_stage", record_stage)
+
+    result = api.download_proton_ge()
+
+    size = len(archive_buffer.getvalue())
+    assert ("Downloading GE-Proton-test", size, size, True) in stages
+    assert api.get_proton_download_status()["running"] is False
 
     if not checksum_ok:
         assert result["success"] is False
@@ -814,8 +830,38 @@ def test_check_for_updates_refreshes_thread_edit_metadata_without_overwriting_ex
     assert game["thread_main_post_checked_at"] == "2026-03-07T01:00:00"
 
 
+class _InlineThread:
+    def __init__(self, target, args=(), daemon=None):
+        _ = daemon
+        self._run = lambda: target(*args)
+
+    def start(self):
+        self._run()
+
+
+class _DeferredThread(_InlineThread):
+    def start(self):
+        pass
+
+
+def test_add_game_returns_before_metadata_fetch(monkeypatch):
+    api = Api()
+    monkeypatch.setattr("core.api.threading.Thread", _DeferredThread)
+
+    result = api.add_game(
+        title="Pending", exe_path="/tmp/pending.exe", f95_url="https://f95zone.to/threads/p.1/"
+    )
+    no_url = api.add_game(title="Local", exe_path="/tmp/local.exe")
+
+    assert result["success"] is True and result["metadata_pending"] is True
+    assert no_url["metadata_pending"] is False
+    pending = {game["title"]: game.get("metadata_pending") for game in api.get_games()}
+    assert pending == {"Pending": True, "Local": None}
+
+
 def test_add_game_backfills_missing_metadata(monkeypatch):
     api = Api()
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
@@ -838,7 +884,7 @@ def test_add_game_backfills_missing_metadata(monkeypatch):
     )
 
     assert result["id"] is not None
-    assert result["metadata_updated"] == 1
+    assert "metadata_pending" not in api.get_games()[0]
 
     game = get_all_games()[0]
     assert game["engine"] == "Unity"
@@ -850,6 +896,7 @@ def test_add_game_updates_thread_edit_metadata_without_overwriting_existing_fiel
     monkeypatch,
 ):
     api = Api()
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
@@ -874,7 +921,6 @@ def test_add_game_updates_thread_edit_metadata_without_overwriting_existing_fiel
     )
 
     assert result["id"] is not None
-    assert result["metadata_updated"] == 0
 
     game = get_all_games()[0]
     assert game["engine"] == "Unity"

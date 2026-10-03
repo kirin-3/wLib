@@ -128,7 +128,22 @@ watch(
   (isOpen) => {
     if (isOpen) {
       void loadRpgmakerLinuxRunnerStatus();
+      return;
     }
+    // Reset on every close, including when the parent closes the modal after saving.
+    title.value = "";
+    exePath.value = "";
+    f95Url.value = "";
+    version.value = "";
+    coverImage.value = "";
+    tags.value = "";
+    rating.value = "";
+    developer.value = "";
+    engine.value = "";
+    launchMode.value = "auto";
+    commandLineArgs.value = "";
+    guessed.value = { title: "", version: "", engine: "" };
+    inspectRequest++;
   },
 );
 
@@ -136,26 +151,37 @@ const close = () => {
   if (readQueryValue(route.query.action) === "import") {
     router.replace({ query: {} });
   }
-  title.value = "";
-  exePath.value = "";
-  f95Url.value = "";
-  version.value = "";
-  coverImage.value = "";
-  tags.value = "";
-  rating.value = "";
-  developer.value = "";
-  engine.value = "";
-  launchMode.value = "auto";
-  commandLineArgs.value = "";
   emit("update:modelValue", false);
 };
 
 const modalRef = ref<HTMLElement | null>(null);
 useModalKeyboard(modalRef, () => props.modelValue, close);
 
+// Values filled from the exe path; replaced again when the path changes, unless edited.
+const guessed = ref({ title: "", version: "", engine: "" });
+let inspectRequest = 0;
+const inspectExePath = async () => {
+  const path = exePath.value.trim();
+  const request = ++inspectRequest;
+  if (!path) return;
+  try {
+    const guess = await api.inspectGamePath(path);
+    if (request !== inspectRequest || !guess?.success) return;
+    if (!title.value || title.value === guessed.value.title) title.value = guess.title || "";
+    if (!version.value || version.value === guessed.value.version) version.value = guess.version || "";
+    if (!engine.value || engine.value === guessed.value.engine) engine.value = guess.engine || "";
+    guessed.value = { title: guess.title || "", version: guess.version || "", engine: guess.engine || "" };
+  } catch (e) {
+    console.error("Failed to inspect game path", e);
+  }
+};
+
 const browseExe = async () => {
   const p = await api.browseFile(exePath.value || "");
-  if (p) exePath.value = p;
+  if (p) {
+    exePath.value = p;
+    void inspectExePath();
+  }
 };
 
 const save = () => {
@@ -261,11 +287,18 @@ const save = () => {
               type="text"
               placeholder="/path/to/game.exe"
               class="modal-input flex-1 !py-3 text-sm font-mono"
+              @change="inspectExePath"
             />
             <button @click="browseExe" class="modal-btn !py-3">Browse</button>
           </div>
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             The .exe or .sh file that launches the game.
+            <template v-if="engine || version">
+              Detected:
+              <span style="color: var(--text-secondary)">{{
+                [engine, version && `v${version}`].filter(Boolean).join(", ")
+              }}</span>
+            </template>
           </p>
         </div>
 
