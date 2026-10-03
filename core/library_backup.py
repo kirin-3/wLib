@@ -387,6 +387,26 @@ def load_library_backup(path: object) -> dict[str, object]:
     if not isinstance(games, list):
         raise BackupValidationError("Backup file does not contain a game list.")
 
+    for index, raw_game in enumerate(cast(list[object], games), start=1):
+        game = _coerce_mapping(raw_game)
+        metadata = _game_section(game, SECTION_METADATA)
+        if not any(
+            isinstance(metadata.get(field), str) and str(metadata[field]).strip()
+            for field in ("title", "f95_url")
+        ):
+            raise BackupValidationError(
+                f"Game record {index} must contain a title or thread URL in metadata."
+            )
+        if SECTION_LAUNCH_TARGETS in game:
+            targets = game[SECTION_LAUNCH_TARGETS]
+            if not isinstance(targets, list) or any(
+                _normalize_launch_target(target) is None
+                for target in cast(list[object], targets)
+            ):
+                raise BackupValidationError(
+                    f"Game record {index} has invalid launch targets; each needs a label and executable path."
+                )
+
     return backup
 
 
@@ -744,6 +764,10 @@ def _update_game_row(
 
 def _normalize_launch_target(raw_target: object) -> dict[str, object] | None:
     target = _coerce_mapping(raw_target)
+    if not isinstance(target.get("label"), str) or not isinstance(
+        target.get("exe_path"), str
+    ):
+        return None
     label = _coerce_text(target.get("label")).strip()
     exe_path = _coerce_text(target.get("exe_path")).strip()
     if not label or not exe_path:
@@ -762,9 +786,16 @@ def _normalize_launch_target(raw_target: object) -> dict[str, object] | None:
 def _replace_launch_targets(
     cursor: sqlite3.Cursor, game_id: int, imported_game: Mapping[str, object]
 ) -> None:
+    if SECTION_LAUNCH_TARGETS not in imported_game:
+        return
+    targets = [
+        _normalize_launch_target(target)
+        for target in _coerce_sequence(imported_game.get(SECTION_LAUNCH_TARGETS))
+    ]
+    if any(target is None for target in targets):
+        raise BackupValidationError("Invalid launch targets.")
     _ = cursor.execute("DELETE FROM game_launch_targets WHERE game_id = ?", (game_id,))
-    for raw_target in _coerce_sequence(imported_game.get(SECTION_LAUNCH_TARGETS)):
-        target = _normalize_launch_target(raw_target)
+    for target in targets:
         if target is None:
             continue
         _ = cursor.execute(

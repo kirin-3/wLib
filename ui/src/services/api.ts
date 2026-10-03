@@ -560,6 +560,7 @@ declare global {
 }
 
 class ApiService {
+  private gameSaves = new Map<number, Promise<void>>();
   constructor() {
     this.isWebview = window.pywebview !== undefined;
     this._mockWarnings = new Set();
@@ -640,7 +641,15 @@ class ApiService {
   }
 
   async updateGame(id: number, fields: Record<string, unknown>): Promise<ApiBasicResponse> {
-    return this.invokeLibraryChange("update_game", id, fields);
+    const previous = this.gameSaves.get(id) ?? Promise.resolve();
+    const snapshot = { ...fields };
+    const request = previous.then(() => this.invokeLibraryChange("update_game", id, snapshot));
+    const settled = request.then(() => {}, () => {});
+    this.gameSaves.set(id, settled);
+    void settled.then(() => {
+      if (this.gameSaves.get(id) === settled) this.gameSaves.delete(id);
+    });
+    return request;
   }
 
   async inspectGamePath(exePath: string): Promise<InspectGamePathResponse> {

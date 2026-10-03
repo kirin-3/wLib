@@ -65,6 +65,45 @@ def base_backup(games: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("invalid", [None, 42, "bad", {}, {"metadata": "bad"}, {"metadata": {"title": " "}}])
+def test_invalid_game_records_rejected_before_import(tmp_path, invalid):
+    payload = base_backup([{"metadata": {"title": "Valid"}}])
+    payload["games"] = [{"metadata": {"title": "Valid"}}, invalid]
+    path = write_backup(tmp_path / "invalid.json", payload)
+    api = Api()
+    assert api.inspect_library_backup(str(path))["success"] is False
+    assert api.import_library_backup(str(path))["success"] is False
+    assert get_all_games() == []
+
+
+@pytest.mark.parametrize("targets", [[{"label": "Broken"}], None, "bad", [None], [{"label": "Broken", "exe_path": 42}]])
+def test_invalid_targets_preserve_existing_targets(tmp_path, targets):
+    url = "https://f95zone.to/threads/game.123/"
+    game_id = add_game("Original", "", f95_url=url)
+    assert game_id is not None
+    add_game_launch_target(game_id, "Existing", "/game.sh")
+    before = list_game_launch_targets(game_id)
+    payload = base_backup([{"metadata": {"title": "Changed", "f95_url": url}, "launch_targets": targets}])
+    path = write_backup(tmp_path / "invalid.json", payload)
+    assert Api().import_library_backup(str(path))["success"] is False
+    assert list_game_launch_targets(game_id) == before
+    assert get_all_games()[0]["title"] == "Original"
+
+
+@pytest.mark.parametrize("include_targets", [False, True])
+def test_missing_targets_preserved_and_empty_targets_clear(tmp_path, include_targets):
+    url = "https://f95zone.to/threads/game.123/"
+    game_id = add_game("Original", "", f95_url=url)
+    assert game_id is not None
+    add_game_launch_target(game_id, "Existing", "/game.sh")
+    game = {"metadata": {"title": "Original", "f95_url": url}}
+    if include_targets:
+        game["launch_targets"] = []
+    path = write_backup(tmp_path / "targets.json", base_backup([game]))
+    assert Api().import_library_backup(str(path))["success"] is True
+    assert len(list_game_launch_targets(game_id)) == (0 if include_targets else 1)
+
+
 def test_custom_status_and_urm_settings_round_trip(tmp_path):
     api = Api()
     game_id = add_game("Custom", "/tmp/game.exe", f95_url="https://f95zone.to/threads/custom.123/", launch_mode="custom", command_line_args="xsystem35")

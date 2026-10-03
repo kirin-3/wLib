@@ -1373,6 +1373,15 @@ def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
     assert kwargs["cwd"] == "/home/user/games"
 
 
+def test_launch_html_escapes_url_characters():
+    with (patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen):
+        result = Launcher().launch("/games/Chapter#1/100% ? café.html")
+    assert result["success"] is True
+    assert popen.call_args.args[0] == [
+        "xdg-open", "file:///games/Chapter%231/100%25%20%3F%20caf%C3%A9.html"
+    ]
+
+
 @patch("os.path.exists")
 @patch("subprocess.Popen")
 @patch("os.path.abspath")

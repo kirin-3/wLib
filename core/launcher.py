@@ -11,6 +11,7 @@ import tempfile
 import signal
 import threading
 import time
+from urllib.parse import quote
 from collections.abc import Callable
 from _thread import LockType
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ def _host_path_module():
     return ntpath if is_windows() else posixpath
 
 
-def _is_elf(path: str) -> bool:
+def is_elf(path: str) -> bool:
     try:
         with open(path, "rb") as file:
             return file.read(4) == b"\x7fELF"
@@ -779,22 +780,17 @@ class Launcher:
         def execute_html_game(strip_wine_env: bool = False) -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
             abs_path = path_module.abspath(exe_path)
-            normalized_url_path = abs_path.replace(chr(92), "/")
-            file_url = (
-                f"file:///{normalized_url_path.lstrip('/')}"
-                if is_windows()
-                else f"file://{normalized_url_path}"
-            )
             if is_windows():
                 opened, error = open_windows_system_target(abs_path)
                 if opened:
-                    print(f"Opening HTML game in default browser: {file_url}")
+                    print(f"Opening HTML game in default browser: {abs_path}")
                     return {"success": True}
                 return {
                     "success": False,
                     "error": f"Failed to open HTML game: {error}",
                 }
 
+            file_url = "file://" + quote(abs_path, safe="/")
             command = ["xdg-open", file_url]
             print(f"Opening HTML game in default browser: {file_url}")
             try:
@@ -819,7 +815,7 @@ class Launcher:
             process_env = build_host_tool_env(env)
 
             # Unzipping often drops the exec bit; Wine can't run these either.
-            if (ext == ".sh" or _is_elf(exe_path)) and not os.access(exe_path, os.X_OK):
+            if (ext == ".sh" or is_elf(exe_path)) and not os.access(exe_path, os.X_OK):
                 return {
                     "success": False,
                     "error": (

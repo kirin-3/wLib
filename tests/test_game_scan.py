@@ -18,6 +18,37 @@ def test_guess_title_and_version_from_folder_names():
     assert guess_title_and_version("Game 2") == ("Game 2", "")
 
 
+@pytest.mark.parametrize("filename, content", [
+    ("game.x86_64", b"\x7fELF"), ("game.x86", b"\x7fELF"),
+    ("game", b"\x7fELF"), ("start.bat", b""), ("start.cmd", b""),
+    ("Story.html", b""), ("Story.htm", b""),
+])
+def test_scan_supported_launchers(tmp_path, filename, content):
+    folder = tmp_path / "Game"
+    folder.mkdir()
+    launcher = folder / filename
+    launcher.write_bytes(content)
+    (folder / "README").write_text("not executable")
+    (folder / "UnityPlayer.so").write_bytes(b"\x7fELF")
+    games = scan_games_folder(str(tmp_path))
+    assert len(games) == 1
+    assert games[0]["exe_path"] == str(launcher)
+
+
+def test_scan_prefers_native_on_linux_and_index_html(tmp_path, monkeypatch):
+    from core.game_scan import find_launcher
+
+    monkeypatch.setattr("core.game_scan.is_linux", lambda: True)
+    (tmp_path / "game").write_bytes(b"\x7fELF")
+    (tmp_path / "game.exe").touch()
+    assert find_launcher(str(tmp_path)) == str(tmp_path / "game")
+    html = tmp_path / "html"
+    html.mkdir()
+    (html / "aaa.html").touch()
+    (html / "index.html").touch()
+    assert find_launcher(str(html)) == str(html / "index.html")
+
+
 def test_scan_games_folder_detects_launchers_and_engines(tmp_path, monkeypatch):
     monkeypatch.setattr("core.game_scan.is_linux", lambda: False)
     renpy = tmp_path / "Eternum-0.6-pc"

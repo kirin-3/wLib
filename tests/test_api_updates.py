@@ -2156,6 +2156,40 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
     assert api.get_auto_check_setting()["last_check"]
 
 
+@pytest.mark.parametrize("outcome", ["busy", "failed", "empty", "partial", "success"])
+def test_update_check_timestamp_requires_successful_completion(monkeypatch, outcome):
+    import time
+
+    api = Api()
+    for number in (1, 2):
+        add_game(f"Game {number}", "", f95_url=f"https://f95zone.to/threads/game.{number}/")
+    previous = "2020-01-01T00:00:00"
+    update_setting("last_update_check", previous)
+
+    def fake_batch(urls, headless, delay, include_metadata, callback):
+        if outcome == "busy":
+            return {"__batch_error__": {"error": "Browser busy", "code": "browser_busy"}}
+        if outcome == "empty":
+            return {}
+        for index, url in enumerate(urls):
+            if outcome == "failed" or (outcome == "partial" and index == 1):
+                callback(url, {"success": False})
+            else:
+                callback(url, {"success": True, "version": "2.0"})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+    assert api.check_all_updates()["success"] is True
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert api.get_update_status()["running"] is False
+    if outcome == "success":
+        assert get_setting("last_update_check") != previous
+    else:
+        assert get_setting("last_update_check") == previous
+
+
 def test_check_app_updates_fetches_github_once_per_session(monkeypatch):
     api = Api()
     calls: list[str] = []

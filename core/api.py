@@ -1889,6 +1889,8 @@ class Api:
                     has_update = False
                     callback_error = str(result_dict.get("error") or "")
                     callback_error_code = str(result_dict.get("code") or "")
+                    if not result_dict.get("success") and not callback_error:
+                        callback_error = "Update check failed"
 
                     if result_dict.get(
                         "success"
@@ -2004,10 +2006,15 @@ class Api:
                             )
                         self._update_checked = len(games_with_url)
 
-                # Record only finished runs; a closed app or cancel retries at next startup.
+                # Only successful, complete runs postpone the next automatic check.
                 with self._update_lock:
-                    cancelled = self._update_cancelled
-                if not cancelled:
+                    completed = (
+                        not self._update_cancelled
+                        and not batch_error
+                        and self._update_checked == len(urls)
+                        and all(not result["error"] for result in self._update_results)
+                    )
+                if completed:
                     from datetime import datetime
 
                     from core.database import update_setting

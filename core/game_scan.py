@@ -8,6 +8,7 @@ import re
 from typing import TypedDict
 
 from core.host_platform import is_linux
+from core.launcher import is_elf
 
 
 class GameGuess(TypedDict):
@@ -31,7 +32,9 @@ _SKIPPED_EXECUTABLES_RE = re.compile(
     + r"dxwebsetup|vc_?redist\S*|python\w*|zsync\w*|.*-32)\.exe$",
     re.I,
 )
-_LAUNCHER_EXTENSIONS = (".exe", ".sh", ".html", ".htm", ".jar")
+_LAUNCHER_EXTENSIONS = (
+    ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar"
+)
 
 
 def guess_title_and_version(folder_name: str) -> tuple[str, str]:
@@ -103,11 +106,22 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
         entry.name
         for entry in entries
         if entry.is_file()
-        and entry.name.lower().endswith(_LAUNCHER_EXTENSIONS)
+        and (
+            entry.name.lower().endswith(_LAUNCHER_EXTENSIONS)
+            or (not os.path.splitext(entry.name)[1] and is_elf(entry.path))
+        )
         and not _SKIPPED_EXECUTABLES_RE.match(entry.name)
     ]
     # Native Ren'Py/NW.js scripts run without Wine on Linux; elsewhere prefer the .exe.
-    preferred = (".sh", ".exe") if is_linux() else (".exe", ".sh")
+    native = [
+        name for name in files
+        if name.lower().endswith((".sh", ".x86", ".x86_64"))
+        or is_elf(os.path.join(game_dir, name))
+    ]
+    if is_linux() and native:
+        script = next((name for name in native if name.lower().endswith(".sh")), native[0])
+        return os.path.join(game_dir, script)
+    preferred = (".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64")
     for ext in (*preferred, ".jar"):
         matches = [name for name in files if name.lower().endswith(ext)]
         if matches:
@@ -115,6 +129,8 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
     for name in ("index.html", "index.htm"):
         if name in (f.lower() for f in files):
             return os.path.join(game_dir, next(f for f in files if f.lower() == name))
+    if files:
+        return os.path.join(game_dir, files[0])
     if depth > 1:
         subdirs = [entry.path for entry in entries if entry.is_dir()]
         if len(subdirs) == 1:
