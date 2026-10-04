@@ -199,7 +199,9 @@ echo "🧹 Removing conflicting bundled system libraries..."
 find dist/wlib-bin -name "libstdc++.so.6" -exec rm -f {} + || true
 find dist/wlib-bin -name "libgcc_s.so.1" -exec rm -f {} + || true
 # Keep the xcb-util family Qt's xcb plugin needs: unrelated to GPU drivers and missing on many distros.
+# libxcb-xkb is absent on the AppImage catalog's test runner; without it Qt aborts at startup.
 find dist/wlib-bin -name "libxcb*" \
+    ! -name "libxcb-xkb.so*" ! -name "libxcb-shape.so*" \
     ! -name "libxcb-cursor.so*" ! -name "libxcb-icccm.so*" ! -name "libxcb-image.so*" \
     ! -name "libxcb-keysyms.so*" ! -name "libxcb-render-util.so*" ! -name "libxcb-util.so*" \
     -exec rm -f {} + || true
