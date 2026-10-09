@@ -1,5 +1,19 @@
 # Backend Systems (Python)
 
+## Library sync and encrypted backups
+
+`core/library_sync.py` contains `SyncManager`, `FolderLocation`, and `DropboxLocation`. Both locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. Newest wins for the whole library; simultaneous use from several machines is unsupported.
+
+First connection pauses at `needs_choice` if both libraries contain games. `use-remote` mirrors the file including deletions, `use-local` replaces the file, and `merge-once` imports without deletions then uploads. Sync uses conservative thread/title/developer matching, with unique-title matching for manual games without a developer; ambiguous candidates are preserved and reported. Mirror apply saves every backup section to `<data dir>/sync/last-local.json` before applying in one database transaction. Local edits during downloads cause re-evaluation; uploads retain any edits made after the payload was captured.
+
+Bridge methods: `get_sync_status`, `set_sync_folder(path)`, `connect_dropbox`, `disconnect_sync`, `sync_now`, `resolve_sync_choice(choice)`, `set_sync_passphrase(passphrase | null)`, and `unlock_sync(passphrase)`. Failures include `error_code`. Runs execute in background threads and status is polled by the UI. Startup checks both sides; the 60-second watcher pushes after 30 seconds without local edits. Exit allows a final push up to 10 seconds. Background and exit runs do not pull remote changes; pulls emit `wlib-refresh-library`.
+
+Folder writes check mtime/size revisions, preserve `.bak`, write `.tmp`, and replace atomically. A missing folder is unavailable and is never created. Dropbox uses urllib with the configured SSL certificates and app-relative `/wlib-library.json` (visible as `/Apps/wLib/wlib-library.json`). Uploads use update/add with strict revision conflicts; conflict responses trigger re-evaluation. Access tokens stay in memory and refresh on expiry or a 401.
+
+Dropbox uses OAuth PKCE S256 with offline access and a ten-minute state expiry. `GET /dropbox/callback` on the existing server forwards code/state to `complete_dropbox_callback` and returns a static, uncached completion page. Extension origin restrictions remain unchanged. Connect is disabled when port 8183 is unavailable. Configure the exact redirect `http://127.0.0.1:8183/dropbox/callback` and scopes `files.content.read`, `files.content.write`, `files.metadata.read`, and `account_info.read` (display name) in the app console. No app secret is shipped. Disconnect attempts token revocation and clears local credentials even if offline.
+
+`core/library_backup.py` encrypts the complete JSON document with scrypt (N=131072, r=8, p=1) and AES-256-GCM from `cryptography`. The v1 `wlib.encrypted` envelope authenticates its header and uses a fresh nonce. Manual exports use fresh salts; sync stores only a derived key and salt locally. Unknown keys/salts pause at `needs_passphrase`. Disabling encryption clears the key and marks the next write for plaintext. Backup load/inspect/import/write accept optional passphrases; errors include `passphrase_required`, `decrypt_failed`, and `unsupported_format_version`. Sync settings and credentials remain outside backup allowlists.
+
 The core strength of wLib relies on its native Python backend, divided primarily into `main.py` and modularized controllers in the `core/` package. The supported development and CI target for backend work is Python 3.12.
 
 ## Bootstrapping in `main.py`

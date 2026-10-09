@@ -10,6 +10,7 @@ url="https://github.com/kirin-3/wLib"
 license=('GPL-3.0-or-later')
 depends=(
   'ca-certificates'
+  'python-cryptography'
   'gtk3'
   'hicolor-icon-theme'
   'libxkbcommon-x11'

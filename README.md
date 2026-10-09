@@ -321,4 +321,6 @@ Please read the [Contributing Guide](CONTRIBUTING.md) to initialize your dev env
 
 ## 📄 License
 
+Optional folder and Dropbox library sync is described in the [privacy policy](PRIVACY.md).
+
 This project is licensed under the [GNU General Public License v3.0 or later](LICENSE).

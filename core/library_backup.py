@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import secrets
 import ntpath
 import os
 import sqlite3
@@ -10,8 +13,12 @@ from contextlib import closing
 from datetime import datetime
 from typing import cast
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from core.database import (
     DEFAULT_PLAY_STATUS,
+    GENERAL_SETTINGS_KEYS,
     RPGMAKER_LINUX_RUNNER_SETTING,
     get_all_games,
     get_connection,
@@ -23,6 +30,9 @@ from core.host_platform import is_windows
 
 BACKUP_FORMAT = "wlib.library_migration"
 BACKUP_FORMAT_VERSION = 1
+ENCRYPTED_FORMAT = "wlib.encrypted"
+SCRYPT_N = 131072
+SYNC_SECTIONS = ("metadata", "user_state", "settings_general")
 
 SECTION_METADATA = "metadata"
 SECTION_USER_STATE = "user_state"
@@ -83,7 +93,6 @@ LAUNCH_CONFIG_FIELDS = (
 )
 EXECUTABLE_PATH_FIELDS = ("exe_path",)
 LAUNCH_TARGET_FIELDS = ("label", "exe_path", "sort_order", "created_at", "updated_at")
-GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_statuses")
 PATH_SETTINGS_KEYS = (
     "proton_path",
     "wine_prefix_path",
@@ -117,6 +126,122 @@ class BackupValidationError(ValueError):
     def __init__(self, message: str, error_code: str = "invalid_backup") -> None:
         super().__init__(message)
         self.error_code: str = error_code
+
+
+def derive_backup_key(passphrase: str, salt: bytes) -> bytes:
+    if not passphrase:
+        raise BackupValidationError("Enter a passphrase.", "passphrase_required")
+    return hashlib.scrypt(
+        passphrase.encode("utf-8"),
+        salt=salt,
+        n=SCRYPT_N,
+        r=8,
+        p=1,
+        dklen=32,
+        maxmem=256 * 1024 * 1024,
+    )
+
+
+def _header_bytes(envelope: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        {
+            key: envelope[key]
+            for key in ("format", "format_version", "kdf", "cipher", "nonce")
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def encrypted_backup_salt(envelope: Mapping[str, object]) -> bytes:
+    version = envelope.get("format_version")
+    if isinstance(version, int) and version > 1:
+        raise BackupValidationError(
+            "This encrypted file needs a newer wLib.", "unsupported_format_version"
+        )
+    try:
+        kdf = _coerce_mapping(envelope.get("kdf"))
+        salt = base64.b64decode(str(kdf.get("salt", "")), validate=True)
+        nonce = base64.b64decode(str(envelope.get("nonce", "")), validate=True)
+        if (
+            envelope.get("format") != ENCRYPTED_FORMAT
+            or version != 1
+            or envelope.get("cipher") != "AES-256-GCM"
+            or kdf
+            != {
+                "name": "scrypt",
+                "salt": kdf.get("salt"),
+                "n": SCRYPT_N,
+                "r": 8,
+                "p": 1,
+            }
+            or len(salt) != 16
+            or len(nonce) != 12
+        ):
+            raise ValueError("Invalid encryption header")
+        return salt
+    except (ValueError, TypeError) as exc:
+        raise BackupValidationError(
+            "The file could not be decrypted.", "decrypt_failed"
+        ) from exc
+
+
+def encrypt_library_backup(
+    backup: Mapping[str, object],
+    passphrase: str | None = None,
+    *,
+    key: bytes | None = None,
+    salt: bytes | None = None,
+) -> dict[str, object]:
+    salt = salt if salt is not None else secrets.token_bytes(16)
+    key = key if key is not None else derive_backup_key(passphrase or "", salt)
+    if len(key) != 32 or len(salt) != 16:
+        raise BackupValidationError("Invalid encryption key.", "decrypt_failed")
+    nonce = secrets.token_bytes(12)
+    envelope: dict[str, object] = {
+        "format": ENCRYPTED_FORMAT,
+        "format_version": 1,
+        "kdf": {
+            "name": "scrypt",
+            "salt": base64.b64encode(salt).decode("ascii"),
+            "n": SCRYPT_N,
+            "r": 8,
+            "p": 1,
+        },
+        "cipher": "AES-256-GCM",
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+    }
+    plaintext = json.dumps(backup, ensure_ascii=False).encode("utf-8")
+    envelope["ciphertext"] = base64.b64encode(
+        AESGCM(key).encrypt(nonce, plaintext, _header_bytes(envelope))
+    ).decode("ascii")
+    return envelope
+
+
+def decrypt_library_backup(
+    envelope: Mapping[str, object],
+    passphrase: str | None = None,
+    *,
+    key: bytes | None = None,
+) -> dict[str, object]:
+    salt = encrypted_backup_salt(envelope)
+    if key is None and passphrase is None:
+        raise BackupValidationError(
+            "Enter the passphrase for this file.", "passphrase_required"
+        )
+    key = key if key is not None else derive_backup_key(passphrase or "", salt)
+    try:
+        nonce = base64.b64decode(str(envelope["nonce"]), validate=True)
+        ciphertext = base64.b64decode(
+            str(envelope.get("ciphertext", "")), validate=True
+        )
+        plaintext = AESGCM(key).decrypt(nonce, ciphertext, _header_bytes(envelope))
+        payload = cast(object, json.loads(plaintext))
+    except (InvalidTag, ValueError, TypeError, KeyError) as exc:
+        raise BackupValidationError(
+            "The file could not be decrypted.", "decrypt_failed"
+        ) from exc
+    return validate_library_backup(payload)
 
 
 def _coerce_mapping(value: object) -> dict[str, object]:
@@ -316,14 +441,18 @@ def write_library_backup(
     options: Mapping[str, object] | None = None,
     *,
     app_version: str = "",
+    passphrase: str | None = None,
 ) -> dict[str, object]:
     output_path = _resolve_export_destination(destination_path)
     backup = build_library_backup(options, app_version=app_version)
+    document = (
+        encrypt_library_backup(backup, passphrase) if passphrase is not None else backup
+    )
     tmp_path = f"{output_path}.tmp"
 
     try:
         with open(tmp_path, "w", encoding="utf-8") as backup_file:
-            json.dump(backup, backup_file, ensure_ascii=False, indent=2)
+            json.dump(document, backup_file, ensure_ascii=False, indent=2)
             _ = backup_file.write("\n")
         os.replace(tmp_path, output_path)
     except OSError as exc:
@@ -340,10 +469,13 @@ def write_library_backup(
         "path": output_path,
         "selected_sections": backup["selected_sections"],
         "game_count": len(_coerce_sequence(backup.get("games"))),
+        "encrypted": passphrase is not None,
     }
 
 
-def load_library_backup(path: object) -> dict[str, object]:
+def load_library_backup(
+    path: object, passphrase: str | None = None
+) -> dict[str, object]:
     backup_path = os.path.expanduser(str(path or "").strip())
     if not backup_path:
         raise BackupValidationError("Choose a JSON backup file.", "missing_path")
@@ -362,6 +494,13 @@ def load_library_backup(path: object) -> dict[str, object]:
             f"Could not read backup file: {exc}", "read_failed"
         ) from exc
 
+    backup = _coerce_mapping(payload)
+    if backup.get("format") == ENCRYPTED_FORMAT:
+        return decrypt_library_backup(backup, passphrase)
+    return validate_library_backup(payload)
+
+
+def validate_library_backup(payload: object) -> dict[str, object]:
     backup = _coerce_mapping(payload)
     if not backup:
         raise BackupValidationError("Backup file is not a supported wLib export.")
@@ -443,7 +582,10 @@ def _fallback_identity_key(game_metadata: Mapping[str, object]) -> tuple[str, st
 
 
 def _match_imported_game(
-    imported_game: Mapping[str, object], local_games: Sequence[Mapping[str, object]]
+    imported_game: Mapping[str, object],
+    local_games: Sequence[Mapping[str, object]],
+    *,
+    sync: bool = False,
 ) -> dict[str, object]:
     metadata = _game_section(imported_game, "metadata")
     title = _coerce_text(metadata.get("title")).strip()
@@ -451,7 +593,9 @@ def _match_imported_game(
 
     if f95_url:
         f95_matches = [
-            game for game in local_games if thread_urls_match(game.get("f95_url"), f95_url)
+            game
+            for game in local_games
+            if thread_urls_match(game.get("f95_url"), f95_url)
         ]
         if len(f95_matches) == 1:
             return {
@@ -467,6 +611,7 @@ def _match_imported_game(
                 "title": title,
                 "reason": "Multiple local games share this F95 thread identity.",
                 "candidate_count": len(f95_matches),
+                "candidate_ids": [game["id"] for game in f95_matches],
             }
         return {"status": "new", "game": imported_game, "title": title}
 
@@ -476,12 +621,16 @@ def _match_imported_game(
         _game_section(imported_game, SECTION_EXECUTABLE_PATHS).get("exe_path")
     ).strip()
     second_key = "developer" if developer_key else "executable"
-    if title_key and (developer_key or exe_key):
+    if title_key and (developer_key or exe_key or sync):
         fallback_matches = [
             game
             for game in local_games
             if _fallback_identity_key(game) == (title_key, developer_key)
-            and (developer_key or _coerce_text(game.get("exe_path")).strip() == exe_key)
+            and (
+                developer_key
+                or sync
+                or _coerce_text(game.get("exe_path")).strip() == exe_key
+            )
         ]
         if len(fallback_matches) == 1:
             return {
@@ -497,15 +646,18 @@ def _match_imported_game(
                 "title": title,
                 "reason": f"Multiple local games share this title and {second_key}.",
                 "candidate_count": len(fallback_matches),
+                "candidate_ids": [game["id"] for game in fallback_matches],
             }
 
     return {"status": "new", "game": imported_game, "title": title}
 
 
-def _build_import_plan(backup: Mapping[str, object]) -> list[dict[str, object]]:
+def _build_import_plan(
+    backup: Mapping[str, object], *, sync: bool = False
+) -> list[dict[str, object]]:
     local_games = _local_games()
     return [
-        _match_imported_game(_coerce_mapping(game), local_games)
+        _match_imported_game(_coerce_mapping(game), local_games, sync=sync)
         for game in _coerce_sequence(backup.get("games"))
     ]
 
@@ -629,8 +781,10 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
     return warnings
 
 
-def inspect_library_backup(path: object) -> dict[str, object]:
-    backup = load_library_backup(path)
+def inspect_library_backup(
+    path: object, passphrase: str | None = None
+) -> dict[str, object]:
+    backup = load_library_backup(path, passphrase)
     plan = _build_import_plan(backup)
     warnings = _build_backup_warnings(backup)
     ambiguous_games = [item for item in plan if item.get("status") == "ambiguous"]
@@ -838,9 +992,38 @@ def _import_setting_groups(
 
 
 def import_library_backup(
-    path: object, options: Mapping[str, object] | None = None
+    path: object,
+    options: Mapping[str, object] | None = None,
+    passphrase: str | None = None,
 ) -> dict[str, object]:
-    backup = load_library_backup(path)
+    backup = load_library_backup(path, passphrase)
+    return apply_library_backup(backup, options)
+
+
+def build_sync_backup(modified_at: str, device: str) -> dict[str, object]:
+    backup = build_library_backup({"sections": SYNC_SECTIONS})
+    # Cover files belong to this machine; only remote cover links can be shared.
+    for raw_game in _coerce_sequence(backup.get("games")):
+        metadata = _game_section(_coerce_mapping(raw_game), SECTION_METADATA)
+        cover = str(metadata.get("cover_image_path") or "")
+        if cover and not cover.startswith(("https://", "http://")):
+            metadata["cover_image_path"] = ""
+        cast(dict[str, object], raw_game)[SECTION_METADATA] = metadata
+    backup["selected_sections"] = list(SYNC_SECTIONS)
+    backup["sync"] = {"modified_at": modified_at, "device": device}
+    return backup
+
+
+def apply_library_backup(
+    backup: Mapping[str, object],
+    options: Mapping[str, object] | None = None,
+    *,
+    mirror: bool = False,
+    sync: bool = False,
+    sync_settings: Mapping[str, str] | None = None,
+    expected_local_modified_at: str | None = None,
+) -> dict[str, object]:
+    backup = validate_library_backup(backup)
     available_sections = _available_backup_sections(backup)
     sections = _select_sections(
         options,
@@ -849,7 +1032,6 @@ def import_library_backup(
         supported_sections=SUPPORTED_IMPORT_SECTIONS,
         reject_empty_selection=True,
     )
-    plan = _build_import_plan(backup)
     warnings = _build_backup_warnings(backup)
 
     created = 0
@@ -857,11 +1039,44 @@ def import_library_backup(
     skipped = 0
     ambiguous = 0
     settings_updated = 0
+    deleted = 0
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         try:
+            _ = cursor.execute("BEGIN IMMEDIATE")
+            if expected_local_modified_at is not None:
+                from core.database import get_setting
+
+                if (
+                    get_setting("sync_local_modified_at") or ""
+                ) != expected_local_modified_at:
+                    raise BackupValidationError(
+                        "The local library changed during sync. Try again.",
+                        "sync_conflict",
+                    )
+            plan = _build_import_plan(backup, sync=sync)
+            keep_ids = {
+                int(str(item["local_id"]))
+                for item in plan
+                if item.get("status") == "matched"
+            }
+            for item in plan:
+                keep_ids.update(
+                    int(str(candidate))
+                    for candidate in _coerce_sequence(item.get("candidate_ids"))
+                )
+            original_ids = {int(str(game["id"])) for game in _local_games()}
+            if mirror:
+                from core import database
+
+                snapshot_dir = os.path.join(os.path.dirname(database.DB_PATH), "sync")
+                os.makedirs(snapshot_dir, exist_ok=True)
+                _ = write_library_backup(
+                    os.path.join(snapshot_dir, "last-local.json"),
+                    {"sections": SUPPORTED_SECTIONS},
+                )
             for item in plan:
                 imported_game = _coerce_mapping(item.get("game"))
                 status = str(item.get("status") or "")
@@ -876,6 +1091,8 @@ def import_library_backup(
                         sections,
                         include_metadata=SECTION_METADATA in sections,
                     )
+                    if sync and not fields.get("cover_image_path"):
+                        _ = fields.pop("cover_image_path", None)
                     local_id = int(str(item.get("local_id", 0)))
                     _update_game_row(cursor, local_id, fields)
                     game_id = local_id
@@ -893,13 +1110,24 @@ def import_library_backup(
                     _replace_launch_targets(cursor, game_id, imported_game)
 
             settings_updated = _import_setting_groups(cursor, backup, sections)
+            if mirror:
+                for game_id in original_ids - keep_ids:
+                    _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
+                    deleted += 1
+            for key, value in (sync_settings or {}).items():
+                if key.startswith("sync_"):
+                    _ = cursor.execute(
+                        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (key, value),
+                    )
             conn.commit()
-        except sqlite3.Error:
+        except Exception:
             conn.rollback()
             raise
 
     return {
         "created": created,
+        "deleted": deleted,
         "updated": updated,
         "skipped": skipped,
         "ambiguous": ambiguous,

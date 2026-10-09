@@ -4,6 +4,7 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   IconBrandGithub,
+  IconCloud,
   IconDatabaseExport,
   IconLayout2,
   IconMoon,
@@ -293,6 +294,24 @@ onUnmounted(() => {
               class="whitespace-nowrap transition-opacity duration-150"
               :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Import / Export</span
+            >
+          </router-link>
+
+          <router-link
+            to="/sync"
+            :title="isNavCollapsed ? 'Sync' : ''"
+            :class="[
+              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              isNavCollapsed ? 'justify-center' : 'gap-3',
+            ]"
+            active-class="nav-active"
+            exact-active-class="nav-active"
+          >
+            <IconCloud class="shrink-0" :size="18" />
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Sync</span
             >
           </router-link>
 

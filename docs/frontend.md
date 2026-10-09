@@ -1,5 +1,13 @@
 # Frontend (Vue 3 + TypeScript)
 
+## Library sync and backup encryption
+
+`SyncView.vue` (the `/sync` route, its own left-navigation entry) hosts `LibrarySyncPanel.vue`. It offers None/Folder/Dropbox locations, the directory picker or browser sign-in, disconnect, Sync now, last sync/device/error status, and the external privacy-policy link. Browser previews explicitly label mock data; `wlib-mock-sync` holds the mock status and can select `off`, `idle`, `syncing`, `needs_choice`, `needs_passphrase`, or `error` for UI checks.
+
+All backend access stays in `ui/src/services/api.ts`, with typed `LibrarySyncStatus`, `LibrarySyncState`, and `LibrarySyncChoice`. The panel polls status, avoids stale poll responses overwriting actions, and shows first-connection and passphrase dialogs. Dialogs support Escape, trapped keyboard focus, and return focus to the opener. Cancel leaves sync paused, with a button to reopen the prompt.
+
+Encryption asks for passphrase confirmation and warns that a forgotten passphrase cannot be recovered. Manual export has the same option; manual import shows a password field on `passphrase_required`, inspects again after entry, and forwards the passphrase when applying. Passwords stay in temporary component state and are cleared after success or cancellation. Mock encrypted imports use a filename containing `encrypted` and passphrase `mock-passphrase`, strictly for browser previews. Theme variables support both light and dark modes; panel/dialog controls reflow on narrow screens.
+
 The wLib UI is a Vue 3 SPA built with the Composition API, TypeScript, and Vite.
 
 - Vue SFCs use `<script setup lang="ts">`.
@@ -42,6 +50,7 @@ wLib uses `vue-router` for top-level views:
 - **Updates View**: single and bulk update checks plus app release checks.
 - **Settings View**: platform-aware launcher/runtime settings and scraper controls. Windows hides Wine/Proton, prefix, Wayland, RPGMaker Linux runner, and Cheat Engine actions while preserving imported values; Linux retains the full runtime UI.
 - **Import / Export View**: top-level left-navigation route for JSON library/settings migration.
+- **Sync View**: top-level left-navigation route for library sync settings and status.
 - **Extension View**: extension service status and folder shortcuts.
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.

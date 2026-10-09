@@ -1,5 +1,20 @@
 # Database & Schema
 
+## Library sync change tracking
+
+`init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes.
+
+Local settings keys, all excluded from manual exports/imports and the sync file:
+
+- `sync_location`, `sync_folder_path`: configured provider and folder.
+- `sync_dropbox_refresh_token`, `sync_dropbox_account`: local credential and display name; access tokens stay in memory.
+- `sync_encryption_key`, `sync_encryption_salt`: base64 derived key and salt, never a passphrase.
+- `sync_encryption_change`: pending encryption-format change requiring a write.
+- `sync_local_modified_at`, `sync_last_synced_at`, `sync_last_revision`: change detection and successful file revision.
+- `sync_last_error`, `sync_last_device`: display status.
+
+`update_settings` commits several state keys atomically. Mirror imports use one write transaction, preserve local launch data, delete unmatched games with foreign-key cascade to their targets, and protect ambiguous candidates. Pulls set the winning timestamps in that transaction to cancel self-triggered change bumps. A local snapshot at `<data dir>/sync/last-local.json` contains all allowlisted backup sections for undoing a mistaken pull.
+
 wLib manages all relational states locally via a single SQLite database file.
 
 **Location**: `~/.local/share/wLib/wlib.db` on Linux or `%LOCALAPPDATA%\wLib\wlib.db` on Windows. `WLIB_DATA_DIR` overrides the root for isolated smoke and packaging tests.

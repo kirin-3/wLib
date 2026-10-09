@@ -1,5 +1,9 @@
 # Build & Packaging
 
+`cryptography>=44.0.0` is a runtime dependency for library backup and sync encryption. Linux `scripts/build.sh` collects the package with `--collect-all`; the Windows script uses `packaging/windows/wlib.spec`, which collects its data, modules, and native binaries. `main.py --smoke-test` imports the AEAD module to verify packaging. AUR metadata and its PKGBUILD template include `python-cryptography`. Rebuild the Linux test image when requirements change.
+
+The Linux test image includes `binutils` (PyInstaller's `objdump`), `curl` (appimagetool download), and `file` (AppImage assembly). Windows checkouts can contain CRLF shell files; normalize shell scripts in a temporary Linux source copy for packaging/clean checks. Keep Linux node_modules in the container or the named volume.
+
 wLib ships Linux artifacts through `scripts/build.sh` and Windows x64 artifacts through `scripts/build-windows.ps1`. Windows output is a portable ZIP plus a per-user MSI, both derived from one canonical PyInstaller onedir payload.
 
 The packaging pipeline integrates the Python backend, Vue frontend, bundled browser extension, release launcher, desktop file, icon, and license into one staged PyInstaller folder. Every release format is then produced from that same staged folder.

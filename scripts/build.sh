@@ -183,6 +183,7 @@ pyinstaller --noconfirm --onedir \
     --collect-data "certifi" \
     --hidden-import "core" \
     --hidden-import "certifi" \
+    --collect-all "cryptography" \
     --hidden-import "pywebview" \
     --hidden-import "PyQt6" \
     --hidden-import "webview.platforms.qt" \

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 
 project_root = Path(SPECPATH).resolve().parents[1]
@@ -22,6 +22,9 @@ datas = [
 datas += collect_data_files("certifi")
 
 hiddenimports = collect_submodules("webview")
+crypto_datas, crypto_binaries, crypto_imports = collect_all("cryptography")
+datas += crypto_datas
+hiddenimports += crypto_imports
 hiddenimports += [
     "PyQt6.QtCore",
     "PyQt6.QtGui",
@@ -34,7 +37,7 @@ hiddenimports += [
 analysis = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=crypto_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

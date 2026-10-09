@@ -73,6 +73,7 @@ pkgbase = wlib-bin
 	arch = x86_64
 	license = GPL-3.0-or-later
 	depends = ca-certificates
+	depends = python-cryptography
 	depends = gtk3
 	depends = hicolor-icon-theme
 	depends = libxkbcommon-x11

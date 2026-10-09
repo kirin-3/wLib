@@ -730,7 +730,34 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._discard_request_body()
-        if self.path.startswith("/api/check"):
+        from urllib.parse import urlparse, parse_qs
+
+        if urlparse(self.path).path == "/dropbox/callback":
+            query = parse_qs(urlparse(self.path).query)
+            callback_api = cast(ExtensionServer, self.server).sync_api
+            result = (
+                callback_api.complete_dropbox_callback(
+                    query.get("code", [""])[0], query.get("state", [""])[0]
+                )
+                if callback_api is not None
+                else {"success": False}
+            )
+            self.send_response(200 if result.get("success") else 400)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", "default-src 'none'")
+            self.end_headers()
+            message = (
+                "Dropbox connected. You can close this tab."
+                if result.get("success")
+                else "Dropbox sign-in failed or expired. Return to wLib and connect again."
+            )
+            _ = self.wfile.write(
+                f"<!doctype html><html lang='en'><meta charset='utf-8'><title>wLib Dropbox</title><p>{message}</p></html>".encode(
+                    "utf-8"
+                )
+            )
+        elif self.path.startswith("/api/check"):
             from urllib.parse import urlparse, parse_qs
 
             query = parse_qs(urlparse(self.path).query)
@@ -854,6 +881,7 @@ class ExtensionServer(ThreadingHTTPServer):
     # The port doubles as the single-instance lock. Windows SO_REUSEADDR would
     # let a second wLib bind it while the first is still listening.
     allow_reuse_address: bool = sys.platform != "win32"
+    sync_api: Api | None = None
 
 
 def bind_extension_server() -> ThreadingHTTPServer | None:
@@ -937,7 +965,11 @@ def run_packaged_smoke_test() -> int:
         "data_dir": APP_DATA_DIR,
     }
     try:
-        for module_name in ("certifi", "webview"):
+        for module_name in (
+            "certifi",
+            "webview",
+            "cryptography.hazmat.primitives.ciphers.aead",
+        ):
             _ = importlib.import_module(module_name)
 
         from core.database import init_db
@@ -1034,17 +1066,24 @@ def main() -> None:
 
     # Start the extension background server in a daemon thread
     if extension_server is not None:
+        cast(ExtensionServer, extension_server).sync_api = api
+        api.library_sync.server_available = True
         print("Starting extension HTTP receiver on port 8183...")
         threading.Thread(target=extension_server.serve_forever, daemon=True).start()
+
+    api.library_sync.start()
 
     # Start the PyWebView UI loop
     # We set debug=False so it doesn't open the Web Inspector automatically
     icon_path = os.path.join(script_dir, "wlib.png")
-    start_webview(
-        webview_module,
-        dev_mode=DEV_MODE,
-        icon_path=icon_path if os.path.exists(icon_path) else None,
-    )
+    try:
+        start_webview(
+            webview_module,
+            dev_mode=DEV_MODE,
+            icon_path=icon_path if os.path.exists(icon_path) else None,
+        )
+    finally:
+        api.library_sync.finish(timeout=10)
 
     # Cleanup Vite server when window closes
     if vite_process:

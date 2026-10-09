@@ -24,7 +24,33 @@ from core.database import (
     normalize_play_status,
     reorder_game_launch_targets,
     update_custom_play_statuses,
+    update_playtime,
 )
+
+
+def test_sync_change_tracking():
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    game_id = add_game("Tracking", "/game.exe")
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    for fields in ({"rating": "9"}, {"play_status": "Playing"}, {"is_favorite": True}):
+        update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+        update_game(game_id, fields)
+        assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_playtime(game_id, 3)
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_game(game_id, {"exe_path": "/new.exe", "launch_mode": "native"})
+    update_setting("proton_path", "/proton")
+    add_game_launch_target(game_id, "Extra", "/extra.exe")
+    init_db()
+    init_db()
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+    update_setting("enable_logging", "true")
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    delete_game(game_id)
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
 
 
 def assert_raises_value_error(message: str, callback):

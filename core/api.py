@@ -162,7 +162,7 @@ normalize_thread_url: Callable[[str], str] = cast(
     Callable[[str], str], cast(object, _normalize_thread_url)
 )
 
-APP_VERSION = "0.3.5"
+APP_VERSION = "0.3.7"
 # Lunar.Engine.zip from visibou/lunarengine v.7.2 (uploaded 2020-11-29, 29738666 bytes).
 LUNAR_ENGINE_SHA256 = "c208f52ca1873007df3f7ef71b61f3c2870a58ad0ddadff7944785f6bf36de23"
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
@@ -218,6 +218,11 @@ class Api:
         }
         # Make sure our database is initialized
         init_db()
+        from core.library_sync import SyncManager
+
+        self.library_sync: SyncManager = SyncManager(
+            on_pull=self._refresh_synced_library
+        )
         self.scraper: Scraper = Scraper()
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
@@ -1151,6 +1156,72 @@ class Api:
         ]
         return {"success": True, "games": games}
 
+    def _refresh_synced_library(self) -> None:
+        if self.window is not None:
+            try:
+                _ = cast(
+                    object,
+                    self.window.evaluate_js(
+                        "window.dispatchEvent(new Event('wlib-refresh-library'));"
+                    ),
+                )
+            except Exception:
+                pass
+
+    def get_sync_status(self) -> dict[str, object]:
+        return self.library_sync.status()
+
+    def set_sync_folder(self, path: str) -> dict[str, object]:
+        result = self.library_sync.set_folder(path)
+        if result.get("success"):
+            return self.library_sync.start_run()
+        return result
+
+    def connect_dropbox(self) -> dict[str, object]:
+        result = self.library_sync.connect_dropbox()
+        if result.get("success"):
+            opened = self.open_in_browser(str(result["url"]))
+            if not opened.get("success"):
+                return {
+                    "success": False,
+                    "error": "Could not open Dropbox sign-in in your browser.",
+                    "error_code": "browser_failed",
+                }
+        return result
+
+    def complete_dropbox_callback(self, code: str, state: str) -> dict[str, object]:
+        result = self.library_sync.complete_dropbox(code, state)
+        if result.get("success"):
+            _ = self.library_sync.start_run()
+        return result
+
+    def disconnect_sync(self) -> dict[str, object]:
+        return self.library_sync.disconnect()
+
+    def sync_now(self) -> dict[str, object]:
+        return self.library_sync.start_run()
+
+    def resolve_sync_choice(self, choice: str) -> dict[str, object]:
+        if choice not in ("use-remote", "use-local", "merge-once"):
+            return {
+                "success": False,
+                "error": "Choose a valid library option.",
+                "error_code": "invalid_sync_choice",
+            }
+        return self.library_sync.start_run(choice)
+
+    def set_sync_passphrase(self, passphrase: str | None) -> dict[str, object]:
+        result = self.library_sync.set_passphrase(passphrase)
+        if result.get("success"):
+            return self.library_sync.start_run()
+        return result
+
+    def unlock_sync(self, passphrase: str) -> dict[str, object]:
+        result = self.library_sync.unlock(passphrase)
+        if result.get("success"):
+            return self.library_sync.start_run()
+        return result
+
     def _backup_error_payload(self, error: Exception) -> dict[str, object]:
         from core.library_backup import BackupValidationError
 
@@ -1166,6 +1237,7 @@ class Api:
         self,
         options: Mapping[str, object] | None = None,
         destination_path: str = "",
+        passphrase: str | None = None,
     ) -> dict[str, object]:
         from core.library_backup import write_library_backup
 
@@ -1174,31 +1246,37 @@ class Api:
                 destination_path,
                 dict(options or {}),
                 app_version=APP_VERSION,
+                passphrase=passphrase,
             )
         except Exception as exc:
             return self._backup_error_payload(exc)
 
         return {"success": True, **payload}
 
-    def inspect_library_backup(self, path: str) -> dict[str, object]:
+    def inspect_library_backup(
+        self, path: str, passphrase: str | None = None
+    ) -> dict[str, object]:
         from core.library_backup import inspect_library_backup
 
         try:
-            payload = inspect_library_backup(path)
+            payload = inspect_library_backup(path, passphrase)
         except Exception as exc:
             return self._backup_error_payload(exc)
 
         return {"success": True, **payload}
 
     def import_library_backup(
-        self, path: str, options: Mapping[str, object] | None = None
+        self,
+        path: str,
+        options: Mapping[str, object] | None = None,
+        passphrase: str | None = None,
     ) -> dict[str, object]:
         import sqlite3
 
         from core.library_backup import import_library_backup
 
         try:
-            payload = import_library_backup(path, dict(options or {}))
+            payload = import_library_backup(path, dict(options or {}), passphrase)
         except sqlite3.IntegrityError as exc:
             return {
                 "success": False,

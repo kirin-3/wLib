@@ -6,6 +6,7 @@ import SettingsView from "../views/SettingsView.vue";
 import ExtensionView from "../views/ExtensionView.vue";
 import UpdatesView from "../views/UpdatesView.vue";
 import LibraryBackupView from "../views/LibraryBackupView.vue";
+import SyncView from "../views/SyncView.vue";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -27,6 +28,11 @@ const routes: RouteRecordRaw[] = [
     path: "/import-export",
     name: "import-export",
     component: LibraryBackupView,
+  },
+  {
+    path: "/sync",
+    name: "sync",
+    component: SyncView,
   },
   {
     path: "/settings",

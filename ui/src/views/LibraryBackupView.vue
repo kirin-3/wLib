@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, type Component, type Ref } from "vue";
+import { computed, ref, watch, type Component, type Ref } from "vue";
 import {
   IconAlertTriangle,
   IconDatabaseExport,
@@ -100,6 +100,13 @@ const importError = ref("");
 const exporting = ref(false);
 const inspecting = ref(false);
 const importing = ref(false);
+const encryptExport = ref(false);
+const exportPassphrase = ref("");
+const exportConfirmation = ref("");
+const importPassphrase = ref("");
+const importNeedsPassphrase = ref(false);
+watch(importPath, () => { importPassphrase.value = ""; importNeedsPassphrase.value = false; inspectResult.value = null; importSections.value = []; });
+watch(encryptExport, () => { exportPassphrase.value = ""; exportConfirmation.value = ""; });
 
 const importCounts = computed(() => inspectResult.value?.counts || null);
 const availableImportSections = computed<LibraryBackupSection[]>(
@@ -168,18 +175,24 @@ const runExport = async () => {
   if (exporting.value) return;
   exportMessage.value = "";
   exportError.value = "";
+  if (encryptExport.value && (!exportPassphrase.value || exportPassphrase.value !== exportConfirmation.value)) {
+    exportError.value = "Enter a passphrase and a matching confirmation.";
+    return;
+  }
   exporting.value = true;
 
   try {
     const result = await api.exportLibraryBackup(
       { sections: exportSections.value },
       exportPath.value,
+      encryptExport.value ? exportPassphrase.value : null,
     );
     if (!result || result.success === false) {
       exportError.value = result?.error || "Export failed.";
       return;
     }
     exportMessage.value = `Exported ${result.game_count ?? 0} games to ${result.path || "the selected file"}.`;
+    exportPassphrase.value = exportConfirmation.value = "";
   } catch (error) {
     exportError.value = `Export failed: ${String(error)}`;
   } finally {
@@ -195,9 +208,10 @@ const inspectImport = async () => {
   inspecting.value = true;
 
   try {
-    const result = await api.inspectLibraryBackup(importPath.value);
+    const result = await api.inspectLibraryBackup(importPath.value, importPassphrase.value || null);
     if (!result || result.success === false) {
       importError.value = result?.error || "Could not inspect backup.";
+      if (result?.error_code === "passphrase_required") importNeedsPassphrase.value = true;
       return;
     }
     inspectResult.value = result;
@@ -224,13 +238,16 @@ const runImport = async () => {
   try {
     const result = await api.importLibraryBackup(importPath.value, {
       sections: importSections.value,
-    });
+    }, importPassphrase.value || null);
     if (!result || result.success === false) {
       importError.value = result?.error || "Import failed.";
       return;
     }
     importMessage.value = `Imported backup. Created ${result.created ?? 0}, updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}.`;
     window.dispatchEvent(new Event("wlib-refresh-library"));
+    importPassphrase.value = "";
+    importNeedsPassphrase.value = false;
+    inspectResult.value = null;
   } catch (error) {
     importError.value = `Import failed: ${String(error)}`;
   } finally {
@@ -315,6 +332,13 @@ const runImport = async () => {
           </label>
         </div>
 
+        <label class="backup-check-row"><input v-model="encryptExport" type="checkbox" /> Encrypt with passphrase</label>
+        <div v-if="encryptExport" class="backup-field backup-passphrase-fields">
+          <p>A forgotten passphrase cannot be recovered. Without it, the export cannot be read.</p>
+          <label for="export-passphrase">Export passphrase</label><input id="export-passphrase" v-model="exportPassphrase" class="backup-input" type="password" autocomplete="new-password" />
+          <label for="export-confirmation">Confirm export passphrase</label><input id="export-confirmation" v-model="exportConfirmation" class="backup-input" type="password" autocomplete="new-password" />
+        </div>
+
         <p class="backup-disclaimer">
           <IconInfoCircle />
           <span>
@@ -351,6 +375,11 @@ const runImport = async () => {
           <IconFileImport v-else />
           {{ inspecting ? "Inspecting..." : "Inspect Backup" }}
         </button>
+
+        <div v-if="importNeedsPassphrase" class="backup-field backup-passphrase-fields">
+          <label for="import-passphrase">Backup passphrase</label><input id="import-passphrase" v-model="importPassphrase" class="backup-input" type="password" autocomplete="current-password" @keydown.enter="inspectImport" />
+          <p>Enter the passphrase, then inspect the backup again.</p>
+        </div>
 
         <div v-if="inspectResult" class="backup-preview">
           <div class="backup-counts">
@@ -456,8 +485,19 @@ const runImport = async () => {
 </template>
 
 <style scoped>
+.backup-passphrase-fields { display: grid; gap: .5rem; }
+.backup-passphrase-fields p { font-size: .875rem; color: var(--text-secondary); }
+.backup-page button:focus-visible, .backup-page input[type="checkbox"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 .backup-page {
   color: var(--text-primary);
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .backup-page { padding: 1rem; }
+  .backup-path-row { flex-wrap: wrap; }
+  .backup-path-row input { flex-basis: 100%; }
 }
 
 .backup-page-header {
@@ -733,7 +773,7 @@ const runImport = async () => {
 }
 
 .backup-primary {
-  background: var(--brand);
+  background: var(--brand-deep);
   color: white;
 }
 

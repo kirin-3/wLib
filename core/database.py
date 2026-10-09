@@ -20,6 +20,28 @@ DEFAULT_PLAY_STATUS = "Not Started"
 DEFAULT_LAUNCH_MODE = "auto"
 RPGMAKER_LINUX_LAUNCH_MODE = "rpgmaker_linux"
 RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
+GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_statuses")
+SYNC_GAME_COLUMNS = (
+    "title",
+    "developer",
+    "engine",
+    "tags",
+    "f95_url",
+    "version",
+    "latest_version",
+    "cover_image_path",
+    "play_status",
+    "is_favorite",
+    "rating",
+    "rating_graphics",
+    "rating_story",
+    "rating_fappability",
+    "rating_gameplay",
+    "progress",
+    "playtime_seconds",
+    "last_played",
+    "date_added",
+)
 CANONICAL_LAUNCH_MODES = (
     DEFAULT_LAUNCH_MODE,
     "native",
@@ -338,6 +360,35 @@ def init_db() -> None:
             f"UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN ({launch_mode_placeholders})",
             (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
         )
+
+        bump_sync_time = """
+            INSERT INTO settings (key, value)
+            VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(key) DO UPDATE SET value = CASE
+                WHEN settings.value >= excluded.value
+                THEN strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds')
+                ELSE excluded.value END;
+        """
+        for action in ("INSERT", "DELETE"):
+            _ = cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS sync_games_{action.lower()} AFTER {action} ON games BEGIN {bump_sync_time} END"
+            )
+        columns = ", ".join(SYNC_GAME_COLUMNS)
+        changed = " OR ".join(
+            f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
+        )
+        _ = cursor.execute(
+            f"CREATE TRIGGER IF NOT EXISTS sync_games_update AFTER UPDATE OF {columns} ON games WHEN {changed} BEGIN {bump_sync_time} END"
+        )
+        keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
+        for action in ("INSERT", "UPDATE", "DELETE"):
+            row = "OLD" if action == "DELETE" else "NEW"
+            condition = f"{row}.key IN ({keys})"
+            if action == "UPDATE":
+                condition += " AND OLD.value IS NOT NEW.value"
+            _ = cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS sync_settings_{action.lower()} AFTER {action} ON settings WHEN {condition} BEGIN {bump_sync_time} END"
+            )
 
         conn.commit()
     finally:
@@ -682,11 +733,15 @@ def get_setting(key: str) -> str | None:
 
 
 def update_setting(key: str, value: str) -> None:
+    update_settings({key: value})
+
+
+def update_settings(values: Mapping[str, str]) -> None:
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
-        _ = cursor.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
-            (key, value, value),
+        _ = cursor.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            list(values.items()),
         )
         conn.commit()
 

@@ -29,7 +29,147 @@ from core.library_backup import (
     SECTION_SETTINGS_GENERAL,
     SECTION_SETTINGS_PATHS,
     SECTION_USER_STATE,
+    BackupValidationError,
+    build_library_backup,
+    build_sync_backup,
+    encrypt_library_backup,
+    decrypt_library_backup,
+    load_library_backup,
+    apply_library_backup,
+    SYNC_SECTIONS,
 )
+
+
+def test_encryption_round_trip_and_fresh_nonce():
+    payload = base_backup([{"metadata": {"title": "Private game"}}])
+    first = encrypt_library_backup(payload, "test passphrase")
+    second = encrypt_library_backup(payload, "test passphrase")
+    assert decrypt_library_backup(first, "test passphrase") == payload
+    assert first["nonce"] != second["nonce"]
+    assert first["ciphertext"] != second["ciphertext"]
+    assert "Private game" not in json.dumps(first)
+    with pytest.raises(BackupValidationError, match="passphrase") as error:
+        decrypt_library_backup(first)
+    assert error.value.error_code == "passphrase_required"
+    with pytest.raises(BackupValidationError) as error:
+        decrypt_library_backup(first, "wrong")
+    assert error.value.error_code == "decrypt_failed"
+
+
+@pytest.mark.parametrize("tamper", ["ciphertext", "kdf", "nonce"])
+def test_encryption_tampering_rejected(tamper):
+    envelope = encrypt_library_backup(base_backup([]), "test")
+    if tamper == "kdf":
+        envelope["kdf"]["n"] = 2
+    else:
+        envelope[tamper] = "AAAA"
+    with pytest.raises(BackupValidationError) as error:
+        decrypt_library_backup(envelope, "test")
+    assert error.value.error_code == "decrypt_failed"
+
+
+def test_future_envelope_rejected():
+    with pytest.raises(BackupValidationError) as error:
+        decrypt_library_backup({"format": "wlib.encrypted", "format_version": 2})
+    assert error.value.error_code == "unsupported_format_version"
+
+
+def test_encrypted_backup_api(tmp_path):
+    add_game(
+        "Secret", "/local/game.exe", f95_url="https://f95zone.to/threads/secret.123/"
+    )
+    path = str(tmp_path / "encrypted.json")
+    api = Api()
+    result = api.export_library_backup(destination_path=path, passphrase="phrase")
+    assert result["success"] and result["encrypted"]
+    assert api.inspect_library_backup(path)["error_code"] == "passphrase_required"
+    assert (
+        api.import_library_backup(path, passphrase="wrong")["error_code"]
+        == "decrypt_failed"
+    )
+    assert api.inspect_library_backup(path, "phrase")["counts"]["total_games"] == 1
+    assert api.import_library_backup(path, passphrase="phrase")["success"]
+
+
+def test_sync_payload_excludes_machine_paths_and_secrets(tmp_path):
+    game_id = add_game(
+        "Game",
+        "/secret/game.exe",
+        cover_image="/secret/cover.png",
+        custom_prefix="/secret/prefix",
+    )
+    add_game_launch_target(game_id, "Extra", "/secret/extra.exe")
+    for key in (
+        "sync_dropbox_refresh_token",
+        "sync_encryption_key",
+        "sync_encryption_salt",
+        "sync_folder_path",
+    ):
+        update_setting(key, "SECRET_VALUE")
+    update_setting("proton_path", "/secret/proton")
+    sync = build_sync_backup("2026-10-09T00:00:00Z", "test-device")
+    serialized = json.dumps(sync)
+    assert "/secret" not in serialized and "SECRET_VALUE" not in serialized
+    assert not any(
+        section in sync["games"][0]
+        for section in ("launch_config", "launch_targets", "executable_paths")
+    )
+    assert "paths" not in sync["settings"]
+    assert load_library_backup(write_backup(tmp_path / "sync.json", sync)) == sync
+    exported = json.dumps(
+        build_library_backup(
+            {
+                "sections": [
+                    *SYNC_SECTIONS,
+                    SECTION_SETTINGS_PATHS,
+                    SECTION_LAUNCH_CONFIG,
+                    SECTION_EXECUTABLE_PATHS,
+                    SECTION_LAUNCH_TARGETS,
+                ]
+            }
+        )
+    )
+    assert "sync_" not in exported and "SECRET_VALUE" not in exported
+
+
+def test_mirror_preserves_paths_deletes_targets_and_snapshots(tmp_path):
+    keep = add_game("Manual", "/local/game.exe", launch_mode="native")
+    remove = add_game("Gone", "/gone.exe")
+    add_game_launch_target(keep, "Keep", "/keep.exe")
+    add_game_launch_target(remove, "Remove", "/remove.exe")
+    payload = base_backup(
+        [
+            {"metadata": {"title": "Manual"}, "user_state": {"rating": "8"}},
+            {"metadata": {"title": "New", "developer": "Dev"}},
+        ]
+    )
+    result = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+    assert result["deleted"] == 1 and result["created"] == 1
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["Manual"]["exe_path"] == "/local/game.exe"
+    assert games["Manual"]["launch_mode"] == "native"
+    assert games["Manual"]["rating"] == "8"
+    assert games["New"]["exe_path"] == ""
+    assert len(list_game_launch_targets(keep)) == 1
+    assert list_game_launch_targets(remove) == []
+    snapshot = tmp_path / "sync" / "last-local.json"
+    assert len(load_library_backup(snapshot)["games"]) == 2
+
+
+def test_mirror_keeps_ambiguous_manual_games():
+    add_game("Duplicate", "/one.exe")
+    add_game("Duplicate", "/two.exe")
+    result = apply_library_backup(
+        base_backup([{"metadata": {"title": "Duplicate"}}]),
+        {"sections": SYNC_SECTIONS},
+        mirror=True,
+        sync=True,
+    )
+    assert result["ambiguous"] == 1
+    assert result["deleted"] == 0
+    assert len(get_all_games()) == 2
 
 
 @pytest.fixture(autouse=True)

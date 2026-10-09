@@ -272,6 +272,23 @@ export interface LibraryBackupExportResponse extends ApiBasicResponse {
   path?: string;
   selected_sections?: LibraryBackupSection[];
   game_count?: number;
+  encrypted?: boolean;
+}
+
+export type LibrarySyncState = "off" | "idle" | "syncing" | "needs_choice" | "needs_passphrase" | "error";
+export type LibrarySyncChoice = "use-remote" | "use-local" | "merge-once";
+export interface LibrarySyncStatus extends ApiBasicResponse {
+  state?: LibrarySyncState;
+  location?: "" | "folder" | "dropbox";
+  folder_path?: string;
+  account?: string;
+  encrypted?: boolean;
+  last_synced_at?: string;
+  last_device?: string;
+  last_error?: string;
+  dropbox_available?: boolean;
+  dropbox_unavailable_reason?: string;
+  connecting?: boolean;
 }
 
 export interface LibraryBackupInspectResponse extends ApiBasicResponse {
@@ -823,29 +840,42 @@ class ApiService {
 
   async exportLibraryBackup(
     options: LibraryBackupOptions,
-    destinationPath: string
+    destinationPath: string,
+    passphrase: string | null = null,
   ): Promise<LibraryBackupExportResponse> {
     return this.invoke<LibraryBackupExportResponse>(
       "export_library_backup",
       options,
       destinationPath,
+      passphrase,
     );
   }
 
-  async inspectLibraryBackup(path: string): Promise<LibraryBackupInspectResponse> {
-    return this.invoke<LibraryBackupInspectResponse>("inspect_library_backup", path);
+  async inspectLibraryBackup(path: string, passphrase: string | null = null): Promise<LibraryBackupInspectResponse> {
+    return this.invoke<LibraryBackupInspectResponse>("inspect_library_backup", path, passphrase);
   }
 
   async importLibraryBackup(
     path: string,
-    options: LibraryBackupOptions
+    options: LibraryBackupOptions,
+    passphrase: string | null = null,
   ): Promise<LibraryBackupImportResponse> {
     return this.invoke<LibraryBackupImportResponse>(
       "import_library_backup",
       path,
       options,
+      passphrase,
     );
   }
+
+  async getSyncStatus(): Promise<LibrarySyncStatus> { return this.invoke("get_sync_status"); }
+  async setSyncFolder(path: string): Promise<LibrarySyncStatus> { return this.invoke("set_sync_folder", path); }
+  async connectDropbox(): Promise<LibrarySyncStatus> { return this.invoke("connect_dropbox"); }
+  async disconnectSync(): Promise<LibrarySyncStatus> { return this.invoke("disconnect_sync"); }
+  async syncNow(): Promise<LibrarySyncStatus> { return this.invoke("sync_now"); }
+  async resolveSyncChoice(choice: LibrarySyncChoice): Promise<LibrarySyncStatus> { return this.invoke("resolve_sync_choice", choice); }
+  async setSyncPassphrase(passphrase: string | null): Promise<LibrarySyncStatus> { return this.invoke("set_sync_passphrase", passphrase); }
+  async unlockSync(passphrase: string): Promise<LibrarySyncStatus> { return this.invoke("unlock_sync", passphrase); }
 
   async browseFile(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_file", startPath);
@@ -1053,9 +1083,12 @@ class ApiService {
           path,
           selected_sections: sections,
           game_count: 0,
+          encrypted: typeof args[2] === "string" && args[2].length > 0,
         };
       }
       case "inspect_library_backup":
+        if (String(args[0]).includes("encrypted") && !args[1]) return { success: false, mock: true, error: "Enter the passphrase for this file.", error_code: "passphrase_required" };
+        if (String(args[0]).includes("encrypted") && args[1] !== "mock-passphrase") return { success: false, mock: true, error: "The file could not be decrypted.", error_code: "decrypt_failed" };
         return {
           success: true,
           mock: true,
@@ -1114,6 +1147,30 @@ class ApiService {
           settings_updated: 0,
           selected_sections: sections,
         };
+      }
+      case "get_sync_status":
+      case "set_sync_folder":
+      case "connect_dropbox":
+      case "disconnect_sync":
+      case "sync_now":
+      case "resolve_sync_choice":
+      case "set_sync_passphrase":
+      case "unlock_sync": {
+        let stored: LibrarySyncStatus = {};
+        try { stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}"); } catch { /* Start with sync off when mock data is invalid. */ }
+        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, ...stored };
+        if (method === "set_sync_folder") Object.assign(status, { state: "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
+        if (method === "connect_dropbox") Object.assign(status, { state: "idle", location: "dropbox", account: "Browser mock account", last_error: "" });
+        if (method === "disconnect_sync") Object.assign(status, { state: "off", location: "", encrypted: false, account: "", folder_path: "", last_synced_at: "", last_device: "", last_error: "" });
+        if (method === "sync_now" && status.state === "idle") Object.assign(status, { last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });
+        if (method === "resolve_sync_choice") Object.assign(status, { state: "idle", last_error: "", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });
+        if (method === "set_sync_passphrase") status.encrypted = args[0] !== null;
+        if (method === "unlock_sync") {
+          if (args[0] !== "mock-passphrase") return { ...status, success: false, error: "The file could not be decrypted.", error_code: "decrypt_failed" };
+          Object.assign(status, { state: "idle", encrypted: true, last_error: "" });
+        }
+        localStorage.setItem("wlib-mock-sync", JSON.stringify(status));
+        return status;
       }
       case "browse_file":
       case "browse_urm_file":

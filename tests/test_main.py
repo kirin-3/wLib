@@ -55,6 +55,28 @@ def _make_extension_handler(path, matching_game=None, headers=None):
     return handler
 
 
+def test_dropbox_callback_without_origin(monkeypatch):
+    handler = _make_extension_handler("/dropbox/callback?code=one&state=two")
+    handler.server = MagicMock()
+    callback = handler.server.sync_api.complete_dropbox_callback
+    callback.return_value = {"success": True}
+    handler.do_GET()
+    callback.assert_called_once_with("one", "two")
+    handler.send_response.assert_called_once_with(200)
+    assert b"You can close this tab" in handler.wfile.getvalue()
+
+
+def test_dropbox_callback_origin_rules_unchanged():
+    handler = _make_extension_handler(
+        "/dropbox/callback?code=one&state=two",
+        headers={"Origin": "https://untrusted.example"},
+    )
+    handler.server = MagicMock()
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(403)
+    handler.server.sync_api.complete_dropbox_callback.assert_not_called()
+
+
 def test_configure_qt_runtime_environment_prefers_wayland(monkeypatch):
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
@@ -94,7 +116,6 @@ def test_configure_qt_runtime_environment_honors_override(monkeypatch):
     assert result["qt_qpa_platform"] == "xcb"
     assert result["source"] == "override"
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
-
 
 
 def test_cleanup_legacy_browser_data_removes_owned_dirs_only(monkeypatch, tmp_path):
@@ -366,6 +387,8 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     fake_webview.create_window.return_value = fake_window
 
     class FakeApi:
+        library_sync = MagicMock()
+
         def sync_extension_files(self):
             return {"success": True}
 
@@ -395,8 +418,12 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
         "load_webview_module",
         lambda: call_order.append("load_webview") or fake_webview,
     )
-    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(main, "collect_renderer_environment_snapshot", lambda dev_mode: {})
+    monkeypatch.setattr(
+        main, "log_renderer_diagnostics", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
     monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _module: {})
     monkeypatch.setattr(main, "Api", FakeApi)
     monkeypatch.setattr(main, "cleanup_legacy_browser_data_async", lambda: None)
