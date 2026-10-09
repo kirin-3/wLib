@@ -1440,7 +1440,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.7"
+    assert chrome_manifest["version"] == "1.0.8"
     assert "scripts" not in chrome_manifest["background"]
     assert (
         "*://f95zone.to/sam/latest_alpha*"
@@ -1611,7 +1611,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.7",
+                "version": "1.0.8",
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -1627,7 +1627,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result.get("updated") is False
     assert result.get("reason") == "up-to-date"
-    assert result.get("installed_version") == "1.0.7"
+    assert result.get("installed_version") == "1.0.8"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 

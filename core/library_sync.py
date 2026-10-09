@@ -86,6 +86,11 @@ def timestamp(value: str) -> float:
         ) from exc
 
 
+def _folder_revision(stat: os.stat_result) -> str:
+    # mtime ticks coarsely (ms on Linux); the inode changes on every os.replace.
+    return f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
+
+
 class FolderLocation:
     def __init__(self, folder: str) -> None:
         self.folder: Path = Path(os.path.expanduser(folder))
@@ -101,14 +106,14 @@ class FolderLocation:
             stat = self.path.stat()
         except FileNotFoundError:
             return None
-        return f"{stat.st_mtime_ns}:{stat.st_size}"
+        return _folder_revision(stat)
 
     def read(self) -> tuple[bytes, str]:
         self._check_folder()
         with self.path.open("rb") as source:
             stat = os.fstat(source.fileno())
             data = source.read()
-        revision = f"{stat.st_mtime_ns}:{stat.st_size}"
+        revision = _folder_revision(stat)
         if self.revision() != revision:
             raise SyncConflict()
         return data, revision
