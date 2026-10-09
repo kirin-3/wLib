@@ -37,12 +37,12 @@ def test_pyinstaller_spec_contains_required_windows_payload():
         '"ui/dist"',
         '"extension"',
         'collect_data_files("certifi")',
-        'collect_data_files("playwright")',
         '"PyQt6.QtWebEngineWidgets"',
         '"gi"',
         '"PySide6"',
     ):
         assert required_text in spec
+    assert "playwright" not in spec.lower()
 
 
 def test_msi_metadata_is_per_user_x64_and_data_safe():

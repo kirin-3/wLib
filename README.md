@@ -55,10 +55,8 @@ The same library can move between Linux and Windows through semantic JSON import
 - **Dependency Installers (Linux)** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RPGMaker RTPs/DLLs. On Windows, install any game-required runtimes using their native installers.
 
 ### 🌐 F95Zone Integration & Automation
-- **Automated Update Checker** — Tracks your local version against the latest releases by scraping F95Zone threads.
-- **Cloudflare Bypass** — Intelligently resolves Cloudflare Anti-Bot challenges using Microsoft Playwright to ensure scraping remains reliable.
+- **Automated Update Checker**: Compares local versions with F95Zone's `checker.php` endpoint in batches of up to 100 games. Guest thread pages provide metadata and a fallback for missing versions.
 - **Browser Extension** — A custom Chrome/Firefox extension that injects "Add to wLib" and "Open in wLib" buttons directly onto F95Zone pages.
-- **Persistent Browser Sessions** — F95Zone login sessions are saved under `~/.local/share/wLib/browser_session` on Linux or `%LOCALAPPDATA%\wLib\browser_session` on Windows so you stay logged in across restarts.
 
 > [!TIP]
 > wLib can check for newer GitHub releases and open the latest release page directly from the Updates view.
@@ -96,7 +94,7 @@ The same library can move between Linux and Windows through semantic JSON import
 
 ### System Dependencies
 
-Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, Winetricks, or GTK. Chromium is downloaded in the background on first startup if missing, into `%LOCALAPPDATA%\wLib\playwright`, so network access is needed before scraping.
+Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, Winetricks, or GTK. Game versions and metadata are fetched over guest HTTP requests without downloading a browser.
 
 | Dependency | Platform / when needed | Purpose |
 |------------|------------------------|---------|
@@ -157,7 +155,7 @@ Download either Windows artifact from the [Releases](https://github.com/kirin-3/
 - `wLib-<version>-windows-x64.msi` installs per-user under `%LOCALAPPDATA%\Programs\wLib`, adds a Start Menu shortcut (desktop shortcut optional), and supports upgrades, repair, and clean uninstall.
 - `wLib-<version>-windows-x64-portable.zip` can be extracted anywhere and run with `wLib.exe`.
 
-The MSI removes only installed program files and shortcuts. Library data, settings, scraper sessions, and Playwright browsers under `%LOCALAPPDATA%\wLib` remain after uninstall. The portable ZIP uses that same data directory; its library is not stored beside `wLib.exe`. SHA-256 hashes are published beside the artifacts.
+The MSI removes only installed program files and shortcuts. Library data and settings under `%LOCALAPPDATA%\wLib` remain after uninstall. The portable ZIP uses that same data directory; its library is not stored beside `wLib.exe`. SHA-256 hashes are published beside the artifacts.
 
 Windows builds are currently unsigned, so Windows SmartScreen shows "Windows protected your PC" on first launch. Click **More info → Run anyway**. If you downloaded the portable ZIP, you can instead right-click it before extracting, open **Properties**, and tick **Unblock**. Verify the download against the published SHA-256 hashes if you want to be sure it is the official build.
 
@@ -267,13 +265,13 @@ npm run build
 
 ### Quick Backend Verification
 
-Use the smoke backend test to verify your environment without opening the UI. On Windows, first set `WLIB_DATA_DIR` to a temporary directory; changing `HOME` alone does not isolate `%LOCALAPPDATA%`. The [contributing guide](CONTRIBUTING.md#smoke-backend-test) includes a PowerShell example that restores the environment afterward.
+Use the smoke backend test to verify your environment without opening the UI. It sets temporary HOME and `WLIB_DATA_DIR` paths automatically on Linux and Windows. See the [contributing guide](CONTRIBUTING.md#smoke-backend-test) for source and packaged asset checks.
 
 ```bash
 python scripts/smoke_backend.py
 ```
 
-This runs extension sync and Qt/Playwright initialization with temporary HOME and browser paths.
+This runs extension sync and Qt initialization with temporary HOME and app-data paths.
 
 > [!NOTE]
 > Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).

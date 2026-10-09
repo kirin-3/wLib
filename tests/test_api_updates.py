@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.api import DEFAULT_PLAYWRIGHT_BROWSERS_PATH, Api
+from core.api import Api
 from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
@@ -539,7 +539,6 @@ def test_api_settings_persist_rpgmaker_linux_runner_path(tmp_path):
             "proton_path": "/opt/proton",
             "wine_prefix_path": "/tmp/wlib-prefix",
             "enable_logging": True,
-            "playwright_browsers_path": "/tmp/ms-playwright",
         }
     )
     assert first_save["success"] is True
@@ -550,7 +549,6 @@ def test_api_settings_persist_rpgmaker_linux_runner_path(tmp_path):
     assert get_setting("proton_path") == "/opt/proton"
     assert get_setting("wine_prefix_path") == "/tmp/wlib-prefix"
     assert get_setting("enable_logging") == "true"
-    assert get_setting("playwright_browsers_path") == "/tmp/ms-playwright"
     assert get_setting(RPGMAKER_LINUX_RUNNER_SETTING) == str(runner_path)
 
     settings = api.get_settings()
@@ -716,7 +714,7 @@ def test_check_for_updates_non_numeric_version(monkeypatch, local_version, has_u
     assert result["has_update"] is has_update
 
 
-def test_check_for_updates_retries_blocked_with_headed_mode(monkeypatch):
+def test_check_for_updates_returns_blocked_without_retry(monkeypatch):
     api = Api()
     add_game(
         title="Demo",
@@ -729,28 +727,29 @@ def test_check_for_updates_retries_blocked_with_headed_mode(monkeypatch):
 
     def fake_get_thread_version(
         _url,
-        headless=True,
-        timeout_ms=60000,
-        hold_open_seconds=0,
         include_metadata=False,
     ):
-        calls.append((headless, timeout_ms, hold_open_seconds, include_metadata))
-        if len(calls) == 1:
-            return {
-                "success": False,
-                "code": "blocked",
-                "error": "Blocked by anti-bot challenge while loading thread",
-            }
-        return {"success": True, "title": "Demo [v1.1]", "version": "1.1"}
+        calls.append(include_metadata)
+        return {
+            "success": False,
+            "code": "blocked",
+            "error": "Blocked by anti-bot challenge while loading thread",
+        }
 
     monkeypatch.setattr(api.scraper, "get_thread_version", fake_get_thread_version)
 
     result = api.check_for_updates("https://f95zone.to/threads/demo.123/")
 
-    assert result["success"] is True
-    assert result["version"] == "1.1"
-    assert calls[0] == (True, 60000, 0, True)
-    assert calls[1] == (False, 180000, 20, True)
+    assert result["success"] is False
+    assert result["error_code"] == "blocked"
+    assert calls == [True]
+
+
+def test_settings_ignore_legacy_browser_path():
+    api = Api()
+    assert api.save_settings({"playwright_browsers_path": "/legacy"})["success"] is True
+    assert get_setting("playwright_browsers_path") is None
+    assert "playwright_browsers_path" not in api.get_settings()
 
 
 def test_check_for_updates_backfills_missing_metadata(monkeypatch):
@@ -1030,27 +1029,6 @@ def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
     assert result["error_code"] == "duplicate_url"
 
 
-def test_get_settings_includes_playwright_path_default():
-    api = Api()
-
-    settings = api.get_settings()
-
-    assert settings["playwright_browsers_path"] == DEFAULT_PLAYWRIGHT_BROWSERS_PATH
-
-
-def test_save_settings_persists_playwright_path():
-    api = Api()
-
-    api.save_settings(
-        {
-            "proton_path": "",
-            "wine_prefix_path": "",
-            "enable_logging": False,
-            "playwright_browsers_path": "/tmp/custom-playwright-cache",
-        }
-    )
-
-    assert get_setting("playwright_browsers_path") == "/tmp/custom-playwright-cache"
 
 
 def test_browse_file_uses_linux_fallback_order(monkeypatch, tmp_path):
@@ -1276,34 +1254,6 @@ def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     }
 
 
-def test_open_scraper_login_session_delegates_to_scraper(monkeypatch):
-    api = Api()
-
-    monkeypatch.setattr(
-        api.scraper,
-        "open_login_session",
-        lambda login_url: {"success": True, "login_url": login_url},
-    )
-
-    result = api.open_scraper_login_session()
-
-    assert result["success"] is True
-    assert result["login_url"] == "https://f95zone.to/login/"
-
-
-def test_reset_scraper_session_delegates_to_scraper(monkeypatch):
-    api = Api()
-
-    monkeypatch.setattr(
-        api.scraper,
-        "reset_browser_session",
-        lambda: {"success": True, "message": "reset"},
-    )
-
-    result = api.reset_scraper_session()
-
-    assert result["success"] is True
-    assert result["message"] == "reset"
 
 
 def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_path):
@@ -2092,14 +2042,13 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     release = threading.Event()
     callback_results: list[bool] = []
 
-    def fake_batch(urls, headless, delay, include_metadata, callback):
-        _ = (headless, delay, include_metadata)
+    def fake_batch(urls, callback):
         entered.set()
         assert release.wait(5)
         callback_results.append(callback(urls[0], {"success": True, "version": "2.0"}))
         return {}
 
-    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+    monkeypatch.setattr(api.scraper, "check_versions", fake_batch)
 
     assert api.check_all_updates()["success"] is True
     assert entered.wait(5)
@@ -2110,7 +2059,7 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     status = api.get_update_status()
     assert status["running"] is True
     assert status["cancelling"] is True
-    # The old worker still owns the browser profile, so a restart must wait.
+    # The old worker is still running, so a restart must wait.
     assert api.check_all_updates()["success"] is False
 
     release.set()
@@ -2129,6 +2078,47 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     assert api.get_auto_check_setting()["last_check"] == ""
 
 
+def test_bulk_check_preserves_thread_edit_metadata(monkeypatch):
+    import time
+
+    api = Api()
+    url = "https://f95zone.to/threads/game.1/"
+    add_game("Game", "", f95_url=url, version="1.0")
+    api._update_thread_edit_metadata_for_url(url, {
+        "thread_main_post_last_edit_at": "2025-01-01T00:00:00",
+        "thread_main_post_checked_at": "2025-01-02T00:00:00",
+    })
+    def batch(urls, callback):
+        callback(urls[0], {
+            "success": True, "version": "1.0",
+            "thread_main_post_last_edit_at": "2026-10-09T00:00:00",
+            "thread_main_post_checked_at": "2026-10-09T00:00:00",
+        })
+        return {}
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    api.check_all_updates()
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    game = get_all_games()[0]
+    assert game["latest_version"] == "1.0"
+    assert game["thread_main_post_last_edit_at"] == "2025-01-01T00:00:00"
+    assert game["thread_main_post_checked_at"] == "2025-01-02T00:00:00"
+    assert api.get_update_status()["outcome"] == "completed"
+
+
+def test_add_game_metadata_failure_is_not_retried(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/game.1/"
+    game_id = add_game("Game", "", f95_url=url)
+    get = MagicMock(return_value={"success": False, "code": "blocked", "error": "challenge"})
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", get)
+    api._metadata_pending.add(game_id)
+    api._fetch_added_game_metadata(game_id, url, True)
+    get.assert_called_once_with(url)
+    assert game_id not in api._metadata_pending
+
+
 def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
     import time
 
@@ -2140,15 +2130,14 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
         _ = add_game(title=title, exe_path="/tmp/game.sh", f95_url=url)
     seen: list[tuple[str, str]] = []
 
-    def fake_batch(urls, headless, delay, include_metadata, callback):
-        _ = (headless, delay, include_metadata)
+    def fake_batch(urls, callback):
         for url in urls:
             seen.append((titles_by_url[url], str(api.get_update_status()["current"])))
             _ = callback(url, {"success": True, "version": "2.0"})
         seen.append(("", str(api.get_update_status()["current"])))
         return {}
 
-    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+    monkeypatch.setattr(api.scraper, "check_versions", fake_batch)
 
     assert api.check_all_updates()["success"] is True
     deadline = time.monotonic() + 5
@@ -2162,7 +2151,7 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
 
 @pytest.mark.parametrize(
     "outcome",
-    ["busy", "failed", "empty", "partial", "success", "interrupted", "exception", "cancelled"],
+    ["batch_error", "failed", "empty", "partial", "success", "interrupted", "exception", "cancelled"],
 )
 def test_update_check_timestamp_requires_successful_completion(monkeypatch, outcome):
     import time
@@ -2173,9 +2162,9 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
     previous = "2020-01-01T00:00:00"
     update_setting("last_update_check", previous)
 
-    def fake_batch(urls, headless, delay, include_metadata, callback):
-        if outcome == "busy":
-            return {"__batch_error__": {"error": "Browser busy", "code": "browser_busy"}}
+    def fake_batch(urls, callback):
+        if outcome == "batch_error":
+            return {"__batch_error__": {"error": "Batch setup failed", "code": "batch_failed"}}
         if outcome == "empty":
             return {}
         for index, url in enumerate(urls):
@@ -2183,7 +2172,7 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
                 if outcome == "interrupted":
                     return {}
                 if outcome == "exception":
-                    raise RuntimeError("Browser closed")
+                    raise RuntimeError("Request interrupted")
                 if outcome == "cancelled":
                     api.cancel_update_check()
                     return {}
@@ -2193,7 +2182,7 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
                 callback(url, {"success": True, "version": "2.0"})
         return {}
 
-    monkeypatch.setattr(api.scraper, "get_multiple_thread_versions", fake_batch)
+    monkeypatch.setattr(api.scraper, "check_versions", fake_batch)
     assert api.check_all_updates()["success"] is True
     deadline = time.monotonic() + 5
     while api.get_update_status()["running"] and time.monotonic() < deadline:
@@ -2201,7 +2190,7 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
     status = api.get_update_status()
     assert status["running"] is False
     assert status["checked"] == (
-        0 if outcome in {"busy", "empty"}
+        0 if outcome in {"batch_error", "empty"}
         else 1 if outcome in {"interrupted", "exception", "cancelled"}
         else 2
     )

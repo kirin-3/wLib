@@ -12,7 +12,6 @@ export const CONSERVATIVE_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   launch_modes: ["auto"],
   data_dir: "",
   cache_dir: "",
-  playwright_browsers_path: "",
   extension_dir: "",
 };
 

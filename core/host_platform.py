@@ -21,7 +21,6 @@ class PlatformCapabilities(TypedDict):
     launch_modes: list[str]
     data_dir: str
     cache_dir: str
-    playwright_browsers_path: str
     extension_dir: str
 
 
@@ -103,31 +102,16 @@ def get_cache_root(
     return os.path.abspath(os.path.expanduser(base))
 
 
-def get_playwright_browsers_path(
-    *,
-    platform: str | None = None,
-    environ: Mapping[str, str] | None = None,
-    home: str | None = None,
-) -> str:
-    env = _environment(environ)
-    override = str(env.get("WLIB_PLAYWRIGHT_BROWSERS_PATH") or "").strip()
-    if override:
-        return os.path.abspath(os.path.expanduser(override))
-    if get_host_name(platform) == "windows":
-        return os.path.join(
-            get_data_dir(platform=platform, environ=env, home=home), "playwright"
-        )
-    return os.path.join(
-        get_cache_root(platform=platform, environ=env, home=home), "ms-playwright"
-    )
-
-
 def get_data_subdir(name: str, *, platform: str | None = None) -> str:
     return os.path.join(get_data_dir(platform=platform), name)
 
 
 def get_browser_session_dir() -> str:
     return get_data_subdir("browser_session")
+
+
+def get_legacy_browser_dirs() -> list[str]:
+    return [get_browser_session_dir(), get_data_subdir("playwright")]
 
 
 def get_extension_dir(*, platform: str | None = None) -> str:
@@ -167,7 +151,6 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
         else ["auto"],
         "data_dir": get_data_dir(platform=platform),
         "cache_dir": get_cache_root(platform=platform),
-        "playwright_browsers_path": get_playwright_browsers_path(platform=platform),
         "extension_dir": get_extension_dir(platform=platform),
     }
 

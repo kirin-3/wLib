@@ -5,7 +5,7 @@ from core.host_platform import (
     get_cache_root,
     get_data_dir,
     get_platform_capabilities,
-    get_playwright_browsers_path,
+    get_legacy_browser_dirs,
 )
 
 
@@ -19,9 +19,6 @@ def test_windows_paths_use_local_app_data(tmp_path):
     assert get_cache_root(platform="win32", environ=env) == os.path.join(
         str(local_app_data), "wLib", "cache"
     )
-    assert get_playwright_browsers_path(
-        platform="win32", environ=env
-    ) == os.path.join(str(local_app_data), "wLib", "playwright")
 
 
 def test_windows_paths_fall_back_to_user_home(tmp_path):
@@ -40,18 +37,12 @@ def test_linux_paths_preserve_xdg_defaults(tmp_path):
         platform="linux", environ=env, home=str(tmp_path / "home")
     ) == os.path.join(str(data_home), "wLib")
     assert get_cache_root(platform="linux", environ=env) == str(cache_home)
-    assert get_playwright_browsers_path(
-        platform="linux", environ=env
-    ) == os.path.join(str(cache_home), "ms-playwright")
 
 
 def test_linux_paths_preserve_home_fallbacks(tmp_path):
     assert get_data_dir(platform="linux", environ={}, home=str(tmp_path)) == os.path.join(
         str(tmp_path), ".local", "share", "wLib"
     )
-    assert get_playwright_browsers_path(
-        platform="linux", environ={}, home=str(tmp_path)
-    ) == os.path.join(str(tmp_path), ".cache", "ms-playwright")
 
 
 def test_linux_xdg_data_home_keeps_existing_legacy_library(tmp_path):
@@ -78,6 +69,16 @@ def test_explicit_path_overrides_isolate_smoke_runtime(tmp_path):
 
     assert get_data_dir(platform="linux", environ=env) == str(data_dir)
     assert get_cache_root(platform="linux", environ=env) == str(cache_dir)
+
+
+def test_legacy_browser_dirs_only_include_app_owned_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("WLIB_PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "shared"))
+    assert get_legacy_browser_dirs() == [
+        str(tmp_path / "data" / "browser_session"),
+        str(tmp_path / "data" / "playwright"),
+    ]
+    assert "playwright_browsers_path" not in get_platform_capabilities()
 
 
 def test_platform_capabilities_hide_linux_mutations_on_windows(monkeypatch, tmp_path):

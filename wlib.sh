@@ -67,12 +67,6 @@ if [ ! -f "$VENV_DIR/.deps_installed" ] || [ requirements.txt -nt "$VENV_DIR/.de
         exit 1
     fi
 
-    # Install Playwright browsers if not present
-    if ! python -c "from playwright.sync_api import sync_playwright" 2>/dev/null; then
-        echo "🌐 Installing Playwright browser..."
-        playwright install chromium
-    fi
-
     touch "$VENV_DIR/.deps_installed"
 fi
 

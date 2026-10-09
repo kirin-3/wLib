@@ -188,12 +188,6 @@ export interface AppVersionResponse {
   version: string;
 }
 
-export interface ScraperSessionResponse extends ApiBasicResponse {
-  success: boolean;
-  message?: string;
-  code?: string;
-}
-
 export interface CheatEngineStatusResponse {
   installed: boolean;
   path: string;
@@ -365,7 +359,6 @@ export interface PlatformCapabilities {
   launch_modes: LaunchMode[];
   data_dir: string;
   cache_dir: string;
-  playwright_browsers_path: string;
   extension_dir: string;
 }
 
@@ -375,7 +368,6 @@ export interface SettingsPayload {
   proton_path?: string;
   wine_prefix_path?: string;
   enable_logging?: boolean;
-  playwright_browsers_path?: string;
   rpgmaker_linux_runner_path?: string;
 }
 
@@ -391,7 +383,6 @@ export interface SettingsResponse {
   proton_path: string;
   wine_prefix_path: string;
   enable_logging: boolean;
-  playwright_browsers_path: string;
   rpgmaker_linux_runner_path: string;
   rpgmaker_linux_runner_status: RpgmakerLinuxRunnerStatus;
 }
@@ -404,7 +395,6 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   proton_path: "",
   wine_prefix_path: "",
   enable_logging: false,
-  playwright_browsers_path: "",
   rpgmaker_linux_runner_path: "",
   rpgmaker_linux_runner_status: {
     available: false,
@@ -487,10 +477,6 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.enable_logging === "boolean"
         ? source.enable_logging
         : DEFAULT_MOCK_SETTINGS.enable_logging,
-    playwright_browsers_path:
-      typeof source.playwright_browsers_path === "string"
-        ? source.playwright_browsers_path
-        : DEFAULT_MOCK_SETTINGS.playwright_browsers_path,
     rpgmaker_linux_runner_path: rpgmakerRunnerPath,
     rpgmaker_linux_runner_status: rpgmakerRunnerStatus,
   };
@@ -699,14 +685,6 @@ class ApiService {
 
   async openInBrowser(url: string): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("open_in_browser", url);
-  }
-
-  async openScraperLoginSession(): Promise<ScraperSessionResponse> {
-    return this.invoke<ScraperSessionResponse>("open_scraper_login_session");
-  }
-
-  async resetScraperSession(): Promise<ScraperSessionResponse> {
-    return this.invoke<ScraperSessionResponse>("reset_scraper_session");
   }
 
   async checkForUpdates(url: string): Promise<UpdateCheckResponse> {
@@ -1170,7 +1148,7 @@ class ApiService {
           checked: 0,
           current: "",
           results: [],
-          delay_seconds: 5,
+          delay_seconds: 2,
         };
       case "get_auto_check_setting":
         return { frequency: "weekly", last_check: "" };
@@ -1199,13 +1177,6 @@ class ApiService {
           distro: "Unknown",
           command:
             "# Backend unavailable in browser mode. Run this in the desktop app.",
-        };
-      case "open_scraper_login_session":
-      case "reset_scraper_session":
-        return {
-          success: false,
-          mock: true,
-          error: "Scraper session controls require the desktop app runtime.",
         };
       case "get_extension_service_status":
         return {

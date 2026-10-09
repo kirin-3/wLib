@@ -34,7 +34,6 @@ flowchart TD
     subgraph "Local OS & Storage"
         SQLITE[(SQLite DB)]:::storage
         FS[Filesystem / Games]:::storage
-        BROWSER_SESSION[Browser Session]:::storage
         DIAG_LOG[Renderer Diagnostics Log]:::storage
     end
 
@@ -58,8 +57,7 @@ flowchart TD
     MAIN --> SSL
 
     DB <--> SQLITE
-    SCRAPER <-->|Playwright Persistent Session| BROWSER_SESSION
-    SCRAPER <-->|Playwright Sync| F95
+    SCRAPER <-->|Paced HTTP: checker.php and thread pages| F95
     LAUNCHER -->|Subprocess / Native / Wine / Proton / RPGMaker Linux| FS
     
     EXT <-->|CORS HTTP| EXT_SERVER
@@ -75,7 +73,7 @@ flowchart TD
 - **Desktop Window Manager**: PyWebView with Qt WebEngine on Linux and Windows (Windows releases bundle PyQt6)
 - **Frontend Framework**: Vue 3 (Composition API) + TypeScript + Vite + TailwindCSS
 - **Database**: SQLite3 (Local file-based database)
-- **Web Automation**: Microsoft Playwright (Sync API for background scraping)
+- **F95 Requests**: Python urllib with TLS verification, batch version checks, and HTML metadata parsing
 - **Packaging**: PyInstaller and release scripts for Linux AppImage/tar.gz/DEB/RPM/AUR plus Windows x64 portable ZIP and per-user MSI
 
 ## Platform Paths
@@ -86,16 +84,16 @@ flowchart TD
 |----------|---------------|-----------------|
 | App data | `~/.local/share/wLib` | `%LOCALAPPDATA%\wLib` |
 | Database | `~/.local/share/wLib/wlib.db` | `%LOCALAPPDATA%\wLib\wlib.db` |
-| F95Zone browser session | `~/.local/share/wLib/browser_session/` | `%LOCALAPPDATA%\wLib\browser_session` |
 | Browser extension copies | `~/.local/share/wLib/extension/` | `%LOCALAPPDATA%\wLib\extension` |
 | PyWebView storage | `~/.local/share/wLib/webview/` | `%LOCALAPPDATA%\wLib\webview` |
 | Cache root | `~/.cache` | `%LOCALAPPDATA%\wLib\cache` |
-| Playwright browsers | `~/.cache/ms-playwright` | `%LOCALAPPDATA%\wLib\playwright` |
 | Renderer diagnostics | `~/.local/share/wLib/renderer-diagnostics.log` | `%LOCALAPPDATA%\wLib\renderer-diagnostics.log` |
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
 
-At startup, `WLIB_PLAYWRIGHT_BROWSERS_PATH` takes precedence over the saved `playwright_browsers_path` setting and the platform default. MSI and portable Windows builds share the same user-data location; extracting a portable ZIP does not move the library beside the executable.
+MSI and portable Windows builds share the same user-data location; extracting a portable ZIP does not move the library beside the executable.
+
+Upgrade cleanup removes legacy `browser_session/` and `playwright/` directories inside the app data root in the background. Shared caches such as `~/.cache/ms-playwright` and custom browser paths are left untouched. The legacy `playwright_browsers_path` setting is removed from the database and skipped during backup import.
 
 ## Platform Capabilities
 
@@ -111,7 +109,7 @@ wLib operates across two distinct contexts that never directly share memory:
    - Manages the entire lifecycle of the application.
    - Configures SSL certificates and Qt runtime environment.
    - Bootstraps the local SQLite database.
-   - Ensures Microsoft Playwright's Chromium binaries are available on the user's system.
+   - Removes app-owned legacy browser data in a background thread.
    - Starts the `http.server` daemon thread for the browser extension.
    - Instantiates the `pywebview` window and maps a Python class object (`Api`) to the JavaScript runtime.
    - Logs Qt and browser renderer diagnostics on both platforms; Linux release launchers handle GPU detection and the crash guard.

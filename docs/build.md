@@ -31,7 +31,7 @@ dotnet tool install --global wix --version 6.0.2
 .\scripts\build-windows.ps1 -Version 1.2.0 -Python .\.venv\Scripts\python.exe
 ```
 
-The script validates the MSI-compatible version, installs `requirements-windows.txt`, runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, Playwright's driver, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading Chromium.
+The script validates the MSI-compatible version, installs `requirements-windows.txt`, runs frontend typecheck/build, stages the common Chrome extension plus a supplied signed Firefox XPI (or an explicitly unsigned local fallback), and freezes `wLib.exe` with `packaging/windows/wlib.spec`. The onedir payload includes Qt WebEngine/PyWebView, certifi, Vue assets, and extension assets. Frozen `--smoke-test` runs against an isolated data directory without opening the UI or downloading external content.
 
 Intermediate files are recreated under `build/windows/`; the canonical payload is `build/windows/frozen/wLib/`. Artifacts are written to `dist/windows/` by default:
 
@@ -65,15 +65,15 @@ Authenticode signing is optional and requires `signtool.exe` on `PATH` (from the
 
 ### Windows release qualification
 
-The initial pipeline has been exercised on Windows 11 x64 with source/frozen smoke tests, normal UI startup, portable ZIP creation, and silent MSI install/repair/major-upgrade/uninstall. GitHub's `windows-2022` runner provides clean x64 packaging coverage. Before calling a release broadly Windows 10-qualified, repeat the visible UI and game-launch checks on a clean, fully patched Windows 10 x64 machine; that manual hardware/OS pass is not represented by the Server 2022 runner. Chromium requires network access when downloaded in the background on first startup, and unsigned local artifacts may show Windows publisher warnings.
+The initial pipeline has been exercised on Windows 11 x64 with source/frozen smoke tests, normal UI startup, portable ZIP creation, and silent MSI install/repair/major-upgrade/uninstall. GitHub's `windows-2022` runner provides clean x64 packaging coverage. Before calling a release broadly Windows 10-qualified, repeat the visible UI and game-launch checks on a clean, fully patched Windows 10 x64 machine; that manual hardware/OS pass is not represented by the Server 2022 runner. Scraping uses guest HTTP requests with no browser download. Unsigned local artifacts may show Windows publisher warnings.
 
 ### Smoke Backend Test
 
 The smoke test (`scripts/smoke_backend.py`) is a lightweight verification tool that:
 
 - Runs backend initialization without opening the UI
-- Uses a temporary HOME directory and browser path; on Windows, also set `WLIB_DATA_DIR` to a temporary directory to avoid touching `%LOCALAPPDATA%\wLib`
-- Tests Qt platform configuration and Playwright browser path setup
+- Uses temporary HOME and `WLIB_DATA_DIR` paths to avoid touching the user's library on either platform
+- Tests Qt platform configuration and backend initialization
 - Exercises extension file synchronization
 
 Use it for quick CI checks or to verify backend changes before running the full app. See the [PowerShell smoke example](../CONTRIBUTING.md#smoke-backend-test) for Windows isolation. Linux contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.

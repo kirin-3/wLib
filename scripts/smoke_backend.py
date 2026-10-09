@@ -17,9 +17,7 @@ def main() -> None:
         os.environ["HOME"] = str(temp_home)
         if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
             os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        os.environ["WLIB_PLAYWRIGHT_BROWSERS_PATH"] = str(
-            temp_home / ".cache" / "ms-playwright"
-        )
+        os.environ["WLIB_DATA_DIR"] = str(temp_home / ".local" / "share" / "wLib")
 
         if str(repo_root) not in sys.path:
             sys.path.insert(0, str(repo_root))
@@ -28,7 +26,6 @@ def main() -> None:
         from core.api import Api
 
         qt_env = wlib_main.configure_qt_runtime_environment()
-        browsers_path = wlib_main.configure_playwright_browsers_path()
         webview_module = wlib_main.load_webview_module()
 
         if webview_module is None:
@@ -44,7 +41,6 @@ def main() -> None:
 
         print("Smoke check passed")
         print(f"Qt platform source: {qt_env['source']}")
-        print(f"Playwright browsers path: {browsers_path}")
         print(f"Extension sync reason: {sync_result.get('reason', 'unknown')}")
 
 

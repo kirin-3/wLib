@@ -87,7 +87,6 @@ GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_sta
 PATH_SETTINGS_KEYS = (
     "proton_path",
     "wine_prefix_path",
-    "playwright_browsers_path",
     RPGMAKER_LINUX_RUNNER_SETTING,
     "urm_rpa_path",
 )

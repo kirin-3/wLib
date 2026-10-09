@@ -66,7 +66,7 @@ const sectionOptions: SectionOption[] = [
   {
     id: "settings_paths",
     label: "Machine-specific settings paths",
-    description: "Includes Proton, Wine prefix, browser, and RPGMaker runner paths.",
+    description: "Includes Proton, Wine prefix, and RPGMaker runner paths.",
     icon: IconFolderCog,
   },
 ];

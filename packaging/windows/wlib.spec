@@ -20,10 +20,8 @@ datas = [
     (str(project_root / "wlib.png"), "."),
 ]
 datas += collect_data_files("certifi")
-datas += collect_data_files("playwright")
 
-hiddenimports = collect_submodules("playwright")
-hiddenimports += collect_submodules("webview")
+hiddenimports = collect_submodules("webview")
 hiddenimports += [
     "PyQt6.QtCore",
     "PyQt6.QtGui",

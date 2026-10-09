@@ -18,6 +18,8 @@ from core.database import (
     update_game,
     update_game_launch_target,
     get_all_games,
+    get_setting,
+    update_setting,
     normalize_launch_mode,
     normalize_play_status,
     reorder_game_launch_targets,
@@ -32,6 +34,16 @@ def assert_raises_value_error(message: str, callback):
         assert message in str(exc)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_init_db_removes_legacy_browser_path_and_preserves_other_settings():
+    update_setting("playwright_browsers_path", "/shared/browser")
+    update_setting("proton_path", "/custom/proton")
+    update_setting("custom_key", "preserve")
+    init_db()
+    assert get_setting("playwright_browsers_path") is None
+    assert get_setting("proton_path") == "/custom/proton"
+    assert get_setting("custom_key") == "preserve"
 
 
 @pytest.fixture(autouse=True)

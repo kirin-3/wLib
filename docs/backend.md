@@ -10,11 +10,11 @@ The core strength of wLib relies on its native Python backend, divided primarily
 3. **Qt Runtime Configuration**: Detects Linux session type (X11/Wayland) and configures Qt platform plugins; on Windows, leaves native platform selection to Qt unless explicitly overridden (`configure_qt_runtime_environment()`). Both platforms start PyWebView with `gui="qt"`.
 4. **Database Initialization**: Calls `core.database.init_db()` to create/migrate the SQLite schema.
 5. **Extension Sync**: Copies bundled extension assets into the platform user-data directory when files are missing or the bundled manifest version changed.
-6. **Playwright Preflight**: Runs the packaged Playwright installer in a background thread on every start (a no-op when the matching Chromium revision is installed) (`~/.cache/ms-playwright` on Linux, `%LOCALAPPDATA%\wLib\playwright` on Windows), keeping UI startup responsive.
-7. **Daemon Threads**: Serves the extension HTTP server in a daemonized background thread to prevent blocking the main GUI loop. `main()` binds its port (`bind_extension_server()`) before anything else; if the port is taken and `focus_running_instance()` gets a wLib reply, the new process brings the running window forward and exits, so two copies never share the database and browser profile. The port is bound without `SO_REUSEADDR` on Windows, where that option would let a second process bind it.
+6. **Legacy Data Cleanup**: Removes the old `browser_session/` and `playwright/` directories inside the app data directory in the background. Failures are logged separately and do not block startup; shared caches and custom paths are preserved.
+7. **Daemon Threads**: Serves the extension HTTP server in a daemonized background thread to prevent blocking the main GUI loop. `main()` binds its port (`bind_extension_server()`) before anything else; if the port is taken and `focus_running_instance()` gets a wLib reply, the new process brings the running window forward and exits, so two copies never share the database. The port is bound without `SO_REUSEADDR` on Windows, where that option would let a second process bind it.
 8. **WebView Launch**: Binds the `core.api.Api` instance to `pywebview` and enters the blocking UI loop.
 
-`main.py` also exposes maintenance CLI paths: `--install-playwright-if-needed` runs browser preflight, while `--smoke-test` validates imports, database initialization, bundled assets, and driver resolution without opening the UI or downloading a browser.
+`main.py --smoke-test` validates imports, database initialization, and bundled assets without opening the UI or downloading external content.
 
 ### Renderer Diagnostics System
 
@@ -30,7 +30,7 @@ The core strength of wLib relies on its native Python backend, divided primarily
 
 ### `core/host_platform.py` (Host Paths and Capabilities)
 
-Centralizes Linux/Windows detection, data/cache/browser/extension paths, and platform capabilities. `Api.get_platform_capabilities()` exposes these through `getPlatformCapabilities()` in the frontend bridge. Linux-only runtime installers return `success: false` with `code: "unsupported_platform"` before starting downloads or subprocesses on Windows. Windows file/folder and HTML opening uses system associations. See [Platform Paths](architecture.md#platform-paths) for defaults and environment overrides.
+Centralizes Linux/Windows detection, data/cache/extension paths, and platform capabilities. `Api.get_platform_capabilities()` exposes these through `getPlatformCapabilities()` in the frontend bridge. Linux-only runtime installers return `success: false` with `code: "unsupported_platform"` before starting downloads or subprocesses on Windows. Windows file/folder and HTML opening uses system associations. See [Platform Paths](architecture.md#platform-paths) for defaults and environment overrides.
 
 ### `core/api.py` (The API Bridge)
 The `Api` class acts as the single point of entry for the Vue frontend. All methods defined without a leading underscore (e.g. `get_games`, `launch_game`) are automatically serialized into Promises on the `window.pywebview.api` object.
@@ -51,7 +51,7 @@ This module serializes and imports semantic library backups without copying the 
 - **Always-included metadata**: Every exported game includes title, developer, engine, tags, F95 URL, version fields, and cover reference so records remain identifiable after migration.
 - **Import matching**: Matches games by normalized F95 thread identity first, then by normalized title/developer only when there is exactly one local match. Ambiguous fallback matches are skipped and reported.
 - **Merge behavior**: Matched games receive backup values for always-included metadata and selected optional sections. Unselected sections preserve local values. Playtime is overwritten from the backup when user state is imported, never summed.
-- **Safety boundaries**: The JSON export excludes scraper browser sessions, cookies, webview storage, downloaded runtimes, Playwright browser binaries, extension copies, caches, and diagnostics.
+- **Safety boundaries**: The JSON export excludes cookies, webview storage, downloaded runtimes, extension copies, caches, and diagnostics.
 - **Cross-platform paths**: Inspection reports missing executable paths and foreign global path settings. Import skips global settings whose path syntax belongs to the other OS; per-game paths and launch options remain available to edit after migration.
 
 ### `core/launcher.py` (Process Management)
@@ -68,14 +68,14 @@ This module handles native host launching and Linux compatibility runtimes.
 - **Playtime Tracking**: Uses `Popen.wait()` in a dedicated watcher thread, capturing timestamps on start and exit, then executing a database UPDATE callback to record total seconds played. HTML/browser targets do not support process-based playtime tracking on either platform.
 - **Running Registry**: `launch(..., game_id=...)` registers process handles under a lock and removes them on exit by process identity before the final playtime tick. Linux launches use a new session; Stop sends SIGTERM to the process group and SIGKILL after five seconds if the group remains. Wine/Proton also uses the matching `wineserver -k` with the resolved prefix when available (Proton `files/bin` or `dist/bin`, Wine sibling or system server). This ends all processes in that Wine prefix, so it is skipped while another tracked game uses the same prefix (that game keeps running; only the stopped game's process group is signalled). Windows uses `taskkill /T /F /PID`, including the PID of elevated handles; failure advises closing the game itself. Launcher processes that exit before their detached games are not tracked further.
 
-### `core/scraper.py` (Playwright Engine)
-Responsibile for fetching and parsing data from F95Zone.
-- **Headless Operations**: Uses `playwright.sync_api` to spin up headless Chromium instances.
-- **Persistent Browser Sessions**: Maintains a persistent browser profile below the resolved platform data directory (`browser_session/`) so login cookies, localStorage, and session state survive restarts.
-- **Cloudflare Bypass**: Implements resilient `page.wait_for_selector()` heuristics to intelligently wait out or detect Cloudflare turnstiles, and identifies login-wall blocks to bubble up authentication errors to the UI.
-- **DOM Parsing**: Compiles metadata (title, version, image URLs, developer) by executing query selectors on the rendered HTML structure.
-- **Version Fallback**: Numeric, chapter/episode, and bare-v patterns retain precedence. With two or more brackets, an otherwise unmatched title uses the trimmed first bracket (`Final`, `b12`); single developer brackets still allow the first-post fallback. Update checks compare actionable versions as strings.
-- **Environment Cleanup**: Strips AppImage-specific environment variables (`APPIMAGE`, `APPDIR`, `LD_LIBRARY_PATH`) before launching Playwright to prevent library conflicts with the bundled Chromium binaries.
+### `core/scraper.py` (HTTP Scraping)
+
+- **Batch Versions**: `check_versions(urls, callback)` requests `https://f95zone.to/sam/checker.php?threads=<ids>` with at most 100 unique thread IDs per request. Versions use the title parser shared with the extension before comparison.
+- **Page Fallback**: Missing, empty, and non-actionable versions, or non-challenge endpoint failures, fall back to guest thread pages. Regex extraction reads the title and starter post.
+- **Metadata**: Add-game fetches and single-game checks read engine, tags, cover, and starter-post edit timestamps. Bulk checks preserve stored edit metadata.
+- **Pacing and TLS**: Every request passes through `_f95_get`, which holds a global lock through the request and waits after the previous request finishes. `WLIB_UPDATE_CHECK_DELAY_SECONDS` defaults to 2 seconds and is bounded to 1–30. urllib uses the default SSL context and the configured CA certificates.
+- **Failures**: Deleted threads report `not_found`, challenges report `blocked`, and login walls report `login_required`. No login session or automatic challenge retry is available. Network timeouts report `navigation_timeout`; other network or parse failures report `scraper_error`.
+- **Callbacks**: Results are delivered in input order, shared thread IDs reuse results, returning `False` stops processing, and callback exceptions propagate to the update worker.
 
 ## Backend Verification Workflow
 
@@ -84,7 +84,7 @@ Responsibile for fetching and parsing data from F95Zone.
 - **Initial rollout scope**: `tests/` are intentionally excluded from type checking for now so backend diagnostics stay focused on application code.
 - **Baseline tracking**: `.basedpyright/baseline.json` is currently empty. It remains in the repo so future typing rollouts can use the same incremental workflow without changing tool paths.
 - **Linting**: `ruff` is configured repo-wide for Python files so tests, utility scripts, and backend modules share the same baseline lint rules.
-- **Runtime smoke check**: `scripts/smoke_backend.py` imports the backend, configures runtime helpers, imports `pywebview`, and exercises extension sync with a temporary HOME/browser path. Windows also needs an explicit temporary `WLIB_DATA_DIR` because `HOME` does not override `%LOCALAPPDATA%`; see the [PowerShell smoke example](../CONTRIBUTING.md#smoke-backend-test).
+- **Runtime smoke check**: `scripts/smoke_backend.py` imports the backend, configures runtime helpers, imports `pywebview`, and exercises extension sync with temporary HOME and `WLIB_DATA_DIR` paths on both platforms.
 - **Local checks**: Linux wrappers `bash scripts/check-python.sh` and `bash scripts/check-python-clean.sh` run `ruff`, `basedpyright`, the smoke check, and `pytest` in an active or fresh Python 3.12 environment. On Windows, install `requirements-dev.txt` plus `requirements-windows.txt` and run the same tools directly in PowerShell.
 
 ## SSL Certificate Configuration

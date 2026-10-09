@@ -11,11 +11,9 @@ import {
   IconFolderOpen,
   IconKeyboard,
   IconLoader2,
-  IconLogout2,
   IconPalette,
   IconSettings,
   IconTool,
-  IconUserCircle,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
@@ -48,7 +46,6 @@ const newStatus = ref("");
 const statusError = ref("");
 const urmPath = ref("");
 const prefixPath = ref("");
-const playwrightPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
 const enableLogging = ref(false);
 const savingLogging = ref(false);
@@ -82,10 +79,6 @@ const rtpProgress = ref<InstallProgressStatus>({
 });
 const systemDeps = ref<SystemDepsCommandResponse | null>(null);
 const copiedCommand = ref(false);
-const openingLoginSession = ref(false);
-const resettingSession = ref(false);
-const sessionMessage = ref("");
-const sessionError = ref("");
 const saveError = ref("");
 const settingsLoaded = ref(false);
 const platformCapabilities = ref<PlatformCapabilities>({
@@ -122,10 +115,6 @@ const applySettings = (data: SettingsResponse) => {
   urmPath.value = data.urm_rpa_path || "";
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
-  playwrightPath.value =
-    data.playwright_browsers_path ||
-    platformCapabilities.value.playwright_browsers_path ||
-    "";
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
@@ -137,7 +126,6 @@ const applySettings = (data: SettingsResponse) => {
 const formValues = () => ({
   protonPath: protonPath.value,
   prefixPath: prefixPath.value,
-  playwrightPath: playwrightPath.value,
   rpgmakerLinuxRunnerPath: rpgmakerLinuxRunnerPath.value,
   customStatuses: [...customStatuses.value],
   urmPath: urmPath.value,
@@ -394,50 +382,6 @@ const copyDepsCommand = () => {
   setTimeout(() => (copiedCommand.value = false), 2000);
 };
 
-const openLoginSession = async () => {
-  openingLoginSession.value = true;
-  sessionError.value = "";
-  sessionMessage.value =
-    "Playwright login window opened. Complete login, then close the window to continue.";
-
-  try {
-    const result = await api.openScraperLoginSession();
-    if (result && result.success) {
-      sessionMessage.value =
-        result.message ||
-        "Login session closed. Future checks will reuse this session.";
-    } else {
-      sessionMessage.value = "";
-      sessionError.value = result?.error || "Failed to open login session.";
-    }
-  } catch (e) {
-    sessionMessage.value = "";
-    sessionError.value = String(e);
-  } finally {
-    openingLoginSession.value = false;
-  }
-};
-
-const resetSession = async () => {
-  resettingSession.value = true;
-  sessionError.value = "";
-  sessionMessage.value = "";
-
-  try {
-    const result = await api.resetScraperSession();
-    if (result && result.success) {
-      sessionMessage.value =
-        result.message || "Scraper browser session was reset successfully.";
-    } else {
-      sessionError.value = result?.error || "Failed to reset scraper session.";
-    }
-  } catch (e) {
-    sessionError.value = String(e);
-  } finally {
-    resettingSession.value = false;
-  }
-};
-
 onMounted(() => {
   onWebviewReady(() => {
     loadSettings();
@@ -458,7 +402,7 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, playwrightPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath], () => {
+watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath], () => {
   if (!saving.value) saveError.value = "";
 });
 
@@ -484,7 +428,6 @@ const saveSettings = async () => {
     const res = await api.saveSettings({
       proton_path: protonPath.value,
       wine_prefix_path: prefixPath.value,
-      playwright_browsers_path: playwrightPath.value,
       rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
       custom_play_statuses: customStatuses.value,
       urm_rpa_path: urmPath.value,
@@ -524,7 +467,6 @@ const discardChanges = () => {
   const saved = savedValues.value;
   protonPath.value = saved.protonPath;
   prefixPath.value = saved.prefixPath;
-  playwrightPath.value = saved.playwrightPath;
   rpgmakerLinuxRunnerPath.value = saved.rpgmakerLinuxRunnerPath;
   customStatuses.value = [...saved.customStatuses];
   urmPath.value = saved.urmPath;
@@ -1011,61 +953,6 @@ const browseUrm = async () => {
           <p v-if="installError" class="copyable-feedback text-xs text-red-400">{{ installError }}</p>
           <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">{{ rtpError }}</p>
           <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
-        </div>
-      </section>
-
-      <!-- F95 Account -->
-      <section class="settings-card rounded-xl p-6 space-y-5">
-        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
-          <IconUserCircle class="ui-section-icon" />
-          F95 Account
-        </h3>
-
-        <div>
-          <h4 class="text-sm font-medium" style="color: var(--text-primary)">Login Session</h4>
-          <p class="text-xs mt-1" style="color: var(--text-muted)">
-            Log in once in wLib's own browser profile so update checks can read
-            login-only threads.
-          </p>
-          <div class="flex flex-wrap gap-3 mt-3">
-            <button
-              @click="openLoginSession"
-              :disabled="openingLoginSession || resettingSession"
-              class="settings-btn ui-action-btn disabled:opacity-50"
-            >
-              <img src="/f95.png" alt="F95" class="ui-action-icon" />
-              {{ openingLoginSession ? "Login Window Open..." : "Open F95 Login Window" }}
-            </button>
-            <button
-              @click="resetSession"
-              :disabled="resettingSession || openingLoginSession"
-              class="settings-btn ui-action-btn disabled:opacity-50"
-            >
-              <IconLogout2 class="ui-action-icon" />
-              {{ resettingSession ? "Resetting..." : "Reset Session/Cookies" }}
-            </button>
-          </div>
-          <p v-if="sessionMessage" class="copyable-feedback text-xs text-green-400 mt-2">
-            {{ sessionMessage }}
-          </p>
-          <p v-if="sessionError" class="copyable-feedback text-xs text-red-400 mt-2">
-            {{ sessionError }}
-          </p>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">
-            Playwright Browsers Path
-          </label>
-          <input
-            v-model="playwrightPath"
-            type="text"
-            :placeholder="platformCapabilities.playwright_browsers_path || 'Managed by wLib for this platform'"
-            class="settings-input w-full"
-          />
-          <p class="text-xs mt-2" style="color: var(--text-muted)">
-            Where Chromium is installed for scraping. Changes apply after restarting wLib.
-          </p>
         </div>
       </section>
 

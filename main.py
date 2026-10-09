@@ -18,11 +18,9 @@ from core.f95zone import normalize_thread_url
 from core.host_platform import (
     get_cache_root,
     get_data_dir,
-    get_playwright_browsers_path,
+    get_legacy_browser_dirs,
 )
 
-DEFAULT_PLAYWRIGHT_BROWSERS_PATH = get_playwright_browsers_path()
-playwright_browsers_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
 APP_DATA_DIR = get_data_dir()
 PYWEBVIEW_STORAGE_DIR_NAME = "webview"
 PYWEBVIEW_CACHE_VERSION_MARKER = ".webview-cache-version"
@@ -221,25 +219,6 @@ def ensure_packaged_webview_cache_fresh() -> None:
         return
 
     print(f"[wLib] Packaged WebView cache is fresh for version {APP_VERSION}")
-
-
-def configure_playwright_browsers_path() -> str:
-    global playwright_browsers_path
-
-    configured_path = (os.environ.get("WLIB_PLAYWRIGHT_BROWSERS_PATH") or "").strip()
-
-    if not configured_path:
-        try:
-            from core.database import get_setting, init_db
-
-            init_db()
-            configured_path = (get_setting("playwright_browsers_path") or "").strip()
-        except Exception as e:
-            print(f"[wLib] Failed to read Playwright path from settings: {e}")
-
-    playwright_browsers_path = configured_path or DEFAULT_PLAYWRIGHT_BROWSERS_PATH
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
-    return playwright_browsers_path
 
 
 def configure_ssl_certificates() -> str | None:
@@ -916,102 +895,36 @@ def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
     return None
 
 
-def _is_same_executable(path_a: str | None, path_b: str | None) -> bool:
-    if not path_a or not path_b:
-        return False
-    try:
-        return os.path.samefile(path_a, path_b)
-    except Exception:
-        return os.path.realpath(path_a) == os.path.realpath(path_b)
-
-
-def _get_playwright_install_command() -> list[str] | None:
-    # Prefer Playwright's packaged driver entrypoint so frozen builds don't
-    # accidentally relaunch this app binary via sys.executable.
-    try:
-        from playwright._impl import _driver as playwright_driver
-
-        driver_executable, driver_cli = playwright_driver.compute_driver_executable()
-        if driver_executable and driver_cli:
-            return [driver_executable, driver_cli, "install", "chromium"]
-    except Exception as e:
-        print(f"[wLib] Failed to resolve Playwright driver executable: {e}")
-
-    playwright_cli = shutil.which("playwright")
-    if playwright_cli:
-        return [playwright_cli, "install", "chromium"]
-
-    if getattr(sys, "frozen", False):
-        return None
-
-    return [sys.executable, "-m", "playwright", "install", "chromium"]
-
-
-def ensure_playwright_browsers() -> bool:
-    """Ensure the Chromium build this Playwright version expects is installed."""
-    import glob
-
-    try:
-        _ = importlib.import_module("playwright")
-    except ModuleNotFoundError:
-        print(
-            "[wLib] Playwright Python package is missing; cannot install browser binaries."
-        )
-        return False
-
-    # Any chromium-* folder may be an older revision left by a previous wLib, so
-    # always let the installer decide; it is a no-op when the right one exists.
-    has_any_chromium = bool(
-        glob.glob(os.path.join(playwright_browsers_path, "chromium-*"))
-    )
-    install_cmd = _get_playwright_install_command()
-    if not install_cmd:
-        print("[wLib] Could not locate a Playwright installer command in this build.")
-        return has_any_chromium
-
-    if getattr(sys, "frozen", False) and _is_same_executable(
-        install_cmd[0], sys.executable
-    ):
-        print(
-            "[wLib] Refusing to run Playwright installer via app executable to avoid recursive relaunch."
-        )
-        return has_any_chromium
-
-    print("Checking Playwright chromium browser (installs only if missing)...")
-    try:
-        _ = subprocess.run(
-            install_cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        print("Playwright chromium is ready.")
-        return True
-    except Exception as e:
-        print(f"Failed to install Playwright chromium: {e}")
-        return False
-
-
-def ensure_playwright_browsers_async() -> None:
-    """Run Playwright browser availability checks outside startup critical path."""
-
-    def _ensure() -> None:
-        ok = ensure_playwright_browsers()
-        if not ok:
-            print(
-                "[wLib] Playwright browser check failed; update checks may fail until installed."
-            )
-
-    thread = threading.Thread(target=_ensure, daemon=True)
-    thread.start()
-
-
 def get_bundle_root() -> str:
     if getattr(sys, "frozen", False):
         return str(
             getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
         )
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def cleanup_legacy_browser_data() -> None:
+    data_dir = os.path.realpath(get_data_dir())
+    for path in get_legacy_browser_dirs():
+        try:
+            resolved = os.path.realpath(path)
+            if (
+                os.path.commonpath([data_dir, resolved]) != data_dir
+                or resolved == data_dir
+            ):
+                print(
+                    f"[wLib] Skipping legacy browser directory outside data directory: {path}"
+                )
+                continue
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"[wLib] Removed legacy browser directory: {path}")
+        except Exception as exc:
+            print(f"[wLib] Failed to remove legacy browser directory {path}: {exc}")
+
+
+def cleanup_legacy_browser_data_async() -> None:
+    threading.Thread(target=cleanup_legacy_browser_data, daemon=True).start()
 
 
 def run_packaged_smoke_test() -> int:
@@ -1024,7 +937,7 @@ def run_packaged_smoke_test() -> int:
         "data_dir": APP_DATA_DIR,
     }
     try:
-        for module_name in ("certifi", "playwright", "webview"):
+        for module_name in ("certifi", "webview"):
             _ = importlib.import_module(module_name)
 
         from core.database import init_db
@@ -1046,7 +959,6 @@ def run_packaged_smoke_test() -> int:
             {
                 "success": True,
                 "assets": list(required_assets),
-                "playwright_install_command": _get_playwright_install_command(),
             }
         )
         print(json.dumps(diagnostics, ensure_ascii=False))
@@ -1059,15 +971,10 @@ def run_packaged_smoke_test() -> int:
 
 def main() -> None:
     _ = configure_ssl_certificates()
-    _ = configure_playwright_browsers_path()
-
-    if "--install-playwright-if-needed" in sys.argv:
-        _ = ensure_playwright_browsers()
-        sys.exit(0)
 
     global window_ref, DEV_MODE
 
-    # A second copy would share the database and browser profile.
+    # A second copy would share the database.
     extension_server = bind_extension_server()
     if extension_server is None and focus_running_instance():
         print("[wLib] wLib is already running; showing its window instead.")
@@ -1123,8 +1030,7 @@ def main() -> None:
     window_ref = window
     api.set_window(window)
 
-    # Keep startup responsive by verifying Playwright browsers in the background.
-    ensure_playwright_browsers_async()
+    cleanup_legacy_browser_data_async()
 
     # Start the extension background server in a daemon thread
     if extension_server is not None:

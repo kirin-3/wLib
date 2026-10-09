@@ -26,7 +26,6 @@ wLib consists of a Python 3 backend and a Vue 3 + TypeScript frontend.
 - Python 3.12 (recommended for backend development and type checking)
 - Node.js 22.12+ and npm (supports the current Vite build and frontend unit tests)
 - Linux (tested heavily on Arch/CachyOS) or Windows x64; see [Windows release qualification](docs/build.md#windows-release-qualification) for tested OS coverage
-- Playwright Chromium (downloaded in the background on startup if missing; Linux may also need system packages)
 
 ### GPU & Rendering Notes
 
@@ -104,7 +103,7 @@ Rebuild `ui/dist/` after frontend edits when testing the real desktop bridge on 
 2. Sets up SSL certificates for secure scraping
 3. Initializes the SQLite database with WAL mode
 4. Syncs browser extension files to the platform data directory: `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows
-5. Installs Playwright Chromium browsers in the background if missing
+5. Cleans up app-owned legacy browser data in the background
 6. Starts the extension HTTP server on `127.0.0.1:8183`
 7. Launches the PyWebView window
 
@@ -138,9 +137,9 @@ These tool commands work in Bash and PowerShell with an active `.venv`. For the 
 
 The smoke test (`scripts/smoke_backend.py`) verifies backend initialization without opening the UI:
 
-- Uses a temporary HOME directory and browser path; Windows also requires a `WLIB_DATA_DIR` override to isolate user data
+- Sets temporary HOME and `WLIB_DATA_DIR` paths automatically on both platforms
 - Tests Qt platform configuration
-- Verifies Playwright browser path setup
+- Verifies HTTP scraping initialization without a browser runtime
 - Exercises extension file synchronization
 - Does not require a display or GUI session
 
@@ -155,16 +154,10 @@ python scripts/smoke_backend.py
 **Windows (PowerShell, active `.venv`):**
 
 ```powershell
-$previousDataDir = $env:WLIB_DATA_DIR
-try {
-    $env:WLIB_DATA_DIR = Join-Path $env:TEMP ("wlib-smoke-" + [guid]::NewGuid())
-    python scripts/smoke_backend.py
-} finally {
-    $env:WLIB_DATA_DIR = $previousDataDir
-}
+python scripts/smoke_backend.py
 ```
 
-For a source or packaged asset check, build the frontend first and run `python main.py --smoke-test` (or `wLib.exe --smoke-test`) with an isolated `WLIB_DATA_DIR`. This checks imports, database initialization, bundled assets, and Playwright driver resolution without opening the UI or downloading Chromium.
+For a source or packaged asset check, build the frontend first and run `python main.py --smoke-test` (or `wLib.exe --smoke-test`) with an isolated `WLIB_DATA_DIR`. This checks imports, database initialization, and bundled assets without opening the UI or downloading external content.
 
 ### Frontend Code
 ```bash
@@ -217,7 +210,7 @@ docs: update installation instructions for Fedora
 
 - [ ] Code follows existing style conventions.
 - [ ] Tests pass locally (`pytest`).
-- [ ] The app launches headless Chromium (Playwright) successfully.
+- [ ] Batch version checks and guest thread metadata requests succeed over paced HTTP.
 - [ ] UI changes work elegantly in both Dark and Light themes.
 - [ ] Added documentation and migration coverage for any new features, schema changes, settings, or frontend/backend API contracts.
 
@@ -236,7 +229,6 @@ wLib stores its data under `~/.local/share/wLib` on Linux or `%LOCALAPPDATA%\wLi
 
 - **Renderer Diagnostics**: `renderer-diagnostics.log` - Qt backend selection and WebGL renderer details on both platforms, plus Linux GPU probe results
 - **Linux Launcher Logs**: `wlib-launch.log` or `appimage-launch.log` - Linux release-launch context
-- **Browser Session**: `browser_session/` - Persistent Playwright browser profile for F95Zone
 - **Extension Files**: `extension/` - Installed browser extension copies
 
 Enable debug logging in **Settings → Debug Logging** for verbose application logs.

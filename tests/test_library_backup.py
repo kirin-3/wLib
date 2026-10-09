@@ -396,8 +396,8 @@ def test_import_merges_backup_values_and_preserves_unselected_fields(tmp_path):
 @pytest.mark.parametrize(
     ("host_is_windows", "foreign_path", "native_path"),
     [
-        (False, r"C:\Users\me\AppData\Local\wLib\playwright", "/opt/ms-playwright"),
-        (True, "/home/me/.cache/ms-playwright", r"D:\Games\Proton\proton"),
+        (False, r"C:\Users\me\Games\prefix", "/opt/proton"),
+        (True, "/home/me/.local/share/wLib/prefix", r"D:\Games\Proton\proton"),
     ],
 )
 def test_import_skips_path_settings_from_other_os(
@@ -405,16 +405,15 @@ def test_import_skips_path_settings_from_other_os(
 ):
     monkeypatch.setattr("core.library_backup.is_windows", lambda: host_is_windows)
     api = Api()
-    update_setting("playwright_browsers_path", "local-playwright")
+    update_setting("wine_prefix_path", "local-prefix")
     backup_path = write_backup(
         tmp_path / "import.json",
         {
             **base_backup([]),
             "settings": {
                 "paths": {
-                    "playwright_browsers_path": foreign_path,
+                    "wine_prefix_path": foreign_path,
                     "proton_path": native_path,
-                    "wine_prefix_path": "",
                 }
             },
         },
@@ -426,14 +425,33 @@ def test_import_skips_path_settings_from_other_os(
     )
 
     assert result["success"] is True
-    assert get_setting("playwright_browsers_path") == "local-playwright"
+    assert get_setting("wine_prefix_path") == "local-prefix"
     assert get_setting("proton_path") == native_path
-    assert result["settings_updated"] == 2
+    assert result["settings_updated"] == 1
     warnings = cast(list[dict[str, object]], inspect["warnings"])
     assert any(
-        w["type"] == "foreign_path" and w["field"] == "playwright_browsers_path"
+        w["type"] == "foreign_path" and w["field"] == "wine_prefix_path"
         for w in warnings
     )
+
+
+def test_legacy_browser_path_is_skipped_in_backups(tmp_path):
+    api = Api()
+    path = write_backup(tmp_path / "legacy.json", {
+        **base_backup([]),
+        "settings": {"paths": {"playwright_browsers_path": "/legacy/cache", "proton_path": "/proton"}},
+    })
+    inspected = api.inspect_library_backup(str(path))
+    assert inspected["success"] is True
+    assert not any(w.get("field") == "playwright_browsers_path" for w in inspected["warnings"])
+    imported = api.import_library_backup(str(path), {"sections": [SECTION_SETTINGS_PATHS]})
+    assert imported["success"] is True
+    assert get_setting("playwright_browsers_path") is None
+    assert get_setting("proton_path") == "/proton"
+    update_setting("playwright_browsers_path", "/stale")
+    exported_path = tmp_path / "export.json"
+    assert api.export_library_backup({"sections": [SECTION_SETTINGS_PATHS]}, str(exported_path))["success"] is True
+    assert "playwright_browsers_path" not in exported_path.read_text()
 
 
 def test_import_rejects_empty_section_list_without_writes(tmp_path):

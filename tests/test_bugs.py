@@ -23,7 +23,6 @@ from core.database import (
     update_setting,
 )
 from core.launcher import Launcher
-from core.host_platform import get_playwright_browsers_path
 from core.scraper import Scraper
 
 
@@ -361,12 +360,8 @@ def test_scraper_url_validation_edge_cases():
     ]
 
     for url in invalid_urls:
-        result = scraper._is_valid_thread_url(url)
-        # Some of these should be False, but the method only checks for HTTP(S) scheme
-        if url is None or not isinstance(url, str):
-            assert result is False
-        elif url.strip() == "":
-            assert result is False
+        result = scraper.get_thread_metadata(url)
+        assert result["code"] == "invalid_url"
 
 
 def test_scraper_non_actionable_version_edge_cases():
@@ -438,14 +433,7 @@ def test_scraper_classify_page_issue_with_empty_page():
     """Test page issue classification with empty or minimal page content."""
     scraper = Scraper()
 
-    class EmptyPage:
-        def title(self):
-            return ""
-
-        def content(self):
-            return ""
-
-    issue = scraper._classify_page_issue(EmptyPage())
+    issue = scraper._classify_page_issue(200, "", "")
     # Should return None for empty pages (no issue detected)
     assert issue is None
 
@@ -466,14 +454,7 @@ def test_scraper_classify_page_issue_with_various_challenges():
 
     for title, content in challenge_types:
 
-        class FakePage:
-            def title(self):
-                return title
-
-            def content(self):
-                return content
-
-        issue = scraper._classify_page_issue(FakePage())
+        issue = scraper._classify_page_issue(200, title, content)
         assert issue is not None
         assert "code" in issue
 
@@ -640,7 +621,6 @@ def test_settings_table_default_values():
         "enable_logging": "false",
         "auto_update_check": "weekly",
         "last_update_check": "",
-        "playwright_browsers_path": get_playwright_browsers_path(),
     }
 
     for key, expected_value in expected_settings.items():
@@ -667,23 +647,3 @@ def test_launcher_boolean_flag_handling():
                 for flags in flag_combinations:
                     result = launcher.launch("/tmp/test.sh", **flags)
                     assert result["success"] is True
-
-
-def test_scraper_dependency_missing_handling():
-    """Test scraper behavior when Playwright dependency is missing."""
-    scraper = Scraper()
-
-    # Mock the _load_sync_playwright to raise ModuleNotFoundError
-    original_method = scraper._load_sync_playwright
-    scraper._load_sync_playwright = lambda: (_ for _ in ()).throw(
-        ModuleNotFoundError("playwright.sync_api")
-    )
-
-    result = scraper.get_thread_version("https://example.com/threads/test.1/")
-
-    assert result["success"] is False
-    assert result["code"] == "dependency_missing"
-    assert "Playwright" in result.get("error", "")
-
-    # Restore original method
-    scraper._load_sync_playwright = original_method

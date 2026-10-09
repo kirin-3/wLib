@@ -96,69 +96,43 @@ def test_configure_qt_runtime_environment_honors_override(monkeypatch):
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
 
 
-def test_ensure_playwright_browsers_refuses_recursive_installer_in_frozen(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
-    monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
-    monkeypatch.setattr(
-        main,
-        "_get_playwright_install_command",
-        lambda: ["/tmp/wlib-bin", "-m", "playwright", "install", "chromium"],
-    )
-    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
 
-    run_mock = MagicMock()
-    monkeypatch.setattr(main.subprocess, "run", run_mock)
-
-    result = main.ensure_playwright_browsers()
-
-    assert result is False
-    run_mock.assert_not_called()
+def test_cleanup_legacy_browser_data_removes_owned_dirs_only(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data))
+    owned = [data / "browser_session", data / "playwright"]
+    shared = tmp_path / "cache" / "ms-playwright"
+    for path in [*owned, shared]:
+        path.mkdir(parents=True)
+        (path / "keep.txt").write_text("data")
+    monkeypatch.setenv("WLIB_PLAYWRIGHT_BROWSERS_PATH", str(shared))
+    main.cleanup_legacy_browser_data()
+    assert all(not path.exists() for path in owned)
+    assert (shared / "keep.txt").exists()
 
 
-def test_ensure_playwright_browsers_uses_driver_command_in_frozen(
-    monkeypatch, tmp_path
-):
-    install_cmd = [
-        "/tmp/playwright-driver",
-        "/tmp/playwright-cli",
-        "install",
-        "chromium",
-    ]
-
-    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
-    monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
-    monkeypatch.setattr(main, "_get_playwright_install_command", lambda: install_cmd)
-    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
-
-    run_mock = MagicMock()
-    monkeypatch.setattr(main.subprocess, "run", run_mock)
-
-    result = main.ensure_playwright_browsers()
-
-    assert result is True
-    run_mock.assert_called_once()
-    assert run_mock.call_args.args[0] == install_cmd
+def test_cleanup_legacy_browser_data_logs_failure_and_continues(monkeypatch, tmp_path, capsys):
+    data = tmp_path / "data"
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data))
+    for name in ("browser_session", "playwright"):
+        (data / name).mkdir(parents=True)
+    removal = MagicMock(side_effect=[PermissionError("locked"), None])
+    monkeypatch.setattr(main.shutil, "rmtree", removal)
+    main.cleanup_legacy_browser_data()
+    assert removal.call_count == 2
+    assert "locked" in capsys.readouterr().out
 
 
-def test_ensure_playwright_browsers_runs_installer_over_stale_revision(
-    monkeypatch, tmp_path
-):
-    # A Chromium left by an older Playwright must not short-circuit the install.
-    (tmp_path / "chromium-1000").mkdir()
-    monkeypatch.setattr(main, "playwright_browsers_path", str(tmp_path))
-    monkeypatch.setattr(main.importlib, "import_module", lambda _: object())
-    monkeypatch.setattr(
-        main, "_get_playwright_install_command", lambda: ["playwright", "install"]
-    )
-    run_mock = MagicMock()
-    monkeypatch.setattr(main.subprocess, "run", run_mock)
-
-    assert main.ensure_playwright_browsers() is True
-    run_mock.assert_called_once()
+def test_cleanup_legacy_browser_data_refuses_outside_paths(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data))
+    monkeypatch.setattr(main, "get_legacy_browser_dirs", lambda: [str(shared)])
+    removal = MagicMock()
+    monkeypatch.setattr(main.shutil, "rmtree", removal)
+    main.cleanup_legacy_browser_data()
+    removal.assert_not_called()
 
 
 def test_get_packaged_webview_cache_path_uses_xdg_cache_home(monkeypatch, tmp_path):
@@ -410,7 +384,6 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
             return None
 
     monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
-    monkeypatch.setattr(main, "configure_playwright_browsers_path", lambda: "")
     monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
     monkeypatch.setattr(
         main,
@@ -426,7 +399,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     monkeypatch.setattr(main, "collect_renderer_environment_snapshot", lambda dev_mode: {})
     monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _module: {})
     monkeypatch.setattr(main, "Api", FakeApi)
-    monkeypatch.setattr(main, "ensure_playwright_browsers_async", lambda: None)
+    monkeypatch.setattr(main, "cleanup_legacy_browser_data_async", lambda: None)
     monkeypatch.setattr(main.threading, "Thread", FakeThread)
     monkeypatch.setattr(main, "bind_extension_server", MagicMock())
     monkeypatch.setattr(
@@ -805,7 +778,6 @@ def test_second_instance_cannot_share_the_extension_port():
 def test_main_focuses_running_instance_instead_of_starting(monkeypatch):
     load_webview = MagicMock()
     monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
-    monkeypatch.setattr(main, "configure_playwright_browsers_path", lambda: "")
     monkeypatch.setattr(main, "bind_extension_server", lambda: None)
     monkeypatch.setattr(main, "focus_running_instance", lambda: True)
     monkeypatch.setattr(main, "load_webview_module", load_webview)

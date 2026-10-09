@@ -1,99 +1,17 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
-import os
+import threading
+import time
+from email.message import Message
 from pathlib import Path
-from typing import cast
+from urllib.error import HTTPError, URLError
+from unittest.mock import MagicMock
 
-from core.scraper import PageLike, Scraper
+import pytest
 
-
-class _FakeBatchPage:
-    def __init__(
-        self,
-        title_text: str = "Example Game [v1.0]",
-        goto_error: Exception | None = None,
-        selector_error: Exception | None = None,
-        content_text: str = "",
-    ):
-        self.title_text = title_text
-        self.goto_error = goto_error
-        self.selector_error = selector_error
-        self.content_text = content_text
-        self.closed = False
-
-    def query_selector(self, selector):
-        return object() if selector == "h1.p-title-value" else None
-
-    def evaluate(self, expression, arg=None):
-        _ = (expression, arg)
-        return self.title_text
-
-    def title(self):
-        return self.title_text
-
-    def content(self):
-        return self.content_text
-
-    def goto(self, *args, **kwargs):
-        _ = (args, kwargs)
-        if self.goto_error is not None:
-            raise self.goto_error
-
-    def bring_to_front(self):
-        return None
-
-    def wait_for_event(self, event, *, timeout):
-        _ = (event, timeout)
-        return None
-
-    def wait_for_selector(self, selector, *, timeout):
-        _ = (selector, timeout)
-        if self.selector_error is not None:
-            raise self.selector_error
-
-    def close(self):
-        self.closed = True
-
-
-class _FakeBatchContext:
-    def __init__(self, pages):
-        self._pages = list(pages)
-        self.pages = []
-        self.new_page_calls = 0
-        self.closed = False
-
-    def new_page(self):
-        page = self._pages[self.new_page_calls]
-        self.new_page_calls += 1
-        return page
-
-    def close(self):
-        self.closed = True
-
-
-class _FakeSyncPlaywright:
-    def __enter__(self):
-        return object()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        _ = (exc_type, exc_value, traceback)
-        return None
-
-
-def _configure_batch_scraper(monkeypatch, scraper, pages):
-    context = _FakeBatchContext(pages)
-    monkeypatch.setattr(
-        scraper,
-        "_load_sync_playwright",
-        lambda: lambda: _FakeSyncPlaywright(),
-    )
-    monkeypatch.setattr(
-        scraper,
-        "_launch_persistent_browser_context",
-        lambda _playwright, headless: context,
-    )
-    return context
+from core import scraper as scraper_module
+from core.scraper import Scraper
 
 
 def test_extract_version_from_title():
@@ -145,6 +63,315 @@ def test_extract_version_from_title():
     assert scraper._extract_version_from_title(None) == "Unknown"
 
 
+@pytest.fixture
+def thread_html():
+    return (Path(__file__).parent / "fixtures" / "f95_thread.html").read_text()
+
+
+def test_checker_normalization_matches_stored_versions():
+    cases = json.loads(
+        Path(__file__).with_name("checker_version_cases.json").read_text()
+    )
+    for raw, expected in cases:
+        assert Scraper()._normalize_checker_version(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("status", "title", "html", "code"),
+    [
+        (404, "Log in", "cf-challenge", "not_found"),
+        (200, "", "The requested thread could not be found", "not_found"),
+        (503, "Just a moment", "", "blocked"),
+        (403, "", "verify you are human", "blocked"),
+        (200, "Log in | F95zone", "", "login_required"),
+        (200, "", "You must be logged in", "login_required"),
+        (200, "Game [v1.0]", "<nav>Log in</nav>", None),
+        (
+            200,
+            "Game [v1.0]",
+            '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>',
+            None,
+        ),
+    ],
+)
+def test_page_classification(status, title, html, code):
+    issue = Scraper()._classify_page_issue(status, title, html)
+    assert (issue["code"] if issue else None) == code
+
+
+def test_starter_metadata_and_nested_wrapper(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    assert result["title"] == "Example & Game [v1.10] [Dev]"
+    assert result["version"] == "1.10"
+    assert result["engine"] == "Ren'Py"
+    assert result["tags"] == ["sandbox", "3dcg"]
+    assert result["cover_image"] == "https://attachments.f95zone.to/cover.jpg?x=1&y=2"
+    assert result["thread_main_post_last_edit_at"] == "2026-10-08T09:00:00Z"
+    assert result["thread_main_post_checked_at"]
+
+
+def test_reply_edit_ignored_when_starter_not_edited(thread_html):
+    html = thread_html.replace(
+        '<div class="message-lastEdit">Last edited: <time datetime="2026-10-08T09:00:00Z">yesterday</time></div>',
+        "",
+    )
+    result = Scraper()._extract_page(html)
+    assert result["thread_main_post_last_edit_at"] == ""
+    assert result["thread_main_post_checked_at"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<b>Version</b>: v2.5a<br>",
+        "Current Version: 2.5a",
+        "<b>Ver.</b>: 2.5a<br>",
+        "Release: 2.5a",
+    ],
+)
+def test_post_version_fallback(body):
+    assert Scraper()._extract_version_from_post(body) == "2.5a"
+
+
+def checker_response(ids, version="v1.10"):
+    return 200, json.dumps({"status": "ok", "msg": {i: version for i in ids}})
+
+
+def test_250_urls_need_three_requests(monkeypatch):
+    requests = []
+
+    def get(url):
+        ids = url.split("threads=")[1].split(",")
+        requests.append(ids)
+        return checker_response(ids)
+
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 251)]
+    results = Scraper().check_versions(urls)
+    assert [len(ids) for ids in requests] == [100, 100, 50]
+    assert all(r["version"] == "1.10" for r in results.values())
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        (400, '{"status":"error"}'),
+        (200, "not json"),
+        (200, '{"status":"error"}'),
+        (200, '{"status":"ok","msg":{}}'),
+        (200, '{"status":"ok","msg":{"1":"Unknown"}}'),
+        (200, '{"status":"ok","msg":{"1":""}}'),
+    ],
+)
+def test_batch_falls_back_to_page(monkeypatch, thread_html, response):
+    get = MagicMock(side_effect=[response, (200, thread_html)])
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    result = Scraper().get_thread_version("https://f95zone.to/threads/1/")
+    assert result["version"] == "1.10"
+    assert get.call_count == 2
+
+
+def test_missing_thread_is_not_found(monkeypatch):
+    monkeypatch.setattr(
+        scraper_module,
+        "_f95_get",
+        MagicMock(side_effect=[(200, '{"status":"ok","msg":{}}'), (404, "missing")]),
+    )
+    assert (
+        Scraper().get_thread_version("https://f95zone.to/threads/1/")["code"]
+        == "not_found"
+    )
+
+
+def test_no_actionable_page_version(monkeypatch):
+    monkeypatch.setattr(
+        scraper_module,
+        "_f95_get",
+        MagicMock(
+            side_effect=[
+                checker_response(["1"], "Unknown"),
+                (200, "<title>Game</title>"),
+            ]
+        ),
+    )
+    assert (
+        Scraper().get_thread_version("https://f95zone.to/threads/1/")["code"]
+        == "extract_failed"
+    )
+
+
+def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
+    get = MagicMock(side_effect=[(503, "cf-challenge"), checker_response(["101"])])
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 102)]
+    results = Scraper().check_versions(urls)
+    assert all(results[url]["code"] == "blocked" for url in urls[:100])
+    assert results[urls[-1]]["version"] == "1.10"
+    assert get.call_count == 2
+
+
+def test_duplicate_ids_and_invalid_urls_keep_callback_order(monkeypatch):
+    get = MagicMock(return_value=checker_response(["1"]))
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [
+        "bad",
+        "https://f95zone.to/threads/1/",
+        "https://f95zone.to/threads/game.1/",
+    ]
+    seen = []
+    results = Scraper().check_versions(
+        urls, lambda url, result: seen.append(url) or True
+    )
+    assert seen == urls
+    assert results["bad"]["code"] == "invalid_url"
+    assert results[urls[1]] == results[urls[2]]
+    assert get.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        checker_response(["1", "2"]),
+        (503, "cf-challenge"),
+        (200, '{"status":"ok","msg":{}}'),
+    ],
+)
+def test_callback_exception_propagates(monkeypatch, thread_html, response):
+    get = MagicMock(side_effect=[response, (200, thread_html)])
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+
+    def callback(url, result):
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        Scraper().check_versions(
+            ["https://f95zone.to/threads/1/", "https://f95zone.to/threads/2/"], callback
+        )
+    assert get.call_count == (2 if '"msg":{}' in response[1] else 1)
+
+
+def test_invalid_url_callback_exception_propagates_without_request(monkeypatch):
+    get = MagicMock()
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+
+    def callback(url, result):
+        raise RuntimeError("invalid URL callback")
+
+    with pytest.raises(RuntimeError, match="invalid URL callback"):
+        Scraper().check_versions(["bad"], callback)
+    get.assert_not_called()
+
+
+def test_cancellation_stops_page_fallbacks(monkeypatch, thread_html):
+    get = MagicMock(side_effect=[(400, "error"), (200, thread_html)])
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 102)]
+    results = Scraper().check_versions(urls, lambda url, result: False)
+    assert list(results) == urls[:1]
+    assert get.call_count == 2
+
+
+def test_single_check_and_metadata_keep_result_shape(monkeypatch, thread_html):
+    get = MagicMock(
+        side_effect=[checker_response(["1"]), (200, thread_html), (200, thread_html)]
+    )
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    scraper = Scraper()
+    expected = {
+        "success",
+        "title",
+        "version",
+        "engine",
+        "tags",
+        "cover_image",
+        "thread_main_post_last_edit_at",
+        "thread_main_post_checked_at",
+    }
+    assert (
+        expected
+        <= scraper.get_thread_version(
+            "https://f95zone.to/threads/1/", include_metadata=True
+        ).keys()
+    )
+    assert (
+        expected <= scraper.get_thread_metadata("https://f95zone.to/threads/1/").keys()
+    )
+    assert get.call_count == 3
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("bad", 2), ("0", 1), ("60", 30), ("3", 3)]
+)
+def test_request_interval_bounds(monkeypatch, raw, expected):
+    monkeypatch.setenv("WLIB_UPDATE_CHECK_DELAY_SECONDS", raw)
+    assert scraper_module.get_request_interval_seconds() == expected
+
+
+def test_http_requests_serialize_and_wait_after_finish(monkeypatch):
+    monkeypatch.setenv("WLIB_UPDATE_CHECK_DELAY_SECONDS", "1")
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    events = []
+    headers = Message()
+    headers["Content-Type"] = "text/html; charset=utf-8"
+
+    def urlopen(request, **kwargs):
+        events.append(("start", time.monotonic()))
+        assert request.get_header("User-agent") == "Mozilla/5.0"
+        assert kwargs["timeout"] == 30
+        response = MagicMock()
+        response.status = 200
+        response.headers = headers
+
+        def read():
+            time.sleep(0.02)
+            events.append(("finish", time.monotonic()))
+            return b"ok"
+
+        response.read.side_effect = read
+        response.__enter__.return_value = response
+        return response
+
+    monkeypatch.setattr(scraper_module, "urlopen", urlopen)
+    threads = [
+        threading.Thread(target=scraper_module._f95_get, args=("https://f95zone.to/",))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert [event for event, _ in events] == ["start", "finish", "start", "finish"]
+    assert events[2][1] - events[1][1] >= 1
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (TimeoutError("timeout"), "navigation_timeout"),
+        (URLError(TimeoutError("timeout")), "navigation_timeout"),
+        (URLError("offline"), "scraper_error"),
+    ],
+)
+def test_network_failure_codes(monkeypatch, error, code):
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    monkeypatch.setattr(scraper_module, "urlopen", MagicMock(side_effect=error))
+    assert (
+        Scraper().get_thread_metadata("https://f95zone.to/threads/1/")["code"] == code
+    )
+
+
+def test_http_error_body_is_preserved(monkeypatch):
+    from io import BytesIO
+
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    error = HTTPError(
+        "https://f95zone.to/", 404, "Not Found", Message(), BytesIO(b"missing")
+    )
+    monkeypatch.setattr(scraper_module, "urlopen", MagicMock(side_effect=error))
+    assert scraper_module._f95_get("https://f95zone.to/") == (404, "missing")
+
+
 def test_title_versions_match_extension_parser():
     # Shared with tests/extension_version.test.cjs so both parsers stay identical.
     cases_path = Path(__file__).with_name("version_title_cases.json")
@@ -191,513 +418,3 @@ def test_extract_version_from_title_real_f95_formats():
         scraper._extract_version_from_title("RPG Game [Ch.12 v0.3] [RPG Dev]")
         == "Ch.12 v0.3"
     )
-
-
-def test_extract_version_from_post_html():
-    """Test the _extract_version_from_post fallback using mock page objects."""
-    # We can't easily mock a Playwright page, but we can test the regex patterns
-    # used inside _extract_version_from_post directly via _extract_version_from_title
-    # as a sanity check. The actual HTML parsing is tested by the regex patterns below.
-
-    import re
-
-    # Test the HTML patterns used in _extract_version_from_post
-    html_patterns = [
-        r"<b>\s*(?:Current\s+)?Version\s*</b>\s*:?\s*v?([^<\n]+)",
-        r"<b>\s*Ver(?:\.|sion)?\s*</b>\s*:?\s*v?([^<\n]+)",
-    ]
-
-    # Pattern 1: <b>Version</b>: 1.07
-    test_html_1 = "<b>Version</b>: 1.07<br>"
-    m = re.search(html_patterns[0], test_html_1, re.I)
-    assert m is not None
-    assert m.group(1).strip().split()[0] == "1.07"
-
-    # Pattern 1: <b>Version</b>: v2.5a
-    test_html_2 = "<b>Version</b>: v2.5a<br>"
-    m = re.search(html_patterns[0], test_html_2, re.I)
-    assert m is not None
-    assert m.group(1).strip().split()[0] == "2.5a"
-
-    # Pattern 1: <b>Current Version</b>: 3.0
-    test_html_3 = "<b>Current Version</b>: 3.0<br>"
-    m = re.search(html_patterns[0], test_html_3, re.I)
-    assert m is not None
-    assert m.group(1).strip().split()[0] == "3.0"
-
-    # Pattern 2: <b>Ver.</b>: 1.2.3
-    test_html_4 = "<b>Ver.</b>: 1.2.3<br>"
-    m = re.search(html_patterns[1], test_html_4, re.I)
-    assert m is not None
-    assert m.group(1).strip().split()[0] == "1.2.3"
-
-    # Test the text patterns used as final fallback
-    text_patterns = [
-        r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
-        r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
-        r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
-    ]
-
-    # Plain text: "Version: 1.07"
-    m = re.search(text_patterns[0], "Version: 1.07", re.I)
-    assert m is not None
-    assert m.group(1) == "1.07"
-
-    # Plain text: "Version: v0.5b"
-    m = re.search(text_patterns[0], "Version: v0.5b", re.I)
-    assert m is not None
-    assert m.group(1) == "0.5b"
-
-    # Plain text: "Release: 2.1"
-    m = re.search(text_patterns[2], "Release: 2.1", re.I)
-    assert m is not None
-    assert m.group(1) == "2.1"
-
-
-def test_thread_url_validation():
-    scraper = Scraper()
-
-    assert scraper._is_valid_thread_url("https://f95zone.to/threads/some-game.12345/")
-    assert scraper._is_valid_thread_url("http://example.com/path")
-    assert not scraper._is_valid_thread_url("")
-    assert not scraper._is_valid_thread_url("   ")
-    assert not scraper._is_valid_thread_url("javascript:alert(1)")
-    assert not scraper._is_valid_thread_url("file:///tmp/x")
-    assert not scraper._is_valid_thread_url(None)
-
-
-def test_get_thread_version_rejects_invalid_url():
-    scraper = Scraper()
-    result = scraper.get_thread_version("javascript:alert(1)")
-
-    assert result["success"] is False
-    assert result["code"] == "invalid_url"
-    assert result["error"] == "Invalid thread URL"
-
-
-def test_non_actionable_version_detection():
-    scraper = Scraper()
-
-    assert scraper._is_non_actionable_version("Unknown")
-    assert scraper._is_non_actionable_version("  ")
-    assert scraper._is_non_actionable_version(None)
-    assert not scraper._is_non_actionable_version("1.2.3")
-
-
-def test_classify_page_issue_cloudflare():
-    scraper = Scraper()
-
-    class FakePage:
-        def title(self):
-            return "Just a moment..."
-
-        def content(self):
-            return "<html>Cloudflare challenge</html>"
-
-    issue = scraper._classify_page_issue(cast(PageLike, cast(object, FakePage())))
-
-    assert issue is not None
-    assert issue["code"] == "blocked"
-
-
-def test_get_thread_version_returns_blocked_on_challenge(monkeypatch):
-    scraper = Scraper()
-
-    class FakePage:
-        def goto(self, *args, **kwargs):
-            return None
-
-        def wait_for_selector(self, *args, **kwargs):
-            raise RuntimeError("selector timeout")
-
-        def title(self):
-            return "Cloudflare"
-
-        def content(self):
-            return "Checking your browser before accessing"
-
-        def close(self):
-            return None
-
-    class FakeContext:
-        def __init__(self, page):
-            self._page = page
-
-        def new_page(self):
-            return self._page
-
-        def close(self):
-            return None
-
-    class FakePlaywright:
-        def __init__(self, page):
-            self.chromium = self
-            self._page = page
-
-        def launch_persistent_context(self, **kwargs):
-            return FakeContext(self._page)
-
-    class FakeSyncPlaywright:
-        def __init__(self, page):
-            self._page = page
-
-        def start(self):
-            return FakePlaywright(self._page)
-
-        def stop(self):
-            return None
-
-    monkeypatch.setattr(
-        scraper, "_load_sync_playwright", lambda: lambda: FakeSyncPlaywright(FakePage())
-    )
-
-    result = scraper.get_thread_version("https://f95zone.to/threads/example.1/")
-
-    assert result["success"] is False
-    assert result["code"] == "blocked"
-
-
-def test_get_thread_version_dependency_missing(monkeypatch):
-    scraper = Scraper()
-
-    monkeypatch.setattr(
-        scraper,
-        "_load_sync_playwright",
-        lambda: (_ for _ in ()).throw(ModuleNotFoundError("playwright.sync_api")),
-    )
-
-    result = scraper.get_thread_version("https://f95zone.to/threads/example.1/")
-
-    assert result["success"] is False
-    assert result["code"] == "dependency_missing"
-    assert "Playwright" in str(result["error"])
-
-
-def test_get_multiple_thread_versions_callback_exception_after_invalid_url(
-    monkeypatch,
-):
-    scraper = Scraper()
-    context = _configure_batch_scraper(monkeypatch, scraper, [_FakeBatchPage()])
-
-    def callback(url, result):
-        _ = (url, result)
-        raise RuntimeError("callback exploded")
-
-    result = scraper.get_multiple_thread_versions(["not-a-thread"], callback=callback)
-
-    invalid_result = result["not-a-thread"]
-    batch_error = result["__batch_error__"]
-    assert invalid_result["success"] is False
-    assert invalid_result["code"] == "invalid_url"
-    assert batch_error["code"] == "batch_failed"
-    assert "callback exploded" in str(batch_error["error"])
-    assert context.closed is True
-
-
-def test_get_multiple_thread_versions_callback_exception_after_navigation_failure(
-    monkeypatch,
-):
-    scraper = Scraper()
-    url = "https://f95zone.to/threads/example.1/"
-    page = _FakeBatchPage(goto_error=RuntimeError("navigation failed"))
-    _ = _configure_batch_scraper(monkeypatch, scraper, [page])
-
-    def callback(callback_url, result):
-        _ = (callback_url, result)
-        raise RuntimeError("callback failed after navigation")
-
-    result = scraper.get_multiple_thread_versions([url], callback=callback)
-
-    thread_result = result[url]
-    batch_error = result["__batch_error__"]
-    assert thread_result["success"] is False
-    assert thread_result["code"] == "navigation_timeout"
-    assert batch_error["code"] == "batch_failed"
-    assert "callback failed after navigation" in str(batch_error["error"])
-    assert page.closed is True
-
-
-def test_get_multiple_thread_versions_callback_exception_after_success(monkeypatch):
-    scraper = Scraper()
-    url = "https://f95zone.to/threads/example.1/"
-    _ = _configure_batch_scraper(monkeypatch, scraper, [_FakeBatchPage()])
-
-    def callback(callback_url, result):
-        _ = (callback_url, result)
-        raise RuntimeError("callback failed after success")
-
-    result = scraper.get_multiple_thread_versions([url], callback=callback)
-
-    thread_result = result[url]
-    batch_error = result["__batch_error__"]
-    assert thread_result["success"] is True
-    assert thread_result["version"] == "1.0"
-    assert batch_error["code"] == "batch_failed"
-    assert "callback failed after success" in str(batch_error["error"])
-
-
-def test_get_multiple_thread_versions_callback_false_cancels_batch(monkeypatch):
-    scraper = Scraper()
-    first_url = "https://f95zone.to/threads/first.1/"
-    second_url = "https://f95zone.to/threads/second.2/"
-    context = _configure_batch_scraper(
-        monkeypatch,
-        scraper,
-        [
-            _FakeBatchPage("First Game [v1.0]"),
-            _FakeBatchPage("Second Game [v2.0]"),
-        ],
-    )
-
-    callbacks = []
-
-    def callback(callback_url, result):
-        callbacks.append((callback_url, result))
-        return False
-
-    result = scraper.get_multiple_thread_versions(
-        [first_url, second_url], callback=callback
-    )
-
-    assert list(result.keys()) == [first_url]
-    assert len(callbacks) == 1
-    assert callbacks[0][0] == first_url
-    assert context.new_page_calls == 1
-    assert "__batch_error__" not in result
-
-
-def test_normalize_cover_image_url_upgrades_thumb_path():
-    scraper = Scraper()
-
-    thumb_url = (
-        "https://attachments.f95zone.to/2025/04/thumb/4773537_Screenshot_Banner.png"
-    )
-    normalized = scraper._normalize_cover_image_url(thumb_url)
-
-    assert normalized == (
-        "https://attachments.f95zone.to/2025/04/4773537_Screenshot_Banner.png"
-    )
-
-
-def test_extract_metadata_from_page_reads_thread_starter_edit_timestamp():
-    scraper = Scraper()
-
-    class FakePage:
-        def evaluate(self, expression, arg=None):
-            _ = arg
-            assert "article.message-threadStarterPost.message--post" in expression
-            assert ".message-lastEdit time[datetime]" in expression
-            return {
-                "engine": "Ren'Py",
-                "tags": ["sandbox", "3dcg"],
-                "cover_image": "https://img.example/cover.jpg",
-                "thread_main_post_last_edit_at": "2026-03-06T22:59:58+0300",
-            }
-
-    metadata = scraper._extract_metadata_from_page(
-        cast(PageLike, cast(object, FakePage()))
-    )
-
-    assert metadata["engine"] == "Ren'Py"
-    assert metadata["tags"] == ["sandbox", "3dcg"]
-    assert metadata["cover_image"] == "https://img.example/cover.jpg"
-    assert metadata["thread_main_post_last_edit_at"] == "2026-03-06T22:59:58+0300"
-    assert metadata["thread_main_post_checked_at"]
-
-
-def test_extract_metadata_from_page_marks_thread_checked_without_last_edit():
-    scraper = Scraper()
-
-    class FakePage:
-        def evaluate(self, expression, arg=None):
-            _ = (expression, arg)
-            return {
-                "engine": "",
-                "tags": [],
-                "cover_image": "",
-                "thread_main_post_last_edit_at": "",
-            }
-
-    metadata = scraper._extract_metadata_from_page(
-        cast(PageLike, cast(object, FakePage()))
-    )
-
-    assert metadata["thread_main_post_last_edit_at"] == ""
-    assert metadata["thread_main_post_checked_at"]
-
-
-def test_open_login_session_waits_for_user_close(monkeypatch):
-    scraper = Scraper()
-    events = []
-    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
-    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
-    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
-
-    class FakePage:
-        def goto(self, url, **kwargs):
-            events.append(("goto", url, kwargs.get("wait_until")))
-
-        def bring_to_front(self):
-            events.append(("front",))
-
-        def wait_for_event(self, name, timeout=0):
-            events.append(("wait", name, timeout))
-
-    class FakeContext:
-        def __init__(self):
-            self.pages = []
-            self.closed = False
-
-        def new_page(self):
-            page = FakePage()
-            self.pages.append(page)
-            return page
-
-        def close(self):
-            self.closed = True
-
-    class FakePlaywright:
-        def __init__(self):
-            self.chromium = self
-            self.context = FakeContext()
-            self.stopped = False
-            self.launch_kwargs = {}
-
-        def launch_persistent_context(self, **kwargs):
-            self.launch_kwargs = kwargs
-            return self.context
-
-        def stop(self):
-            self.stopped = True
-
-    class FakeSyncPlaywright:
-        def __init__(self, playwright):
-            self._playwright = playwright
-
-        def start(self):
-            return self._playwright
-
-    fake_playwright = FakePlaywright()
-    monkeypatch.setattr(
-        scraper,
-        "_load_sync_playwright",
-        lambda: lambda: FakeSyncPlaywright(fake_playwright),
-    )
-
-    result = scraper.open_login_session()
-
-    assert result["success"] is True
-    assert fake_playwright.launch_kwargs["headless"] is False
-    assert Path(fake_playwright.launch_kwargs["user_data_dir"]).name == "browser_session"
-    assert fake_playwright.launch_kwargs["env"]["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
-    assert "APPIMAGE" not in fake_playwright.launch_kwargs["env"]
-    assert "APPDIR" not in fake_playwright.launch_kwargs["env"]
-    assert ("wait", "close", 0) in events
-    assert fake_playwright.context.closed is True
-    assert fake_playwright.stopped is True
-
-
-def test_build_browser_launch_env_drops_appimage_overrides(monkeypatch):
-    scraper = Scraper()
-
-    monkeypatch.setenv("APPIMAGE", "/tmp/wLib.AppImage")
-    monkeypatch.setenv("APPDIR", "/tmp/.mount_wLib")
-    monkeypatch.setenv("OWD", "/tmp")
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
-    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib:/lib")
-
-    env = scraper._build_browser_launch_env()
-
-    assert env["PATH"] == "/usr/bin:/bin"
-    assert env["LD_LIBRARY_PATH"] == "/usr/lib:/lib"
-    assert "APPIMAGE" not in env
-    assert "APPDIR" not in env
-    assert "OWD" not in env
-
-
-def test_build_browser_launch_env_removes_bundled_library_path_without_orig(
-    monkeypatch,
-):
-    scraper = Scraper()
-
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wLib/usr/bin/_internal")
-    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
-
-    env = scraper._build_browser_launch_env()
-
-    assert "LD_LIBRARY_PATH" not in env
-
-
-def test_reset_browser_session_clears_profile(tmp_path):
-    scraper = Scraper()
-    scraper.user_data_dir = str(tmp_path / "browser_session")
-    os.makedirs(scraper.user_data_dir, exist_ok=True)
-
-    old_file = os.path.join(scraper.user_data_dir, "Cookies")
-    with open(old_file, "w", encoding="utf-8") as f:
-        f.write("stale-cookie-data")
-
-    result = scraper.reset_browser_session()
-
-    assert result["success"] is True
-    assert os.path.isdir(scraper.user_data_dir)
-    assert os.listdir(scraper.user_data_dir) == []
-
-
-def test_browser_session_entry_points_fail_fast_while_profile_in_use(tmp_path):
-    from core import scraper as scraper_module
-
-    scraper = Scraper()
-    scraper.user_data_dir = str(tmp_path / "browser_session")
-    url = "https://f95zone.to/threads/example.1/"
-
-    with scraper_module._BROWSER_SESSION_LOCK:
-        assert scraper.get_thread_version(url)["code"] == "busy"
-        assert scraper.get_thread_metadata(url)["code"] == "busy"
-        assert scraper.open_login_session()["code"] == "busy"
-        assert scraper.reset_browser_session()["code"] == "busy"
-        batch = scraper.get_multiple_thread_versions([url])
-        assert batch["__batch_error__"]["code"] == "busy"
-
-    assert scraper.reset_browser_session()["success"] is True
-
-
-def test_classify_page_issue_ignores_guest_header_login_link():
-    scraper = Scraper()
-
-    class FakePage:
-        def __init__(self, title_text, content_text):
-            self.title_text = title_text
-            self.content_text = content_text
-
-        def title(self):
-            return self.title_text
-
-        def content(self):
-            return self.content_text
-
-    def classify(title_text, content_text):
-        page = FakePage(title_text, content_text)
-        return scraper._classify_page_issue(cast(PageLike, cast(object, page)))
-
-    guest_header = '<a href="/login/" class="p-navgroup-link--logIn">Log in</a>'
-    cf_script = '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
-
-    deleted_thread = classify(
-        "Oops! We ran into some problems. | F95zone",
-        f"{guest_header}{cf_script}<div>The requested thread could not be found.</div>",
-    )
-    assert deleted_thread is not None
-    assert deleted_thread["code"] == "not_found"
-
-    assert classify("Example | F95zone", f"{guest_header}<div>No title</div>") is None
-
-    login_prompt = classify("Error | F95zone", "You must be logged-in to do that.")
-    assert login_prompt is not None
-    assert login_prompt["code"] == "login_required"
-
-    login_page = classify("Log in | F95zone", guest_header)
-    assert login_page is not None
-    assert login_page["code"] == "login_required"

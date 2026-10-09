@@ -77,7 +77,7 @@ const status = ref<UpdateStatusResponse>({
   checked: 0,
   current: "",
   results: [],
-  delay_seconds: 5,
+  delay_seconds: 2,
 });
 const lastCheckTime = ref("");
 const autoCheckFreq = ref("weekly");

@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import TypedDict, cast
 
 from core.f95zone import normalize_thread_url, thread_urls_match
-from core.host_platform import get_data_dir, get_playwright_browsers_path
+from core.host_platform import get_data_dir
 
 DATA_DIR = get_data_dir()
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -278,8 +278,7 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
         )
         _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('playwright_browsers_path', ?)",
-            (get_playwright_browsers_path(),),
+            "DELETE FROM settings WHERE key = 'playwright_browsers_path'"
         )
         _ = cursor.execute(
             f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"

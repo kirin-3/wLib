@@ -22,7 +22,6 @@ from core.host_platform import (
     get_default_wine_prefix,
     get_extension_dir,
     get_platform_capabilities as resolve_platform_capabilities,
-    get_playwright_browsers_path,
     get_proton_dir,
     get_rtp_dir,
     is_linux,
@@ -166,7 +165,6 @@ normalize_thread_url: Callable[[str], str] = cast(
 APP_VERSION = "0.3.5"
 # Lunar.Engine.zip from visibou/lunarengine v.7.2 (uploaded 2020-11-29, 29738666 bytes).
 LUNAR_ENGINE_SHA256 = "c208f52ca1873007df3f7ef71b61f3c2870a58ad0ddadff7944785f6bf36de23"
-DEFAULT_PLAYWRIGHT_BROWSERS_PATH = get_playwright_browsers_path()
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
 KOMODO_RTP_DOWNLOAD_HOSTS = {"dl.komodo.jp"}
 KOMODO_SECTIGO_INTERMEDIATE_CERT_PEM = """-----BEGIN CERTIFICATE-----
@@ -1277,8 +1275,8 @@ class Api:
                 or self._is_missing_text(cover_image)
                 or not self._normalize_tags_csv(tags)
             )
-            # Scraping can take minutes (headed retry on Cloudflare), so the game
-            # is saved now and its card shows a loading state until this finishes.
+            # F95 requests are paced app-wide and can queue behind a folder import,
+            # so the game is saved now and its card shows a loading state until this finishes.
             self._metadata_pending.add(game_id)
             threading.Thread(
                 target=self._fetch_added_game_metadata,
@@ -1296,46 +1294,13 @@ class Api:
     def _fetch_added_game_metadata(
         self, game_id: int, normalized_url: str, needs_metadata_backfill: bool
     ) -> None:
-        import time
-
         try:
-            metadata_result: dict[str, object] = {}
-            # ponytail: polls while another scrape (e.g. Check All) holds the browser
-            # session; a queue would be cleaner if adds pile up.
-            for _ in range(360):
-                metadata_result = (
-                    self._coerce_string_key_dict(
-                        cast(
-                            object,
-                            self.scraper.get_thread_metadata(
-                                normalized_url, headless=True
-                            ),
-                        )
-                    )
-                    or {}
+            metadata_result = (
+                self._coerce_string_key_dict(
+                    self.scraper.get_thread_metadata(normalized_url)
                 )
-                if metadata_result.get("code") != "busy":
-                    break
-                time.sleep(5)
-
-            if not metadata_result.get("success") and metadata_result.get("code") in (
-                "blocked",
-                "login_required",
-            ):
-                metadata_result = (
-                    self._coerce_string_key_dict(
-                        cast(
-                            object,
-                            self.scraper.get_thread_metadata(
-                                normalized_url,
-                                headless=False,
-                                timeout_ms=180000,
-                                hold_open_seconds=self._get_headed_retry_hold_seconds(),
-                            ),
-                        )
-                    )
-                    or {}
-                )
+                or {}
+            )
 
             if metadata_result.get("success"):
                 _ = self._update_thread_edit_metadata_for_url(
@@ -1532,30 +1497,18 @@ class Api:
 
         if code == "blocked":
             result["error"] = (
-                f"{message}. Try checking again once the challenge is cleared, "
-                "or log in to F95Zone and retry."
+                f"{message}. F95Zone is challenging HTTP requests; try again later."
             )
         elif code == "login_required":
             result["error"] = (
-                f"{message}. Please log in to F95Zone in the scraper browser session and retry."
+                f"{message}. This thread is unavailable to guest HTTP requests."
             )
         return result
 
     def _get_bulk_check_delay_seconds(self) -> int:
-        raw = os.environ.get("WLIB_UPDATE_CHECK_DELAY_SECONDS", "5")
-        try:
-            parsed = int(raw)
-        except (TypeError, ValueError):
-            parsed = 5
-        return max(2, min(parsed, 30))
+        from core.scraper import get_request_interval_seconds
 
-    def _get_headed_retry_hold_seconds(self) -> int:
-        raw = os.environ.get("WLIB_HEADED_RETRY_HOLD_SECONDS", "20")
-        try:
-            parsed = int(raw)
-        except (TypeError, ValueError):
-            parsed = 20
-        return max(5, min(parsed, 300))
+        return get_request_interval_seconds()
 
     def _normalize_tags_csv(self, tags: object) -> str:
         if isinstance(tags, str):
@@ -1695,7 +1648,7 @@ class Api:
 
     def check_for_updates(self, url: str) -> Mapping[str, object]:
         """
-        Uses Playwright to hit F95Zone and extract the version string from the thread title.
+        Reads the version from F95Zone's checker endpoint and refreshes thread metadata.
         Stores it in latest_version for comparison with the current version.
         """
         if not url.strip():
@@ -1709,34 +1662,12 @@ class Api:
                     object,
                     self.scraper.get_thread_version(
                         url,
-                        headless=True,
                         include_metadata=True,
                     ),
                 )
             )
             if version_info is None:
                 version_info = {}
-
-            # If anti-bot/login blocks headless scraping, retry once in headed mode
-            # so users can clear the challenge with the persisted session.
-            if not version_info.get("success") and version_info.get("code") in (
-                "blocked",
-                "login_required",
-            ):
-                version_info = self._coerce_string_key_dict(
-                    cast(
-                        object,
-                        self.scraper.get_thread_version(
-                            url,
-                            headless=False,
-                            timeout_ms=180000,
-                            hold_open_seconds=self._get_headed_retry_hold_seconds(),
-                            include_metadata=True,
-                        ),
-                    )
-                )
-                if version_info is None:
-                    version_info = {}
 
             if not version_info.get("success"):
                 return self._build_scraper_error_payload(
@@ -1818,14 +1749,6 @@ class Api:
 
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
-    def open_scraper_login_session(self):
-        """Open headed Playwright session for manual F95 login and wait until user closes it."""
-        return self.scraper.open_login_session("https://f95zone.to/login/")
-
-    def reset_scraper_session(self):
-        """Clear persisted Playwright session/cookies used by scraper."""
-        return self.scraper.reset_browser_session()
-
     def check_all_updates(self) -> dict[str, object]:
         """Start a background thread to check all games for updates."""
         from core.database import get_all_games
@@ -1903,7 +1826,6 @@ class Api:
                     ) and self._is_actionable_remote_version(
                         result_dict.get("version")
                     ):
-                        _ = self._update_thread_edit_metadata_for_url(url, result_dict)
                         remote_version = str(result_dict.get("version") or "").strip()
                         import sqlite3
 
@@ -1955,22 +1877,8 @@ class Api:
                         self._update_current = next_title_by_url.get(url, "")
                     return True
 
-                get_multiple_thread_versions_fn = cast(
-                    Callable[
-                        [list[str], bool, int, bool, Callable[[str, object], bool]],
-                        object,
-                    ],
-                    self.scraper.get_multiple_thread_versions,
-                )
-
                 bulk_results = self._coerce_string_key_dict(
-                    get_multiple_thread_versions_fn(
-                        urls,
-                        True,
-                        self._update_delay_seconds,
-                        True,
-                        check_callback,
-                    )
+                    self.scraper.check_versions(urls, check_callback)
                 )
                 if bulk_results is None:
                     bulk_results = {}
@@ -2070,7 +1978,7 @@ class Api:
                 "checked": getattr(self, "_update_checked", 0),
                 "current": getattr(self, "_update_current", ""),
                 "results": list(getattr(self, "_update_results", [])),
-                "delay_seconds": getattr(self, "_update_delay_seconds", 5),
+                "delay_seconds": getattr(self, "_update_delay_seconds", 2),
             }
 
     def cancel_update_check(self) -> dict[str, bool]:
@@ -2925,9 +2833,6 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
-        playwright_path = get_setting_fn("playwright_browsers_path")
-        if not isinstance(playwright_path, str) or not playwright_path.strip():
-            playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
         rpgmaker_linux_runner_path = str(
             get_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING) or ""
         )
@@ -2938,7 +2843,6 @@ class Api:
             "custom_play_statuses": get_custom_play_statuses(),
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
-            "playwright_browsers_path": playwright_path,
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
                 rpgmaker_linux_runner_path
@@ -2980,17 +2884,6 @@ class Api:
                 return str(settings.get(key, "") or "")
             return str(get_setting_fn(key) or default)
 
-        raw_playwright_path = (
-            settings.get("playwright_browsers_path")
-            if "playwright_browsers_path" in settings
-            else get_setting_fn("playwright_browsers_path")
-        )
-        if isinstance(raw_playwright_path, str):
-            playwright_path = raw_playwright_path.strip()
-        else:
-            playwright_path = str(raw_playwright_path or "").strip()
-        if not playwright_path:
-            playwright_path = DEFAULT_PLAYWRIGHT_BROWSERS_PATH
         rpgmaker_linux_runner_path = str(
             get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
         ).strip()
@@ -3009,7 +2902,6 @@ class Api:
         update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
         update_setting_fn("wine_prefix_path", get_payload_or_existing("wine_prefix_path"))
         update_setting_fn("enable_logging", enable_logging)
-        update_setting_fn("playwright_browsers_path", playwright_path)
         update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
         update_setting_fn("urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip())
         if "custom_play_statuses" in settings:

@@ -7,7 +7,7 @@ wLib manages all relational states locally via a single SQLite database file.
 Both platforms use the same schema and additive migrations. Windows MSI and portable ZIP builds share the same database location; MSI uninstall preserves user data. See [Platform Paths](architecture.md#platform-paths) for data-directory overrides and Linux XDG behavior.
 
 ## Engine Configuration
-Upon startup, `init_db()` in `core/database.py` executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). The mode is stored in the database file, so later connections inherit it. This is crucial because `pywebview`, the extension server, and the Playwright scraper all operate on independent threads. `WAL` mode allows concurrent readers alongside a single active writer.
+Upon startup, `init_db()` in `core/database.py` executes `PRAGMA journal_mode=WAL` (Write-Ahead Logging). The mode is stored in the database file, so later connections inherit it. This is crucial because `pywebview`, the extension server, and HTTP scraping workers all operate on independent threads. `WAL` mode allows concurrent readers alongside a single active writer.
 
 ### WAL Mode Advantages
 
@@ -92,7 +92,7 @@ A simple generic key-value store for application-wide persistence.
 | `key` | `TEXT` | Primary Key string matching a setting name (e.g. `proton_path`). |
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
 
-Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, `playwright_browsers_path`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
 
 `custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
 
@@ -105,5 +105,5 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 - **Optional sections**: Users can include user state (play status, ratings, notes, favorites, playtime, timestamps), launch configuration, executable paths, additional launch targets, general settings, and machine-specific path settings.
 - **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
-- **Excluded data**: Browser sessions/cookies, webview storage, downloaded runtimes, Playwright binaries, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
-- **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Playwright path imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.
+- **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
+- **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Wine prefix imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.

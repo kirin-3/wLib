@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-import functools
+import json
 import os
 import re
-import shutil
-import sys
+import socket
+import ssl
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from types import TracebackType
+from html import unescape
+from http.client import HTTPResponse
 from typing import Protocol, TypeAlias, cast
-from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from .host_platform import get_browser_session_dir
-
+from .f95zone import extract_thread_id
 
 ScraperResultValue: TypeAlias = bool | str | list[str]
 ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
@@ -21,78 +22,14 @@ ScraperResultDict: TypeAlias = dict[str, ScraperResultValue]
 ThreadMetadata: TypeAlias = dict[str, str | list[str]]
 
 
-class PostElementLike(Protocol):
-    def inner_html(self) -> str: ...
-
-    def text_content(self) -> str | None: ...
-
-
-class PageLike(Protocol):
-    def query_selector(self, selector: str) -> PostElementLike | None: ...
-
-    def evaluate(
-        self, expression: str, arg: PostElementLike | None = None
-    ) -> object: ...
-
-    def title(self) -> str: ...
-
-    def content(self) -> str: ...
-
-    def goto(self, url: str, *, wait_until: str, timeout: int) -> None: ...
-
-    def bring_to_front(self) -> None: ...
-
-    def wait_for_event(self, event: str, *, timeout: int) -> None: ...
-
-    def wait_for_selector(self, selector: str, *, timeout: int) -> None: ...
-
-    def close(self) -> None: ...
-
-
-class BrowserContextLike(Protocol):
-    pages: Sequence[PageLike]
-
-    def new_page(self) -> PageLike: ...
-
-    def close(self) -> None: ...
-
-
-class ChromiumLike(Protocol):
-    def launch_persistent_context(
-        self,
-        *,
-        user_data_dir: str,
-        headless: bool,
-        args: list[str],
-        env: dict[str, str],
-    ) -> BrowserContextLike: ...
-
-
-class PlaywrightInstanceLike(Protocol):
-    chromium: ChromiumLike
-
-    def stop(self) -> None: ...
-
-
-class PlaywrightContextManagerLike(Protocol):
-    def start(self) -> PlaywrightInstanceLike: ...
-
-    def __enter__(self) -> PlaywrightInstanceLike: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None: ...
-
-
-class PlaywrightModuleLike(Protocol):
-    sync_playwright: Callable[[], PlaywrightContextManagerLike]
-
-
 class BatchResultCallback(Protocol):
     def __call__(self, url: str, result: ScraperResult) -> bool: ...
+
+
+class _F95RequestError(Exception):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code: str = code
 
 
 _BRACKETED_VERSION_RE = re.compile(
@@ -105,856 +42,382 @@ _CHAPTER_VERSION_RE = re.compile(
 )
 _BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
 
-
-# Chromium refuses to open one profile twice, and every scraper entry point
-# shares the persistent browser_session profile.
-_BROWSER_SESSION_LOCK = threading.Lock()
-
-
-def _browser_session_busy_error() -> ScraperResult:
-    return {
-        "success": False,
-        "code": "busy",
-        "error": "Another F95Zone browser session is already running. Try again when it finishes.",
-    }
+# ponytail: global lock serializes all F95 traffic; use a per-host token bucket
+# if we ever add another host.
+_F95_REQUEST_LOCK = threading.Lock()
+_f95_last_request_finished: float | None = None
 
 
-def _exclusive_browser_session[**P, R](
-    on_busy: Callable[[ScraperResult], R],
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    def decorate(method: Callable[P, R]) -> Callable[P, R]:
-        @functools.wraps(method)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            if not _BROWSER_SESSION_LOCK.acquire(blocking=False):
-                return on_busy(_browser_session_busy_error())
+def get_request_interval_seconds() -> int:
+    try:
+        value = int(os.environ.get("WLIB_UPDATE_CHECK_DELAY_SECONDS", "2"))
+    except ValueError:
+        value = 2
+    return max(1, min(value, 30))
+
+
+def _f95_get(url: str) -> tuple[int, str]:
+    global _f95_last_request_finished
+    with _F95_REQUEST_LOCK:
+        if _f95_last_request_finished is not None:
+            remaining = get_request_interval_seconds() - (
+                time.monotonic() - _f95_last_request_finished
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+        try:
+            request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
             try:
-                return method(*args, **kwargs)
-            finally:
-                _BROWSER_SESSION_LOCK.release()
+                with cast(
+                    HTTPResponse,
+                    urlopen(request, timeout=30, context=ssl.create_default_context()),
+                ) as response:
+                    encoding = response.headers.get_content_charset() or "utf-8"
+                    return response.status, response.read().decode(
+                        encoding, errors="replace"
+                    )
+            except HTTPError as exc:
+                with exc:
+                    encoding = exc.headers.get_content_charset() or "utf-8"
+                    return exc.code, exc.read().decode(encoding, errors="replace")
+        except (TimeoutError, socket.timeout) as exc:
+            raise _F95RequestError(
+                "navigation_timeout", "F95Zone request timed out"
+            ) from exc
+        except URLError as exc:
+            code = (
+                "navigation_timeout"
+                if isinstance(exc.reason, TimeoutError)
+                else "scraper_error"
+            )
+            raise _F95RequestError(code, str(exc.reason)) from exc
+        except (OSError, ValueError) as exc:
+            raise _F95RequestError("scraper_error", str(exc)) from exc
+        finally:
+            _f95_last_request_finished = time.monotonic()
 
-        return wrapper
 
-    return decorate
+def _attribute(opening: str, name: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(name)}\s*=\s*([\"'])(.*?)\1", opening, re.S | re.I
+    )
+    return unescape(match.group(2)) if match else ""
+
+
+def _text(html: str) -> str:
+    return unescape(re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def _blocks(html: str, tag: str, class_name: str = "") -> Iterator[tuple[str, str]]:
+    # A spoiler/div inside bbWrapper must not truncate the starter post.
+    tokens = re.compile(rf"</?{tag}\b[^>]*>", re.I)
+    for opening in re.finditer(rf"<{tag}\b[^>]*>", html, re.I):
+        if (
+            class_name
+            and class_name not in _attribute(opening.group(), "class").split()
+        ):
+            continue
+        depth = 1
+        for token in tokens.finditer(html, opening.end()):
+            depth += -1 if token.group().startswith("</") else 1
+            if depth == 0:
+                yield opening.group(), html[opening.end() : token.start()]
+                break
 
 
 class Scraper:
-    def __init__(self) -> None:
-        # Store browser session in the user's data dir so login persists across installations
-        self.user_data_dir: str = get_browser_session_dir()
-
-    def _log_scrape_stage(self, url: str, stage: str, detail: str = "") -> None:
-        target_url = str(url or "").strip() or "<unknown-url>"
-        message = f"[wLib] Scraper[{stage}] {target_url}"
-        if detail:
-            message += f" - {detail}"
-        print(message)
-
-    def _build_browser_launch_env(self) -> dict[str, str]:
-        clean_env = os.environ.copy()
-
-        for var in (
-            "APPIMAGE",
-            "APPDIR",
-            "ARGV0",
-            "APPIMAGE_SILENT_INSTALL",
-            "OWD",
-            "APPIMAGE_EXTRACT_AND_RUN",
-        ):
-            _ = clean_env.pop(var, None)
-
-        original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
-        if original_library_path:
-            clean_env["LD_LIBRARY_PATH"] = original_library_path
-        else:
-            _ = clean_env.pop("LD_LIBRARY_PATH", None)
-
-        return clean_env
-
-    def _launch_persistent_browser_context(
-        self, playwright_instance: PlaywrightInstanceLike, headless: bool
-    ) -> BrowserContextLike:
-        return playwright_instance.chromium.launch_persistent_context(
-            user_data_dir=self.user_data_dir,
-            headless=headless,
-            args=["--disable-blink-features=AutomationControlled"],
-            env=self._build_browser_launch_env(),
-        )
-
     def _extract_version_from_title(self, title: object) -> str:
-        # Same rules, in the same order, as extractGameInfo() in extension/content.js:
-        # the extension stores the version when a game is added and this compares
-        # against it later, so any difference shows as a false "update available".
+        # Keep these rules aligned with extractGameInfo() in extension/content.js.
         if not isinstance(title, str):
             return "Unknown"
-
         title = re.sub(r"^\[[^\]]+\]\s*", "", title.strip())
         brackets = cast(list[str], re.findall(r"\[([^\]]*)\]", title))
         for bracket in brackets:
             inner = bracket.strip()
-            # [v1.0], [1.0.2], [Version 2.1], [v2.0 Beta]
             match = _BRACKETED_VERSION_RE.match(inner)
             if match:
                 return match.group(1).strip()
-            # [Ch.3], [Ep. 3 v1.1], [S2 E3], [Part 3]: keep the whole release label.
             if _CHAPTER_VERSION_RE.match(inner):
                 return inner
-
-        # Bare version outside brackets: "Game Name v1.0.2 [Dev]"
         match = _BARE_VERSION_RE.search(title)
         if match:
             return match.group(1)
-        # Anything else in the first of two brackets, e.g. [Final] [Dev] or
-        # [v1.0-beta2] [Dev]; kept whole so suffix-only releases still differ.
         if len(brackets) >= 2:
             return brackets[0].strip() or "Unknown"
         return "Unknown"
 
-    def _extract_version_from_post(self, page: PageLike) -> str:
-        """
-        Fallback: extract version from the first post body.
-        Looks for patterns like <b>Version</b>: 1.07 or plain text "Version: 1.07".
-        """
-        try:
-            first_post = page.query_selector(".message-body .bbWrapper")
-            if not first_post:
-                return "Unknown"
+    def _normalize_checker_version(self, raw: object) -> str:
+        if not isinstance(raw, str):
+            return "Unknown"
+        return self._extract_version_from_title(f"_ [{raw.strip()}] [_]")
 
-            # Try innerHTML first for <b>Version</b>: value patterns
-            html_content = first_post.inner_html()
-            html_patterns = [
-                r"<b>\s*(?:Current\s+)?Version\s*</b>\s*:?\s*v?([^<\n]+)",
-                r"<b>\s*Ver(?:\.|sion)?\s*</b>\s*:?\s*v?([^<\n]+)",
-            ]
-            for pattern in html_patterns:
-                m = re.search(pattern, html_content, re.I)
-                if m:
-                    raw_value = (m.group(1) or "").strip()
-                    version = raw_value.split()[0] if raw_value else ""
-                    if version and re.match(r"^\d", version):
-                        return version
-
-            # Fallback: plain text search
-            text_content = first_post.text_content() or ""
-            text_patterns = [
-                r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
-                r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
-                r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
-            ]
-            for pattern in text_patterns:
-                m = re.search(pattern, text_content, re.I)
-                if m:
-                    version = m.group(1).strip()
-                    if version and re.match(r"^\d", version):
-                        return version
-        except Exception as e:
-            print(f"[wLib] Failed to extract version from post body: {e}")
-
+    def _extract_version_from_post(self, html: str) -> str:
+        html_patterns = [
+            r"<b>\s*(?:Current\s+)?Version\s*</b>\s*:?\s*v?([^<\n]+)",
+            r"<b>\s*Ver(?:\.|sion)?\s*</b>\s*:?\s*v?([^<\n]+)",
+        ]
+        for pattern in html_patterns:
+            match = re.search(pattern, html, re.I)
+            if match:
+                raw = unescape(match.group(1)).strip()
+                version = raw.split()[0] if raw else ""
+                if re.match(r"^\d", version):
+                    return version
+        text_patterns = [
+            r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
+            r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
+            r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
+        ]
+        for pattern in text_patterns:
+            match = re.search(pattern, _text(html), re.I)
+            if match and re.match(r"^\d", match.group(1)):
+                return match.group(1).strip()
         return "Unknown"
-
-    def _is_valid_thread_url(self, url: object) -> bool:
-        if not isinstance(url, str):
-            return False
-
-        normalized = url.strip()
-        if not normalized:
-            return False
-
-        parsed = urlparse(normalized)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-
-    def _extract_title_text_from_page(self, page: PageLike) -> str:
-        """
-        Extract the clean title text from the h1.p-title-value DOM element,
-        stripping out label/badge links (engine tags, status tags).
-        Falls back to page.title() if the element is not found.
-        """
-        try:
-            h1 = page.query_selector("h1.p-title-value")
-            if h1:
-                # Remove label links and label-append spans via JS to get clean text
-                clean_text = page.evaluate(
-                    """
-                    (el) => {
-                        const clone = el.cloneNode(true);
-                        clone.querySelectorAll('a.labelLink, span.label-append').forEach(e => e.remove());
-                        return clone.textContent.trim();
-                    }
-                """,
-                    h1,
-                )
-                if isinstance(clean_text, str):
-                    normalized_text = clean_text.strip()
-                    if normalized_text:
-                        return normalized_text
-        except Exception as e:
-            print(f"[wLib] Failed to extract title from h1 element: {e}")
-
-        # Fallback to page title
-        return page.title()
-
-    def _extract_version_from_page(self, page: PageLike) -> tuple[str, str]:
-        """
-        Full version extraction pipeline:
-        1. Try extracting from the h1.p-title-value element text
-        2. Fall back to first post body (Version: X.X)
-        """
-        title_text = self._extract_title_text_from_page(page)
-        version = self._extract_version_from_title(title_text)
-
-        if version == "Unknown":
-            version = self._extract_version_from_post(page)
-
-        return title_text, version
-
-    def _extract_metadata_from_page(self, page: PageLike) -> ThreadMetadata:
-        """Extract thread metadata fields used by the app."""
-        metadata: ThreadMetadata = {
-            "engine": "",
-            "tags": [],
-            "cover_image": "",
-            "thread_main_post_last_edit_at": "",
-            "thread_main_post_checked_at": "",
-        }
-        metadata_extracted = False
-
-        try:
-            extracted = page.evaluate(
-                """
-                () => {
-                    const result = {
-                        engine: "",
-                        tags: [],
-                        cover_image: "",
-                        thread_main_post_last_edit_at: "",
-                    };
-
-                    const starterPost =
-                        document.querySelector(
-                            "article.message-threadStarterPost.message--post"
-                        ) || document.querySelector("article.message--post");
-
-                    const h1 = document.querySelector("h1.p-title-value");
-                    if (h1) {
-                        const firstLabel = h1.querySelector("a.labelLink span");
-                        if (firstLabel) {
-                            result.engine = (firstLabel.textContent || "").trim();
-                        }
-                    }
-
-                    const tagSet = new Set();
-                    document.querySelectorAll(".tagItem").forEach((tag) => {
-                        const value = (tag.textContent || "").trim();
-                        if (value) tagSet.add(value);
-                    });
-                    result.tags = Array.from(tagSet);
-
-                    const firstPostWrapper =
-                        starterPost?.querySelector(".message-body .bbWrapper") ||
-                        document.querySelector("article.message--post .message-body .bbWrapper") ||
-                        document.querySelector(".message-body .bbWrapper");
-
-                    const lastEditTime =
-                        starterPost?.querySelector(".message-lastEdit time[datetime]") ||
-                        starterPost?.querySelector(".message-lastEdit time");
-                    if (lastEditTime) {
-                        result.thread_main_post_last_edit_at =
-                            lastEditTime.getAttribute("datetime") || "";
-                    }
-
-                    if (firstPostWrapper) {
-                        const zoomer = firstPostWrapper.querySelector(
-                            ".lbContainer-zoomer[data-src]"
-                        );
-                        if (zoomer) {
-                            result.cover_image = zoomer.getAttribute("data-src") || "";
-                        }
-
-                        if (!result.cover_image) {
-                            const firstImg = firstPostWrapper.querySelector(
-                                "img.bbImage[data-src], img.bbImage[src]"
-                            );
-                            if (firstImg) {
-                                result.cover_image =
-                                    firstImg.getAttribute("data-src") ||
-                                    firstImg.getAttribute("src") ||
-                                    "";
-                            }
-                        }
-                    }
-
-                    if (!result.cover_image) {
-                        const fallbackZoomer = document.querySelector(
-                            ".message .lbContainer-zoomer[data-src]"
-                        );
-                        if (fallbackZoomer) {
-                            result.cover_image = fallbackZoomer.getAttribute("data-src") || "";
-                        }
-                    }
-
-                    return result;
-                }
-                """
-            )
-            if isinstance(extracted, dict):
-                metadata_extracted = True
-                extracted_dict = cast(dict[str, object], extracted)
-                metadata["engine"] = str(extracted_dict.get("engine") or "").strip()
-                raw_tags_obj = extracted_dict.get("tags")
-                if isinstance(raw_tags_obj, list):
-                    tags: list[str] = []
-                    for raw_tag in cast(list[object], raw_tags_obj):
-                        normalized_tag = str(raw_tag).strip()
-                        if normalized_tag:
-                            tags.append(normalized_tag)
-                    metadata["tags"] = tags
-                metadata["cover_image"] = self._normalize_cover_image_url(
-                    extracted_dict.get("cover_image")
-                )
-                metadata["thread_main_post_last_edit_at"] = str(
-                    extracted_dict.get("thread_main_post_last_edit_at") or ""
-                ).strip()
-        except Exception as e:
-            print(f"[wLib] Failed to extract metadata from page: {e}")
-
-        if metadata_extracted:
-            metadata["thread_main_post_checked_at"] = datetime.now().isoformat()
-
-        return metadata
 
     def _normalize_cover_image_url(self, url: object) -> str:
         if not isinstance(url, str):
             return ""
-
         normalized = url.strip()
-        if not normalized:
-            return ""
-
-        # F95 attachments may expose thumbnail URLs under /thumb/.
-        # Prefer the original asset path when possible.
-        if "attachments.f95zone.to/" in normalized and "/thumb/" in normalized:
+        if "attachments.f95zone.to/" in normalized:
             while "/thumb/" in normalized:
                 normalized = normalized.replace("/thumb/", "/", 1)
-
         return normalized
 
     def _error(self, code: str, message: str) -> ScraperResult:
         return {"success": False, "code": code, "error": message}
 
-    def _should_continue_batch(
-        self,
-        callback: BatchResultCallback | None,
-        url: str,
-        result: ScraperResult,
-    ) -> bool:
-        if callback is None:
-            return True
-        return callback(url, result)
-
     def _is_non_actionable_version(self, version: object) -> bool:
-        if version is None:
-            return True
-        value = str(version).strip().lower()
-        return value in ("", "unknown", "n/a", "na", "none", "null")
-
-    def _classify_page_issue(self, page: PageLike) -> dict[str, str] | None:
-        try:
-            page_title = (page.title() or "").lower()
-        except Exception:
-            page_title = ""
-
-        try:
-            page_content = (page.content() or "").lower()
-        except Exception:
-            page_content = ""
-
-        combined = f"{page_title}\n{page_content}"
-
-        # Checked first: 404 pages also carry Cloudflare scripts and the guest
-        # "Log in" header, and retrying them headed cannot help.
-        not_found_markers = (
-            "requested thread could not be found",
-            "requested page could not be found",
+        return str(version or "").strip().lower() in (
+            "",
+            "unknown",
+            "n/a",
+            "na",
+            "none",
+            "null",
         )
-        if any(marker in combined for marker in not_found_markers):
+
+    def _classify_page_issue(
+        self, status: int, title: str, html: str
+    ) -> dict[str, str] | None:
+        page_title = title.lower()
+        # Guest threads include Cloudflare's passive JS detection script even
+        # after the server has delivered the complete page.
+        page_html = re.sub(
+            r"/cdn-cgi/challenge-platform/scripts/jsd/[^\s\"'<>]+",
+            "",
+            html.lower(),
+        )
+        combined = f"{page_title}\n{page_html}"
+        if status == 404 or any(
+            marker in combined
+            for marker in (
+                "requested thread could not be found",
+                "requested page could not be found",
+            )
+        ):
             return {
                 "code": "not_found",
                 "error": "Thread not found; it may have been deleted or moved",
             }
-
-        blocked_markers = (
-            "just a moment",
-            "checking your browser",
-            "verify you are human",
-            "attention required",
-            "cf-challenge",
-            "challenge-platform",
-        )
-        if any(marker in combined for marker in blocked_markers):
+        if any(
+            marker in combined
+            for marker in (
+                "just a moment",
+                "checking your browser",
+                "verify you are human",
+                "attention required",
+                "cf-challenge",
+                "challenge-platform",
+            )
+        ):
             return {
                 "code": "blocked",
                 "error": "Blocked by anti-bot challenge while loading thread",
             }
-
-        # Every guest page header says "Log in", so the bare phrase only counts
-        # in the page title; XenForo's explicit login prompt counts anywhere.
-        title_login_markers = ("log in", "login", "sign in")
-        prompt_login_markers = (
-            "you must be logged-in",
-            "you must be logged in",
-            'action="/login/login"',
-        )
-        if any(marker in page_title for marker in title_login_markers) or any(
-            marker in combined for marker in prompt_login_markers
+        if any(
+            marker in page_title for marker in ("log in", "login", "sign in")
+        ) or any(
+            marker in combined
+            for marker in (
+                "you must be logged-in",
+                "you must be logged in",
+                'action="/login/login"',
+            )
         ):
             return {
                 "code": "login_required",
                 "error": "Login is required to access this thread",
             }
-
         return None
 
-    def _load_sync_playwright(self) -> Callable[[], PlaywrightContextManagerLike]:
-        import importlib
+    def _page_title(self, html: str) -> str:
+        return _text(next(_blocks(html, "title"), ("", ""))[1])
 
-        module = importlib.import_module("playwright.sync_api")
-        typed_module = cast(PlaywrightModuleLike, cast(object, module))
-        return typed_module.sync_playwright
-
-    def _dependency_missing_message(self) -> str:
-        if getattr(sys, "frozen", False):
-            return (
-                "Playwright runtime is missing from this build. "
-                "Please reinstall/update wLib and try again."
-            )
-        return (
-            "Playwright is not installed in this Python environment. "
-            "Run: python -m pip install playwright && python -m playwright install chromium"
+    def _extract_page(self, html: str) -> ScraperResult:
+        h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
+        engine = _text(next(_blocks(h1, "a", "labelLink"), ("", ""))[1])
+        clean_h1 = re.sub(
+            r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
+            "",
+            h1,
+            flags=re.I | re.S,
         )
-
-    @_exclusive_browser_session(lambda busy: busy)
-    def open_login_session(
-        self, login_url: str = "https://f95zone.to/login/"
-    ) -> ScraperResult:
-        if not self._is_valid_thread_url(login_url):
-            return self._error("invalid_url", "Invalid login URL")
-
-        context: BrowserContextLike | None = None
-        page: PageLike | None = None
-        playwright_instance: PlaywrightInstanceLike | None = None
-
-        try:
-            sync_playwright = self._load_sync_playwright()
-        except ModuleNotFoundError:
-            return self._error("dependency_missing", self._dependency_missing_message())
-
-        try:
-            playwright_instance = sync_playwright().start()
-            context = self._launch_persistent_browser_context(
-                playwright_instance, headless=False
-            )
-
-            if context.pages:
-                page = context.pages[0]
-            else:
-                page = context.new_page()
-
-            page.goto(login_url.strip(), wait_until="domcontentloaded", timeout=60000)
-            try:
-                page.bring_to_front()
-            except Exception:
-                pass
-
-            # Keep session browser open until user closes the login tab/window.
-            page.wait_for_event("close", timeout=0)
-            return {"success": True, "message": "Login session closed"}
-        except Exception as e:
-            return self._error("scraper_error", str(e))
-        finally:
-            try:
-                if context is not None:
-                    context.close()
-            except Exception:
-                pass
-            try:
-                if playwright_instance is not None:
-                    playwright_instance.stop()
-            except Exception:
-                pass
-
-    @_exclusive_browser_session(lambda busy: busy)
-    def reset_browser_session(self) -> ScraperResult:
-        try:
-            if os.path.exists(self.user_data_dir):
-                shutil.rmtree(self.user_data_dir)
-            os.makedirs(self.user_data_dir, exist_ok=True)
-            return {"success": True, "message": "Browser session reset"}
-        except Exception as e:
-            return self._error("session_reset_failed", str(e))
-
-    @_exclusive_browser_session(lambda busy: busy)
-    def get_thread_version(
-        self,
-        url: str,
-        headless: bool = False,
-        timeout_ms: int = 60000,
-        hold_open_seconds: int = 0,
-        include_metadata: bool = False,
-    ) -> ScraperResult:
-        """
-        Navigates to an F95Zone thread URL and extracts the version string from the title or tags.
-        Spins up and down the browser safely within the calling thread.
-        """
-        if not self._is_valid_thread_url(url):
-            return self._error("invalid_url", "Invalid thread URL")
-
-        target_url = url.strip()
-        context: BrowserContextLike | None = None
-        page: PageLike | None = None
-        playwright_instance: PlaywrightInstanceLike | None = None
-
-        self._log_scrape_stage(target_url, "start", f"headless={headless}")
-        try:
-            sync_playwright = self._load_sync_playwright()
-        except ModuleNotFoundError:
-            self._log_scrape_stage(target_url, "dependency-missing")
-            return self._error("dependency_missing", self._dependency_missing_message())
-        try:
-            playwright_instance = sync_playwright().start()
-            context = self._launch_persistent_browser_context(
-                playwright_instance, headless=headless
-            )
-            self._log_scrape_stage(target_url, "browser-ready")
-            page = context.new_page()
-            try:
-                self._log_scrape_stage(target_url, "navigate")
-                page.goto(
-                    target_url,
-                    wait_until="domcontentloaded",
-                    timeout=timeout_ms,
-                )
-                self._log_scrape_stage(target_url, "navigated")
-            except Exception:
-                self._log_scrape_stage(target_url, "navigation-timeout")
-                return self._error(
-                    "navigation_timeout",
-                    "Timed out while loading thread page",
-                )
-
-            try:
-                page.wait_for_selector("h1.p-title-value", timeout=timeout_ms)
-                self._log_scrape_stage(target_url, "title-ready")
-            except Exception:
-                page_issue = self._classify_page_issue(page)
-                if page_issue:
-                    self._log_scrape_stage(
-                        target_url,
-                        "page-issue",
-                        str(page_issue.get("code") or "unknown"),
+        clean_h1 = re.sub(
+            r'<span\b[^>]*class=["\'][^"\']*\blabel-append\b[^"\']*["\'][^>]*>.*?</span>',
+            "",
+            clean_h1,
+            flags=re.I | re.S,
+        )
+        title = re.sub(r"\s+", " ", _text(clean_h1)) or self._page_title(html)
+        if not title:
+            return self._error("title_not_found", "Could not find thread title")
+        starter = next(_blocks(html, "article", "message-threadStarterPost"), ("", ""))[
+            1
+        ]
+        if not starter:
+            starter = next(_blocks(html, "article", "message--post"), ("", ""))[1]
+        wrapper = next(_blocks(starter, "div", "bbWrapper"), ("", ""))[1]
+        version = self._extract_version_from_title(title)
+        if self._is_non_actionable_version(version):
+            version = self._extract_version_from_post(wrapper)
+        tags: list[str] = []
+        for tag in ("a", "span"):
+            for _, content in _blocks(html, tag, "tagItem"):
+                value = _text(content)
+                if value and value not in tags:
+                    tags.append(value)
+        cover = ""
+        for match in re.finditer(r"<[^/!][^>]*>", wrapper):
+            opening = match.group()
+            if "lbContainer-zoomer" in _attribute(opening, "class").split():
+                cover = _attribute(opening, "data-src")
+                if cover:
+                    break
+        if not cover:
+            for match in re.finditer(r"<img\b[^>]*>", wrapper, re.I):
+                opening = match.group()
+                if "bbImage" in _attribute(opening, "class").split():
+                    cover = _attribute(opening, "data-src") or _attribute(
+                        opening, "src"
                     )
-                    return self._error(page_issue["code"], page_issue["error"])
-                self._log_scrape_stage(target_url, "title-missing")
-                return self._error(
-                    "title_not_found",
-                    "Could not find thread title on page",
-                )
+                    if cover:
+                        break
+        last_edit = ""
+        for tag in ("div", "span"):
+            edit = next(_blocks(starter, tag, "message-lastEdit"), ("", ""))[1]
+            edit_time = re.search(r"<time\b[^>]*>", edit, re.I)
+            if edit_time:
+                last_edit = _attribute(edit_time.group(), "datetime")
+                break
+        return {
+            "success": True,
+            "title": title,
+            "version": version,
+            "engine": engine,
+            "tags": tags,
+            "cover_image": self._normalize_cover_image_url(cover),
+            "thread_main_post_last_edit_at": last_edit,
+            "thread_main_post_checked_at": datetime.now().isoformat(),
+        }
 
-            title, version = self._extract_version_from_page(page)
-            self._log_scrape_stage(
-                target_url,
-                "version-extracted",
-                f"title={title!r}, version={version!r}",
+    def _get_page(self, thread_id: str) -> ScraperResult:
+        try:
+            status, html = _f95_get(f"https://f95zone.to/threads/{thread_id}/")
+            issue = self._classify_page_issue(status, self._page_title(html), html)
+            if issue:
+                return self._error(issue["code"], issue["error"])
+            if status != 200:
+                return self._error("scraper_error", f"F95Zone returned HTTP {status}")
+            return self._extract_page(html)
+        except _F95RequestError as exc:
+            return self._error(exc.code, str(exc))
+        except Exception as exc:
+            return self._error("scraper_error", str(exc))
+
+    def _check_chunk(self, ids: list[str]) -> dict[str, ScraperResult | None]:
+        versions: dict[str, object] = {}
+        try:
+            status, text = _f95_get(
+                f"https://f95zone.to/sam/checker.php?threads={','.join(ids)}"
             )
-
+            issue = self._classify_page_issue(status, self._page_title(text), text)
+            if issue and issue["code"] == "blocked":
+                return {
+                    thread_id: self._error(issue["code"], issue["error"])
+                    for thread_id in ids
+                }
+            if status == 200:
+                payload = cast(object, json.loads(text))
+                if isinstance(payload, dict):
+                    data = cast(dict[str, object], payload)
+                    if data.get("status") == "ok" and isinstance(data.get("msg"), dict):
+                        versions = cast(dict[str, object], data["msg"])
+        except (_F95RequestError, ValueError):
+            pass
+        results: dict[str, ScraperResult | None] = {}
+        for thread_id in ids:
+            version = self._normalize_checker_version(versions.get(thread_id))
             if self._is_non_actionable_version(version):
-                self._log_scrape_stage(target_url, "version-non-actionable")
-                return self._error(
-                    "extract_failed",
-                    "Could not extract a usable version from thread",
-                )
-
-            result: ScraperResultDict = {
-                "success": True,
-                "title": title,
-                "version": str(version).strip(),
-            }
-            if include_metadata:
-                self._log_scrape_stage(target_url, "metadata-extract")
-                result.update(self._extract_metadata_from_page(page))
-            self._log_scrape_stage(target_url, "done", "success")
-            return result
-        except Exception as e:
-            self._log_scrape_stage(target_url, "error", str(e))
-            return self._error("scraper_error", str(e))
-        finally:
-            try:
-                hold_seconds = int(hold_open_seconds)
-            except (TypeError, ValueError):
-                hold_seconds = 0
-            if not headless and hold_seconds > 0:
-                time.sleep(max(0, min(hold_seconds, 300)))
-
-            try:
-                if page is not None:
-                    page.close()
-            except Exception:
-                pass
-            try:
-                if context is not None:
-                    context.close()
-            except Exception:
-                pass
-            try:
-                if playwright_instance is not None:
-                    playwright_instance.stop()
-            except Exception:
-                pass
-
-    @_exclusive_browser_session(lambda busy: busy)
-    def get_thread_metadata(
-        self,
-        url: str,
-        headless: bool = True,
-        timeout_ms: int = 60000,
-        hold_open_seconds: int = 0,
-    ) -> ScraperResult:
-        if not self._is_valid_thread_url(url):
-            return self._error("invalid_url", "Invalid thread URL")
-
-        target_url = url.strip()
-        context: BrowserContextLike | None = None
-        page: PageLike | None = None
-        playwright_instance: PlaywrightInstanceLike | None = None
-
-        self._log_scrape_stage(target_url, "metadata-start", f"headless={headless}")
-        try:
-            sync_playwright = self._load_sync_playwright()
-        except ModuleNotFoundError:
-            self._log_scrape_stage(target_url, "dependency-missing")
-            return self._error("dependency_missing", self._dependency_missing_message())
-
-        try:
-            playwright_instance = sync_playwright().start()
-            context = self._launch_persistent_browser_context(
-                playwright_instance, headless=headless
-            )
-            self._log_scrape_stage(target_url, "browser-ready")
-            page = context.new_page()
-            try:
-                self._log_scrape_stage(target_url, "navigate")
-                page.goto(
-                    target_url,
-                    wait_until="domcontentloaded",
-                    timeout=timeout_ms,
-                )
-                self._log_scrape_stage(target_url, "navigated")
-            except Exception:
-                self._log_scrape_stage(target_url, "navigation-timeout")
-                return self._error(
-                    "navigation_timeout",
-                    "Timed out while loading thread page",
-                )
-
-            try:
-                page.wait_for_selector("h1.p-title-value", timeout=timeout_ms)
-                self._log_scrape_stage(target_url, "title-ready")
-            except Exception:
-                page_issue = self._classify_page_issue(page)
-                if page_issue:
-                    self._log_scrape_stage(
-                        target_url,
-                        "page-issue",
-                        str(page_issue.get("code") or "unknown"),
-                    )
-                    return self._error(page_issue["code"], page_issue["error"])
-                self._log_scrape_stage(target_url, "title-missing")
-                return self._error(
-                    "title_not_found",
-                    "Could not find thread title on page",
-                )
-
-            self._log_scrape_stage(target_url, "metadata-extract")
-            metadata = self._extract_metadata_from_page(page)
-            self._log_scrape_stage(target_url, "done", "metadata-success")
-            return {"success": True, **metadata}
-        except Exception as e:
-            self._log_scrape_stage(target_url, "error", str(e))
-            return self._error("scraper_error", str(e))
-        finally:
-            try:
-                hold_seconds = int(hold_open_seconds)
-            except (TypeError, ValueError):
-                hold_seconds = 0
-            if not headless and hold_seconds > 0:
-                time.sleep(max(0, min(hold_seconds, 300)))
-
-            try:
-                if page is not None:
-                    page.close()
-            except Exception:
-                pass
-            try:
-                if context is not None:
-                    context.close()
-            except Exception:
-                pass
-            try:
-                if playwright_instance is not None:
-                    playwright_instance.stop()
-            except Exception:
-                pass
-
-    @_exclusive_browser_session(lambda busy: {"__batch_error__": busy})
-    def get_multiple_thread_versions(
-        self,
-        urls: Sequence[str],
-        headless: bool = True,
-        delay: int = 5,
-        include_metadata: bool = False,
-        callback: BatchResultCallback | None = None,
-    ) -> dict[str, ScraperResult]:
-        """
-        Checks multiple URLs reusing the same browser context to reduce overhead.
-        """
-        results: dict[str, ScraperResult] = {}
-        try:
-            delay_seconds = int(delay)
-        except (TypeError, ValueError):
-            delay_seconds = 5
-        delay_seconds = max(2, min(delay_seconds, 30))
-
-        try:
-            sync_playwright = self._load_sync_playwright()
-        except ModuleNotFoundError:
-            results["__batch_error__"] = self._error(
-                "dependency_missing", self._dependency_missing_message()
-            )
-            return results
-
-        try:
-            with sync_playwright() as p:
-                context = self._launch_persistent_browser_context(p, headless=headless)
-                self._log_scrape_stage(
-                    "<batch>",
-                    "batch-start",
-                    f"count={len(urls)}, headless={headless}, include_metadata={include_metadata}",
-                )
-
-                try:
-                    for i, url in enumerate(urls):
-                        page = context.new_page()
-                        result: ScraperResult = self._error(
-                            "scraper_error", "No scraper result produced"
-                        )
-                        try:
-                            if not self._is_valid_thread_url(url):
-                                self._log_scrape_stage(url, "invalid-url")
-                                result = self._error("invalid_url", "Invalid thread URL")
-                            else:
-                                try:
-                                    self._log_scrape_stage(
-                                        url,
-                                        "batch-navigate",
-                                        f"index={i + 1}/{len(urls)}",
-                                    )
-                                    page.goto(
-                                        url.strip(),
-                                        wait_until="domcontentloaded",
-                                        timeout=60000,
-                                    )
-                                    self._log_scrape_stage(url, "batch-navigated")
-                                except Exception:
-                                    self._log_scrape_stage(url, "navigation-timeout")
-                                    result = self._error(
-                                        "navigation_timeout",
-                                        "Timed out while loading thread page",
-                                    )
-                                else:
-                                    try:
-                                        page.wait_for_selector(
-                                            "h1.p-title-value", timeout=60000
-                                        )
-                                        self._log_scrape_stage(url, "title-ready")
-                                    except Exception:
-                                        page_issue = self._classify_page_issue(page)
-                                        if page_issue:
-                                            self._log_scrape_stage(
-                                                url,
-                                                "page-issue",
-                                                str(page_issue.get("code") or "unknown"),
-                                            )
-                                            result = self._error(
-                                                page_issue["code"], page_issue["error"]
-                                            )
-                                        else:
-                                            self._log_scrape_stage(url, "title-missing")
-                                            result = self._error(
-                                                "title_not_found",
-                                                "Could not find thread title on page",
-                                            )
-                                    else:
-                                        try:
-                                            title, version = (
-                                                self._extract_version_from_page(page)
-                                            )
-                                            self._log_scrape_stage(
-                                                url,
-                                                "version-extracted",
-                                                f"title={title!r}, version={version!r}",
-                                            )
-
-                                            if self._is_non_actionable_version(version):
-                                                self._log_scrape_stage(
-                                                    url, "version-non-actionable"
-                                                )
-                                                result = self._error(
-                                                    "extract_failed",
-                                                    "Could not extract a usable version from thread",
-                                                )
-                                            else:
-                                                result = cast(
-                                                    ScraperResultDict,
-                                                    {
-                                                        "success": True,
-                                                        "title": title,
-                                                        "version": str(version).strip(),
-                                                    },
-                                                )
-                                                if include_metadata:
-                                                    self._log_scrape_stage(
-                                                        url, "metadata-extract"
-                                                    )
-                                                    result.update(
-                                                        self._extract_metadata_from_page(
-                                                            page
-                                                        )
-                                                    )
-                                                self._log_scrape_stage(
-                                                    url, "done", "success"
-                                                )
-                                        except Exception as e:
-                                            self._log_scrape_stage(url, "error", str(e))
-                                            result = self._error("scraper_error", str(e))
-                        finally:
-                            try:
-                                page.close()
-                            except Exception:
-                                pass
-
-                        results[url] = result
-
-                        if not self._should_continue_batch(callback, url, result):
-                            break
-
-                        if i < len(urls) - 1:
-                            time.sleep(delay_seconds)
-                finally:
-                    try:
-                        context.close()
-                    except Exception:
-                        pass
-        except Exception as e:
-            results["__batch_error__"] = self._error(
-                "batch_failed", f"Playwright batch check failed: {e}"
-            )
-
+                results[thread_id] = None
+            else:
+                results[thread_id] = {"success": True, "version": version}
         return results
+
+    def check_versions(
+        self, urls: Sequence[str], callback: BatchResultCallback | None = None
+    ) -> dict[str, ScraperResult]:
+        ids = list(
+            dict.fromkeys(
+                thread_id for url in urls if (thread_id := extract_thread_id(url))
+            )
+        )
+        chunk_by_id: dict[str, list[str]] = {}
+        for offset in range(0, len(ids), 100):
+            chunk = ids[offset : offset + 100]
+            for thread_id in chunk:
+                chunk_by_id[thread_id] = chunk
+        by_id: dict[str, ScraperResult | None] = {}
+        results: dict[str, ScraperResult] = {}
+        for url in urls:
+            thread_id = extract_thread_id(url)
+            if not thread_id:
+                result = self._error(
+                    "invalid_url", "A valid F95Zone thread URL is required"
+                )
+            else:
+                if thread_id not in by_id:
+                    by_id.update(self._check_chunk(chunk_by_id[thread_id]))
+                page_result = by_id[thread_id]
+                if page_result is None:
+                    page_result = self._get_page(thread_id)
+                    if page_result.get("success") and self._is_non_actionable_version(
+                        page_result.get("version")
+                    ):
+                        page_result = self._error(
+                            "extract_failed", "Could not extract a version from thread"
+                        )
+                    by_id[thread_id] = page_result
+                result = page_result
+            results[url] = result
+            if callback is not None and callback(url, result) is False:
+                break
+        return results
+
+    def get_thread_version(
+        self, url: str, include_metadata: bool = False
+    ) -> ScraperResult:
+        result = self.check_versions([url])[url]
+        if include_metadata and result.get("success"):
+            # A page fallback already has metadata; do not request it twice.
+            if "thread_main_post_checked_at" not in result:
+                metadata = self.get_thread_metadata(url)
+                if not metadata.get("success"):
+                    return metadata
+                result = {**metadata, **result}
+        return result
+
+    def get_thread_metadata(self, url: str) -> ScraperResult:
+        thread_id = extract_thread_id(url)
+        if not thread_id:
+            return self._error("invalid_url", "A valid F95Zone thread URL is required")
+        return self._get_page(thread_id)
