@@ -437,9 +437,11 @@ def test_import_skips_path_settings_from_other_os(
 
 def test_legacy_browser_path_is_skipped_in_backups(tmp_path):
     api = Api()
+    # Host-native path: the importer skips paths written for the other OS.
+    proton_path = str(tmp_path / "proton")
     path = write_backup(tmp_path / "legacy.json", {
         **base_backup([]),
-        "settings": {"paths": {"playwright_browsers_path": "/legacy/cache", "proton_path": "/proton"}},
+        "settings": {"paths": {"playwright_browsers_path": "/legacy/cache", "proton_path": proton_path}},
     })
     inspected = api.inspect_library_backup(str(path))
     assert inspected["success"] is True
@@ -447,7 +449,7 @@ def test_legacy_browser_path_is_skipped_in_backups(tmp_path):
     imported = api.import_library_backup(str(path), {"sections": [SECTION_SETTINGS_PATHS]})
     assert imported["success"] is True
     assert get_setting("playwright_browsers_path") is None
-    assert get_setting("proton_path") == "/proton"
+    assert get_setting("proton_path") == proton_path
     update_setting("playwright_browsers_path", "/stale")
     exported_path = tmp_path / "export.json"
     assert api.export_library_backup({"sections": [SECTION_SETTINGS_PATHS]}, str(exported_path))["success"] is True
