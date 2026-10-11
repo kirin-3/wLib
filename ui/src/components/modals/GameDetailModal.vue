@@ -1226,7 +1226,7 @@ const openInBrowser = async () => {
             <button
               @click="isRunning && game ? emit('stop', game.id) : launchGame()"
               :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
-              class="launch-btn header-launch-btn ui-action-btn"
+              class="launch-btn header-launch-btn ui-play-btn ui-action-btn"
             >
               <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
               <IconPlayerPlayFilled v-else class="ui-action-icon" />
@@ -1438,7 +1438,7 @@ const openInBrowser = async () => {
                       {{ exePath || "No executable selected" }}
                     </div>
                   </div>
-                  <button v-if="!isRunning" @click="launchGame" class="launch-target-action ui-action-btn">
+                  <button v-if="!isRunning" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
                     <IconPlayerPlayFilled class="ui-action-icon" />
                     Play
                   </button>
@@ -1519,7 +1519,7 @@ const openInBrowser = async () => {
                           <IconChevronDown class="ui-action-icon" />
                         </button>
                       </div>
-                      <button v-if="!isRunning" @click="launchTarget(target)" class="launch-target-action ui-action-btn">
+                      <button v-if="!isRunning" @click="launchTarget(target)" class="launch-target-action ui-play-btn ui-action-btn">
                         <IconPlayerPlayFilled class="ui-action-icon" />
                         Play
                       </button>
@@ -2362,6 +2362,13 @@ const openInBrowser = async () => {
   color: var(--text-primary);
 }
 
+.launch-target-action.ui-play-btn,
+.launch-target-action.ui-play-btn:hover:not(:disabled) {
+  background: var(--play);
+  border-color: var(--play);
+  color: var(--on-play);
+}
+
 @media (max-width: 768px) {
   .launch-target-row {
     flex-direction: column;
@@ -2566,20 +2573,14 @@ const openInBrowser = async () => {
 }
 
 .launch-btn {
-  background: var(--toggle-active);
-  border: 1px solid var(--toggle-active);
-  color: #f8fafc;
-}
-
-.launch-btn:hover {
-  filter: brightness(1.06);
+  border: 1px solid var(--play);
 }
 
 .save-btn {
   background: var(--brand);
   border: 1px solid var(--brand);
   box-shadow: var(--shadow-brand);
-  color: var(--text-inverse);
+  color: var(--on-brand);
 }
 
 .line-clamp-2 {

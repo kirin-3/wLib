@@ -354,8 +354,8 @@ onUnmounted(() => {
           <div class="flex gap-2 shrink-0">
             <button
               @click="openInBrowser(appUpdate.url)"
-              class="ui-action-btn text-white px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0"
-              style="background: var(--brand); box-shadow: var(--shadow-brand)"
+              class="ui-action-btn px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0"
+              style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
             >
               <IconExternalLink class="ui-action-icon" />
               Latest release
@@ -429,7 +429,8 @@ onUnmounted(() => {
             <button
               v-if="!status.running"
               @click="startCheck"
-              class="ui-action-btn bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg text-sm font-bold transition-all shadow-lg shadow-green-900/20"
+              class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110"
+              style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
             >
               <IconReload class="ui-action-icon" />
               Check All Games

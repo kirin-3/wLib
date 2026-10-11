@@ -180,8 +180,8 @@ onUnmounted(() => {
 
         <button
           @click="openExtensionFolder"
-          class="ui-action-btn text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-all"
-          style="background: var(--brand); box-shadow: var(--shadow-brand)"
+          class="ui-action-btn px-5 py-2.5 rounded-lg text-sm font-medium transition-all"
+          style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
           <IconFolderOpen class="ui-action-icon" />
           Open Extension Folder

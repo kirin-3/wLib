@@ -202,8 +202,8 @@ const importSelected = async () => {
         <button
           @click="importSelected"
           :disabled="!selectedGames.length || importing"
-          class="text-white px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-          style="background: var(--brand); box-shadow: var(--shadow-brand)"
+          class="px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
           {{
             importing

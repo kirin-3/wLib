@@ -19,6 +19,14 @@ import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
 import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
 import {
+  accentPreference,
+  previewAccentPreference,
+  setAccentPreference,
+  type AccentPreference,
+  type AccentPreset,
+} from "../utils/accentPreference";
+import {
+  isDarkTheme,
   setThemePreference,
   themePreference,
   type ThemePreference,
@@ -144,6 +152,33 @@ const themeOptions: { value: ThemePreference; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
 ];
+
+// Swatch colors mirror the preset values in style.css for each theme.
+const accentOptions: { value: AccentPreset; label: string; dark: string; light: string }[] = [
+  { value: "magenta", label: "Magenta", dark: "#d152d1", light: "#b93ab9" },
+  { value: "violet", label: "Violet", dark: "#a78bfa", light: "#7c3aed" },
+  { value: "blue", label: "Blue", dark: "#60a5fa", light: "#2563eb" },
+  { value: "cyan", label: "Cyan", dark: "#22d3ee", light: "#0e7490" },
+  { value: "rose", label: "Rose", dark: "#fb7185", light: "#e11d48" },
+  { value: "orange", label: "Orange", dark: "#fb923c", light: "#c2410c" },
+];
+
+const isCustomAccent = computed(() => accentPreference.value.startsWith("#"));
+// Keeps the picker's last color while a preset is selected.
+const customAccentColor = ref("#d152d1");
+watch(
+  accentPreference,
+  (value) => {
+    if (value.startsWith("#")) customAccentColor.value = value;
+  },
+  { immediate: true },
+);
+
+const onAccentColorInput = (event: Event, save: boolean): void => {
+  const value = (event.target as HTMLInputElement).value as AccentPreference;
+  if (save) setAccentPreference(value);
+  else previewAccentPreference(value);
+};
 
 const shortcuts = [
   { keys: ["/", "Ctrl+F"], action: "Search the library" },
@@ -629,6 +664,45 @@ const browseUrm = async () => {
 
         <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
+            <h4 id="accent-label" class="text-sm font-medium" style="color: var(--text-primary)">Accent</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Highlight color for buttons, tabs, and active items. Play buttons stay green.
+            </p>
+          </div>
+          <div class="accent-swatches flex flex-wrap justify-end gap-2 shrink-0" role="radiogroup" aria-labelledby="accent-label">
+            <button
+              v-for="option in accentOptions"
+              :key="option.value"
+              type="button"
+              role="radio"
+              class="accent-swatch"
+              :class="accentPreference === option.value ? 'accent-swatch-selected' : ''"
+              :style="{ background: isDarkTheme ? option.dark : option.light }"
+              :aria-checked="accentPreference === option.value"
+              :aria-label="option.label"
+              :title="option.label"
+              @click="setAccentPreference(option.value)"
+            />
+            <label
+              class="accent-swatch accent-swatch-custom"
+              :class="isCustomAccent ? 'accent-swatch-selected' : ''"
+              :style="isCustomAccent ? { background: accentPreference } : undefined"
+              title="Custom"
+            >
+              <input
+                type="color"
+                class="accent-color-input"
+                :value="customAccentColor"
+                :aria-label="isCustomAccent ? 'Custom color (selected)' : 'Custom color'"
+                @input="onAccentColorInput($event, false)"
+                @change="onAccentColorInput($event, true)"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
               Turn non-essential UI motion on or off. Loading indicators stay visible either way.
@@ -1001,8 +1075,8 @@ const browseUrm = async () => {
           <button
             @click="saveSettings"
             :disabled="saving"
-            class="ui-action-btn text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-wait"
-            style="background: var(--brand); box-shadow: var(--shadow-brand)"
+            class="ui-action-btn px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-wait"
+            style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
           >
             <IconDeviceFloppyFilled class="ui-action-icon" />
             {{ saving ? "Saving..." : "Save Changes" }}
@@ -1017,6 +1091,41 @@ const browseUrm = async () => {
 .settings-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
+}
+
+.accent-swatch {
+  position: relative;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--overlay-border);
+}
+
+.accent-swatch:focus-visible,
+.accent-swatch:focus-within {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.accent-swatch-selected {
+  border-color: var(--bg-surface);
+  box-shadow: 0 0 0 2px var(--text-primary);
+}
+
+.accent-swatch-custom {
+  background: conic-gradient(#f87171, #facc15, #4ade80, #22d3ee, #818cf8, #e879f9, #f87171);
+  overflow: hidden;
+}
+
+.accent-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .setting-row,

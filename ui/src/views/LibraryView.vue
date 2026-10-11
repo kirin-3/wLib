@@ -1148,7 +1148,7 @@ onUnmounted(() => {
             class="ui-action-btn library-primary-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
             style="
               background: var(--brand);
-              color: var(--text-inverse);
+              color: var(--on-brand);
               box-shadow: var(--shadow-brand);
             "
           >
@@ -1213,7 +1213,7 @@ onUnmounted(() => {
             <span
               v-if="activeFilterCount > 0"
               class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[10px] font-bold flex items-center justify-center"
-              style="background: var(--brand); color: var(--text-inverse)"
+              style="background: var(--brand); color: var(--on-brand)"
             >
               {{ activeFilterCount }}
             </span>
@@ -1459,7 +1459,7 @@ onUnmounted(() => {
                   <button
                     @click.stop="toggleGame(game)"
                     :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                    class="play-btn rounded-md p-1.5"
+                    class="play-btn ui-play-btn rounded-md p-1.5"
                   >
                     <IconPlayerStopFilled
                       v-if="runningGameIds.has(game.id)"
@@ -1610,7 +1610,7 @@ onUnmounted(() => {
               <div class="relative flex shrink-0">
                 <button
                   @click.stop="toggleGame(game)"
-                  class="compact-play-btn rounded-md p-2"
+                  class="compact-play-btn ui-play-btn rounded-md p-2"
                   :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                 >
                   <IconPlayerStopFilled
@@ -1698,7 +1698,7 @@ onUnmounted(() => {
                 <button
                   @click.stop="toggleGame(game)"
                   :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                  class="play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
+                  class="play-btn ui-play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
                 >
                   <IconPlayerStopFilled
                     v-if="runningGameIds.has(game.id)"
@@ -1864,7 +1864,7 @@ onUnmounted(() => {
 .running-label,
 .collection-count {
   background: var(--brand);
-  color: var(--text-inverse);
+  color: var(--on-brand);
   border-radius: 0.3rem;
   padding: 0.15rem 0.35rem;
   font-size: 0.65rem;
@@ -1963,16 +1963,6 @@ onUnmounted(() => {
   transform: none;
 }
 
-.play-btn {
-  background: var(--brand);
-  color: var(--text-inverse);
-  box-shadow: var(--shadow-brand);
-  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
-}
-.play-btn:hover {
-  filter: brightness(1.15);
-}
-
 .target-menu-toggle {
   margin-left: 0.35rem;
   background: var(--bg-raised);
@@ -2041,7 +2031,6 @@ onUnmounted(() => {
 }
 
 .filters-checkbox {
-  accent-color: var(--brand);
   border-color: var(--border);
   background: transparent;
 }
@@ -2069,18 +2058,6 @@ onUnmounted(() => {
   -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.65);
   max-height: 2.6em;
   overflow: hidden;
-}
-
-.compact-play-btn {
-  background: rgba(17, 24, 39, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  color: #f8fafc;
-  transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
-}
-
-.compact-play-btn:hover {
-  background: rgba(17, 24, 39, 0.78);
-  border-color: rgba(255, 255, 255, 0.42);
 }
 
 .compact-target-toggle {

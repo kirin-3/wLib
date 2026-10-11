@@ -272,7 +272,7 @@ onUnmounted(() => {
               v-if="availableUpdateCount"
               class="rounded-full px-1.5 min-w-5 text-center text-[10px] font-bold"
               :class="isNavCollapsed ? 'absolute -top-1 -right-1' : 'ml-auto'"
-              style="background: var(--brand); color: var(--text-inverse)"
+              style="background: var(--brand); color: var(--on-brand)"
               aria-hidden="true"
               >{{ availableUpdateCount }}</span
             >

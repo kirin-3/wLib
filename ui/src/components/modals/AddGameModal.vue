@@ -360,8 +360,8 @@ const save = () => {
         <button
           @click="save"
           :disabled="!title || !exePath || saving"
-          class="text-white px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          style="background: var(--brand); box-shadow: var(--shadow-brand)"
+          class="px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
           {{ saving ? "Adding…" : "Save to Library" }}
         </button>

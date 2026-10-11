@@ -12,9 +12,10 @@
   color-scheme: dark;
 
   --brand: #d152d1;
+  --on-brand: #0f0f14;
   --brand-deep: #5a3968;
-  --brand-glow: rgba(209, 82, 209, 0.15);
-  --brand-glow-strong: rgba(209, 82, 209, 0.3);
+  --brand-glow: color-mix(in srgb, var(--brand) 15%, transparent);
+  --brand-glow-strong: color-mix(in srgb, var(--brand) 30%, transparent);
 
   --bg-base: #0f0f14;
   --bg-surface: #1a1a22;
@@ -24,16 +25,16 @@
 
   --border: #2a2a34;
   --border-hover: #3a3a48;
-  --border-active: #d152d1;
+  --border-active: var(--brand);
 
   --text-primary: #e8ecf0;
   --text-secondary: #9ca3af;
-  --text-muted: #555566;
+  --text-muted: #8b8b9c;
   --text-inverse: #0f0f14;
 
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
   --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-brand: 0 4px 16px rgba(209, 82, 209, 0.2);
+  --shadow-brand: 0 4px 16px color-mix(in srgb, var(--brand) 20%, transparent);
 
   --scrollbar-track: #15151c;
   --scrollbar-thumb: #2d2d38;
@@ -60,6 +61,8 @@
   --danger-text: #fca5a5;
   --warning-text: #facc15;
   --toggle-active: #2f6a49;
+  --play: #2f6a49;
+  --on-play: #f8fafc;
 
   --status-not-started-bg: rgba(148, 163, 184, 0.12);
   --status-not-started-border: rgba(148, 163, 184, 0.3);
@@ -88,10 +91,11 @@
 .light {
   color-scheme: light;
 
-  --brand: #c040c0;
+  --brand: #b93ab9;
+  --on-brand: #ffffff;
   --brand-deep: #7a4f8a;
-  --brand-glow: rgba(192, 64, 192, 0.1);
-  --brand-glow-strong: rgba(192, 64, 192, 0.2);
+  --brand-glow: color-mix(in srgb, var(--brand) 10%, transparent);
+  --brand-glow-strong: color-mix(in srgb, var(--brand) 20%, transparent);
 
   --bg-base: #f3f4f6;
   --bg-surface: #ffffff;
@@ -101,16 +105,16 @@
 
   --border: #dcdce4;
   --border-hover: #c4c4d0;
-  --border-active: #c040c0;
+  --border-active: var(--brand);
 
   --text-primary: #1a1a2e;
   --text-secondary: #4b5563;
-  --text-muted: #9ca3af;
+  --text-muted: #676776;
   --text-inverse: #ffffff;
 
   --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 8px 32px rgba(0, 0, 0, 0.12);
-  --shadow-brand: 0 4px 16px rgba(192, 64, 192, 0.12);
+  --shadow-brand: 0 4px 16px color-mix(in srgb, var(--brand) 12%, transparent);
 
   --scrollbar-track: #f0f0f4;
   --scrollbar-thumb: #c8c8d4;
@@ -133,6 +137,8 @@
   --danger-text: #b91c1c;
   --warning-text: #a16207;
   --toggle-active: #2f855a;
+  --play: #2f855a;
+  --on-play: #ffffff;
 
   /* The -400 status utilities are tuned for dark surfaces; darken them on white. */
   --color-red-400: #b91c1c;
@@ -162,6 +168,28 @@
   --status-abandoned-text: #b91c1c;
 }
 
+/* ========== ACCENT PRESETS ========== */
+/* Magenta is the default (no attribute). A preset only sets --brand / --on-brand;
+   glow, shadow and border tokens derive from --brand in the theme blocks above. */
+:root {
+  accent-color: var(--brand);
+}
+
+:root[data-accent] {
+  --brand-deep: color-mix(in oklab, var(--brand) 45%, black);
+}
+
+:root[data-accent="violet"] { --brand: #a78bfa; --on-brand: #0f0f14; }
+:root.light[data-accent="violet"] { --brand: #7c3aed; --on-brand: #ffffff; }
+:root[data-accent="blue"] { --brand: #60a5fa; --on-brand: #0f0f14; }
+:root.light[data-accent="blue"] { --brand: #2563eb; --on-brand: #ffffff; }
+:root[data-accent="cyan"] { --brand: #22d3ee; --on-brand: #0f0f14; }
+:root.light[data-accent="cyan"] { --brand: #0e7490; --on-brand: #ffffff; }
+:root[data-accent="rose"] { --brand: #fb7185; --on-brand: #0f0f14; }
+:root.light[data-accent="rose"] { --brand: #e11d48; --on-brand: #ffffff; }
+:root[data-accent="orange"] { --brand: #fb923c; --on-brand: #0f0f14; }
+:root.light[data-accent="orange"] { --brand: #c2410c; --on-brand: #ffffff; }
+
 /* ========== GLOBAL STYLES ========== */
 
 body {
@@ -182,6 +210,16 @@ body {
 
 .motion-off .animate-pulse {
   animation: none !important;
+}
+
+/* Launch actions use a fixed green that never follows the accent. */
+.ui-play-btn {
+  background: var(--play);
+  color: var(--on-play);
+}
+
+.ui-play-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
 }
 
 /* Scrollbar styling */
