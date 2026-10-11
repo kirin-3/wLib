@@ -30,7 +30,7 @@ jobs:
           node-version: '20'
 
       - name: Lint Firefox extension
-        run: npx --yes web-ext@10.1.0 lint --source-dir=extension
+        run: npx --yes web-ext@10.7.0 lint --source-dir=extension
 
       # AMO accepts each extension version once, so only tagged releases sign;
       # manual dry runs package an unsigned XPI instead of burning the version.
@@ -38,7 +38,7 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         run: |
           set -euo pipefail
-          npx --yes web-ext@10.1.0 build \
+          npx --yes web-ext@10.7.0 build \
             --source-dir=extension \
             --artifacts-dir="$RUNNER_TEMP/wlib-extension" \
             --filename=wlib-unsigned.xpi
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/wlib-extension"
-          npx --yes web-ext@10.1.0 sign \
+          npx --yes web-ext@10.7.0 sign \
             --source-dir=extension \
             --artifacts-dir="$RUNNER_TEMP/wlib-extension" \
             --channel=unlisted \
