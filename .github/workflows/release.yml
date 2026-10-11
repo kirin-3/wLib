@@ -138,6 +138,7 @@ jobs:
           WLIB_BUILD_AUR: '1'
           WLIB_REQUIRE_PACKAGE_METADATA: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
           WLIB_MAINTAINER: ${{ vars.WLIB_MAINTAINER }}
+          WLIB_GDRIVE_CLIENT_SECRET: ${{ secrets.WLIB_GDRIVE_CLIENT_SECRET }}
         run: |
           export WLIB_SIGNED_FIREFOX_XPI="$(find "$RUNNER_TEMP/wlib-extension" -maxdepth 1 -name '*.xpi' -print -quit)"
           chmod +x scripts/build.sh
@@ -224,6 +225,8 @@ jobs:
 
       - name: Build and smoke Windows packages
         shell: pwsh
+        env:
+          WLIB_GDRIVE_CLIENT_SECRET: ${{ secrets.WLIB_GDRIVE_CLIENT_SECRET }}
         run: |
           $xpi = Get-ChildItem "$env:RUNNER_TEMP\wlib-extension\*.xpi" | Select-Object -First 1
           .\scripts\build-windows.ps1 `

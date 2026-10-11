@@ -8,7 +8,7 @@ const status = ref<LibrarySyncStatus>({ state: "off" });
 const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
-const location = ref<"" | "folder" | "dropbox">("");
+const location = ref<"" | "folder" | "dropbox" | "gdrive">("");
 const dialog = ref<"choice" | "unlock" | "encrypt" | null>(null);
 const dialogElement = ref<HTMLElement | null>(null);
 const passphrase = ref("");
@@ -118,21 +118,23 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); requestVersion++; });
 
 <template>
   <section class="sync-panel" aria-labelledby="sync-heading" :aria-busy="loading || status.state === 'syncing'">
-    <header><h3 id="sync-heading">Library sync</h3><p>Keep one library across your machines in a folder or your Dropbox app folder.</p></header>
+    <header><h3 id="sync-heading">Library sync</h3><p>Keep one library across your machines in a folder, your Dropbox app folder, or Google Drive.</p></header>
     <p v-if="status.mock" class="sync-description">Browser preview with mock data. No files are synced.</p>
     <p class="sync-description">Sync shares game metadata, ratings, notes, playtime, and general settings. Executable paths and launch options stay on this machine. Use one machine at a time; the newer library replaces the older one, including deletions.</p>
     <label for="sync-location">Sync location</label>
     <div class="sync-controls">
       <select id="sync-location" v-model="location" :disabled="disabled" @change="changeLocation">
-        <option value="">None</option><option value="folder">Folder</option><option value="dropbox">Dropbox</option>
+        <option value="">None</option><option value="folder">Folder</option><option value="dropbox">Dropbox</option><option value="gdrive">Google Drive</option>
       </select>
       <button v-if="location === 'folder'" type="button" :disabled="disabled" @click="browseFolder">Choose folder</button>
       <button v-if="location === 'dropbox' && status.location !== 'dropbox'" type="button" :disabled="disabled || !status.dropbox_available" @click="act(() => api.connectDropbox())">Connect Dropbox</button>
+      <button v-if="location === 'gdrive' && status.location !== 'gdrive'" type="button" :disabled="disabled || !status.gdrive_available" @click="act(() => api.connectGdrive())">Connect Google Drive</button>
       <button v-if="connected" type="button" :disabled="disabled" @click="act(() => api.disconnectSync())">Disconnect</button>
     </div>
     <p v-if="location === 'folder'" class="sync-description">Choose a folder kept in sync by your preferred tool. wLib writes wlib-library.json there.</p>
     <p v-if="location === 'dropbox' && !status.dropbox_available" class="sync-description">{{ status.dropbox_unavailable_reason }}</p>
-    <p v-if="status.connecting" role="status">Finish Dropbox sign-in in your browser.</p>
+    <p v-if="location === 'gdrive' && !status.gdrive_available" class="sync-description">{{ status.gdrive_unavailable_reason }}</p>
+    <p v-if="status.connecting" role="status">Finish {{ location === 'gdrive' ? 'Google' : 'Dropbox' }} sign-in in your browser.</p>
     <p v-if="status.folder_path" class="sync-path">{{ status.folder_path }}</p>
     <p v-if="status.account" class="sync-description">Connected account: {{ status.account }}</p>
     <div class="sync-status" role="status" aria-live="polite">

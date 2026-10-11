@@ -1177,20 +1177,33 @@ class Api:
             return self.library_sync.start_run()
         return result
 
-    def connect_dropbox(self) -> dict[str, object]:
-        result = self.library_sync.connect_dropbox()
+    def _open_signin(
+        self, result: dict[str, object], provider: str
+    ) -> dict[str, object]:
         if result.get("success"):
             opened = self.open_in_browser(str(result["url"]))
             if not opened.get("success"):
                 return {
                     "success": False,
-                    "error": "Could not open Dropbox sign-in in your browser.",
+                    "error": f"Could not open {provider} sign-in in your browser.",
                     "error_code": "browser_failed",
                 }
         return result
 
+    def connect_dropbox(self) -> dict[str, object]:
+        return self._open_signin(self.library_sync.connect_dropbox(), "Dropbox")
+
+    def connect_gdrive(self) -> dict[str, object]:
+        return self._open_signin(self.library_sync.connect_gdrive(), "Google")
+
     def complete_dropbox_callback(self, code: str, state: str) -> dict[str, object]:
         result = self.library_sync.complete_dropbox(code, state)
+        if result.get("success"):
+            _ = self.library_sync.start_run()
+        return result
+
+    def complete_gdrive_callback(self, code: str, state: str) -> dict[str, object]:
+        result = self.library_sync.complete_gdrive(code, state)
         if result.get("success"):
             _ = self.library_sync.start_run()
         return result

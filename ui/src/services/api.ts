@@ -279,7 +279,7 @@ export type LibrarySyncState = "off" | "idle" | "syncing" | "needs_choice" | "ne
 export type LibrarySyncChoice = "use-remote" | "use-local" | "merge-once";
 export interface LibrarySyncStatus extends ApiBasicResponse {
   state?: LibrarySyncState;
-  location?: "" | "folder" | "dropbox";
+  location?: "" | "folder" | "dropbox" | "gdrive";
   folder_path?: string;
   account?: string;
   encrypted?: boolean;
@@ -288,6 +288,8 @@ export interface LibrarySyncStatus extends ApiBasicResponse {
   last_error?: string;
   dropbox_available?: boolean;
   dropbox_unavailable_reason?: string;
+  gdrive_available?: boolean;
+  gdrive_unavailable_reason?: string;
   connecting?: boolean;
 }
 
@@ -871,6 +873,7 @@ class ApiService {
   async getSyncStatus(): Promise<LibrarySyncStatus> { return this.invoke("get_sync_status"); }
   async setSyncFolder(path: string): Promise<LibrarySyncStatus> { return this.invoke("set_sync_folder", path); }
   async connectDropbox(): Promise<LibrarySyncStatus> { return this.invoke("connect_dropbox"); }
+  async connectGdrive(): Promise<LibrarySyncStatus> { return this.invoke("connect_gdrive"); }
   async disconnectSync(): Promise<LibrarySyncStatus> { return this.invoke("disconnect_sync"); }
   async syncNow(): Promise<LibrarySyncStatus> { return this.invoke("sync_now"); }
   async resolveSyncChoice(choice: LibrarySyncChoice): Promise<LibrarySyncStatus> { return this.invoke("resolve_sync_choice", choice); }
@@ -1151,6 +1154,7 @@ class ApiService {
       case "get_sync_status":
       case "set_sync_folder":
       case "connect_dropbox":
+      case "connect_gdrive":
       case "disconnect_sync":
       case "sync_now":
       case "resolve_sync_choice":
@@ -1158,9 +1162,10 @@ class ApiService {
       case "unlock_sync": {
         let stored: LibrarySyncStatus = {};
         try { stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}"); } catch { /* Start with sync off when mock data is invalid. */ }
-        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, ...stored };
+        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, gdrive_available: true, ...stored };
         if (method === "set_sync_folder") Object.assign(status, { state: "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
         if (method === "connect_dropbox") Object.assign(status, { state: "idle", location: "dropbox", account: "Browser mock account", last_error: "" });
+        if (method === "connect_gdrive") Object.assign(status, { state: "idle", location: "gdrive", account: "mock@example.com", last_error: "" });
         if (method === "disconnect_sync") Object.assign(status, { state: "off", location: "", encrypted: false, account: "", folder_path: "", last_synced_at: "", last_device: "", last_error: "" });
         if (method === "sync_now" && status.state === "idle") Object.assign(status, { last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });
         if (method === "resolve_sync_choice") Object.assign(status, { state: "idle", last_error: "", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });

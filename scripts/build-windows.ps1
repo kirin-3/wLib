@@ -173,11 +173,25 @@ $env:WLIB_EXTENSION_STAGE = $ExtensionStage
 $env:WLIB_VERSION_FILE = $VersionFile
 $FrozenParent = Join-Path $BuildRoot "frozen"
 $PyInstallerWork = Join-Path $BuildRoot "pyinstaller"
-Invoke-Checked "Freeze wLib.exe" {
-    & $Python -m PyInstaller --clean --noconfirm `
-        --distpath $FrozenParent `
-        --workpath $PyInstallerWork `
-        (Join-Path $RepositoryRoot "packaging\windows\wlib.spec")
+# Embed the Google Drive client secret for the freeze only (gitignored module).
+$GDriveSecretModule = Join-Path $RepositoryRoot "core\_gdrive_secret.py"
+try {
+    if ($env:WLIB_GDRIVE_CLIENT_SECRET) {
+        if ($env:WLIB_GDRIVE_CLIENT_SECRET -notmatch '^[A-Za-z0-9_-]+$') {
+            throw "WLIB_GDRIVE_CLIENT_SECRET contains unexpected characters."
+        }
+        Set-Content -LiteralPath $GDriveSecretModule -Value "CLIENT_SECRET = `"$env:WLIB_GDRIVE_CLIENT_SECRET`"" -Encoding ascii
+    }
+    Invoke-Checked "Freeze wLib.exe" {
+        & $Python -m PyInstaller --clean --noconfirm `
+            --distpath $FrozenParent `
+            --workpath $PyInstallerWork `
+            (Join-Path $RepositoryRoot "packaging\windows\wlib.spec")
+    }
+} finally {
+    if ($env:WLIB_GDRIVE_CLIENT_SECRET) {
+        Remove-Item -LiteralPath $GDriveSecretModule -Force -ErrorAction SilentlyContinue
+    }
 }
 $CanonicalDirectory = Join-Path $FrozenParent "wLib"
 $Executable = Join-Path $CanonicalDirectory "wLib.exe"

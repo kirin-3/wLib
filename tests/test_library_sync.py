@@ -6,21 +6,25 @@ import os
 import subprocess
 import sys
 import time
+import types
 from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import core
 from core import database
 from core.api import Api
 from core.library_backup import build_sync_backup, encrypt_library_backup
 from core.library_sync import (
     DropboxLocation,
     FolderLocation,
+    GoogleDriveLocation,
     SyncConflict,
     SyncError,
     SyncManager,
+    _gdrive_client_secret,
 )
 
 
@@ -288,12 +292,12 @@ def test_pkce_state_expiry_exchange_and_disconnect(monkeypatch):
     assert query["token_access_type"] == ["offline"]
     assert sync.complete_dropbox("code", "wrong")["error_code"] == "invalid_oauth_state"
     pending = sync._pending
-    sync._pending = (pending[0], pending[1], time.monotonic() - 1)
+    sync._pending = (pending[0], pending[1], time.monotonic() - 1, pending[3])
     assert sync.complete_dropbox("code", pending[0])["success"] is False
     query = parse_qs(urlparse(sync.connect_dropbox()["url"]).query)
     monkeypatch.setattr(
         "core.library_sync._token_request",
-        lambda args: {"refresh_token": "secret", "access_token": "access"},
+        lambda *args: {"refresh_token": "secret", "access_token": "access"},
     )
     monkeypatch.setattr(DropboxLocation, "account_name", lambda self: "Tester")
     assert sync.complete_dropbox("code", query["state"][0])["success"]
@@ -305,6 +309,207 @@ def test_pkce_state_expiry_exchange_and_disconnect(monkeypatch):
     )
     sync.disconnect()
     assert not database.get_setting("sync_dropbox_refresh_token")
+    assert sync.status()["state"] == "off"
+
+
+def gdrive_urlopen(monkeypatch, replies):
+    calls = []
+    queue = iter(replies)
+
+    def urlopen(request, **kwargs):
+        calls.append(request)
+        result = next(queue)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    return calls
+
+
+def no_gdrive_secret(monkeypatch):
+    monkeypatch.delenv("WLIB_GDRIVE_CLIENT_SECRET", raising=False)
+    # A generated module on disk is also bound as an attribute of the package.
+    monkeypatch.delattr(core, "_gdrive_secret", raising=False)
+    monkeypatch.setitem(sys.modules, "core._gdrive_secret", None)
+
+
+def test_gdrive_client_secret_sources(monkeypatch):
+    no_gdrive_secret(monkeypatch)
+    assert _gdrive_client_secret() == ""
+    module = types.ModuleType("core._gdrive_secret")
+    module.CLIENT_SECRET = "from-module"
+    monkeypatch.setitem(sys.modules, "core._gdrive_secret", module)
+    assert _gdrive_client_secret() == "from-module"
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "from-env")
+    assert _gdrive_client_secret() == "from-env"
+
+
+def test_gdrive_secret_module_is_gitignored():
+    root = os.path.dirname(os.path.dirname(__file__))
+    with open(os.path.join(root, ".gitignore"), encoding="utf-8") as ignore:
+        assert "core/_gdrive_secret.py" in ignore.read().splitlines()
+
+
+def test_gdrive_refresh_lookup_download_and_upload(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    calls = gdrive_urlopen(
+        monkeypatch,
+        [
+            response({"access_token": "access", "expires_in": 300}),
+            response({"files": []}),
+            response({"files": [{"id": "early", "md5Checksum": "5"}, {"id": "late", "md5Checksum": "9"}]}),
+            response({"files": [{"id": "early", "md5Checksum": "5"}]}),
+            response(b"file"),
+            response({"files": []}),
+            response({"md5Checksum": "1"}),
+            response({"files": [{"id": "early", "md5Checksum": "1"}]}),
+            response({"md5Checksum": "2"}),
+        ],
+    )
+    location = GoogleDriveLocation("refresh")
+    assert location.revision() is None
+    assert location.revision() == "5"
+    assert location.read() == (b"file", "5")
+    assert location.write(b"new", None) == "1"
+    assert location.write(b"updated", "1") == "2"
+    refresh = parse_qs(calls[0].data.decode())
+    assert refresh["client_secret"] == ["test-secret"]
+    assert refresh["refresh_token"] == ["refresh"]
+    assert refresh["grant_type"] == ["refresh_token"]
+    lookup = parse_qs(urlparse(calls[1].full_url).query)
+    assert lookup["spaces"] == ["appDataFolder"]
+    assert lookup["orderBy"] == ["createdTime"]
+    # Content checksum, not Drive's `version`, which keeps rising after an upload.
+    assert lookup["fields"] == ["files(id,md5Checksum)"]
+    assert "trashed=false" in lookup["q"][0] and "wlib-library.json" in lookup["q"][0]
+    assert calls[1].get_header("Authorization") == "Bearer access"
+    assert "files/early?alt=media" in calls[4].full_url
+    create, update = calls[6], calls[8]
+    assert create.get_method() == "POST"
+    assert "uploadType=multipart" in create.full_url
+    assert b'"parents": ["appDataFolder"]' in create.data and b"new" in create.data
+    assert create.get_header("Content-type").startswith("multipart/related")
+    assert update.get_method() == "PATCH"
+    assert "files/early?uploadType=media" in update.full_url
+    assert update.data == b"updated"
+    assert "fields=md5Checksum" in update.full_url
+    assert "fields=md5Checksum" in create.full_url
+
+
+def test_gdrive_conflicts_401_and_errors(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a"}),
+            response({"files": [{"id": "f", "md5Checksum": "7"}]}),
+            response({"files": [{"id": "f", "md5Checksum": "7"}]}),
+            http_error(401),
+            response({"access_token": "b"}),
+            response({"files": [{"id": "f", "md5Checksum": "8"}]}),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    location = GoogleDriveLocation("refresh")
+    with pytest.raises(SyncConflict):
+        location.write(b"file", "6")
+    with pytest.raises(SyncConflict):
+        location.write(b"file", None)
+    assert location.revision() == "8"
+    mock.side_effect = URLError("credential should never surface")
+    with pytest.raises(SyncError) as error:
+        location.revision()
+    assert "credential" not in str(error.value)
+    mock.side_effect = http_error(403, {"error": "credential should never surface"})
+    with pytest.raises(SyncError) as error:
+        location.revision()
+    assert "credential" not in str(error.value)
+    assert error.value.error_code == "gdrive_request_failed"
+
+
+def test_gdrive_account_name_and_revoke(monkeypatch):
+    calls = gdrive_urlopen(
+        monkeypatch,
+        [
+            response({"access_token": "a"}),
+            response({"user": {"displayName": "Name", "emailAddress": "me@example.com"}}),
+            response({"user": {"displayName": "Name"}}),
+            response({}),
+            response(b""),
+        ],
+    )
+    location = GoogleDriveLocation("refresh")
+    assert location.account_name() == "me@example.com"
+    assert location.account_name() == "Name"
+    assert location.account_name() == "Google Drive"
+    location.revoke()
+    assert calls[-1].full_url == "https://oauth2.googleapis.com/revoke"
+    assert parse_qs(calls[-1].data.decode()) == {"token": ["refresh"]}
+
+
+def test_gdrive_unavailable_reasons(monkeypatch):
+    no_gdrive_secret(monkeypatch)
+    sync = SyncManager()
+    sync.server_available = True
+    status = sync.status()
+    assert status["gdrive_available"] is False
+    assert "credentials" in status["gdrive_unavailable_reason"]
+    assert sync.connect_gdrive()["error_code"] == "gdrive_unavailable"
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    sync.server_available = False
+    status = sync.status()
+    assert status["gdrive_available"] is False
+    assert "callback server" in status["gdrive_unavailable_reason"]
+    assert sync.connect_gdrive()["success"] is False
+    sync.server_available = True
+    assert sync.status()["gdrive_available"] is True
+
+
+def test_gdrive_signin_state_exchange_and_disconnect(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    sync = SyncManager()
+    sync.server_available = True
+    query = parse_qs(urlparse(sync.connect_gdrive()["url"]).query)
+    assert query["scope"] == ["https://www.googleapis.com/auth/drive.appdata"]
+    assert query["access_type"] == ["offline"]
+    assert query["prompt"] == ["consent"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["redirect_uri"] == ["http://127.0.0.1:8183/gdrive/callback"]
+    assert "client_secret" not in query
+    assert sync.complete_gdrive("code", "wrong")["error_code"] == "invalid_oauth_state"
+    # A Dropbox callback must not complete a pending Google sign-in.
+    result = sync.complete_dropbox("code", query["state"][0])
+    assert result["error_code"] == "invalid_oauth_state"
+    assert sync.status()["connecting"] is True
+    monkeypatch.setattr(
+        "core.library_sync._token_request", lambda *args: {"access_token": "access"}
+    )
+    result = sync.complete_gdrive("code", query["state"][0])
+    assert result["error_code"] == "gdrive_auth_failed"
+    assert not database.get_setting("sync_gdrive_refresh_token")
+    query = parse_qs(urlparse(sync.connect_gdrive()["url"]).query)
+    monkeypatch.setattr(
+        "core.library_sync._token_request",
+        lambda *args: {"refresh_token": "secret", "access_token": "access"},
+    )
+    monkeypatch.setattr(GoogleDriveLocation, "account_name", lambda self: "me@example.com")
+    assert sync.complete_gdrive("code", query["state"][0])["success"]
+    assert database.get_setting("sync_gdrive_refresh_token") == "secret"
+    status = sync.status()
+    assert status["location"] == "gdrive" and status["account"] == "me@example.com"
+    assert "secret" not in json.dumps(status)
+    # Reconnecting shares the old grant, so the old token must not be revoked.
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        MagicMock(side_effect=AssertionError("reconnect must not revoke")),
+    )
+    query = parse_qs(urlparse(sync.connect_gdrive()["url"]).query)
+    assert sync.complete_gdrive("code", query["state"][0])["success"]
+    calls = gdrive_urlopen(monkeypatch, [response(b"")])
+    sync.disconnect()
+    assert [call.full_url for call in calls] == ["https://oauth2.googleapis.com/revoke"]
+    assert not database.get_setting("sync_gdrive_refresh_token")
+    assert not database.get_setting("sync_gdrive_account")
     assert sync.status()["state"] == "off"
 
 
@@ -349,6 +554,8 @@ def test_api_sync_methods(tmp_path, monkeypatch):
     api.library_sync.server_available = True
     monkeypatch.setattr(api, "open_in_browser", lambda url: {"success": True})
     assert api.connect_dropbox()["success"]
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    assert api.connect_gdrive()["success"]
     assert api.disconnect_sync()["state"] == "off"
     assert (
         api.set_sync_folder(str(tmp_path / "missing"))["error_code"]

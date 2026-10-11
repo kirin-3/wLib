@@ -19,7 +19,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from http.client import HTTPResponse
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, cast, final
 
 from core import database
 from core.library_backup import (
@@ -43,6 +43,18 @@ DROPBOX_PATH = "/wlib-library.json"
 DROPBOX_SCOPES = (
     "files.content.read files.content.write files.metadata.read account_info.read"
 )
+DROPBOX_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
+# Desktop client IDs are public. The matching secret is not; see _gdrive_client_secret.
+GDRIVE_CLIENT_ID = (
+    "176038770966-nglo31o6lcqd3l31klmvrbl4fisoo3na.apps.googleusercontent.com"
+)
+GDRIVE_REDIRECT_URI = "http://127.0.0.1:8183/gdrive/callback"
+GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata"
+GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GDRIVE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+GDRIVE_API = "https://www.googleapis.com/drive/v3/"
+GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/"
+CALLBACK_UNAVAILABLE = "The local callback server on port 8183 is unavailable."
 
 
 class SyncError(Exception):
@@ -155,54 +167,100 @@ def _json_object(data: bytes) -> dict[str, object]:
         ) from exc
 
 
-def _token_request(parameters: Mapping[str, str]) -> dict[str, object]:
+def _gdrive_client_secret() -> str:
+    secret = os.environ.get("WLIB_GDRIVE_CLIENT_SECRET", "")
+    if secret:
+        return secret
+    try:
+        # Written by the build scripts and gitignored. It must stay a plain import
+        # statement: PyInstaller only bundles modules it finds that way.
+        from core import _gdrive_secret
+    except ImportError:
+        return ""
+    return _gdrive_secret.CLIENT_SECRET
+
+
+def _pkce() -> tuple[str, str, str]:
+    verifier = secrets.token_urlsafe(64)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    return verifier, challenge, secrets.token_urlsafe(32)
+
+
+def _form_post(url: str, parameters: Mapping[str, str]) -> bytes:
     request = urllib.request.Request(
-        "https://api.dropboxapi.com/oauth2/token",
+        url,
         data=urllib.parse.urlencode(parameters).encode("ascii"),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
+    with cast(
+        HTTPResponse,
+        urllib.request.urlopen(
+            request, context=ssl.create_default_context(), timeout=8
+        ),
+    ) as response:
+        return response.read()
+
+
+def _token_request(
+    url: str, parameters: Mapping[str, str], provider: str, error_code: str
+) -> dict[str, object]:
     try:
-        with cast(
-            HTTPResponse,
-            urllib.request.urlopen(
-                request, context=ssl.create_default_context(), timeout=8
-            ),
-        ) as response:
-            return _json_object(response.read())
+        return _json_object(_form_post(url, parameters))
     except (OSError, urllib.error.URLError) as exc:
         raise SyncError(
-            "Dropbox sign-in could not be completed. Connect again.",
-            "dropbox_auth_failed",
+            f"{provider} sign-in could not be completed. Connect again.", error_code
         ) from exc
 
 
-class DropboxLocation:
+class _OAuthLocation:
+    provider: str = ""
+    auth_error: str = ""
+    _refresh_token: str
+    _access_token: str
+    _expires_at: float
+
     def __init__(self, refresh_token: str) -> None:
-        self._refresh_token: str = refresh_token
-        self._access_token: str = ""
-        self._expires_at: float = 0.0
+        self._refresh_token = refresh_token
+        self._access_token = ""
+        self._expires_at = 0.0
 
     def accept_token(self, payload: Mapping[str, object]) -> None:
         self._access_token = str(payload.get("access_token") or "")
         try:
             self._expires_at = (
-                time.monotonic() + float(str(payload.get("expires_in", 14400))) - 30
+                time.monotonic() + float(str(payload.get("expires_in", 3600))) - 30
             )
         except ValueError as exc:
             raise SyncError(
-                "Dropbox returned an invalid token response.", "dropbox_auth_failed"
+                f"{self.provider} returned an invalid token response.",
+                self.auth_error,
             ) from exc
         if not self._access_token:
-            raise SyncError("Dropbox returned no access token.", "dropbox_auth_failed")
+            raise SyncError(
+                f"{self.provider} returned no access token.", self.auth_error
+            )
+
+
+@final
+class DropboxLocation(_OAuthLocation):
+    provider: str = "Dropbox"
+    auth_error: str = "dropbox_auth_failed"
 
     def _refresh(self) -> None:
         self.accept_token(
             _token_request(
+                DROPBOX_TOKEN_URL,
                 {
                     "grant_type": "refresh_token",
                     "refresh_token": self._refresh_token,
                     "client_id": DROPBOX_APP_KEY,
-                }
+                },
+                self.provider,
+                self.auth_error,
             )
         )
 
@@ -327,6 +385,168 @@ class DropboxLocation:
         _ = self._request("auth/token/revoke")
 
 
+@final
+class GoogleDriveLocation(_OAuthLocation):
+    provider: str = "Google"
+    auth_error: str = "gdrive_auth_failed"
+
+    def __init__(self, refresh_token: str) -> None:
+        super().__init__(refresh_token)
+        self._file_id: str = ""
+
+    def _refresh(self) -> None:
+        self.accept_token(
+            _token_request(
+                GDRIVE_TOKEN_URL,
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                    "client_id": GDRIVE_CLIENT_ID,
+                    "client_secret": _gdrive_client_secret(),
+                },
+                self.provider,
+                self.auth_error,
+            )
+        )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: bytes | None = None,
+        content_type: str = "application/json",
+    ) -> bytes:
+        for attempt in range(2):
+            if not self._access_token or time.monotonic() >= self._expires_at:
+                self._refresh()
+            headers = {"Authorization": f"Bearer {self._access_token}"}
+            if data is not None:
+                headers["Content-Type"] = content_type
+            request = urllib.request.Request(
+                url, data=data, headers=headers, method=method
+            )
+            try:
+                with cast(
+                    HTTPResponse,
+                    urllib.request.urlopen(
+                        request, context=ssl.create_default_context(), timeout=8
+                    ),
+                ) as response:
+                    return response.read()
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401 and attempt == 0:
+                    self._access_token = ""
+                    continue
+                raise SyncError(
+                    "Google Drive rejected the request. Check the connection and permissions.",
+                    "gdrive_request_failed",
+                ) from exc
+            except (OSError, urllib.error.URLError) as exc:
+                raise SyncError("Google Drive is unavailable. Try again later.") from exc
+        raise SyncError("Google sign-in expired. Connect again.", "gdrive_auth_failed")
+
+    def _lookup(self) -> tuple[str, str] | None:
+        # Earliest-created wins so every machine agrees if duplicates exist. The
+        # revision is the content checksum: Drive's `version` keeps rising after an
+        # upload, so a value read from the upload response is already stale.
+        query = urllib.parse.urlencode(
+            {
+                "spaces": "appDataFolder",
+                "q": f"name='{SYNC_FILENAME}' and trashed=false",
+                "orderBy": "createdTime",
+                "pageSize": "1",
+                "fields": "files(id,md5Checksum)",
+            }
+        )
+        files = _json_object(self._request("GET", GDRIVE_API + "files?" + query)).get(
+            "files"
+        )
+        if not isinstance(files, list) or not files:
+            self._file_id = ""
+            return None
+        first = cast(list[object], files)[0]
+        item = cast(dict[str, object], first) if isinstance(first, dict) else {}
+        file_id, checksum = (
+            str(item.get("id") or ""),
+            str(item.get("md5Checksum") or ""),
+        )
+        if not file_id or not checksum:
+            raise SyncError(
+                "Google Drive returned no file revision.", "gdrive_request_failed"
+            )
+        self._file_id = file_id
+        return file_id, checksum
+
+    def revision(self) -> str | None:
+        found = self._lookup()
+        return found[1] if found else None
+
+    def read(self) -> tuple[bytes, str]:
+        found = self._lookup()
+        if found is None:
+            raise SyncConflict()
+        file_id, checksum = found
+        data = self._request(
+            "GET", GDRIVE_API + "files/" + urllib.parse.quote(file_id) + "?alt=media"
+        )
+        return data, checksum
+
+    def write(self, data: bytes, expected_revision: str | None) -> str:
+        # ponytail: Drive has no conditional upload, so a write by another machine
+        # between this check and the upload still wins the race. Use one machine at a time.
+        if self.revision() != expected_revision:
+            raise SyncConflict()
+        if self._file_id:
+            result = self._request(
+                "PATCH",
+                GDRIVE_UPLOAD
+                + "files/"
+                + urllib.parse.quote(self._file_id)
+                + "?uploadType=media&fields=md5Checksum",
+                data=data,
+            )
+        else:
+            boundary = secrets.token_hex(16)
+            metadata = json.dumps(
+                {"name": SYNC_FILENAME, "parents": ["appDataFolder"]}
+            ).encode("utf-8")
+            body = b"".join(
+                (
+                    f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(),
+                    metadata,
+                    f"\r\n--{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(),
+                    data,
+                    f"\r\n--{boundary}--".encode(),
+                )
+            )
+            result = self._request(
+                "POST",
+                GDRIVE_UPLOAD + "files?uploadType=multipart&fields=md5Checksum",
+                data=body,
+                content_type=f"multipart/related; boundary={boundary}",
+            )
+        checksum = str(_json_object(result).get("md5Checksum") or "")
+        if not checksum:
+            raise SyncError(
+                "Google Drive returned no upload revision.", "gdrive_request_failed"
+            )
+        return checksum
+
+    def account_name(self) -> str:
+        query = urllib.parse.urlencode({"fields": "user(displayName,emailAddress)"})
+        user = _json_object(self._request("GET", GDRIVE_API + "about?" + query)).get(
+            "user"
+        )
+        fields = cast(dict[str, object], user) if isinstance(user, dict) else {}
+        return str(
+            fields.get("emailAddress") or fields.get("displayName") or "Google Drive"
+        )
+
+    def revoke(self) -> None:
+        _ = _form_post(GDRIVE_REVOKE_URL, {"token": self._refresh_token})
+
+
 class SyncManager:
     def __init__(
         self,
@@ -337,12 +557,14 @@ class SyncManager:
         self._worker_lock: threading.Lock = threading.Lock()
         self._location_override: SyncLocation | None = location
         self._dropbox: DropboxLocation | None = None
+        self._gdrive: GoogleDriveLocation | None = None
         self._on_pull: Callable[[], None] | None = on_pull
         self._state: str = "idle"
         self._error_code: str = ""
         self.server_available: bool = False
         self._remote_encrypted: bool = False
-        self._pending: tuple[str, str, float] | None = None
+        # (state, PKCE verifier, expiry, provider)
+        self._pending: tuple[str, str, float, str] | None = None
         self._stop: threading.Event = threading.Event()
         self._worker: threading.Thread | None = None
         self._timer: threading.Thread | None = None
@@ -350,8 +572,15 @@ class SyncManager:
     def _setting(self, key: str) -> str:
         return database.get_setting("sync_" + key) or ""
 
+    def _gdrive_unavailable(self) -> str:
+        if not GDRIVE_CLIENT_ID or not _gdrive_client_secret():
+            return "This build of wLib has no Google Drive credentials."
+        return "" if self.server_available else CALLBACK_UNAVAILABLE
+
     def status(self) -> dict[str, object]:
-        enabled = bool(self._setting("location"))
+        location = self._setting("location")
+        enabled = bool(location)
+        gdrive_reason = self._gdrive_unavailable()
         error = self._setting("last_error")
         return {
             "success": True,
@@ -364,9 +593,13 @@ class SyncManager:
                 if enabled
                 else "off"
             ),
-            "location": self._setting("location"),
+            "location": location,
             "folder_path": self._setting("folder_path"),
-            "account": self._setting("dropbox_account"),
+            "account": (
+                self._setting(location + "_account")
+                if location in ("dropbox", "gdrive")
+                else ""
+            ),
             "encrypted": bool(self._setting("encryption_key")),
             "last_synced_at": self._setting("last_synced_at"),
             "last_device": self._setting("last_device"),
@@ -374,10 +607,10 @@ class SyncManager:
             "error_code": self._error_code,
             "dropbox_available": self.server_available,
             "dropbox_unavailable_reason": (
-                ""
-                if self.server_available
-                else "The local callback server on port 8183 is unavailable."
+                "" if self.server_available else CALLBACK_UNAVAILABLE
             ),
+            "gdrive_available": not gdrive_reason,
+            "gdrive_unavailable_reason": gdrive_reason,
             "connecting": self._pending is not None,
         }
 
@@ -413,6 +646,14 @@ class SyncManager:
             if self._dropbox is None:
                 self._dropbox = DropboxLocation(self._setting("dropbox_refresh_token"))
             return self._dropbox
+        if self._setting("location") == "gdrive" and self._setting(
+            "gdrive_refresh_token"
+        ):
+            if self._gdrive is None:
+                self._gdrive = GoogleDriveLocation(
+                    self._setting("gdrive_refresh_token")
+                )
+            return self._gdrive
         raise SyncError("Choose a sync location first.", "sync_off")
 
     def _reset_connection(self, values: Mapping[str, str]) -> None:
@@ -681,64 +922,141 @@ class SyncManager:
             except Exception as error:
                 return self._error(error)
 
+    def _start_signin(
+        self, provider: str, authorize_url: str, parameters: Mapping[str, str]
+    ) -> dict[str, object]:
+        verifier, challenge, state = _pkce()
+        self._pending = (state, verifier, time.monotonic() + 600, provider)
+        query = urllib.parse.urlencode(
+            {
+                **parameters,
+                "response_type": "code",
+                "code_challenge_method": "S256",
+                "code_challenge": challenge,
+                "state": state,
+            }
+        )
+        return {"success": True, "url": authorize_url + "?" + query}
+
+    def _take_pending(self, provider: str, label: str, code: str, state: str) -> str:
+        """Check the callback against the pending sign-in and return its PKCE verifier."""
+        pending = self._pending
+        if (
+            pending is None
+            or pending[3] != provider
+            or not secrets.compare_digest(state, pending[0])
+            or time.monotonic() > pending[2]
+        ):
+            raise SyncError(
+                f"{label} sign-in expired or did not match. Connect again.",
+                "invalid_oauth_state",
+            )
+        self._pending = None
+        if not code:
+            raise SyncError(
+                f"{label} sign-in was cancelled. Connect again.",
+                provider + "_auth_failed",
+            )
+        return pending[1]
+
     def connect_dropbox(self) -> dict[str, object]:
         with self._lock:
             if not self.server_available:
                 return {
                     "success": False,
-                    "error": "The local callback server on port 8183 is unavailable.",
+                    "error": CALLBACK_UNAVAILABLE,
                     "error_code": "callback_unavailable",
                 }
-            verifier, state = secrets.token_urlsafe(64), secrets.token_urlsafe(32)
-            self._pending = (state, verifier, time.monotonic() + 600)
-            challenge = (
-                base64.urlsafe_b64encode(
-                    hashlib.sha256(verifier.encode("ascii")).digest()
-                )
-                .decode("ascii")
-                .rstrip("=")
-            )
-            url = "https://www.dropbox.com/oauth2/authorize?" + urllib.parse.urlencode(
+            return self._start_signin(
+                "dropbox",
+                "https://www.dropbox.com/oauth2/authorize",
                 {
                     "client_id": DROPBOX_APP_KEY,
-                    "response_type": "code",
                     "redirect_uri": DROPBOX_REDIRECT_URI,
                     "token_access_type": "offline",
-                    "code_challenge_method": "S256",
-                    "code_challenge": challenge,
-                    "state": state,
                     "scope": DROPBOX_SCOPES,
-                }
+                },
             )
-            return {"success": True, "url": url}
+
+    def connect_gdrive(self) -> dict[str, object]:
+        with self._lock:
+            reason = self._gdrive_unavailable()
+            if reason:
+                return {
+                    "success": False,
+                    "error": reason,
+                    "error_code": "gdrive_unavailable",
+                }
+            return self._start_signin(
+                "gdrive",
+                "https://accounts.google.com/o/oauth2/v2/auth",
+                {
+                    "client_id": GDRIVE_CLIENT_ID,
+                    "redirect_uri": GDRIVE_REDIRECT_URI,
+                    "scope": GDRIVE_SCOPE,
+                    "access_type": "offline",
+                    "prompt": "consent",
+                },
+            )
+
+    def complete_gdrive(self, code: str, state: str) -> dict[str, object]:
+        with self._lock:
+            try:
+                verifier = self._take_pending("gdrive", "Google", code, state)
+                token = _token_request(
+                    GDRIVE_TOKEN_URL,
+                    {
+                        "client_id": GDRIVE_CLIENT_ID,
+                        "client_secret": _gdrive_client_secret(),
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": GDRIVE_REDIRECT_URI,
+                        "code_verifier": verifier,
+                    },
+                    "Google",
+                    "gdrive_auth_failed",
+                )
+                refresh = str(token.get("refresh_token") or "")
+                if not refresh:
+                    raise SyncError(
+                        "Google returned no refresh token. Connect again.",
+                        "gdrive_auth_failed",
+                    )
+                location = GoogleDriveLocation(refresh)
+                location.accept_token(token)
+                name = location.account_name()
+                # Same account, same grant: revoking the old token would kill the new one.
+                database.update_setting("sync_gdrive_refresh_token", "")
+                self._gdrive = None
+                self._disconnect_locked()
+                self._gdrive = location
+                self._reset_connection(
+                    {
+                        "sync_location": "gdrive",
+                        "sync_folder_path": "",
+                        "sync_gdrive_refresh_token": refresh,
+                        "sync_gdrive_account": name,
+                    }
+                )
+                return self.status()
+            except Exception as error:
+                return self._error(error)
 
     def complete_dropbox(self, code: str, state: str) -> dict[str, object]:
         with self._lock:
             try:
-                pending = self._pending
-                if (
-                    pending is None
-                    or not secrets.compare_digest(state, pending[0])
-                    or time.monotonic() > pending[2]
-                ):
-                    raise SyncError(
-                        "Dropbox sign-in expired or did not match. Connect again.",
-                        "invalid_oauth_state",
-                    )
-                self._pending = None
-                if not code:
-                    raise SyncError(
-                        "Dropbox sign-in was cancelled. Connect again.",
-                        "dropbox_auth_failed",
-                    )
+                verifier = self._take_pending("dropbox", "Dropbox", code, state)
                 token = _token_request(
+                    DROPBOX_TOKEN_URL,
                     {
                         "client_id": DROPBOX_APP_KEY,
                         "grant_type": "authorization_code",
                         "code": code,
                         "redirect_uri": DROPBOX_REDIRECT_URI,
-                        "code_verifier": pending[1],
-                    }
+                        "code_verifier": verifier,
+                    },
+                    "Dropbox",
+                    "dropbox_auth_failed",
                 )
                 refresh = str(token.get("refresh_token") or "")
                 if not refresh:
@@ -764,14 +1082,16 @@ class SyncManager:
                 return self._error(error)
 
     def _disconnect_locked(self) -> None:
-        if self._setting("dropbox_refresh_token"):
-            try:
-                location = self._dropbox or DropboxLocation(
-                    self._setting("dropbox_refresh_token")
-                )
-                location.revoke()
-            except Exception:
-                pass
+        for provider, cached, cls in (
+            ("dropbox", self._dropbox, DropboxLocation),
+            ("gdrive", self._gdrive, GoogleDriveLocation),
+        ):
+            token = self._setting(provider + "_refresh_token")
+            if token:
+                try:
+                    (cached or cls(token)).revoke()
+                except Exception:
+                    pass
         database.update_settings(
             {
                 "sync_" + key: ""
@@ -780,6 +1100,8 @@ class SyncManager:
                     "folder_path",
                     "dropbox_refresh_token",
                     "dropbox_account",
+                    "gdrive_refresh_token",
+                    "gdrive_account",
                     "encryption_key",
                     "encryption_salt",
                     "encryption_change",
@@ -790,7 +1112,7 @@ class SyncManager:
                 )
             }
         )
-        self._dropbox, self._pending = None, None
+        self._dropbox, self._gdrive, self._pending = None, None, None
         self._state, self._error_code = "idle", ""
 
     def disconnect(self) -> dict[str, object]:

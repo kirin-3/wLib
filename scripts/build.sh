@@ -169,6 +169,17 @@ cd "$PROJECT_DIR"
 echo "📦 Installing Python dependencies for build..."
 pip install -r requirements.txt
 
+# ── Embed the Google Drive client secret (gitignored; removed after the build) ──
+GDRIVE_SECRET_MODULE="$PROJECT_DIR/core/_gdrive_secret.py"
+if [ -n "${WLIB_GDRIVE_CLIENT_SECRET:-}" ]; then
+    if [[ ! "$WLIB_GDRIVE_CLIENT_SECRET" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        echo "WLIB_GDRIVE_CLIENT_SECRET contains unexpected characters." >&2
+        exit 1
+    fi
+    trap 'rm -f "$GDRIVE_SECRET_MODULE"' EXIT
+    printf 'CLIENT_SECRET = "%s"\n' "$WLIB_GDRIVE_CLIENT_SECRET" > "$GDRIVE_SECRET_MODULE"
+fi
+
 # ── Build Python Backend with PyInstaller ──
 echo "🐍 Building Python binary with PyInstaller..."
 export QT_API="${QT_API:-pyqt6}"
@@ -191,6 +202,7 @@ pyinstaller --noconfirm --onedir \
     --exclude-module "webview.platforms.gtk" \
     --exclude-module "webview.platforms.gtkwebkit2" \
     main.py
+[ -z "${WLIB_GDRIVE_CLIENT_SECRET:-}" ] || rm -f "$GDRIVE_SECRET_MODULE"
 
 # Clean up system libraries bundled by PyInstaller that break host graphics drivers (e.g. Vulkan/OpenGL)
 # These MUST use the host's native versions to work with the host's GPU drivers.

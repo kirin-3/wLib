@@ -38,6 +38,17 @@ async (page) => {
     await page.getByRole("button", { name: "Connect Dropbox", exact: true }).click();
     await page.getByRole("button", { name: "Sync now", exact: true }).click();
     await verifyContrast();
+    await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await page.getByText("Sync is off", { exact: true }).waitFor();
+    await page.getByLabel("Sync location").selectOption("gdrive");
+    await page.getByRole("button", { name: "Connect Google Drive", exact: true }).click();
+    await page.getByText("Connected account: mock@example.com", { exact: true }).waitFor();
+    await verifyContrast();
+    await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await page.getByText("Sync is off", { exact: true }).waitFor();
+    await page.getByLabel("Sync location").selectOption("dropbox");
+    await page.getByRole("button", { name: "Connect Dropbox", exact: true }).click();
+    await page.getByRole("button", { name: "Sync now", exact: true }).click();
     await page.getByRole("checkbox", { name: "Encrypt the sync file with a passphrase", exact: true }).click();
     await page.getByRole("dialog").waitFor();
     await verifyContrast();

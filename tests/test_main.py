@@ -66,6 +66,41 @@ def test_dropbox_callback_without_origin(monkeypatch):
     assert b"You can close this tab" in handler.wfile.getvalue()
 
 
+@pytest.mark.parametrize(
+    "path,method,label",
+    [
+        ("/dropbox/callback", "complete_dropbox_callback", "Dropbox"),
+        ("/gdrive/callback", "complete_gdrive_callback", "Google Drive"),
+    ],
+)
+@pytest.mark.parametrize("success,status", [(True, 200), (False, 400)])
+def test_sync_oauth_callbacks_over_http(path, method, label, success, status):
+    server = main.ExtensionServer(("127.0.0.1", 0), main.ExtensionRequestHandler)
+    server.sync_api = MagicMock()
+    getattr(server.sync_api, method).return_value = {"success": success}
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
+    thread.start()
+    connection = HTTPConnection(*server.server_address, timeout=3)
+    try:
+        connection.request(
+            "GET", f"{path}?code=one&state=two", headers={"Host": "localhost:8183"}
+        )
+        response = connection.getresponse()
+        page = response.read().decode()
+        assert response.status == status
+        assert response.getheader("Content-Security-Policy") == "default-src 'none'"
+        assert (f"{label} connected" in page) is success
+        assert (f"{label} sign-in failed" in page) is not success
+        getattr(server.sync_api, method).assert_called_once_with("one", "two")
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
 def test_dropbox_callback_origin_rules_unchanged():
     handler = _make_extension_handler(
         "/dropbox/callback?code=one&state=two",

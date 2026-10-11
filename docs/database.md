@@ -8,6 +8,7 @@ Local settings keys, all excluded from manual exports/imports and the sync file:
 
 - `sync_location`, `sync_folder_path`: configured provider and folder.
 - `sync_dropbox_refresh_token`, `sync_dropbox_account`: local credential and display name; access tokens stay in memory.
+- `sync_gdrive_refresh_token`, `sync_gdrive_account`: the same for Google Drive; the account is the Google email.
 - `sync_encryption_key`, `sync_encryption_salt`: base64 derived key and salt, never a passphrase.
 - `sync_encryption_change`: pending encryption-format change requiring a write.
 - `sync_local_modified_at`, `sync_last_synced_at`, `sync_last_revision`: change detection and successful file revision.

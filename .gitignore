@@ -32,6 +32,9 @@ node_modules/
 .env.*
 !.env.example
 
+# Google Drive OAuth client secret, written by the build scripts
+core/_gdrive_secret.py
+
 # Editor directories and files
 .idea/
 .vscode/

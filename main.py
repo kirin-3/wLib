@@ -34,6 +34,11 @@ RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log"
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
 EXTENSION_REQUEST_HEADER = "X-wLib-Extension"
+# Sync sign-in redirects: path -> (Api method, provider name for the result page).
+OAUTH_CALLBACKS = {
+    "/dropbox/callback": ("complete_dropbox_callback", "Dropbox"),
+    "/gdrive/callback": ("complete_gdrive_callback", "Google Drive"),
+}
 MAX_EXTENSION_BODY_BYTES = 1024 * 1024
 renderer_log_lock = threading.Lock()
 
@@ -732,13 +737,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         self._discard_request_body()
         from urllib.parse import urlparse, parse_qs
 
-        if urlparse(self.path).path == "/dropbox/callback":
+        sign_in = OAUTH_CALLBACKS.get(urlparse(self.path).path)
+        if sign_in is not None:
+            method, label = sign_in
             query = parse_qs(urlparse(self.path).query)
             callback_api = cast(ExtensionServer, self.server).sync_api
             result = (
-                callback_api.complete_dropbox_callback(
-                    query.get("code", [""])[0], query.get("state", [""])[0]
-                )
+                cast(
+                    Callable[[str, str], dict[str, object]],
+                    getattr(callback_api, method),
+                )(query.get("code", [""])[0], query.get("state", [""])[0])
                 if callback_api is not None
                 else {"success": False}
             )
@@ -748,12 +756,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Security-Policy", "default-src 'none'")
             self.end_headers()
             message = (
-                "Dropbox connected. You can close this tab."
+                f"{label} connected. You can close this tab."
                 if result.get("success")
-                else "Dropbox sign-in failed or expired. Return to wLib and connect again."
+                else f"{label} sign-in failed or expired. Return to wLib and connect again."
             )
             _ = self.wfile.write(
-                f"<!doctype html><html lang='en'><meta charset='utf-8'><title>wLib Dropbox</title><p>{message}</p></html>".encode(
+                f"<!doctype html><html lang='en'><meta charset='utf-8'><title>wLib {label}</title><p>{message}</p></html>".encode(
                     "utf-8"
                 )
             )

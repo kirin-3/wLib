@@ -25,6 +25,19 @@ Backend changes are validated separately from release packaging through `.github
 
 Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
 
+### Google Drive client secret
+
+Google Drive sync uses a Google Desktop OAuth client. Google requires the client secret in token requests even with PKCE, but does not treat it as confidential for installed apps. It still stays out of the repository (GitHub push protection blocks `GOCSPX-` values).
+
+- **Release builds:** add the repository secret `WLIB_GDRIVE_CLIENT_SECRET`. `release.yml` passes it to `scripts/build.sh` and `scripts/build-windows.ps1`. Each script writes it to the gitignored `core/_gdrive_secret.py` before PyInstaller runs and deletes the module afterwards (also on failure). Without the secret the build still succeeds and the Google Drive option reports that the build has no credentials; Folder and Dropbox sync are unaffected.
+- **Development and source runs:** export the variable before starting wLib. The environment variable takes precedence over the generated module.
+
+```bash
+WLIB_GDRIVE_CLIENT_SECRET=GOCSPX-your-secret DEV_MODE=1 python main.py
+```
+
+- **Consent screen:** the OAuth consent screen must be set to **In production**. In Testing, Google expires refresh tokens after 7 days and users are silently disconnected.
+
 ## Windows Build Pipeline (`scripts/build-windows.ps1`)
 
 Build on Windows x64 with 64-bit Python 3.12 and npm. The current Vite build needs Node 20.19+ or 22.12+; Node 22.12+ also supports the frontend unit tests. MSI builds additionally need the .NET SDK and WiX 6.0.2 on `PATH`. From the repository root in PowerShell:
