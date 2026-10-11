@@ -174,7 +174,7 @@ def _gdrive_client_secret() -> str:
     try:
         # Written by the build scripts and gitignored. It must stay a plain import
         # statement: PyInstaller only bundles modules it finds that way.
-        from core import _gdrive_secret
+        from core import _gdrive_secret  # pyright: ignore[reportMissingModuleSource]
     except ImportError:
         return ""
     return _gdrive_secret.CLIENT_SECRET
