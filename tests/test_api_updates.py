@@ -283,6 +283,37 @@ def test_download_proton_ge_streams_and_filters_tar(
         assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
 
 
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_download_proton_ge_picks_assets_for_host_arch(monkeypatch, tmp_path, machine):
+    release = {
+        "tag_name": "GE-Proton11-7",
+        "assets": [
+            {"name": f"GE-Proton11-7-{arch}.{ext}", "browser_download_url": f"https://example.com/{arch}.{ext}"}
+            for arch in ("aarch64", "x86_64")
+            for ext in ("sha512sum", "tar.gz")
+        ],
+    }
+    requested = []
+
+    def fake_urlopen(req, *_args, **_kwargs):
+        requested.append(req.full_url)
+        if len(requested) == 1:
+            return io.BytesIO(json.dumps(release).encode())
+        return io.BytesIO(b"0" * 128)  # checksum; mismatch stops before extraction
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("platform.machine", lambda: machine)
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+
+    Api().download_proton_ge()
+
+    assert requested[1:] == [
+        f"https://example.com/{machine}.sha512sum",
+        f"https://example.com/{machine}.tar.gz",
+    ]
+
+
 @pytest.mark.parametrize("mode", ["native", "custom"])
 def test_api_add_game_persists_launch_mode(mode):
     api = Api()

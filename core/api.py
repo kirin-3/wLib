@@ -2801,22 +2801,34 @@ class Api:
             if data is None:
                 data = {}
 
-            download_url = ""
-            checksum_url = ""
             release_name = str(data.get("tag_name") or "proton-ge")
             assets = data.get("assets")
+            asset_urls: dict[str, str] = {}
             for asset_obj in (
                 cast(list[object], assets) if isinstance(assets, list) else []
             ):
                 asset = self._coerce_string_key_dict(asset_obj)
-                if not asset:
-                    continue
-                asset_name = str(asset.get("name") or "")
-                asset_url = str(asset.get("browser_download_url") or "")
-                if asset_name.endswith(".tar.gz") and not download_url:
-                    download_url = asset_url
-                elif asset_name.endswith(".sha512sum"):
-                    checksum_url = asset_url
+                if asset:
+                    asset_urls[str(asset.get("name") or "")] = str(
+                        asset.get("browser_download_url") or ""
+                    )
+
+            # Newer releases ship one tarball per architecture
+            # (e.g. GE-Proton11-7-x86_64.tar.gz and -aarch64.tar.gz);
+            # older ones ship a single unsuffixed tarball.
+            import platform
+
+            arch = platform.machine().lower()
+            arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(arch, arch)
+            tarballs = [name for name in asset_urls if name.endswith(".tar.gz")]
+            tarball = next(
+                (name for name in tarballs if name.endswith(f"-{arch}.tar.gz")),
+                tarballs[0] if len(tarballs) == 1 else "",
+            )
+            download_url = asset_urls.get(tarball, "")
+            checksum_url = asset_urls.get(
+                tarball.removesuffix(".tar.gz") + ".sha512sum", ""
+            )
 
             if not download_url:
                 return {
