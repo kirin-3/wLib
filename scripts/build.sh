@@ -195,7 +195,6 @@ pyinstaller --noconfirm --onedir \
     --hidden-import "core" \
     --hidden-import "certifi" \
     --collect-all "cryptography" \
-    --hidden-import "pywebview" \
     --hidden-import "PyQt6" \
     --hidden-import "webview.platforms.qt" \
     --exclude-module "gi" \
