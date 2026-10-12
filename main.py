@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -161,6 +162,16 @@ def _clear_webview_cache_path(cache_path: str) -> None:
     os.remove(cache_path)
 
 
+def get_webview_cache_key() -> str:
+    # Rebuilds that keep APP_VERSION still ship a new UI, so key on its index.html too.
+    try:
+        index_html = os.path.join(get_bundle_root(), "ui", "dist", "index.html")
+        with open(index_html, "rb") as f:
+            return APP_VERSION + "+" + hashlib.sha256(f.read()).hexdigest()[:12]
+    except OSError:
+        return APP_VERSION
+
+
 def ensure_packaged_webview_cache_fresh() -> None:
     if not is_packaged_wlib_runtime():
         print("[wLib] Skipping WebView cache cleanup: not packaged wlib-bin runtime")
@@ -169,6 +180,7 @@ def ensure_packaged_webview_cache_fresh() -> None:
     profile_cache_paths = get_packaged_webview_profile_cache_paths()
     legacy_cache_path = get_packaged_webview_cache_path()
     marker_path = get_webview_cache_version_marker_path()
+    cache_key = get_webview_cache_key()
     recorded_version = ""
 
     try:
@@ -179,8 +191,8 @@ def ensure_packaged_webview_cache_fresh() -> None:
     except Exception as e:
         print(f"[wLib] Failed to read WebView cache version marker: {e}")
 
-    if recorded_version == APP_VERSION:
-        print(f"[wLib] WebView cache already fresh for version {APP_VERSION}")
+    if recorded_version == cache_key:
+        print(f"[wLib] WebView cache already fresh for version {cache_key}")
         return
 
     if not profile_cache_paths:
@@ -190,7 +202,7 @@ def ensure_packaged_webview_cache_fresh() -> None:
     print(
         "[wLib] Clearing packaged WebView cache "
         + f"(previous_version={recorded_version or '<none>'}, "
-        + f"current_version={APP_VERSION}, "
+        + f"current_version={cache_key}, "
         + f"profile_paths={profile_cache_paths}, legacy_path={legacy_cache_path})"
     )
 
@@ -218,12 +230,12 @@ def ensure_packaged_webview_cache_fresh() -> None:
     try:
         os.makedirs(os.path.dirname(marker_path), exist_ok=True)
         with open(marker_path, "w", encoding="utf-8") as marker_file:
-            _ = marker_file.write(APP_VERSION + "\n")
+            _ = marker_file.write(cache_key + "\n")
     except Exception as e:
         print(f"[wLib] Failed to write WebView cache version marker: {e}")
         return
 
-    print(f"[wLib] Packaged WebView cache is fresh for version {APP_VERSION}")
+    print(f"[wLib] Packaged WebView cache is fresh for version {cache_key}")
 
 
 def configure_ssl_certificates() -> str | None:

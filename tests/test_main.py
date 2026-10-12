@@ -28,6 +28,7 @@ def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setattr(main.sys, "frozen", True, raising=False)
     monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
+    monkeypatch.setattr(main, "get_bundle_root", lambda: str(tmp_path / "bundle"))
     webview_storage = app_data_dir / main.PYWEBVIEW_STORAGE_DIR_NAME
     return {
         "app_data_dir": app_data_dir,
@@ -282,6 +283,30 @@ def test_ensure_packaged_webview_cache_fresh_preserves_unchanged_version_cache(
 
     assert cache_file.read_text(encoding="utf-8") == "current"
     assert paths["marker_path"].read_text(encoding="utf-8").strip() == main.APP_VERSION
+
+
+def test_ensure_packaged_webview_cache_fresh_clears_cache_for_rebuilt_ui(
+    monkeypatch, tmp_path
+):
+    paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
+    paths["cache_path"].mkdir(parents=True, exist_ok=True)
+    (paths["cache_path"] / "old-ui").write_text("old", encoding="utf-8")
+    paths["marker_path"].parent.mkdir(parents=True, exist_ok=True)
+    paths["marker_path"].write_text(main.APP_VERSION + "\n", encoding="utf-8")
+    index_html = tmp_path / "bundle" / "ui" / "dist" / "index.html"
+    index_html.parent.mkdir(parents=True)
+    index_html.write_text("<script src=new.js>", encoding="utf-8")
+
+    main.ensure_packaged_webview_cache_fresh()
+
+    assert not paths["cache_path"].exists()
+    marker = paths["marker_path"].read_text(encoding="utf-8").strip()
+    assert marker.startswith(main.APP_VERSION + "+")
+
+    (paths["cache_path"] / "new-ui").parent.mkdir(parents=True)
+    (paths["cache_path"] / "new-ui").write_text("new", encoding="utf-8")
+    main.ensure_packaged_webview_cache_fresh()
+    assert (paths["cache_path"] / "new-ui").exists()
 
 
 def test_ensure_packaged_webview_cache_fresh_skips_source_runtime(
