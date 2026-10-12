@@ -284,12 +284,12 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
-        prefix_source = (
-            get_setting_fn("wine_prefix_path") if prefix_path is None else prefix_path
+        # Like the launcher, an empty per-game value (what the UI sends when no
+        # override is set) means "use the global setting", not "use nothing".
+        prefix_source = (prefix_path or "").strip() or get_setting_fn(
+            "wine_prefix_path"
         )
-        proton_source = (
-            get_setting_fn("proton_path") if proton_path is None else proton_path
-        )
+        proton_source = (proton_path or "").strip() or get_setting_fn("proton_path")
 
         base_prefix = str(prefix_source or "").strip()
         if not base_prefix:
@@ -804,7 +804,8 @@ class Api:
         stderr = str(completed.stderr or "").strip()
 
         if completed.returncode == 0:
-            selected_path = self._normalize_selected_path(stdout.splitlines()[0])
+            first_line = stdout.splitlines()[0] if stdout else ""
+            selected_path = self._normalize_selected_path(first_line)
             if selected_path:
                 return {
                     "success": True,
@@ -2010,17 +2011,24 @@ class Api:
                                 }
                             )
 
-                # Only successful, complete runs postpone the next automatic check.
+                # A full pass postpones the next automatic check as long as at least
+                # one game was checked; a deleted thread or one timeout must not make
+                # every launch re-check the library. All-failed passes (offline,
+                # blocked, logged out) stay due.
                 with self._update_lock:
-                    completed = (
+                    ran_through = (
                         not self._update_cancelled
                         and not batch_error
                         and self._update_checked == len(urls)
-                        and all(not result["error"] for result in self._update_results)
                     )
-                if completed:
-                    outcome = "completed"
-                    error = ""
+                    completed = ran_through and all(
+                        not result["error"] for result in self._update_results
+                    )
+                    postpone_next_check = ran_through and (
+                        completed
+                        or any(not result["error"] for result in self._update_results)
+                    )
+                if postpone_next_check:
                     from datetime import datetime
 
                     from core.database import update_setting
@@ -2029,6 +2037,9 @@ class Api:
                         update_setting("last_update_check", datetime.now().isoformat())
                     except Exception as e:
                         print(f"[wLib] Failed to update last_update_check setting: {e}")
+                if completed:
+                    outcome = "completed"
+                    error = ""
                 elif batch_error:
                     error = str(
                         batch_error_payload.get("error") or "Batch update check failed"
@@ -3230,9 +3241,13 @@ class Api:
             proton_path and "proton" in os.path.basename(proton_path).lower()
         )
 
+        # Mirror the launcher's prefix resolution (core/launcher.py) so saves are
+        # searched where the game actually ran.
+        wine_prefix = os.path.expanduser(wine_prefix.strip())
         if is_proton:
-            pfx_path = os.path.join(wine_prefix, "pfx")
-            actual_prefix = pfx_path if os.path.exists(pfx_path) else wine_prefix
+            actual_prefix = os.path.join(proton_compat_data_path(wine_prefix), "pfx")
+        elif os.path.isdir(os.path.join(wine_prefix, "pfx")):
+            actual_prefix = os.path.join(wine_prefix, "pfx")
         else:
             actual_prefix = wine_prefix
 

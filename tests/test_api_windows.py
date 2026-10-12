@@ -122,3 +122,29 @@ def test_save_discovery_ignores_short_title_words(monkeypatch, tmp_path, windows
         str(appdata / "MOON-Saves"),
         str(appdata / "run-data"),
     }
+
+
+@pytest.mark.parametrize("layout", ["plain_wine", "proton_prefix", "tilde"])
+def test_save_discovery_uses_launcher_proton_prefix(monkeypatch, tmp_path, layout):
+    prefix = tmp_path / "prefix"
+    if layout == "plain_wine":
+        # Proton gets an isolated proton_compat/pfx next to a plain Wine prefix.
+        (prefix / "drive_c").mkdir(parents=True)
+        pfx = prefix / "proton_compat" / "pfx"
+    else:
+        pfx = prefix / "pfx"
+    saves = pfx / "drive_c" / "users" / "steamuser" / "AppData" / "Roaming" / "MoonGame"
+    saves.mkdir(parents=True)
+    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    custom_prefix = "~/prefix" if layout == "tilde" else str(prefix)
+
+    results = Api().find_save_files(
+        exe_path=str(tmp_path / "run.exe"),
+        title="Moon Game",
+        custom_prefix=custom_prefix,
+        proton_version="/opt/GE-Proton9-1/proton",
+    )
+
+    assert {os.path.normpath(entry["path"]) for entry in results} == {str(saves)}

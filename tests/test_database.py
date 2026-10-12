@@ -527,3 +527,14 @@ def test_update_game_normalizes_legacy_play_status_values():
     games = get_all_games()
     game = next(game for game in games if game["id"] == game_id)
     assert game["play_status"] == "Waiting For Update"
+
+
+def test_thread_urls_ignore_non_f95_hosts():
+    from core.f95zone import extract_thread_id, thread_urls_match
+
+    f95 = "https://f95zone.to/threads/game.123/"
+    assert extract_thread_id("https://www.f95zone.to/threads/game.123/") == "123"
+    assert extract_thread_id("https://example.com/threads/game.123/") == ""
+    assert extract_thread_id("https://f95zone.to.evil.test/threads/game.123/") == ""
+    assert not thread_urls_match(f95, "https://example.com/threads/other.123/")
+    assert thread_urls_match(f95, "https://www.f95zone.to/threads/renamed.123/page-2")

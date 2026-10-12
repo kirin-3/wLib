@@ -1142,6 +1142,22 @@ def test_browse_file_falls_back_after_portal_error_like_cancel(monkeypatch, tmp_
     assert [command[0] for command, _env in calls] == ["portal", "zenity"]
 
 
+@pytest.mark.parametrize("stdout", ["", "\n", "   \n"])
+def test_run_picker_command_empty_stdout_is_cancel_not_crash(monkeypatch, stdout):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess(["zenity"], 0, stdout, ""),
+    )
+
+    result = Api()._run_picker_command(["zenity"])
+
+    assert result["success"] is False
+    assert result["cancelled"] is True
+
+
 def test_browse_file_stops_on_user_cancel_even_with_portal_stderr(monkeypatch):
     api = Api()
     calls = []
@@ -1747,6 +1763,21 @@ def test_resolve_runtime_install_target_prefers_proton_pfx(tmp_path):
     assert target["is_proton"] is True
 
 
+def test_resolve_runtime_install_target_empty_overrides_use_global_settings(tmp_path):
+    api = Api()
+    global_prefix = tmp_path / "global-prefix"
+    (global_prefix / "drive_c").mkdir(parents=True)
+    update_setting("wine_prefix_path", str(global_prefix))
+    update_setting("proton_path", "/tmp/GE-Proton/proton")
+
+    # The game modal sends "" when the game has no per-game prefix/Proton.
+    target = api._resolve_runtime_install_target("", "")
+
+    assert target["is_proton"] is True
+    assert target["base_prefix"] == str(global_prefix)
+    assert target["resolved_prefix"] == str(global_prefix / "proton_compat" / "pfx")
+
+
 def test_get_install_status_derives_from_requested_prefix(tmp_path):
     api = Api()
     resolved_prefix = tmp_path / "prefix"
@@ -2184,7 +2215,7 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
     "outcome",
     ["batch_error", "failed", "empty", "partial", "success", "interrupted", "exception", "cancelled"],
 )
-def test_update_check_timestamp_requires_successful_completion(monkeypatch, outcome):
+def test_update_check_timestamp_requires_full_pass_with_a_success(monkeypatch, outcome):
     import time
 
     api = Api()
@@ -2231,7 +2262,9 @@ def test_update_check_timestamp_requires_successful_completion(monkeypatch, outc
         else "failed"
     )
     assert bool(status["error"]) == (outcome not in {"success", "cancelled"})
-    if outcome == "success":
+    # A full pass with at least one good check postpones the next auto check,
+    # even when another game errored (deleted thread, timeout).
+    if outcome in {"success", "partial"}:
         assert get_setting("last_update_check") != previous
     else:
         assert get_setting("last_update_check") == previous

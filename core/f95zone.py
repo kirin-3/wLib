@@ -4,6 +4,7 @@ from urllib.parse import urlparse, urlunparse
 
 
 THREAD_PATH_RE = re.compile(r"^/threads/(?:(?P<slug>.+)\.)?(?P<thread_id>\d+)(?:/.*)?$")
+F95_HOSTS = frozenset({"f95zone.to", "www.f95zone.to"})
 
 
 def _coerce_url(value: object) -> str:
@@ -33,6 +34,10 @@ def extract_thread_id(url: object) -> str:
         return ""
 
     parsed = urlparse(normalized)
+    # Thread IDs are only meaningful on F95Zone; another site's /threads/<id>/
+    # must not be matched or scraped as an F95 thread.
+    if parsed.netloc and parsed.hostname not in F95_HOSTS:
+        return ""
     path = _normalize_path(parsed.path or normalized)
     match = THREAD_PATH_RE.match(path)
     return match.group("thread_id") if match else ""
