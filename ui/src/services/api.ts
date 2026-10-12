@@ -380,6 +380,49 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   selected_sections?: LibraryBackupSection[];
 }
 
+export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary";
+export type ExternalLibraryMergeMode = "overwrite" | "fill_missing";
+
+export interface ExternalLibraryDetectResponse extends ApiBasicResponse {
+  success: boolean;
+  source?: string;
+  path?: string;
+  checked?: string[];
+}
+
+export interface ExternalLibraryCounts {
+  total_games: number;
+  matched_games: number;
+  new_games: number;
+  ambiguous_games: number;
+  skipped_no_identity: number;
+  dropped_paths: number;
+  warnings: number;
+}
+
+export interface ExternalLibraryInspectResponse extends ApiBasicResponse {
+  success: boolean;
+  source?: string;
+  schema_version?: string | number;
+  available_sections?: LibraryBackupSection[];
+  counts?: ExternalLibraryCounts;
+  warnings?: LibraryBackupWarning[];
+  ambiguous_games?: LibraryBackupAmbiguousGame[];
+}
+
+export interface ExternalLibraryImportOptions {
+  sections?: LibraryBackupSection[];
+  merge_mode?: ExternalLibraryMergeMode;
+}
+
+export interface ExternalLibraryImportResponse extends LibraryBackupImportResponse {
+  created_ids?: number[];
+  updated_ids?: number[];
+  skipped_no_identity?: number;
+  dropped_paths?: number;
+  metadata_check?: "started" | "busy" | "none";
+}
+
 export interface SaveLocation {
   path: string;
   type: string;
@@ -972,6 +1015,34 @@ class ApiService {
     );
   }
 
+  async detectExternalLibrary(source: ExternalLibrarySource): Promise<ExternalLibraryDetectResponse> {
+    return this.invoke<ExternalLibraryDetectResponse>("detect_external_library", source);
+  }
+
+  async inspectExternalLibrary(
+    source: ExternalLibrarySource,
+    path: string,
+  ): Promise<ExternalLibraryInspectResponse> {
+    return this.invoke<ExternalLibraryInspectResponse>("inspect_external_library", source, path);
+  }
+
+  async importExternalLibrary(
+    source: ExternalLibrarySource,
+    path: string,
+    options: ExternalLibraryImportOptions,
+  ): Promise<ExternalLibraryImportResponse> {
+    return this.invoke<ExternalLibraryImportResponse>(
+      "import_external_library",
+      source,
+      path,
+      options,
+    );
+  }
+
+  async browseExternalLibraryFile(source: ExternalLibrarySource, startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_external_library_file", source, startPath);
+  }
+
   async getSyncStatus(): Promise<LibrarySyncStatus> { return this.invoke("get_sync_status"); }
   async setSyncFolder(path: string): Promise<LibrarySyncStatus> { return this.invoke("set_sync_folder", path); }
   async connectDropbox(): Promise<LibrarySyncStatus> { return this.invoke("connect_dropbox"); }
@@ -1331,8 +1402,72 @@ class ApiService {
       case "browse_runner_file":
       case "browse_backup_file":
       case "browse_archive_file":
+      case "browse_external_library_file":
       case "browse_directory":
         return "";
+      case "detect_external_library": {
+        const source = typeof args[0] === "string" ? args[0] : "";
+        return { success: true, mock: true, source, path: "", checked: [] };
+      }
+      case "inspect_external_library": {
+        const source = typeof args[0] === "string" ? args[0] : "";
+        return {
+          success: true,
+          mock: true,
+          source,
+          schema_version: "",
+          available_sections: ["metadata", "user_state", "executable_paths", "launch_targets"],
+          counts: {
+            total_games: 0,
+            matched_games: 0,
+            new_games: 0,
+            ambiguous_games: 0,
+            skipped_no_identity: 0,
+            dropped_paths: 0,
+            warnings: 1,
+          },
+          warnings: [
+            {
+              type: "cover_references",
+              scope: "library",
+              message:
+                "Browser mock preview only. Desktop imports validate real paths and cover references.",
+            },
+          ],
+          ambiguous_games: [],
+        };
+      }
+      case "import_external_library": {
+        const options = isRecord(args[2]) ? args[2] : {};
+        const sections = Array.isArray(options.sections)
+          ? (options.sections as LibraryBackupSection[])
+          : [];
+        if (sections.length === 0) {
+          return {
+            success: false,
+            mock: true,
+            error: "Select at least one section to import.",
+            error_code: "empty_selection",
+          };
+        }
+        return {
+          success: true,
+          mock: true,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          ambiguous: 0,
+          warnings: 0,
+          warning_records: [],
+          settings_updated: 0,
+          selected_sections: sections,
+          created_ids: [],
+          updated_ids: [],
+          skipped_no_identity: 0,
+          dropped_paths: 0,
+          metadata_check: "none" as const,
+        };
+      }
       case "inspect_archive": {
         const fileName = String(args[0]).split(/[/\\]/).pop() || "";
         const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");

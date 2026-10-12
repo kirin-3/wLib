@@ -891,6 +891,156 @@ def test_import_invalid_file_does_not_partially_write(tmp_path):
     assert games[0]["title"] == "Safe"
 
 
+def test_apply_merge_mode_overwrite_replaces_matched_values():
+    url = "https://f95zone.to/threads/merge.999/"
+    game_id = add_game("Local", "/local/game.sh", f95_url=url)
+    assert game_id is not None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET rating_story = ?, play_status = ?, playtime_seconds = ? WHERE id = ?",
+        (4.0, "Playing", 100, game_id),
+    )
+    conn.commit()
+    conn.close()
+    add_game_launch_target(game_id, "Existing", "/local/extra.sh")
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Local", "f95_url": url},
+                SECTION_USER_STATE: {
+                    "rating_story": 3.0,
+                    "play_status": "Completed",
+                    "playtime_seconds": 50,
+                },
+                SECTION_LAUNCH_TARGETS: [
+                    {"label": "Imported", "exe_path": "/backup/extra.sh"}
+                ],
+            }
+        ]
+    )
+    result = apply_library_backup(
+        payload,
+        {"sections": [SECTION_USER_STATE, SECTION_LAUNCH_TARGETS]},
+        merge_mode="overwrite",
+    )
+    assert result["updated"] == 1
+    game = get_all_games()[0]
+    assert game["rating_story"] == 3.0
+    assert game["play_status"] == "Completed"
+    assert game["playtime_seconds"] == 50
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Imported"
+    ]
+
+
+def test_apply_merge_mode_fill_missing_fills_blanks_and_keeps_values():
+    url = "https://f95zone.to/threads/fill.998/"
+    game_id = add_game("Local", "/local/game.sh", f95_url=url)
+    assert game_id is not None
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE games SET rating_story = ?, play_status = ?, playtime_seconds = ? WHERE id = ?",
+        (4.0, "Playing", 100, game_id),
+    )
+    conn.commit()
+    conn.close()
+    add_game_launch_target(game_id, "Existing", "/local/extra.sh")
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Local", "f95_url": url},
+                SECTION_USER_STATE: {
+                    "rating_story": 3.0,
+                    "play_status": "Completed",
+                    "playtime_seconds": 50,
+                },
+                SECTION_LAUNCH_TARGETS: [
+                    {"label": "Imported", "exe_path": "/backup/extra.sh"}
+                ],
+            }
+        ]
+    )
+    result = apply_library_backup(
+        payload,
+        {"sections": [SECTION_USER_STATE, SECTION_LAUNCH_TARGETS]},
+        merge_mode="fill_missing",
+    )
+    assert result["updated"] == 1
+    game = get_all_games()[0]
+    assert game["rating_story"] == 4.0
+    assert game["play_status"] == "Playing"
+    assert game["playtime_seconds"] == 100
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Existing"
+    ]
+
+
+def test_apply_merge_mode_fill_missing_fills_default_status_and_zero_playtime():
+    url = "https://f95zone.to/threads/fill-blank.997/"
+    game_id = add_game("Blank", "", f95_url=url)
+    assert game_id is not None
+    assert get_all_games()[0]["play_status"] == "Not Started"
+    assert get_all_games()[0]["playtime_seconds"] == 0
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Blank", "f95_url": url},
+                SECTION_USER_STATE: {
+                    "play_status": "Playing",
+                    "playtime_seconds": 3600,
+                },
+                SECTION_EXECUTABLE_PATHS: {"exe_path": "/backup/game.sh"},
+            }
+        ]
+    )
+    result = apply_library_backup(
+        payload,
+        {"sections": [SECTION_USER_STATE, SECTION_EXECUTABLE_PATHS]},
+        merge_mode="fill_missing",
+    )
+    assert result["updated"] == 1
+    game = get_all_games()[0]
+    assert game["play_status"] == "Playing"
+    assert game["playtime_seconds"] == 3600
+    assert game["exe_path"] == "/backup/game.sh"
+
+
+def test_apply_returns_created_and_updated_ids():
+    first_id = add_game(
+        "First", "/first.sh", f95_url="https://f95zone.to/threads/first.111/"
+    )
+    assert first_id is not None
+    payload = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "First",
+                    "f95_url": "https://f95zone.to/threads/first.111/",
+                },
+                SECTION_USER_STATE: {"progress": "Chapter 2"},
+            },
+            {
+                "metadata": {
+                    "title": "Second",
+                    "f95_url": "https://f95zone.to/threads/second.222/",
+                },
+            },
+        ]
+    )
+    result = apply_library_backup(payload, {"sections": [SECTION_USER_STATE]})
+    assert result["created"] == 1
+    assert result["updated"] == 1
+    games = {game["title"]: game for game in get_all_games()}
+    assert result["created_ids"] == [games["Second"]["id"]]
+    assert result["updated_ids"] == [first_id]
+    assert games["First"]["progress"] == "Chapter 2"
+
+
 def test_paths_export_includes_library_settings_excludes_dismissals(tmp_path):
     from core.library_backup import PATH_SETTINGS_KEYS, build_library_backup
 

@@ -1355,6 +1355,108 @@ class Api:
 
         return {"success": True, **payload}
 
+    def detect_external_library(self, source: str) -> dict[str, object]:
+        from core.external_import import locate_external_library
+        from core.library_backup import BackupValidationError
+
+        try:
+            payload = locate_external_library(source)
+        except BackupValidationError as exc:
+            return self._backup_error_payload(exc)
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        return {"success": True, **payload}
+
+    def inspect_external_library(self, source: str, path: str) -> dict[str, object]:
+        from core.library_backup import inspect_external_library
+
+        try:
+            payload = inspect_external_library(source, path)
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        return {"success": True, **payload}
+
+    def import_external_library(
+        self,
+        source: str,
+        path: str,
+        options: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        import sqlite3
+
+        from core.library_backup import import_external_library
+
+        try:
+            payload = import_external_library(source, path, dict(options or {}))
+        except sqlite3.IntegrityError as exc:
+            return {
+                "success": False,
+                "error": f"Import could not be applied safely: {exc}",
+                "error_code": "import_conflict",
+            }
+        except Exception as exc:
+            return self._backup_error_payload(exc)
+
+        game_ids = [
+            *cast(list[int], payload.get("created_ids", [])),
+            *cast(list[int], payload.get("updated_ids", [])),
+        ]
+        ids_with_url = self._game_ids_with_url(game_ids) if game_ids else []
+        if ids_with_url:
+            check_result = self.check_all_updates(ids_with_url)
+            if check_result.get("success"):
+                payload["metadata_check"] = "started"
+            else:
+                payload["metadata_check"] = "busy"
+        else:
+            payload["metadata_check"] = "none"
+
+        self._refresh_synced_library()
+        return {"success": True, **payload}
+
+    def _game_ids_with_url(self, game_ids: Sequence[int]) -> list[int]:
+        from core.database import get_all_games
+
+        wanted: set[int] = set()
+        for raw_id in game_ids:
+            try:
+                wanted.add(int(str(raw_id)))
+            except (TypeError, ValueError):
+                continue
+        ids_with_url: list[int] = []
+        for game in get_all_games():
+            game_id = game.get("id")
+            url = game.get("f95_url")
+            if (
+                isinstance(game_id, int)
+                and game_id in wanted
+                and isinstance(url, str)
+                and url.strip()
+            ):
+                ids_with_url.append(game_id)
+        return ids_with_url
+
+    def browse_external_library_file(self, source: str, start_path: str = "") -> str:
+        from core.external_import import (
+            EXTERNAL_IMPORT_FILE_FILTERS,
+            normalize_source,
+        )
+
+        try:
+            key = normalize_source(source)
+        except Exception:
+            return ""
+        file_types = EXTERNAL_IMPORT_FILE_FILTERS.get(key, ())
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
     def add_game(
         self,
         title: str,
@@ -1904,11 +2006,29 @@ class Api:
 
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
-    def check_all_updates(self) -> dict[str, object]:
+    def check_all_updates(
+        self, game_ids: Sequence[int] | None = None
+    ) -> dict[str, object]:
         """Start a background thread to check all games for updates."""
         from core.database import get_all_games
 
+        wanted_ids: set[int] | None = None
+        if game_ids is not None:
+            wanted_ids = set()
+            for raw_id in game_ids:
+                try:
+                    wanted_ids.add(int(str(raw_id)))
+                except (TypeError, ValueError):
+                    continue
+
         all_games_raw = get_all_games()
+        if wanted_ids is not None:
+            all_games_raw = [
+                game
+                for game in all_games_raw
+                if isinstance(game.get("id"), int)
+                and int(str(game.get("id"))) in wanted_ids
+            ]
         games_with_url: list[GameRecord] = []
         for game in all_games_raw:
             game_id = game.get("id")

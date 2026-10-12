@@ -16,6 +16,12 @@ from typing import cast
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.backup_format import (
+    BACKUP_FORMAT,
+    BACKUP_FORMAT_VERSION,
+    ENCRYPTED_FORMAT,
+    BackupValidationError,
+)
 from core.database import (
     DEFAULT_PLAY_STATUS,
     GENERAL_SETTINGS_KEYS,
@@ -28,9 +34,13 @@ from core.database import (
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import is_windows
 
-BACKUP_FORMAT = "wlib.library_migration"
-BACKUP_FORMAT_VERSION = 1
-ENCRYPTED_FORMAT = "wlib.encrypted"
+__all__ = [
+    "BACKUP_FORMAT",
+    "BACKUP_FORMAT_VERSION",
+    "ENCRYPTED_FORMAT",
+    "BackupValidationError",
+]
+
 SCRYPT_N = 131072
 SYNC_SECTIONS = ("metadata", "user_state", "settings_general")
 
@@ -125,12 +135,6 @@ IMPORTABLE_GAME_FIELDS = (
     *LAUNCH_CONFIG_FIELDS,
     *EXECUTABLE_PATH_FIELDS,
 )
-
-
-class BackupValidationError(ValueError):
-    def __init__(self, message: str, error_code: str = "invalid_backup") -> None:
-        super().__init__(message)
-        self.error_code: str = error_code
 
 
 def derive_backup_key(passphrase: str, salt: bytes) -> bytes:
@@ -904,6 +908,7 @@ def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:
     insert_fields = dict(fields)
     _ = insert_fields.setdefault("title", "Imported Game")
     _ = insert_fields.setdefault("exe_path", "")
+    _ = insert_fields.setdefault("f95_url", "")
     _ = insert_fields.setdefault("play_status", DEFAULT_PLAY_STATUS)
     _ = insert_fields.setdefault("date_added", datetime.now().isoformat())
 
@@ -1032,6 +1037,45 @@ def build_sync_backup(modified_at: str, device: str) -> dict[str, object]:
     return backup
 
 
+MERGE_MODES = ("overwrite", "fill_missing")
+
+
+def _is_fill_missing_empty(field: str, local_value: object) -> bool:
+    """True when a local value counts as missing for fill-missing merges."""
+    if field == "play_status":
+        if local_value is None:
+            return True
+        text = str(local_value).strip()
+        return text == "" or text == DEFAULT_PLAY_STATUS
+    if (
+        field in INTEGER_GAME_FIELDS
+        or field in REAL_GAME_FIELDS
+        or field in BOOLEAN_GAME_FIELDS
+    ):
+        try:
+            return float(str(local_value if local_value is not None else 0)) == 0.0
+        except (TypeError, ValueError):
+            return True
+    if local_value is None:
+        return True
+    return str(local_value).strip() == ""
+
+
+def _resolve_merge_mode(
+    options: Mapping[str, object] | None, merge_mode: str = "overwrite"
+) -> str:
+    resolved = str(merge_mode or "overwrite").strip().lower()
+    if resolved == "overwrite":
+        candidate = _coerce_mapping(options or {}).get("merge_mode")
+        if isinstance(candidate, str) and candidate.strip():
+            resolved = candidate.strip().lower()
+    if resolved not in MERGE_MODES:
+        raise BackupValidationError(
+            "Merge mode must be 'overwrite' or 'fill_missing'.", "invalid_merge_mode"
+        )
+    return resolved
+
+
 def apply_library_backup(
     backup: Mapping[str, object],
     options: Mapping[str, object] | None = None,
@@ -1040,8 +1084,10 @@ def apply_library_backup(
     sync: bool = False,
     sync_settings: Mapping[str, str] | None = None,
     expected_local_modified_at: str | None = None,
+    merge_mode: str = "overwrite",
 ) -> dict[str, object]:
     backup = validate_library_backup(backup)
+    merge_mode = _resolve_merge_mode(options, merge_mode)
     available_sections = _available_backup_sections(backup)
     sections = _select_sections(
         options,
@@ -1058,6 +1104,8 @@ def apply_library_backup(
     ambiguous = 0
     settings_updated = 0
     deleted = 0
+    created_ids: list[int] = []
+    updated_ids: list[int] = []
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -1085,7 +1133,9 @@ def apply_library_backup(
                     int(str(candidate))
                     for candidate in _coerce_sequence(item.get("candidate_ids"))
                 )
-            original_ids = {int(str(game["id"])) for game in _local_games()}
+            local_rows = _local_games()
+            local_by_id = {int(str(game["id"])): game for game in local_rows}
+            original_ids = set(local_by_id)
             if mirror:
                 from core import database
 
@@ -1112,9 +1162,17 @@ def apply_library_backup(
                     if sync and not fields.get("cover_image_path"):
                         _ = fields.pop("cover_image_path", None)
                     local_id = int(str(item.get("local_id", 0)))
+                    if merge_mode == "fill_missing":
+                        local_row = local_by_id.get(local_id, {})
+                        fields = {
+                            key: value
+                            for key, value in fields.items()
+                            if _is_fill_missing_empty(key, local_row.get(key))
+                        }
                     _update_game_row(cursor, local_id, fields)
                     game_id = local_id
                     updated += 1
+                    updated_ids.append(local_id)
                 else:
                     fields = _import_fields_for_game(
                         imported_game,
@@ -1123,8 +1181,15 @@ def apply_library_backup(
                     )
                     game_id = _insert_game(cursor, fields)
                     created += 1
+                    created_ids.append(game_id)
 
                 if SECTION_LAUNCH_TARGETS in sections:
+                    if merge_mode == "fill_missing" and status == "matched":
+                        local_targets = _coerce_sequence(
+                            local_by_id.get(game_id, {}).get("launch_targets")
+                        )
+                        if local_targets:
+                            continue
                     _replace_launch_targets(cursor, game_id, imported_game)
 
             settings_updated = _import_setting_groups(cursor, backup, sections)
@@ -1153,4 +1218,84 @@ def apply_library_backup(
         "warning_records": warnings,
         "settings_updated": settings_updated,
         "selected_sections": sorted(sections),
+        "created_ids": created_ids,
+        "updated_ids": updated_ids,
     }
+
+
+EXTERNAL_IMPORT_SECTIONS = (
+    SECTION_METADATA,
+    SECTION_USER_STATE,
+    SECTION_EXECUTABLE_PATHS,
+    SECTION_LAUNCH_TARGETS,
+)
+
+
+def _external_import_options(
+    options: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Normalize external-import options: metadata always applies to matches."""
+    normalized = dict(options or {})
+    has_section_option, raw_sections = _section_option(normalized)
+    if not has_section_option:
+        return normalized
+    selected: set[str] = set()
+    if isinstance(raw_sections, Mapping):
+        section_map = cast(Mapping[object, object], raw_sections)
+        for key, enabled in section_map.items():
+            if _coerce_bool(enabled):
+                selected.add(str(key))
+    else:
+        selected.update(str(section) for section in _coerce_sequence(raw_sections))
+    selected.add(SECTION_METADATA)
+    normalized["sections"] = sorted(selected)
+    return normalized
+
+
+def inspect_external_library(source: object, path: object) -> dict[str, object]:
+    from core.external_import import read_external_library
+
+    backup, stats = read_external_library(source, path)
+    plan = _build_import_plan(backup)
+    warnings = _build_backup_warnings(backup)
+    ambiguous_games = [item for item in plan if item.get("status") == "ambiguous"]
+
+    return {
+        "source": str(source or "").strip().lower(),
+        "schema_version": stats.get("schema_version", ""),
+        "available_sections": _available_backup_sections(backup),
+        "counts": {
+            "total_games": len(plan) + int(str(stats.get("skipped_no_identity", 0))),
+            "matched_games": sum(1 for item in plan if item.get("status") == "matched"),
+            "new_games": sum(1 for item in plan if item.get("status") == "new"),
+            "ambiguous_games": len(ambiguous_games),
+            "skipped_no_identity": int(str(stats.get("skipped_no_identity", 0))),
+            "dropped_paths": int(str(stats.get("dropped_paths", 0))),
+            "warnings": len(warnings),
+        },
+        "warnings": warnings,
+        "ambiguous_games": [
+            {
+                "title": item.get("title", ""),
+                "reason": item.get("reason", ""),
+                "candidate_count": item.get("candidate_count", 0),
+            }
+            for item in ambiguous_games
+        ],
+    }
+
+
+def import_external_library(
+    source: object, path: object, options: Mapping[str, object] | None = None
+) -> dict[str, object]:
+    from core.external_import import read_external_library
+
+    backup, stats = read_external_library(source, path)
+    result = apply_library_backup(backup, _external_import_options(options))
+    skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))
+    result["skipped"] = int(str(result.get("skipped", 0))) + skipped_no_identity
+    result["skipped_no_identity"] = skipped_no_identity
+    result["dropped_paths"] = int(str(stats.get("dropped_paths", 0)))
+    result["schema_version"] = stats.get("schema_version", "")
+    result["source"] = str(source or "").strip().lower()
+    return result

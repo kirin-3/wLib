@@ -19,12 +19,16 @@ import {
 } from "@tabler/icons-vue";
 import { api } from "../services/api";
 import type {
+  ExternalLibraryImportResponse,
+  ExternalLibraryInspectResponse,
+  ExternalLibraryMergeMode,
+  ExternalLibrarySource,
   LibraryBackupInspectResponse,
   LibraryBackupSection,
   LibraryBackupWarning,
 } from "../services/api";
 
-type BackupTab = "export" | "import";
+type BackupTab = "export" | "import" | "external";
 
 interface SectionOption {
   id: LibraryBackupSection;
@@ -89,6 +93,16 @@ const defaultExportSections: LibraryBackupSection[] = [
 ];
 
 const activeTab = ref<BackupTab>("export");
+const externalSources: { id: ExternalLibrarySource; label: string }[] = [
+  { id: "f95checker", label: "F95Checker" },
+  { id: "atlas", label: "Atlas" },
+  { id: "xlibrary", label: "XLibrary" },
+];
+const externalImportSectionIds: LibraryBackupSection[] = [
+  "user_state",
+  "executable_paths",
+  "launch_targets",
+];
 const exportPath = ref("");
 const importPath = ref("");
 const exportSections = ref<LibraryBackupSection[]>([...defaultExportSections]);
@@ -106,6 +120,20 @@ const exportPassphrase = ref("");
 const exportConfirmation = ref("");
 const importPassphrase = ref("");
 const importNeedsPassphrase = ref(false);
+const externalSource = ref<ExternalLibrarySource>("f95checker");
+const externalPath = ref("");
+const externalDetectedPath = ref("");
+const externalCheckedPaths = ref<string[]>([]);
+const externalDetecting = ref(false);
+const externalDetectedSources = new Set<ExternalLibrarySource>();
+const externalPreview = ref<ExternalLibraryInspectResponse | null>(null);
+const externalSections = ref<LibraryBackupSection[]>([]);
+const externalMergeMode = ref<ExternalLibraryMergeMode>("fill_missing");
+const externalMessage = ref("");
+const externalError = ref("");
+const externalInspecting = ref(false);
+const externalImporting = ref(false);
+const externalResult = ref<ExternalLibraryImportResponse | null>(null);
 watch(importPath, () => { importPassphrase.value = ""; importNeedsPassphrase.value = false; inspectResult.value = null; importSections.value = []; });
 watch(encryptExport, () => { exportPassphrase.value = ""; exportConfirmation.value = ""; });
 
@@ -123,6 +151,24 @@ const availableImportOptions = computed(() => {
 });
 const canImportSelected = computed(() => {
   return Boolean(inspectResult.value) && importSections.value.length > 0;
+});
+const externalCounts = computed(() => externalPreview.value?.counts || null);
+const externalAvailableSections = computed<LibraryBackupSection[]>(
+  () => externalPreview.value?.available_sections || [],
+);
+const externalWarnings = computed<LibraryBackupWarning[]>(
+  () => externalPreview.value?.warnings || [],
+);
+const externalAvailableOptions = computed(() => {
+  return importSectionOptions.filter(
+    (item) =>
+      externalImportSectionIds.includes(item.id) &&
+      externalAvailableSections.value.includes(item.id),
+  );
+});
+const canImportExternal = computed(() => {
+  // Identity and versions always import, so an empty section list is valid.
+  return Boolean(externalPreview.value);
 });
 
 const isSelected = (sections: LibraryBackupSection[], id: LibraryBackupSection) => {
@@ -146,6 +192,10 @@ const toggleExportSection = (id: LibraryBackupSection) => {
 
 const toggleImportSection = (id: LibraryBackupSection) => {
   toggleSectionValue(importSections, id);
+};
+
+const toggleExternalSection = (id: LibraryBackupSection) => {
+  toggleSectionValue(externalSections, id);
 };
 
 const browseExportDestination = async () => {
@@ -226,6 +276,125 @@ const inspectImport = async () => {
   }
 };
 
+const detectExternal = async () => {
+  if (externalDetecting.value) return;
+  externalError.value = "";
+  externalDetecting.value = true;
+  try {
+    const result = await api.detectExternalLibrary(externalSource.value);
+    if (!result || result.success === false) {
+      externalError.value = result?.error || "Could not locate the source library.";
+      return;
+    }
+    externalDetectedPath.value = result.path || "";
+    externalCheckedPaths.value = result.checked || [];
+    externalDetectedSources.add(externalSource.value);
+    if (result.path) externalPath.value = result.path;
+  } catch (error) {
+    externalError.value = `Could not locate the source library: ${String(error)}`;
+  } finally {
+    externalDetecting.value = false;
+  }
+};
+
+const openExternalTab = () => {
+  activeTab.value = "external";
+  if (!externalDetectedSources.has(externalSource.value)) void detectExternal();
+};
+
+const browseExternalFile = async () => {
+  try {
+    const selected = await api.browseExternalLibraryFile(
+      externalSource.value,
+      externalPath.value || "",
+    );
+    if (selected) {
+      externalPath.value = selected;
+      externalPreview.value = null;
+      externalResult.value = null;
+      externalMessage.value = "";
+      externalError.value = "";
+    }
+  } catch (error) {
+    externalError.value = `Could not open library picker: ${String(error)}`;
+  }
+};
+
+const inspectExternal = async () => {
+  if (externalInspecting.value) return;
+  externalMessage.value = "";
+  externalError.value = "";
+  externalPreview.value = null;
+  externalResult.value = null;
+  externalInspecting.value = true;
+
+  try {
+    const result = await api.inspectExternalLibrary(
+      externalSource.value,
+      externalPath.value,
+    );
+    if (!result || result.success === false) {
+      externalError.value = result?.error || "Could not inspect library.";
+      return;
+    }
+    externalPreview.value = result;
+    externalSections.value = (result.available_sections || []).filter(
+      (section): section is LibraryBackupSection =>
+        externalImportSectionIds.includes(section),
+    );
+  } catch (error) {
+    externalError.value = `Could not inspect library: ${String(error)}`;
+  } finally {
+    externalInspecting.value = false;
+  }
+};
+
+const runExternalImport = async () => {
+  if (externalImporting.value || !externalPreview.value) return;
+  externalMessage.value = "";
+  externalError.value = "";
+  externalResult.value = null;
+  externalImporting.value = true;
+
+  try {
+    const result = await api.importExternalLibrary(externalSource.value, externalPath.value, {
+      sections: externalSections.value,
+      merge_mode: externalMergeMode.value,
+    });
+    if (!result || result.success === false) {
+      externalError.value = result?.error || "Import failed.";
+      return;
+    }
+    externalResult.value = result;
+    externalMessage.value =
+      `Imported library. Created ${result.created ?? 0}, ` +
+      `updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}.`;
+    window.dispatchEvent(new Event("wlib-refresh-library"));
+    externalPreview.value = null;
+  } catch (error) {
+    externalError.value = `Import failed: ${String(error)}`;
+  } finally {
+    externalImporting.value = false;
+  }
+};
+
+watch(externalSource, () => {
+  externalPath.value = "";
+  externalDetectedPath.value = "";
+  externalCheckedPaths.value = [];
+  externalPreview.value = null;
+  externalResult.value = null;
+  externalSections.value = [];
+  externalMessage.value = "";
+  externalError.value = "";
+  void detectExternal();
+});
+watch(externalPath, () => {
+  externalPreview.value = null;
+  externalResult.value = null;
+  externalMessage.value = "";
+});
+
 const runImport = async () => {
   if (importing.value || !inspectResult.value) return;
   importMessage.value = "";
@@ -295,6 +464,14 @@ const runImport = async () => {
         >
           <IconFileImport />
           Import
+        </button>
+        <button
+          type="button"
+          :class="['backup-tab', activeTab === 'external' ? 'backup-tab-active' : '']"
+          @click="openExternalTab"
+        >
+          <IconFileImport />
+          From another app
         </button>
       </div>
 
@@ -370,7 +547,7 @@ const runImport = async () => {
         </p>
       </section>
 
-      <section v-else class="backup-body">
+      <section v-else-if="activeTab === 'import'" class="backup-body">
         <div class="backup-field">
           <label>Backup JSON file</label>
           <div class="backup-path-row">
@@ -461,6 +638,141 @@ const runImport = async () => {
         </div>
       </section>
 
+      <section v-else-if="activeTab === 'external'" class="backup-body">
+        <div class="backup-segmented" role="group" aria-label="Source app">
+          <button
+            v-for="item in externalSources"
+            :key="item.id"
+            type="button"
+            :class="['backup-tab', externalSource === item.id ? 'backup-tab-active' : '']"
+            @click="externalSource = item.id"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+
+        <div v-if="externalDetecting" class="backup-note">
+          <IconLoader2 class="backup-spinner" />
+          <span>Looking for the source library...</span>
+        </div>
+        <div v-else-if="externalDetectedPath" class="backup-note">
+          <IconInfoCircle />
+          <span>Found library: {{ externalDetectedPath }}</span>
+        </div>
+        <div v-else-if="externalCheckedPaths.length" class="backup-note">
+          <IconInfoCircle />
+          <span>
+            No library found. Checked:
+            {{ externalCheckedPaths.join(", ") }}.
+            Pick the file manually.
+          </span>
+        </div>
+
+        <div class="backup-field">
+          <label>Source library file</label>
+          <div class="backup-path-row">
+            <input
+              v-model="externalPath"
+              type="text"
+              placeholder="Path to the source library file"
+              class="backup-input"
+            />
+            <button type="button" class="backup-secondary" @click="browseExternalFile">
+              <IconFolderOpen />
+              Browse
+            </button>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="backup-secondary backup-inspect"
+          :disabled="externalInspecting || !externalPath"
+          @click="inspectExternal"
+        >
+          <IconLoader2 v-if="externalInspecting" class="backup-spinner" />
+          <IconFileImport v-else />
+          {{ externalInspecting ? "Inspecting..." : "Inspect Library" }}
+        </button>
+
+        <div v-if="externalPreview" class="backup-preview">
+          <div class="backup-counts">
+            <span>New: {{ externalCounts?.new_games ?? 0 }}</span>
+            <span>Matched: {{ externalCounts?.matched_games ?? 0 }}</span>
+            <span>Ambiguous: {{ externalCounts?.ambiguous_games ?? 0 }}</span>
+            <span>Skipped: {{ externalCounts?.skipped_no_identity ?? 0 }}</span>
+            <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
+          </div>
+
+          <div class="backup-field">
+            <label>For games already in wLib</label>
+            <div class="backup-segmented" role="radiogroup" aria-label="Merge mode">
+              <label class="backup-check-row">
+                <input
+                  v-model="externalMergeMode"
+                  type="radio"
+                  value="fill_missing"
+                />
+                <span class="backup-option-copy">
+                  <strong>Only fill missing</strong>
+                  <em>Keeps your values and fills in blanks.</em>
+                </span>
+              </label>
+              <label class="backup-check-row">
+                <input
+                  v-model="externalMergeMode"
+                  type="radio"
+                  value="overwrite"
+                />
+                <span class="backup-option-copy">
+                  <strong>Overwrite</strong>
+                  <em>Replaces your values with the source's.</em>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="backup-section-list compact">
+            <label
+              v-for="option in externalAvailableOptions"
+              :key="option.id"
+              class="backup-check-row"
+            >
+              <component :is="option.icon" class="backup-option-icon" />
+              <span class="backup-option-copy">
+                <strong>{{ option.label }}</strong>
+                <em>{{ option.description }}</em>
+              </span>
+              <input
+                type="checkbox"
+                :checked="isSelected(externalSections, option.id)"
+                @change="toggleExternalSection(option.id)"
+              />
+            </label>
+          </div>
+
+          <div class="backup-disclaimer">
+            <IconInfoCircle />
+            <span>
+              Titles, F95 links, and versions are always imported. The
+              sections above choose what else comes along.
+            </span>
+          </div>
+
+          <div v-if="externalWarnings.length" class="backup-warnings">
+            <strong>
+              <IconAlertTriangle />
+              {{ externalWarnings.length }} warning{{ externalWarnings.length === 1 ? '' : 's' }}
+            </strong>
+            <ul>
+              <li v-for="(warning, index) in externalWarnings.slice(0, 4)" :key="index">
+                {{ warning.message }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       <footer class="backup-footer">
         <div class="backup-feedback">
           <p v-if="activeTab === 'export' && exportError" class="backup-error">
@@ -475,6 +787,21 @@ const runImport = async () => {
           <p v-else-if="activeTab === 'import' && importMessage" class="backup-success">
             {{ importMessage }}
           </p>
+          <p v-else-if="activeTab === 'external' && externalError" class="backup-error">
+            {{ externalError }}
+          </p>
+          <div v-else-if="activeTab === 'external' && externalResult" class="backup-success">
+            <p>{{ externalMessage }}</p>
+            <router-link
+              v-if="externalResult.metadata_check === 'started'"
+              to="/updates"
+            >
+              View progress
+            </router-link>
+            <p v-else-if="externalResult.metadata_check === 'busy'">
+              An update check is already running; run one later from Updates.
+            </p>
+          </div>
         </div>
 
         <div class="backup-actions">
@@ -490,7 +817,7 @@ const runImport = async () => {
             {{ exporting ? "Exporting..." : "Create Export" }}
           </button>
           <button
-            v-else
+            v-else-if="activeTab === 'import'"
             type="button"
             class="backup-primary"
             :disabled="importing || !canImportSelected"
@@ -499,6 +826,17 @@ const runImport = async () => {
             <IconLoader2 v-if="importing" class="backup-spinner" />
             <IconFileImport v-else />
             {{ importing ? "Importing..." : "Import Selected" }}
+          </button>
+          <button
+            v-else-if="activeTab === 'external'"
+            type="button"
+            class="backup-primary"
+            :disabled="externalImporting || !canImportExternal"
+            @click="runExternalImport"
+          >
+            <IconLoader2 v-if="externalImporting" class="backup-spinner" />
+            <IconFileImport v-else />
+            {{ externalImporting ? "Importing..." : "Import Selected" }}
           </button>
         </div>
       </footer>
@@ -680,6 +1018,16 @@ const runImport = async () => {
 
 .backup-inspect {
   width: fit-content;
+}
+
+.backup-segmented {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.backup-segmented .backup-check-row {
+  flex: 1 1 12rem;
 }
 
 .backup-preview {
