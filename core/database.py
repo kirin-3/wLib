@@ -20,6 +20,7 @@ DEFAULT_PLAY_STATUS = "Not Started"
 DEFAULT_LAUNCH_MODE = "auto"
 RPGMAKER_LINUX_LAUNCH_MODE = "rpgmaker_linux"
 RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
+DEFAULT_LIBRARY_FOLDER_PATTERN = "{creator}/{title}/{version}"
 GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_statuses")
 SYNC_GAME_COLUMNS = (
     "title",
@@ -92,6 +93,30 @@ class LaunchTarget(TypedDict):
 
 def _normalize_status_key(value: object) -> str:
     return str(value or "").strip().lower()
+
+
+def default_downloads_folder() -> str:
+    """OS Downloads folder: `xdg-user-dir DOWNLOAD` with `~/Downloads` fallback."""
+    fallback = os.path.abspath(os.path.expanduser(os.path.join("~", "Downloads")))
+    try:
+        import shutil
+        import subprocess
+
+        xdg_user_dir = shutil.which("xdg-user-dir")
+        if xdg_user_dir:
+            completed = subprocess.run(
+                [xdg_user_dir, "DOWNLOAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            candidate = (completed.stdout or "").strip()
+            if completed.returncode == 0 and candidate:
+                return os.path.abspath(os.path.expanduser(candidate))
+    except Exception:
+        pass
+    return fallback
 
 
 def normalize_launch_mode(launch_mode: object) -> str:
@@ -327,6 +352,23 @@ def init_db() -> None:
         )
         _ = cursor.execute(
             f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder', '')"
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder_pattern', ?)",
+            (DEFAULT_LIBRARY_FOLDER_PATTERN,),
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('downloads_folder', ?)",
+            (default_downloads_folder(),),
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('download_detection_enabled', 'true')"
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('dismissed_download_archives', '[]')"
         )
 
         # Safely migrate existing DBs by adding new columns
@@ -785,7 +827,11 @@ def get_custom_play_statuses() -> list[str]:
         if not isinstance(status, str):
             continue
         name = status.strip()
-        if not 1 <= len(name) <= 40 or name.casefold() in seen or normalize_play_status(name) != name:
+        if (
+            not 1 <= len(name) <= 40
+            or name.casefold() in seen
+            or normalize_play_status(name) != name
+        ):
             continue
         seen.add(name.casefold())
         result.append(name)
@@ -795,7 +841,9 @@ def get_custom_play_statuses() -> list[str]:
 def update_custom_play_statuses(statuses: Sequence[str]) -> None:
     # Match case-insensitively like the reset below, so a case-only rename keeps its games.
     kept = {status.casefold() for status in statuses}
-    removed = [status for status in get_custom_play_statuses() if status.casefold() not in kept]
+    removed = [
+        status for status in get_custom_play_statuses() if status.casefold() not in kept
+    ]
     with closing(get_connection()) as conn:
         for status in removed:
             _ = conn.execute(

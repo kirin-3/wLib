@@ -42,6 +42,7 @@ The same library can move between Linux and Windows through semantic JSON import
 - **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
 - **Portable JSON Migration** — Export and import your library, playtime, launch options, and selected settings with one JSON file.
 - **Additional Launch Targets** — Add named executables for multi-part games while keeping one canonical default launch path.
+- **Install From Archive** — Install a new game or an update from a downloaded `.zip`, `.7z`, or `.rar` into a managed library folder, with save carry-over and safe removal of the old version. `.7z`/`.rar` need 7-Zip on Windows or `7z`/`bsdtar`/`unrar` on Linux; matching archives in your Downloads folder are offered automatically.
 - **Dark & Light Themes** — Toggle instantly between a polished dark mode and a clean light interface.
 
 ### 🚀 Advanced Launcher

@@ -16,12 +16,17 @@ import {
   IconSun,
   IconX,
 } from "@tabler/icons-vue";
-import { api, onWebviewReady } from "./services/api";
+import { api, onWebviewReady, type DownloadOffer, type GameRecord } from "./services/api";
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
 import { dismissToast, notify, toasts } from "./utils/toast";
 import { hasAvailableUpdate } from "./utils/libraryGames";
+import {
+  INSTALL_ARCHIVE_EVENT,
+  type InstallArchiveRequest,
+} from "./utils/installArchive";
+import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
 
 interface ExtensionEventDetail {
   url: string;
@@ -47,6 +52,84 @@ let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;
 let updateCountRequest = 0;
+let wasUpdateRunning = false;
+
+// Install-from-archive dialog (global so any view or toast can open it).
+const showInstallModal = ref(false);
+const installGame = ref<GameRecord | null>(null);
+const installArchivePath = ref("");
+
+const handleInstallArchiveRequest = async (event: Event) => {
+  const detail = (event as CustomEvent<InstallArchiveRequest>).detail || {};
+  installArchivePath.value = detail.archivePath || "";
+  installGame.value = null;
+  if (detail.gameId != null) {
+    try {
+      const games = await api.getGames();
+      installGame.value = games.find((game) => game.id === detail.gameId) || null;
+    } catch (error) {
+      console.error("Failed to resolve game for install dialog", error);
+    }
+  }
+  showInstallModal.value = true;
+};
+
+// Downloads-folder scan (throttled, no background watcher).
+let lastDownloadScan = 0;
+const shownOfferKeys = new Set<string>();
+const offerToastByKey = new Map<string, number>();
+
+const dismissOfferToast = (toastId: number) => {
+  for (const [key, id] of offerToastByKey) {
+    if (id === toastId) {
+      offerToastByKey.delete(key);
+      void api.dismissDownloadOffer(key);
+      break;
+    }
+  }
+  dismissToast(toastId);
+};
+
+const scanDownloadOffers = async () => {
+  const now = Date.now();
+  if (now - lastDownloadScan < 60_000) return;
+  lastDownloadScan = now;
+  let offers: DownloadOffer[] = [];
+  try {
+    const result = await api.findDownloadOffers();
+    if (!result?.success) return;
+    offers = result.offers || [];
+  } catch (error) {
+    console.error("Failed to scan Downloads folder", error);
+    return;
+  }
+  for (const offer of offers) {
+    if (shownOfferKeys.has(offer.key)) continue;
+    shownOfferKeys.add(offer.key);
+    notify(
+      `${offer.game_title}: version ${offer.archive_version || offer.latest_version} is waiting in your Downloads folder.`,
+      "info",
+      "Update downloaded",
+      {
+        label: "Install update",
+        run: () => {
+          offerToastByKey.delete(offer.key);
+          window.dispatchEvent(
+            new CustomEvent<InstallArchiveRequest>(INSTALL_ARCHIVE_EVENT, {
+              detail: { gameId: offer.game_id, archivePath: offer.archive_path },
+            }),
+          );
+        },
+      },
+    );
+    const toast = toasts[toasts.length - 1];
+    if (toast) offerToastByKey.set(offer.key, toast.id);
+  }
+};
+
+const handleWindowFocus = () => {
+  void scanDownloadOffers();
+};
 
 const refreshUpdateCount = async () => {
   const request = ++updateCountRequest;
@@ -70,6 +153,8 @@ const pollLibraryUpdates = async () => {
       lastUpdateProgress = progress;
       window.dispatchEvent(new Event("wlib-refresh-library"));
     }
+    if (wasUpdateRunning && !status.running) void scanDownloadOffers();
+    wasUpdateRunning = !!status.running;
   } catch (error) {
     console.error("Failed to refresh update progress", error);
   } finally {
@@ -138,10 +223,15 @@ onMounted(() => {
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
   window.addEventListener("wlib-refresh-library", refreshUpdateCount);
+  window.addEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
 
   // Check for App Updates on Startup
   onWebviewReady(async () => {
     void refreshUpdateCount();
+    void scanDownloadOffers();
+    // Listen only once the backend is injected: a focus event at startup would
+    // otherwise scan the mocks and the 60 s throttle would skip this real scan.
+    window.addEventListener("focus", handleWindowFocus);
     updatePollInterval = setInterval(pollLibraryUpdates, 5000);
     try {
       const extensionSync = await api.getStartupExtensionSyncStatus();
@@ -185,6 +275,8 @@ onUnmounted(() => {
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
   window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
+  window.removeEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
+  window.removeEventListener("focus", handleWindowFocus);
   if (updatePollInterval) clearInterval(updatePollInterval);
 });
 </script>
@@ -452,9 +544,16 @@ onUnmounted(() => {
             <p class="copyable-feedback text-xs leading-5" :class="toast.title ? 'mt-1' : ''">
               {{ toast.message }}
             </p>
+            <button
+              v-if="toast.action"
+              @click="dismissToast(toast.id); toast.action.run()"
+              class="toast-action mt-2 px-3 py-1.5 rounded-lg text-xs font-bold"
+            >
+              {{ toast.action.label }}
+            </button>
           </div>
           <button
-            @click="dismissToast(toast.id)"
+            @click="dismissOfferToast(toast.id)"
             class="theme-toggle -mr-1 rounded-md p-1 shrink-0"
             title="Dismiss"
             aria-label="Dismiss notification"
@@ -473,6 +572,12 @@ onUnmounted(() => {
           <component :is="Component" />
         </transition>
       </router-view>
+
+      <InstallArchiveModal
+        v-model="showInstallModal"
+        :game="installGame"
+        :preselected-archive="installArchivePath"
+      />
     </main>
 
   </div>
@@ -501,6 +606,15 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--bg-surface) 85%, var(--danger-text) 15%);
   border-color: var(--danger-border);
   color: var(--danger-text);
+}
+
+.toast-action {
+  background: var(--brand);
+  color: var(--on-brand);
+  box-shadow: var(--shadow-brand);
+}
+.toast-action:hover {
+  filter: brightness(1.1);
 }
 
 .app-shell {

@@ -3,6 +3,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  IconArchive,
   IconChevronDown,
   IconArrowUp,
   IconClock,
@@ -48,6 +49,7 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { notify, notifyError } from "../utils/toast";
+import { openInstallArchive } from "../utils/installArchive";
 import {
   compareLibraryGames,
   gameFolder,
@@ -1175,6 +1177,19 @@ onUnmounted(() => {
           >
             <IconFolderPlus class="ui-action-icon" />
             Import Folder
+          </button>
+          <button
+            @click="openInstallArchive()"
+            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
+            style="
+              background: var(--bg-raised);
+              color: var(--text-primary);
+              border: 1px solid var(--border);
+            "
+            title="Install a game from a downloaded archive (.zip, .7z, .rar)"
+          >
+            <IconArchive class="ui-action-icon" />
+            Install from archive
           </button>
         </div>
       </header>

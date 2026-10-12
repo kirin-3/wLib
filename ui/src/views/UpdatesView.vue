@@ -14,9 +14,10 @@ import {
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
+import { openInstallArchive } from "../utils/installArchive";
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { isNewerVersion } from "../utils/appVersion";
-import type { GameRecord, UpdateStatusResponse } from "../services/api";
+import type { DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -30,6 +31,24 @@ const router = useRouter();
 const games = ref<GameRecord[]>([]);
 const markingUpdatedIds = ref(new Set<number>());
 const recheckingIds = ref(new Set<number>());
+const downloadOffers = ref(new Map<number, DownloadOffer>());
+
+const loadDownloadOffers = async () => {
+  try {
+    const result = await api.findDownloadOffers();
+    const offers = result?.success ? result.offers || [] : [];
+    downloadOffers.value = new Map(offers.map((offer) => [offer.game_id, offer]));
+  } catch (e) {
+    console.error("Failed to load download offers", e);
+  }
+};
+
+const installUpdate = (game: GameRecord) => {
+  openInstallArchive({
+    gameId: game.id,
+    archivePath: downloadOffers.value.get(game.id)?.archive_path,
+  });
+};
 
 const openGame = (game: GameRecord) => {
   void router.push({ path: "/", query: { action: "open", f95url: game.f95_url } });
@@ -172,6 +191,7 @@ const pollStatus = async () => {
         pollInterval = null;
         await loadGames();
         await loadAutoCheckSetting();
+        await loadDownloadOffers();
       }
     }
   } catch (e) {
@@ -262,6 +282,7 @@ onMounted(() => {
     void loadAppUpdate();
     await loadGames();
     await loadAutoCheckSetting();
+    await loadDownloadOffers();
     const s = await api.getUpdateStatus();
     if (s && s.running) {
       status.value = s;
@@ -553,6 +574,27 @@ onUnmounted(() => {
               </div>
             </button>
             <div class="flex items-center gap-3 shrink-0">
+              <button
+                @click="installUpdate(game)"
+                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs"
+                style="
+                  background: var(--brand-glow);
+                  color: var(--brand);
+                  border: 1px solid var(--brand-deep);
+                "
+                :title="downloadOffers.get(game.id) ? `Install from ${downloadOffers.get(game.id)?.archive_path}` : 'Install the new version from a downloaded archive'"
+              >
+                <IconArrowUp class="ui-action-icon" />
+                Install update
+              </button>
+              <span
+                v-if="downloadOffers.get(game.id)"
+                class="text-xs font-semibold"
+                style="color: var(--brand)"
+                title="A matching archive was found in your Downloads folder"
+              >
+                Archive found
+              </span>
               <button
                 @click="markAsUpdated(game)"
                 :disabled="markingUpdatedIds.has(game.id)"

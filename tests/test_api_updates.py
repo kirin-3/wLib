@@ -45,8 +45,12 @@ class _FakeDownloadResponse:
 def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "wlib-proton"))
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/wine" if name == "wine" else None)
+    monkeypatch.setattr(
+        "core.api.get_proton_dir", lambda: str(tmp_path / "wlib-proton")
+    )
+    monkeypatch.setattr(
+        "shutil.which", lambda name: "/usr/bin/wine" if name == "wine" else None
+    )
     locations = {
         "wlib-proton/Managed/proton": "Managed",
         ".steam/steam/compatibilitytools.d/SteamGE/proton": "SteamGE (Steam)",
@@ -62,19 +66,36 @@ def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
         path.touch()
     result = Api().get_available_runners()
     runners = result["runners"]
-    assert {runner["name"] for runner in runners} == {"System Wine", *locations.values()}
-    assert {runner["path"] for runner in runners} == {"wine", *(str(tmp_path / relative) for relative in locations)}
+    assert {runner["name"] for runner in runners} == {
+        "System Wine",
+        *locations.values(),
+    }
+    assert {runner["path"] for runner in runners} == {
+        "wine",
+        *(str(tmp_path / relative) for relative in locations),
+    }
     assert len({os.path.realpath(runner["path"]) for runner in runners}) == len(runners)
     try:
-        (tmp_path / ".steam/root").symlink_to(tmp_path / ".local/share/Steam", target_is_directory=True)
+        (tmp_path / ".steam/root").symlink_to(
+            tmp_path / ".local/share/Steam", target_is_directory=True
+        )
     except OSError:
         # A Windows junction resolves the same way without symlink privileges.
         import subprocess
+
         if os.name != "nt":
             raise
         result = subprocess.run(
-            ["cmd.exe", "/c", "mklink", "/J", str(tmp_path / ".steam/root"), str(tmp_path / ".local/share/Steam")],
-            capture_output=True, check=False,
+            [
+                "cmd.exe",
+                "/c",
+                "mklink",
+                "/J",
+                str(tmp_path / ".steam/root"),
+                str(tmp_path / ".local/share/Steam"),
+            ],
+            capture_output=True,
+            check=False,
         )
         assert result.returncode == 0
     runners = Api().get_available_runners()["runners"]
@@ -96,8 +117,22 @@ def test_custom_status_settings_validation_and_removal():
     assert api.save_settings({"custom_play_statuses": [" Backlog "]})["success"]
     assert api.get_settings()["custom_play_statuses"] == ["Backlog"]
     update_game(game_id, {"play_status": "Backlog"})
-    for invalid in (["backlog", "Backlog"], ["playing"], ["Replaying"], ["in_progress"], [""], ["x" * 41], [7], "Backlog"):
-        assert api.save_settings({"custom_play_statuses": invalid, "proton_path": "must-not-save"})["success"] is False
+    for invalid in (
+        ["backlog", "Backlog"],
+        ["playing"],
+        ["Replaying"],
+        ["in_progress"],
+        [""],
+        ["x" * 41],
+        [7],
+        "Backlog",
+    ):
+        assert (
+            api.save_settings(
+                {"custom_play_statuses": invalid, "proton_path": "must-not-save"}
+            )["success"]
+            is False
+        )
         assert api.get_settings()["custom_play_statuses"] == ["Backlog"]
         assert get_setting("proton_path") != "must-not-save"
     assert api.save_settings({"custom_play_statuses": []})["success"]
@@ -113,7 +148,12 @@ def test_urm_install_overwrite_remove_and_errors(tmp_path):
     game_id = add_game("RenPy", str(target))
     assert game_id is not None
     api = Api()
-    assert api.get_urm_status(game_id) == {"success": True, "renpy": True, "installed": False, "source_configured": False}
+    assert api.get_urm_status(game_id) == {
+        "success": True,
+        "renpy": True,
+        "installed": False,
+        "source_configured": False,
+    }
     assert api.set_urm_installed(game_id, True)["success"] is False
     source = tmp_path / "mod.rpa"
     source.write_bytes(b"first")
@@ -149,7 +189,9 @@ def test_urm_failed_copy_preserves_existing_mod(monkeypatch, tmp_path):
     source.touch()
     update_setting("urm_rpa_path", str(source))
     game_id = add_game("RenPy", str(folder / "game.exe"))
-    monkeypatch.setattr("shutil.copyfile", MagicMock(side_effect=OSError("copy failed")))
+    monkeypatch.setattr(
+        "shutil.copyfile", MagicMock(side_effect=OSError("copy failed"))
+    )
     result = Api().set_urm_installed(game_id, True)
     assert result["success"] is False
     assert installed.read_bytes() == b"old"
@@ -187,9 +229,7 @@ def _redirect_cheat_engine_dir(monkeypatch, tmp_path):
 
 
 def _redirect_extension_dir(monkeypatch, persistent_dir):
-    monkeypatch.setattr(
-        "core.api.get_extension_dir", lambda: str(persistent_dir)
-    )
+    monkeypatch.setattr("core.api.get_extension_dir", lambda: str(persistent_dir))
 
 
 def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
@@ -201,7 +241,11 @@ def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
 
 @pytest.mark.parametrize(
     "member_name, checksum_ok",
-    [("GE-Proton-test/proton", True), ("../escaped", True), ("GE-Proton-test/proton", False)],
+    [
+        ("GE-Proton-test/proton", True),
+        ("../escaped", True),
+        ("GE-Proton-test/proton", False),
+    ],
 )
 def test_download_proton_ge_streams_and_filters_tar(
     monkeypatch, tmp_path, member_name, checksum_ok
@@ -233,7 +277,9 @@ def test_download_proton_ge_streams_and_filters_tar(
             },
         ],
     }
-    digest = hashlib.sha512(archive_buffer.getvalue() if checksum_ok else b"other").hexdigest()
+    digest = hashlib.sha512(
+        archive_buffer.getvalue() if checksum_ok else b"other"
+    ).hexdigest()
     responses = iter(
         [
             io.BytesIO(json.dumps(release).encode()),
@@ -288,7 +334,10 @@ def test_download_proton_ge_picks_assets_for_host_arch(monkeypatch, tmp_path, ma
     release = {
         "tag_name": "GE-Proton11-7",
         "assets": [
-            {"name": f"GE-Proton11-7-{arch}.{ext}", "browser_download_url": f"https://example.com/{arch}.{ext}"}
+            {
+                "name": f"GE-Proton11-7-{arch}.{ext}",
+                "browser_download_url": f"https://example.com/{arch}.{ext}",
+            }
             for arch in ("aarch64", "x86_64")
             for ext in ("sha512sum", "tar.gz")
         ],
@@ -318,7 +367,9 @@ def test_download_proton_ge_picks_assets_for_host_arch(monkeypatch, tmp_path, ma
 def test_api_add_game_persists_launch_mode(mode):
     api = Api()
 
-    result = api.add_game("Native", "/tmp/native.sh", launch_mode=mode, command_line_args="xsystem35")
+    result = api.add_game(
+        "Native", "/tmp/native.sh", launch_mode=mode, command_line_args="xsystem35"
+    )
 
     assert result["id"] is not None
     games = get_all_games()
@@ -534,9 +585,7 @@ def test_download_cheat_engine_replaces_install_after_verified_download(
     old_executable = _write_existing_cheat_engine(ce_dir)
     old_marker = ce_dir / "old-marker.txt"
     old_marker.write_text("old install", encoding="utf-8")
-    archive_data = _zip_bytes(
-        {"Lunar Engine/lunarengine-x86_64.exe": b"new engine"}
-    )
+    archive_data = _zip_bytes({"Lunar Engine/lunarengine-x86_64.exe": b"new engine"})
     monkeypatch.setattr(
         "core.api.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
     )
@@ -726,7 +775,9 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["has_update"] is True
 
 
-@pytest.mark.parametrize("local_version, has_update", [("b12", True), ("Final", False), ("", True)])
+@pytest.mark.parametrize(
+    "local_version, has_update", [("b12", True), ("Final", False), ("", True)]
+)
 def test_check_for_updates_non_numeric_version(monkeypatch, local_version, has_update):
     api = Api()
     url = "https://f95zone.to/threads/demo.123/"
@@ -879,7 +930,9 @@ def test_add_game_returns_before_metadata_fetch(monkeypatch):
     monkeypatch.setattr("core.api.threading.Thread", _DeferredThread)
 
     result = api.add_game(
-        title="Pending", exe_path="/tmp/pending.exe", f95_url="https://f95zone.to/threads/p.1/"
+        title="Pending",
+        exe_path="/tmp/pending.exe",
+        f95_url="https://f95zone.to/threads/p.1/",
     )
     no_url = api.add_game(title="Local", exe_path="/tmp/local.exe")
 
@@ -1058,8 +1111,6 @@ def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
     assert first["id"] is not None
     assert result["success"] is False
     assert result["error_code"] == "duplicate_url"
-
-
 
 
 def test_browse_file_uses_linux_fallback_order(monkeypatch, tmp_path):
@@ -1301,8 +1352,6 @@ def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     }
 
 
-
-
 def test_open_folder_uses_host_env_outside_appimage_runtime(monkeypatch, tmp_path):
     api = Api()
     target_dir = tmp_path / "folder"
@@ -1500,9 +1549,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     assert (firefox_dir / "wLib.xpi").is_file()
 
 
-def test_sync_extension_files_copies_bundled_signed_firefox_xpi(
-    monkeypatch, tmp_path
-):
+def test_sync_extension_files_copies_bundled_signed_firefox_xpi(monkeypatch, tmp_path):
     api = Api()
     bundled_dir = tmp_path / "bundled-extension"
     persistent_dir = tmp_path / "extension"
@@ -2146,17 +2193,26 @@ def test_bulk_check_preserves_thread_edit_metadata(monkeypatch):
     api = Api()
     url = "https://f95zone.to/threads/game.1/"
     add_game("Game", "", f95_url=url, version="1.0")
-    api._update_thread_edit_metadata_for_url(url, {
-        "thread_main_post_last_edit_at": "2025-01-01T00:00:00",
-        "thread_main_post_checked_at": "2025-01-02T00:00:00",
-    })
+    api._update_thread_edit_metadata_for_url(
+        url,
+        {
+            "thread_main_post_last_edit_at": "2025-01-01T00:00:00",
+            "thread_main_post_checked_at": "2025-01-02T00:00:00",
+        },
+    )
+
     def batch(urls, callback):
-        callback(urls[0], {
-            "success": True, "version": "1.0",
-            "thread_main_post_last_edit_at": "2026-10-09T00:00:00",
-            "thread_main_post_checked_at": "2026-10-09T00:00:00",
-        })
+        callback(
+            urls[0],
+            {
+                "success": True,
+                "version": "1.0",
+                "thread_main_post_last_edit_at": "2026-10-09T00:00:00",
+                "thread_main_post_checked_at": "2026-10-09T00:00:00",
+            },
+        )
         return {}
+
     monkeypatch.setattr(api.scraper, "check_versions", batch)
     api.check_all_updates()
     deadline = time.monotonic() + 5
@@ -2173,7 +2229,9 @@ def test_add_game_metadata_failure_is_not_retried(monkeypatch):
     api = Api()
     url = "https://f95zone.to/threads/game.1/"
     game_id = add_game("Game", "", f95_url=url)
-    get = MagicMock(return_value={"success": False, "code": "blocked", "error": "challenge"})
+    get = MagicMock(
+        return_value={"success": False, "code": "blocked", "error": "challenge"}
+    )
     monkeypatch.setattr(api.scraper, "get_thread_metadata", get)
     api._metadata_pending.add(game_id)
     api._fetch_added_game_metadata(game_id, url, True)
@@ -2213,20 +2271,36 @@ def test_check_all_updates_current_label_names_game_being_checked(monkeypatch):
 
 @pytest.mark.parametrize(
     "outcome",
-    ["batch_error", "failed", "empty", "partial", "success", "interrupted", "exception", "cancelled"],
+    [
+        "batch_error",
+        "failed",
+        "empty",
+        "partial",
+        "success",
+        "interrupted",
+        "exception",
+        "cancelled",
+    ],
 )
 def test_update_check_timestamp_requires_full_pass_with_a_success(monkeypatch, outcome):
     import time
 
     api = Api()
     for number in (1, 2):
-        add_game(f"Game {number}", "", f95_url=f"https://f95zone.to/threads/game.{number}/")
+        add_game(
+            f"Game {number}", "", f95_url=f"https://f95zone.to/threads/game.{number}/"
+        )
     previous = "2020-01-01T00:00:00"
     update_setting("last_update_check", previous)
 
     def fake_batch(urls, callback):
         if outcome == "batch_error":
-            return {"__batch_error__": {"error": "Batch setup failed", "code": "batch_failed"}}
+            return {
+                "__batch_error__": {
+                    "error": "Batch setup failed",
+                    "code": "batch_failed",
+                }
+            }
         if outcome == "empty":
             return {}
         for index, url in enumerate(urls):
@@ -2252,13 +2326,17 @@ def test_update_check_timestamp_requires_full_pass_with_a_success(monkeypatch, o
     status = api.get_update_status()
     assert status["running"] is False
     assert status["checked"] == (
-        0 if outcome in {"batch_error", "empty"}
-        else 1 if outcome in {"interrupted", "exception", "cancelled"}
+        0
+        if outcome in {"batch_error", "empty"}
+        else 1
+        if outcome in {"interrupted", "exception", "cancelled"}
         else 2
     )
     assert status["outcome"] == (
-        "completed" if outcome == "success"
-        else "cancelled" if outcome == "cancelled"
+        "completed"
+        if outcome == "success"
+        else "cancelled"
+        if outcome == "cancelled"
         else "failed"
     )
     assert bool(status["error"]) == (outcome not in {"success", "cancelled"})
@@ -2297,3 +2375,170 @@ def test_version_normalization_ignores_v_prefix_case_and_whitespace():
     assert normalize_version("Ch. 2 Final") == normalize_version("ch.2 final")
     assert normalize_version("v0.08") != normalize_version("v0.8")
     assert normalize_version("vX") == "vx"
+
+
+def _write_archive(path, files):
+    with zipfile.ZipFile(str(path), "w") as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+
+
+def test_api_install_archive_new_game(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    library.mkdir()
+    archive = tmp_path / "Eternum-0.8-pc.zip"
+    _write_archive(archive, {"Eternum.exe": b"new"})
+
+    inspected = api.inspect_archive(str(archive))
+    assert inspected["success"] is True
+    assert inspected["title"] == "Eternum"
+    assert inspected["version"] == "0.8"
+    assert inspected["tool_error"] == ""
+
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "library_folder": str(library),
+            "pattern": "{title}/{version}",
+            "title": "Eternum",
+            "version": "0.8",
+        }
+    )
+    assert result["success"] is True
+    assert os.path.isfile(str(result["exe_path"]))
+    games = get_all_games()
+    assert len(games) == 1 and games[0]["version"] == "0.8"
+    assert api.get_archive_install_status()["running"] is False
+
+
+def test_api_install_archive_update_changes_exe_and_version(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    old_dir = library / "Game" / "1.0"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    game_id = add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+
+    archive = tmp_path / "Game-2.0.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "game_id": game_id,
+            "library_folder": str(library),
+            "pattern": "{title}/{version}",
+            "title": "Game",
+            "version": "2.0",
+        }
+    )
+    assert result["success"] is True
+    game = next(g for g in get_all_games() if g["id"] == game_id)
+    assert game["version"] == "2.0"
+    assert str(game["exe_path"]).endswith(os.path.join("2.0", "Game.exe"))
+    assert not old_dir.exists()
+
+
+def test_api_install_archive_duplicate_url_returns_existing_game(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    library.mkdir()
+    existing_id = add_game(
+        "Existing",
+        str(library / "Existing.exe"),
+        f95_url="https://f95zone.to/threads/dup.123/",
+    )
+    assert existing_id is not None
+    archive = tmp_path / "New-1.0.zip"
+    _write_archive(archive, {"New.exe": b"x"})
+
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "library_folder": str(library),
+            "title": "New",
+            "version": "1.0",
+            "f95_url": "https://f95zone.to/threads/dup.123/",
+        }
+    )
+    assert result["success"] is False
+    assert result["error_code"] == "duplicate_url"
+    assert result["game_id"] == existing_id
+    assert len(get_all_games()) == 1
+
+
+def test_api_install_archive_refuses_running_game(tmp_path, monkeypatch):
+    api = Api()
+    library = tmp_path / "lib"
+    old_dir = library / "Game" / "1.0"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    game_id = add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+    monkeypatch.setattr(api.launcher, "get_running_games", lambda: [game_id])
+
+    archive = tmp_path / "Game-2.0.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "game_id": game_id,
+            "library_folder": str(library),
+            "title": "Game",
+            "version": "2.0",
+        }
+    )
+    assert result["success"] is False
+    assert result["error_code"] == "game_running"
+    assert get_all_games()[0]["version"] == "1.0"
+
+
+def test_api_install_archive_refuses_concurrent_install(tmp_path):
+    # A second install would delete the first one's staging folder.
+    api = Api()
+    api._archive_install_status["running"] = True
+    library = tmp_path / "lib"
+    staging = library / ".wlib-staging-busy"
+    staging.mkdir(parents=True)
+    archive = tmp_path / "Game-1.0.zip"
+    _write_archive(archive, {"Game.exe": b"x"})
+
+    result = api.install_archive(
+        {"archive_path": str(archive), "library_folder": str(library), "title": "Game"}
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "install_running"
+    assert staging.is_dir()
+    assert get_all_games() == []
+
+
+def test_library_downloads_settings_round_trip(tmp_path):
+    api = Api()
+    settings = api.get_settings()
+    assert settings["library_folder_pattern"] == "{creator}/{title}/{version}"
+    assert settings["download_detection_enabled"] is True
+
+    library = tmp_path / "lib"
+    library.mkdir()
+    downloads = tmp_path / "dl"
+    result = api.save_settings(
+        {
+            "library_folder": str(library),
+            "library_folder_pattern": "{title}/{version}",
+            "downloads_folder": str(downloads),
+            "download_detection_enabled": False,
+        }
+    )
+    assert result["success"] is True
+    settings = api.get_settings()
+    assert settings["library_folder"] == str(library)
+    assert settings["library_folder_pattern"] == "{title}/{version}"
+    assert settings["downloads_folder"] == str(downloads)
+    assert settings["downloads_folder_exists"] is False
+    assert settings["download_detection_enabled"] is False
+    downloads.mkdir()
+    assert api.get_settings()["downloads_folder_exists"] is True

@@ -205,7 +205,9 @@ def base_backup(games: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("invalid", [None, 42, "bad", {}, {"metadata": "bad"}, {"metadata": {"title": " "}}])
+@pytest.mark.parametrize(
+    "invalid", [None, 42, "bad", {}, {"metadata": "bad"}, {"metadata": {"title": " "}}]
+)
 def test_invalid_game_records_rejected_before_import(tmp_path, invalid):
     payload = base_backup([{"metadata": {"title": "Valid"}}])
     payload["games"] = [{"metadata": {"title": "Valid"}}, invalid]
@@ -216,14 +218,19 @@ def test_invalid_game_records_rejected_before_import(tmp_path, invalid):
     assert get_all_games() == []
 
 
-@pytest.mark.parametrize("targets", [[{"label": "Broken"}], None, "bad", [None], [{"label": "Broken", "exe_path": 42}]])
+@pytest.mark.parametrize(
+    "targets",
+    [[{"label": "Broken"}], None, "bad", [None], [{"label": "Broken", "exe_path": 42}]],
+)
 def test_invalid_targets_preserve_existing_targets(tmp_path, targets):
     url = "https://f95zone.to/threads/game.123/"
     game_id = add_game("Original", "", f95_url=url)
     assert game_id is not None
     add_game_launch_target(game_id, "Existing", "/game.sh")
     before = list_game_launch_targets(game_id)
-    payload = base_backup([{"metadata": {"title": "Changed", "f95_url": url}, "launch_targets": targets}])
+    payload = base_backup(
+        [{"metadata": {"title": "Changed", "f95_url": url}, "launch_targets": targets}]
+    )
     path = write_backup(tmp_path / "invalid.json", payload)
     assert Api().import_library_backup(str(path))["success"] is False
     assert list_game_launch_targets(game_id) == before
@@ -246,12 +253,25 @@ def test_missing_targets_preserved_and_empty_targets_clear(tmp_path, include_tar
 
 def test_custom_status_and_urm_settings_round_trip(tmp_path):
     api = Api()
-    game_id = add_game("Custom", "/tmp/game.exe", f95_url="https://f95zone.to/threads/custom.123/", launch_mode="custom", command_line_args="xsystem35")
+    game_id = add_game(
+        "Custom",
+        "/tmp/game.exe",
+        f95_url="https://f95zone.to/threads/custom.123/",
+        launch_mode="custom",
+        command_line_args="xsystem35",
+    )
     assert game_id is not None
     update_game(game_id, {"play_status": "Backlog"})
     source_path = str(tmp_path / "URM.rpa")
-    assert api.save_settings({"custom_play_statuses": ["Backlog"], "urm_rpa_path": source_path})["success"]
-    sections = [SECTION_USER_STATE, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]
+    assert api.save_settings(
+        {"custom_play_statuses": ["Backlog"], "urm_rpa_path": source_path}
+    )["success"]
+    sections = [
+        SECTION_USER_STATE,
+        SECTION_LAUNCH_CONFIG,
+        SECTION_SETTINGS_GENERAL,
+        SECTION_SETTINGS_PATHS,
+    ]
     destination = tmp_path / "backup.json"
     result = api.export_library_backup({"sections": sections}, str(destination))
     assert result["success"]
@@ -414,7 +434,10 @@ def test_inspect_validates_format_and_matches_games(tmp_path):
     assert counts["new_games"] == 1
     assert counts["ambiguous_games"] == 1
     assert SECTION_METADATA in cast(list[str], result["available_sections"])
-    assert cast(list[dict[str, object]], result["ambiguous_games"])[0]["title"] == "Ambiguous"
+    assert (
+        cast(list[dict[str, object]], result["ambiguous_games"])[0]["title"]
+        == "Ambiguous"
+    )
 
     invalid_path = tmp_path / "invalid.json"
     invalid_path.write_text("not json", encoding="utf-8")
@@ -579,20 +602,37 @@ def test_legacy_browser_path_is_skipped_in_backups(tmp_path):
     api = Api()
     # Host-native path: the importer skips paths written for the other OS.
     proton_path = str(tmp_path / "proton")
-    path = write_backup(tmp_path / "legacy.json", {
-        **base_backup([]),
-        "settings": {"paths": {"playwright_browsers_path": "/legacy/cache", "proton_path": proton_path}},
-    })
+    path = write_backup(
+        tmp_path / "legacy.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "paths": {
+                    "playwright_browsers_path": "/legacy/cache",
+                    "proton_path": proton_path,
+                }
+            },
+        },
+    )
     inspected = api.inspect_library_backup(str(path))
     assert inspected["success"] is True
-    assert not any(w.get("field") == "playwright_browsers_path" for w in inspected["warnings"])
-    imported = api.import_library_backup(str(path), {"sections": [SECTION_SETTINGS_PATHS]})
+    assert not any(
+        w.get("field") == "playwright_browsers_path" for w in inspected["warnings"]
+    )
+    imported = api.import_library_backup(
+        str(path), {"sections": [SECTION_SETTINGS_PATHS]}
+    )
     assert imported["success"] is True
     assert get_setting("playwright_browsers_path") is None
     assert get_setting("proton_path") == proton_path
     update_setting("playwright_browsers_path", "/stale")
     exported_path = tmp_path / "export.json"
-    assert api.export_library_backup({"sections": [SECTION_SETTINGS_PATHS]}, str(exported_path))["success"] is True
+    assert (
+        api.export_library_backup(
+            {"sections": [SECTION_SETTINGS_PATHS]}, str(exported_path)
+        )["success"]
+        is True
+    )
     assert "playwright_browsers_path" not in exported_path.read_text()
 
 
@@ -716,7 +756,9 @@ def test_import_selected_metadata_updates_matched_game(tmp_path):
         ),
     )
 
-    result = api.import_library_backup(str(backup_path), {"sections": [SECTION_METADATA]})
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_METADATA]}
+    )
 
     assert result["success"] is True
     game = get_all_games()[0]
@@ -752,7 +794,9 @@ def test_import_new_game_uses_metadata_without_metadata_section(tmp_path):
         ),
     )
 
-    result = api.import_library_backup(str(backup_path), {"sections": [SECTION_USER_STATE]})
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_USER_STATE]}
+    )
 
     assert result["success"] is True
     assert result["created"] == 1
@@ -771,10 +815,32 @@ def test_import_invalid_file_does_not_partially_write(tmp_path):
     invalid_path = tmp_path / "invalid.json"
     invalid_path.write_text("not json", encoding="utf-8")
 
-    result = api.import_library_backup(str(invalid_path), {"sections": [SECTION_USER_STATE]})
+    result = api.import_library_backup(
+        str(invalid_path), {"sections": [SECTION_USER_STATE]}
+    )
 
     assert result["success"] is False
     assert result["error_code"] == "invalid_json"
     games = get_all_games()
     assert len(games) == 1
     assert games[0]["title"] == "Safe"
+
+
+def test_paths_export_includes_library_settings_excludes_dismissals(tmp_path):
+    from core.library_backup import PATH_SETTINGS_KEYS, build_library_backup
+
+    assert "library_folder" in PATH_SETTINGS_KEYS
+    assert "library_folder_pattern" in PATH_SETTINGS_KEYS
+    assert "downloads_folder" in PATH_SETTINGS_KEYS
+    assert "download_detection_enabled" in PATH_SETTINGS_KEYS
+    assert "dismissed_download_archives" not in PATH_SETTINGS_KEYS
+
+    update_setting("library_folder", "/games")
+    update_setting("downloads_folder", "/downloads")
+    update_setting("dismissed_download_archives", '["old"]')
+    backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
+    paths = backup["settings"]["paths"]
+    assert paths["library_folder"] == "/games"
+    assert "library_folder_pattern" in paths
+    assert paths["downloads_folder"] == "/downloads"
+    assert "dismissed_download_archives" not in paths

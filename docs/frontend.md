@@ -66,8 +66,17 @@ Backend background tasks push updates into the UI using webview JS evaluation. T
 - **`wlib-extension-open`**: Emitted when the browser extension requests to open a game in wLib; includes the F95Zone URL
 - **`wlib-extension-add`**: Emitted when the browser extension queues a new game to add; includes scraped metadata (title, URL, engine, tags)
 - **`wlib-refresh-library`**: Emitted by frontend workflows such as backup import when the Library view should reload game data from the backend
+- **`wlib-install-archive`**: Dispatched by Library/Updates views, the game detail modal, and download-offer toasts to open the global install dialog; detail is `{ gameId?, archivePath? }` (see `ui/src/utils/installArchive.ts`)
 
 Keep these event names stable unless backend and frontend are updated together.
+
+## Install From Archive
+
+- **Modal**: `ui/src/components/modals/InstallArchiveModal.vue` is hosted once in `App.vue` so toasts and any view can open it with game context. It offers an archive picker, editable title/version/creator/URL, a destination preview from `inspect_archive`, a ticked "Remove old version" checkbox showing the exact folder (disabled with the guard's reason when not removable), an unticked "Delete archive after install" checkbox, progress polled from `get_archive_install_status()`, and a result summary including unmoved launch targets. With no library folder set it prompts to choose one first.
+- **Entry points**: "Install from archive" beside "Import Folder" in `LibraryView.vue`, "Install update" beside "Mark updated" in `UpdatesView.vue` (with an "Archive found" badge fed by `findDownloadOffers()`), and "Install update" in the game detail toolbar when an update is available. Successful installs refresh via `wlib-refresh-library`.
+- **Settings**: the "Library & Downloads" section edits `library_folder` (browse), `library_folder_pattern` (token hint plus a live example), `downloads_folder` (browse, with a "folder does not exist" note), and the detection toggle; all persist through the existing save bar.
+- **Toast actions**: `Toast` carries an optional `{ label, run }` action rendered as a button in `App.vue`; action toasts never auto-dismiss. Covered by `ui/src/utils/toast.test.ts` (`npm run test:unit`).
+- **Download scan triggers**: `App.vue` scans on mount, after an update check completes, and on window `focus`, throttled to one scan per minute in the UI. Each new offer shows one action toast ("Install update" opens the modal with the archive preselected; dismissing the toast dismisses the offer).
 
 ## Styling
 

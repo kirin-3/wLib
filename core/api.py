@@ -307,6 +307,13 @@ class Api:
             "current": "",
             "error": "",
         }
+        # Polled by the install-from-archive dialog while install_archive runs.
+        self._archive_install_status: dict[str, object] = {
+            "running": False,
+            "stage": "",
+            "done": 0,
+            "total": 0,
+        }
 
     def _load_webview_module(self) -> WebviewModule | None:
         import importlib
@@ -2283,13 +2290,17 @@ class Api:
         home = Path(os.path.expanduser("~"))
         steam_runners: list[Path] = []
         for root in (
-            ".steam/root", ".steam/steam", ".local/share/Steam",
+            ".steam/root",
+            ".steam/steam",
+            ".local/share/Steam",
             ".var/app/com.valvesoftware.Steam/data/Steam",
             ".var/app/com.valvesoftware.Steam/.local/share/Steam",
         ):
             steam_runners.extend((home / root).glob("compatibilitytools.d/*/proton"))
             steam_runners.extend((home / root).glob("steamapps/common/Proton*/proton"))
-        for path in sorted(steam_runners, key=lambda path: (path.parent.name, str(path))):
+        for path in sorted(
+            steam_runners, key=lambda path: (path.parent.name, str(path))
+        ):
             if path.is_file():
                 add_runner(f"{path.parent.name} (Steam)", str(path))
 
@@ -2379,12 +2390,16 @@ class Api:
         try:
             folder = self._get_urm_game_dir(game_id)
             source = get_setting("urm_rpa_path") or ""
-            renpy = all(os.path.isdir(os.path.join(folder, part)) for part in ("renpy", "game"))
+            renpy = all(
+                os.path.isdir(os.path.join(folder, part)) for part in ("renpy", "game")
+            )
             return {
                 "success": True,
                 "renpy": renpy,
-                "installed": renpy and os.path.isfile(os.path.join(folder, "game", "0x52_URM.rpa")),
-                "source_configured": source.lower().endswith(".rpa") and os.path.isfile(source),
+                "installed": renpy
+                and os.path.isfile(os.path.join(folder, "game", "0x52_URM.rpa")),
+                "source_configured": source.lower().endswith(".rpa")
+                and os.path.isfile(source),
             }
         except (ValueError, OSError) as exc:
             return {"success": False, "error": str(exc)}
@@ -2402,12 +2417,19 @@ class Api:
         if not status.get("renpy"):
             return {"success": False, "error": "This game folder is not a Ren'Py game"}
         if installed and not status.get("source_configured"):
-            return {"success": False, "error": "Configure an existing URM .rpa source file in Settings"}
+            return {
+                "success": False,
+                "error": "Configure an existing URM .rpa source file in Settings",
+            }
         temporary = ""
         try:
-            target = os.path.join(self._get_urm_game_dir(game_id), "game", "0x52_URM.rpa")
+            target = os.path.join(
+                self._get_urm_game_dir(game_id), "game", "0x52_URM.rpa"
+            )
             if installed:
-                with tempfile.NamedTemporaryFile(dir=os.path.dirname(target), delete=False) as file:
+                with tempfile.NamedTemporaryFile(
+                    dir=os.path.dirname(target), delete=False
+                ) as file:
                     temporary = file.name
                 _ = shutil.copyfile(get_setting("urm_rpa_path") or "", temporary)
                 os.replace(temporary, target)
@@ -2479,8 +2501,14 @@ class Api:
 
         with self._status_lock:
             # winetricks verbs run wineserver -k/-w, which would break a parallel install.
-            if self._deps_install_status["running"] or self._rtp_install_status["running"]:
-                return {"success": False, "error": "Another install is already running. Wait for it to finish."}
+            if (
+                self._deps_install_status["running"]
+                or self._rtp_install_status["running"]
+            ):
+                return {
+                    "success": False,
+                    "error": "Another install is already running. Wait for it to finish.",
+                }
             self._deps_install_status = {
                 "running": True,
                 "done": 0,
@@ -2690,8 +2718,14 @@ class Api:
                 )
 
         with self._status_lock:
-            if self._deps_install_status["running"] or self._rtp_install_status["running"]:
-                return {"success": False, "error": "Another install is already running. Wait for it to finish."}
+            if (
+                self._deps_install_status["running"]
+                or self._rtp_install_status["running"]
+            ):
+                return {
+                    "success": False,
+                    "error": "Another install is already running. Wait for it to finish.",
+                }
             self._rtp_install_status = {
                 "running": True,
                 "done": 0,
@@ -2840,7 +2874,9 @@ class Api:
         with self._status_lock:
             return dict(self._proton_download_status)
 
-    def _set_proton_download_stage(self, stage: str, done: int = 0, total: int = 0) -> None:
+    def _set_proton_download_stage(
+        self, stage: str, done: int = 0, total: int = 0
+    ) -> None:
         with self._status_lock:
             self._proton_download_status.update(stage=stage, done=done, total=total)
 
@@ -2988,7 +3024,11 @@ class Api:
             return {"success": False, "error": str(e)}
 
     def get_settings(self) -> dict[str, object]:
-        from core.database import get_custom_play_statuses, get_setting
+        from core.database import (
+            DEFAULT_LIBRARY_FOLDER_PATTERN,
+            get_custom_play_statuses,
+            get_setting,
+        )
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
@@ -3006,11 +3046,33 @@ class Api:
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
                 rpgmaker_linux_runner_path
             ),
+            "library_folder": str(get_setting_fn("library_folder") or ""),
+            "library_folder_pattern": str(
+                get_setting_fn("library_folder_pattern")
+                or DEFAULT_LIBRARY_FOLDER_PATTERN
+            ),
+            "downloads_folder": str(get_setting_fn("downloads_folder") or ""),
+            "downloads_folder_exists": (
+                os.path.isdir(
+                    os.path.abspath(
+                        os.path.expanduser(
+                            str(get_setting_fn("downloads_folder") or "")
+                        )
+                    )
+                )
+                if str(get_setting_fn("downloads_folder") or "").strip()
+                else True
+            ),
+            "download_detection_enabled": (
+                get_setting_fn("download_detection_enabled") or "true"
+            )
+            == "true",
         }
 
     def save_settings(self, settings: Mapping[str, object]) -> dict[str, object]:
         from core.database import (
             CANONICAL_PLAY_STATUSES,
+            DEFAULT_LIBRARY_FOLDER_PATTERN,
             get_setting,
             normalize_play_status,
             update_custom_play_statuses,
@@ -3021,17 +3083,29 @@ class Api:
         if "custom_play_statuses" in settings:
             raw_statuses = settings["custom_play_statuses"]
             if not isinstance(raw_statuses, list):
-                return {"success": False, "error": "Play statuses must be a list of names"}
+                return {
+                    "success": False,
+                    "error": "Play statuses must be a list of names",
+                }
             seen = {status.casefold() for status in CANONICAL_PLAY_STATUSES}
             for status in cast(list[object], raw_statuses):
                 if not isinstance(status, str) or not 1 <= len(status.strip()) <= 40:
-                    return {"success": False, "error": "Play status names must contain 1–40 characters"}
+                    return {
+                        "success": False,
+                        "error": "Play status names must contain 1–40 characters",
+                    }
                 name = status.strip()
                 if name.casefold() in seen:
-                    return {"success": False, "error": f"Play status '{name}' already exists"}
+                    return {
+                        "success": False,
+                        "error": f"Play status '{name}' already exists",
+                    }
                 # Legacy aliases (e.g. "Replaying") would be rewritten to a built-in status on save.
                 if normalize_play_status(name) != name:
-                    return {"success": False, "error": f"Play status '{name}' is reserved"}
+                    return {
+                        "success": False,
+                        "error": f"Play status '{name}' is reserved",
+                    }
                 seen.add(name.casefold())
                 custom_statuses.append(name)
 
@@ -3059,10 +3133,38 @@ class Api:
         )
 
         update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
-        update_setting_fn("wine_prefix_path", get_payload_or_existing("wine_prefix_path"))
+        update_setting_fn(
+            "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
+        )
         update_setting_fn("enable_logging", enable_logging)
         update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
-        update_setting_fn("urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip())
+        update_setting_fn(
+            "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()
+        )
+        if "library_folder" in settings:
+            update_setting_fn(
+                "library_folder",
+                str(settings.get("library_folder") or "").strip(),
+            )
+        if "library_folder_pattern" in settings:
+            raw_pattern = str(settings.get("library_folder_pattern") or "").strip()
+            update_setting_fn(
+                "library_folder_pattern",
+                raw_pattern or DEFAULT_LIBRARY_FOLDER_PATTERN,
+            )
+        if "downloads_folder" in settings:
+            update_setting_fn(
+                "downloads_folder",
+                str(settings.get("downloads_folder") or "").strip(),
+            )
+        if "download_detection_enabled" in settings:
+            raw_detection = settings.get("download_detection_enabled")
+            update_setting_fn(
+                "download_detection_enabled",
+                "true"
+                if raw_detection is True or str(raw_detection).strip().lower() == "true"
+                else "false",
+            )
         if "custom_play_statuses" in settings:
             update_custom_play_statuses(custom_statuses)
         return {"success": True}
@@ -3070,8 +3172,12 @@ class Api:
     def browse_urm_file(self, start_path: str = "") -> str:
         file_types = ("Ren'Py Archives (*.rpa)",)
         if sys.platform.startswith("linux"):
-            return self._browse_linux_dialog("file", directory=start_path, file_types=file_types)
-        return self._browse_qt_dialog("file", directory=start_path, file_types=file_types)
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
 
     def browse_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select an executable or HTML game."""
@@ -3132,6 +3238,303 @@ class Api:
 
         return self._browse_qt_dialog("directory", directory=start_path)
 
+    def browse_archive_file(self, start_path: str = "") -> str:
+        """Opens a native file dialog to select a game archive (.zip/.7z/.rar)."""
+        file_types = (
+            "Game Archives (*.zip;*.7z;*.rar)",
+            "All files (*.*)",
+        )
+
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
+    def inspect_archive(
+        self, path: str, game_id: int | None = None
+    ) -> dict[str, object]:
+        """Read-only preview for the install-from-archive dialog."""
+        from core.archive_install import (
+            archive_format,
+            build_destination,
+            can_remove_old_folder,
+            detect_archive_tool,
+        )
+        from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN, get_setting
+        from core.game_scan import guess_title_and_version
+
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+
+        archive_path = (path or "").strip()
+        if not archive_path or not os.path.isfile(archive_path):
+            return {"success": False, "error": "Archive file was not found."}
+        if archive_format(archive_path) not in ("zip", "7z", "rar"):
+            return {
+                "success": False,
+                "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
+            }
+
+        _tool, tool_error = detect_archive_tool(archive_path)
+
+        stem = os.path.splitext(os.path.basename(archive_path))[0]
+        guessed_title, guessed_version = guess_title_and_version(stem)
+
+        library_folder = str(get_setting_fn("library_folder") or "")
+        pattern = str(
+            get_setting_fn("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
+        )
+
+        title = guessed_title
+        version = guessed_version
+        creator = ""
+        old_folder = ""
+        old_exe = ""
+        if game_id is not None:
+            from core.database import get_all_games
+
+            for game in get_all_games():
+                try:
+                    if int(str(game.get("id"))) != int(game_id):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                old_exe = str(game.get("exe_path") or "")
+                if not title.strip():
+                    title = str(game.get("title") or "")
+                latest = str(game.get("latest_version") or "").strip()
+                if latest:
+                    version = latest
+                creator = str(game.get("developer") or "")
+                break
+            if old_exe:
+                old_folder = os.path.dirname(os.path.abspath(old_exe))
+
+        destination = ""
+        if library_folder.strip() and title.strip():
+            destination = build_destination(
+                library_folder, pattern, creator, title, version, ""
+            )
+
+        guard: dict[str, object] = {"removable": False, "reason": ""}
+        if old_folder:
+            from core.archive_install import other_game_paths
+
+            downloads_folder = str(get_setting_fn("downloads_folder") or "")
+            guard = can_remove_old_folder(
+                old_folder,
+                destination,
+                library_folder,
+                downloads_folder,
+                other_game_paths(int(game_id) if game_id is not None else None),
+                old_exe,
+            )
+
+        return {
+            "success": True,
+            "title": title,
+            "version": version,
+            "creator": creator,
+            "destination": destination,
+            "tool_error": tool_error or "",
+            "old_folder": old_folder,
+            "removable": guard.get("removable", False),
+            "remove_reason": guard.get("reason", ""),
+        }
+
+    def get_archive_install_status(self) -> dict[str, object]:
+        with self._status_lock:
+            return dict(self._archive_install_status)
+
+    def _set_archive_install_status(
+        self, *, running: bool, stage: str = "", done: int = 0, total: int = 0
+    ) -> None:
+        with self._status_lock:
+            self._archive_install_status = {
+                "running": running,
+                "stage": stage,
+                "done": done,
+                "total": total,
+            }
+
+    def install_archive(
+        self, options: Mapping[str, object] | None = None
+    ) -> dict[str, object]:
+        """Blocking install from an archive; the dialog polls status meanwhile."""
+        import sqlite3
+
+        from core.archive_install import ArchiveInstallError
+        from core.archive_install import install_archive as run_install
+        from core.database import (
+            DEFAULT_LIBRARY_FOLDER_PATTERN,
+            find_game_by_f95_url,
+            get_setting,
+        )
+
+        payload = dict(options or {})
+        archive_path = str(
+            payload.get("archive_path") or payload.get("archive") or ""
+        ).strip()
+        game_id_raw = payload.get("game_id", payload.get("gameId"))
+        game_id: int | None = None
+        if game_id_raw not in (None, ""):
+            try:
+                game_id = int(str(game_id_raw))
+            except (TypeError, ValueError):
+                return {"success": False, "error": "Invalid game id."}
+
+        if game_id is not None and game_id in self.get_running_games():
+            return {
+                "success": False,
+                "error": "Close the game before installing an update.",
+                "error_code": "game_running",
+            }
+
+        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+        f95_url = normalize_thread_url(
+            str(payload.get("f95_url") or payload.get("url") or "")
+        )
+        if f95_url:
+            existing = find_game_by_f95_url(f95_url, exclude_id=game_id)
+            if existing is not None:
+                return {
+                    "success": False,
+                    "error": "That thread URL is already in your library.",
+                    "error_code": "duplicate_url",
+                    "game_id": existing.get("id"),
+                }
+
+        title = str(payload.get("title") or "").strip()
+        version = str(payload.get("version") or "").strip()
+        creator = str(payload.get("creator") or payload.get("developer") or "").strip()
+        engine = str(payload.get("engine") or "").strip()
+        library_folder = str(
+            payload.get("library_folder")
+            if "library_folder" in payload
+            else (get_setting_fn("library_folder") or "")
+        )
+        pattern = str(
+            payload.get("pattern")
+            if "pattern" in payload
+            else (
+                get_setting_fn("library_folder_pattern")
+                or DEFAULT_LIBRARY_FOLDER_PATTERN
+            )
+        )
+        remove_old_raw = payload.get("remove_old", payload.get("removeOld", True))
+        remove_old = (
+            remove_old_raw is True or str(remove_old_raw).strip().lower() == "true"
+        )
+        delete_raw = payload.get("delete_archive", payload.get("deleteArchive", False))
+        delete_archive = delete_raw is True or str(delete_raw).strip().lower() == "true"
+
+        # Fill title/version guesses when the dialog sent only the archive path.
+        if (not title or not version) and archive_path:
+            from core.game_scan import guess_title_and_version as _guess
+
+            guessed_title, guessed_version = _guess(
+                os.path.splitext(os.path.basename(archive_path))[0]
+            )
+            title = title or guessed_title
+            version = version or guessed_version
+
+        # One install at a time: each install starts by deleting leftover
+        # .wlib-staging-* folders, which would include a running install's.
+        with self._status_lock:
+            if self._archive_install_status["running"]:
+                return {
+                    "success": False,
+                    "error": "Another archive install is running. Wait for it to finish.",
+                    "error_code": "install_running",
+                }
+            self._archive_install_status = {
+                "running": True,
+                "stage": "starting",
+                "done": 0,
+                "total": 0,
+            }
+
+        def _on_stage(stage: str) -> None:
+            self._set_archive_install_status(running=True, stage=stage)
+
+        try:
+            result = run_install(
+                archive_path,
+                library_folder=library_folder,
+                pattern=pattern,
+                title=title,
+                version=version,
+                creator=creator,
+                engine=engine,
+                game_id=game_id,
+                remove_old=remove_old,
+                delete_archive=delete_archive,
+                progress_cb=_on_stage,
+            )
+        except ArchiveInstallError as exc:
+            self._set_archive_install_status(running=False, stage="failed")
+            return {"success": False, "error": str(exc)}
+        except sqlite3.IntegrityError:
+            self._set_archive_install_status(running=False, stage="failed")
+            return {
+                "success": False,
+                "error": "A game with this URL is already in your library",
+                "error_code": "duplicate_url",
+            }
+        except Exception as exc:
+            self._set_archive_install_status(running=False, stage="failed")
+            return {"success": False, "error": str(exc)}
+
+        self._set_archive_install_status(running=False, stage="done")
+        installed_id = result.get("game_id")
+
+        # New installs with a thread URL get the same metadata fetch as add_game.
+        if game_id is None and f95_url and isinstance(installed_id, int):
+            from core.database import update_game
+
+            try:
+                update_game(installed_id, {"f95_url": f95_url})
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                self._metadata_pending.add(installed_id)
+                threading.Thread(
+                    target=self._fetch_added_game_metadata,
+                    args=(installed_id, f95_url, True),
+                    daemon=True,
+                ).start()
+        elif f95_url and game_id is not None:
+            from core.database import update_game as update_game_row
+
+            try:
+                update_game_row(game_id, {"f95_url": f95_url})
+            except sqlite3.IntegrityError:
+                pass
+
+        self._refresh_synced_library()
+        return {"success": True, **result}
+
+    def find_download_offers(self) -> dict[str, object]:
+        from core.archive_install import find_download_offers as scan_offers
+
+        try:
+            offers = scan_offers()
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "offers": offers}
+
+    def dismiss_download_offer(self, key: str = "") -> dict[str, object]:
+        from core.archive_install import dismiss_download_offer as dismiss_offer
+
+        try:
+            dismiss_offer(str(key or ""))
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True}
+
     def find_save_files(
         self,
         exe_path: str,
@@ -3160,32 +3563,31 @@ class Api:
 
         # ── 1. Check game directory for common save folders/files ──
         if game_dir and os.path.isdir(game_dir):
-            save_patterns = ["save", "saves", "Save", "Saves", "SaveData", "savedata"]
-            for pattern in save_patterns:
+            from core.archive_install import INFOLDER_SAVE_DIRS, LOOSE_SAVE_PATTERNS
+
+            for pattern in INFOLDER_SAVE_DIRS:
                 candidate = os.path.join(game_dir, pattern)
                 if os.path.isdir(candidate):
+                    label = (
+                        "RPGMaker MV/MZ"
+                        if pattern == os.path.join("www", "save")
+                        else "Game Folder"
+                    )
+                    description = (
+                        "RPGMaker MV/MZ web save folder"
+                        if pattern == os.path.join("www", "save")
+                        else f'Found "{pattern}/" folder next to executable'
+                    )
                     results.append(
                         {
                             "path": candidate,
-                            "type": "Game Folder",
-                            "description": f'Found "{pattern}/" folder next to executable',
+                            "type": label,
+                            "description": description,
                         }
                     )
 
-            # RPGMaker MV/MZ: www/save/
-            www_save = os.path.join(game_dir, "www", "save")
-            if os.path.isdir(www_save):
-                results.append(
-                    {
-                        "path": www_save,
-                        "type": "RPGMaker MV/MZ",
-                        "description": "RPGMaker MV/MZ web save folder",
-                    }
-                )
-
-            # Check for loose save files
-            save_extensions = ["*.sav", "*.rpgsave", "*.save", "*.dat"]
-            for ext in save_extensions:
+            # Check for loose save files (.dat excluded: too many games ship data as .dat)
+            for ext in LOOSE_SAVE_PATTERNS:
                 found = glob.glob(os.path.join(game_dir, ext))
                 if found:
                     results.append(
@@ -3243,7 +3645,9 @@ class Api:
                     for entry in os.listdir(root):
                         entry_lower = entry.lower()
                         title_words = title_clean.lower().split() if title_clean else []
-                        significant_words = [word for word in title_words if len(word) >= 4]
+                        significant_words = [
+                            word for word in title_words if len(word) >= 4
+                        ]
                         matched = bool(
                             (game_name and game_name.lower() in entry_lower)
                             or any(word in entry_lower for word in significant_words)
@@ -3467,9 +3871,7 @@ class Api:
             return {"installed": True, "path": executable_path}
         return {"installed": False, "path": ""}
 
-    def _restore_cheat_engine_backup(
-        self, ce_dir: str, backup_dir: str | None
-    ) -> str:
+    def _restore_cheat_engine_backup(self, ce_dir: str, backup_dir: str | None) -> str:
         if not backup_dir:
             return ""
 
@@ -3510,9 +3912,7 @@ class Api:
 
         try:
             os.makedirs(parent_dir, exist_ok=True)
-            stage_dir = tempfile.mkdtemp(
-                prefix="CheatEngine-download-", dir=parent_dir
-            )
+            stage_dir = tempfile.mkdtemp(prefix="CheatEngine-download-", dir=parent_dir)
             extract_dir = os.path.join(stage_dir, "install")
             os.makedirs(extract_dir, exist_ok=True)
             zip_path = os.path.join(stage_dir, "ce.zip")
@@ -3529,7 +3929,10 @@ class Api:
                 _ = out_file.write(response.read())
 
             with open(zip_path, "rb") as zip_file:
-                if hashlib.file_digest(zip_file, "sha256").hexdigest() != LUNAR_ENGINE_SHA256:
+                if (
+                    hashlib.file_digest(zip_file, "sha256").hexdigest()
+                    != LUNAR_ENGINE_SHA256
+                ):
                     return {
                         "success": False,
                         "error": "Downloaded Cheat Engine archive failed its SHA-256 check.",

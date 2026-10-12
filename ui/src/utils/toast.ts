@@ -3,11 +3,17 @@ import { reactive } from "vue";
 
 export type ToastType = "info" | "success" | "error";
 
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Toast {
   id: number;
   type: ToastType;
   title: string;
   message: string;
+  action?: ToastAction | undefined;
 }
 
 export const toasts = reactive<Toast[]>([]);
@@ -18,11 +24,17 @@ export const dismissToast = (id: number): void => {
   if (index !== -1) toasts.splice(index, 1);
 };
 
-// Errors stay until dismissed so their text can be read and copied.
-export const notify = (message: string, type: ToastType = "info", title = ""): void => {
+// Errors and action toasts stay until dismissed so their text can be read
+// and their action can be taken. Plain info/success toasts auto-dismiss.
+export const notify = (
+  message: string,
+  type: ToastType = "info",
+  title = "",
+  action?: ToastAction,
+): void => {
   const id = nextToastId++;
-  toasts.push({ id, type, title, message });
-  if (type !== "error") setTimeout(() => dismissToast(id), 5000);
+  toasts.push({ id, type, title, message, action });
+  if (type !== "error" && !action) setTimeout(() => dismissToast(id), 5000);
 };
 
 export const notifyError = (message: string, title = ""): void => notify(message, "error", title);

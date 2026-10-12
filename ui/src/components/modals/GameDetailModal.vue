@@ -14,6 +14,7 @@ import {
   IconPaletteFilled,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
+  IconDownload,
   IconRefresh,
   IconStarFilled,
   IconTrashX,
@@ -22,6 +23,7 @@ import {
 } from "@tabler/icons-vue";
 import { api } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
+import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import { hasAvailableUpdate } from "../../utils/libraryGames";
 import type {
@@ -1249,6 +1251,16 @@ const openInBrowser = async () => {
             >
               <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
               {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
+            </button>
+            <button
+              v-if="hasUpdate && props.game"
+              @click="openInstallArchive({ gameId: props.game.id })"
+              class="modal-toolbar-action ui-action-btn"
+              style="color: var(--text-primary)"
+              title="Install the new version from a downloaded archive"
+            >
+              <IconDownload class="ui-action-icon" />
+              Install update
             </button>
           </div>
 

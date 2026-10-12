@@ -55,6 +55,11 @@ const statusError = ref("");
 const urmPath = ref("");
 const prefixPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
+const libraryFolder = ref("");
+const libraryFolderPattern = ref("{creator}/{title}/{version}");
+const downloadsFolder = ref("");
+const downloadsFolderExists = ref(true);
+const downloadDetectionEnabled = ref(true);
 const enableLogging = ref(false);
 const savingLogging = ref(false);
 const protonDownload = ref<ProtonDownloadStatus | null>(null);
@@ -123,6 +128,11 @@ const applySettings = (data: SettingsResponse) => {
   urmPath.value = data.urm_rpa_path || "";
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
+  libraryFolder.value = data.library_folder || "";
+  libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
+  downloadsFolder.value = data.downloads_folder || "";
+  downloadsFolderExists.value = data.downloads_folder_exists !== false;
+  downloadDetectionEnabled.value = data.download_detection_enabled !== false;
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
@@ -137,6 +147,10 @@ const formValues = () => ({
   rpgmakerLinuxRunnerPath: rpgmakerLinuxRunnerPath.value,
   customStatuses: [...customStatuses.value],
   urmPath: urmPath.value,
+  libraryFolder: libraryFolder.value,
+  libraryFolderPattern: libraryFolderPattern.value,
+  downloadsFolder: downloadsFolder.value,
+  downloadDetectionEnabled: downloadDetectionEnabled.value,
 });
 const savedValues = ref(formValues());
 const hasUnsavedChanges = computed(
@@ -277,6 +291,55 @@ const browsePrefix = async () => {
     notifyError("Error browsing directory: " + String(e));
   }
 };
+
+const browseLibraryFolder = async () => {
+  try {
+    const p = await api.browseDirectory(libraryFolder.value || "");
+    if (p) {
+      libraryFolder.value = p;
+    }
+  } catch (e) {
+    console.error("Browse library folder error", e);
+    notifyError("Error browsing directory: " + String(e));
+  }
+};
+
+const browseDownloadsFolder = async () => {
+  try {
+    const p = await api.browseDirectory(downloadsFolder.value || "");
+    if (p) {
+      downloadsFolder.value = p;
+    }
+  } catch (e) {
+    console.error("Browse downloads folder error", e);
+    notifyError("Error browsing directory: " + String(e));
+  }
+};
+
+// Live example for the folder pattern, using a sample game.
+const patternExample = computed(() => {
+  const samples: Record<string, string> = {
+    creator: "Caribdis",
+    title: "Eternum",
+    version: "0.8",
+    engine: "Ren'Py",
+  };
+  const clean = (segment: string) =>
+    segment.replace(/[<>:"/\\|?*]/g, "_").replace(/[. ]+$/, "").trim() || "_";
+  const parts = (libraryFolderPattern.value || "").split("/");
+  const segments: string[] = [];
+  for (const part of parts) {
+    let substituted = part;
+    for (const [token, sample] of Object.entries(samples)) {
+      substituted = substituted.split(`{${token}}`).join(sample);
+    }
+    substituted = substituted.replace(/\{[^{}]*\}/g, "");
+    const cleaned = clean(substituted);
+    if (cleaned && cleaned !== "_") segments.push(cleaned);
+  }
+  const base = (libraryFolder.value || "~/games").replace(/[/\\]+$/, "");
+  return `${base}/${segments.length ? segments.join("/") : "Eternum"}`;
+});
 
 const browseRpgmakerLinuxRunner = async () => {
   try {
@@ -437,7 +500,7 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath], () => {
+watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath, libraryFolder, libraryFolderPattern, downloadsFolder, downloadDetectionEnabled], () => {
   if (!saving.value) saveError.value = "";
 });
 
@@ -466,6 +529,10 @@ const saveSettings = async () => {
       rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
       custom_play_statuses: customStatuses.value,
       urm_rpa_path: urmPath.value,
+      library_folder: libraryFolder.value,
+      library_folder_pattern: libraryFolderPattern.value.trim() || "{creator}/{title}/{version}",
+      downloads_folder: downloadsFolder.value,
+      download_detection_enabled: downloadDetectionEnabled.value,
     });
 
     if (!res || res.success === false) {
@@ -505,6 +572,10 @@ const discardChanges = () => {
   rpgmakerLinuxRunnerPath.value = saved.rpgmakerLinuxRunnerPath;
   customStatuses.value = [...saved.customStatuses];
   urmPath.value = saved.urmPath;
+  libraryFolder.value = saved.libraryFolder;
+  libraryFolderPattern.value = saved.libraryFolderPattern;
+  downloadsFolder.value = saved.downloadsFolder;
+  downloadDetectionEnabled.value = saved.downloadDetectionEnabled;
   statusError.value = "";
   saveError.value = "";
 };
@@ -630,6 +701,95 @@ const browseUrm = async () => {
               </dd>
             </div>
           </dl>
+        </div>
+      </section>
+
+      <!-- Library & Downloads -->
+      <section class="settings-card rounded-xl p-6 space-y-5">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconDownloadFilled class="ui-section-icon" />
+          Library &amp; Downloads
+        </h3>
+
+        <div class="space-y-3">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folder</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              New installs from archives are placed inside this folder.
+            </p>
+          </div>
+          <div class="flex gap-3">
+            <input
+              v-model="libraryFolder"
+              type="text"
+              class="settings-input flex-1 font-mono"
+              placeholder="/path/to/games"
+              aria-label="Library folder"
+            />
+            <button @click="browseLibraryFolder" class="settings-btn ui-action-btn">Browse</button>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Folder pattern</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Tokens: <code>{creator}</code> <code>{title}</code> <code>{version}</code> <code>{engine}</code>.
+              Empty parts are skipped.
+            </p>
+          </div>
+          <input
+            v-model="libraryFolderPattern"
+            type="text"
+            class="settings-input w-full font-mono"
+            placeholder="{creator}/{title}/{version}"
+            aria-label="Library folder pattern"
+          />
+          <p class="text-xs font-mono break-all" style="color: var(--text-muted)">
+            Example: {{ patternExample }}
+          </p>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Downloads folder</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              wLib looks here for archives matching games with pending updates.
+            </p>
+          </div>
+          <div class="flex gap-3">
+            <input
+              v-model="downloadsFolder"
+              type="text"
+              class="settings-input flex-1 font-mono"
+              placeholder="~/Downloads"
+              aria-label="Downloads folder"
+            />
+            <button @click="browseDownloadsFolder" class="settings-btn ui-action-btn">Browse</button>
+          </div>
+          <p v-if="downloadsFolder && !downloadsFolderExists" role="alert" class="text-xs" style="color: var(--warning-text)">
+            This folder does not exist, so automatic detection will find nothing.
+          </p>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+              Detect downloaded updates
+            </h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Offer to install matching archives when the app starts, after update checks, and when the window regains focus.
+            </p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              v-model="downloadDetectionEnabled"
+              class="sr-only peer"
+              aria-label="Detect downloaded updates"
+            />
+            <div class="ui-toggle"></div>
+          </label>
         </div>
       </section>
 

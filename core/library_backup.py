@@ -98,6 +98,10 @@ PATH_SETTINGS_KEYS = (
     "wine_prefix_path",
     RPGMAKER_LINUX_RUNNER_SETTING,
     "urm_rpa_path",
+    "library_folder",
+    "library_folder_pattern",
+    "downloads_folder",
+    "download_detection_enabled",
 )
 
 BOOLEAN_GAME_FIELDS = (
@@ -247,7 +251,9 @@ def decrypt_library_backup(
 def _coerce_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
-    return {str(key): item for key, item in cast(Mapping[object, object], value).items()}
+    return {
+        str(key): item for key, item in cast(Mapping[object, object], value).items()
+    }
 
 
 def _coerce_sequence(value: object) -> list[object]:
@@ -334,7 +340,9 @@ def _select_sections(
     return selected
 
 
-def _pick_fields(source: Mapping[str, object], fields: Sequence[str]) -> dict[str, object]:
+def _pick_fields(
+    source: Mapping[str, object], fields: Sequence[str]
+) -> dict[str, object]:
     return {field: source.get(field, "") for field in fields}
 
 
@@ -571,7 +579,9 @@ def _available_backup_sections(backup: Mapping[str, object]) -> list[str]:
 
 
 def _local_games() -> list[dict[str, object]]:
-    return [{str(key): value for key, value in game.items()} for game in get_all_games()]
+    return [
+        {str(key): value for key, value in game.items()} for game in get_all_games()
+    ]
 
 
 def _fallback_identity_key(game_metadata: Mapping[str, object]) -> tuple[str, str]:
@@ -858,17 +868,22 @@ def _import_fields_for_game(
     fields: dict[str, object] = {}
     if include_metadata:
         fields.update(
-            _normalized_fields(_game_section(imported_game, SECTION_METADATA), METADATA_FIELDS)
+            _normalized_fields(
+                _game_section(imported_game, SECTION_METADATA), METADATA_FIELDS
+            )
         )
 
     if SECTION_USER_STATE in sections:
         fields.update(
-            _normalized_fields(_game_section(imported_game, SECTION_USER_STATE), USER_STATE_FIELDS)
+            _normalized_fields(
+                _game_section(imported_game, SECTION_USER_STATE), USER_STATE_FIELDS
+            )
         )
     if SECTION_LAUNCH_CONFIG in sections:
         fields.update(
             _normalized_fields(
-                _game_section(imported_game, SECTION_LAUNCH_CONFIG), LAUNCH_CONFIG_FIELDS
+                _game_section(imported_game, SECTION_LAUNCH_CONFIG),
+                LAUNCH_CONFIG_FIELDS,
             )
         )
     if SECTION_EXECUTABLE_PATHS in sections:
@@ -879,7 +894,9 @@ def _import_fields_for_game(
             )
         )
 
-    return {key: value for key, value in fields.items() if key in IMPORTABLE_GAME_FIELDS}
+    return {
+        key: value for key, value in fields.items() if key in IMPORTABLE_GAME_FIELDS
+    }
 
 
 def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:

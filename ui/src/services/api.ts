@@ -203,6 +203,66 @@ export interface ExecutableModifiedTimeResponse extends ApiBasicResponse {
   modified_at: string | null;
 }
 
+export interface ArchiveInspectResponse extends ApiBasicResponse {
+  success: boolean;
+  title?: string;
+  version?: string;
+  creator?: string;
+  destination?: string;
+  tool_error?: string;
+  old_folder?: string;
+  removable?: boolean;
+  remove_reason?: string;
+}
+
+export interface ArchiveInstallOptions {
+  archive_path: string;
+  game_id?: number | null | undefined;
+  title?: string | undefined;
+  version?: string | undefined;
+  creator?: string | undefined;
+  engine?: string | undefined;
+  f95_url?: string | undefined;
+  library_folder?: string | undefined;
+  pattern?: string | undefined;
+  remove_old?: boolean | undefined;
+  delete_archive?: boolean | undefined;
+}
+
+export interface ArchiveInstallResponse extends ApiBasicResponse {
+  success: boolean;
+  game_id?: number;
+  exe_path?: string;
+  destination?: string;
+  unmoved_targets?: Array<Record<string, unknown>>;
+  kept_old_folder_reason?: string;
+  removed_old?: boolean;
+  old_folder?: string;
+}
+
+export interface ArchiveInstallStatus {
+  running: boolean;
+  stage: string;
+  done: number;
+  total: number;
+}
+
+export interface DownloadOffer {
+  game_id: number;
+  game_title: string;
+  installed_version: string;
+  latest_version: string;
+  archive_path: string;
+  archive_version: string;
+  guessed_title: string;
+  key: string;
+}
+
+export interface DownloadOffersResponse extends ApiBasicResponse {
+  success: boolean;
+  offers?: DownloadOffer[];
+}
+
 export interface LaunchTarget {
   id: number;
   game_id: number;
@@ -388,6 +448,10 @@ export interface SettingsPayload {
   wine_prefix_path?: string;
   enable_logging?: boolean;
   rpgmaker_linux_runner_path?: string;
+  library_folder?: string;
+  library_folder_pattern?: string;
+  downloads_folder?: string;
+  download_detection_enabled?: boolean;
 }
 
 export interface UrmStatusResponse extends ApiBasicResponse {
@@ -404,6 +468,11 @@ export interface SettingsResponse {
   enable_logging: boolean;
   rpgmaker_linux_runner_path: string;
   rpgmaker_linux_runner_status: RpgmakerLinuxRunnerStatus;
+  library_folder: string;
+  library_folder_pattern: string;
+  downloads_folder: string;
+  downloads_folder_exists: boolean;
+  download_detection_enabled: boolean;
 }
 
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
@@ -422,6 +491,11 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
     configured_path: "",
     error: "RPGMaker Linux runner is not installed or configured.",
   },
+  library_folder: "",
+  library_folder_pattern: "{creator}/{title}/{version}",
+  downloads_folder: "",
+  downloads_folder_exists: true,
+  download_detection_enabled: true,
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -498,6 +572,26 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
         : DEFAULT_MOCK_SETTINGS.enable_logging,
     rpgmaker_linux_runner_path: rpgmakerRunnerPath,
     rpgmaker_linux_runner_status: rpgmakerRunnerStatus,
+    library_folder:
+      typeof source.library_folder === "string"
+        ? source.library_folder
+        : DEFAULT_MOCK_SETTINGS.library_folder,
+    library_folder_pattern:
+      typeof source.library_folder_pattern === "string" && source.library_folder_pattern.trim()
+        ? source.library_folder_pattern
+        : DEFAULT_MOCK_SETTINGS.library_folder_pattern,
+    downloads_folder:
+      typeof source.downloads_folder === "string"
+        ? source.downloads_folder
+        : DEFAULT_MOCK_SETTINGS.downloads_folder,
+    downloads_folder_exists:
+      typeof source.downloads_folder_exists === "boolean"
+        ? source.downloads_folder_exists
+        : DEFAULT_MOCK_SETTINGS.downloads_folder_exists,
+    download_detection_enabled:
+      typeof source.download_detection_enabled === "boolean"
+        ? source.download_detection_enabled
+        : DEFAULT_MOCK_SETTINGS.download_detection_enabled,
   };
 };
 
@@ -577,6 +671,7 @@ class ApiService {
   _mockRunningGames = new Set<number>();
   _mockPendingMetadata = new Set<number>();
   _mockUrmInstalled = new Set<number>();
+  _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
 
   async invoke<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
     const invoker = window.pywebview?.api?.[method];
@@ -896,6 +991,30 @@ class ApiService {
     return this.invoke<string>("browse_directory", startPath);
   }
 
+  async browseArchiveFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_archive_file", startPath);
+  }
+
+  async inspectArchive(archivePath: string, gameId: number | null = null): Promise<ArchiveInspectResponse> {
+    return this.invoke<ArchiveInspectResponse>("inspect_archive", archivePath, gameId);
+  }
+
+  async installArchive(options: ArchiveInstallOptions): Promise<ArchiveInstallResponse> {
+    return this.invokeLibraryChange<ArchiveInstallResponse>("install_archive", options);
+  }
+
+  async getArchiveInstallStatus(): Promise<ArchiveInstallStatus> {
+    return this.invoke<ArchiveInstallStatus>("get_archive_install_status");
+  }
+
+  async findDownloadOffers(): Promise<DownloadOffersResponse> {
+    return this.invoke<DownloadOffersResponse>("find_download_offers");
+  }
+
+  async dismissDownloadOffer(key: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("dismiss_download_offer", key);
+  }
+
   async installRpgmakerDependencies(
     prefix_path: string | null = null,
     proton_path: string | null = null
@@ -1181,8 +1300,60 @@ class ApiService {
       case "browse_urm_file":
       case "browse_runner_file":
       case "browse_backup_file":
+      case "browse_archive_file":
       case "browse_directory":
         return "";
+      case "inspect_archive": {
+        const fileName = String(args[0]).split(/[/\\]/).pop() || "";
+        const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");
+        const versionMatch = stem.match(/[-_ ]v?(\d[\d._]*[a-z]?)$/i);
+        const version = versionMatch?.[1] ? versionMatch[1].replace(/_/g, ".") : "";
+        const title = (versionMatch ? stem.slice(0, versionMatch.index) : stem).replace(/[_-]+/g, " ").trim() || stem;
+        const settings = readMockSettings();
+        const gameId = typeof args[1] === "number" ? args[1] : null;
+        const game = gameId !== null ? readMockGames().find((entry) => entry.id === gameId) : undefined;
+        const pattern = settings.library_folder_pattern || DEFAULT_MOCK_SETTINGS.library_folder_pattern;
+        const destination = settings.library_folder && title
+          ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${pattern.replace("{title}", title).replace("{version}", version || "1.0").replace("{creator}", "").replace("{engine}", "").replace(/\/+/g, "/").replace(/^\/|\/$/g, "")}`
+          : "";
+        return {
+          success: true,
+          mock: true,
+          title: game?.title || title,
+          version: version || game?.latest_version || "1.0",
+          creator: "",
+          destination,
+          tool_error: "",
+          old_folder: game ? game.exe_path.split(/[/\\]/).slice(0, -1).join("/") : "",
+          removable: !!game,
+          remove_reason: game ? "" : "No previous install.",
+        };
+      }
+      case "install_archive": {
+        this._mockArchiveStatus = { running: true, stage: "extracting", done: 1, total: 3 };
+        setTimeout(() => {
+          this._mockArchiveStatus = { running: false, stage: "done", done: 3, total: 3 };
+          window.dispatchEvent(new Event("wlib-refresh-library"));
+        }, 900);
+        const options = isRecord(args[0]) ? args[0] : {};
+        return {
+          success: true,
+          mock: true,
+          game_id: typeof options.game_id === "number" ? options.game_id : 9001,
+          exe_path: String(options.archive_path || ""),
+          destination: "",
+          unmoved_targets: [],
+          kept_old_folder_reason: "",
+          removed_old: false,
+          old_folder: "",
+        };
+      }
+      case "get_archive_install_status":
+        return { ...this._mockArchiveStatus };
+      case "find_download_offers":
+        return { success: true, mock: true, offers: [] };
+      case "dismiss_download_offer":
+        return { success: true, mock: true };
       case "inspect_game_path": {
         const folder = String(args[0]).split(/[\/]/).slice(-2, -1)[0] || "";
         return { success: true, mock: true, title: folder, version: "", engine: "", exe_path: String(args[0]) };

@@ -128,7 +128,9 @@ def test_custom_mode_and_status_survive_update_and_startup():
     assert normalize_launch_mode("custom") == "custom"
     assert normalize_play_status(" ") == DEFAULT_PLAY_STATUS
     assert normalize_play_status("x" * 45) == "x" * 40
-    game_id = add_game("Custom", "/tmp/game.exe", launch_mode="custom", command_line_args="xsystem35")
+    game_id = add_game(
+        "Custom", "/tmp/game.exe", launch_mode="custom", command_line_args="xsystem35"
+    )
     assert game_id is not None
     update_game(game_id, {"play_status": "  Backlog  "})
     assert get_all_games()[0]["play_status"] == "Backlog"
@@ -180,7 +182,9 @@ def test_imported_custom_statuses_never_shadow_built_in_ones():
     assert game_id is not None
     update_game(game_id, {"play_status": "Playing"})
     # An imported backup or sync file can hold any list.
-    update_setting("custom_play_statuses", '["playing", "replaying", " Backlog ", "backlog", 3]')
+    update_setting(
+        "custom_play_statuses", '["playing", "replaying", " Backlog ", "backlog", 3]'
+    )
     assert get_custom_play_statuses() == ["Backlog"]
     update_custom_play_statuses([])
     assert get_all_games()[0]["play_status"] == "Playing"
@@ -314,7 +318,8 @@ def test_reorder_launch_targets_rejects_missing_or_foreign_targets():
     other = add_game_launch_target(other_id, "Other", "/tmp/other-part.exe")
 
     assert_raises_value_error(
-        "include all targets", lambda: reorder_game_launch_targets(game_id, [first["id"]])
+        "include all targets",
+        lambda: reorder_game_launch_targets(game_id, [first["id"]]),
     )
     assert_raises_value_error(
         "include all targets",
@@ -571,3 +576,28 @@ def test_thread_urls_ignore_non_f95_hosts():
     assert extract_thread_id("https://f95zone.to.evil.test/threads/game.123/") == ""
     assert not thread_urls_match(f95, "https://example.com/threads/other.123/")
     assert thread_urls_match(f95, "https://www.f95zone.to/threads/renamed.123/page-2")
+
+
+def test_archive_install_settings_defaults_for_fresh_and_existing_db():
+    from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
+
+    assert get_setting("library_folder") == ""
+    assert get_setting("library_folder_pattern") == DEFAULT_LIBRARY_FOLDER_PATTERN
+    assert (
+        (get_setting("downloads_folder") or "").replace("\\", "/").endswith("Downloads")
+    )
+    assert get_setting("download_detection_enabled") == "true"
+    assert get_setting("dismissed_download_archives") == "[]"
+
+    # Existing DB keeps custom values; missing keys still get defaults.
+    update_setting("library_folder", "/games")
+    conn = get_connection()
+    conn.execute("DELETE FROM settings WHERE key = 'downloads_folder'")
+    conn.commit()
+    conn.close()
+    init_db()
+    assert get_setting("library_folder") == "/games"
+    assert get_setting("library_folder_pattern") == DEFAULT_LIBRARY_FOLDER_PATTERN
+    assert (
+        (get_setting("downloads_folder") or "").replace("\\", "/").endswith("Downloads")
+    )
