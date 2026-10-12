@@ -118,13 +118,13 @@ const contextMenu = ref<{ game: GameRecord; x: number; y: number } | null>(
 const contextMenuElement = ref<HTMLElement | null>(null);
 let contextMenuTrigger: HTMLElement | null = null;
 
-const tableColumns: Array<{ key: SortField; label: string }> = [
+const tableColumns: Array<{ key: SortField; label: string; class?: string }> = [
   { key: "title", label: "Title" },
   { key: "version", label: "Version" },
   { key: "play_status", label: "Status" },
-  { key: "engine", label: "Engine" },
+  { key: "engine", label: "Engine", class: "col-engine" },
   { key: "playtime_seconds", label: "Playtime" },
-  { key: "last_played", label: "Last played" },
+  { key: "last_played", label: "Last played", class: "col-last-played" },
 ];
 
 const updateCount = computed(
@@ -755,7 +755,14 @@ const handleContextMenuKeyboard = (event: KeyboardEvent) => {
 
 const runContextAction = async (
   action:
-    "play" | "folder" | "thread" | "check" | "favorite" | "remove" | "status",
+    | "play"
+    | "folder"
+    | "thread"
+    | "check"
+    | "mark-updated"
+    | "favorite"
+    | "remove"
+    | "status",
   status = "",
 ) => {
   const game = contextMenu.value?.game;
@@ -764,6 +771,7 @@ const runContextAction = async (
   try {
     if (action === "play") return await toggleGame(game);
     if (action === "check") return await checkUpdate(game);
+    if (action === "mark-updated") return await markAsUpdated(game);
     if (
       action === "remove" &&
       !confirm(`Remove "${game.title}" from your library?`)
@@ -1352,6 +1360,7 @@ onUnmounted(() => {
               <th
                 v-for="column in tableColumns"
                 :key="column.key"
+                :class="column.class"
                 scope="col"
                 :aria-sort="
                   sortBy === column.key
@@ -1392,6 +1401,15 @@ onUnmounted(() => {
                     alt=""
                     class="w-8 h-8 rounded object-cover shrink-0"
                   />
+                  <span
+                    v-else
+                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center"
+                    style="background: var(--bg-raised)"
+                    aria-hidden="true"
+                    ><IconPhotoFilled
+                      class="w-4 h-4"
+                      style="color: var(--text-muted)"
+                  /></span>
                   <button
                     @click.stop="openDetail(game)"
                     class="truncate text-left font-semibold"
@@ -1418,23 +1436,22 @@ onUnmounted(() => {
                 </div>
               </td>
               <td>
-                <div class="flex flex-wrap items-center gap-1">
+                <div class="flex items-center gap-1">
                   <span class="font-mono text-xs">{{
                     game.version || "Unknown"
                   }}</span>
-                  <button
+                  <span
                     v-if="hasAvailableUpdate(game)"
-                    @click.stop="markAsUpdated(game)"
-                    :disabled="markingUpdatedIds.has(game.id)"
-                    class="update-version-badge rounded px-1.5 py-0.5 text-xs"
-                    :title="`Mark as updated to ${game.latest_version}`"
-                    :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
+                    class="update-pill"
+                    :title="`Update available: ${game.latest_version}`"
                   >
-                    ⬆ {{ game.latest_version }}
-                  </button>
+                    <IconArrowUp class="w-3 h-3" aria-hidden="true" />
+                    <span class="sr-only">Update available: </span
+                    >{{ game.latest_version }}
+                  </span>
                 </div>
               </td>
-              <td>
+              <td class="library-table-clip" :title="getGamePlayStatusMeta(game).label">
                 <span
                   class="ui-status-inline whitespace-nowrap"
                   :class="getGamePlayStatusMeta(game).toneClass"
@@ -1444,12 +1461,17 @@ onUnmounted(() => {
                   />{{ getGamePlayStatusMeta(game).label }}</span
                 >
               </td>
-              <td class="text-xs">{{ game.engine || "Unknown" }}</td>
-              <td class="whitespace-nowrap text-xs">
+              <td
+                class="col-engine library-table-clip text-xs"
+                :title="game.engine || 'Unknown'"
+              >
+                {{ game.engine || "Unknown" }}
+              </td>
+              <td class="text-xs">
                 {{ formatPlaytime(game.playtime_seconds) }}
               </td>
               <td
-                class="whitespace-nowrap text-xs"
+                class="col-last-played text-xs"
                 :title="game.last_played || 'Never'"
               >
                 {{ formatLastPlayed(game.last_played) }}
@@ -1565,16 +1587,15 @@ onUnmounted(() => {
                 aria-label="Favorite"
                 ><IconStarFilled class="w-3 h-3 text-yellow-400"
               /></span>
-              <button
+              <span
                 v-if="layoutMode === 'compact' && hasAvailableUpdate(game)"
-                @click.stop="markAsUpdated(game)"
-                :disabled="markingUpdatedIds.has(game.id)"
-                class="update-version-badge compact-update-badge rounded px-1.5 py-0.5 text-xs"
-                :title="`Mark as updated to ${game.latest_version}`"
-                :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
+                class="update-pill update-pill-on-art"
+                :title="`Update available: ${game.latest_version}`"
               >
-                ⬆
-              </button>
+                <IconArrowUp class="w-3 h-3" aria-hidden="true" />
+                <span class="sr-only">Update available: </span
+                >{{ game.latest_version }}
+              </span>
             </div>
             <button
               v-if="layoutMode !== 'compact' && game.f95_url"
@@ -1666,16 +1687,15 @@ onUnmounted(() => {
               <span class="font-mono" style="color: var(--brand)">{{
                 game.version || "Unknown"
               }}</span>
-              <button
+              <span
                 v-if="hasAvailableUpdate(game)"
-                @click.stop="markAsUpdated(game)"
-                :disabled="markingUpdatedIds.has(game.id)"
-                class="update-version-badge rounded px-1.5 py-0.5 font-mono"
-                :title="`Mark as updated to ${game.latest_version}`"
-                :aria-label="`Mark ${game.title} as updated to ${game.latest_version}`"
+                class="update-pill"
+                :title="`Update available: ${game.latest_version}`"
               >
-                ⬆ {{ game.latest_version }}
-              </button>
+                <IconArrowUp class="w-3 h-3" aria-hidden="true" />
+                <span class="sr-only">Update available: </span
+                >{{ game.latest_version }}
+              </span>
               <span
                 v-if="game.playtime_seconds"
                 style="color: var(--text-secondary)"
@@ -1774,6 +1794,13 @@ onUnmounted(() => {
             :disabled="!contextMenu.game.f95_url || updatingId !== null"
           >
             Check update
+          </button>
+          <button
+            v-if="hasAvailableUpdate(contextMenu.game)"
+            @click="runContextAction('mark-updated')"
+            :disabled="markingUpdatedIds.has(contextMenu.game.id)"
+          >
+            Mark as updated to {{ contextMenu.game.latest_version }}
           </button>
           <label
             class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
@@ -1877,6 +1904,18 @@ onUnmounted(() => {
 }
 .library-table-wrap {
   overflow-x: auto;
+  container-type: inline-size;
+}
+/* Thresholds tuned to the list width at 1200x800 with filters open. */
+@container (max-width: 780px) {
+  .col-engine {
+    display: none;
+  }
+}
+@container (max-width: 690px) {
+  .col-last-played {
+    display: none;
+  }
 }
 .library-table {
   width: 100%;
@@ -1888,6 +1927,13 @@ onUnmounted(() => {
 .library-table :is(th, td) {
   padding: 0.4rem 0.5rem;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+/* Fits the longest built-in status ("Waiting For Update"); longer custom names truncate. */
+.library-table-clip {
+  max-width: 10.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .library-table th {
   color: var(--text-muted);
@@ -1940,8 +1986,7 @@ onUnmounted(() => {
 .game-context-menu > button:hover {
   background: var(--bg-raised);
 }
-.game-context-menu button:disabled,
-.update-version-badge:disabled {
+.game-context-menu button:disabled {
   opacity: 0.5;
   cursor: wait;
 }
@@ -2087,7 +2132,22 @@ onUnmounted(() => {
   background: var(--overlay-scrim-strong);
   border: 1px solid var(--overlay-border);
   color: var(--overlay-control-text);
+  /* Hidden only visually: it stays clickable so a click that arrives with the
+     pointer (before :hover applies) still hits the button, not the card. */
+  opacity: 0;
   transition: opacity 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.game-card:hover .update-overlay-btn,
+.game-card:focus-within .update-overlay-btn,
+.update-overlay-btn:disabled {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .update-overlay-btn {
+    opacity: 1;
+  }
 }
 
 .update-overlay-btn:hover {
@@ -2095,14 +2155,24 @@ onUnmounted(() => {
   color: var(--overlay-control-text);
 }
 
-.update-version-badge {
+.update-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
   background: var(--success-bg);
   border: 1px solid var(--success-border);
   color: var(--success-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
-.compact-update-badge {
+/* Sits on cover art, so it keeps a solid fill for contrast. */
+.update-pill-on-art {
   background: var(--success-text);
+  border-color: transparent;
   color: var(--text-inverse);
 }
 

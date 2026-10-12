@@ -5,10 +5,18 @@ import assert from "node:assert/strict";
 import {
   LAUNCH_MODE_OPTIONS,
   getLaunchModeOptions,
+  isClearlyNativeTarget,
   normalizeLaunchMode,
   resolveLaunchRuntimeOverrides,
   usesWineProtonControls,
 } from "./launchMode.ts";
+
+test("only unambiguous host-native extensions count as clearly native", () => {
+  for (const path of ["a/game.sh", "g.jar", "i.html", "i.htm", "G.SH", "  game.sh \n"])
+    assert.equal(isClearlyNativeTarget(path), true, path);
+  for (const path of ["Game.exe", "run.bat", "game.x86_64", "game", ""])
+    assert.equal(isClearlyNativeTarget(path), false, path);
+});
 
 test("launch mode options include user-facing runtime choices", () => {
   assert.deepEqual(

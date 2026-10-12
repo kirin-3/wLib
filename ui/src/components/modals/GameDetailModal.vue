@@ -36,6 +36,7 @@ import type {
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
   getLaunchModeOptions,
+  isClearlyNativeTarget,
   normalizeLaunchMode,
   resolveLaunchRuntimeOverrides,
   usesWineProtonControls,
@@ -189,6 +190,13 @@ const showWineProtonControls = computed(
     platformCapabilities.value.wine_proton &&
     usesWineProtonControls(launchMode.value),
 );
+// Visibility only: saved prefix/runner/CE values are untouched (see isNativeLaunchMode).
+const hideWineControlsForAuto = computed(() => {
+  if (!platformCapabilities.value.wine_proton || launchMode.value !== "auto")
+    return false;
+  const targets = [exePath.value, ...launchTargets.value.map((t) => t.exe_path)];
+  return targets.every(isClearlyNativeTarget);
+});
 const launchModeOptions = computed(() =>
   getLaunchModeOptions(
     platformCapabilities.value,
@@ -1698,7 +1706,8 @@ const openInBrowser = async () => {
                 <div
                   v-if="
                     platformCapabilities.cheat_engine_injection &&
-                    !isNativeLaunchMode
+                    !isNativeLaunchMode &&
+                    !hideWineControlsForAuto
                   "
                   class="rounded-md px-2 py-1 transition-colors"
                   :style="
@@ -1743,7 +1752,10 @@ const openInBrowser = async () => {
             </div>
 
             <!-- Advanced Launch Options -->
-            <div v-if="showWineProtonControls" class="col-span-2 mt-2">
+            <div
+              v-if="showWineProtonControls && !hideWineControlsForAuto"
+              class="col-span-2 mt-2"
+            >
               <div
                 class="flex items-center justify-between p-3 rounded-lg"
                 style="
