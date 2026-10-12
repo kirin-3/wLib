@@ -135,7 +135,9 @@ def test_save_discovery_uses_launcher_proton_prefix(monkeypatch, tmp_path, layou
         pfx = prefix / "pfx"
     saves = pfx / "drive_c" / "users" / "steamuser" / "AppData" / "Roaming" / "MoonGame"
     saves.mkdir(parents=True)
+    # Undo this module's Windows host fixture: the launcher's path helpers read it too.
     monkeypatch.setattr("core.api.is_windows", lambda: False)
+    monkeypatch.setattr("core.host_platform.sys.platform", "linux")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     custom_prefix = "~/prefix" if layout == "tilde" else str(prefix)
