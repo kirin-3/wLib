@@ -1232,15 +1232,6 @@ const openInBrowser = async () => {
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
             <button
-              @click="isRunning && game ? emit('stop', game.id) : launchGame()"
-              :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
-              class="launch-btn header-launch-btn ui-play-btn ui-action-btn"
-            >
-              <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
-              <IconPlayerPlayFilled v-else class="ui-action-icon" />
-              {{ isRunning ? 'Stop' : 'Play' }}
-            </button>
-            <button
               v-if="f95Url"
               @click="openInBrowser"
               class="modal-toolbar-action ui-action-btn"
@@ -2041,15 +2032,26 @@ const openInBrowser = async () => {
               {{ searchingSaves ? "Searching..." : "Find Saves" }}
             </button>
           </div>
-          <div v-if="hasUnsavedChanges" class="flex flex-wrap items-center gap-3">
-            <span class="text-xs" style="color: var(--text-muted)">Unsaved changes</span>
+          <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
+            <template v-if="hasUnsavedChanges">
+              <span class="text-xs" style="color: var(--text-muted)">Unsaved changes</span>
+              <button
+                @click="save"
+                :disabled="saving"
+                class="save-btn ui-action-btn disabled:opacity-50"
+              >
+                <IconDeviceFloppyFilled class="ui-action-icon" />
+                {{ saving ? "Saving..." : "Save Changes" }}
+              </button>
+            </template>
             <button
-              @click="save"
-              :disabled="saving"
-              class="save-btn ui-action-btn disabled:opacity-50"
+              @click="isRunning && game ? emit('stop', game.id) : launchGame()"
+              :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
+              class="launch-btn footer-launch-btn ui-play-btn ui-action-btn"
             >
-              <IconDeviceFloppyFilled class="ui-action-icon" />
-              {{ saving ? "Saving..." : "Save Changes" }}
+              <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else class="ui-action-icon" />
+              {{ isRunning ? 'Stop' : 'Play' }}
             </button>
           </div>
         </div>
@@ -2116,7 +2118,7 @@ const openInBrowser = async () => {
   color: var(--warning-text);
 }
 
-.header-launch-btn {
+.footer-launch-btn {
   justify-content: center;
   min-width: 6.5rem;
 }
