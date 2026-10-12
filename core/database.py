@@ -114,7 +114,10 @@ def default_downloads_folder() -> str:
             )
             candidate = (completed.stdout or "").strip()
             if completed.returncode == 0 and candidate:
-                return os.path.abspath(os.path.expanduser(candidate))
+                resolved = os.path.abspath(os.path.expanduser(candidate))
+                # xdg-user-dir falls back to $HOME when DOWNLOAD is unset.
+                if resolved != os.path.abspath(os.path.expanduser("~")):
+                    return resolved
     except Exception:
         pass
     return fallback

@@ -752,3 +752,21 @@ def test_archive_install_settings_defaults_for_fresh_and_existing_db():
     assert (
         (get_setting("downloads_folder") or "").replace("\\", "/").endswith("Downloads")
     )
+
+
+def test_default_downloads_folder_ignores_xdg_home_fallback(monkeypatch):
+    """xdg-user-dir prints $HOME when DOWNLOAD is unset; use ~/Downloads instead."""
+    import shutil
+    import subprocess
+
+    from core.database import default_downloads_folder
+
+    home = os.path.abspath(os.path.expanduser("~"))
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/xdg-user-dir")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout=home + "\n"),
+    )
+
+    assert default_downloads_folder() == os.path.join(home, "Downloads")
