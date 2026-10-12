@@ -71,6 +71,7 @@ METADATA_FIELDS = (
 )
 USER_STATE_FIELDS = (
     "play_status",
+    "finished_version",
     "is_favorite",
     "rating",
     "rating_graphics",

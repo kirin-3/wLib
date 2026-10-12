@@ -7,6 +7,7 @@ from core.database import (
     DEFAULT_PLAY_STATUS,
     DEFAULT_LAUNCH_MODE,
     RPGMAKER_LINUX_RUNNER_SETTING,
+    SYNC_GAME_COLUMNS,
     init_db,
     get_connection,
     add_game,
@@ -576,6 +577,156 @@ def test_thread_urls_ignore_non_f95_hosts():
     assert extract_thread_id("https://f95zone.to.evil.test/threads/game.123/") == ""
     assert not thread_urls_match(f95, "https://example.com/threads/other.123/")
     assert thread_urls_match(f95, "https://www.f95zone.to/threads/renamed.123/page-2")
+
+
+def test_finished_version_starts_empty_for_new_games():
+    """New games get an empty finished version, and saves trim the value."""
+    game_id = add_game(title="Fresh Finished", exe_path="/tmp/fresh.exe")
+    assert game_id is not None
+
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == ""
+
+    update_game(game_id, {"finished_version": "  0.5  "})
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.5"
+
+
+def test_init_db_migrates_finished_version_without_backfill():
+    """Games from before the column existed stay empty, Completed or not."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE games")
+    cursor.execute("""
+        CREATE TABLE games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            f95_url TEXT,
+            exe_path TEXT NOT NULL,
+            version TEXT,
+            progress TEXT DEFAULT '',
+            developer TEXT DEFAULT '',
+            last_played TIMESTAMP,
+            cover_image_path TEXT,
+            play_status TEXT DEFAULT 'Not Started'
+        )
+    """)
+    cursor.executemany(
+        "INSERT INTO games (title, exe_path, version, play_status) VALUES (?, ?, ?, ?)",
+        [
+            ("Completed Legacy", "/tmp/a.exe", "0.5", "Completed"),
+            ("Playing Legacy", "/tmp/b.exe", "0.7", "Playing"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(games)")
+    columns = [row[1] for row in cursor.fetchall()]
+    conn.close()
+    assert "finished_version" in columns
+
+    finished = {
+        game["title"]: game["finished_version"] for game in get_all_games()
+    }
+    assert finished == {"Completed Legacy": "", "Playing Legacy": ""}
+
+
+def test_sync_trigger_recreation_watches_finished_version():
+    """A database with the pre-column trigger gets it recreated with the new column."""
+    game_id = add_game(title="Trigger Watch", exe_path="/tmp/trigger.exe")
+    assert game_id is not None
+
+    conn = get_connection()
+    old_columns = [
+        column for column in SYNC_GAME_COLUMNS if column != "finished_version"
+    ]
+    columns_sql = ", ".join(old_columns)
+    changed_sql = " OR ".join(
+        f"OLD.{column} IS NOT NEW.{column}" for column in old_columns
+    )
+    conn.execute("DROP TRIGGER sync_games_update")
+    conn.execute(
+        f"CREATE TRIGGER sync_games_update AFTER UPDATE OF {columns_sql} ON games "
+        f"WHEN {changed_sql} BEGIN "
+        "UPDATE settings SET value = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+        "WHERE key = 'sync_local_modified_at'; END"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_game(game_id, {"finished_version": "0.5"})
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_updating_version_keeps_finished_version():
+    """Editing the installed version never touches the finished version."""
+    game_id = add_game(title="Version Keeps", exe_path="/tmp/keeps.exe", version="0.5")
+    assert game_id is not None
+    update_game(game_id, {"finished_version": "0.5"})
+
+    update_game(game_id, {"version": "0.7"})
+
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["version"] == "0.7"
+    assert game["finished_version"] == "0.5"
+
+
+def test_completed_status_change_auto_fills_finished_version():
+    """Moving to Completed records the installed version; leaving it keeps the value."""
+    game_id = add_game(title="Auto Fill", exe_path="/tmp/autofill.exe", version="0.5")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Playing"})
+
+    # Playing -> Completed records the installed version and reports it applied.
+    applied = update_game(game_id, {"play_status": "Completed"})
+    assert applied["finished_version"] == "0.5"
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.5"
+
+    # Completed -> Completed leaves the recorded value alone.
+    applied = update_game(game_id, {"play_status": "Completed"})
+    assert "finished_version" not in applied
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.5"
+
+    # Leaving Completed keeps the value.
+    update_game(game_id, {"play_status": "Waiting For Update"})
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.5"
+
+    # An explicit finished_version in the same change wins.
+    applied = update_game(
+        game_id, {"play_status": "Completed", "finished_version": "0.4"}
+    )
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.4"
+
+    # Completing again after an update records the incoming new version.
+    update_game(game_id, {"play_status": "Waiting For Update"})
+    applied = update_game(game_id, {"play_status": "Completed", "version": "0.7"})
+    assert applied["finished_version"] == "0.7"
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.7"
+
+
+def test_completed_status_change_without_stored_version_falls_back_to_incoming():
+    """A Completed change with no stored version uses the incoming version."""
+    game_id = add_game(title="No Stored", exe_path="/tmp/nostored.exe", version="")
+    assert game_id is not None
+
+    applied = update_game(game_id, {"play_status": "Completed", "version": "0.9"})
+
+    assert applied["finished_version"] == "0.9"
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["finished_version"] == "0.9"
 
 
 def test_archive_install_settings_defaults_for_fresh_and_existing_db():

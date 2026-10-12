@@ -20,6 +20,7 @@ import {
   IconPlayerStopFilled,
   IconPlayerPlayFilled,
   IconRefresh,
+  IconSparkles,
   IconZoom,
   IconStarFilled,
   IconX,
@@ -55,6 +56,7 @@ import {
   gameFolder,
   gameTags,
   hasAvailableUpdate,
+  hasNewSinceFinished,
   matchesGameSearch,
 } from "../utils/libraryGames";
 
@@ -140,6 +142,7 @@ const collections: Array<{
   { value: "All", label: "All Games", icon: IconLayoutGridFilled },
   { value: "Favorites", label: "Favorites", icon: IconStarFilled },
   { value: "Updates available", label: "Updates available", icon: IconArrowUp },
+  { value: "New since finished", label: "New since finished", icon: IconSparkles },
   { value: "Recently played", label: "Recently played", icon: IconClock },
 ];
 
@@ -358,6 +361,8 @@ const filteredGames = computed(() => {
   }
   if (filterCollection.value === "Updates available")
     result = result.filter(hasAvailableUpdate);
+  if (filterCollection.value === "New since finished")
+    result = result.filter(hasNewSinceFinished);
   if (filterCollection.value === "Recently played") {
     result = result.filter((game) => !!game.last_played);
   }

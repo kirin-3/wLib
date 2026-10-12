@@ -15,6 +15,15 @@ export const hasAvailableUpdate = (
   return !!remote && remote !== normalizeVersion(game.version);
 };
 
+// The installed version differs from the version the user finished. "Differs",
+// not "is newer": free-form version strings can't be ordered reliably.
+export const hasNewSinceFinished = (
+  game: Pick<GameRecord, "version" | "finished_version">,
+): boolean => {
+  const finished = normalizeVersion(game.finished_version);
+  return !!finished && finished !== normalizeVersion(game.version);
+};
+
 export const gameTags = (game: Pick<GameRecord, "tags">): string[] => [
   ...new Set(
     (typeof game.tags === "string" ? game.tags.split(",") : game.tags || [])

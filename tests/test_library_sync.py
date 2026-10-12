@@ -98,6 +98,26 @@ def test_first_push_idle_and_local_change():
     assert json.loads(location.data)["games"][0]["user_state"]["rating"] == "9"
 
 
+def test_finished_version_round_trips_between_libraries(tmp_path, monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Synced", "/synced.exe", version="0.5")
+    database.update_game(game_id, {"play_status": "Completed"})
+    assert sync.run()["state"] == "idle"
+
+    pushed = json.loads(location.data)
+    assert pushed["games"][0]["user_state"]["finished_version"] == "0.5"
+
+    # A second library pulls the same sync file and receives the value.
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-library.db"))
+    database.init_db()
+    other = manager(location)
+    assert other.run()["state"] == "idle"
+    game = database.get_all_games()[0]
+    assert game["title"] == "Synced"
+    assert game["finished_version"] == "0.5"
+
+
 @pytest.mark.parametrize("choice", ["use-remote", "use-local", "merge-once"])
 def test_first_connection_choice(choice):
     database.add_game("Local", "/local.exe", developer="Dev")

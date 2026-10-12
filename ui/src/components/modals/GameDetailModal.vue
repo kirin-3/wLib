@@ -33,6 +33,7 @@ import type {
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   SaveLocation,
+  UpdateGameResponse,
   UrmStatusResponse,
 } from "../../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
@@ -117,6 +118,7 @@ const title = ref("");
 const exePath = ref("");
 const f95Url = ref("");
 const version = ref("");
+const finishedVersion = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
 const playStatus = ref<PlayStatus>(DEFAULT_PLAY_STATUS);
@@ -324,23 +326,26 @@ const ratingCategories = [
 ] as const;
 
 // Launch and info fields save explicitly; Overview fields save on click.
+// Object keys keep the dirty-check string stable and let one field's baseline
+// be patched without wiping the dirty state of the others.
 const formSnapshot = (): string =>
-  JSON.stringify([
-    title.value,
-    exePath.value,
-    f95Url.value,
-    version.value,
-    commandLineArgs.value,
-    coverImage.value,
-    engine.value,
-    runJapaneseLocale.value,
-    runWayland.value,
-    autoInjectCe.value,
-    useCustomPrefix.value,
-    customPrefix.value,
-    protonVersion.value,
-    launchMode.value,
-  ]);
+  JSON.stringify({
+    title: title.value,
+    exe_path: exePath.value,
+    f95_url: f95Url.value,
+    version: version.value,
+    finished_version: finishedVersion.value,
+    command_line_args: commandLineArgs.value,
+    cover_image: coverImage.value,
+    engine: engine.value,
+    run_japanese_locale: runJapaneseLocale.value,
+    run_wayland: runWayland.value,
+    auto_inject_ce: autoInjectCe.value,
+    use_custom_prefix: useCustomPrefix.value,
+    custom_prefix: customPrefix.value,
+    proton_version: protonVersion.value,
+    launch_mode: launchMode.value,
+  });
 const savedSnapshot = ref("");
 const quickFields = (): Record<string, unknown> => ({
   play_status: playStatus.value,
@@ -371,6 +376,7 @@ watch(
         exePath.value = g.exe_path || "";
         f95Url.value = g.f95_url || "";
         version.value = g.version || "";
+        finishedVersion.value = g.finished_version || "";
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
         playStatus.value = normalizePlayStatus(g.play_status, g.status);
@@ -567,28 +573,56 @@ useModalKeyboard(
   },
 );
 
-const saveQuickFields = async (fields: Record<string, unknown>) => {
+const saveQuickFields = async (
+  fields: Record<string, unknown>,
+): Promise<UpdateGameResponse | undefined> => {
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
   try {
     const res = await api.updateGame(gameId, fields);
     if (res && res.success === false) {
       notifyError("Failed to save: " + (res.error || "Unknown error"));
-      return;
+      return res;
     }
     if (isCurrentGame(gameId)) {
       Object.assign(savedQuickFields.value, fields);
     }
+    return res;
   } catch (e) {
     console.error("Failed to save game", e);
     notifyError("Error saving: " + String(e));
   }
 };
 
+// A backend-filled finished version (move to Completed) must show up at once
+// without marking the form dirty or discarding other fields' dirty state.
+const applyAutoFilledFinishedVersion = (value: string) => {
+  finishedVersion.value = value;
+  try {
+    const baseline = JSON.parse(savedSnapshot.value || "{}") as Record<
+      string,
+      unknown
+    >;
+    baseline.finished_version = value;
+    savedSnapshot.value = JSON.stringify(baseline);
+  } catch {
+    savedSnapshot.value = formSnapshot();
+  }
+};
+
 const setPlayStatus = (value: PlayStatus) => {
   if (playStatus.value === value) return;
   playStatus.value = value;
-  void saveQuickFields({ play_status: value });
+  const gameId = props.game?.id;
+  void saveQuickFields({ play_status: value }).then((res) => {
+    if (
+      typeof res?.finished_version === "string" &&
+      typeof gameId === "number" &&
+      isCurrentGame(gameId)
+    ) {
+      applyAutoFilledFinishedVersion(res.finished_version);
+    }
+  });
 };
 
 const toggleFavorite = () => {
@@ -909,6 +943,7 @@ const save = async () => {
       exe_path: exePath.value,
       f95_url: f95Url.value,
       version: version.value,
+      finished_version: finishedVersion.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       ...quickFields(),
@@ -1857,6 +1892,17 @@ const openInBrowser = async () => {
                 v-model="version" id="detail-version"
                 type="text"
                 placeholder="v1.0"
+                class="modal-input w-full font-mono"
+                style="color: var(--brand)"
+              />
+            </div>
+
+            <div>
+              <label for="detail-finished-version" class="modal-label">Finished version</label>
+              <input
+                v-model="finishedVersion" id="detail-finished-version"
+                type="text"
+                placeholder="Not finished"
                 class="modal-input w-full font-mono"
                 style="color: var(--brand)"
               />

@@ -556,6 +556,71 @@ def test_import_merges_backup_values_and_preserves_unselected_fields(tmp_path):
     assert targets[0]["id"] != 999
 
 
+def test_finished_version_exports_with_user_state(tmp_path):
+    api = Api()
+    game_id = add_game(
+        title="Finished Game",
+        exe_path="/tmp/finished/game.sh",
+        f95_url="https://f95zone.to/threads/finished.777/",
+        version="0.5",
+    )
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Completed"})
+
+    result = api.export_library_backup(
+        {"sections": [SECTION_USER_STATE]}, str(tmp_path / "export")
+    )
+
+    assert result["success"] is True
+    backup = json.loads(Path(str(result["path"])).read_text(encoding="utf-8"))
+    exported_game = backup["games"][0]
+    assert exported_game[SECTION_USER_STATE]["finished_version"] == "0.5"
+
+
+def test_import_finished_version_semantics(tmp_path):
+    api = Api()
+    local_id = add_game(
+        title="Local Game",
+        exe_path="/tmp/local/game.sh",
+        f95_url="https://f95zone.to/threads/local.888/",
+        version="0.7",
+    )
+    assert local_id is not None
+    update_game(local_id, {"play_status": "Playing", "finished_version": "0.6"})
+
+    def imported_finished_version(name: str, user_state: dict[str, object]) -> object:
+        backup_path = write_backup(
+            tmp_path / name,
+            base_backup(
+                [
+                    {
+                        "metadata": {
+                            "title": "Local Game",
+                            "f95_url": "https://f95zone.to/threads/local.888/",
+                        },
+                        SECTION_USER_STATE: user_state,
+                    }
+                ]
+            ),
+        )
+        result = api.import_library_backup(
+            str(backup_path), {"sections": [SECTION_USER_STATE]}
+        )
+        assert result["success"] is True
+        game = next(g for g in get_all_games() if g["id"] == local_id)
+        return game["finished_version"]
+
+    # A backup finished_version is applied to the matched game.
+    assert imported_finished_version("with.json", {"finished_version": "0.5"}) == "0.5"
+    # A backup without the key keeps the local value...
+    assert imported_finished_version("without.json", {"rating": "9"}) == "0.5"
+    # ...even when the backup status is Completed.
+    assert (
+        imported_finished_version("completed.json", {"play_status": "Completed"})
+        == "0.5"
+    )
+
+
 @pytest.mark.parametrize(
     ("host_is_windows", "foreign_path", "native_path"),
     [

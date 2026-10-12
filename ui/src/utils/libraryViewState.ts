@@ -13,7 +13,12 @@ export type SortField =
   | "playtime_seconds"
   | "rating"
   | "own_rating";
-export type FilterCollection = "All" | "Favorites" | "Updates available" | "Recently played";
+export type FilterCollection =
+  | "All"
+  | "Favorites"
+  | "Updates available"
+  | "New since finished"
+  | "Recently played";
 
 export interface FilterSections {
   collections: boolean;
@@ -88,7 +93,13 @@ const VALID_SORT_FIELDS = new Set<SortField>([
   "own_rating",
 ]);
 const VALID_SORT_DIRECTIONS = new Set<SortDir>(["asc", "desc"]);
-const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>(["All", "Favorites", "Updates available", "Recently played"]);
+const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>([
+  "All",
+  "Favorites",
+  "Updates available",
+  "New since finished",
+  "Recently played",
+]);
 
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) {

@@ -2,7 +2,7 @@
 
 ## Library sync change tracking
 
-`init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes.
+`init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, finished version, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes. Because `CREATE TRIGGER IF NOT EXISTS` would keep a pre-existing trigger's column list, `init_db()` drops and recreates `sync_games_update` on every start so databases upgraded after new columns (such as `finished_version`) watch them too.
 
 Local settings keys, all excluded from manual exports/imports and the sync file:
 
@@ -83,6 +83,7 @@ Stores the library records and their associated configuration flags.
 | `date_added` | `TIMESTAMP` | ISO timestamp when added to library. |
 | `status` | `TEXT` | Legacy status field (migrated to `play_status`, then cleared on startup). |
 | `play_status` | `TEXT` | Canonical or custom status, at most 40 characters. New games default to `Not Started`; legacy values are normalized during startup. |
+| `finished_version` | `TEXT` | Free-text version the user finished, independent of `version`. Empty means not finished. Values are trimmed on save. Added with `TEXT DEFAULT ''`; existing games are never backfilled — a `Completed` game may have been updated since it was finished, so copying the installed version would be a guess. |
 | `is_favorite` | `BOOLEAN` | Favorite flag for library filtering. |
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |

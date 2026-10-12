@@ -32,6 +32,7 @@ SYNC_GAME_COLUMNS = (
     "latest_version",
     "cover_image_path",
     "play_status",
+    "finished_version",
     "is_favorite",
     "rating",
     "rating_graphics",
@@ -402,6 +403,7 @@ def init_db() -> None:
             ("thread_main_post_last_edit_at", "TIMESTAMP"),
             ("thread_main_post_checked_at", "TIMESTAMP"),
             ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
+            ("finished_version", "TEXT DEFAULT ''"),
         ]
 
         for col_name, col_type in new_columns:
@@ -443,8 +445,11 @@ def init_db() -> None:
         changed = " OR ".join(
             f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
         )
+        # Recreate on every start so upgraded databases watch columns added
+        # after the trigger was first created.
+        _ = cursor.execute("DROP TRIGGER IF EXISTS sync_games_update")
         _ = cursor.execute(
-            f"CREATE TRIGGER IF NOT EXISTS sync_games_update AFTER UPDATE OF {columns} ON games WHEN {changed} BEGIN {bump_sync_time} END"
+            f"CREATE TRIGGER sync_games_update AFTER UPDATE OF {columns} ON games WHEN {changed} BEGIN {bump_sync_time} END"
         )
         keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
         for action in ("INSERT", "UPDATE", "DELETE"):
@@ -711,10 +716,14 @@ def delete_game(game_id: int) -> None:
         conn.commit()
 
 
-def update_game(game_id: int, fields: Mapping[str, object]) -> None:
-    """Update arbitrary fields on a game row. `fields` is a dict of column->value."""
+def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]:
+    """Update arbitrary fields on a game row. `fields` is a dict of column->value.
+
+    Returns the fields actually applied, including a `finished_version` the
+    caller never sent when a move to `Completed` auto-filled it.
+    """
     if not fields:
-        return
+        return {}
     allowed = {
         "title",
         "exe_path",
@@ -740,6 +749,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
         "proton_version",
         "launch_mode",
         "play_status",
+        "finished_version",
         "is_favorite",
     }
     # Only allow known columns
@@ -747,13 +757,15 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
         k: v for k, v in fields.items() if k in allowed and v is not None
     }
     if not safe_fields:
-        return
+        return {}
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
 
     if "play_status" in safe_fields:
         safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
+    if "finished_version" in safe_fields:
+        safe_fields["finished_version"] = str(safe_fields["finished_version"]).strip()
     if "launch_mode" in safe_fields:
         safe_fields["launch_mode"] = normalize_launch_mode(safe_fields["launch_mode"])
 
@@ -768,10 +780,25 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> None:
         ):
             raise sqlite3.IntegrityError("duplicate f95_url")
 
+        if (
+            safe_fields.get("play_status") == "Completed"
+            and "finished_version" not in safe_fields
+        ):
+            _ = cursor.execute(
+                "SELECT play_status, version FROM games WHERE id = ?", (game_id,)
+            )
+            stored = cast(sqlite3.Row | None, cursor.fetchone())
+            if stored is not None and stored["play_status"] != "Completed":
+                incoming_version = str(safe_fields.get("version") or "").strip()
+                safe_fields["finished_version"] = incoming_version or str(
+                    stored["version"] or ""
+                )
+
         set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)
         _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
         conn.commit()
+    return safe_fields
 
 
 def update_playtime(game_id: int, delta_seconds: int) -> None:

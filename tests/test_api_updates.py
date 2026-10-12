@@ -1113,6 +1113,28 @@ def test_update_game_rejects_duplicate_thread_url_variants(monkeypatch):
     assert result["error_code"] == "duplicate_url"
 
 
+def test_api_update_game_returns_auto_filled_finished_version():
+    api = Api()
+    game_id = add_game("Auto Filled", "/tmp/game.exe", version="0.5")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Playing"})
+
+    result = api.update_game(game_id, {"play_status": "Completed"})
+
+    assert result["success"] is True
+    assert result["finished_version"] == "0.5"
+
+
+def test_api_update_game_response_omits_finished_version_when_not_filled():
+    api = Api()
+    game_id = add_game("Unrelated Edit", "/tmp/game2.exe")
+    assert game_id is not None
+
+    result = api.update_game(game_id, {"rating": "9/10"})
+
+    assert result == {"success": True}
+
+
 def test_browse_file_uses_linux_fallback_order(monkeypatch, tmp_path):
     api = Api()
     selected_file = tmp_path / "game.exe"
@@ -2439,6 +2461,35 @@ def test_api_install_archive_update_changes_exe_and_version(tmp_path):
     assert game["version"] == "2.0"
     assert str(game["exe_path"]).endswith(os.path.join("2.0", "Game.exe"))
     assert not old_dir.exists()
+
+
+def test_api_install_archive_update_keeps_finished_version(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    old_dir = library / "Game" / "0.5"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    game_id = add_game("Game", str(old_exe), version="0.5")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Completed"})
+
+    archive = tmp_path / "Game-0.7.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    result = api.install_archive(
+        {
+            "archive_path": str(archive),
+            "game_id": game_id,
+            "library_folder": str(library),
+            "pattern": "{title}/{version}",
+            "title": "Game",
+            "version": "0.7",
+        }
+    )
+    assert result["success"] is True
+    game = next(g for g in get_all_games() if g["id"] == game_id)
+    assert game["version"] == "0.7"
+    assert game["finished_version"] == "0.5"
 
 
 def test_api_install_archive_duplicate_url_returns_existing_game(tmp_path):

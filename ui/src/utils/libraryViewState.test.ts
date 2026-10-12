@@ -46,7 +46,11 @@ class MemoryStorage implements Storage {
 
 test("new collections and sortable table columns survive persistence", () => {
   const storage = new MemoryStorage();
-  for (const filterCollection of ["Updates available", "Recently played"]) {
+  for (const filterCollection of [
+    "Updates available",
+    "New since finished",
+    "Recently played",
+  ]) {
     for (const sortBy of ["version", "play_status", "engine"]) {
       saveLibraryViewState(storage, normalizeLibraryViewState({ filterCollection, sortBy, layoutMode: "list" }));
       const { state } = readLibraryViewState(storage);

@@ -1480,7 +1480,9 @@ class Api:
 
         from core.database import update_game
 
-        update_game_fn = cast(Callable[[int, dict[str, object]], None], update_game)
+        update_game_fn = cast(
+            Callable[[int, dict[str, object]], dict[str, object]], update_game
+        )
 
         updated_fields: dict[str, object] = dict(fields or {})
         if "f95_url" in updated_fields:
@@ -1493,7 +1495,7 @@ class Api:
             )
 
         try:
-            update_game_fn(game_id, updated_fields)
+            applied_fields = update_game_fn(game_id, updated_fields)
         except sqlite3.IntegrityError:
             return {
                 "success": False,
@@ -1501,7 +1503,13 @@ class Api:
                 "error_code": "duplicate_url",
             }
 
-        return {"success": True}
+        response: dict[str, object] = {"success": True}
+        if (
+            "finished_version" in applied_fields
+            and updated_fields.get("finished_version") is None
+        ):
+            response["finished_version"] = applied_fields["finished_version"]
+        return response
 
     def get_launch_targets(self, game_id: int) -> list[dict[str, object]]:
         from core.database import list_game_launch_targets
@@ -3496,7 +3504,7 @@ class Api:
             from core.database import update_game
 
             try:
-                update_game(installed_id, {"f95_url": f95_url})
+                _ = update_game(installed_id, {"f95_url": f95_url})
             except sqlite3.IntegrityError:
                 pass
             else:
@@ -3510,7 +3518,7 @@ class Api:
             from core.database import update_game as update_game_row
 
             try:
-                update_game_row(game_id, {"f95_url": f95_url})
+                _ = update_game_row(game_id, {"f95_url": f95_url})
             except sqlite3.IntegrityError:
                 pass
 

@@ -44,6 +44,12 @@ export interface AddGameResponse extends ApiBasicResponse {
   metadata_pending?: boolean;
 }
 
+// finished_version is present only when the backend auto-filled it by
+// moving the game to Completed.
+export interface UpdateGameResponse extends ApiBasicResponse {
+  finished_version?: string;
+}
+
 // Title, version and engine guessed from a game's install folder.
 export interface GameGuess {
   title: string;
@@ -395,6 +401,7 @@ export interface GameRecord {
   engine?: string;
   status?: string;
   play_status?: string;
+  finished_version?: string;
   playtime_seconds?: number;
   last_played?: string;
   date_added?: string;
@@ -741,7 +748,7 @@ class ApiService {
     return this.invokeLibraryChange("delete_game", id);
   }
 
-  async updateGame(id: number, fields: Record<string, unknown>): Promise<ApiBasicResponse> {
+  async updateGame(id: number, fields: Record<string, unknown>): Promise<UpdateGameResponse> {
     const previous = this.gameSaves.get(id) ?? Promise.resolve();
     const snapshot = { ...fields };
     const request = previous.then(() => this.invokeLibraryChange("update_game", id, snapshot));
@@ -1126,8 +1133,31 @@ class ApiService {
       case "update_game": {
         const games = readMockGames();
         const fields = isRecord(args[1]) ? args[1] : {};
-        localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((game) => game.id === Number(args[0]) ? { ...game, ...fields } : game)));
-        return { success: true, mock: true };
+        let filledFinishedVersion: string | undefined;
+        const nextGames = games.map((game) => {
+          if (game.id !== Number(args[0])) return game;
+          const merged: Record<string, unknown> = { ...game, ...fields };
+          if (typeof merged.finished_version === "string") {
+            merged.finished_version = merged.finished_version.trim();
+          }
+          const finishedSupplied =
+            fields.finished_version !== undefined && fields.finished_version !== null;
+          if (
+            !finishedSupplied &&
+            merged.play_status === "Completed" &&
+            game.play_status !== "Completed"
+          ) {
+            // Mirrors the backend: reaching Completed records the installed version.
+            filledFinishedVersion =
+              String(fields.version ?? "").trim() || String(game.version ?? "").trim();
+            merged.finished_version = filledFinishedVersion;
+          }
+          return merged;
+        });
+        localStorage.setItem("wlib-mock-games", JSON.stringify(nextGames));
+        return filledFinishedVersion !== undefined
+          ? { success: true, mock: true, finished_version: filledFinishedVersion }
+          : { success: true, mock: true };
       }
       case "delete_game": {
         const gameId = Number(args[0]);

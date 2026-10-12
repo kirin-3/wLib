@@ -6,6 +6,7 @@ import {
   gameFolder,
   gameTags,
   hasAvailableUpdate,
+  hasNewSinceFinished,
   matchesGameSearch,
 } from "./libraryGames.ts";
 import type { GameRecord } from "../services/api.ts";
@@ -38,6 +39,22 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
     hasAvailableUpdate({ ...game, version: game.latest_version }),
     false,
   );
+});
+
+test("new since finished matches any normalized difference and skips unfinished games", () => {
+  assert.equal(hasNewSinceFinished({ version: "0.7", finished_version: "0.5" }), true);
+  assert.equal(
+    hasNewSinceFinished({ version: "0.7", finished_version: "v0.7" }),
+    false,
+  );
+  assert.equal(hasNewSinceFinished({ version: "0.7", finished_version: "" }), false);
+  assert.equal(hasNewSinceFinished({ version: "0.7" }), false);
+  assert.equal(
+    hasNewSinceFinished({ version: " 0.7 ", finished_version: " V 0.7 " }),
+    false,
+  );
+  // "Differs" includes downgrades; versions are not ordered.
+  assert.equal(hasNewSinceFinished({ version: "0.5", finished_version: "0.7" }), true);
 });
 
 test("search includes title, developer, engine and normalized tags in both storage formats", () => {

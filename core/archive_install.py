@@ -981,7 +981,7 @@ def install_archive(
                             break
                     except (TypeError, ValueError):
                         continue
-            _db.update_game(int(game_id), fields)
+            _ = _db.update_game(int(game_id), fields)
             if old_root_for_targets and os.path.isdir(destination):
                 try:
                     targets = list_game_launch_targets(int(game_id))
