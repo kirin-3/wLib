@@ -38,6 +38,35 @@ def is_elf(path: str) -> bool:
         return False
 
 
+def ensure_executable(path: str) -> bool:
+    """Add the exec bit that Windows-made archives drop; True if path is now executable.
+
+    Ren'Py's .sh execs lib/*linux*/<binary>, which lost its bit in the same unzip.
+    """
+    targets = [path]
+    if path.endswith(".sh"):
+        lib_dir = os.path.join(os.path.dirname(path), "lib")
+        try:
+            for name in os.listdir(lib_dir):
+                platform_dir = os.path.join(lib_dir, name)
+                if "linux" in name and os.path.isdir(platform_dir):
+                    targets += [
+                        os.path.join(platform_dir, f) for f in os.listdir(platform_dir)
+                    ]
+        except OSError:
+            pass
+    for target in targets:
+        if target != path and not is_elf(target):
+            continue
+        try:
+            mode = os.stat(target).st_mode
+            os.chmod(target, mode | ((mode & 0o444) >> 2))  # x wherever r is set
+        except OSError:
+            pass
+    # chmod "succeeds" without effect on some NTFS/exFAT mounts, so re-check.
+    return os.access(path, os.X_OK)
+
+
 def proton_compat_data_path(prefix: str) -> str:
     """STEAM_COMPAT_DATA_PATH for a configured prefix (Proton's Wine prefix is <it>/pfx).
 
@@ -815,11 +844,16 @@ class Launcher:
             process_env = build_host_tool_env(env)
 
             # Unzipping often drops the exec bit; Wine can't run these either.
-            if (ext == ".sh" or is_elf(exe_path)) and not os.access(exe_path, os.X_OK):
+            if (
+                (ext == ".sh" or is_elf(exe_path))
+                and not os.access(exe_path, os.X_OK)
+                and not ensure_executable(exe_path)
+            ):
                 return {
                     "success": False,
                     "error": (
-                        f"{exe_path} is not executable. Run chmod +x on it, "
+                        f"{exe_path} is not executable and wLib could not fix it "
+                        "(read-only or noexec mount?). Run chmod +x on it, "
                         "then launch again."
                     ),
                 }

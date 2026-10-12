@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from core.launcher import Launcher, RunningGame, _ElevatedProcess, _split_windows_command_line
+from core.launcher import Launcher, RunningGame, ensure_executable, _ElevatedProcess, _split_windows_command_line
 
 
 @pytest.fixture(autouse=True)
@@ -210,6 +210,24 @@ def test_non_executable_native_files_ask_for_chmod_instead_of_wine(exe_path, hea
     assert result["success"] is False
     assert "chmod +x" in result["error"]
     popen.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX exec bits")
+def test_ensure_executable_fixes_renpy_script_and_bundled_binary(tmp_path):
+    script = tmp_path / "Game.sh"
+    script.write_text("#!/bin/sh\n")
+    platform_dir = tmp_path / "lib" / "py3-linux-x86_64"
+    platform_dir.mkdir(parents=True)
+    binary = platform_dir / "Game"
+    binary.write_bytes(b"\x7fELF")
+    data = platform_dir / "notes.txt"
+    data.write_text("x")
+    for f in (script, binary, data):
+        f.chmod(0o644)
+
+    assert ensure_executable(str(script)) is True
+    assert binary.stat().st_mode & 0o111 == 0o111
+    assert data.stat().st_mode & 0o111 == 0
 
 
 def test_logging_falls_back_to_temp_dir_for_read_only_game_folder():
