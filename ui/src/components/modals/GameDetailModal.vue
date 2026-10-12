@@ -1199,7 +1199,7 @@ const openInBrowser = async () => {
       aria-modal="true"
       aria-labelledby="game-detail-title"
       tabindex="-1"
-      class="modal-content relative flex max-h-[90vh] w-full max-w-[56rem] flex-col overflow-hidden rounded-xl"
+      class="modal-content relative flex h-[min(90vh,52rem)] w-full max-w-[56rem] flex-col overflow-hidden rounded-xl"
     >
       <div class="absolute right-4 top-4 z-10">
         <button
@@ -1601,7 +1601,7 @@ const openInBrowser = async () => {
                 v-model="commandLineArgs"
                 id="detail-command"
                 type="text"
-                placeholder="gamemoderun %command% --fullscreen"
+                placeholder="e.g. gamemoderun %command% --fullscreen"
                 class="modal-input w-full font-mono"
               />
               <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>

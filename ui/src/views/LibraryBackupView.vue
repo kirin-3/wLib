@@ -12,6 +12,7 @@ import {
   IconInfoCircle,
   IconListDetails,
   IconLoader2,
+  IconLock,
   IconSettings,
   IconTerminal2,
   IconUserCheck,
@@ -258,14 +259,23 @@ const runImport = async () => {
 
 <template>
   <div class="allow-text-selection backup-page p-8 max-w-5xl pb-12">
-    <header class="backup-page-header">
-      <div class="backup-title-block">
-        <IconDatabaseExport class="backup-title-icon" />
-        <div>
-          <h2 class="backup-page-title">Import / Export</h2>
-          <p>Move your library and selected settings with one JSON file.</p>
-        </div>
-      </div>
+    <header class="mb-8">
+      <h2
+        class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
+        style="color: var(--text-primary)"
+      >
+        <IconDatabaseExport class="ui-page-heading-icon" />
+        <span>Import / Export</span>
+      </h2>
+      <p
+        class="text-sm pl-3"
+        style="
+          color: var(--text-secondary);
+          border-left: 2px solid var(--brand);
+        "
+      >
+        Move your library and selected settings with one JSON file.
+      </p>
     </header>
 
     <div class="backup-panel">
@@ -332,7 +342,19 @@ const runImport = async () => {
           </label>
         </div>
 
-        <label class="backup-check-row"><input v-model="encryptExport" type="checkbox" /> Encrypt with passphrase</label>
+        <label class="backup-check-row">
+          <IconLock class="backup-option-icon" aria-hidden="true" />
+          <span class="backup-option-copy">
+            <strong id="encrypt-export-title">Encrypt with passphrase</strong>
+            <em id="encrypt-export-desc">Protects the file; you'll need the passphrase to import it.</em>
+          </span>
+          <input
+            v-model="encryptExport"
+            type="checkbox"
+            aria-labelledby="encrypt-export-title"
+            aria-describedby="encrypt-export-desc"
+          />
+        </label>
         <div v-if="encryptExport" class="backup-field backup-passphrase-fields">
           <p>A forgotten passphrase cannot be recovered. Without it, the export cannot be read.</p>
           <label for="export-passphrase">Export passphrase</label><input id="export-passphrase" v-model="exportPassphrase" class="backup-input" type="password" autocomplete="new-password" />
@@ -500,10 +522,6 @@ const runImport = async () => {
   .backup-path-row input { flex-basis: 100%; }
 }
 
-.backup-page-header {
-  margin-bottom: 1.5rem;
-}
-
 .backup-panel {
   display: flex;
   flex-direction: column;
@@ -517,33 +535,6 @@ const runImport = async () => {
 .backup-footer {
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
-}
-
-.backup-title-block {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-
-.backup-title-icon {
-  width: 1.75rem;
-  height: 1.75rem;
-  margin-top: 0.15rem;
-  color: var(--brand);
-}
-
-.backup-page-title {
-  margin: 0;
-  font-size: 1.875rem;
-  line-height: 2.25rem;
-  font-weight: 800;
-  letter-spacing: -0.025em;
-}
-
-.backup-page-header p {
-  margin: 0.25rem 0 0;
-  color: var(--text-secondary);
-  font-size: 0.875rem;
 }
 
 .backup-tabs {

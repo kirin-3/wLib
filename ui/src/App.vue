@@ -35,6 +35,7 @@ interface ExtensionEventDetail {
 }
 
 const router = useRouter();
+const mainRef = ref<HTMLElement | null>(null);
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
@@ -418,7 +419,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- Main Content Area -->
-    <main class="flex-1 overflow-y-auto relative">
+    <main ref="mainRef" class="flex-1 overflow-y-auto relative">
       <transition-group
         :name="fadeTransitionName"
         tag="div"
@@ -449,7 +450,11 @@ onUnmounted(() => {
       </transition-group>
 
       <router-view v-slot="{ Component }">
-        <transition :name="fadeTransitionName" mode="out-in">
+        <transition
+          :name="fadeTransitionName"
+          mode="out-in"
+          @before-enter="mainRef?.scrollTo(0, 0)"
+        >
           <component :is="Component" />
         </transition>
       </router-view>

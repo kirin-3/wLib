@@ -748,11 +748,14 @@ const browseUrm = async () => {
         </div>
 
         <div v-if="supportsLinuxRuntimes">
-          <label
-            class="block text-sm font-medium mb-1.5 flex justify-between items-center"
-            style="color: var(--text-secondary)"
-          >
-            <span>Proton / Wine Executable Path</span>
+          <div class="mb-1.5 flex justify-between items-center">
+            <label
+              for="settings-proton-path"
+              class="block text-sm font-medium"
+              style="color: var(--text-secondary)"
+            >
+              Proton / Wine Executable Path
+            </label>
             <button
               @click="downloadProton"
               :disabled="downloadingProton"
@@ -763,11 +766,13 @@ const browseUrm = async () => {
               <IconDownloadFilled v-else class="ui-action-icon" />
               {{ downloadingProton ? "Downloading GE-Proton…" : "Auto Download Latest GE-Proton" }}
             </button>
-          </label>
+          </div>
           <div class="flex gap-3">
             <input
+              id="settings-proton-path"
               v-model="protonPath"
               list="runner-paths"
+              aria-describedby="settings-proton-help"
               type="text"
               placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
               class="settings-input flex-1"
@@ -803,7 +808,7 @@ const browseUrm = async () => {
               ></div>
             </div>
           </div>
-          <p class="text-xs mt-2" style="color: var(--text-muted)">
+          <p id="settings-proton-help" class="text-xs mt-2" style="color: var(--text-muted)">
             Leave empty to use the system default `wine` command.
           </p>
           <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
@@ -812,12 +817,18 @@ const browseUrm = async () => {
         </div>
 
         <div v-if="supportsLinuxRuntimes">
-          <label class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">
+          <label
+            for="settings-prefix-path"
+            class="block text-sm font-medium mb-1.5"
+            style="color: var(--text-secondary)"
+          >
             Default Wine Prefix Path (WINEPREFIX)
           </label>
           <div class="flex gap-3">
             <input
+              id="settings-prefix-path"
               v-model="prefixPath"
+              aria-describedby="settings-prefix-help"
               type="text"
               placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
               class="settings-input flex-1"
@@ -827,7 +838,7 @@ const browseUrm = async () => {
               Browse
             </button>
           </div>
-          <p class="text-xs mt-2" style="color: var(--text-muted)">
+          <p id="settings-prefix-help" class="text-xs mt-2" style="color: var(--text-muted)">
             The location where game dependencies and save files will be isolated.
           </p>
         </div>
@@ -836,10 +847,10 @@ const browseUrm = async () => {
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+                <h4 id="settings-rpgm-label" class="text-sm font-medium" style="color: var(--text-primary)">
                   RPGMaker Linux Runner
                 </h4>
-                <p class="text-xs mt-1" style="color: var(--text-muted)">
+                <p id="settings-rpgm-help" class="text-xs mt-1" style="color: var(--text-muted)">
                   Optional native-port runner for RPG Maker, TyranoBuilder,
                   Godot, Construct, and Nscripter games. Install it manually
                   from the upstream project.
@@ -857,6 +868,8 @@ const browseUrm = async () => {
             <div class="flex gap-3">
               <input
                 v-model="rpgmakerLinuxRunnerPath"
+                aria-labelledby="settings-rpgm-label"
+                aria-describedby="settings-rpgm-help"
                 type="text"
                 placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
                 class="settings-input flex-1"
@@ -1043,6 +1056,7 @@ const browseUrm = async () => {
           <input
             id="urm-source"
             v-model="urmPath"
+            aria-describedby="settings-urm-help"
             type="text"
             class="settings-input flex-1"
             placeholder="/path/to/0x52_URM.rpa"
@@ -1051,7 +1065,7 @@ const browseUrm = async () => {
             <IconFolderOpen class="ui-action-icon" />Browse
           </button>
         </div>
-        <p class="text-xs" style="color: var(--text-muted)">
+        <p id="settings-urm-help" class="text-xs" style="color: var(--text-muted)">
           Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.
         </p>
       </section>

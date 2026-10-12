@@ -341,7 +341,7 @@ const save = () => {
         </div>
         <div>
           <label for="add-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
-          <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'onscripter %command% or xsystem35' : 'gamemoderun %command% --fullscreen'" />
+          <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'e.g. onscripter %command% or xsystem35' : 'e.g. gamemoderun %command% --fullscreen'" />
           <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
         </div>
       </div>
