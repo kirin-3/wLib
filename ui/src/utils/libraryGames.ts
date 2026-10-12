@@ -3,11 +3,17 @@ import type { GameRecord } from "../services/api.ts";
 import type { SortDir, SortField } from "./libraryViewState.ts";
 import { normalizePlayStatus } from "./playStatus.ts";
 
+// "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
+// normalize_version() in core/api.py.
+export const normalizeVersion = (version: string | null | undefined): string =>
+  (version || "").replace(/\s+/g, "").toLowerCase().replace(/^v(?=\d)/, "");
+
 export const hasAvailableUpdate = (
   game: Pick<GameRecord, "version" | "latest_version">,
-): boolean =>
-  !!game.latest_version?.trim() &&
-  game.latest_version.trim() !== (game.version || "").trim();
+): boolean => {
+  const remote = normalizeVersion(game.latest_version);
+  return !!remote && remote !== normalizeVersion(game.version);
+};
 
 export const gameTags = (game: Pick<GameRecord, "tags">): string[] => [
   ...new Set(

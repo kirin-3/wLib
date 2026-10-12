@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import ssl
 import sys
 import threading
@@ -34,6 +35,12 @@ from core.scraper import Scraper
 
 if TYPE_CHECKING:
     from webview import Window
+
+
+def normalize_version(version: object) -> str:
+    """Treat v0.8, 0.8 and "V 0.8 " as equal; mirrors normalizeVersion() in the UI."""
+    value = "".join(str(version or "").split()).lower()
+    return re.sub(r"^v(?=\d)", "", value)
 
 
 class ProgressStatus(TypedDict):
@@ -1561,8 +1568,8 @@ class Api:
     def _has_update(self, current_version: object, remote_version: object) -> bool:
         # Same rule as hasAvailableUpdate() in ui/src/utils/libraryGames.ts: an
         # unknown installed version counts as an update.
-        remote = str(remote_version or "").strip()
-        return bool(remote) and str(current_version or "").strip() != remote
+        remote = normalize_version(remote_version)
+        return bool(remote) and normalize_version(current_version) != remote
 
     def _is_actionable_remote_version(self, version: object | None) -> bool:
         if version is None:

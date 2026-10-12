@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.api import Api
+from core.api import Api, normalize_version
 from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
@@ -2290,3 +2290,10 @@ def test_check_app_updates_fetches_github_once_per_session(monkeypatch):
     assert api.check_app_updates()["version"] == "v9.9.9"
     assert api.check_app_updates()["version"] == "v9.9.9"
     assert len(calls) == 2
+
+
+def test_version_normalization_ignores_v_prefix_case_and_whitespace():
+    assert normalize_version("v0.8") == normalize_version(" 0.8 ")
+    assert normalize_version("Ch. 2 Final") == normalize_version("ch.2 final")
+    assert normalize_version("v0.08") != normalize_version("v0.8")
+    assert normalize_version("vX") == "vx"

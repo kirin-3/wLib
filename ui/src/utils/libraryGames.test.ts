@@ -20,6 +20,18 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
     false,
   );
   assert.equal(hasAvailableUpdate({ latest_version: "2.0" }), true);
+  assert.equal(
+    hasAvailableUpdate({ version: "v0.8", latest_version: "0.8 " }),
+    false,
+  );
+  assert.equal(
+    hasAvailableUpdate({ version: "Ch. 2 Final", latest_version: "ch.2 final" }),
+    false,
+  );
+  assert.equal(
+    hasAvailableUpdate({ version: "v0.08", latest_version: "v0.8" }),
+    true,
+  );
   const game = { version: "1.0", latest_version: "2.0" };
   assert.equal(hasAvailableUpdate(game), true);
   assert.equal(
