@@ -161,6 +161,29 @@ def _normalize_game_play_statuses(
         _ = cursor.execute("UPDATE games SET status = '' WHERE status != ''")
 
 
+def _normalize_game_f95_urls(cursor: sqlite3.Cursor) -> None:
+    # Rows saved before URL normalization existed never match the exact-URL
+    # lookups used by metadata refreshes.
+    _ = cursor.execute(
+        "SELECT id, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+    )
+    for row in cast(list[sqlite3.Row], cursor.fetchall()):
+        stored = cast(object, row["f95_url"])
+        normalized = normalize_thread_url(stored)
+        game_id = cast(int, row["id"])
+        if not normalized or normalized == stored:
+            continue
+        # Leave true duplicates alone rather than merging two library entries.
+        if _find_matching_game_row(cursor, normalized, exclude_id=game_id) is not None:
+            continue
+        try:
+            _ = cursor.execute(
+                "UPDATE games SET f95_url = ? WHERE id = ?", (normalized, game_id)
+            )
+        except sqlite3.IntegrityError:
+            continue
+
+
 def _find_matching_game_row(
     cursor: sqlite3.Cursor, url: object, exclude_id: int | None = None
 ) -> sqlite3.Row | None:
@@ -355,6 +378,7 @@ def init_db() -> None:
             )
 
         _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
+        _normalize_game_f95_urls(cursor)
         launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
         _ = cursor.execute(
             f"UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN ({launch_mode_placeholders})",
@@ -753,7 +777,19 @@ def get_custom_play_statuses() -> list[str]:
         return []
     if not isinstance(statuses, list):
         return []
-    return [status for status in cast(list[object], statuses) if isinstance(status, str) and status.strip()]
+    # Imports and sync store this list unvalidated. Drop names that clash with a
+    # built-in status, or removing them would reset every game in that status.
+    seen = {status.casefold() for status in CANONICAL_PLAY_STATUSES}
+    result: list[str] = []
+    for status in cast(list[object], statuses):
+        if not isinstance(status, str):
+            continue
+        name = status.strip()
+        if not 1 <= len(name) <= 40 or name.casefold() in seen or normalize_play_status(name) != name:
+            continue
+        seen.add(name.casefold())
+        result.append(name)
+    return result
 
 
 def update_custom_play_statuses(statuses: Sequence[str]) -> None:

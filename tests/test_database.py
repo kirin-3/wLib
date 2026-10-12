@@ -18,6 +18,7 @@ from core.database import (
     update_game,
     update_game_launch_target,
     get_all_games,
+    get_custom_play_statuses,
     get_setting,
     update_setting,
     normalize_launch_mode,
@@ -151,6 +152,38 @@ def test_custom_status_case_only_rename_keeps_games():
     assert get_all_games()[0]["play_status"] == "backlog"
     update_custom_play_statuses([])
     assert get_all_games()[0]["play_status"] == DEFAULT_PLAY_STATUS
+
+
+def test_init_db_normalizes_legacy_f95_urls_without_merging_duplicates():
+    conn = get_connection()
+    conn.executemany(
+        "INSERT INTO games (title, exe_path, f95_url) VALUES (?, ?, ?)",
+        [
+            ("Legacy", "/tmp/a.exe", "https://www.f95zone.to/threads/legacy.1/post-9"),
+            ("Kept", "/tmp/b.exe", "https://f95zone.to/threads/dupe.2/"),
+            ("Dupe", "/tmp/c.exe", "https://www.f95zone.to/threads/dupe.2"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    init_db()
+    urls = {game["title"]: game["f95_url"] for game in get_all_games()}
+    assert urls == {
+        "Legacy": "https://f95zone.to/threads/legacy.1/",
+        "Kept": "https://f95zone.to/threads/dupe.2/",
+        "Dupe": "https://www.f95zone.to/threads/dupe.2",
+    }
+
+
+def test_imported_custom_statuses_never_shadow_built_in_ones():
+    game_id = add_game("Playing", "/tmp/game.exe")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Playing"})
+    # An imported backup or sync file can hold any list.
+    update_setting("custom_play_statuses", '["playing", "replaying", " Backlog ", "backlog", 3]')
+    assert get_custom_play_statuses() == ["Backlog"]
+    update_custom_play_statuses([])
+    assert get_all_games()[0]["play_status"] == "Playing"
 
 
 def test_add_and_get_game():

@@ -1558,6 +1558,12 @@ class Api:
     # ==========================
     # Scraper API
     # ==========================
+    def _has_update(self, current_version: object, remote_version: object) -> bool:
+        # Same rule as hasAvailableUpdate() in ui/src/utils/libraryGames.ts: an
+        # unknown installed version counts as an update.
+        remote = str(remote_version or "").strip()
+        return bool(remote) and str(current_version or "").strip() != remote
+
     def _is_actionable_remote_version(self, version: object | None) -> bool:
         if version is None:
             return False
@@ -1804,11 +1810,7 @@ class Api:
                 if conn is not None:
                     conn.close()
 
-            has_update = bool(
-                current_version
-                and remote_version
-                and str(current_version).strip() != str(remote_version).strip()
-            )
+            has_update = self._has_update(current_version, remote_version)
             metadata_updated = self._backfill_missing_metadata_for_url(
                 url, version_info
             )
@@ -1937,11 +1939,8 @@ class Api:
                             )
                             current_version = current_versions_by_url.get(url, "")
                             conn.commit()
-                            has_update = bool(
-                                current_version
-                                and remote_version
-                                and str(current_version).strip()
-                                != str(remote_version).strip()
+                            has_update = self._has_update(
+                                current_version, remote_version
                             )
                         except Exception as e:
                             callback_error = f"Failed to save update data: {e}"

@@ -726,7 +726,7 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["has_update"] is True
 
 
-@pytest.mark.parametrize("local_version, has_update", [("b12", True), ("Final", False)])
+@pytest.mark.parametrize("local_version, has_update", [("b12", True), ("Final", False), ("", True)])
 def test_check_for_updates_non_numeric_version(monkeypatch, local_version, has_update):
     api = Api()
     url = "https://f95zone.to/threads/demo.123/"
