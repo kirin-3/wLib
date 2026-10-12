@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
+from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
 
@@ -196,12 +197,12 @@ def build_host_open_env() -> dict[str, str]:
         "OWD",
         "APPIMAGE_EXTRACT_AND_RUN",
     ):
-        clean_env.pop(var, None)
+        _ = clean_env.pop(var, None)
     original_library_path = str(clean_env.get("LD_LIBRARY_PATH_ORIG") or "").strip()
     if original_library_path:
         clean_env["LD_LIBRARY_PATH"] = original_library_path
     else:
-        clean_env.pop("LD_LIBRARY_PATH", None)
+        _ = clean_env.pop("LD_LIBRARY_PATH", None)
     return clean_env
 
 
@@ -224,7 +225,7 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
                 if name == "" or name.endswith("/") and name.strip("/") == "":
                     raise ArchiveSafetyError(f"Archive entry is unsafe: {name!r}")
                 check_archive_entry_safe(name)
-                _target_inside_staging(staging_dir, name)
+                _ = _target_inside_staging(staging_dir, name)
             for info in infos:
                 name = info.filename.replace("\\", "/")
                 target = _target_inside_staging(staging_dir, name)
@@ -287,7 +288,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
             raise ArchiveInstallError(
                 f"Could not list archive contents: {(completed.stderr or '').strip() or f'exit {completed.returncode}'}"
             )
-        entries = []
+        entries: list[str] = []
         for line in (completed.stdout or "").splitlines():
             line = line.strip()
             if line.startswith("./"):
@@ -447,7 +448,9 @@ def flatten_single_wrapper(staging_dir: str) -> bool:
             return False
     try:
         for name in inner:
-            shutil.move(os.path.join(wrapper, name), os.path.join(staging_dir, name))
+            _ = shutil.move(
+                os.path.join(wrapper, name), os.path.join(staging_dir, name)
+            )
         os.rmdir(wrapper)
     except OSError:
         return False
@@ -513,7 +516,7 @@ def ensure_free_space(library_folder: str, required_bytes: int | None) -> None:
         )
 
 
-def uncompressed_size(archive_path: str, tool: str | None = None) -> int | None:
+def uncompressed_size(archive_path: str) -> int | None:
     """Best-effort uncompressed size in bytes (None when unknown)."""
     import zipfile
 
@@ -573,13 +576,13 @@ def copy_infolder_saves(old_root: str, new_root: str) -> list[str]:
         try:
             if os.path.isdir(src) and not os.path.islink(src):
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
-                shutil.copytree(
+                _ = shutil.copytree(
                     src, dst, dirs_exist_ok=True, copy_function=shutil.copy2
                 )
                 copied.append(rel)
             elif os.path.isfile(src):
                 os.makedirs(os.path.dirname(dst) or new_root, exist_ok=True)
-                shutil.copy2(src, dst)
+                _ = shutil.copy2(src, dst)
                 copied.append(rel)
         except OSError as exc:
             raise ArchiveInstallError(
@@ -875,7 +878,7 @@ def install_archive(
     tool, tool_error = detect_archive_tool(archive_path)
     if tool_error:
         raise ArchiveInstallError(tool_error)
-    ensure_free_space(library_folder, uncompressed_size(archive_path, tool))
+    ensure_free_space(library_folder, uncompressed_size(archive_path))
     staging = create_staging_dir(library_folder)
     try:
         _progress("extracting")
@@ -1080,12 +1083,13 @@ def _load_dismissals() -> list[str]:
     except OSError:
         return []
     try:
-        raw_items: object = json.loads(raw)
+        raw_items: object = cast(object, json.loads(raw))
     except (ValueError, TypeError):
         return []
     if not isinstance(raw_items, list):
         return []
-    return [str(item) for item in raw_items if isinstance(item, (str, int, float))]
+    items = cast(list[object], raw_items)
+    return [str(item) for item in items if isinstance(item, (str, int, float))]
 
 
 def dismiss_download_offer(key: str) -> None:
