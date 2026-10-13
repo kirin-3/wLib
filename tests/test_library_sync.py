@@ -712,3 +712,171 @@ print(json.dumps({'success': True}))
         environment.pop("XDG_DATA_HOME", None)
         result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
         assert json.loads(result.stdout)["success"]
+
+
+def test_dropbox_401_retry_failure_raises_auth_failed(monkeypatch):
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a"}),
+            http_error(401),
+            response({"access_token": "b"}),
+            http_error(401),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    location = DropboxLocation("refresh")
+    with pytest.raises(SyncError) as error:
+        location.revision()
+    assert error.value.error_code == "dropbox_auth_failed"
+    assert "Dropbox sign-in expired" in str(error.value)
+
+
+def test_gdrive_401_retry_failure_raises_auth_failed(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a"}),
+            http_error(401),
+            response({"access_token": "b"}),
+            http_error(401),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    location = GoogleDriveLocation("refresh")
+    with pytest.raises(SyncError) as error:
+        location.revision()
+    assert error.value.error_code == "gdrive_auth_failed"
+    assert "Google sign-in expired" in str(error.value)
+
+
+def test_dropbox_reconnect_does_not_revoke_grant(monkeypatch):
+    calls = []
+
+    def fake_urlopen(request, *args, **kwargs):
+        calls.append(request)
+        if "token" in request.full_url:
+            return response({"access_token": "new-acc", "refresh_token": "new-ref"})
+        if "account" in request.full_url or "users" in request.full_url:
+            return response(
+                {"email": "test@example.com", "name": {"display_name": "Test User"}}
+            )
+        return response({})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sync = SyncManager()
+    sync.server_available = True
+    database.update_setting("sync_dropbox_refresh_token", "old-refresh-token")
+    start = sync.connect_dropbox()
+    state = parse_qs(urlparse(str(start["url"])).query)["state"][0]
+    result = sync.complete_dropbox("code", state)
+    assert result["success"]
+    assert not any("revoke" in getattr(r, "full_url", "") for r in calls)
+
+
+def test_oauth_concurrent_refreshes_serialized(monkeypatch):
+    refresh_count = 0
+
+    def fake_urlopen(request, *args, **kwargs):
+        nonlocal refresh_count
+        if "oauth2/token" in request.full_url or "token" in request.full_url:
+            refresh_count += 1
+            time.sleep(0.05)
+            return response(
+                {"access_token": f"token-{refresh_count}", "expires_in": 3600}
+            )
+        return response(
+            {"rev": "123"}, headers={"Dropbox-API-Result": json.dumps({"rev": "123"})}
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    location = DropboxLocation("refresh")
+    import threading
+
+    threads = [threading.Thread(target=location.revision) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert refresh_count == 1
+
+
+def test_merge_once_triggers_on_pull_and_records_ambiguous():
+    pulled = False
+
+    def on_pull():
+        nonlocal pulled
+        pulled = True
+
+    remote = remote_backup("Ambiguous Game")
+    database.add_game("Ambiguous Game", "/game1.exe")
+    database.add_game("Ambiguous Game", "/game2.exe")
+    for g in database.get_all_games():
+        database.update_game(g["id"], {"developer": "Dev"})
+
+    location = MemoryLocation(remote)
+    sync = SyncManager(location, on_pull=on_pull)
+    database.update_setting("sync_location", "folder")
+
+    res = sync.run("merge-once")
+    assert res["success"]
+    assert pulled is True
+    assert (
+        "more than one local game"
+        in (database.get_setting("sync_last_error") or "").lower()
+    )
+
+
+def test_set_passphrase_monotonic_with_clock_skew(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    database.add_game("Game", "/path.exe")
+    sync.run()
+    database.update_setting("sync_last_synced_at", "2026-10-10T12:00:00.000Z")
+    database.update_setting("sync_local_modified_at", "2026-10-10T12:00:00.000Z")
+
+    monkeypatch.setattr("core.library_sync.utc_now", lambda: "2026-10-09T00:00:00.000Z")
+    res = sync.set_passphrase("newpass")
+    assert res["success"]
+    local_mod = database.get_setting("sync_local_modified_at")
+    assert local_mod > "2026-10-10T12:00:00.000Z"
+    assert local_mod == "2026-10-10T12:00:00.001Z"
+
+
+def test_start_run_status_not_stuck_at_syncing_when_lock_held():
+    location = MemoryLocation()
+    sync = manager(location)
+    import threading
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with sync._lock:
+            held.set()
+            release.wait(timeout=2)
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    held.wait(timeout=1)
+
+    res = sync.start_run()
+    assert res["state"] == "syncing"
+
+    release.set()
+    t.join()
+    if sync._worker:
+        sync._worker.join(timeout=2)
+
+    status = sync.status()
+    assert status["state"] == "idle"
+
+
+def test_open_signin_clears_pending_on_browser_failure():
+    api = Api()
+    api.library_sync.server_available = True
+    api.open_in_browser = MagicMock(return_value={"success": False, "error": "No browser"})
+    result = api.connect_dropbox()
+    assert not result["success"]
+    assert result["error_code"] == "browser_failed"
+    assert api.library_sync.status()["connecting"] is False
+

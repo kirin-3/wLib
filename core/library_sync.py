@@ -16,10 +16,10 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPResponse
 from pathlib import Path
-from typing import Protocol, cast, final
+from typing import Protocol, cast, final, override
 
 from core import database
 from core.library_backup import (
@@ -227,9 +227,13 @@ class _OAuthLocation:
         self._refresh_token = refresh_token
         self._access_token = ""
         self._expires_at = 0.0
+        self._lock: threading.Lock = threading.Lock()
 
     def accept_token(self, payload: Mapping[str, object]) -> None:
         self._access_token = str(payload.get("access_token") or "")
+        new_refresh = payload.get("refresh_token")
+        if new_refresh:
+            self._refresh_token = str(new_refresh)
         try:
             self._expires_at = (
                 time.monotonic() + float(str(payload.get("expires_in", 3600))) - 30
@@ -244,12 +248,22 @@ class _OAuthLocation:
                 f"{self.provider} returned no access token.", self.auth_error
             )
 
+    def _refresh(self) -> None:
+        raise NotImplementedError
+
+    def _ensure_token(self) -> None:
+        if not self._access_token or time.monotonic() >= self._expires_at:
+            with self._lock:
+                if not self._access_token or time.monotonic() >= self._expires_at:
+                    self._refresh()
+
 
 @final
 class DropboxLocation(_OAuthLocation):
     provider: str = "Dropbox"
     auth_error: str = "dropbox_auth_failed"
 
+    @override
     def _refresh(self) -> None:
         self.accept_token(
             _token_request(
@@ -272,8 +286,7 @@ class DropboxLocation(_OAuthLocation):
         data: bytes | None = None,
     ) -> tuple[bytes, str]:
         for attempt in range(2):
-            if not self._access_token or time.monotonic() >= self._expires_at:
-                self._refresh()
+            self._ensure_token()
             content = endpoint in ("files/download", "files/upload")
             base = (
                 "https://content.dropboxapi.com/2/"
@@ -305,9 +318,15 @@ class DropboxLocation(_OAuthLocation):
                         response.headers.get("Dropbox-API-Result", "")
                     )
             except urllib.error.HTTPError as exc:
-                if exc.code == 401 and attempt == 0:
-                    self._access_token = ""
-                    continue
+                if exc.code == 401:
+                    if attempt == 0:
+                        with self._lock:
+                            self._access_token = ""
+                        continue
+                    raise SyncError(
+                        "Dropbox sign-in expired. Connect again.",
+                        "dropbox_auth_failed",
+                    ) from exc
                 if exc.code == 409:
                     if endpoint == "files/upload":
                         raise SyncConflict() from exc
@@ -394,6 +413,7 @@ class GoogleDriveLocation(_OAuthLocation):
         super().__init__(refresh_token)
         self._file_id: str = ""
 
+    @override
     def _refresh(self) -> None:
         self.accept_token(
             _token_request(
@@ -418,8 +438,7 @@ class GoogleDriveLocation(_OAuthLocation):
         content_type: str = "application/json",
     ) -> bytes:
         for attempt in range(2):
-            if not self._access_token or time.monotonic() >= self._expires_at:
-                self._refresh()
+            self._ensure_token()
             headers = {"Authorization": f"Bearer {self._access_token}"}
             if data is not None:
                 headers["Content-Type"] = content_type
@@ -435,9 +454,15 @@ class GoogleDriveLocation(_OAuthLocation):
                 ) as response:
                     return response.read()
             except urllib.error.HTTPError as exc:
-                if exc.code == 401 and attempt == 0:
-                    self._access_token = ""
-                    continue
+                if exc.code == 401:
+                    if attempt == 0:
+                        with self._lock:
+                            self._access_token = ""
+                        continue
+                    raise SyncError(
+                        "Google sign-in expired. Connect again.",
+                        "gdrive_auth_failed",
+                    ) from exc
                 raise SyncError(
                     "Google Drive rejected the request. Check the connection and permissions.",
                     "gdrive_request_failed",
@@ -582,12 +607,20 @@ class SyncManager:
         enabled = bool(location)
         gdrive_reason = self._gdrive_unavailable()
         error = self._setting("last_error")
+        state = self._state
+        if (
+            state == "syncing"
+            and not self._lock.locked()
+            and not (self._worker and self._worker.is_alive())
+        ):
+            state = "idle"
+            self._state = "idle"
         return {
             "success": True,
             "state": (
                 (
-                    self._state
-                    if self._state != "idle"
+                    state
+                    if state != "idle"
                     else ("error" if error else "idle")
                 )
                 if enabled
@@ -762,11 +795,31 @@ class SyncManager:
         if self._on_pull is not None:
             self._on_pull()
 
+    def _next_local_modified_at(self) -> str:
+        now = utc_now()
+        ref = max(
+            self._setting("last_synced_at"),
+            self._setting("local_modified_at"),
+        )
+        if not ref:
+            return now
+        try:
+            if timestamp(now) > timestamp(ref):
+                return now
+            dt = datetime.fromisoformat(ref.replace("Z", "+00:00")) + timedelta(milliseconds=1)
+            return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        except Exception:
+            return now
+
     def _push(self, location: SyncLocation, revision: str | None) -> None:
         # Capture payload and its timestamp under one SQLite write lock.
         with closing(database.get_connection()) as connection:
             _ = connection.execute("BEGIN IMMEDIATE")
-            modified = self._setting("local_modified_at") or utc_now()
+            modified = self._setting("local_modified_at")
+            if not modified or timestamp(modified) <= timestamp(
+                self._setting("last_synced_at")
+            ):
+                modified = self._next_local_modified_at()
             device = socket.gethostname()
             backup = build_sync_backup(modified, device)
             connection.commit()
@@ -793,10 +846,14 @@ class SyncManager:
     def run(
         self, choice: str | None = None, *, push_only: bool = False
     ) -> dict[str, object]:
-        if not self._lock.acquire(blocking=False):
+        blocking = threading.current_thread() is self._worker
+        if not self._lock.acquire(blocking=blocking):
+            if self._state == "syncing" and not (self._worker and self._worker.is_alive()):
+                self._state = "idle"
             return self.status()
         try:
             if not self._setting("location"):
+                self._state = "idle"
                 return self.status()
             if choice is not None and choice not in (
                 "use-remote",
@@ -853,8 +910,17 @@ class SyncManager:
                 self._state = "needs_choice"
                 return
             if choice == "merge-once":
-                _ = apply_library_backup(backup, {"sections": SYNC_SECTIONS}, sync=True)
+                result = apply_library_backup(
+                    backup, {"sections": SYNC_SECTIONS}, sync=True
+                )
+                if self._on_pull is not None:
+                    self._on_pull()
                 self._push(location, revision)
+                if result["ambiguous"]:
+                    database.update_setting(
+                        "sync_last_error",
+                        "Some games matched more than one local game and were left unchanged.",
+                    )
             elif choice == "use-local" or (local_games and not remote_games):
                 self._push(location, revision)
             else:
@@ -895,7 +961,7 @@ class SyncManager:
                         "sync_encryption_key": key,
                         "sync_encryption_salt": salt,
                         "sync_encryption_change": "true",
-                        "sync_local_modified_at": utc_now(),
+                        "sync_local_modified_at": self._next_local_modified_at(),
                     }
                 )
                 return self.status()
@@ -958,6 +1024,10 @@ class SyncManager:
                 provider + "_auth_failed",
             )
         return pending[1]
+
+    def cancel_signin(self) -> None:
+        with self._lock:
+            self._pending = None
 
     def connect_dropbox(self) -> dict[str, object]:
         with self._lock:
@@ -1067,6 +1137,9 @@ class SyncManager:
                 location = DropboxLocation(refresh)
                 location.accept_token(token)
                 name = location.account_name()
+                # Same account, same grant: revoking the old token would kill the new one.
+                database.update_setting("sync_dropbox_refresh_token", "")
+                self._dropbox = None
                 self._disconnect_locked()
                 self._dropbox = location
                 self._reset_connection(
@@ -1149,7 +1222,7 @@ class SyncManager:
                         >= 30
                     ):
                         _ = self.start_run(push_only=True)
-                except SyncError:
+                except Exception:
                     pass
 
         self._timer = threading.Thread(target=watch, daemon=True)
