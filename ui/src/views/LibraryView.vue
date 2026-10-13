@@ -572,6 +572,8 @@ const deleteCollectionFromTab = async (name: string) => {
 
 // Arrow keys move focus and selection across the tab strip.
 const handleCollectionTabsKeyboard = (event: KeyboardEvent) => {
+  // Leave caret keys alone in the inline rename/create inputs.
+  if ((event.target as HTMLElement).tagName === "INPUT") return;
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabs = [
     ...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>(
@@ -974,10 +976,14 @@ watch(
     }
     if (action === "open" && queryUrl) {
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
-      const match = ((await api.getGames()) || []).find((g) =>
-        urlsMatchByThreadIdentity(g.f95_url, queryUrl),
-      );
-      if (match) openDetail(match);
+      try {
+        const match = ((await api.getGames()) || []).find((g) =>
+          urlsMatchByThreadIdentity(g.f95_url, queryUrl),
+        );
+        if (match) openDetail(match);
+      } catch (e) {
+        console.error("Failed to open game from URL", e);
+      }
       // Consume the request: an identical route push is ignored as a duplicate,
       // so a leftover query would swallow the next "Open in wLib" for this game.
       void router.replace({ path: "/", query: {} });
@@ -1097,7 +1103,8 @@ const openContextMenu = async (
 };
 
 const handleContextMenuKeyboard = (event: KeyboardEvent) => {
-  if ((event.target as HTMLElement).tagName === "SELECT" && event.key !== "Tab")
+  const targetTag = (event.target as HTMLElement).tagName;
+  if ((targetTag === "SELECT" || targetTag === "INPUT") && event.key !== "Tab")
     return;
   const controls = [
     ...contextMenuElement.value!.querySelectorAll<HTMLElement>(
