@@ -74,7 +74,14 @@ export const compareLibraryGames = (
   };
   const left = value(a),
     right = value(b);
-  const order =
+
+  const isLeftEmpty = left === "" || left === 0 || left == null || Number.isNaN(left);
+  const isRightEmpty = right === "" || right === 0 || right == null || Number.isNaN(right);
+
+  if (isLeftEmpty && !isRightEmpty) return 1;
+  if (!isLeftEmpty && isRightEmpty) return -1;
+
+  let order =
     typeof left === "string" && typeof right === "string"
       ? left.localeCompare(right, undefined, { numeric: true })
       : left < right
@@ -82,6 +89,16 @@ export const compareLibraryGames = (
         : left > right
           ? 1
           : 0;
+
+  if (order === 0 && field !== "title") {
+    const titleA = (a.title || "").trim().toLowerCase();
+    const titleB = (b.title || "").trim().toLowerCase();
+    const titleOrder = titleA.localeCompare(titleB, undefined, { numeric: true });
+    // Stable sort should maintain consistent secondary sorting (always ascending)
+    // even if the primary sort is descending, so we counter-act the direction multiplier
+    order = titleOrder * (direction === "asc" ? 1 : -1);
+  }
+
   return direction === "asc" ? order : -order;
 };
 
