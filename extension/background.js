@@ -13,7 +13,7 @@ async function readWLibResponse(response) {
 
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
-const MIN_APP_VERSION = "0.3.8";
+const MIN_APP_VERSION = "0.3.9";
 
 // Compare dot-separated numeric release components, treating missing parts as
 // zero. A leading `v` and any `-suffix` (e.g. `-rc1`) are ignored, so

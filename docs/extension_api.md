@@ -33,8 +33,8 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "exists": true,
     "playStatus": "Playing",
     "wishlisted": false,
-    "app_version": "0.3.8",
-    "extension_version": "1.0.11"
+    "app_version": "0.3.9",
+    "extension_version": "1.0.12"
   }
   ```
 - **Contract Notes:**
@@ -99,7 +99,7 @@ Saves the thread directly as a library game with an empty executable path. The b
 
 ## Installed Extension Files
 
-Extension version `1.0.11` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.11` also warns without blocking when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.8`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
+Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also warns without blocking when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
 
 Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
 
