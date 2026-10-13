@@ -712,3 +712,88 @@ print(json.dumps({'success': True}))
         environment.pop("XDG_DATA_HOME", None)
         result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
         assert json.loads(result.stdout)["success"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "cls", "error_code"),
+    [
+        ("dropbox", DropboxLocation, "dropbox_auth_failed"),
+        ("gdrive", GoogleDriveLocation, "gdrive_auth_failed"),
+    ],
+)
+def test_repeated_401_reports_expired_signin(monkeypatch, provider, cls, error_code):
+    if provider == "gdrive":
+        monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a", "expires_in": 300}),
+            http_error(401),
+            response({"access_token": "b", "expires_in": 300}),
+            http_error(401),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    with pytest.raises(SyncError) as error:
+        cls("refresh").revision()
+    assert error.value.error_code == error_code
+
+
+def test_folder_concurrent_writes_serialize(tmp_path, monkeypatch):
+    import threading
+
+    location = FolderLocation(str(tmp_path))
+    rev = location.write(b"base", None)
+    real_replace = os.replace
+    entered_replace = threading.Event()
+    rival_started = threading.Event()
+
+    def hooked_replace(src, dst):
+        # Pause the first writer between its final revision check and the
+        # rename long enough for an unserialized rival to slip into that window.
+        if threading.current_thread().name == "first-writer":
+            entered_replace.set()
+            assert rival_started.wait(5)
+            time.sleep(0.2)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", hooked_replace)
+    outcomes: dict[str, object] = {}
+
+    def first() -> None:
+        try:
+            outcomes["first"] = location.write(b"AAA", rev)
+        except Exception as error:
+            outcomes["first"] = type(error).__name__
+
+    def rival() -> None:
+        assert entered_replace.wait(10)
+        rival_started.set()
+        try:
+            outcomes["rival"] = FolderLocation(str(tmp_path)).write(b"BBB", rev)
+        except SyncConflict:
+            outcomes["rival"] = "conflict"
+
+    first_thread = threading.Thread(target=first, name="first-writer")
+    rival_thread = threading.Thread(target=rival, name="rival-writer")
+    first_thread.start()
+    rival_thread.start()
+    first_thread.join(30)
+    rival_thread.join(30)
+    # Exactly one writer wins; the loser must see SyncConflict, never a
+    # silent clobber (or a crash on the other writer's temp file).
+    assert outcomes.get("rival") == "conflict"
+    assert isinstance(outcomes.get("first"), str) and outcomes["first"] != "conflict"
+    assert (tmp_path / "wlib-library.json").read_bytes() == b"AAA"
+    assert list(tmp_path.glob("wlib-library.json.tmp.*")) == []
+
+
+def test_folder_write_survives_unsupported_flock(tmp_path, monkeypatch):
+    import core.library_sync as library_sync
+
+    def no_flock(*_args):
+        raise OSError(95, "Operation not supported")
+
+    monkeypatch.setattr(library_sync, "_fcntl_module", types.SimpleNamespace(flock=no_flock, LOCK_EX=2, LOCK_UN=8))
+    location = FolderLocation(str(tmp_path))
+    assert location.write(b"data", None) == location.revision()
+    assert (tmp_path / "wlib-library.json").read_bytes() == b"data"
