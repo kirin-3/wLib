@@ -227,7 +227,9 @@ def apply_path_rule(path: object) -> str:
     if "://" in text:
         return ""
     if is_windows():
-        return text if ntpath.splitdrive(text)[0] else ""
+        # A drive letter alone ("C:" or "C:foo") is drive-relative, not
+        # absolute. Require both a drive/UNC prefix and an absolute path.
+        return text if (ntpath.splitdrive(text)[0] and ntpath.isabs(text)) else ""
     return text if text.startswith(("/", "~")) else ""
 
 
@@ -391,6 +393,10 @@ def read_f95checker_library(path: str) -> tuple[dict[str, object], dict[str, obj
         raise _validation_error(
             "The file is not an F95Checker library.", "invalid_source"
         ) from exc
+    except OSError as exc:
+        raise _validation_error(
+            f"Could not read F95Checker database: {exc}", "read_failed"
+        ) from exc
     backup = _external_backup("f95checker", games)
     return backup, {
         "skipped_no_identity": skipped,
@@ -399,11 +405,20 @@ def read_f95checker_library(path: str) -> tuple[dict[str, object], dict[str, obj
     }
 
 
+def _title_metadata(title: str, f95_url: str) -> dict[str, object]:
+    """Omit a missing title when the game has a thread URL so an overwrite
+    never replaces a real local title with the placeholder. New games still
+    get the placeholder from the insert default."""
+    if title:
+        return {"title": title}
+    return {} if f95_url else {"title": "Imported Game"}
+
+
 def _translate_f95checker_game(
     record: Mapping[str, object], base_dir: str, has_playtime: bool
 ) -> tuple[dict[str, object] | None, int]:
     dropped = 0
-    title = _as_str(record.get("name")) or "Imported Game"
+    title = _as_str(record.get("name"))
     developer = _as_str(record.get("developer"))
     f95_url = _f95checker_url(record)
 
@@ -426,7 +441,7 @@ def _translate_f95checker_game(
     else:
         play_status = ""
 
-    metadata: dict[str, object] = {"title": title}
+    metadata = _title_metadata(title, f95_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
@@ -611,11 +626,11 @@ def _xlibrary_executables(
 def _translate_xlibrary_game(
     data: Mapping[str, object],
 ) -> tuple[dict[str, object] | None, int]:
-    title = _as_str(data.get("name")) or "Imported Game"
+    title = _as_str(data.get("name"))
     developer = _as_str(data.get("developer"))
     f95_url = _xlibrary_f95_url(data)
 
-    metadata: dict[str, object] = {"title": title}
+    metadata = _title_metadata(title, f95_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
@@ -677,9 +692,13 @@ def read_xlibrary_library(path: str) -> tuple[dict[str, object], dict[str, objec
             "XLibrary library file was not found.", "file_not_found"
         )
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(path, encoding="utf-8-sig") as handle:
             payload = cast(object, json.load(handle))
     except json.JSONDecodeError as exc:
+        raise _validation_error(
+            "The file is not an XLibrary library.", "invalid_source"
+        ) from exc
+    except UnicodeDecodeError as exc:
         raise _validation_error(
             "The file is not an XLibrary library.", "invalid_source"
         ) from exc
@@ -722,7 +741,7 @@ def _translate_atlas_game(
     ratings: Mapping[str, object],
 ) -> tuple[dict[str, object] | None, int]:
     dropped = 0
-    title = _as_str(record.get("title")) or "Imported Game"
+    title = _as_str(record.get("title"))
     developer = _as_str(record.get("creator"))
     engine = _as_str(record.get("engine"))
     f95_url = build_thread_url_from_id(f95_id) if f95_id else ""
@@ -758,7 +777,7 @@ def _translate_atlas_game(
             )[0]
         )
 
-    metadata: dict[str, object] = {"title": title}
+    metadata = _title_metadata(title, f95_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
@@ -970,6 +989,10 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
     except sqlite3.Error as exc:
         raise _validation_error(
             "The file is not an Atlas library.", "invalid_source"
+        ) from exc
+    except OSError as exc:
+        raise _validation_error(
+            f"Could not read Atlas database: {exc}", "read_failed"
         ) from exc
     backup = _external_backup("atlas", games)
     return backup, {
