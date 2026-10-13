@@ -783,3 +783,112 @@ def test_api_detect_and_browse_external_library(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_browse_qt_dialog", lambda *a, **k: "/picked.json")
     assert api.browse_external_library_file("xlibrary", "") == "/picked.json"
     assert api.browse_external_library_file("bogus", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# Fixed bugs: external import robustness
+# ---------------------------------------------------------------------------
+
+
+def test_xlibrary_non_utf8_reports_invalid_source(tmp_path):
+    from core.backup_format import BackupValidationError
+
+    source = tmp_path / "library.games.json"
+    payload = {
+        "family": "library.games",
+        "schemaVersion": 9,
+        "documents": [
+            {
+                "id": "1",
+                "family": "library.games",
+                "schemaVersion": 9,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "id": "1",
+                    "name": "Caf\u00e9",
+                    "externalLinks": [
+                        {
+                            "providerId": "f95zone",
+                            "externalId": "123",
+                            "url": "https://f95zone.to/threads/game.123/",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    # latin-1 byte 0xe9 is invalid UTF-8; must surface as invalid_source,
+    # not a raw UnicodeDecodeError.
+    source.write_bytes(json.dumps(payload, ensure_ascii=False).encode("latin-1"))
+    with pytest.raises(BackupValidationError, match="not an XLibrary library"):
+        read_external_library("xlibrary", str(source))
+
+
+def test_xlibrary_accepts_utf8_bom(tmp_path):
+    source = tmp_path / "library.games.json"
+    payload = {
+        "family": "library.games",
+        "schemaVersion": 9,
+        "documents": [
+            {
+                "id": "1",
+                "family": "library.games",
+                "schemaVersion": 9,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "data": _xgame("BOM Game", links=[_xlink(801)]),
+            }
+        ],
+    }
+    source.write_bytes(b"\xef\xbb\xbf" + json.dumps(payload).encode("utf-8"))
+    backup, _stats = read_external_library("xlibrary", str(source))
+    assert len(backup["games"]) == 1
+    assert backup["games"][0]["metadata"]["title"] == "BOM Game"
+
+
+def test_apply_path_rule_rejects_windows_drive_relative(monkeypatch):
+    monkeypatch.setattr("core.external_import.is_windows", lambda: True)
+    # Drive-relative paths are not absolute and must not be kept.
+    assert apply_path_rule("C:Games\\Game.exe") == ""
+    assert apply_path_rule("C:") == ""
+    # Sanity: real absolute Windows paths are still kept.
+    assert apply_path_rule("D:\\Games\\x\\Game.exe") != ""
+    assert apply_path_rule("\\\\server\\share\\Game.exe") != ""
+
+
+def test_overwrite_preserves_title_when_source_title_missing(tmp_path):
+    url = "https://f95zone.to/threads/game.555/"
+    local_id = add_game("Real Title", "/real/game.sh", f95_url=url)
+    assert local_id is not None
+    source = tmp_path / "library.games.json"
+    nameless = _xgame("Whatever", links=[_xlink(555)])
+    nameless["name"] = ""
+    _write_xlibrary_live(source, [nameless])
+    from core.library_backup import import_external_library as run_import
+
+    result = run_import("xlibrary", str(source), {"merge_mode": "overwrite"})
+    assert result["updated"] == 1 and result["created"] == 0
+    games = {game["title"]: game for game in get_all_games()}
+    assert "Real Title" in games
+    assert "Imported Game" not in games
+
+
+def test_sqlite_copy_failure_reports_read_failed(tmp_path, monkeypatch):
+    import sqlite3 as sqlite3_module
+
+    from core.backup_format import BackupValidationError
+
+    for source_name, table in (("f95checker", "games"), ("atlas", "games")):
+        source = tmp_path / f"{source_name}.db"
+        conn = sqlite3_module.connect(str(source))
+        conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(
+            "core.external_import.shutil.copy2",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        with pytest.raises(BackupValidationError, match="Could not read"):
+            read_external_library(source_name, str(source))
+        monkeypatch.undo()
