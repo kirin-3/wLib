@@ -907,6 +907,15 @@ def test_check_for_updates_backfills_missing_metadata(monkeypatch):
     assert game["cover_image_path"] == "https://img.example/cover.jpg"
 
 
+def test_thread_metadata_replaces_stored_non_engine_prefix():
+    url = "https://f95zone.to/threads/demo.123/"
+    add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url, engine="VN")
+
+    _ = Api()._backfill_missing_metadata_for_url(url, {"engine": "Ren'Py"})
+
+    assert get_all_games()[0]["engine"] == "Ren'Py"
+
+
 def test_check_for_updates_refreshes_thread_edit_metadata_without_overwriting_existing_fields(
     monkeypatch,
 ):

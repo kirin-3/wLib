@@ -63,6 +63,7 @@ type UpdateCheckState = {
 const ENGINE_OPTIONS = [
   "ADRIFT",
   "Flash",
+  "Godot",
   "HTML",
   "Java",
   "Others",
@@ -83,6 +84,7 @@ type EngineOption = (typeof ENGINE_OPTIONS)[number];
 const ENGINE_HUES: Record<Exclude<EngineOption, "Others">, string> = {
   ADRIFT: "109, 128, 145",
   Flash: "189, 93, 56",
+  Godot: "71, 140, 191",
   HTML: "191, 125, 54",
   Java: "177, 120, 45",
   QSP: "125, 82, 156",

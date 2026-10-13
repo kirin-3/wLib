@@ -16,6 +16,7 @@ from core.database import (
     init_db,
     normalize_launch_mode,
 )
+from core.f95zone import NON_ENGINE_PREFIXES
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.host_platform import (
     PlatformCapabilities,
@@ -1837,7 +1838,11 @@ class Api:
                 if not isinstance(game_id, int):
                     continue
 
-                if engine_value and self._is_missing_text(engine_current):
+                # Older scrapes stored a non-engine prefix such as "VN"; replace it.
+                if engine_value and (
+                    self._is_missing_text(engine_current)
+                    or engine_current.casefold() in NON_ENGINE_PREFIXES
+                ):
                     fields["engine"] = engine_value
                 if tags_value and self._is_missing_text(tags_current):
                     fields["tags"] = tags_value

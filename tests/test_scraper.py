@@ -119,6 +119,10 @@ def test_starter_metadata_and_nested_wrapper(thread_html):
         (["Unity", "Abandoned"], "Unity", False),
         (["Ren'Py"], "Ren'Py", False),
         (["Onhold", "Completed"], "", True),
+        (["VN", "RPGM"], "RPGM", False),
+        (["VN", "Ren'Py", "Completed"], "Ren'Py", True),
+        (["Collection", "VN", "Others"], "Others", False),
+        (["VN"], "", False),
     ],
 )
 def test_thread_prefixes_choose_engine_and_completion(thread_html, labels, engine, completed):

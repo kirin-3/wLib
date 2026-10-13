@@ -23,6 +23,7 @@ test('extension skips status prefixes when choosing the engine', () => {
   const info = extractFromTitle('Game [v1.0] [Dev]', ['Completed', "Ren'Py"]);
   assert.equal(info.engine, "Ren'Py");
   assert.equal(info.title, 'Game');
+  assert.equal(extractFromTitle('Game [v1.0] [Dev]', ['VN', 'RPGM']).engine, 'RPGM');
 });
 
 test('wishlist message passes duplicate code and serializes tags', async () => {

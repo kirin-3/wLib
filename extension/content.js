@@ -316,10 +316,11 @@ function extractGameInfo() {
     try {
         const h1 = document.querySelector('h1.p-title-value');
         if (h1) {
-            const statusLabels = new Set(['completed', 'abandoned', 'onhold']);
+            // Same list as NON_ENGINE_PREFIXES in core/f95zone.py.
+            const nonEngineLabels = new Set(['completed', 'abandoned', 'onhold', 'vn', 'collection', 'siterip', 'readme']);
             const engineLabel = [...h1.querySelectorAll('a.labelLink')]
                 .map(label => label.textContent.trim())
-                .find(label => label && !statusLabels.has(label.toLowerCase()));
+                .find(label => label && !nonEngineLabels.has(label.toLowerCase()));
             info.engine = engineLabel || '';
 
             const h1Clone = h1.cloneNode(true);

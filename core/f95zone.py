@@ -5,6 +5,12 @@ from urllib.parse import urlparse, urlunparse
 
 THREAD_PATH_RE = re.compile(r"^/threads/(?:(?P<slug>.+)\.)?(?P<thread_id>\d+)(?:/.*)?$")
 F95_HOSTS = frozenset({"f95zone.to", "www.f95zone.to"})
+# Thread prefixes that are not an engine (F95's games forum prefix filter);
+# every other prefix, including "Others", names the engine. Keep in sync with
+# extension/content.js.
+NON_ENGINE_PREFIXES = frozenset(
+    {"completed", "abandoned", "onhold", "vn", "collection", "siterip", "readme"}
+)
 
 
 def _coerce_url(value: object) -> str:

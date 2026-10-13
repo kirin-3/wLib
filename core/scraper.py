@@ -14,7 +14,7 @@ from typing import Protocol, TypeAlias, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .f95zone import extract_thread_id
+from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id
 
 ScraperResultValue: TypeAlias = bool | str | list[str]
 ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
@@ -257,9 +257,9 @@ class Scraper:
         h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
         labels = [_text(content) for _, content in _blocks(h1, "a", "labelLink")]
         appended_labels = [_text(content) for _, content in _blocks(h1, "span", "label-append")]
-        status_labels = {"completed", "abandoned", "onhold"}
         engine = next(
-            (label for label in labels if label.casefold() not in status_labels), ""
+            (label for label in labels if label.casefold() not in NON_ENGINE_PREFIXES),
+            "",
         )
         thread_completed = any(
             label.casefold() == "completed" for label in (*labels, *appended_labels)

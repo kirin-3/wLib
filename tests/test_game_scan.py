@@ -59,11 +59,16 @@ def test_scan_games_folder_detects_launchers_and_engines(tmp_path, monkeypatch):
     (rpgm / "www").mkdir(parents=True)
     (rpgm / "Game.exe").touch()
     (rpgm / "UnityCrashHandler64.exe").touch()
+    godot = tmp_path / "Brew"
+    godot.mkdir()
+    (godot / "Brew.exe").touch()
+    (godot / "Brew.pck").touch()
     (tmp_path / "Empty").mkdir()
 
     games = {game["title"]: game for game in scan_games_folder(str(tmp_path))}
 
-    assert set(games) == {"Eternum", "Quest"}
+    assert set(games) == {"Eternum", "Quest", "Brew"}
+    assert games["Brew"]["engine"] == "Godot"
     assert games["Eternum"]["exe_path"] == str(renpy / "Eternum.exe")
     assert (games["Eternum"]["engine"], games["Eternum"]["version"]) == ("Ren'Py", "0.6")
     assert games["Quest"]["exe_path"] == str(rpgm / "Game.exe")
@@ -71,4 +76,4 @@ def test_scan_games_folder_detects_launchers_and_engines(tmp_path, monkeypatch):
 
     add_game("Eternum", str(renpy / "Eternum.exe"))
     scanned = {game["title"]: game["in_library"] for game in Api().scan_games_folder(str(tmp_path))["games"]}
-    assert scanned == {"Eternum": True, "Quest": False}
+    assert scanned == {"Eternum": True, "Quest": False, "Brew": False}

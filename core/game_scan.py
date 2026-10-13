@@ -80,6 +80,9 @@ def detect_engine(game_dir: str, exe_path: str = "") -> str:
         return "Wolf RPG"
     if "engine" in names and os.path.isdir(os.path.join(game_dir, "Engine", "Binaries")):
         return "Unreal Engine"
+    # Godot exports ship their data as a .pck beside the executable.
+    if any(name.endswith(".pck") for name in names):
+        return "Godot"
     if exe_path.lower().endswith((".html", ".htm")):
         return "HTML"
     return ""
