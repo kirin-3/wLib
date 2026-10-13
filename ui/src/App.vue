@@ -182,10 +182,14 @@ const toggleTheme = () => setThemePreference(isDarkTheme.value ? "light" : "dark
 
 const toggleNavCollapse = () => {
   isNavCollapsed.value = !isNavCollapsed.value;
-  localStorage.setItem(
-    navCollapsedStorageKey,
-    isNavCollapsed.value ? "true" : "false",
-  );
+  try {
+    localStorage.setItem(
+      navCollapsedStorageKey,
+      isNavCollapsed.value ? "true" : "false",
+    );
+  } catch (error) {
+    console.warn("Could not save nav state", error);
+  }
 };
 
 const handleExtensionAdd = (event: Event) => {
@@ -222,9 +226,13 @@ const handleExtensionOpen = (event: Event) => {
 };
 
 onMounted(() => {
-  const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
-  if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
-    isNavCollapsed.value = savedNavCollapsed === "true";
+  try {
+    const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
+    if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
+      isNavCollapsed.value = savedNavCollapsed === "true";
+    }
+  } catch (error) {
+    console.warn("Could not read nav state", error);
   }
 
   window.addEventListener("keydown", handleGlobalShortcut);

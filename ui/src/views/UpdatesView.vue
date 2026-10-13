@@ -152,7 +152,11 @@ const setFrequency = async (freq: string) => {
   }
 };
 
+const startingCheck = ref(false);
+
 const startCheck = async () => {
+  if (startingCheck.value || status.value.running) return;
+  startingCheck.value = true;
   try {
     const result = await api.checkAllUpdates();
     if (result && result.success === false) {
@@ -166,6 +170,8 @@ const startCheck = async () => {
   } catch (e) {
     console.error("Failed to start update check", e);
     notifyError("Error starting check: " + String(e));
+  } finally {
+    startingCheck.value = false;
   }
 };
 
@@ -300,7 +306,10 @@ onMounted(() => {
 onUnmounted(() => {
   gamesRequest++;
   window.removeEventListener("wlib-refresh-library", loadGames);
-  if (pollInterval) clearInterval(pollInterval);
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
 });
 </script>
 
@@ -454,10 +463,12 @@ onUnmounted(() => {
             <button
               v-if="!status.running"
               @click="startCheck"
-              class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110"
+              :disabled="startingCheck"
+              class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
               style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
             >
-              <IconReload class="ui-action-icon" />
+              <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" />
+              <IconReload v-else class="ui-action-icon" />
               Check All Games
             </button>
             <button
