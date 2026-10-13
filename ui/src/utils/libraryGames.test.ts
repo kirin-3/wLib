@@ -7,6 +7,7 @@ import {
   gameTags,
   hasAvailableUpdate,
   hasNewSinceFinished,
+  isWishlisted,
   matchesGameSearch,
 } from "./libraryGames.ts";
 import type { GameRecord } from "../services/api.ts";
@@ -39,6 +40,13 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
     hasAvailableUpdate({ ...game, version: game.latest_version }),
     false,
   );
+});
+
+test("games without an executable are wishlisted and have no update indicator", () => {
+  assert.equal(isWishlisted({ exe_path: "  " }), true);
+  assert.equal(isWishlisted({ exe_path: "/games/demo.sh" }), false);
+  assert.equal(hasAvailableUpdate({ exe_path: "", version: "1.0", latest_version: "2.0" }), false);
+  assert.equal(hasAvailableUpdate({ exe_path: "/games/demo.sh", version: "1.0", latest_version: "2.0" }), true);
 });
 
 test("new since finished matches any normalized difference and skips unfinished games", () => {

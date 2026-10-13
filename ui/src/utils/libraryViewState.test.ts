@@ -61,6 +61,13 @@ test("new collections and sortable table columns survive persistence", () => {
   }
 });
 
+test("install state filter survives persistence", () => {
+  const storage = new MemoryStorage();
+  saveLibraryViewState(storage, normalizeLibraryViewState({ filterInstallState: "wishlist" }));
+  assert.equal(readLibraryViewState(storage).state.filterInstallState, "wishlist");
+  assert.equal(normalizeLibraryViewState({ filterInstallState: "invalid" }).filterInstallState, "");
+});
+
 test("normalizeLibraryViewState falls back on invalid static values", () => {
   const state = normalizeLibraryViewState({
     layoutMode: "poster",

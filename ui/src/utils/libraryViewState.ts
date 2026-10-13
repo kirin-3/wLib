@@ -19,6 +19,7 @@ export type FilterCollection =
   | "Updates available"
   | "New since finished"
   | "Recently played";
+export type FilterInstallState = "" | "installed" | "wishlist";
 
 export interface FilterSections {
   collections: boolean;
@@ -34,6 +35,7 @@ export interface LibraryViewState {
   sortDir: SortDir;
   filterCollection: FilterCollection;
   filterStatuses: string[];
+  filterInstallState: FilterInstallState;
   filterEngines: string[];
   filterTags: string[];
   isFiltersCollapsed: boolean;
@@ -74,6 +76,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   sortDir: "asc",
   filterCollection: "All",
   filterStatuses: [],
+  filterInstallState: "",
   filterEngines: [],
   filterTags: [],
   isFiltersCollapsed: true,
@@ -214,6 +217,10 @@ export const normalizeLibraryViewState = (
       : DEFAULT_LIBRARY_VIEW_STATE.filterCollection;
 
   const filterStatuses = normalizeStringArray(source.filterStatuses).filter((status) => status.length <= 40);
+  const filterInstallState: FilterInstallState =
+    source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
+      ? source.filterInstallState
+      : "";
 
   const filterEngines = filterAllowedValues(
     normalizeStringArray(source.filterEngines),
@@ -229,6 +236,7 @@ export const normalizeLibraryViewState = (
     sortDir,
     filterCollection,
     filterStatuses,
+    filterInstallState,
     filterEngines,
     filterTags,
     isFiltersCollapsed:

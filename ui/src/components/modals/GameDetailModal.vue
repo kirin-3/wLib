@@ -25,7 +25,7 @@ import { api } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { hasAvailableUpdate } from "../../utils/libraryGames";
+import { hasAvailableUpdate, isWishlisted } from "../../utils/libraryGames";
 import type {
   GameRecord,
   LaunchTarget,
@@ -229,6 +229,7 @@ const averagePersonalRating = computed(() => {
 });
 
 const hasUpdate = computed(() => hasAvailableUpdate({
+  exe_path: props.game?.exe_path || "",
   version: version.value,
   latest_version: latestVersion.value,
 }));
@@ -1484,7 +1485,7 @@ const openInBrowser = async () => {
                       {{ exePath || "No executable selected" }}
                     </div>
                   </div>
-                  <button v-if="!isRunning" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
+                  <button v-if="!isRunning && game && !isWishlisted(game) && exePath.trim()" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
                     <IconPlayerPlayFilled class="ui-action-icon" />
                     Play
                   </button>
@@ -1565,7 +1566,7 @@ const openInBrowser = async () => {
                           <IconChevronDown class="ui-action-icon" />
                         </button>
                       </div>
-                      <button v-if="!isRunning" @click="launchTarget(target)" class="launch-target-action ui-play-btn ui-action-btn">
+                      <button v-if="!isRunning && game && !isWishlisted(game)" @click="launchTarget(target)" class="launch-target-action ui-play-btn ui-action-btn">
                         <IconPlayerPlayFilled class="ui-action-icon" />
                         Play
                       </button>
@@ -2103,13 +2104,13 @@ const openInBrowser = async () => {
               </button>
             </template>
             <button
-              @click="isRunning && game ? emit('stop', game.id) : launchGame()"
-              :title="isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
+              @click="game && isWishlisted(game) ? selectTab('Launch') : isRunning && game ? emit('stop', game.id) : launchGame()"
+              :title="game && isWishlisted(game) ? 'Choose an executable in the Launch tab' : isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
               class="launch-btn footer-launch-btn ui-play-btn ui-action-btn"
             >
-              <IconPlayerStopFilled v-if="isRunning" class="ui-action-icon" />
-              <IconPlayerPlayFilled v-else class="ui-action-icon" />
-              {{ isRunning ? 'Stop' : 'Play' }}
+              <IconPlayerStopFilled v-if="isRunning && game && !isWishlisted(game)" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else-if="game && !isWishlisted(game)" class="ui-action-icon" />
+              {{ game && isWishlisted(game) ? 'Set up' : isRunning ? 'Stop' : 'Play' }}
             </button>
           </div>
         </div>

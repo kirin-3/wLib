@@ -31,12 +31,14 @@ Allows the extension to decorate an F95Zone page based on ownership.
   ```json
   {
     "exists": true,
-    "playStatus": "Playing"
+    "playStatus": "Playing",
+    "wishlisted": false
   }
   ```
 - **Contract Notes:**
   - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
   - `playStatus` is optional enrichment for matching games only. It may contain a canonical desktop status or a custom name (at most 40 characters).
+  - `wishlisted` is present for matching games. It is `true` when `exe_path` is empty after trimming.
 
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={f95_url}`**
@@ -62,6 +64,7 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
     "tags": "Romance, Sci-Fi"
   }
   ```
+
 - **Action:** Emits `wlib-extension-add` payload to the Vue frontend, which catches the event and displays the UI form pre-populated with the data above.
 - **Errors:** `{"success": false, "error": "..."}` with HTTP 400 for an invalid body or `Content-Length` (limit 1 MB), or HTTP 503 while the app window is not ready yet.
 - **Response:**
@@ -70,6 +73,25 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
     "success": true
   }
   ```
+
+### 4. Save to Wishlist
+**`POST /api/wishlist`**
+Saves the thread directly as a library game with an empty executable path. The body uses the same 1 MB limit and origin rules as `/api/add`.
+- **Request Body (JSON):** `title`, `url`, `version`, `coverImage`, `tags`, `rating`, `developer`, and `engine` are string fields. `tags` is a comma-separated string.
+  ```json
+  {
+    "title": "Example Visual Novel",
+    "url": "https://f95zone.to/threads/example.123/",
+    "version": "1.0",
+    "coverImage": "https://example.com/cover.jpg",
+    "tags": "Romance, Sci-Fi",
+    "rating": "4.5",
+    "developer": "Example Studio",
+    "engine": "Ren'Py"
+  }
+  ```
+- **Action:** Calls the desktop API's `add_game` with `exe_path` set to an empty string, then emits `wlib-refresh-library` when the window is ready. The save can succeed while the window is unavailable.
+- **Response:** The `add_game` result, including `success`, `id`, `title`, and `metadata_pending` on success. A duplicate thread returns HTTP 409 with `{"success": false, "error_code": "duplicate_url", "error": "..."}`. Invalid bodies return HTTP 400; an API that is not ready returns HTTP 503.
 
 ## Installed Extension Files
 
@@ -92,8 +114,8 @@ On Windows, Chromium-based browsers load `%LOCALAPPDATA%\wLib\extension\chrome` 
 
 On F95 thread pages, the content script injects a floating widget near the upper-left viewport edge using rem-based offsets instead of anchoring it into the page rails.
 
-- The expanded widget shows the wLib logo, a collapse control, a primary `Add to wLib` or `Open in wLib` action, and transient feedback text for open/add requests.
-- When the thread already matches a library entry, the widget also renders a non-interactive `Status: <value>` line beneath the action using lightweight status-aware color treatment.
+- The expanded widget shows the wLib logo, a collapse control, `Add to wLib` and `Wishlist` for an unsaved thread, or `Open in wLib` for a saved thread. It shows transient feedback for each action, including duplicate and connection errors for Wishlist.
+- When the thread already matches a library entry, the widget also renders a non-interactive status line beneath the action. An exe-less game says `Wishlisted`; an installed game shows its play status.
 - Collapse state is ephemeral to the current page runtime. Collapsing compresses the card into a logo-only affordance that rests near the lower-left viewport edge; expanding reverses that transition.
 - The latest-alpha page continues to reuse `GET /api/check` for its `In wLib` tile badges, but it only reads the `exists` field and ignores `playStatus`.
 - Reduced-motion preferences are respected by shortening the collapse/expand transition to an effectively instant state change.

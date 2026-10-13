@@ -60,6 +60,10 @@ const recheck = async (game: GameRecord) => {
   try {
     const result = await api.checkForUpdates(game.f95_url);
     if (!result?.success) throw new Error(result?.error || "Update check failed");
+    if (result.newly_finished) {
+      notify(`${game.title} is finished`, "success");
+      return;
+    }
     notify(
       result.has_update
         ? `${game.title}: latest version is ${result.version}.`

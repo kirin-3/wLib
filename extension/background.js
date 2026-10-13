@@ -19,6 +19,9 @@ function normalizeCheckPayload(data) {
     if (payload.exists && data && typeof data.playStatus === 'string' && data.playStatus.trim()) {
         payload.playStatus = data.playStatus.trim();
     }
+    if (payload.exists) {
+        payload.wishlisted = Boolean(data.wishlisted);
+    }
 
     return payload;
 }
@@ -60,6 +63,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
 
         // Return true to indicate we will send a response asynchronously
+        return true;
+    }
+
+    if (message.action === "wishlistGameInWLib") {
+        fetch("http://localhost:8183/api/wishlist", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...WLIB_HEADERS },
+            body: JSON.stringify({
+                ...message.payload,
+                tags: Array.isArray(message.payload.tags)
+                    ? message.payload.tags.join(', ')
+                    : message.payload.tags,
+            }),
+        })
+            .then(async response => {
+                const data = await response.json();
+                sendResponse(response.ok && data.success
+                    ? { success: true, data }
+                    : { success: false, error: data.error, error_code: data.error_code });
+            })
+            .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
     }
 

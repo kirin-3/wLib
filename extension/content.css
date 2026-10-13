@@ -167,6 +167,36 @@
     text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
 }
 
+.wlib-action-row {
+    display: flex;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.wlib-action-row .wlib-add-btn {
+    flex: 1;
+    min-width: 0;
+    padding-inline: 0.45rem;
+}
+
+.wlib-wishlist-btn {
+    background: #273247;
+    color: #fff;
+    border-color: #8795ad;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+.wlib-add-btn.wlib-wishlist-btn:hover:not(:disabled) {
+    background: #36445d;
+    box-shadow: none;
+}
+
+.wlib-add-btn:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
 .wlib-add-btn.is-open-action {
     background: linear-gradient(135deg, #159a52 0%, #0f7c42 100%);
     box-shadow: 0 10px 22px rgba(21, 154, 82, 0.2);

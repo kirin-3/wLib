@@ -77,6 +77,7 @@ METADATA_FIELDS = (
     "f95_url",
     "version",
     "latest_version",
+    "thread_completed",
     "cover_image_path",
 )
 USER_STATE_FIELDS = (
@@ -116,6 +117,7 @@ PATH_SETTINGS_KEYS = (
 )
 
 BOOLEAN_GAME_FIELDS = (
+    "thread_completed",
     "run_japanese_locale",
     "run_wayland",
     "auto_inject_ce",

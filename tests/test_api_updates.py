@@ -21,6 +21,7 @@ from core.database import (
     add_game,
     add_game_launch_target,
     get_all_games,
+    get_connection,
     get_setting,
     update_game,
     update_setting,
@@ -773,6 +774,42 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["success"] is True
     assert result["version"] == "1.1"
     assert result["has_update"] is True
+
+
+def test_thread_completion_write_reports_only_new_transition():
+    api = Api()
+    url = "https://f95zone.to/threads/finished.124/"
+    game_id = add_game("Finished", "", f95_url=url)
+    assert game_id is not None
+
+    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == [game_id]
+    assert get_all_games()[0]["thread_completed"] == 1
+    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == []
+    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": False}) == []
+    assert get_all_games()[0]["thread_completed"] == 0
+    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == [game_id]
+
+
+def test_check_for_updates_reports_newly_finished_for_wishlist_only(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist.125/"
+    add_game("Wishlisted", "", f95_url=url, version="1.0")
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "version": "1.1",
+            "thread_completed": True,
+        },
+    )
+
+    first = api.check_for_updates(url)
+    second = api.check_for_updates(url)
+    assert first["has_update"] is False
+    assert first["newly_finished"] is True
+    assert second["newly_finished"] is False
+    assert get_all_games()[0]["thread_completed"] == 1
 
 
 @pytest.mark.parametrize(
@@ -1558,7 +1595,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.9"
+    assert chrome_manifest["version"] == "1.0.10"
     assert "scripts" not in chrome_manifest["background"]
     assert (
         "*://f95zone.to/sam/latest_alpha*"
@@ -1727,7 +1764,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.9",
+                "version": "1.0.10",
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -1743,7 +1780,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result.get("updated") is False
     assert result.get("reason") == "up-to-date"
-    assert result.get("installed_version") == "1.0.9"
+    assert result.get("installed_version") == "1.0.10"
     assert (chrome_dir / "content.js").read_text() == sentinel
 
 
@@ -2245,6 +2282,110 @@ def test_bulk_check_preserves_thread_edit_metadata(monkeypatch):
     assert game["thread_main_post_last_edit_at"] == "2025-01-01T00:00:00"
     assert game["thread_main_post_checked_at"] == "2025-01-02T00:00:00"
     assert api.get_update_status()["outcome"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("exe_path", "old_latest", "remote", "fetch_count"),
+    [
+        ("", "1.0", "1.1", 1),
+        ("", "1.0", "1.0", 0),
+        ("", "", "1.1", 0),
+        ("/tmp/installed.sh", "1.0", "1.1", 0),
+    ],
+)
+def test_bulk_prefix_fetch_only_for_changed_wishlist(
+    monkeypatch, exe_path, old_latest, remote, fetch_count
+):
+    import time
+
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist.126/"
+    game_id = add_game("Wishlist", exe_path, f95_url=url, version="1.0")
+    conn = get_connection()
+    conn.execute("UPDATE games SET latest_version = ? WHERE id = ?", (old_latest, game_id))
+    conn.commit()
+    conn.close()
+
+    fetch = MagicMock(return_value={"success": True, "thread_completed": True})
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch)
+
+    def batch(urls, callback):
+        callback(urls[0], {"success": True, "version": remote})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    assert api.check_all_updates()["success"]
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    result = api.get_update_status()["results"][0]
+    assert fetch.call_count == fetch_count
+    assert result["has_update"] is (bool(exe_path) and old_latest != remote)
+    assert result["newly_finished"] is bool(fetch_count)
+    assert get_all_games()[0]["latest_version"] == remote
+
+
+def test_bulk_prefix_check_reuses_thread_page_fallback(monkeypatch):
+    import time
+
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist.128/"
+    game_id = add_game("Wishlist", "", f95_url=url)
+    conn = get_connection()
+    conn.execute("UPDATE games SET latest_version = '1.0' WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    fetch = MagicMock()
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch)
+    page_result = {
+        "success": True,
+        "version": "1.1",
+        "thread_completed": True,
+        "thread_main_post_checked_at": "2026-10-13T00:00:00",
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+
+    assert api.check_all_updates()["success"]
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    fetch.assert_not_called()
+    assert api.get_update_status()["results"][0]["newly_finished"] is True
+    assert get_all_games()[0]["thread_completed"] == 1
+
+
+def test_bulk_prefix_fetch_failure_preserves_version_and_completion(monkeypatch):
+    import time
+
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist.127/"
+    game_id = add_game("Wishlist", "", f95_url=url)
+    conn = get_connection()
+    conn.execute("UPDATE games SET latest_version = '1.0' WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        api.scraper, "get_thread_metadata", lambda *_args: {"success": False}
+    )
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], {"success": True, "version": "1.1"}) or {},
+    )
+
+    assert api.check_all_updates()["success"]
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    result = api.get_update_status()["results"][0]
+    assert result["error"] == ""
+    assert result["newly_finished"] is False
+    assert get_all_games()[0]["latest_version"] == "1.1"
+    assert get_all_games()[0]["thread_completed"] == 0
 
 
 def test_add_game_metadata_failure_is_not_retried(monkeypatch):

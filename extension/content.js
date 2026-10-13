@@ -114,6 +114,7 @@ function normalizeCheckResult(data) {
     return {
         exists,
         playStatus,
+        wishlisted: exists && Boolean(data.wishlisted),
     };
 }
 
@@ -125,7 +126,7 @@ function checkGameInWLib(url) {
         }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn('wLib extension: Could not connect to background wLib service.', chrome.runtime.lastError);
-                resolve({ exists: false, playStatus: '' });
+                resolve({ exists: false, playStatus: '', wishlisted: false });
                 return;
             }
 
@@ -135,7 +136,7 @@ function checkGameInWLib(url) {
             }
 
             console.warn('wLib extension: Check request failed.', response?.error || response);
-            resolve({ exists: false, playStatus: '' });
+            resolve({ exists: false, playStatus: '', wishlisted: false });
         });
     });
 }
@@ -159,6 +160,7 @@ async function initThreadPageExtension() {
     const checkResult = await checkGameInWLib(gameInfo.url);
     gameInfo.existsInWLib = checkResult.exists;
     gameInfo.playStatus = checkResult.playStatus;
+    gameInfo.wishlisted = checkResult.wishlisted;
     injectUI(gameInfo);
 }
 
@@ -314,10 +316,11 @@ function extractGameInfo() {
     try {
         const h1 = document.querySelector('h1.p-title-value');
         if (h1) {
-            const firstLabel = h1.querySelector('a.labelLink span');
-            if (firstLabel) {
-                info.engine = firstLabel.textContent.trim();
-            }
+            const statusLabels = new Set(['completed', 'abandoned', 'onhold']);
+            const engineLabel = [...h1.querySelectorAll('a.labelLink')]
+                .map(label => label.textContent.trim())
+                .find(label => label && !statusLabels.has(label.toLowerCase()));
+            info.engine = engineLabel || '';
 
             const h1Clone = h1.cloneNode(true);
             h1Clone.querySelectorAll('a.labelLink, span.label-append').forEach(el => el.remove());
@@ -493,6 +496,8 @@ function injectUI(gameInfo) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'wlib-add-btn';
+    const actionRow = document.createElement('div');
+    actionRow.className = 'wlib-action-row';
 
     if (gameInfo.existsInWLib) {
         setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
@@ -504,7 +509,7 @@ function injectUI(gameInfo) {
     libraryStatusBlock.className = 'wlib-library-status-block';
 
     if (gameInfo.existsInWLib) {
-        const playStatus = gameInfo.playStatus || WLIB_DEFAULT_PLAY_STATUS;
+        const playStatus = gameInfo.wishlisted ? 'Wishlisted' : (gameInfo.playStatus || WLIB_DEFAULT_PLAY_STATUS);
         const dividerEl = document.createElement('div');
         dividerEl.className = 'wlib-status-divider';
 
@@ -600,8 +605,49 @@ function injectUI(gameInfo) {
         }
     });
 
+    if (!gameInfo.existsInWLib) {
+        const wishlistBtn = document.createElement('button');
+        wishlistBtn.type = 'button';
+        wishlistBtn.className = 'wlib-add-btn wlib-wishlist-btn';
+        wishlistBtn.textContent = 'Wishlist';
+        wishlistBtn.addEventListener('click', () => {
+            // An Add started mid-save would open the dialog for a game that is about to exist.
+            wishlistBtn.disabled = true;
+            btn.disabled = true;
+            wishlistBtn.textContent = 'Saving...';
+            statusEl.textContent = '';
+            chrome.runtime.sendMessage({
+                action: 'wishlistGameInWLib',
+                payload: gameInfo,
+            }, (response) => {
+                // Reading lastError marks it handled; a missing response falls through to Retry.
+                if (chrome.runtime.lastError) {
+                    console.error('wLib Extension Error:', chrome.runtime.lastError.message);
+                }
+                if (response?.success) {
+                    wishlistBtn.textContent = 'Wishlisted';
+                    statusEl.textContent = 'Wishlisted';
+                    setTimeout(() => {
+                        container.style.opacity = '0';
+                        setTimeout(() => container.remove(), 300);
+                    }, 3000);
+                } else if (response?.error_code === 'duplicate_url') {
+                    wishlistBtn.textContent = 'Already in wLib';
+                    statusEl.textContent = 'Already in wLib';
+                } else {
+                    wishlistBtn.disabled = false;
+                    btn.disabled = false;
+                    wishlistBtn.textContent = 'Retry';
+                    statusEl.textContent = 'Make sure wLib is open';
+                }
+            });
+        });
+        actionRow.appendChild(wishlistBtn);
+    }
+
     container.appendChild(headerRow);
-    body.appendChild(btn);
+    actionRow.prepend(btn);
+    body.appendChild(actionRow);
     if (libraryStatusBlock.childElementCount) {
         body.appendChild(libraryStatusBlock);
     }

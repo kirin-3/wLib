@@ -104,10 +104,32 @@ def test_starter_metadata_and_nested_wrapper(thread_html):
     assert result["title"] == "Example & Game [v1.10] [Dev]"
     assert result["version"] == "1.10"
     assert result["engine"] == "Ren'Py"
+    assert result["thread_completed"] is True
     assert result["tags"] == ["sandbox", "3dcg"]
     assert result["cover_image"] == "https://attachments.f95zone.to/cover.jpg?x=1&y=2"
     assert result["thread_main_post_last_edit_at"] == "2026-10-08T09:00:00Z"
     assert result["thread_main_post_checked_at"]
+
+
+@pytest.mark.parametrize(
+    ("labels", "engine", "completed"),
+    [
+        (["Completed", "Ren'Py"], "Ren'Py", True),
+        (["Ren'Py", "Completed"], "Ren'Py", True),
+        (["Unity", "Abandoned"], "Unity", False),
+        (["Ren'Py"], "Ren'Py", False),
+        (["Onhold", "Completed"], "", True),
+    ],
+)
+def test_thread_prefixes_choose_engine_and_completion(thread_html, labels, engine, completed):
+    prefix_html = "".join(f'<a class="labelLink">{label}</a>' for label in labels)
+    html = thread_html.replace(
+        '<a class="labelLink"><span>Ren\'Py</span></a>', prefix_html
+    ).replace('<span class="label-append">Completed</span>', '')
+    result = Scraper()._extract_page(html)
+    assert result["engine"] == engine
+    assert result["thread_completed"] is completed
+    assert result["title"] == "Example & Game [v1.10] [Dev]"
 
 
 def test_reply_edit_ignored_when_starter_not_edited(thread_html):

@@ -39,6 +39,12 @@ def test_sync_change_tracking():
         update_game(game_id, fields)
         assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    conn = get_connection()
+    conn.execute("UPDATE games SET thread_completed = 1 WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     update_playtime(game_id, 3)
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
@@ -85,6 +91,27 @@ def setup_test_db(tmp_path, monkeypatch):
         os.remove(db_file)
 
 
+def test_existing_database_gains_thread_completed_with_false_default():
+    game_id = add_game("Older game", "")
+    assert game_id is not None
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN thread_completed")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT thread_completed FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None and row[0] == 0
+
+
 def test_database_initialization():
     """Test if tables are created and pragma is applied."""
     conn = get_connection()
@@ -103,6 +130,7 @@ def test_database_initialization():
     assert "thread_main_post_last_edit_at" in columns
     assert "thread_main_post_checked_at" in columns
     assert "launch_mode" in columns
+    assert "thread_completed" in columns
 
     cursor.execute("PRAGMA table_info(game_launch_targets)")
     target_columns = [row[1] for row in cursor.fetchall()]

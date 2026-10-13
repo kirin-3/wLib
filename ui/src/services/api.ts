@@ -100,6 +100,7 @@ export interface UpdateCheckResponse extends ApiBasicResponse {
   success: boolean;
   version?: string;
   has_update?: boolean;
+  newly_finished?: boolean;
   metadata_updated?: number;
 }
 
@@ -115,6 +116,7 @@ export interface BulkUpdateResultItem {
   current_version: string;
   latest_version: string;
   has_update: boolean;
+  newly_finished?: boolean;
   error: string;
   error_code: string;
 }
@@ -462,6 +464,7 @@ export interface GameRecord {
   rating_gameplay?: number;
   thread_main_post_last_edit_at?: string | null;
   thread_main_post_checked_at?: string | null;
+  thread_completed?: boolean | number;
   launch_targets?: LaunchTarget[];
   // F95 metadata is still being fetched in the background after adding.
   metadata_pending?: boolean;
@@ -1188,7 +1191,7 @@ class ApiService {
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
           f95_url: String(args[2] || ""), version: String(args[3] || ""),
           engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
-          command_line_args: String(args[15] || ""), play_status: "Not Started" };
+          command_line_args: String(args[15] || ""), play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -1537,6 +1540,26 @@ class ApiService {
           { name: "GE-Proton (Steam)", path: "/home/user/.local/share/Steam/compatibilitytools.d/GE-Proton/proton" },
           { name: "wine-ge (Lutris)", path: "/home/user/.local/share/lutris/runners/wine/wine-ge/bin/wine" },
         ] : [] };
+      case "check_for_updates": {
+        const games = readMockGames();
+        const game = games.find((entry) => entry.f95_url === String(args[0]));
+        if (!game) return { success: false, error: "Game not found", mock: true };
+        const completedIds = JSON.parse(localStorage.getItem("wlib-mock-completed-threads") || "[]") as unknown;
+        const completed = Array.isArray(completedIds) && completedIds.includes(game.id);
+        const newlyFinished = completed && !game.thread_completed && !game.exe_path.trim();
+        if (completed !== Boolean(game.thread_completed)) {
+          localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((entry) =>
+            entry.id === game.id ? { ...entry, thread_completed: completed } : entry,
+          )));
+        }
+        return {
+          success: true,
+          mock: true,
+          version: game.latest_version || game.version || "",
+          has_update: !!game.exe_path.trim() && !!game.latest_version && game.latest_version !== game.version,
+          newly_finished: newlyFinished,
+        };
+      }
       case "get_update_status":
         return {
           running: false,

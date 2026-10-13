@@ -30,6 +30,7 @@ SYNC_GAME_COLUMNS = (
     "f95_url",
     "version",
     "latest_version",
+    "thread_completed",
     "cover_image_path",
     "play_status",
     "finished_version",
@@ -405,6 +406,7 @@ def init_db() -> None:
             ("is_favorite", "BOOLEAN DEFAULT 0"),
             ("thread_main_post_last_edit_at", "TIMESTAMP"),
             ("thread_main_post_checked_at", "TIMESTAMP"),
+            ("thread_completed", "BOOLEAN DEFAULT 0"),
             ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
             ("finished_version", "TEXT DEFAULT ''"),
         ]

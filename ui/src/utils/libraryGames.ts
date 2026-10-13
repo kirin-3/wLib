@@ -8,9 +8,13 @@ import { normalizePlayStatus } from "./playStatus.ts";
 export const normalizeVersion = (version: string | null | undefined): string =>
   (version || "").replace(/\s+/g, "").toLowerCase().replace(/^v(?=\d)/, "");
 
+export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
+  !String(game.exe_path || "").trim();
+
 export const hasAvailableUpdate = (
-  game: Pick<GameRecord, "version" | "latest_version">,
+  game: Pick<GameRecord, "version" | "latest_version"> & Partial<Pick<GameRecord, "exe_path">>,
 ): boolean => {
+  if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">)) return false;
   const remote = normalizeVersion(game.latest_version);
   return !!remote && remote !== normalizeVersion(game.version);
 };

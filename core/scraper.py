@@ -255,7 +255,15 @@ class Scraper:
 
     def _extract_page(self, html: str) -> ScraperResult:
         h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
-        engine = _text(next(_blocks(h1, "a", "labelLink"), ("", ""))[1])
+        labels = [_text(content) for _, content in _blocks(h1, "a", "labelLink")]
+        appended_labels = [_text(content) for _, content in _blocks(h1, "span", "label-append")]
+        status_labels = {"completed", "abandoned", "onhold"}
+        engine = next(
+            (label for label in labels if label.casefold() not in status_labels), ""
+        )
+        thread_completed = any(
+            label.casefold() == "completed" for label in (*labels, *appended_labels)
+        )
         clean_h1 = re.sub(
             r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
             "",
@@ -314,6 +322,7 @@ class Scraper:
             "title": title,
             "version": version,
             "engine": engine,
+            "thread_completed": thread_completed,
             "tags": tags,
             "cover_image": self._normalize_cover_image_url(cover),
             "thread_main_post_last_edit_at": last_edit,

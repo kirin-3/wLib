@@ -15,7 +15,7 @@ import time
 from typing import IO, TYPE_CHECKING, Callable, Protocol, cast, override
 
 from core.api import APP_VERSION, Api
-from core.f95zone import normalize_thread_url
+from core.f95zone import extract_thread_id, normalize_thread_url
 from core.host_platform import (
     get_cache_root,
     get_data_dir,
@@ -119,6 +119,7 @@ class RendererDiagnosticsWindow(Protocol):
 webview: WebviewModule | None = None
 
 window_ref: Window | None = None
+api_ref: Api | None = None
 
 
 def get_packaged_webview_cache_path() -> str:
@@ -689,6 +690,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         payload: dict[str, object] = {"exists": matching_game is not None}
 
         if matching_game is not None:
+            payload["wishlisted"] = not str(matching_game.get("exe_path") or "").strip()
             play_status = matching_game.get("play_status")
             if isinstance(play_status, str) and play_status.strip():
                 payload["playStatus"] = play_status.strip()
@@ -859,7 +861,59 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._reject_origin()
             return
 
-        if self.path == "/api/add":
+        if self.path == "/api/wishlist":
+            status = 200
+            wishlist_response: dict[str, object]
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                if not 0 <= content_length <= MAX_EXTENSION_BODY_BYTES:
+                    raise ValueError("Invalid Content-Length")
+                raw_payload = cast(object, json.loads(self.rfile.read(content_length).decode("utf-8")))
+                if not isinstance(raw_payload, dict):
+                    raise ValueError("Request body must be a JSON object")
+                payload = cast(dict[str, object], raw_payload)
+                # Without a title and thread there is nothing to show or to check for updates.
+                if not str(payload.get("title") or "").strip() or not extract_thread_id(
+                    payload.get("url")
+                ):
+                    raise ValueError("A title and an F95 thread URL are required")
+                if api_ref is None:
+                    status = 503
+                    wishlist_response = {"success": False, "error": "Application is not ready"}
+                else:
+                    wishlist_response = api_ref.add_game(
+                        title=str(payload.get("title") or ""),
+                        exe_path="",
+                        f95_url=str(payload.get("url") or ""),
+                        version=str(payload.get("version") or ""),
+                        cover_image=str(payload.get("coverImage") or ""),
+                        tags=str(payload.get("tags") or ""),
+                        rating=str(payload.get("rating") or ""),
+                        developer=str(payload.get("developer") or ""),
+                        engine=str(payload.get("engine") or ""),
+                    )
+                    if wishlist_response.get("error_code") == "duplicate_url":
+                        status = 409
+                    elif not wishlist_response.get("success"):
+                        status = 400
+                    elif window_ref:
+                        try:
+                            active_window = cast(ExtensionWindow, window_ref)
+                            _ = active_window.evaluate_js(
+                                "window.dispatchEvent(new Event('wlib-refresh-library'))"
+                            )
+                        except Exception as e:
+                            print(f"[wLib] Failed to refresh library after wishlist: {e}")
+            except Exception as e:
+                status = 400
+                wishlist_response = {"success": False, "error": str(e)}
+
+            self.send_response(status)
+            self._send_cors_headers(allowed_origin)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(json.dumps(wishlist_response).encode())
+        elif self.path == "/api/add":
             status = 200
             response: dict[str, object] = {"success": True}
             try:
@@ -935,7 +989,7 @@ def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
     if os.path.exists(ui_dir):
         # We start process and let it run
         return subprocess.Popen(
-            ["npm", "run", "dev"],
+            ["npm.cmd" if os.name == "nt" else "npm", "run", "dev"],
             cwd=ui_dir,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1024,7 +1078,7 @@ def run_packaged_smoke_test() -> int:
 def main() -> None:
     _ = configure_ssl_certificates()
 
-    global window_ref, DEV_MODE
+    global window_ref, api_ref, DEV_MODE
 
     # A second copy would share the database.
     extension_server = bind_extension_server()
@@ -1048,6 +1102,7 @@ def main() -> None:
     )
 
     api = Api()
+    api_ref = api
     sync_result = api.sync_extension_files()
     api.set_startup_extension_sync_status(sync_result)
     if sync_result.get("success") is False:

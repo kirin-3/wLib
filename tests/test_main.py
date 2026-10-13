@@ -641,6 +641,7 @@ def test_extension_check_payload_includes_play_status_for_matches():
             "title": "Demo",
             "f95_url": "https://f95zone.to/threads/demo.123/",
             "play_status": "Playing",
+            "exe_path": "/tmp/demo.sh",
         },
     )
 
@@ -651,6 +652,19 @@ def test_extension_check_payload_includes_play_status_for_matches():
     assert json.loads(response_body) == {
         "exists": True,
         "playStatus": "Playing",
+        "wishlisted": False,
+    }
+
+
+def test_extension_check_reports_wishlisted_for_empty_executable():
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/",
+        matching_game={"exe_path": "  "},
+    )
+    handler.do_GET()
+    assert json.loads(handler.wfile.getvalue()) == {
+        "exists": True,
+        "wishlisted": True,
     }
 
 
@@ -801,6 +815,114 @@ def test_extension_add_always_replies_with_failure(
         connection.close()
 
 
+def test_extension_wishlist_saves_without_executable_and_rejects_duplicate(
+    monkeypatch, tmp_path, extension_server
+):
+    from core.database import get_all_games
+
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wishlist.db"))
+    api = main.Api()
+    monkeypatch.setattr(
+        api.scraper, "get_thread_metadata", lambda *_args: {"success": False}
+    )
+    monkeypatch.setattr(main, "api_ref", api)
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    body = json.dumps(
+        {
+            "title": "Wishlist demo",
+            "url": "https://f95zone.to/threads/wishlist.555/",
+            "version": "1.0",
+            "coverImage": "https://example.com/cover.jpg",
+            "tags": "sandbox",
+            "rating": "4",
+            "developer": "Studio",
+            "engine": "Ren'Py",
+        }
+    )
+
+    def send():
+        connection = HTTPConnection(*extension_server.server_address, timeout=3)
+        try:
+            connection.request(
+                "POST", "/api/wishlist", body,
+                headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+            )
+            reply = connection.getresponse()
+            return reply.status, json.loads(reply.read())
+        finally:
+            connection.close()
+
+    status, payload = send()
+    assert status == 200 and payload["success"] is True
+    game = get_all_games()[0]
+    assert game["title"] == "Wishlist demo"
+    assert game["exe_path"] == ""
+    assert game["engine"] == "Ren'Py"
+    assert game["tags"] == "sandbox"
+    assert window.evaluate_js.called
+
+    status, payload = send()
+    assert status == 409 and payload["error_code"] == "duplicate_url"
+    assert len(get_all_games()) == 1
+
+
+@pytest.mark.parametrize(
+    ("origin", "oversized", "expected_status"),
+    [
+        ("https://example.com", False, 403),
+        ("chrome-extension://wlib", True, 400),
+    ],
+)
+def test_extension_wishlist_rejects_web_origin_and_oversized_body(
+    monkeypatch, extension_server, origin, oversized, expected_status
+):
+    api = MagicMock()
+    monkeypatch.setattr(main, "api_ref", api)
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.putrequest("POST", "/api/wishlist", skip_host=True)
+        connection.putheader("Host", "localhost:8183")
+        connection.putheader("Origin", origin)
+        connection.putheader(
+            "Content-Length", str(main.MAX_EXTENSION_BODY_BYTES + 1) if oversized else "2"
+        )
+        connection.endheaders(b"{}" if not oversized else None)
+        reply = connection.getresponse()
+        assert reply.status == expected_status
+        assert json.loads(reply.read())["success"] is False
+        api.add_game.assert_not_called()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "", "url": "https://f95zone.to/threads/demo.1/"},
+        {"title": "Demo", "url": ""},
+        {"title": "Demo", "url": "https://example.com/threads/demo.1/"},
+    ],
+)
+def test_extension_wishlist_requires_title_and_thread_url(
+    monkeypatch, extension_server, payload
+):
+    api = MagicMock()
+    monkeypatch.setattr(main, "api_ref", api)
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.request(
+            "POST", "/api/wishlist", json.dumps(payload),
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+        )
+        reply = connection.getresponse()
+        assert reply.status == 400
+        assert json.loads(reply.read())["success"] is False
+        api.add_game.assert_not_called()
+    finally:
+        connection.close()
+
+
 def test_extension_check_remains_responsive_while_open_waits(
     monkeypatch, extension_server
 ):
@@ -873,6 +995,16 @@ def test_main_focuses_running_instance_instead_of_starting(monkeypatch):
     main.main()
 
     load_webview.assert_not_called()
+
+
+def test_start_vite_dev_server_uses_platform_npm_command(monkeypatch):
+    process = MagicMock()
+    popen = MagicMock(return_value=process)
+    monkeypatch.setattr(main.subprocess, "Popen", popen)
+    assert main.start_vite_dev_server() is process
+    assert popen.call_args.args[0] == [
+        "npm.cmd" if os.name == "nt" else "npm", "run", "dev"
+    ]
 
 
 @pytest.mark.parametrize(

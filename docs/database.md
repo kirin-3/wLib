@@ -2,7 +2,7 @@
 
 ## Library sync change tracking
 
-`init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, finished version, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes. Because `CREATE TRIGGER IF NOT EXISTS` would keep a pre-existing trigger's column list, `init_db()` drops and recreates `sync_games_update` on every start so databases upgraded after new columns (such as `finished_version`) watch them too.
+`init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, finished version, thread completion, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes. Because `CREATE TRIGGER IF NOT EXISTS` would keep a pre-existing trigger's column list, `init_db()` drops and recreates `sync_games_update` on every start so databases upgraded after new columns (such as `thread_completed`) watch them too.
 
 Local settings keys, all excluded from manual exports/imports and the sync file:
 
@@ -87,6 +87,7 @@ Stores the library records and their associated configuration flags.
 | `is_favorite` | `BOOLEAN` | Favorite flag for library filtering. |
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |
+| `thread_completed` | `BOOLEAN DEFAULT 0` | Whether the F95 thread currently has a `Completed` prefix. Added to existing databases during `init_db()`. |
 
 ### Table: `game_launch_targets`
 Stores additional executable targets for games that ship with multiple playable parts. The canonical default executable remains `games.exe_path`; this table only contains extra named targets.

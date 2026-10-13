@@ -53,6 +53,7 @@ let lastUpdateProgress = "";
 let pollingUpdates = false;
 let updateCountRequest = 0;
 let wasUpdateRunning = false;
+const notifiedFinishedIds = new Set<number>();
 
 // Install-from-archive dialog (global so any view or toast can open it).
 const showInstallModal = ref(false);
@@ -148,6 +149,13 @@ const pollLibraryUpdates = async () => {
   try {
     const status = await api.getUpdateStatus();
     if (status.success === false) return;
+    if (status.running && !wasUpdateRunning) notifiedFinishedIds.clear();
+    for (const result of status.results) {
+      if (result.newly_finished && !notifiedFinishedIds.has(result.id)) {
+        notifiedFinishedIds.add(result.id);
+        notify(`${result.title} is finished`, "success");
+      }
+    }
     const progress = JSON.stringify([status.running, status.checked, status.total, status.results]);
     if (progress !== lastUpdateProgress) {
       lastUpdateProgress = progress;

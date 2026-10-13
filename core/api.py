@@ -100,6 +100,7 @@ class ScraperResponse(TypedDict, total=False):
     tags: str | list[object]
     thread_main_post_last_edit_at: str
     thread_main_post_checked_at: str
+    thread_completed: bool
 
 
 class LaunchTargetRecord(TypedDict):
@@ -117,6 +118,9 @@ class GameRecord(TypedDict):
     title: str
     version: str
     f95_url: str
+    exe_path: NotRequired[str]
+    latest_version: NotRequired[str]
+    thread_completed: NotRequired[bool]
     launch_mode: NotRequired[str]
     launch_targets: NotRequired[list[LaunchTargetRecord]]
     thread_main_post_last_edit_at: NotRequired[str | None]
@@ -1855,16 +1859,18 @@ class Api:
 
     def _update_thread_edit_metadata_for_url(
         self, url: str, metadata: Mapping[str, object]
-    ) -> int:
+    ) -> list[int]:
         normalized_url = normalize_thread_url(url)
         if not normalized_url:
-            return 0
+            return []
 
         checked_at_value = str(
             metadata.get("thread_main_post_checked_at") or ""
         ).strip()
-        if not checked_at_value:
-            return 0
+        has_edit_metadata = bool(checked_at_value)
+        has_completion = "thread_completed" in metadata
+        if not has_edit_metadata and not has_completion:
+            return []
 
         last_edit_raw = str(metadata.get("thread_main_post_last_edit_at") or "").strip()
         last_edit_value: str | None = last_edit_raw or None
@@ -1873,12 +1879,13 @@ class Api:
 
         from core.database import get_connection
 
+        newly_finished_ids: list[int] = []
         updated_rows = 0
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at FROM games WHERE f95_url = ?",
+                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -1890,22 +1897,34 @@ class Api:
 
                 current_last_edit = cast(object, game["thread_main_post_last_edit_at"])
                 current_checked_at = cast(object, game["thread_main_post_checked_at"])
-                if (
-                    current_last_edit == last_edit_value
-                    and current_checked_at == checked_at_value
+                fields: dict[str, object] = {}
+                if has_edit_metadata and (
+                    current_last_edit != last_edit_value
+                    or current_checked_at != checked_at_value
                 ):
+                    fields["thread_main_post_last_edit_at"] = last_edit_value
+                    fields["thread_main_post_checked_at"] = checked_at_value
+                if has_completion:
+                    completed = bool(metadata["thread_completed"])
+                    was_completed = bool(cast(object, game["thread_completed"]))
+                    if completed != was_completed:
+                        fields["thread_completed"] = int(completed)
+                        if completed:
+                            newly_finished_ids.append(game_id)
+                if not fields:
                     continue
 
+                set_clause = ", ".join(f"{field} = ?" for field in fields)
                 _ = cursor.execute(
-                    "UPDATE games SET thread_main_post_last_edit_at = ?, thread_main_post_checked_at = ? WHERE id = ?",
-                    (last_edit_value, checked_at_value, game_id),
+                    f"UPDATE games SET {set_clause} WHERE id = ?",
+                    (*fields.values(), game_id),
                 )
                 updated_rows += 1
 
             if updated_rows:
                 conn.commit()
 
-        return updated_rows
+        return newly_finished_ids
 
     def check_for_updates(self, url: str) -> Mapping[str, object]:
         """
@@ -1935,7 +1954,9 @@ class Api:
                     version_info, "Failed to check for updates"
                 )
 
-            _ = self._update_thread_edit_metadata_for_url(url, version_info)
+            newly_finished_ids = self._update_thread_edit_metadata_for_url(
+                url, version_info
+            )
 
             remote_version = version_info.get("version")
             if not self._is_actionable_remote_version(remote_version):
@@ -1962,18 +1983,24 @@ class Api:
                 )
                 # Check if it differs from current version
                 _ = cursor.execute(
-                    "SELECT version FROM games WHERE f95_url = ?", (url,)
+                    "SELECT id, version, exe_path FROM games WHERE f95_url = ?", (url,)
                 )
                 row = cast(object, cursor.fetchone())
                 current_version = ""
-                if isinstance(row, Sequence) and len(row) > 0 and row[0] is not None:
-                    current_version = str(row[0]).strip()
+                wishlisted = False
+                newly_finished = False
+                if isinstance(row, Sequence) and len(row) >= 3:
+                    current_version = str(row[1] or "").strip()
+                    wishlisted = not str(row[2] or "").strip()
+                    newly_finished = wishlisted and row[0] in newly_finished_ids
                 conn.commit()
             finally:
                 if conn is not None:
                     conn.close()
 
-            has_update = self._has_update(current_version, remote_version)
+            has_update = not wishlisted and self._has_update(
+                current_version, remote_version
+            )
             metadata_updated = self._backfill_missing_metadata_for_url(
                 url, version_info
             )
@@ -1981,6 +2008,7 @@ class Api:
                 "success": True,
                 "version": str(remote_version).strip(),
                 "has_update": has_update,
+                "newly_finished": newly_finished,
                 "metadata_updated": metadata_updated,
             }
         except Exception as e:
@@ -2045,6 +2073,9 @@ class Api:
                     "title": str(game.get("title") or ""),
                     "version": str(game.get("version") or ""),
                     "f95_url": url.strip(),
+                    "exe_path": str(game.get("exe_path") or ""),
+                    "latest_version": str(game.get("latest_version") or ""),
+                    "thread_completed": bool(game.get("thread_completed")),
                 }
             )
 
@@ -2091,6 +2122,8 @@ class Api:
                         result_dict = {}
 
                     has_update = False
+                    newly_finished = False
+                    wishlisted = not str(game.get("exe_path") or "").strip()
                     callback_error = str(result_dict.get("error") or "")
                     callback_error_code = str(result_dict.get("code") or "")
                     if not result_dict.get("success") and not callback_error:
@@ -2120,7 +2153,7 @@ class Api:
                             )
                             current_version = current_versions_by_url.get(url, "")
                             conn.commit()
-                            has_update = self._has_update(
+                            has_update = not wishlisted and self._has_update(
                                 current_version, remote_version
                             )
                         except Exception as e:
@@ -2129,6 +2162,29 @@ class Api:
                         finally:
                             if conn is not None:
                                 conn.close()
+                        if (
+                            not callback_error
+                            and wishlisted
+                            and str(game.get("latest_version") or "").strip()
+                            and str(game.get("latest_version") or "").strip() != remote_version
+                        ):
+                            try:
+                                # A thread-page fallback already read the prefixes; skip a second request.
+                                metadata = (
+                                    result_dict
+                                    if "thread_completed" in result_dict
+                                    else self._coerce_string_key_dict(
+                                        self.scraper.get_thread_metadata(url)
+                                    )
+                                )
+                                if metadata and metadata.get("success"):
+                                    newly_finished = game["id"] in (
+                                        self._update_thread_edit_metadata_for_url(
+                                            url, metadata
+                                        )
+                                    )
+                            except Exception:
+                                pass
                     elif result_dict.get("success"):
                         callback_error = "Could not extract a version from thread"
                         callback_error_code = "extract_failed"
@@ -2141,6 +2197,7 @@ class Api:
                                 "current_version": game["version"],
                                 "latest_version": str(result_dict.get("version") or ""),
                                 "has_update": has_update,
+                                "newly_finished": newly_finished,
                                 "error": callback_error,
                                 "error_code": callback_error_code,
                             }

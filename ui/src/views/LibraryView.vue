@@ -43,6 +43,7 @@ import {
   readLibraryViewState,
   saveLibraryViewState,
   type FilterCollection,
+  type FilterInstallState,
   type FilterSections,
   type LayoutMode,
   type LibraryViewState,
@@ -57,6 +58,7 @@ import {
   gameTags,
   hasAvailableUpdate,
   hasNewSinceFinished,
+  isWishlisted,
   matchesGameSearch,
 } from "../utils/libraryGames";
 
@@ -158,6 +160,7 @@ const filterEngines = ref<string[]>([
   ...DEFAULT_LIBRARY_VIEW_STATE.filterEngines,
 ]);
 const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
+const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
 const sortDir = ref<SortDir>(DEFAULT_LIBRARY_VIEW_STATE.sortDir);
@@ -293,12 +296,14 @@ const activeFilterCount = computed(
   () =>
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
+    (filterInstallState.value ? 1 : 0) +
     (filterEngines.value.length > 0 ? 1 : 0) +
     (filterTags.value.length > 0 ? 1 : 0),
 );
 const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
+  filterInstallState.value = "";
   filterEngines.value = [];
   filterTags.value = [];
   filterCollection.value = "All";
@@ -310,6 +315,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   sortDir.value = state.sortDir;
   filterCollection.value = state.filterCollection;
   filterStatuses.value = [...state.filterStatuses];
+  filterInstallState.value = state.filterInstallState;
   filterEngines.value = [...state.filterEngines];
   filterTags.value = [...state.filterTags];
   isFiltersCollapsed.value = state.isFiltersCollapsed;
@@ -323,6 +329,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     sortDir: sortDir.value,
     filterCollection: filterCollection.value,
     filterStatuses: filterStatuses.value,
+    filterInstallState: filterInstallState.value,
     filterEngines: filterEngines.value,
     filterTags: filterTags.value,
     isFiltersCollapsed: isFiltersCollapsed.value,
@@ -375,6 +382,10 @@ const filteredGames = computed(() => {
       );
     });
   }
+  if (filterInstallState.value === "wishlist")
+    result = result.filter(isWishlisted);
+  if (filterInstallState.value === "installed")
+    result = result.filter((game) => !isWishlisted(game));
   if (filterEngines.value.length) {
     result = result.filter((g) =>
       filterEngines.value.includes(normalizeEngineFilterValue(g.engine)),
@@ -450,7 +461,7 @@ const getEffectiveLaunchTargets = (
 
 const hasAdditionalLaunchTargets = (game: GameRecord): boolean => {
   return (
-    !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0
+    !isWishlisted(game) && !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0
   );
 };
 
@@ -520,6 +531,10 @@ const runSingleGameUpdateCheck = async (game: GameRecord) => {
     const result = await api.checkForUpdates(game.f95_url);
     if (result && result.success) {
       await loadGames();
+      if (result.newly_finished) {
+        notify(`${game.title} is finished`, "success");
+        return { type: "" as const, message: "" };
+      }
       if (result.has_update) {
         return {
           type: "success" as const,
@@ -550,6 +565,10 @@ const runSingleGameUpdateCheck = async (game: GameRecord) => {
 };
 
 const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
+  if (isWishlisted(game)) {
+    openDetail(game);
+    return;
+  }
   closeLaunchTargetMenus();
   try {
     const result = await api.launchGame(
@@ -583,7 +602,9 @@ const stopGame = async (gameId: number) => {
   }
 };
 
-const toggleGame = (game: GameRecord) => runningGameIds.value.has(game.id) ? stopGame(game.id) : launchGameFast(game);
+const toggleGame = (game: GameRecord) => isWishlisted(game)
+  ? openDetail(game)
+  : runningGameIds.value.has(game.id) ? stopGame(game.id) : launchGameFast(game);
 
 const launchSelectedTarget = async (
   game: GameRecord,
@@ -677,7 +698,7 @@ const checkUpdate = async (game: GameRecord) => {
   if (updatingId.value !== null) return;
   const feedback = await runSingleGameUpdateCheck(game);
   if (feedback.type === "error") notifyError(feedback.message);
-  else notify(feedback.message, "success");
+  else if (feedback.type === "success") notify(feedback.message, "success");
 };
 
 const markAsUpdated = async (game: GameRecord) => {
@@ -884,6 +905,7 @@ watch(
     sortDir,
     filterCollection,
     filterStatuses,
+    filterInstallState,
     filterEngines,
     filterTags,
     isFiltersCollapsed,
@@ -1027,6 +1049,17 @@ onUnmounted(() => {
               </span>
             </label>
           </div>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
+          <label class="block px-2 text-xs uppercase tracking-widest font-bold" style="color: var(--text-muted)">
+            Install state
+            <select v-model="filterInstallState" class="library-search-input mt-3 w-full rounded-lg px-3 py-2 text-sm normal-case tracking-normal font-medium">
+              <option value="">All</option>
+              <option value="installed">Installed</option>
+              <option value="wishlist">Wishlist</option>
+            </select>
+          </label>
         </div>
 
         <div class="p-6 pb-2 pt-4">
@@ -1437,6 +1470,8 @@ onUnmounted(() => {
                   >
                     {{ game.title }}
                   </button>
+                  <span v-if="isWishlisted(game)" class="wishlist-pill shrink-0">Wishlist</span>
+                  <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill shrink-0">Finished</span>
                   <IconStarFilled
                     v-if="game.is_favorite"
                     class="w-3.5 h-3.5 shrink-0 text-yellow-500"
@@ -1500,13 +1535,13 @@ onUnmounted(() => {
                 <div class="flex items-center gap-1">
                   <button
                     @click.stop="toggleGame(game)"
-                    :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+                    :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                     class="play-btn ui-play-btn rounded-md p-1.5"
                   >
                     <IconPlayerStopFilled
-                      v-if="runningGameIds.has(game.id)"
+                      v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
                       class="w-4 h-4"
-                    /><IconPlayerPlayFilled v-else class="w-4 h-4" />
+                    /><span v-else-if="isWishlisted(game)" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-4 h-4" />
                   </button>
                   <select
                     v-if="hasAdditionalLaunchTargets(game)"
@@ -1652,12 +1687,12 @@ onUnmounted(() => {
                 <button
                   @click.stop="toggleGame(game)"
                   class="compact-play-btn ui-play-btn rounded-md p-2"
-                  :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+                  :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                 >
                   <IconPlayerStopFilled
-                    v-if="runningGameIds.has(game.id)"
+                    v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
                     class="w-3.5 h-3.5"
-                  /><IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
+                  /><span v-else-if="isWishlisted(game)" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
                 </button>
                 <button
                   v-if="hasAdditionalLaunchTargets(game)"
@@ -1707,6 +1742,8 @@ onUnmounted(() => {
               <span class="font-mono" style="color: var(--brand)">{{
                 game.version || "Unknown"
               }}</span>
+              <span v-if="isWishlisted(game)" class="wishlist-pill">Wishlist</span>
+              <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill">Finished</span>
               <span
                 v-if="hasAvailableUpdate(game)"
                 class="update-pill"
@@ -1737,14 +1774,14 @@ onUnmounted(() => {
               <div class="relative flex shrink-0">
                 <button
                   @click.stop="toggleGame(game)"
-                  :title="`${runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
+                  :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
                   class="play-btn ui-play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
                 >
                   <IconPlayerStopFilled
-                    v-if="runningGameIds.has(game.id)"
+                    v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
                     class="ui-action-icon"
-                  /><IconPlayerPlayFilled v-else class="ui-action-icon" />{{
-                    runningGameIds.has(game.id) ? "Stop" : "Play"
+                  /><IconPlayerPlayFilled v-else-if="!isWishlisted(game)" class="ui-action-icon" />{{
+                    isWishlisted(game) ? "Set up" : runningGameIds.has(game.id) ? "Stop" : "Play"
                   }}
                 </button>
                 <button
@@ -1795,7 +1832,7 @@ onUnmounted(() => {
             {{ contextMenu.game.title }}
           </p>
           <button @click="runContextAction('play')">
-            {{ runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
+            {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
           </button>
           <button
             @click="runContextAction('folder')"
@@ -1916,6 +1953,22 @@ onUnmounted(() => {
   padding: 0.15rem 0.35rem;
   font-size: 0.65rem;
   font-weight: 700;
+}
+.wishlist-pill,
+.finished-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.15rem 0.35rem;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.finished-pill {
+  color: var(--success-text);
 }
 .card-indicator {
   background: var(--overlay-scrim-strong);
