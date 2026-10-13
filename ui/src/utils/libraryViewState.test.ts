@@ -255,3 +255,20 @@ test("normalizeLibraryViewState preserves the expanded supported status set", ()
 
   assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES, "Unknown"]);
 });
+
+test("normalizeActiveCollection and filterAllowedValues handle non-string and non-iterable collections safely", () => {
+  // Collections containing null, undefined or numbers do not crash
+  const mixedCollections = ["RPG", null as unknown as string, undefined as unknown as string, 42 as unknown as string];
+  assert.equal(
+    readLibraryViewState(new MemoryStorage(), { validCollections: mixedCollections }).state.activeCollection,
+    "",
+  );
+  // Non-iterable objects do not crash
+  assert.doesNotThrow(() => {
+    readLibraryViewState(new MemoryStorage(), {
+      validCollections: {} as unknown as Iterable<string>,
+      validEngines: 123 as unknown as Iterable<string>,
+      validTags: null as unknown as Iterable<string>,
+    });
+  });
+});

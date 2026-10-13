@@ -170,3 +170,45 @@ test("folder actions preserve POSIX and Windows roots and reject bare commands",
   assert.equal(gameFolder("C:\\Game.exe"), "C:\\");
   assert.equal(gameFolder("game"), "");
 });
+
+test("search matches unicode accents and decomposed characters case-insensitively", () => {
+  const game: GameRecord = {
+    id: 1,
+    title: "Pok\u00e9mon Mystery Café", // precomposed é
+    exe_path: "/game/run",
+    developer: "Développeur",
+    engine: "Unity",
+    tags: ["Aventure", "Café"],
+  };
+  // Search without accents
+  assert.equal(matchesGameSearch(game, "pokemon"), true);
+  assert.equal(matchesGameSearch(game, "cafe"), true);
+  assert.equal(matchesGameSearch(game, "developpeur"), true);
+  // Search with decomposed accents (e + combining acute)
+  assert.equal(matchesGameSearch(game, "Poke\u0301mon"), true);
+  assert.equal(matchesGameSearch(game, "Cafe\u0301"), true);
+  // Search with uppercase and whitespace
+  assert.equal(matchesGameSearch(game, "  POKEMON  "), true);
+  // Non-matching query
+  assert.equal(matchesGameSearch(game, "digimon"), false);
+});
+
+test("table sort breaks ties stably by ID and sinks missing titles", () => {
+  const g1: GameRecord = { id: 10, title: "Echoes", exe_path: "", rating: "4.5" };
+  const g2: GameRecord = { id: 2, title: "Echoes", exe_path: "", rating: "4.5" };
+  // Same field, same title: tie broken by ID
+  assert.ok(compareLibraryGames(g1, g2, "rating", "asc") > 0);
+  assert.ok(compareLibraryGames(g2, g1, "rating", "asc") < 0);
+  // Same title when sorting by title: tie broken by ID
+  assert.ok(compareLibraryGames(g1, g2, "title", "asc") > 0);
+  assert.ok(compareLibraryGames(g1, g2, "title", "desc") > 0);
+
+  // Missing title sinks to the bottom when tie-breaking
+  const gNoTitle: GameRecord = { id: 3, title: "", exe_path: "", rating: "4.5" };
+  assert.ok(compareLibraryGames(gNoTitle, g1, "rating", "asc") > 0);
+  assert.ok(compareLibraryGames(g1, gNoTitle, "rating", "asc") < 0);
+
+  // Non-string version number does not crash
+  const gNumericVersion: GameRecord = { id: 4, title: "NumVer", exe_path: "", version: 1 as unknown as string };
+  assert.doesNotThrow(() => compareLibraryGames(gNumericVersion, g1, "version", "asc"));
+});
