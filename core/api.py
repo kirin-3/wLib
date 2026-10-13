@@ -1954,6 +1954,8 @@ class Api:
             result["error"] = (
                 f"{message}. This thread is unavailable to guest HTTP requests."
             )
+        elif code == "rate_limited":
+            result["error"] = f"{message}; try again later."
         return result
 
     def _get_bulk_check_delay_seconds(self) -> int:
@@ -2124,7 +2126,8 @@ class Api:
         if not url.strip():
             return {"success": False, "error": "A valid thread URL is required"}
 
-        url = url.strip()
+        # Stored f95_url values are normalized; exact-match lookups below need the same form.
+        url = normalize_thread_url(url) or url.strip()
         print(f"Checking for updates for {url}")
         try:
             version_info = self._coerce_string_key_dict(

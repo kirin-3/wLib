@@ -236,6 +236,15 @@ def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
     assert get.call_count == 2
 
 
+def test_rate_limited_chunk_does_not_fallback_to_pages(monkeypatch):
+    get = MagicMock(return_value=(429, "Too Many Requests"))
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 4)]
+    results = Scraper().check_versions(urls)
+    assert all(results[url]["code"] == "rate_limited" for url in urls)
+    assert get.call_count == 1
+
+
 def test_duplicate_ids_and_invalid_urls_keep_callback_order(monkeypatch):
     get = MagicMock(return_value=checker_response(["1"]))
     monkeypatch.setattr(scraper_module, "_f95_get", get)

@@ -208,6 +208,8 @@ class Scraper:
             html.lower(),
         )
         combined = f"{page_title}\n{page_html}"
+        if status == 429:
+            return {"code": "rate_limited", "error": "Rate limited by F95Zone"}
         if status == 404 or any(
             marker in combined
             for marker in (
@@ -350,7 +352,8 @@ class Scraper:
                 f"https://f95zone.to/sam/checker.php?threads={','.join(ids)}"
             )
             issue = self._classify_page_issue(status, self._page_title(text), text)
-            if issue and issue["code"] == "blocked":
+            # Falling back to 100 page requests would only hammer F95 harder.
+            if issue and issue["code"] in ("blocked", "rate_limited"):
                 return {
                     thread_id: self._error(issue["code"], issue["error"])
                     for thread_id in ids

@@ -106,7 +106,7 @@ This module handles native host launching and Linux compatibility runtimes.
 ### `core/scraper.py` (HTTP Scraping)
 
 - **Batch Versions**: `check_versions(urls, callback)` requests `https://f95zone.to/sam/checker.php?threads=<ids>` with at most 100 unique thread IDs per request. Versions use the title parser shared with the extension before comparison.
-- **Page Fallback**: Missing, empty, and non-actionable versions, or non-challenge endpoint failures, fall back to guest thread pages. Regex extraction reads the title and starter post.
+- **Page Fallback**: Missing, empty, and non-actionable versions, or endpoint failures other than challenges and HTTP 429 rate limits, fall back to guest thread pages. Regex extraction reads the title and starter post.
 - **Metadata**: Add-game fetches and single-game checks read engine, tags, cover, and starter-post edit timestamps. Bulk checks preserve stored edit metadata.
 - **Pacing and TLS**: Every request passes through `_f95_get`, which holds a global lock through the request and waits after the previous request finishes. `WLIB_UPDATE_CHECK_DELAY_SECONDS` defaults to 2 seconds and is bounded to 1–30. urllib uses the default SSL context and the configured CA certificates.
 - **Failures**: Deleted threads report `not_found`, challenges report `blocked`, and login walls report `login_required`. No login session or automatic challenge retry is available. Network timeouts report `navigation_timeout`; other network or parse failures report `scraper_error`.

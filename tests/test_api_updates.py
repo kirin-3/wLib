@@ -783,6 +783,26 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["has_update"] is True
 
 
+def test_check_for_updates_matches_unnormalized_url(monkeypatch):
+    api = Api()
+    add_game(
+        title="Demo",
+        exe_path="/tmp/demo.exe",
+        f95_url="https://f95zone.to/threads/demo.123/",
+        version="1.0",
+    )
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {"success": True, "version": "1.0"},
+    )
+
+    result = api.check_for_updates("http://www.f95zone.to/threads/demo.123")
+
+    assert result["has_update"] is False
+    assert get_all_games()[0]["latest_version"] == "1.0"
+
+
 def test_thread_completion_write_reports_only_new_transition():
     api = Api()
     url = "https://f95zone.to/threads/finished.124/"
