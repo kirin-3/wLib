@@ -143,9 +143,9 @@ const applySettings = (data: SettingsResponse) => {
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
   libraryFolder.value = data.library_folder || "";
-  libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
+  libraryFolderPattern.value = data.library_folder_pattern ?? "{creator}/{title}/{version}";
   downloadsFolder.value = data.downloads_folder || "";
-  downloadDetectionEnabled.value = data.download_detection_enabled !== false;
+  downloadDetectionEnabled.value = String(data.download_detection_enabled) !== 'false';
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
@@ -543,7 +543,7 @@ const saveSettings = async () => {
       custom_play_statuses: customStatuses.value,
       urm_rpa_path: urmPath.value,
       library_folder: libraryFolder.value,
-      library_folder_pattern: libraryFolderPattern.value.trim() || "{creator}/{title}/{version}",
+      library_folder_pattern: libraryFolderPattern.value.trim(),
       downloads_folder: downloadsFolder.value,
       download_detection_enabled: downloadDetectionEnabled.value,
     });

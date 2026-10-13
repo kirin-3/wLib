@@ -49,6 +49,7 @@ async function refreshStatus() {
   try {
     const result = await api.getSyncStatus();
     if (version === requestVersion) {
+      if (result.success !== false) error.value = "";
       acceptStatus(result);
       if (result.success === false) error.value = result.error || "Could not read sync status.";
     }
