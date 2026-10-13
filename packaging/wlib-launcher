@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Shared launcher for wLib binary release artifacts.
+set -euo pipefail
 
 SELF_PATH="$(readlink -f "$0")"
 SELF_DIR="$(dirname "$SELF_PATH")"

@@ -96,7 +96,7 @@ jobs:
       - name: Run backend checks
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          .venv\Scripts\Activate.ps1
+          . .venv\Scripts\Activate.ps1
           ruff check .
           basedpyright
           pytest
