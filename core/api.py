@@ -2641,8 +2641,8 @@ class Api:
 
     def launch_game(
         self,
-        game_id: int,
-        exe_path: str,
+        game_id: int | None = None,
+        exe_path: str = "",
         command_line_args: str = "",
         run_japanese_locale: bool = False,
         run_wayland: bool = False,
@@ -2654,11 +2654,44 @@ class Api:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
+        target_path = (exe_path or "").strip()
+        if game_id is not None:
+            from core.database import get_all_games, list_game_launch_targets
+
+            canonical_path = ""
+            for g in get_all_games():
+                if g.get("id") == game_id:
+                    canonical_path = str(g.get("exe_path") or "").strip()
+                    break
+
+            if not target_path:
+                if canonical_path and os.path.exists(canonical_path):
+                    target_path = canonical_path
+                else:
+                    for t in list_game_launch_targets(game_id):
+                        candidate = str(t.get("exe_path") or "").strip()
+                        if candidate and os.path.exists(candidate):
+                            target_path = candidate
+                            break
+                    if not target_path and canonical_path:
+                        target_path = canonical_path
+            elif not os.path.exists(target_path):
+                if canonical_path and os.path.exists(canonical_path):
+                    target_path = canonical_path
+                else:
+                    for t in list_game_launch_targets(game_id):
+                        candidate = str(t.get("exe_path") or "").strip()
+                        if candidate and os.path.exists(candidate):
+                            target_path = candidate
+                            break
+
         print(
-            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
+            f"Launching {target_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
         )
 
         def on_exit(delta: int, is_final: bool = True) -> None:
+            if game_id is None:
+                return
             try:
                 from core.database import update_playtime
 
@@ -2677,7 +2710,7 @@ class Api:
                 print(f"Failed to update playtime for game {game_id}: {e}")
 
         result = self.launcher.launch(
-            exe_path,
+            target_path,
             command_line_args,
             run_japanese_locale,
             run_wayland,

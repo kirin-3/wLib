@@ -1512,3 +1512,225 @@ def test_launch_html_from_appimage(mock_abspath, mock_popen, mock_exists):
         "LD_LIBRARY_PATH" not in env
         or env["LD_LIBRARY_PATH"] != "/tmp/.mount_wLib/usr/lib"
     )
+
+
+def test_without_packaged_runtime_env_strips_python_and_qt_variables(monkeypatch):
+    monkeypatch.setenv("PYTHONHOME", "/tmp/wlib/python")
+    monkeypatch.setenv("PYTHONPATH", "/tmp/wlib/lib")
+    monkeypatch.setenv("PYTHONEXECUTABLE", "/tmp/wlib/bin/python")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("QT_QUICK_BACKEND", "software")
+    monkeypatch.setenv("QSG_RHI_BACKEND", "opengl")
+    monkeypatch.setenv("QT_PLUGIN_PATH", "/tmp/wlib/plugins")
+    monkeypatch.setenv("QML2_IMPORT_PATH", "/tmp/wlib/qml")
+    monkeypatch.setenv("WLIB_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("PYWEBVIEW_GUI", "qt")
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch("/opt/game/game.sh")
+
+    assert result["success"] is True
+    launched_env = popen.call_args.kwargs["env"]
+    for var in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "QT_QPA_PLATFORM",
+        "QT_QUICK_BACKEND",
+        "QSG_RHI_BACKEND",
+        "QT_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "WLIB_QPA_PLATFORM",
+        "PYWEBVIEW_GUI",
+    ):
+        assert var not in launched_env
+
+
+def test_launch_proton_strips_stale_wineprefix_and_wine_strips_steam_compat(monkeypatch):
+    monkeypatch.setenv("WINEPREFIX", "/stale/prefix")
+    monkeypatch.setenv("STEAM_COMPAT_DATA_PATH", "/stale/steam/data")
+    monkeypatch.setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", "/stale/steam/client")
+    monkeypatch.setenv("STEAM_COMPAT_INSTALL_PATH", "/stale/steam/install")
+    monkeypatch.setenv("UMU_ID", "stale_umu")
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=False),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        # 1. Proton launch: should strip stale host WINEPREFIX
+        res_proton = Launcher().launch(
+            "/opt/game/game.exe",
+            proton_version="/usr/bin/proton",
+            launch_mode="auto",
+        )
+        assert res_proton["success"] is True
+        env_proton = popen.call_args.kwargs["env"]
+        assert "WINEPREFIX" not in env_proton
+        assert env_proton.get("STEAM_COMPAT_CLIENT_INSTALL_PATH") == "/tmp/wlib"
+
+        # 2. Wine launch: should strip stale host STEAM_COMPAT_* and UMU_ID
+        res_wine = Launcher().launch(
+            "/opt/game/game.exe",
+            proton_version="",
+            launch_mode="auto",
+        )
+        assert res_wine["success"] is True
+        env_wine = popen.call_args.kwargs["env"]
+        assert "STEAM_COMPAT_DATA_PATH" not in env_wine
+        assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env_wine
+        assert "STEAM_COMPAT_INSTALL_PATH" not in env_wine
+        assert "UMU_ID" not in env_wine
+        assert "WINEPREFIX" in env_wine
+
+
+def test_launch_script_without_sh_extension_ensures_executable(monkeypatch):
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.is_script", return_value=True),
+        patch("core.launcher.is_elf", return_value=False),
+        patch("core.launcher.ensure_executable", return_value=True) as mock_ensure,
+        patch("os.access", side_effect=[False, True]),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch("/opt/game/start_runner")
+
+    assert result["success"] is True
+    mock_ensure.assert_called_once_with("/opt/game/start_runner")
+    assert popen.call_args.args[0] == ["/opt/game/start_runner"]
+
+
+def test_launch_cmd_file_not_treated_as_linux_native(monkeypatch):
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        # In strict native mode, .cmd must be rejected
+        res_native = Launcher().launch("/opt/game/setup.cmd", launch_mode="native")
+        assert res_native["success"] is False
+        assert "Linux Native launch mode cannot run Windows executables" in str(res_native["error"])
+
+        # In auto mode, .cmd must NOT execute directly as Linux native, but fall back to Wine
+        res_auto = Launcher().launch("/opt/game/setup.cmd", launch_mode="auto")
+        assert res_auto["success"] is True
+        assert popen.call_args.args[0][0] == "wine"
+
+
+def test_track_playtime_monitors_process_group_for_launcher_stubs(monkeypatch):
+    process = MagicMock()
+    # Stub process exits cleanly after first check
+    process.poll.side_effect = [None, 0]
+    process.wait.side_effect = [0]
+    process.pid = 12345
+
+    # killpg: first call shows process group is still alive, second call raises ProcessLookupError
+    mock_killpg = MagicMock(side_effect=[None, ProcessLookupError()])
+    monkeypatch.setattr("os.killpg", mock_killpg, raising=False)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    callbacks: list[tuple[int, bool]] = []
+
+    def run_thread_immediately(*, target, daemon):
+        assert daemon is True
+        target()
+        return MagicMock()
+
+    monkeypatch.setattr("threading.Thread", run_thread_immediately)
+    clock = MagicMock(side_effect=[100.0, 170.0, 180.0])
+    monkeypatch.setattr("time.monotonic", clock)
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen", return_value=process),
+    ):
+        launcher = Launcher()
+        result = launcher.launch(
+            "/opt/game/start.sh",
+            game_id=42,
+            on_exit_callback=lambda delta, final=True: callbacks.append((delta, final)),
+        )
+
+    assert result["success"] is True
+    # The process group was checked via killpg(12345, 0)
+    mock_killpg.assert_any_call(12345, 0)
+    # Both periodic tick and final tick were emitted despite the stub process exiting
+    assert callbacks == [(70, False), (10, True)]
+
+
+def test_launcher_shutdown_flushes_playtime_and_closes_logs(monkeypatch):
+    launcher = Launcher()
+    callbacks: list[tuple[int, bool]] = []
+    mock_log = MagicMock()
+
+    entry = RunningGame(
+        proc=MagicMock(),
+        kill_info=None,
+        on_exit_callback=lambda delta, final=True: callbacks.append((delta, final)),
+        last_saved_time=100.0,
+        log_file=mock_log,
+    )
+    with launcher._running_lock:
+        launcher._running[99] = entry
+
+    monkeypatch.setattr("time.monotonic", lambda: 145.0)
+    launcher.shutdown()
+
+    # Log file was closed
+    mock_log.close.assert_called_once()
+    # Playtime delta (145 - 100 = 45s) was flushed on shutdown
+    assert callbacks == [(45, True)]
+    # _running was cleared
+    assert launcher.get_running_games() == []
+
+
+def test_rpgmaker_linux_runner_normalizes_www_directory(monkeypatch):
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isfile", return_value=True),
+        patch("os.path.isdir", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        monkeypatch.setattr(
+            launcher,
+            "get_rpgmaker_linux_runner_status",
+            lambda: {
+                "available": True,
+                "path": "/opt/runner/nwjsstart-cicpoffs.sh",
+                "source": "test",
+                "configured_path": "",
+                "error": "",
+            },
+        )
+        result = launcher.launch("/games/myrpg/www/index.html", launch_mode="rpgmaker_linux")
+
+    assert result["success"] is True
+    cmd = popen.call_args.args[0]
+    # --gamepath should be normalized to parent of www
+    idx = cmd.index("--gamepath")
+    assert cmd[idx + 1] == "/games/myrpg"
+
+
+def test_stop_game_cleans_up_on_process_lookup_error(monkeypatch):
+    launcher = Launcher()
+    entry = RunningGame(proc=MagicMock(pid=54321), kill_info=None)
+    with launcher._running_lock:
+        launcher._running[77] = entry
+
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr("os.killpg", MagicMock(side_effect=ProcessLookupError()), raising=False)
+
+    res = launcher.stop(77)
+    assert res["success"] is True
+    assert 77 not in launcher.get_running_games()

@@ -150,3 +150,39 @@ def test_save_discovery_uses_launcher_proton_prefix(monkeypatch, tmp_path, layou
     )
 
     assert {os.path.normpath(entry["path"]) for entry in results} == {str(saves)}
+
+
+def test_api_launch_game_fallback_to_valid_target_and_handles_none_game_id(tmp_path, monkeypatch):
+    from core.database import add_game, add_game_launch_target
+
+    real_exe = tmp_path / "valid_game.exe"
+    real_exe.write_bytes(b"MZ")
+
+    missing_exe = tmp_path / "deleted_game.exe"
+
+    game_id = add_game(title="Fallback Game", exe_path=str(missing_exe))
+    assert game_id is not None
+    _ = add_game_launch_target(game_id, "Working Target", str(real_exe))
+
+    api = Api()
+    launched: list[str] = []
+
+    def mock_launch(target_path, *args, **kwargs):
+        on_exit = kwargs.get("on_exit_callback")
+        if on_exit:
+            on_exit(10, True)
+        launched.append(target_path)
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", mock_launch)
+
+    # 1. Fallback when requested exe_path points to missing file
+    res = api.launch_game(game_id=game_id, exe_path=str(missing_exe))
+    assert res["success"] is True
+    assert launched == [str(real_exe)]
+
+    # 2. Safely handles None game_id without crashing on_exit callback
+    launched.clear()
+    res_none = api.launch_game(game_id=None, exe_path=str(real_exe))
+    assert res_none["success"] is True
+    assert launched == [str(real_exe)]

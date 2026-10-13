@@ -92,3 +92,11 @@ def test_platform_capabilities_hide_linux_mutations_on_windows(monkeypatch, tmp_
     assert capabilities["rpgmaker_linux"] is False
     assert capabilities["launch_modes"] == ["auto"]
     assert "custom" in get_platform_capabilities("linux")["launch_modes"]
+
+
+def test_open_windows_system_target_platform_parameter():
+    from core.host_platform import open_windows_system_target
+
+    opened, error = open_windows_system_target("https://example.com", platform="linux")
+    assert opened is False
+    assert "Windows system associations are unavailable" in error

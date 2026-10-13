@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import atexit
 import signal
 import threading
 import time
@@ -15,7 +16,7 @@ from urllib.parse import quote
 from collections.abc import Callable
 from _thread import LockType
 from dataclasses import dataclass
-from typing import Protocol, TypedDict, cast, final
+from typing import IO, Protocol, TypedDict, cast, final
 
 from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
 from .host_platform import (
@@ -38,13 +39,21 @@ def is_elf(path: str) -> bool:
         return False
 
 
+def is_script(path: str) -> bool:
+    try:
+        with open(path, "rb") as file:
+            return file.read(2) == b"#!"
+    except OSError:
+        return False
+
+
 def ensure_executable(path: str) -> bool:
     """Add the exec bit that Windows-made archives drop; True if path is now executable.
 
     Ren'Py's .sh execs lib/*linux*/<binary>, which lost its bit in the same unzip.
     """
     targets = [path]
-    if path.endswith(".sh"):
+    if path.endswith(".sh") or is_script(path):
         lib_dir = os.path.join(os.path.dirname(path), "lib")
         try:
             for name in os.listdir(lib_dir):
@@ -244,12 +253,38 @@ class RunningGame:
     # None while the process is still starting (e.g. waiting on a UAC prompt).
     proc: subprocess.Popen[bytes] | _ElevatedProcess | None
     kill_info: tuple[str, dict[str, str]] | None
+    on_exit_callback: ExitCallback | None = None
+    last_saved_time: float = 0.0
+    log_file: IO[str] | None = None
 
 
 class Launcher:
     def __init__(self):
         self._running: dict[int, RunningGame] = {}
         self._running_lock: LockType = threading.Lock()
+        _ = atexit.register(self.shutdown)
+
+    def shutdown(self) -> None:
+        """Flush accumulated playtime and close logs for all running games upon exit."""
+        now = time.monotonic()
+        with self._running_lock:
+            running_entries = list(self._running.items())
+            self._running.clear()
+        for game_id, entry in running_entries:
+            if entry.log_file is not None:
+                try:
+                    entry.log_file.close()
+                except OSError:
+                    pass
+                entry.log_file = None
+            if entry.on_exit_callback is not None and entry.last_saved_time > 0:
+                delta = max(0, int(now - entry.last_saved_time))
+                try:
+                    _ = entry.on_exit_callback(delta, True)
+                except Exception as exc:
+                    print(
+                        f"Failed to record final playtime on shutdown for game {game_id}: {exc}"
+                    )
 
     def get_running_games(self) -> list[int]:
         with self._running_lock:
@@ -264,7 +299,7 @@ class Launcher:
             prefix_shared = any(
                 other.kill_info is not None and other.kill_info[1].get("WINEPREFIX") == prefix
                 for other_id, other in self._running.items()
-                if other_id != game_id
+                if other_id != game_id and prefix is not None
             )
         if running is None:
             return {"success": False, "code": "not_running", "error": "Game is not running"}
@@ -296,6 +331,9 @@ class Launcher:
                 try:
                     killpg(pid, signal.SIGTERM)
                 except ProcessLookupError:
+                    with self._running_lock:
+                        if self._running.get(game_id) is running:
+                            del self._running[game_id]
                     return {"success": True}
 
                 def force_stop() -> None:
@@ -534,7 +572,13 @@ class Launcher:
             log_file = None
             # Reserve the slot under the lock, but start the process outside it so a
             # UAC prompt doesn't block stop/get_running_games or other games' exits.
-            entry = RunningGame(None, kill_info)
+            entry = RunningGame(
+                None,
+                kill_info,
+                on_exit_callback=on_exit_callback,
+                last_saved_time=0.0,
+                log_file=None,
+            )
             with self._running_lock:
                 if game_id in self._running:
                     return {"success": False, "code": "already_running", "error": "Game is already running"}
@@ -577,11 +621,12 @@ class Launcher:
                         log_file.close()
                         log_file = None
                     game_proc = _ElevatedProcess(cmd, game_dir)
-                with self._running_lock:
-                    entry.proc = game_proc
-
                 # Do not count time spent waiting for UAC approval as playtime.
                 start_time = time.monotonic()
+                with self._running_lock:
+                    entry.proc = game_proc
+                    entry.last_saved_time = start_time
+                    entry.log_file = log_file
                 if is_wine_executable and run_ce:
                     # Spawn CE in a background thread after a delay
                     def inject_ce():
@@ -643,31 +688,61 @@ class Launcher:
 
                 def track_playtime_thread():
                     last_saved_time = start_time
+                    killpg = getattr(os, "killpg", None)
+                    pid = getattr(game_proc, "pid", None)
                     try:
-                        while game_proc.poll() is None:
-                            try:
-                                _ = game_proc.wait(timeout=60)
-                                # Process exited cleanly during wait
-                                break
-                            except subprocess.TimeoutExpired:
-                                pass
-                            now = time.monotonic()
-                            delta = int(now - last_saved_time)
-                            last_saved_time = now
-                            if on_exit_callback is not None:
+                        while True:
+                            if game_proc.poll() is None:
                                 try:
-                                    _ = on_exit_callback(delta, False)
-                                except Exception as exc:
-                                    print(f"Failed to record playtime: {exc}")
+                                    _ = game_proc.wait(timeout=60)
+                                    if not is_windows() and killpg is not None and pid is not None:
+                                        try:
+                                            killpg(pid, 0)
+                                        except (ProcessLookupError, PermissionError, OSError):
+                                            break
+                                    else:
+                                        break
+                                except subprocess.TimeoutExpired:
+                                    pass
+                            else:
+                                if not is_windows() and killpg is not None and pid is not None:
+                                    try:
+                                        killpg(pid, 0)
+                                        time.sleep(1)
+                                    except (ProcessLookupError, PermissionError, OSError):
+                                        break
+                                else:
+                                    break
+
+                            now = time.monotonic()
+                            if now - last_saved_time >= 60:
+                                delta = int(now - last_saved_time)
+                                last_saved_time = now
+                                with self._running_lock:
+                                    entry.last_saved_time = last_saved_time
+                                if on_exit_callback is not None:
+                                    try:
+                                        _ = on_exit_callback(delta, False)
+                                    except Exception as exc:
+                                        print(f"Failed to record playtime: {exc}")
                     finally:
                         with self._running_lock:
-                            current = self._running.get(game_id) if game_id is not None else None
-                            if game_id is not None and current is not None and current.proc is game_proc:
-                                del self._running[game_id]
+                            if game_id is not None:
+                                current = self._running.get(game_id)
+                                if current is not None and current.proc is game_proc:
+                                    del self._running[game_id]
+                                    should_report_exit = True
+                                else:
+                                    should_report_exit = False
+                            else:
+                                should_report_exit = True
                         if log_file is not None:
-                            log_file.close()
+                            try:
+                                log_file.close()
+                            except OSError:
+                                pass
                         now = time.monotonic()
-                        if on_exit_callback is not None:
+                        if should_report_exit and on_exit_callback is not None:
                             _ = on_exit_callback(max(0, int(now - last_saved_time)), True)
 
                 threading.Thread(target=track_playtime_thread, daemon=True).start()
@@ -754,6 +829,18 @@ class Launcher:
                 "APPIMAGE_SILENT_INSTALL",
                 "OWD",
                 "APPIMAGE_EXTRACT_AND_RUN",
+                "PYTHONHOME",
+                "PYTHONPATH",
+                "PYTHONEXECUTABLE",
+                "QT_QPA_PLATFORM",
+                "QT_QUICK_BACKEND",
+                "QSG_RHI_BACKEND",
+                "QT_OPENGL",
+                "QTWEBENGINE_CHROMIUM_FLAGS",
+                "QT_PLUGIN_PATH",
+                "QML2_IMPORT_PATH",
+                "WLIB_QPA_PLATFORM",
+                "PYWEBVIEW_GUI",
             ):
                 _ = clean_env.pop(var, None)
 
@@ -800,6 +887,10 @@ class Launcher:
                 }
 
             runner_game_dir = path_module.dirname(path_module.abspath(exe_path))
+            if path_module.basename(runner_game_dir).lower() == "www":
+                parent_dir = path_module.dirname(runner_game_dir)
+                if os.path.isfile(path_module.join(parent_dir, "package.json")) or os.path.isdir(runner_game_dir):
+                    runner_game_dir = parent_dir
             base_cmd = [runner_status["path"], "--gamepath", runner_game_dir]
 
             command = build_command(base_cmd, args)
@@ -828,13 +919,21 @@ class Launcher:
                     os.environ.copy(), strip_wine_env=strip_wine_env
                 )
 
-                _ = subprocess.Popen(
+                proc = subprocess.Popen(
                     command,
                     env=clean_env,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     cwd=path_module.dirname(abs_path),
                 )
+
+                def reap_opener() -> None:
+                    try:
+                        _ = proc.wait(timeout=10)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+
+                threading.Thread(target=reap_opener, daemon=True).start()
                 return {"success": True}
             except Exception as e:
                 print(f"Error launching HTML game: {e}")
@@ -845,7 +944,7 @@ class Launcher:
 
             # Unzipping often drops the exec bit; Wine can't run these either.
             if (
-                (ext == ".sh" or is_elf(exe_path))
+                (ext == ".sh" or is_elf(exe_path) or is_script(exe_path))
                 and not os.access(exe_path, os.X_OK)
                 and not ensure_executable(exe_path)
             ):
@@ -876,15 +975,15 @@ class Launcher:
             if ext in [".html", ".htm"]:
                 return execute_html_game(strip_wine_env=strict_native)
 
-            # 4. Native Linux Binary (Executable without .exe/.bat extension)
+            # 4. Native Linux Binary (Executable without .exe/.bat/.cmd extension)
             # Some native Linux games like Godot have no extension or .x86_64.
-            if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat"]:
+            if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat", ".cmd"]:
                 command = build_command([exe_path], args)
                 print(f"Executing Linux binary natively: {' '.join(command)}")
                 return execute_process(command, process_env)
 
             if strict_native:
-                if ext in [".exe", ".bat"]:
+                if ext in [".exe", ".bat", ".cmd"]:
                     return {
                         "success": False,
                         "error": (
@@ -959,13 +1058,20 @@ class Launcher:
 
         # 5. Fallback to Wine / Proton execution for Windows executables
         env = without_packaged_runtime_env(env)
+        env = without_wine_proton_env(env)
+        env.update(user_env)
         # Expand "~" like the dependency/RTP installers so both use the same prefix.
         proton_path = path_module.expanduser(
             (proton_version or get_setting("proton_path") or "").strip()
         )
+        if proton_path and path_module.sep in proton_path:
+            proton_path = path_module.abspath(proton_path)
+
         wine_prefix = path_module.expanduser(
             (custom_prefix or get_setting("wine_prefix_path") or "").strip()
         )
+        if wine_prefix:
+            wine_prefix = path_module.abspath(wine_prefix)
 
         if not wine_prefix:
             # We must supply a prefix for Proton to function at all.
@@ -1016,6 +1122,8 @@ class Launcher:
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/tmp/wlib"
             env["STEAM_COMPAT_INSTALL_PATH"] = game_dir
             _ = env.setdefault("UMU_ID", "wlib")
+            if "WINEPREFIX" not in user_env:
+                _ = env.pop("WINEPREFIX", None)
         else:
             # If the selected prefix is actually a Proton prefix (contains pfx subfolder),
             # standard Wine must point directly to the pfx subfolder
@@ -1023,6 +1131,14 @@ class Launcher:
                 wine_prefix = path_module.join(wine_prefix, "pfx")
 
             env["WINEPREFIX"] = wine_prefix
+            for var in (
+                "STEAM_COMPAT_DATA_PATH",
+                "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+                "STEAM_COMPAT_INSTALL_PATH",
+                "UMU_ID",
+            ):
+                if var not in user_env:
+                    _ = env.pop(var, None)
 
         if enable_logging:
             env["PROTON_LOG"] = "1"
