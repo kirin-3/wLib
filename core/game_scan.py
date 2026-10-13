@@ -28,8 +28,9 @@ _VERSION_SUFFIX_RE = re.compile(
     re.I,
 )
 _SKIPPED_EXECUTABLES_RE = re.compile(
-    r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|dxsetup|"
-    + r"dxwebsetup|vc_?redist\S*|python\w*|zsync\w*|.*-32)\.exe$",
+    r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|crashreport\w*|"
+    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*)(?:\.exe)?$|"
+    + r"^.*-32\.exe$",
     re.I,
 )
 _LAUNCHER_EXTENSIONS = (
@@ -102,19 +103,27 @@ def inspect_game_path(exe_path: str) -> GameGuess:
 def find_launcher(game_dir: str, depth: int = 2) -> str:
     """Best launch file in game_dir, looking one folder deeper when it holds none."""
     try:
-        entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
+        entries = list(os.scandir(game_dir))
     except OSError:
         return ""
-    files = [
-        entry.name
-        for entry in entries
-        if entry.is_file()
-        and (
-            entry.name.lower().endswith(_LAUNCHER_EXTENSIONS)
-            or (not os.path.splitext(entry.name)[1] and is_elf(entry.path))
-        )
-        and not _SKIPPED_EXECUTABLES_RE.match(entry.name)
-    ]
+    # Collect candidate launcher files without sorting entire directory upfront
+    files: list[str] = []
+    for entry in entries:
+        try:
+            if not entry.is_file():
+                continue
+            name = entry.name
+            lower = name.lower()
+            if _SKIPPED_EXECUTABLES_RE.match(name):
+                continue
+            if lower.endswith(_LAUNCHER_EXTENSIONS):
+                files.append(name)
+            elif not os.path.splitext(name)[1] and is_elf(entry.path):
+                files.append(name)
+        except OSError:
+            continue
+    files.sort(key=str.lower)
+
     # Native Ren'Py/NW.js scripts run without Wine on Linux; elsewhere prefer the .exe.
     native = [
         name for name in files
@@ -122,20 +131,55 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
         or is_elf(os.path.join(game_dir, name))
     ]
     if is_linux() and native:
-        script = next((name for name in native if name.lower().endswith(".sh")), native[0])
-        return os.path.join(game_dir, script)
+        folder_stem = os.path.basename(game_dir).lower()
+        title_stem, _ = guess_title_and_version(folder_stem)
+        sh_files = [n for n in native if n.lower().endswith(".sh")]
+        if sh_files:
+            clean_title = re.sub(r"[^a-z0-9]", "", title_stem.lower())
+            preferred_sh = next(
+                (
+                    n
+                    for n in sh_files
+                    if (clean_title and clean_title in re.sub(r"[^a-z0-9]", "", n.lower()))
+                    or n.lower().startswith(("game", "start", "run"))
+                ),
+                sh_files[0],
+            )
+            return os.path.join(game_dir, preferred_sh)
+        return os.path.join(game_dir, native[0])
+
     preferred = (".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64")
+    folder_stem = os.path.basename(game_dir).lower()
+    title_stem, _ = guess_title_and_version(folder_stem)
+    clean_title = re.sub(r"[^a-z0-9]", "", title_stem.lower())
+
     for ext in (*preferred, ".jar"):
         matches = [name for name in files if name.lower().endswith(ext)]
         if matches:
-            return os.path.join(game_dir, matches[0])
+            best = matches[0]
+            # Prioritize executable whose name matches folder/title or standard game launchers over helper tools
+            for m in matches:
+                stem = os.path.splitext(m)[0].lower()
+                clean_stem = re.sub(r"[^a-z0-9]", "", stem)
+                if clean_title and (clean_stem == clean_title or clean_title in clean_stem):
+                    best = m
+                    break
+                if stem in ("game", "start", "launcher", "main"):
+                    best = m
+                    break
+            return os.path.join(game_dir, best)
     for name in ("index.html", "index.htm"):
         if name in (f.lower() for f in files):
             return os.path.join(game_dir, next(f for f in files if f.lower() == name))
     if files:
         return os.path.join(game_dir, files[0])
     if depth > 1:
-        subdirs = [entry.path for entry in entries if entry.is_dir()]
+        junk_dirs = {"__macosx", ".git", ".wlib-staging-"}
+        subdirs = [
+            entry.path
+            for entry in entries
+            if entry.is_dir() and entry.name.lower() not in junk_dirs
+        ]
         if len(subdirs) == 1:
             return find_launcher(subdirs[0], depth - 1)
     return ""

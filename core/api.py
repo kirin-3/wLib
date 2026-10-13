@@ -318,7 +318,9 @@ class Api:
             "stage": "",
             "done": 0,
             "total": 0,
+            "error": "",
         }
+        self._archive_install_cancelled: bool = False
 
     def _load_webview_module(self) -> WebviewModule | None:
         import importlib
@@ -3628,6 +3630,22 @@ class Api:
                 "success": False,
                 "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
             }
+        if archive_format(archive_path) == "zip":
+            import zipfile
+
+            try:
+                with zipfile.ZipFile(archive_path, "r") as zf:
+                    for info in zf.infolist():
+                        if info.flag_bits & 0x1:
+                            return {
+                                "success": False,
+                                "error": "Archive is password-protected or encrypted.",
+                            }
+            except (zipfile.BadZipFile, OSError) as exc:
+                return {
+                    "success": False,
+                    "error": f"Archive is corrupt or incomplete: {exc}",
+                }
 
         _tool, tool_error = detect_archive_tool(archive_path)
 
@@ -3701,7 +3719,13 @@ class Api:
             return dict(self._archive_install_status)
 
     def _set_archive_install_status(
-        self, *, running: bool, stage: str = "", done: int = 0, total: int = 0
+        self,
+        *,
+        running: bool,
+        stage: str = "",
+        done: int = 0,
+        total: int = 0,
+        error: str = "",
     ) -> None:
         with self._status_lock:
             self._archive_install_status = {
@@ -3709,7 +3733,25 @@ class Api:
                 "stage": stage,
                 "done": done,
                 "total": total,
+                "error": error,
             }
+
+    def cancel_archive_install(self) -> dict[str, object]:
+        """Cancel an in-progress archive installation."""
+        with self._status_lock:
+            self._archive_install_cancelled = True
+            if not self._archive_install_status.get("running"):
+                return {"success": True, "cancelled": False}
+            done_val = self._archive_install_status.get("done")
+            total_val = self._archive_install_status.get("total")
+            self._archive_install_status = {
+                "running": False,
+                "stage": "cancelled",
+                "done": done_val if isinstance(done_val, int) else 0,
+                "total": total_val if isinstance(total_val, int) else 0,
+                "error": "Cancelled by user",
+            }
+        return {"success": True, "cancelled": True}
 
     def install_archive(
         self, options: Mapping[str, object] | None = None
@@ -3801,11 +3843,13 @@ class Api:
                     "error": "Another archive install is running. Wait for it to finish.",
                     "error_code": "install_running",
                 }
+            self._archive_install_cancelled = False
             self._archive_install_status = {
                 "running": True,
                 "stage": "starting",
                 "done": 0,
                 "total": 0,
+                "error": "",
             }
 
         def _on_stage(stage: str) -> None:
@@ -3824,20 +3868,39 @@ class Api:
                 remove_old=remove_old,
                 delete_archive=delete_archive,
                 progress_cb=_on_stage,
+                cancel_cb=lambda: self._archive_install_cancelled,
             )
         except ArchiveInstallError as exc:
-            self._set_archive_install_status(running=False, stage="failed")
+            self._set_archive_install_status(
+                running=False, stage="failed", error=str(exc)
+            )
             return {"success": False, "error": str(exc)}
         except sqlite3.IntegrityError:
-            self._set_archive_install_status(running=False, stage="failed")
+            self._set_archive_install_status(
+                running=False,
+                stage="failed",
+                error="A game with this URL is already in your library",
+            )
             return {
                 "success": False,
                 "error": "A game with this URL is already in your library",
                 "error_code": "duplicate_url",
             }
         except Exception as exc:
-            self._set_archive_install_status(running=False, stage="failed")
+            self._set_archive_install_status(
+                running=False, stage="failed", error=str(exc)
+            )
             return {"success": False, "error": str(exc)}
+
+        if self._archive_install_cancelled:
+            self._set_archive_install_status(
+                running=False, stage="cancelled", error="Cancelled by user"
+            )
+            return {
+                "success": False,
+                "error": "Installation cancelled by user.",
+                "cancelled": True,
+            }
 
         self._set_archive_install_status(running=False, stage="done")
         installed_id = result.get("game_id")

@@ -77,3 +77,50 @@ def test_scan_games_folder_detects_launchers_and_engines(tmp_path, monkeypatch):
     add_game("Eternum", str(renpy / "Eternum.exe"))
     scanned = {game["title"]: game["in_library"] for game in Api().scan_games_folder(str(tmp_path))["games"]}
     assert scanned == {"Eternum": True, "Quest": False, "Brew": False}
+
+
+def test_scan_skips_crash_reporters_and_prereqs(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "UnrealGame"
+    folder.mkdir()
+    (folder / "CrashReportClient.exe").touch()
+    (folder / "UE4PrereqSetup_x64.exe").touch()
+    (folder / "UnityCrashHandler64.exe").touch()
+    (folder / "notification_helper.exe").touch()
+    (folder / "python.exe").touch()
+    (folder / "UnrealGame.exe").touch()
+
+    launcher = find_launcher(str(folder))
+    assert launcher == str(folder / "UnrealGame.exe")
+
+
+def test_scan_prefers_game_over_config(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "MyAdventure"
+    folder.mkdir()
+    (folder / "Config.exe").touch()
+    (folder / "Setup.exe").touch()
+    (folder / "Game.exe").touch()
+
+    launcher = find_launcher(str(folder))
+    assert launcher == str(folder / "Game.exe")
+
+
+def test_scan_ignores_macosx_folder(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "MacGame"
+    folder.mkdir()
+    mac = folder / "__MACOSX"
+    mac.mkdir()
+    (mac / "launcher.exe").touch()
+
+    sub = folder / "InnerGame"
+    sub.mkdir()
+    (sub / "InnerGame.exe").touch()
+
+    launcher = find_launcher(str(folder))
+    assert launcher == str(sub / "InnerGame.exe")
+

@@ -255,6 +255,7 @@ export interface ArchiveInstallStatus {
   stage: string;
   done: number;
   total: number;
+  error?: string;
 }
 
 export interface DownloadOffer {
@@ -1227,6 +1228,10 @@ class ApiService {
     return this.invoke<ArchiveInstallStatus>("get_archive_install_status");
   }
 
+  async cancelArchiveInstall(): Promise<ApiBasicResponse & { cancelled?: boolean }> {
+    return this.invoke<ApiBasicResponse & { cancelled?: boolean }>("cancel_archive_install");
+  }
+
   async findDownloadOffers(): Promise<DownloadOffersResponse> {
     return this.invoke<DownloadOffersResponse>("find_download_offers");
   }
@@ -1783,6 +1788,10 @@ class ApiService {
       }
       case "get_archive_install_status":
         return { ...this._mockArchiveStatus };
+      case "cancel_archive_install": {
+        this._mockArchiveStatus = { running: false, stage: "cancelled", done: 0, total: 0 };
+        return { success: true, mock: true, cancelled: true };
+      }
       case "find_download_offers":
         return { success: true, mock: true, offers: [] };
       case "dismiss_download_offer":
