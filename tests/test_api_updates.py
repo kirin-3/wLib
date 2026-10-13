@@ -2863,3 +2863,73 @@ def test_library_downloads_settings_round_trip(tmp_path):
     assert settings["download_detection_enabled"] is False
     downloads.mkdir()
     assert api.get_settings()["downloads_folder_exists"] is True
+
+
+def test_check_for_updates_matches_unnormalized_and_thread_id_urls(monkeypatch):
+    api = Api()
+    add_game(
+        title="Demo",
+        exe_path="/tmp/demo.exe",
+        f95_url="https://f95zone.to/threads/demo-game.123/",
+        version="1.0",
+    )
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Demo Game [v1.0]",
+            "version": "1.0",
+        },
+    )
+
+    result_no_slash = api.check_for_updates("https://f95zone.to/threads/demo-game.123")
+    assert result_no_slash["success"] is True
+    assert result_no_slash["has_update"] is False
+    assert get_all_games()[0]["latest_version"] == "1.0"
+
+    result_id_only = api.check_for_updates("https://f95zone.to/threads/123/")
+    assert result_id_only["success"] is True
+    assert result_id_only["has_update"] is False
+
+
+@pytest.mark.parametrize(
+    ("current", "remote", "expected"),
+    [
+        ("0.5a", "0.5", False),
+        ("0.5", "0.5a", True),
+        ("0.5a", "0.5b", True),
+        ("0.5b", "0.5a", False),
+        ("v0.5", "0.5", False),
+        ("1.1", "1.0", False),
+        ("1.0", "1.1", True),
+        ("Ep. 3", "Ep 3", False),
+        ("Ep. 3", "Episode 3", False),
+        ("Ep. 3", "Ep. 4", True),
+        ("Ep. 4", "Ep. 3", False),
+        ("Ch. 2", "Chapter 2", False),
+        ("2026-10-08", "2026.10.08", False),
+        ("2026-10-08", "2026/10/08", False),
+        ("2026-10-08", "2026-10-01", False),
+        ("2026-10-08", "2026-10-15", True),
+        ("Final", "Final", False),
+        ("Final", "0.5", False),
+        ("0.5", "Final", True),
+        ("1.0", "Unknown", False),
+        ("1.0", "", False),
+        ("", "1.0", True),
+    ],
+)
+def test_has_update_version_comparisons(current, remote, expected):
+    api = Api()
+    assert api._has_update(current, remote) is expected
+
+
+def test_build_scraper_error_payload_rate_limited():
+    payload = Api()._build_scraper_error_payload(
+        {"code": "rate_limited", "error": "Too Many Requests"}, "Fallback"
+    )
+    assert payload["error_code"] == "rate_limited"
+    assert "rate limit reached" in str(payload["error"]).lower()
+

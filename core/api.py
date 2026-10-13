@@ -16,7 +16,7 @@ from core.database import (
     init_db,
     normalize_launch_mode,
 )
-from core.f95zone import NON_ENGINE_PREFIXES
+from core.f95zone import NON_ENGINE_PREFIXES, thread_urls_match
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.host_platform import (
     PlatformCapabilities,
@@ -41,7 +41,22 @@ if TYPE_CHECKING:
 def normalize_version(version: object) -> str:
     """Treat v0.8, 0.8 and "V 0.8 " as equal; mirrors normalizeVersion() in the UI."""
     value = "".join(str(version or "").split()).lower()
-    return re.sub(r"^v(?=\d)", "", value)
+    value = re.sub(r"^(?:ver(?:sion)?\.?|v\.?)(?=\d)", "", value)
+    value = re.sub(r"^(?:episode|ep)\.?(?=\d)", "ep.", value)
+    value = re.sub(r"^(?:chapter|ch)\.?(?=\d)", "ch.", value)
+    return re.sub(r"^(\d{4})[./](\d{1,2})[./](\d{1,2})$", r"\1-\2-\3", value)
+
+
+def _parse_version_tokens(v: str) -> list[tuple[int, str]] | None:
+    matches = cast(list[tuple[str, str]], re.findall(r"(\d+)([a-zA-Z]*)", v))
+    if not matches:
+        return None
+    tokens: list[tuple[int, str]] = [
+        (int(num), suffix.lower()) for num, suffix in matches
+    ]
+    while len(tokens) > 1 and tokens[-1] == (0, ""):
+        _ = tokens.pop()
+    return tokens
 
 
 class ProgressStatus(TypedDict):
@@ -1860,10 +1875,44 @@ class Api:
     # Scraper API
     # ==========================
     def _has_update(self, current_version: object, remote_version: object) -> bool:
-        # Same rule as hasAvailableUpdate() in ui/src/utils/libraryGames.ts: an
-        # unknown installed version counts as an update.
+        if not self._is_actionable_remote_version(remote_version):
+            return False
         remote = normalize_version(remote_version)
-        return bool(remote) and normalize_version(current_version) != remote
+        if not remote:
+            return False
+        current = normalize_version(current_version)
+        if not current:
+            return True
+        if current == remote:
+            return False
+        if current == "final":
+            return False
+        if remote == "final":
+            return True
+
+        curr_ep = current.startswith("ep.")
+        rem_ep = remote.startswith("ep.")
+        if curr_ep != rem_ep:
+            return True
+        curr_ch = current.startswith("ch.")
+        rem_ch = remote.startswith("ch.")
+        if curr_ch != rem_ch:
+            return True
+
+        curr_tokens = _parse_version_tokens(current)
+        rem_tokens = _parse_version_tokens(remote)
+        if curr_tokens is not None and rem_tokens is not None:
+            for c, r in zip(curr_tokens, rem_tokens):
+                if c < r:
+                    return True
+                if c > r:
+                    return False
+            if len(curr_tokens) < len(rem_tokens):
+                return True
+            if len(curr_tokens) > len(rem_tokens):
+                return False
+            return current != remote
+        return current != remote
 
     def _is_actionable_remote_version(self, version: object | None) -> bool:
         if version is None:
@@ -1901,6 +1950,10 @@ class Api:
         elif code == "login_required":
             result["error"] = (
                 f"{message}. This thread is unavailable to guest HTTP requests."
+            )
+        elif code == "rate_limited":
+            result["error"] = (
+                f"{message}. F95Zone rate limit reached; try again later."
             )
         return result
 
@@ -1954,11 +2007,21 @@ class Api:
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            normalized_url = normalize_thread_url(url)
             _ = cursor.execute(
-                "SELECT id, engine, tags, cover_image_path FROM games WHERE f95_url = ?",
-                (url.strip(),),
+                "SELECT id, engine, tags, cover_image_path, f95_url FROM games WHERE f95_url = ? OR (f95_url = ? AND ? != '')",
+                (url.strip(), normalized_url, normalized_url),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
+            if not games:
+                _ = cursor.execute(
+                    "SELECT id, engine, tags, cover_image_path, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+                )
+                games = [
+                    row
+                    for row in cast(list[sqlite3.Row], cursor.fetchall())
+                    if thread_urls_match(cast(object, row["f95_url"]), url)
+                ]
 
             for game in games:
                 fields: dict[str, str] = {}
@@ -2023,10 +2086,19 @@ class Api:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed FROM games WHERE f95_url = ?",
-                (normalized_url,),
+                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed, f95_url FROM games WHERE f95_url = ? OR (f95_url = ? AND ? != '')",
+                (url.strip(), normalized_url, normalized_url),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
+            if not games:
+                _ = cursor.execute(
+                    "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+                )
+                games = [
+                    row
+                    for row in cast(list[sqlite3.Row], cursor.fetchall())
+                    if thread_urls_match(cast(object, row["f95_url"]), url)
+                ]
 
             for game in games:
                 game_id = cast(object, game["id"])
@@ -2114,23 +2186,44 @@ class Api:
             conn: sqlite3.Connection | None = None
             try:
                 conn = get_connection_fn()
+                conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
+                normalized_url = normalize_thread_url(url)
                 _ = cursor.execute(
-                    "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                    (str(remote_version).strip(), url),
+                    "SELECT id, version, exe_path, f95_url FROM games WHERE f95_url = ? OR (f95_url = ? AND ? != '')",
+                    (url, normalized_url, normalized_url),
                 )
-                # Check if it differs from current version
-                _ = cursor.execute(
-                    "SELECT id, version, exe_path FROM games WHERE f95_url = ?", (url,)
-                )
-                row = cast(object, cursor.fetchone())
+                matching_games = cast(list[sqlite3.Row], cursor.fetchall())
+                if not matching_games:
+                    _ = cursor.execute(
+                        "SELECT id, version, exe_path, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+                    )
+                    matching_games = [
+                        row
+                        for row in cast(list[sqlite3.Row], cursor.fetchall())
+                        if thread_urls_match(cast(object, row["f95_url"]), url)
+                    ]
+
                 current_version = ""
                 wishlisted = False
                 newly_finished = False
-                if isinstance(row, Sequence) and len(row) >= 3:
-                    current_version = str(row[1] or "").strip()
-                    wishlisted = not str(row[2] or "").strip()
-                    newly_finished = wishlisted and row[0] in newly_finished_ids
+                for row in matching_games:
+                    game_id = cast(object, row["id"])
+                    if isinstance(game_id, int):
+                        _ = cursor.execute(
+                            "UPDATE games SET latest_version = ? WHERE id = ?",
+                            (str(remote_version).strip(), game_id),
+                        )
+                if matching_games:
+                    first_row = matching_games[0]
+                    first_id = cast(object, first_row["id"])
+                    current_version = str(cast(object, first_row["version"]) or "").strip()
+                    wishlisted = not str(cast(object, first_row["exe_path"]) or "").strip()
+                    newly_finished = (
+                        wishlisted
+                        and isinstance(first_id, int)
+                        and first_id in newly_finished_ids
+                    )
                 conn.commit()
             finally:
                 if conn is not None:
@@ -2286,8 +2379,8 @@ class Api:
                             conn = get_connection_fn()
                             cursor = conn.cursor()
                             _ = cursor.execute(
-                                "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                                (remote_version, url),
+                                "UPDATE games SET latest_version = ? WHERE id = ?",
+                                (remote_version, game["id"]),
                             )
                             current_version = current_versions_by_url.get(url, "")
                             conn.commit()

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core import scraper as scraper_module
+from core.f95zone import normalize_thread_url
 from core.scraper import Scraper
 
 
@@ -444,3 +445,92 @@ def test_extract_version_from_title_real_f95_formats():
         scraper._extract_version_from_title("RPG Game [Ch.12 v0.3] [RPG Dev]")
         == "Ch.12 v0.3"
     )
+
+
+def test_normalize_thread_url_http_to_https():
+    assert (
+        normalize_thread_url("http://f95zone.to/threads/demo.123/")
+        == "https://f95zone.to/threads/demo.123/"
+    )
+    assert (
+        normalize_thread_url("http://www.f95zone.to/threads/demo.123")
+        == "https://f95zone.to/threads/demo.123/"
+    )
+
+
+def test_extract_version_multiple_leading_brackets_and_dates():
+    scraper = Scraper()
+    assert (
+        scraper._extract_version_from_title(
+            "[Completed] [VN] Game Title [Final] [Dev]"
+        )
+        == "Final"
+    )
+    assert (
+        scraper._extract_version_from_title(
+            "[Completed] [Ren'Py] Game Title [v1.0] [Dev]"
+        )
+        == "1.0"
+    )
+    assert (
+        scraper._extract_version_from_title("Game Title [2026-10-08]")
+        == "2026-10-08"
+    )
+    assert (
+        scraper._extract_version_from_title("Game Title [2026-10-08] [Dev]")
+        == "2026-10-08"
+    )
+
+
+def test_extract_page_with_span_label_link(thread_html):
+    html = thread_html.replace(
+        '<a class="labelLink"><span>Ren\'Py</span></a>',
+        '<span class="labelLink"><span>Ren\'Py</span></span>',
+    )
+    result = Scraper()._extract_page(html)
+    assert result["engine"] == "Ren'Py"
+    assert result["title"] == "Example & Game [v1.10] [Dev]"
+
+
+def test_classify_page_issue_rate_limited():
+    issue = Scraper()._classify_page_issue(429, "", "")
+    assert issue is not None and issue["code"] == "rate_limited"
+
+    issue_html = Scraper()._classify_page_issue(200, "Error", "Too many requests. Please wait.")
+    assert issue_html is not None and issue_html["code"] == "rate_limited"
+
+
+def test_check_chunk_errors_do_not_fallback_to_page(monkeypatch):
+    scraper = Scraper()
+    urls = [
+        "https://f95zone.to/threads/1/",
+        "https://f95zone.to/threads/2/",
+    ]
+
+    # Timeout error
+    timeout_mock = MagicMock(side_effect=scraper_module._F95RequestError("navigation_timeout", "timeout"))
+    monkeypatch.setattr(scraper_module, "_f95_get", timeout_mock)
+    results = scraper.check_versions(urls)
+    assert timeout_mock.call_count == 1
+    assert all(r["code"] == "navigation_timeout" for r in results.values())
+
+    # Rate limited 429
+    rate_mock = MagicMock(return_value=(429, "too many requests"))
+    monkeypatch.setattr(scraper_module, "_f95_get", rate_mock)
+    results = scraper.check_versions(urls)
+    assert rate_mock.call_count == 1
+    assert all(r["code"] == "rate_limited" for r in results.values())
+
+    # Server error 503
+    server_err_mock = MagicMock(return_value=(503, "Service Unavailable"))
+    monkeypatch.setattr(scraper_module, "_f95_get", server_err_mock)
+    results = scraper.check_versions(urls)
+    assert server_err_mock.call_count == 1
+    assert all(r["code"] == "scraper_error" for r in results.values())
+
+    # Login redirect
+    login_mock = MagicMock(return_value=(200, "<title>Log in | F95zone</title>"))
+    monkeypatch.setattr(scraper_module, "_f95_get", login_mock)
+    results = scraper.check_versions(urls)
+    assert login_mock.call_count == 1
+    assert all(r["code"] == "login_required" for r in results.values())

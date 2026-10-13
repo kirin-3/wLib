@@ -41,6 +41,7 @@ _CHAPTER_VERSION_RE = re.compile(
     re.I,
 )
 _BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
+_DATE_VERSION_RE = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$")
 
 # ponytail: global lock serializes all F95 traffic; use a per-host token bucket
 # if we ever add another host.
@@ -130,7 +131,7 @@ class Scraper:
         # Keep these rules aligned with extractGameInfo() in extension/content.js.
         if not isinstance(title, str):
             return "Unknown"
-        title = re.sub(r"^\[[^\]]+\]\s*", "", title.strip())
+        title = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", title.strip())
         brackets = cast(list[str], re.findall(r"\[([^\]]*)\]", title))
         for bracket in brackets:
             inner = bracket.strip()
@@ -138,6 +139,8 @@ class Scraper:
             if match:
                 return match.group(1).strip()
             if _CHAPTER_VERSION_RE.match(inner):
+                return inner
+            if _DATE_VERSION_RE.match(inner):
                 return inner
         match = _BARE_VERSION_RE.search(title)
         if match:
@@ -208,6 +211,18 @@ class Scraper:
             html.lower(),
         )
         combined = f"{page_title}\n{page_html}"
+        if status == 429 or any(
+            marker in combined
+            for marker in (
+                "too many requests",
+                "rate limit",
+                "rate-limit",
+            )
+        ):
+            return {
+                "code": "rate_limited",
+                "error": "Rate limit reached while contacting F95Zone",
+            }
         if status == 404 or any(
             marker in combined
             for marker in (
@@ -255,7 +270,11 @@ class Scraper:
 
     def _extract_page(self, html: str) -> ScraperResult:
         h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
-        labels = [_text(content) for _, content in _blocks(h1, "a", "labelLink")]
+        labels = [
+            _text(content)
+            for tag in ("a", "span")
+            for _, content in _blocks(h1, tag, "labelLink")
+        ]
         appended_labels = [_text(content) for _, content in _blocks(h1, "span", "label-append")]
         engine = next(
             (label for label in labels if label.casefold() not in NON_ENGINE_PREFIXES),
@@ -265,7 +284,7 @@ class Scraper:
             label.casefold() == "completed" for label in (*labels, *appended_labels)
         )
         clean_h1 = re.sub(
-            r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
+            r'<(?:a|span)\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</(?:a|span)>',
             "",
             h1,
             flags=re.I | re.S,
@@ -350,9 +369,16 @@ class Scraper:
                 f"https://f95zone.to/sam/checker.php?threads={','.join(ids)}"
             )
             issue = self._classify_page_issue(status, self._page_title(text), text)
-            if issue and issue["code"] == "blocked":
+            if issue:
                 return {
                     thread_id: self._error(issue["code"], issue["error"])
+                    for thread_id in ids
+                }
+            if status >= 500:
+                return {
+                    thread_id: self._error(
+                        "scraper_error", f"F95Zone returned HTTP {status}"
+                    )
                     for thread_id in ids
                 }
             if status == 200:
@@ -361,7 +387,12 @@ class Scraper:
                     data = cast(dict[str, object], payload)
                     if data.get("status") == "ok" and isinstance(data.get("msg"), dict):
                         versions = cast(dict[str, object], data["msg"])
-        except (_F95RequestError, ValueError):
+        except _F95RequestError as exc:
+            return {
+                thread_id: self._error(exc.code, str(exc))
+                for thread_id in ids
+            }
+        except (ValueError, Exception):
             pass
         results: dict[str, ScraperResult | None] = {}
         for thread_id in ids:

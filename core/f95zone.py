@@ -62,6 +62,8 @@ def normalize_thread_url(url: object) -> str:
     netloc = parsed.netloc.lower()
     if netloc == "www.f95zone.to":
         netloc = "f95zone.to"
+    if netloc in F95_HOSTS or netloc == "f95zone.to":
+        scheme = "https"
 
     path = _normalize_path(parsed.path)
     match = THREAD_PATH_RE.match(path)
