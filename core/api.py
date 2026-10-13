@@ -2693,8 +2693,8 @@ class Api:
 
     def launch_game(
         self,
-        game_id: int,
-        exe_path: str,
+        game_id: int | None = None,
+        exe_path: str = "",
         command_line_args: str = "",
         run_japanese_locale: bool = False,
         run_wayland: bool = False,
@@ -2706,11 +2706,35 @@ class Api:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
+        target_path = (exe_path or "").strip()
+        if game_id is not None and not (target_path and os.path.exists(target_path)):
+            # Missing/empty path: fall back to the default exe, then other targets.
+            from core.database import get_all_games, list_game_launch_targets
+
+            canonical_path = next(
+                (
+                    str(g.get("exe_path") or "").strip()
+                    for g in get_all_games()
+                    if g.get("id") == game_id
+                ),
+                "",
+            )
+            candidates = [canonical_path] + [
+                str(t.get("exe_path") or "").strip()
+                for t in list_game_launch_targets(game_id)
+            ]
+            target_path = next(
+                (c for c in candidates if c and os.path.exists(c)),
+                target_path or canonical_path,
+            )
+
         print(
-            f"Launching {exe_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
+            f"Launching {target_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
         )
 
         def on_exit(delta: int, is_final: bool = True) -> None:
+            if game_id is None:
+                return
             try:
                 from core.database import update_playtime
 
@@ -2719,7 +2743,8 @@ class Api:
                 )
 
                 update_playtime_fn(game_id, delta)
-                if self.window:
+                # evaluate_js can block forever once the window is gone at exit.
+                if self.window and not self.launcher.shutting_down:
                     safe_game_id = int(game_id)
                     safe_delta = max(int(delta), 0)
                     self.window.evaluate_js(
@@ -2729,7 +2754,7 @@ class Api:
                 print(f"Failed to update playtime for game {game_id}: {e}")
 
         result = self.launcher.launch(
-            exe_path,
+            target_path,
             command_line_args,
             run_japanese_locale,
             run_wayland,

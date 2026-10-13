@@ -164,8 +164,10 @@ def unsupported_on_host(feature: str) -> dict[str, object]:
     }
 
 
-def open_windows_system_target(target: str) -> tuple[bool, str]:
-    if not is_windows():
+def open_windows_system_target(
+    target: str, *, platform: str | None = None
+) -> tuple[bool, str]:
+    if not is_windows(platform):
         return False, "Windows system associations are unavailable on this host."
 
     startfile = getattr(os, "startfile", None)
