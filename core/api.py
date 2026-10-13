@@ -1297,6 +1297,8 @@ class Api:
                 return {"ok": False, "reason": "Command not found on PATH"}
             if os.path.isfile(expanded):
                 return {"ok": True, "reason": ""}
+            if os.path.isdir(expanded):
+                return {"ok": False, "reason": "Expected a file"}
             return {"ok": False, "reason": "File not found"}
 
         if kind == "file":
@@ -1314,7 +1316,7 @@ class Api:
             return {"ok": False, "reason": "Folder not found"}
 
         # parent: the file may not exist yet, but its folder must.
-        if os.path.isdir(expanded):
+        if os.path.isdir(expanded) or expanded.endswith(("/", "\\")):
             return {"ok": False, "reason": "Expected a file"}
         parent = os.path.dirname(expanded) or "."
         if os.path.isdir(parent):
@@ -1324,6 +1326,7 @@ class Api:
     def inspect_game_path(self, exe_path: str) -> dict[str, object]:
         from core.game_scan import inspect_game_path
 
+        exe_path = os.path.expanduser(str(exe_path or "").strip())
         if not exe_path or not os.path.isfile(exe_path):
             return {"success": False, "error": "File not found"}
         return {"success": True, **inspect_game_path(exe_path)}
@@ -1332,6 +1335,7 @@ class Api:
         from core.database import get_all_games
         from core.game_scan import scan_games_folder
 
+        folder = os.path.expanduser(str(folder or "").strip())
         if not folder or not os.path.isdir(folder):
             return {"success": False, "error": "Folder not found"}
         known = {
@@ -1597,7 +1601,7 @@ class Api:
 
     def add_game(
         self,
-        title: str,
+        title: object,
         exe_path: str,
         f95_url: str = "",
         version: str = "",
@@ -1617,6 +1621,14 @@ class Api:
         import sqlite3
 
         from core.database import add_game
+
+        if not isinstance(title, str) or not title.strip():
+            return {
+                "success": False,
+                "error": "Game title is required",
+                "error_code": "invalid_title",
+            }
+        title = title.strip()
 
         add_game_fn = cast(
             Callable[..., int | None],
@@ -1645,12 +1657,8 @@ class Api:
                 launch_mode=normalized_launch_mode,
                 command_line_args=command_line_args,
             )
-        except sqlite3.IntegrityError:
-            return {
-                "success": False,
-                "error": "A game with this URL is already in your library",
-                "error_code": "duplicate_url",
-            }
+        except sqlite3.IntegrityError as exc:
+            return self._integrity_error_response(exc)
 
         metadata_pending = bool(normalized_url) and game_id is not None
         if metadata_pending:
@@ -1705,26 +1713,74 @@ class Api:
                         "window.dispatchEvent(new Event('wlib-refresh-library'))"
                     )
 
+    @staticmethod
+    def _integrity_error_response(exc: Exception) -> dict[str, object]:
+        # Both the app-level guard ("duplicate f95_url") and the unique index
+        # ("UNIQUE constraint failed: games.f95_url") name the column.
+        if "f95_url" in str(exc):
+            return {
+                "success": False,
+                "error": "A game with this URL is already in your library",
+                "error_code": "duplicate_url",
+            }
+        return {"success": False, "error": str(exc)}
+
     def delete_game(self, game_id: int) -> dict[str, bool]:
         from core.database import delete_game
 
         delete_game_fn = cast(Callable[[int], None], delete_game)
 
         delete_game_fn(game_id)
+        self._metadata_pending.discard(game_id)
         return {"success": True}
 
-    def update_game(
-        self, game_id: int, fields: Mapping[str, object] | None
-    ) -> dict[str, object]:
+    def update_game(self, game_id: int, fields: object) -> dict[str, object]:
         import sqlite3
 
-        from core.database import update_game
+        from core.database import get_connection, update_game
+
+        if fields is not None and not isinstance(fields, Mapping):
+            return {
+                "success": False,
+                "error": "Fields must be an object",
+                "error_code": "invalid_fields",
+            }
+
+        updated_fields: dict[str, object] = dict(
+            cast(Mapping[str, object], fields or {})
+        )
+        title = updated_fields.get("title")
+        if title is not None:
+            # None is ignored by the database helper, like every other field.
+            if not isinstance(title, str) or not title.strip():
+                return {
+                    "success": False,
+                    "error": "Game title cannot be empty",
+                    "error_code": "invalid_title",
+                }
+            updated_fields["title"] = title.strip()
 
         update_game_fn = cast(
             Callable[[int, dict[str, object]], dict[str, object]], update_game
         )
 
-        updated_fields: dict[str, object] = dict(fields or {})
+        try:
+            with closing(get_connection()) as conn:
+                exists = cast(
+                    object,
+                    conn.execute(
+                        "SELECT 1 FROM games WHERE id = ?", (game_id,)
+                    ).fetchone(),
+                )
+        except sqlite3.Error as exc:
+            return {"success": False, "error": str(exc)}
+        if exists is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+
         if "f95_url" in updated_fields:
             updated_fields["f95_url"] = normalize_thread_url(
                 str(updated_fields["f95_url"] or "")
@@ -1736,12 +1792,8 @@ class Api:
 
         try:
             applied_fields = update_game_fn(game_id, updated_fields)
-        except sqlite3.IntegrityError:
-            return {
-                "success": False,
-                "error": "A game with this URL is already in your library",
-                "error_code": "duplicate_url",
-            }
+        except sqlite3.IntegrityError as exc:
+            return self._integrity_error_response(exc)
 
         response: dict[str, object] = {"success": True}
         if (
@@ -4119,7 +4171,8 @@ class Api:
 
     def open_folder(self, path: str) -> OpenPathResult:
         """Opens a folder in the system file manager."""
-        if not os.path.exists(path):
+        path = os.path.expanduser(str(path or "").strip())
+        if not path or not os.path.exists(path):
             return {"success": False, "error": f"Path does not exist: {path}"}
 
         return self._open_path_with_system_handler(path)
