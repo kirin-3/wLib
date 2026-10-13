@@ -38,8 +38,10 @@ const scan = async () => {
   const path = folder.value.trim();
   if (!path || scanning.value) return;
   scanning.value = true;
+  const currentPath = path;
   try {
     const result = await api.scanGamesFolder(path);
+    if (!props.modelValue || folder.value.trim() !== currentPath) return;
     if (!result?.success) {
       notifyError(`Could not scan folder: ${result?.error || "Unknown error"}`);
       return;
@@ -48,6 +50,7 @@ const scan = async () => {
     selected.value = new Set(newGames.value.map((game) => game.exe_path));
     scanned.value = true;
   } catch (e) {
+    if (!props.modelValue || folder.value.trim() !== currentPath) return;
     notifyError(`Could not scan folder: ${String(e)}`);
   } finally {
     scanning.value = false;

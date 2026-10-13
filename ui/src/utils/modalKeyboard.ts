@@ -23,7 +23,7 @@ export const useModalKeyboard = (
     if (event.key !== "Tab") return;
 
     const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-      (element) => element.offsetParent !== null,
+      (element) => element.getClientRects().length > 0,
     );
     const first = items[0];
     const last = items[items.length - 1];
@@ -56,5 +56,9 @@ export const useModalKeyboard = (
     { immediate: true },
   );
 
-  onBeforeUnmount(() => document.removeEventListener("keydown", onKeydown));
+  onBeforeUnmount(() => {
+    document.removeEventListener("keydown", onKeydown);
+    opener?.focus();
+    opener = null;
+  });
 };

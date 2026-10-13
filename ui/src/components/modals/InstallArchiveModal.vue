@@ -158,25 +158,39 @@ const browseLibraryFolder = async () => {
   }
 };
 
-let statusTimer: ReturnType<typeof setInterval> | null = null;
+let pollId = 0;
 const stopPolling = () => {
-  if (statusTimer) {
-    clearInterval(statusTimer);
-    statusTimer = null;
-  }
+  pollId++;
 };
 
-const pollStatus = () => {
-  stopPolling();
-  statusTimer = setInterval(async () => {
+const pollStatus = async () => {
+  pollId++;
+  const currentPollId = pollId;
+
+  const loop = async () => {
+    if (pollId !== currentPollId) return;
+
     try {
       const status = await api.getArchiveInstallStatus();
+      if (pollId !== currentPollId) return;
+
       if (status?.stage) installStage.value = status.stage;
-      if (status && !status.running) stopPolling();
+
+      if (status && !status.running) {
+        return;
+      }
     } catch (e) {
       console.error("Failed to poll install status", e);
     }
-  }, 500);
+
+    setTimeout(() => {
+      if (pollId === currentPollId) {
+        void loop();
+      }
+    }, 500);
+  };
+
+  void loop();
 };
 
 const install = async () => {
