@@ -103,6 +103,26 @@ def _folder_revision(stat: os.stat_result) -> str:
     return f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
 
 
+try:
+    import fcntl as _fcntl_module
+except ImportError:  # Windows has no fcntl; threads still serialize below.
+    _fcntl_module = None
+
+
+_folder_write_locks: dict[str, threading.Lock] = {}
+_folder_write_locks_guard = threading.Lock()
+
+
+def _folder_write_lock(folder: Path) -> threading.Lock:
+    key = str(folder)
+    with _folder_write_locks_guard:
+        existing = _folder_write_locks.get(key)
+        if existing is None:
+            existing = threading.Lock()
+            _folder_write_locks[key] = existing
+        return existing
+
+
 class FolderLocation:
     def __init__(self, folder: str) -> None:
         self.folder: Path = Path(os.path.expanduser(folder))
@@ -132,9 +152,32 @@ class FolderLocation:
 
     def write(self, data: bytes, expected_revision: str | None) -> str:
         self._check_folder()
+        # Serialize writers for one folder: the revision check below is only
+        # meaningful if no other writer can slip in before os.replace.
+        with _folder_write_lock(self.folder):
+            return self._write_exclusive(data, expected_revision)
+
+    def _write_exclusive(self, data: bytes, expected_revision: str | None) -> str:
+        # The threading lock above only covers this process. A second wLib
+        # process (or a manual edit) uses the same folder, so hold an
+        # advisory lock file while checking and replacing.
+        if _fcntl_module is None:
+            return self._write_file(data, expected_revision)
+        lock_path = self.path.with_name(SYNC_FILENAME + ".lock")
+        with open(lock_path, "a+b") as guard:
+            _fcntl_module.flock(guard.fileno(), _fcntl_module.LOCK_EX)
+            try:
+                return self._write_file(data, expected_revision)
+            finally:
+                _fcntl_module.flock(guard.fileno(), _fcntl_module.LOCK_UN)
+
+    def _write_file(self, data: bytes, expected_revision: str | None) -> str:
         if self.revision() != expected_revision:
             raise SyncConflict()
-        temporary = self.path.with_name(SYNC_FILENAME + ".tmp")
+        # Unique per writer: concurrent writers must never share (and delete)
+        # each other's temporary file.
+        suffix = f"{os.getpid()}.{threading.get_ident():x}.{secrets.token_hex(4)}"
+        temporary = self.path.with_name(f"{SYNC_FILENAME}.tmp.{suffix}")
         try:
             with temporary.open("wb") as target:
                 _ = target.write(data)
@@ -305,9 +348,16 @@ class DropboxLocation(_OAuthLocation):
                         response.headers.get("Dropbox-API-Result", "")
                     )
             except urllib.error.HTTPError as exc:
-                if exc.code == 401 and attempt == 0:
-                    self._access_token = ""
-                    continue
+                if exc.code == 401:
+                    if attempt == 0:
+                        self._access_token = ""
+                        continue
+                    # The refresh itself was rejected: the grant is gone, so a
+                    # generic request error would mislead. Report auth failure.
+                    raise SyncError(
+                        f"{self.provider} sign-in expired. Connect again.",
+                        self.auth_error,
+                    ) from exc
                 if exc.code == 409:
                     if endpoint == "files/upload":
                         raise SyncConflict() from exc
@@ -435,9 +485,16 @@ class GoogleDriveLocation(_OAuthLocation):
                 ) as response:
                     return response.read()
             except urllib.error.HTTPError as exc:
-                if exc.code == 401 and attempt == 0:
-                    self._access_token = ""
-                    continue
+                if exc.code == 401:
+                    if attempt == 0:
+                        self._access_token = ""
+                        continue
+                    # The refresh itself was rejected: the grant is gone, so a
+                    # generic request error would mislead. Report auth failure.
+                    raise SyncError(
+                        f"{self.provider} sign-in expired. Connect again.",
+                        self.auth_error,
+                    ) from exc
                 raise SyncError(
                     "Google Drive rejected the request. Check the connection and permissions.",
                     "gdrive_request_failed",
@@ -784,10 +841,18 @@ class SyncManager:
         database.update_settings(self._winning_settings(modified, device, new_revision))
 
     def local_changed(self) -> bool:
-        return bool(self._setting("location")) and (
-            timestamp(self._setting("local_modified_at"))
-            > timestamp(self._setting("last_synced_at"))
-            or bool(self._setting("encryption_change"))
+        if not self._setting("location"):
+            return False
+        if self._setting("encryption_change"):
+            return True
+        local_modified = self._setting("local_modified_at") or ""
+        last_synced = self._setting("last_synced_at") or ""
+        # last_synced_at comes from the peer's clock, so "newer" alone sticks
+        # clean forever when the peer is ahead (edits would never push). Any
+        # recorded difference means unpushed local edits. timestamp() still
+        # validates both values and raises loudly on garbage.
+        return timestamp(local_modified) > timestamp(last_synced) or (
+            bool(local_modified) and local_modified != last_synced
         )
 
     def run(

@@ -712,3 +712,92 @@ print(json.dumps({'success': True}))
         environment.pop("XDG_DATA_HOME", None)
         result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
         assert json.loads(result.stdout)["success"]
+
+
+def test_clock_skew_future_last_synced_still_pushes():
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    assert location.writes == 1
+    # A peer with a fast clock synced "in the future". A local edit stamped
+    # with this machine's (slower) clock must still count as unpushed.
+    database.update_setting("sync_last_synced_at", "2036-01-01T00:00:00Z")
+    database.update_game(game_id, {"rating": "9"})
+    assert sync.local_changed()
+    sync.run()
+    assert location.writes == 2
+    assert json.loads(location.data)["games"][0]["user_state"]["rating"] == "9"
+
+
+@pytest.mark.parametrize(
+    ("provider", "cls", "error_code"),
+    [
+        ("dropbox", DropboxLocation, "dropbox_auth_failed"),
+        ("gdrive", GoogleDriveLocation, "gdrive_auth_failed"),
+    ],
+)
+def test_repeated_401_reports_expired_signin(monkeypatch, provider, cls, error_code):
+    if provider == "gdrive":
+        monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a", "expires_in": 300}),
+            http_error(401),
+            response({"access_token": "b", "expires_in": 300}),
+            http_error(401),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    with pytest.raises(SyncError) as error:
+        cls("refresh").revision()
+    assert error.value.error_code == error_code
+
+
+def test_folder_concurrent_writes_serialize(tmp_path, monkeypatch):
+    import threading
+
+    location = FolderLocation(str(tmp_path))
+    rev = location.write(b"base", None)
+    real_replace = os.replace
+    entered_replace = threading.Event()
+    rival_done = threading.Event()
+
+    def hooked_replace(src, dst):
+        # Pause the first writer between its final revision check and the
+        # rename so a rival write is guaranteed to slip into that window.
+        if threading.current_thread().name == "first-writer":
+            entered_replace.set()
+            rival_done.wait(5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", hooked_replace)
+    outcomes: dict[str, object] = {}
+
+    def first() -> None:
+        try:
+            outcomes["first"] = location.write(b"AAA", rev)
+        except Exception as error:
+            outcomes["first"] = type(error).__name__
+
+    def rival() -> None:
+        assert entered_replace.wait(10)
+        try:
+            outcomes["rival"] = FolderLocation(str(tmp_path)).write(b"BBB", rev)
+        except SyncConflict:
+            outcomes["rival"] = "conflict"
+        finally:
+            rival_done.set()
+
+    first_thread = threading.Thread(target=first, name="first-writer")
+    rival_thread = threading.Thread(target=rival, name="rival-writer")
+    first_thread.start()
+    rival_thread.start()
+    first_thread.join(30)
+    rival_thread.join(30)
+    # Exactly one writer wins; the loser must see SyncConflict, never a
+    # silent clobber (or a crash on the other writer's temp file).
+    assert outcomes.get("rival") == "conflict"
+    assert isinstance(outcomes.get("first"), str) and outcomes["first"] != "conflict"
+    assert (tmp_path / "wlib-library.json").read_bytes() == b"AAA"
+    assert list(tmp_path.glob("wlib-library.json.tmp.*")) == []
