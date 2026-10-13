@@ -298,6 +298,7 @@ class Api:
         }
         # Games whose F95 metadata is still being fetched after add_game returned.
         self._metadata_pending: set[int] = set()
+        self._metadata_lock: threading.Lock = threading.Lock()
         self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
@@ -1209,7 +1210,8 @@ class Api:
         from core.database import get_all_games
 
         games = get_all_games()
-        pending = set(self._metadata_pending)
+        with self._metadata_lock:
+            pending = set(self._metadata_pending)
         for game in games:
             if game.get("id") in pending:
                 game["metadata_pending"] = True
@@ -1284,7 +1286,7 @@ class Api:
 
         value = str(path or "").strip()
         if not value:
-            return {"ok": False, "reason": "Enter a path"}
+            return {"success": True, "ok": False, "reason": "Enter a path"}
         expanded = os.path.expanduser(value)
 
         if kind == "runner":
@@ -1293,33 +1295,33 @@ class Api:
                 has_separator = os.altsep in expanded
             if not has_separator:
                 if shutil.which(expanded) is not None:
-                    return {"ok": True, "reason": ""}
-                return {"ok": False, "reason": "Command not found on PATH"}
+                    return {"success": True, "ok": True, "reason": ""}
+                return {"success": True, "ok": False, "reason": "Command not found on PATH"}
             if os.path.isfile(expanded):
-                return {"ok": True, "reason": ""}
-            return {"ok": False, "reason": "File not found"}
+                return {"success": True, "ok": True, "reason": ""}
+            return {"success": True, "ok": False, "reason": "File not found"}
 
         if kind == "file":
             if os.path.isfile(expanded):
-                return {"ok": True, "reason": ""}
+                return {"success": True, "ok": True, "reason": ""}
             if os.path.isdir(expanded):
-                return {"ok": False, "reason": "Expected a file"}
-            return {"ok": False, "reason": "File not found"}
+                return {"success": True, "ok": False, "reason": "Expected a file"}
+            return {"success": True, "ok": False, "reason": "File not found"}
 
         if kind == "dir":
             if os.path.isdir(expanded):
-                return {"ok": True, "reason": ""}
+                return {"success": True, "ok": True, "reason": ""}
             if os.path.isfile(expanded):
-                return {"ok": False, "reason": "Expected a folder"}
-            return {"ok": False, "reason": "Folder not found"}
+                return {"success": True, "ok": False, "reason": "Expected a folder"}
+            return {"success": True, "ok": False, "reason": "Folder not found"}
 
         # parent: the file may not exist yet, but its folder must.
         if os.path.isdir(expanded):
-            return {"ok": False, "reason": "Expected a file"}
+            return {"success": True, "ok": False, "reason": "Expected a file"}
         parent = os.path.dirname(expanded) or "."
         if os.path.isdir(parent):
-            return {"ok": True, "reason": ""}
-        return {"ok": False, "reason": "Folder not found"}
+            return {"success": True, "ok": True, "reason": ""}
+        return {"success": True, "ok": False, "reason": "Folder not found"}
 
     def inspect_game_path(self, exe_path: str) -> dict[str, object]:
         from core.game_scan import inspect_game_path
@@ -1662,7 +1664,8 @@ class Api:
             )
             # F95 requests are paced app-wide and can queue behind a folder import,
             # so the game is saved now and its card shows a loading state until this finishes.
-            self._metadata_pending.add(game_id)
+            with self._metadata_lock:
+                self._metadata_pending.add(game_id)
             threading.Thread(
                 target=self._fetch_added_game_metadata,
                 args=(game_id, normalized_url, needs_metadata_backfill),
@@ -1698,7 +1701,8 @@ class Api:
         except Exception as e:
             print(f"Failed to fetch metadata for game {game_id}: {e}")
         finally:
-            self._metadata_pending.discard(game_id)
+            with self._metadata_lock:
+                self._metadata_pending.discard(game_id)
             if self.window:
                 with suppress(Exception):
                     self.window.evaluate_js(
@@ -3851,7 +3855,8 @@ class Api:
             except sqlite3.IntegrityError:
                 pass
             else:
-                self._metadata_pending.add(installed_id)
+                with self._metadata_lock:
+                    self._metadata_pending.add(installed_id)
                 threading.Thread(
                     target=self._fetch_added_game_metadata,
                     args=(installed_id, f95_url, True),

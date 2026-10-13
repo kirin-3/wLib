@@ -543,6 +543,7 @@ export interface CollectionsResponse extends ApiBasicResponse {
 export type PathCheckKind = "file" | "dir" | "parent" | "runner";
 
 export interface PathCheckResponse extends ApiBasicResponse {
+  success: boolean;
   ok?: boolean;
   reason?: string;
 }

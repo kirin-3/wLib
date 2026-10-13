@@ -132,38 +132,38 @@ def test_check_path_kinds(tmp_path, monkeypatch):
     missing_file = tmp_path / "missing.exe"
     export_destination = folder / "wlib-export.json"
 
-    assert api.check_path(str(game_file), "file") == {"ok": True, "reason": ""}
+    assert api.check_path(str(game_file), "file") == {"success": True, "ok": True, "reason": ""}
     assert api.check_path(str(missing_file), "file") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "File not found",
     }
     # A folder given where a file is expected.
     assert api.check_path(str(folder), "file") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Expected a file",
     }
 
-    assert api.check_path(str(folder), "dir") == {"ok": True, "reason": ""}
+    assert api.check_path(str(folder), "dir") == {"success": True, "ok": True, "reason": ""}
     assert api.check_path(str(missing_file), "dir") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Folder not found",
     }
     assert api.check_path(str(game_file), "dir") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Expected a folder",
     }
 
     # An export file that does not exist yet inside an existing folder is fine.
     assert api.check_path(str(export_destination), "parent") == {
-        "ok": True,
+        "success": True, "ok": True,
         "reason": "",
     }
     assert api.check_path(str(folder / "missing" / "out.json"), "parent") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Folder not found",
     }
     assert api.check_path(str(folder), "parent") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Expected a file",
     }
 
@@ -171,25 +171,25 @@ def test_check_path_kinds(tmp_path, monkeypatch):
     import shutil
 
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/wine")
-    assert api.check_path("wine", "runner") == {"ok": True, "reason": ""}
+    assert api.check_path("wine", "runner") == {"success": True, "ok": True, "reason": ""}
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     assert api.check_path("wine", "runner") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "Command not found on PATH",
     }
-    assert api.check_path(str(game_file), "runner") == {"ok": True, "reason": ""}
+    assert api.check_path(str(game_file), "runner") == {"success": True, "ok": True, "reason": ""}
     assert api.check_path(str(missing_file), "runner") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "File not found",
     }
 
     # Tilde expansion and empty values.
     assert api.check_path("~/definitely-not-here", "file") == {
-        "ok": False,
+        "success": True, "ok": False,
         "reason": "File not found",
     }
-    assert api.check_path("", "file") == {"ok": False, "reason": "Enter a path"}
-    assert api.check_path("   ", "dir") == {"ok": False, "reason": "Enter a path"}
+    assert api.check_path("", "file") == {"success": True, "ok": False, "reason": "Enter a path"}
+    assert api.check_path("   ", "dir") == {"success": True, "ok": False, "reason": "Enter a path"}
     assert api.check_path("/tmp/x", "bogus")["success"] is False
 
 
