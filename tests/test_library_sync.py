@@ -797,3 +797,85 @@ def test_folder_write_survives_unsupported_flock(tmp_path, monkeypatch):
     location = FolderLocation(str(tmp_path))
     assert location.write(b"data", None) == location.revision()
     assert (tmp_path / "wlib-library.json").read_bytes() == b"data"
+
+
+def test_merge_once_triggers_on_pull_and_records_ambiguous():
+    pulled = False
+
+    def on_pull():
+        nonlocal pulled
+        pulled = True
+
+    remote = remote_backup("Ambiguous Game")
+    database.add_game("Ambiguous Game", "/game1.exe")
+    database.add_game("Ambiguous Game", "/game2.exe")
+    for g in database.get_all_games():
+        database.update_game(g["id"], {"developer": "Dev"})
+
+    location = MemoryLocation(remote)
+    sync = SyncManager(location, on_pull=on_pull)
+    database.update_setting("sync_location", "folder")
+
+    res = sync.run("merge-once")
+    assert res["success"]
+    assert pulled is True
+    assert (
+        "more than one local game"
+        in (database.get_setting("sync_last_error") or "").lower()
+    )
+
+
+def test_set_passphrase_monotonic_with_clock_skew(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    database.add_game("Game", "/path.exe")
+    sync.run()
+    database.update_setting("sync_last_synced_at", "2026-10-10T12:00:00.000Z")
+    database.update_setting("sync_local_modified_at", "2026-10-10T12:00:00.000Z")
+
+    monkeypatch.setattr("core.library_sync.utc_now", lambda: "2026-10-09T00:00:00.000Z")
+    res = sync.set_passphrase("newpass")
+    assert res["success"]
+    local_mod = database.get_setting("sync_local_modified_at")
+    assert local_mod > "2026-10-10T12:00:00.000Z"
+    assert local_mod == "2026-10-10T12:00:00.001Z"
+
+
+def test_start_run_status_not_stuck_at_syncing_when_lock_held():
+    location = MemoryLocation()
+    sync = manager(location)
+    import threading
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with sync._lock:
+            held.set()
+            release.wait(timeout=2)
+
+    t = threading.Thread(target=hold_lock)
+    t.start()
+    held.wait(timeout=1)
+
+    res = sync.start_run()
+    assert res["state"] == "syncing"
+
+    release.set()
+    t.join()
+    if sync._worker:
+        sync._worker.join(timeout=2)
+
+    status = sync.status()
+    assert status["state"] == "idle"
+
+
+def test_open_signin_clears_pending_on_browser_failure():
+    api = Api()
+    api.library_sync.server_available = True
+    api.open_in_browser = MagicMock(return_value={"success": False, "error": "No browser"})
+    result = api.connect_dropbox()
+    assert not result["success"]
+    assert result["error_code"] == "browser_failed"
+    assert api.library_sync.status()["connecting"] is False
+

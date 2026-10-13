@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPResponse
 from pathlib import Path
 from typing import Protocol, cast, final
@@ -855,7 +855,8 @@ class SyncManager:
     def run(
         self, choice: str | None = None, *, push_only: bool = False
     ) -> dict[str, object]:
-        if not self._lock.acquire(blocking=False):
+        # The worker was already reported as "syncing", so it must wait its turn.
+        if not self._lock.acquire(blocking=threading.current_thread() is self._worker):
             return self.status()
         try:
             if not self._setting("location"):
@@ -915,8 +916,17 @@ class SyncManager:
                 self._state = "needs_choice"
                 return
             if choice == "merge-once":
-                _ = apply_library_backup(backup, {"sections": SYNC_SECTIONS}, sync=True)
+                result = apply_library_backup(
+                    backup, {"sections": SYNC_SECTIONS}, sync=True
+                )
+                if self._on_pull is not None:
+                    self._on_pull()
                 self._push(location, revision)
+                if result["ambiguous"]:
+                    database.update_setting(
+                        "sync_last_error",
+                        "Some games matched more than one local game and were left unchanged.",
+                    )
             elif choice == "use-local" or (local_games and not remote_games):
                 self._push(location, revision)
             else:
@@ -931,6 +941,18 @@ class SyncManager:
                 return
         if local_changed:
             self._push(location, revision)
+
+    def _bumped_local_modified_at(self) -> str:
+        # Mirror the SQLite bump trigger: never move backwards under clock skew.
+        now, previous = utc_now(), self._setting("local_modified_at")
+        if not previous or timestamp(now) > timestamp(previous):
+            return now
+        bumped = datetime.fromisoformat(previous.replace("Z", "+00:00"))
+        return (
+            (bumped + timedelta(milliseconds=1))
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
 
     def set_passphrase(self, passphrase: str | None) -> dict[str, object]:
         with self._lock:
@@ -957,7 +979,7 @@ class SyncManager:
                         "sync_encryption_key": key,
                         "sync_encryption_salt": salt,
                         "sync_encryption_change": "true",
-                        "sync_local_modified_at": utc_now(),
+                        "sync_local_modified_at": self._bumped_local_modified_at(),
                     }
                 )
                 return self.status()
@@ -1020,6 +1042,10 @@ class SyncManager:
                 provider + "_auth_failed",
             )
         return pending[1]
+
+    def cancel_signin(self) -> None:
+        with self._lock:
+            self._pending = None
 
     def connect_dropbox(self) -> dict[str, object]:
         with self._lock:
@@ -1211,7 +1237,7 @@ class SyncManager:
                         >= 30
                     ):
                         _ = self.start_run(push_only=True)
-                except SyncError:
+                except Exception:  # Keep auto-sync alive through transient DB/OS errors.
                     pass
 
         self._timer = threading.Thread(target=watch, daemon=True)

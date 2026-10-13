@@ -1379,6 +1379,7 @@ class Api:
         if result.get("success"):
             opened = self.open_in_browser(str(result["url"]))
             if not opened.get("success"):
+                self.library_sync.cancel_signin()
                 return {
                     "success": False,
                     "error": f"Could not open {provider} sign-in in your browser.",
