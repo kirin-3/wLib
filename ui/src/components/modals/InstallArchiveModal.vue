@@ -158,25 +158,28 @@ const browseLibraryFolder = async () => {
   }
 };
 
-let statusTimer: ReturnType<typeof setInterval> | null = null;
+// Recursive setTimeout so status requests never overlap; bumping pollId cancels the loop.
+let pollId = 0;
 const stopPolling = () => {
-  if (statusTimer) {
-    clearInterval(statusTimer);
-    statusTimer = null;
-  }
+  pollId++;
 };
 
 const pollStatus = () => {
-  stopPolling();
-  statusTimer = setInterval(async () => {
+  const id = ++pollId;
+  const tick = async () => {
     try {
       const status = await api.getArchiveInstallStatus();
+      if (id !== pollId) return;
       if (status?.stage) installStage.value = status.stage;
-      if (status && !status.running) stopPolling();
+      if (status && !status.running) return;
     } catch (e) {
       console.error("Failed to poll install status", e);
     }
-  }, 500);
+    setTimeout(() => {
+      if (id === pollId) void tick();
+    }, 500);
+  };
+  void tick();
 };
 
 const install = async () => {

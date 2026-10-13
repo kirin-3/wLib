@@ -401,6 +401,7 @@ watch(
         launchMode.value = normalizeLaunchMode(g.launch_mode);
         useCustomPrefix.value = !!g.custom_prefix;
         activeTab.value = "Overview";
+        newTag.value = "";
         collectionMembership.value = [...(g.collections || [])];
         newCollectionName.value = "";
         collectionError.value = "";
@@ -659,9 +660,11 @@ const setRating = (category: (typeof ratingCategories)[number], star: number) =>
 };
 
 const browseExe = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   try {
     const p = await api.browseFile(exePath.value || "");
-    if (p) {
+    if (p && isCurrentGame(gameId)) {
       exePath.value = p;
     }
   } catch (e) {
@@ -747,9 +750,11 @@ const loadLaunchTargets = async () => {
 };
 
 const browseNewTargetPath = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   try {
     const p = await api.browseFile(newTargetPath.value || exePath.value || "");
-    if (p) newTargetPath.value = p;
+    if (p && isCurrentGame(gameId)) newTargetPath.value = p;
   } catch (e) {
     console.error("Failed to browse launch target", e);
     notifyError("Error browsing file: " + String(e));
@@ -757,9 +762,11 @@ const browseNewTargetPath = async () => {
 };
 
 const browseEditTargetPath = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   try {
     const p = await api.browseFile(editTargetPath.value || exePath.value || "");
-    if (p) editTargetPath.value = p;
+    if (p && isCurrentGame(gameId)) editTargetPath.value = p;
   } catch (e) {
     console.error("Failed to browse launch target", e);
     notifyError("Error browsing file: " + String(e));
@@ -974,6 +981,7 @@ const toggleModalCollection = (name: string) => {
 // Creates the collection now (empty) and selects its chip; the game joins it
 // when the modal is saved, like every other membership change here.
 const createModalCollection = async () => {
+  if (collectionBusy.value) return;
   const name = newCollectionName.value.trim();
   if (!name) {
     collectionError.value = "Enter a collection name.";
@@ -996,13 +1004,13 @@ const createModalCollection = async () => {
 };
 
 const save = async () => {
-  if (!props.game || typeof props.game.id !== "number") return;
+  if (!props.game || typeof props.game.id !== "number" || saving.value) return;
   saving.value = true;
   try {
     const res = await api.updateGame(props.game.id, {
-      title: title.value,
-      exe_path: exePath.value,
-      f95_url: f95Url.value,
+      title: title.value.trim(),
+      exe_path: exePath.value.trim(),
+      f95_url: f95Url.value.trim(),
       version: version.value,
       finished_version: finishedVersion.value,
       command_line_args: commandLineArgs.value,
@@ -1068,6 +1076,7 @@ const deleteGame = async () => {
   if (
     !props.game ||
     typeof props.game.id !== "number" ||
+    deleting.value ||
     !confirm("Are you sure you want to remove this game from your library?")
   )
     return;
@@ -1151,7 +1160,8 @@ const searchingSaves = ref(false);
 const showSavePanel = ref(false);
 
 const findSaves = async () => {
-  if (!props.game) return;
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   searchingSaves.value = true;
   showSavePanel.value = true;
   try {
@@ -1162,10 +1172,14 @@ const findSaves = async () => {
       !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
       !isNativeLaunchMode.value ? protonVersion.value : ""
     );
-    saveResults.value = results || [];
+    if (isCurrentGame(gameId)) {
+      saveResults.value = results || [];
+    }
   } catch (e) {
     console.error("Failed to find saves", e);
-    saveResults.value = [];
+    if (isCurrentGame(gameId)) {
+      saveResults.value = [];
+    }
   } finally {
     searchingSaves.value = false;
   }

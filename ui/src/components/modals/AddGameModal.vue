@@ -186,11 +186,11 @@ const browseExe = async () => {
 };
 
 const save = () => {
-  if (!title.value || !exePath.value || props.saving) return;
+  if (!title.value.trim() || !exePath.value.trim() || props.saving) return;
   emit("save", {
-    title: title.value,
-    exe_path: exePath.value,
-    f95_url: f95Url.value,
+    title: title.value.trim(),
+    exe_path: exePath.value.trim(),
+    f95_url: f95Url.value.trim(),
     version: version.value,
     cover_image: coverImage.value,
     tags: tags.value,
@@ -361,7 +361,7 @@ const save = () => {
         </button>
         <button
           @click="save"
-          :disabled="!title || !exePath || saving"
+          :disabled="!title.trim() || !exePath.trim() || saving"
           class="px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
