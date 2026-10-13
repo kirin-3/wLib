@@ -544,6 +544,206 @@ def test_reimport_matches_games_without_url_or_developer(tmp_path):
     assert len(get_all_games()) == 2
 
 
+def test_import_without_identity_sections_matches_unique_title(tmp_path):
+    api = Api()
+    game_id = add_game("Solo", "/solo.exe")
+    assert game_id is not None
+    # Exporting only user state leaves the record without any executable
+    # identity, but the title is unique in the local library.
+    destination = tmp_path / "user-state-only.json"
+    exported = api.export_library_backup(
+        {"sections": [SECTION_USER_STATE]}, str(destination)
+    )
+    assert exported["success"] is True
+
+    result = api.import_library_backup(str(destination))
+
+    assert result["success"] is True
+    assert (result["created"], result["updated"]) == (0, 1)
+    assert [game["id"] for game in get_all_games()] == [game_id]
+
+    # Importing the same file again must not grow the library.
+    again = api.import_library_backup(str(destination))
+    assert (again["created"], again["updated"]) == (0, 1)
+    assert len(get_all_games()) == 1
+
+
+def test_import_records_without_identity_and_repeated_title_are_ambiguous(tmp_path):
+    api = Api()
+    add_game("Manual Game", "/games/manual/game.exe")
+    add_game("Manual Game", "/games/other/game.exe")
+    destination = tmp_path / "ambiguous.json"
+    exported = api.export_library_backup(
+        {"sections": [SECTION_USER_STATE]}, str(destination)
+    )
+    assert exported["success"] is True
+
+    result = api.import_library_backup(str(destination))
+
+    assert result["success"] is True
+    assert result["created"] == 0
+    assert result["ambiguous"] == 2
+    assert len(get_all_games()) == 2
+
+
+def test_import_with_url_matches_local_game_added_without_url(tmp_path):
+    api = Api()
+    local_id = add_game("Same Game", "/same.exe", developer="Same Dev")
+    assert local_id is not None
+    backup_path = write_backup(
+        tmp_path / "with-url.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Same Game",
+                        "developer": "Same Dev",
+                        "f95_url": "https://f95zone.to/threads/same.4242/",
+                    },
+                    SECTION_USER_STATE: {"progress": "From backup"},
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path))
+
+    assert result["success"] is True
+    assert (result["created"], result["updated"]) == (0, 1)
+    games = get_all_games()
+    assert [game["id"] for game in games] == [local_id]
+    assert games[0]["f95_url"] == "https://f95zone.to/threads/same.4242/"
+    assert games[0]["exe_path"] == "/same.exe"
+
+
+def test_import_with_url_keeps_local_game_with_another_thread(tmp_path):
+    api = Api()
+    local_id = add_game(
+        "Same Game",
+        "/same.exe",
+        f95_url="https://f95zone.to/threads/same.4242/",
+        developer="Same Dev",
+    )
+    assert local_id is not None
+    backup_path = write_backup(
+        tmp_path / "other-thread.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Same Game",
+                        "developer": "Same Dev",
+                        "f95_url": "https://f95zone.to/threads/same.9999/",
+                    }
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path))
+
+    assert result["success"] is True
+    assert (result["created"], result["updated"]) == (1, 0)
+    games = get_all_games()
+    assert len(games) == 2
+    assert {game["f95_url"] for game in games} == {
+        "https://f95zone.to/threads/same.4242/",
+        "https://f95zone.to/threads/same.9999/",
+    }
+
+
+def test_backup_without_section_manifest_imports_present_sections(tmp_path):
+    api = Api()
+    game_id = add_game(
+        "Legacy",
+        "",
+        f95_url="https://f95zone.to/threads/legacy.210/",
+    )
+    assert game_id is not None
+    path = tmp_path / "no-manifest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format": BACKUP_FORMAT,
+                "format_version": BACKUP_FORMAT_VERSION,
+                "exported_at": "2020-01-01T00:00:00",
+                "app": {"name": "wLib", "version": "0.0.1"},
+                "games": [
+                    {
+                        "metadata": {
+                            "title": "Legacy",
+                            "f95_url": "https://f95zone.to/threads/legacy.210/",
+                        },
+                        SECTION_USER_STATE: {"progress": "Kept progress"},
+                        SECTION_LAUNCH_TARGETS: [
+                            {"label": "Bonus", "exe_path": "/backup/bonus.sh"}
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    inspected = api.inspect_library_backup(str(path))
+
+    assert inspected["success"] is True
+    assert SECTION_USER_STATE in cast(list[str], inspected["available_sections"])
+    assert SECTION_LAUNCH_TARGETS in cast(list[str], inspected["available_sections"])
+
+    result = api.import_library_backup(str(path))
+
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["progress"] == "Kept progress"
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == [
+        "Bonus"
+    ]
+
+
+def test_backup_with_utf8_bom_is_accepted(tmp_path):
+    api = Api()
+    add_game(
+        "Bom",
+        "/bom.exe",
+        f95_url="https://f95zone.to/threads/bom.211/",
+    )
+    destination = tmp_path / "bom.json"
+    exported = api.export_library_backup({}, str(destination))
+    assert exported["success"] is True
+
+    payload = destination.read_bytes()
+    _ = destination.write_bytes(b"\xef\xbb\xbf" + payload)
+
+    inspected = api.inspect_library_backup(str(destination))
+    assert inspected["success"] is True
+    assert inspected["counts"]["total_games"] == 1
+
+    result = api.import_library_backup(str(destination))
+    assert result["success"] is True
+    assert result["updated"] == 1
+
+
+def test_backup_with_invalid_utf8_bytes_is_reported_as_invalid_json(tmp_path):
+    path = tmp_path / "bad-encoding.json"
+    _ = path.write_bytes(b'{"format": "\xff\xfe"}')
+
+    result = Api().inspect_library_backup(str(path))
+
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_json"
+
+
+def test_deeply_nested_backup_is_reported_as_invalid_json(tmp_path):
+    path = tmp_path / "deep.json"
+    _ = path.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+
+    result = Api().inspect_library_backup(str(path))
+
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_json"
+
+
 def test_inspect_validates_format_and_matches_games(tmp_path):
     api = Api()
     add_game(
@@ -1174,6 +1374,30 @@ def test_apply_merge_mode_fill_missing_fills_blanks_and_keeps_values():
     assert [target["label"] for target in list_game_launch_targets(game_id)] == [
         "Existing"
     ]
+
+
+def test_apply_merge_mode_fill_missing_fills_empty_collection_membership():
+    url = "https://f95zone.to/threads/fill-collections.996/"
+    game_id = add_game("Local", "", f95_url=url)
+    assert game_id is not None
+    update_setting("collections", '["Backlog"]')
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Local", "f95_url": url},
+                SECTION_USER_STATE: {"collections": ["Backlog"]},
+            }
+        ]
+    )
+    result = apply_library_backup(
+        payload,
+        {"sections": [SECTION_USER_STATE]},
+        merge_mode="fill_missing",
+    )
+    assert result["updated"] == 1
+    game = get_all_games()[0]
+    assert game["collections"] == ["Backlog"]
 
 
 def test_apply_merge_mode_fill_missing_fills_default_status_and_zero_playtime():
