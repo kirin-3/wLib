@@ -10,6 +10,7 @@ import {
   LIBRARY_PLAY_STATUSES,
   LIBRARY_VIEW_STATE_STORAGE_KEY,
   clearLegacyLibraryViewState,
+  normalizeActiveCollection,
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
@@ -254,4 +255,28 @@ test("normalizeLibraryViewState preserves the expanded supported status set", ()
   });
 
   assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES, "Unknown"]);
+});
+
+test("normalizeActiveCollection handles dirty collection iterables without throwing", () => {
+  // Contains null, undefined, number, and whitespace
+  const dirtyCollections = ["RPG", null, undefined, 42, "  Favorites  "] as any;
+  assert.equal(normalizeActiveCollection("rpg", dirtyCollections), "RPG");
+  assert.equal(normalizeActiveCollection("favorites", dirtyCollections), "Favorites");
+  assert.equal(normalizeActiveCollection("nonexistent", dirtyCollections), "");
+});
+
+test("normalizeLibraryViewState preserves canonical casing for engines and tags", () => {
+  const normalized = normalizeLibraryViewState(
+    {
+      filterEngines: ["ren'py", "unity", "unsupported"],
+      filterTags: ["dating-sim", "SCI-FI", "drop"],
+    },
+    {
+      validEngines: ["Ren'Py", "Unity", null] as any,
+      validTags: ["dating-sim", "sci-fi", 123] as any,
+    },
+  );
+
+  assert.deepEqual(normalized.filterEngines, ["Ren'Py", "Unity"]);
+  assert.deepEqual(normalized.filterTags, ["dating-sim", "sci-fi"]);
 });

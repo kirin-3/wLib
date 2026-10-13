@@ -412,27 +412,33 @@ const filteredGames = computed(() => {
     result = result.filter((game) => !!game.last_played);
   }
   if (filterStatuses.value.length) {
-    result = result.filter((g) => {
-      return filterStatuses.value.some(
-        (status) =>
-          status.toLowerCase() ===
-          normalizePlayStatus(g.play_status, g.status).toLowerCase(),
-      );
-    });
+    const selectedStatuses = new Set(
+      filterStatuses.value.map((s) => s.toLowerCase()),
+    );
+    result = result.filter((g) =>
+      selectedStatuses.has(
+        normalizePlayStatus(g.play_status, g.status).toLowerCase(),
+      ),
+    );
   }
   if (filterInstallState.value === "wishlist")
     result = result.filter(isWishlisted);
   if (filterInstallState.value === "installed")
     result = result.filter((game) => !isWishlisted(game));
   if (filterEngines.value.length) {
+    const selectedEngines = new Set(
+      filterEngines.value.map((e) => e.trim().toLowerCase()),
+    );
     result = result.filter((g) =>
-      filterEngines.value.includes(normalizeEngineFilterValue(g.engine)),
+      selectedEngines.has(normalizeEngineFilterValue(g.engine).toLowerCase()),
     );
   }
   if (filterTags.value.length) {
-    result = result.filter((game) =>
-      filterTags.value.every((tag) => gameTags(game).includes(tag)),
-    );
+    const selectedTags = filterTags.value.map((tag) => tag.toLowerCase());
+    result = result.filter((game) => {
+      const gameTagSet = new Set(gameTags(game).map((t) => t.toLowerCase()));
+      return selectedTags.every((tag) => gameTagSet.has(tag));
+    });
   }
   result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
@@ -456,7 +462,11 @@ const collectionCount = (name: string): number =>
   collectionCounts.value.get(name.toLowerCase()) || 0;
 
 const applyCollectionsFromPayload = (collections: string[] | undefined) => {
-  if (Array.isArray(collections)) userCollections.value = [...collections];
+  if (Array.isArray(collections)) {
+    userCollections.value = collections.filter(
+      (c): c is string => typeof c === "string" && c.trim().length > 0,
+    );
+  }
 };
 
 const startInlineCollectionCreate = async () => {
@@ -556,6 +566,15 @@ const deleteCollectionFromTab = async (name: string) => {
 
 // Arrow keys move focus and selection across the tab strip.
 const handleCollectionTabsKeyboard = (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement | null;
+  if (
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable)
+  ) {
+    return;
+  }
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabs = [
     ...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>(
@@ -687,7 +706,10 @@ const saveFilterPreset = async () => {
 
 const deleteFilterPreset = async (name: string) => {
   if (!confirm(`Delete the saved filter "${name}"?`)) return;
-  const next = savedPresets.value.filter((preset) => preset.name !== name);
+  const targetKey = name.trim().toLowerCase();
+  const next = savedPresets.value.filter(
+    (preset) => preset.name.trim().toLowerCase() !== targetKey,
+  );
   const result = await api.saveLibraryFilterPresets(next);
   if (!result.success) {
     presetError.value = result.error || "Could not delete the filter.";
@@ -790,14 +812,31 @@ const loadGames = async () => {
   }
 };
 
+const applyPresetsFromSettings = (rawPresets: unknown) => {
+  if (!Array.isArray(rawPresets)) {
+    savedPresets.value = [];
+    return;
+  }
+  savedPresets.value = rawPresets
+    .map((item) => normalizeFilterPreset(item))
+    .filter((preset): preset is LibraryFilterPreset => preset !== null);
+};
+
 // Sync and imports can replace the collection list and presets, not just games.
 const handleLibraryRefresh = () => {
   void loadGames();
   void api
+    .getRunningGames()
+    .then((ids) => {
+      runningGameIds.value = new Set(ids);
+    })
+    .catch(console.error);
+  void api
     .getSettings()
     .then((settings) => {
+      customStatuses.value = settings.custom_play_statuses || [];
       applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
+      applyPresetsFromSettings(settings.library_filter_presets);
     })
     .catch(console.error);
 };
@@ -950,10 +989,14 @@ watch(
     }
     if (action === "open" && queryUrl) {
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
-      const match = ((await api.getGames()) || []).find((g) =>
-        urlsMatchByThreadIdentity(g.f95_url, queryUrl),
-      );
-      if (match) openDetail(match);
+      try {
+        const match = ((await api.getGames()) || []).find((g) =>
+          urlsMatchByThreadIdentity(g.f95_url, queryUrl),
+        );
+        if (match) openDetail(match);
+      } catch (e) {
+        console.error("Failed to find game by URL", e);
+      }
       // Consume the request: an identical route push is ignored as a duplicate,
       // so a leftover query would swallow the next "Open in wLib" for this game.
       void router.replace({ path: "/", query: {} });
@@ -1073,7 +1116,13 @@ const openContextMenu = async (
 };
 
 const handleContextMenuKeyboard = (event: KeyboardEvent) => {
-  if ((event.target as HTMLElement).tagName === "SELECT" && event.key !== "Tab")
+  const targetTag = (event.target as HTMLElement | null)?.tagName;
+  if (
+    (targetTag === "SELECT" ||
+      targetTag === "INPUT" ||
+      targetTag === "TEXTAREA") &&
+    event.key !== "Tab"
+  )
     return;
   const controls = [
     ...contextMenuElement.value!.querySelectorAll<HTMLElement>(
@@ -1286,7 +1335,7 @@ onMounted(() => {
     void api.getSettings().then((settings) => {
       customStatuses.value = settings.custom_play_statuses || [];
       applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
+      applyPresetsFromSettings(settings.library_filter_presets);
     }).catch(console.error);
   });
 });

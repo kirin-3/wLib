@@ -35,16 +35,30 @@ export const hasNewSinceFinished = (
 
 export const gameTags = (game: Pick<GameRecord, "tags">): string[] => [
   ...new Set(
-    (typeof game.tags === "string" ? game.tags.split(",") : game.tags || [])
-      .map((tag) => tag.trim())
+    (typeof game.tags === "string"
+      ? game.tags.split(",")
+      : Array.isArray(game.tags)
+        ? game.tags
+        : []
+    )
+      .map((tag) => (typeof tag === "string" ? tag.trim() : String(tag ?? "").trim()))
       .filter(Boolean),
   ),
 ];
 
-export const matchesGameSearch = (game: GameRecord, query: string): boolean =>
-  [game.title, game.developer, game.engine, ...gameTags(game)].some((value) =>
-    (value || "").toLowerCase().includes(query.trim().toLowerCase()),
+const normalizeSearchText = (text: unknown): string =>
+  (text != null ? String(text) : "")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase();
+
+export const matchesGameSearch = (game: GameRecord, query: string): boolean => {
+  const normalizedQuery = normalizeSearchText(query.trim());
+  if (!normalizedQuery) return true;
+  return [game.title, game.developer, game.engine, ...gameTags(game)].some((value) =>
+    normalizeSearchText(value).includes(normalizedQuery),
   );
+};
 
 export const compareLibraryGames = (
   a: GameRecord,
@@ -70,11 +84,11 @@ export const compareLibraryGames = (
         return Number(game.playtime_seconds) || 0;
       case "last_played":
       case "date_added":
-        return Date.parse(game[field] || "") || 0;
+        return Date.parse(String(game[field] || "")) || 0;
       case "play_status":
         return normalizePlayStatus(game.play_status, game.status).toLowerCase();
       default:
-        return (game[field] || "").trim().toLowerCase();
+        return String(game[field] ?? "").trim().toLowerCase();
     }
   };
   const left = value(a),
@@ -91,15 +105,26 @@ export const compareLibraryGames = (
         : left > right
           ? 1
           : 0;
+  let result = direction === "asc" ? order : -order;
   // Ties fall back to ascending title so the order doesn't depend on load order.
-  if (order === 0 && field !== "title")
-    return (a.title || "")
-      .trim()
-      .toLowerCase()
-      .localeCompare((b.title || "").trim().toLowerCase(), undefined, {
+  if (result === 0 && field !== "title") {
+    const aTitle = String(a.title || "").trim().toLowerCase();
+    const bTitle = String(b.title || "").trim().toLowerCase();
+    const aEmpty = !aTitle;
+    const bEmpty = !bTitle;
+    if (aEmpty !== bEmpty) {
+      result = aEmpty ? 1 : -1;
+    } else {
+      result = aTitle.localeCompare(bTitle, undefined, {
         numeric: true,
       });
-  return direction === "asc" ? order : -order;
+    }
+  }
+  // Stable sort tiebreak: if titles are identical (or both untitled), tiebreak by ID.
+  if (result === 0) {
+    result = (Number(a.id) || 0) - (Number(b.id) || 0);
+  }
+  return result;
 };
 
 export const gameFolder = (path: string): string => {

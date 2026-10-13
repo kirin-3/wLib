@@ -165,8 +165,29 @@ const filterAllowedValues = (values: readonly string[], allowed?: Iterable<strin
     return [...values];
   }
 
-  const allowedSet = new Set<string>(allowed);
-  return values.filter((value) => allowedSet.has(value));
+  const allowedMap = new Map<string, string>();
+  for (const item of allowed) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed && !allowedMap.has(trimmed.toLowerCase())) {
+        allowedMap.set(trimmed.toLowerCase(), trimmed);
+      }
+    }
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value === "string") {
+      const canonical = allowedMap.get(value.trim().toLowerCase());
+      if (canonical && !seen.has(canonical.toLowerCase())) {
+        seen.add(canonical.toLowerCase());
+        result.push(canonical);
+      }
+    }
+  }
+
+  return result;
 };
 
 const readStorageItem = (storage: Storage, key: string): string | null => {
@@ -323,7 +344,12 @@ export const normalizeActiveCollection = (
   if (!name) return "";
   if (!validCollections) return name;
   for (const collection of validCollections) {
-    if (collection.toLowerCase() === name.toLowerCase()) return collection;
+    if (
+      typeof collection === "string" &&
+      collection.trim().toLowerCase() === name.toLowerCase()
+    ) {
+      return collection.trim();
+    }
   }
   return "";
 };
