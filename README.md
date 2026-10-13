@@ -40,10 +40,16 @@ The same library can move between Linux and Windows through semantic JSON import
 ### 🎮 Library & Organization
 - **Smart Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status.
 - **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
-- **Portable JSON Migration** — Export and import your library, playtime, launch options, and selected settings with one JSON file.
+- **Collections & Saved Filters** — Group games into your own collections, shown as tabs under the library header, and save filter + sort combinations as presets. A built-in **New since finished** collection lists completed games that got updates after you finished them.
+- **Wishlist** — Keep games you haven't installed yet in the library. They stay out of update counts and show **Set up** instead of **Play**; you're notified when a wishlisted thread is marked Completed.
+- **Finished Version Tracking** — Moving a game to Completed records the version you finished, separate from the installed version.
+- **Portable JSON Migration** — Export and import your library, playtime, launch options, collections, and selected settings with one JSON file, optionally encrypted with a passphrase.
+- **Import From Other Apps** — Bring your library over from **F95Checker**, **Atlas**, or **XLibrary**, choosing whether matched games are overwritten or only have missing fields filled.
+- **Library Sync** — Optionally keep your library in sync between machines through a folder (Syncthing, MEGA, etc.), Dropbox, or Google Drive, with optional passphrase encryption. Paths and launch settings stay per machine; see the [privacy policy](PRIVACY.md).
 - **Additional Launch Targets** — Add named executables for multi-part games while keeping one canonical default launch path.
 - **Install From Archive** — Install a new game or an update from a downloaded `.zip`, `.7z`, or `.rar` into a managed library folder, with save carry-over and safe removal of the old version. `.7z`/`.rar` need 7-Zip on Windows or `7z`/`bsdtar`/`unrar` on Linux; matching archives in your Downloads folder are offered automatically.
-- **Dark & Light Themes** — Toggle instantly between a polished dark mode and a clean light interface.
+- **Path Checks** — Path fields show whether the file or folder exists.
+- **Dark & Light Themes, Text Size** — Toggle between dark and light themes and scale the interface with a per-device text size setting.
 
 ### 🚀 Advanced Launcher
 - **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
@@ -57,7 +63,8 @@ The same library can move between Linux and Windows through semantic JSON import
 
 ### 🌐 F95Zone Integration & Automation
 - **Automated Update Checker**: Compares local versions with F95Zone's `checker.php` endpoint in batches of up to 100 games. Guest thread pages provide metadata and a fallback for missing versions.
-- **Browser Extension** — A custom Chrome/Firefox extension that injects "Add to wLib" and "Open in wLib" buttons directly onto F95Zone pages.
+- **Engine Detection** — Reads the engine from thread prefixes (ignoring tags like `[VN]`, `Collection`, or `SiteRip`) and from game files when importing a folder.
+- **Browser Extension** — A Chrome/Firefox extension that adds "Add to wLib", "Wishlist", and "Open in wLib" buttons to F95Zone thread pages and updates itself.
 
 > [!TIP]
 > wLib can check for newer GitHub releases and open the latest release page directly from the Updates view.
@@ -323,7 +330,5 @@ Contributions are highly welcome! Whether it's tracking down an RPGMaker engine 
 Please read the [Contributing Guide](CONTRIBUTING.md) to initialize your dev environment properly before submitting pull requests.
 
 ## 📄 License
-
-Optional library sync through a folder, Dropbox, or Google Drive is described in the [privacy policy](PRIVACY.md).
 
 This project is licensed under the [GNU General Public License v3.0 or later](LICENSE).
