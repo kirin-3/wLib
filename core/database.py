@@ -228,7 +228,7 @@ def _find_matching_game_row(
     if not lookup_url:
         return None
 
-    query = "SELECT id, title, f95_url, play_status FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+    query = "SELECT id, title, f95_url, play_status, exe_path FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
     params: list[int] = []
     if exclude_id is not None:
         query += " AND id != ?"
@@ -581,9 +581,10 @@ def list_launch_targets_for_games(
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        unique_ids = list(dict.fromkeys(normalized_ids))
         # SQLite before 3.32 allows only 999 parameters per statement.
-        for start in range(0, len(normalized_ids), 500):
-            chunk = normalized_ids[start : start + 500]
+        for start in range(0, len(unique_ids), 500):
+            chunk = unique_ids[start : start + 500]
             placeholders = ",".join("?" for _ in chunk)
             _ = cursor.execute(
                 f"SELECT * FROM game_launch_targets WHERE game_id IN ({placeholders}) ORDER BY game_id ASC, sort_order ASC, id ASC",
@@ -772,6 +773,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "play_status",
         "finished_version",
         "is_favorite",
+        "thread_completed",
     }
     # Only allow known columns
     safe_fields: dict[str, object] = {
@@ -779,6 +781,15 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     }
     if not safe_fields:
         return {}
+
+    raw_tags = safe_fields.get("tags")
+    if isinstance(raw_tags, list):
+        safe_fields["tags"] = ", ".join(
+            str(tag) for tag in cast(list[object], raw_tags)
+        )
+
+    if "thread_completed" in safe_fields:
+        safe_fields["thread_completed"] = int(bool(safe_fields["thread_completed"]))
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
@@ -888,7 +899,7 @@ def get_custom_play_statuses() -> list[str]:
 
 def update_custom_play_statuses(statuses: Sequence[str]) -> None:
     # Match case-insensitively like the reset below, so a case-only rename keeps its games.
-    kept = {status.casefold() for status in statuses}
+    kept = {str(status).strip().casefold() for status in statuses}
     removed = [
         status for status in get_custom_play_statuses() if status.casefold() not in kept
     ]
@@ -900,7 +911,7 @@ def update_custom_play_statuses(statuses: Sequence[str]) -> None:
             )
         _ = conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("custom_play_statuses", json.dumps(list(statuses))),
+            ("custom_play_statuses", json.dumps([str(status).strip() for status in statuses])),
         )
         conn.commit()
 

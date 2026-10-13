@@ -18,6 +18,7 @@ from core.database import (
     delete_game_launch_target,
     find_game_by_f95_url,
     list_game_launch_targets,
+    list_launch_targets_for_games,
     update_game,
     update_game_launch_target,
     get_all_games,
@@ -1007,3 +1008,63 @@ def test_library_filter_presets_drop_invalid_entries_and_duplicates():
     assert get_library_filter_presets() == []
     update_setting("library_filter_presets", '"also not a list"')
     assert get_library_filter_presets() == []
+
+
+def test_find_game_by_f95_url_includes_exe_path():
+    game_id = add_game(
+        title="Installed Game",
+        exe_path="/games/installed/run.sh",
+        f95_url="https://f95zone.to/threads/test-game.12345/",
+    )
+    assert game_id is not None
+    found = find_game_by_f95_url("https://f95zone.to/threads/test-game.12345/")
+    assert found is not None
+    assert "exe_path" in found
+    assert found["exe_path"] == "/games/installed/run.sh"
+
+
+def test_update_custom_play_statuses_with_whitespace_preserves_games():
+    game_id = add_game("Playing Game", "/tmp/game.exe")
+    assert game_id is not None
+    update_custom_play_statuses(["backlog"])
+    update_game(game_id, {"play_status": "backlog"})
+    assert get_all_games()[0]["play_status"] == "backlog"
+
+    # Custom status passed with leading/trailing whitespace must not cause the
+    # status to be treated as removed, which would reset games to DEFAULT_PLAY_STATUS.
+    update_custom_play_statuses([" Backlog "])
+    assert get_all_games()[0]["play_status"] == "backlog"
+
+
+def test_list_launch_targets_for_games_with_duplicate_ids_across_chunks():
+    game_id = add_game("Target Game", "/tmp/game.exe")
+    assert game_id is not None
+    add_game_launch_target(game_id, "Target 1", "/tmp/t1.exe")
+
+    # Duplicate IDs spanning beyond chunk size (500) must not duplicate targets in result
+    targets_by_game = list_launch_targets_for_games([game_id] * 505)
+    assert game_id in targets_by_game
+    assert len(targets_by_game[game_id]) == 1
+    assert targets_by_game[game_id][0]["label"] == "Target 1"
+
+
+def test_update_game_tags_list_and_thread_completed():
+    game_id = add_game("Metadata Game", "/tmp/game.exe")
+    assert game_id is not None
+
+    # update_game should accept list of tags like add_game does
+    applied = update_game(game_id, {"tags": ["visual novel", "rpg"]})
+    assert applied.get("tags") == "visual novel, rpg"
+    game = get_all_games()[0]
+    assert game["tags"] == "visual novel, rpg"
+
+    # update_game should support thread_completed
+    applied_completed = update_game(game_id, {"thread_completed": True})
+    assert applied_completed.get("thread_completed") == 1
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT thread_completed FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None and row[0] == 1
+
