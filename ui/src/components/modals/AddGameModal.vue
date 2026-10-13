@@ -52,6 +52,16 @@ const rpgmakerLinuxRunnerAvailable = ref(false);
 const platformCapabilities = ref<PlatformCapabilities>({
   ...CONSERVATIVE_PLATFORM_CAPABILITIES,
 });
+const isSubmitting = ref(false);
+
+watch(
+  () => props.saving,
+  (saving) => {
+    if (!saving) {
+      isSubmitting.value = false;
+    }
+  },
+);
 const launchModeOptions = computed(() =>
   getLaunchModeOptions(
     platformCapabilities.value,
@@ -132,6 +142,7 @@ watch(
       return;
     }
     // Reset on every close, including when the parent closes the modal after saving.
+    isSubmitting.value = false;
     title.value = "";
     exePath.value = "";
     f95Url.value = "";
@@ -186,7 +197,8 @@ const browseExe = async () => {
 };
 
 const save = () => {
-  if (!title.value.trim() || !exePath.value.trim() || props.saving) return;
+  if (!title.value.trim() || !exePath.value.trim() || props.saving || isSubmitting.value) return;
+  isSubmitting.value = true;
   emit("save", {
     title: title.value.trim(),
     exe_path: exePath.value.trim(),
@@ -272,6 +284,7 @@ const save = () => {
             type="text"
             placeholder="e.g. My Awesome RPG"
             class="modal-input w-full !py-3 font-medium"
+            @keydown.enter="save"
           />
         </div>
 
@@ -289,6 +302,7 @@ const save = () => {
               placeholder="/path/to/game.exe"
               class="modal-input flex-1 !py-3 text-sm font-mono"
               @change="inspectExePath"
+              @keydown.enter="save"
             />
             <button @click="browseExe" class="modal-btn !py-3">Browse</button>
           </div>
@@ -316,6 +330,7 @@ const save = () => {
             placeholder="https://f95zone.to/threads/..."
             class="modal-input w-full !py-3 text-sm"
             style="color: var(--brand)"
+            @keydown.enter="save"
           />
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             Required for checking game updates automatically.
@@ -343,7 +358,7 @@ const save = () => {
         </div>
         <div>
           <label for="add-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
-          <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'e.g. onscripter %command% or xsystem35' : 'e.g. gamemoderun %command% --fullscreen'" />
+          <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'e.g. onscripter %command% or xsystem35' : 'e.g. gamemoderun %command% --fullscreen'" @keydown.enter="save" />
           <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
         </div>
       </div>
@@ -361,11 +376,11 @@ const save = () => {
         </button>
         <button
           @click="save"
-          :disabled="!title.trim() || !exePath.trim() || saving"
+          :disabled="!title.trim() || !exePath.trim() || saving || isSubmitting"
           class="px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
-          {{ saving ? "Adding…" : "Save to Library" }}
+          {{ (saving || isSubmitting) ? "Adding…" : "Save to Library" }}
         </button>
       </div>
     </div>

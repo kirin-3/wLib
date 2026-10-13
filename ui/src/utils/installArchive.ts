@@ -9,6 +9,7 @@ export interface InstallArchiveRequest {
 export const INSTALL_ARCHIVE_EVENT = "wlib-install-archive";
 
 export const openInstallArchive = (request: InstallArchiveRequest = {}): void => {
+  if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent<InstallArchiveRequest>(INSTALL_ARCHIVE_EVENT, { detail: request }),
   );

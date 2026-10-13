@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { IconCheck, IconFolderOpen, IconLoader2, IconX } from "@tabler/icons-vue";
 import {
   api,
@@ -61,7 +61,10 @@ const close = () => {
 const modalRef = ref<HTMLElement | null>(null);
 useModalKeyboard(modalRef, () => props.modelValue, close);
 
+let inspectRequestId = 0;
+
 const reset = () => {
+  inspectRequestId++;
   phase.value = "pick";
   archive.value = "";
   title.value = "";
@@ -88,6 +91,7 @@ const reset = () => {
 const loadLibraryFolder = async () => {
   try {
     const settings = await api.getSettings();
+    if (!props.modelValue) return;
     libraryFolder.value = settings?.library_folder || "";
     libraryFolderMissing.value = !libraryFolder.value.trim();
   } catch (e) {
@@ -98,6 +102,7 @@ const loadLibraryFolder = async () => {
 const inspect = async () => {
   const path = archive.value.trim();
   if (!path || inspecting.value) return;
+  const requestId = ++inspectRequestId;
   inspecting.value = true;
   phase.value = "inspecting";
   inspectError.value = "";
@@ -105,6 +110,7 @@ const inspect = async () => {
   duplicateGameId.value = null;
   try {
     const info = await api.inspectArchive(path, props.game?.id ?? null);
+    if (requestId !== inspectRequestId || !props.modelValue || archive.value.trim() !== path) return;
     if (!info?.success) {
       inspectError.value = info?.error || "Could not read the archive.";
       phase.value = "pick";
@@ -126,16 +132,19 @@ const inspect = async () => {
     else if (isUpdate.value) removeOld.value = true;
     phase.value = "ready";
   } catch (e) {
+    if (requestId !== inspectRequestId || !props.modelValue) return;
     inspectError.value = e instanceof Error ? e.message : String(e);
     phase.value = "pick";
   } finally {
-    inspecting.value = false;
+    if (requestId === inspectRequestId) {
+      inspecting.value = false;
+    }
   }
 };
 
 const browseArchive = async () => {
   const path = await api.browseArchiveFile(archive.value);
-  if (path) {
+  if (path && props.modelValue) {
     archive.value = path;
     title.value = "";
     version.value = "";
@@ -146,41 +155,58 @@ const browseArchive = async () => {
 
 const browseLibraryFolder = async () => {
   const path = await api.browseDirectory(libraryFolder.value);
-  if (!path) return;
+  if (!path || !props.modelValue) return;
   try {
     const res = await api.saveSettings({ library_folder: path });
+    if (!props.modelValue) return;
     if (res?.success === false) throw new Error(res.error || "Could not save library folder");
     libraryFolder.value = path;
     libraryFolderMissing.value = false;
     if (archive.value.trim()) await inspect();
   } catch (e) {
-    notifyError(e instanceof Error ? e.message : String(e));
+    if (props.modelValue) {
+      notifyError(e instanceof Error ? e.message : String(e));
+    }
   }
 };
 
 // Recursive setTimeout so status requests never overlap; bumping pollId cancels the loop.
 let pollId = 0;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
 const stopPolling = () => {
   pollId++;
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
 };
 
 const pollStatus = () => {
-  const id = ++pollId;
+  stopPolling();
+  const id = pollId;
   const tick = async () => {
     try {
       const status = await api.getArchiveInstallStatus();
       if (id !== pollId) return;
       if (status?.stage) installStage.value = status.stage;
-      if (status && !status.running) return;
+      if (!status || !status.running) return;
     } catch (e) {
       console.error("Failed to poll install status", e);
+      return;
     }
-    setTimeout(() => {
+    if (id !== pollId) return;
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
       if (id === pollId) void tick();
     }, 500);
   };
   void tick();
 };
+
+onBeforeUnmount(() => {
+  stopPolling();
+});
 
 const install = async () => {
   if (!canInstall.value) return;
@@ -225,6 +251,7 @@ watch(
   (open) => {
     if (!open) {
       stopPolling();
+      reset();
       return;
     }
     reset();
@@ -235,6 +262,7 @@ watch(
       version.value = props.game.latest_version?.trim() || props.game.version || "";
     }
     void loadLibraryFolder().then(() => {
+      if (!props.modelValue) return;
       if (props.preselectedArchive) {
         archive.value = props.preselectedArchive;
         void inspect();
@@ -301,6 +329,7 @@ watch(
             class="modal-input flex-1 text-sm font-mono"
             :disabled="phase === 'installing'"
             @change="inspect"
+            @keydown.enter="inspect"
           />
           <button @click="browseArchive" :disabled="phase === 'installing'" class="modal-btn">
             <IconFolderOpen class="w-4 h-4 mr-1" />
@@ -315,19 +344,19 @@ watch(
         <div v-if="phase !== 'pick'" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="block">
             <span class="field-label">Title</span>
-            <input v-model="title" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" />
+            <input v-model="title" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Version</span>
-            <input v-model="version" type="text" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" />
+            <input v-model="version" type="text" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Creator</span>
-            <input v-model="creator" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" />
+            <input v-model="creator" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">F95Zone thread URL</span>
-            <input v-model="f95Url" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" />
+            <input v-model="f95Url" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
         </div>
 
