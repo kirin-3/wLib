@@ -20,4 +20,6 @@ test("custom statuses survive legacy fallback and share a presentation", () => {
   assert.equal(normalizePlayStatus("constructor"), "constructor");
   assert.equal(getPlayStatusMeta("__proto__").toneClass, "ui-status-tone-custom");
   assert.deepEqual(getPlayStatusOptions(["Backlog", "backlog", "Playing", "Replay"]).slice(7).map((option) => option.value), ["Backlog", "Replay"]);
+  assert.doesNotThrow(() => getPlayStatusOptions(undefined as unknown as string[]));
+  assert.equal(validateCustomPlayStatuses([null as unknown as string, 123 as unknown as string]), "Play status names must contain 1–40 characters.");
 });

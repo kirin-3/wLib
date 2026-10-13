@@ -430,9 +430,10 @@ const filteredGames = computed(() => {
     );
   }
   if (filterTags.value.length) {
-    result = result.filter((game) =>
-      filterTags.value.every((tag) => gameTags(game).includes(tag)),
-    );
+    result = result.filter((game) => {
+      const tags = new Set(gameTags(game));
+      return filterTags.value.every((tag) => tags.has(tag));
+    });
   }
   result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
@@ -487,22 +488,34 @@ const createCollectionFromTab = async () => {
   cancelInlineCollectionCreate();
 };
 
-const openCollectionTabMenu = (name: string, event: MouseEvent) => {
+let collectionTabMenuTrigger: HTMLElement | null = null;
+const openCollectionTabMenu = async (name: string, event: MouseEvent | KeyboardEvent) => {
   event.preventDefault();
+  collectionTabMenuTrigger =
+    (event.target as HTMLElement)?.closest?.("button") ||
+    (event.currentTarget as HTMLElement) ||
+    null;
+  const rect = collectionTabMenuTrigger?.getBoundingClientRect?.();
+  const rawX = event instanceof MouseEvent && event.clientX ? event.clientX : rect ? rect.left : 8;
+  const rawY = event instanceof MouseEvent && event.clientY ? event.clientY : rect ? rect.bottom : 8;
   // The menu is small; clamp so it stays inside the window.
   collectionTabMenu.value = {
     name,
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 180)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 130)),
+    x: Math.max(8, Math.min(rawX, window.innerWidth - 180)),
+    y: Math.max(8, Math.min(rawY, window.innerHeight - 130)),
   };
+  await nextTick();
+  collectionTabMenuElement.value?.querySelector<HTMLButtonElement>("button")?.focus();
 };
 
-const closeCollectionTabMenu = () => {
+const closeCollectionTabMenu = (restoreFocus = true) => {
+  if (!collectionTabMenu.value) return;
   collectionTabMenu.value = null;
+  if (restoreFocus) collectionTabMenuTrigger?.focus();
 };
 
 const startCollectionRename = async (name: string) => {
-  closeCollectionTabMenu();
+  closeCollectionTabMenu(false);
   renamingCollection.value = name;
   renameCollectionDraft.value = name;
   await nextTick();
@@ -540,7 +553,7 @@ const commitCollectionRename = async () => {
 };
 
 const deleteCollectionFromTab = async (name: string) => {
-  closeCollectionTabMenu();
+  closeCollectionTabMenu(false);
   const count = collectionCount(name);
   const membershipNote = count
     ? ` Its ${count} game${count === 1 ? "" : "s"} stay in your library.`
@@ -550,6 +563,9 @@ const deleteCollectionFromTab = async (name: string) => {
   if (!result.success) {
     notifyError(result.error || "Could not delete the collection.");
     return;
+  }
+  if (activeCollection.value.toLowerCase() === name.toLowerCase()) {
+    activeCollection.value = "";
   }
   applyCollectionsFromPayload(result.collections);
 };
@@ -794,8 +810,15 @@ const loadGames = async () => {
 const handleLibraryRefresh = () => {
   void loadGames();
   void api
+    .getRunningGames()
+    .then((ids) => {
+      runningGameIds.value = new Set(ids);
+    })
+    .catch(console.error);
+  void api
     .getSettings()
     .then((settings) => {
+      customStatuses.value = settings.custom_play_statuses || [];
       applyCollectionsFromPayload(settings.collections);
       savedPresets.value = settings.library_filter_presets || [];
     })
@@ -942,6 +965,7 @@ watch(
     if (action === "import" && queryUrl) {
       await loadGames();
       showAddModal.value = true;
+      void router.replace({ path: "/", query: {} });
     }
     // Ctrl+N from any view (App.vue).
     if (action === "add") {
@@ -1138,14 +1162,14 @@ const runContextAction = async (
 
 const handleDocumentClick = () => {
   closeLaunchTargetMenus();
-  closeCollectionTabMenu();
+  closeCollectionTabMenu(false);
   closeContextMenu(false);
 };
 const handleLibraryScroll = (event: Event) => {
   if (!contextMenuElement.value?.contains(event.target as Node))
     closeContextMenu(false);
   if (!collectionTabMenuElement.value?.contains(event.target as Node))
-    closeCollectionTabMenu();
+    closeCollectionTabMenu(false);
 };
 const handleLibraryKeyboard = (event: KeyboardEvent) => {
   if (contextMenu.value && event.key === "Escape") {
@@ -1153,7 +1177,12 @@ const handleLibraryKeyboard = (event: KeyboardEvent) => {
     closeContextMenu();
     return;
   }
-  if (showAddModal.value || showImportModal.value || showDetailModal.value || contextMenu.value) return;
+  if (collectionTabMenu.value && event.key === "Escape") {
+    event.preventDefault();
+    closeCollectionTabMenu();
+    return;
+  }
+  if (showAddModal.value || showImportModal.value || showDetailModal.value || contextMenu.value || collectionTabMenu.value) return;
   if (event.key === "Escape" && openLaunchTargetMenuId.value !== null) {
     closeLaunchTargetMenus();
     event.preventDefault();
@@ -1268,6 +1297,14 @@ watch(uniqueTags, (tags) => {
 watch(showDetailModal, (open) => {
   if (!open) {
     clearModalUpdateState();
+    selectedGame.value = null;
+    void loadGames();
+  }
+});
+
+watch(showImportModal, (open) => {
+  if (!open) {
+    void loadGames();
   }
 });
 

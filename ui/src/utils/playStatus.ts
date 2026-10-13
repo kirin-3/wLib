@@ -136,7 +136,8 @@ export const PLAY_STATUS_OPTIONS: PlayStatusOption[] = PLAY_STATUSES.map(
 
 export const getPlayStatusOptions = (customStatuses: readonly string[]): PlayStatusOption[] => {
   const seen = new Set(PLAY_STATUSES.map((status) => status.toLowerCase()));
-  return [...PLAY_STATUS_OPTIONS, ...customStatuses.flatMap((status) => {
+  const statuses = Array.isArray(customStatuses) ? customStatuses : [];
+  return [...PLAY_STATUS_OPTIONS, ...statuses.flatMap((status) => {
     const meta = getPlayStatusMeta(status);
     const key = meta.value.toLowerCase();
     if (seen.has(key)) return [];
@@ -147,8 +148,9 @@ export const getPlayStatusOptions = (customStatuses: readonly string[]): PlaySta
 
 export const validateCustomPlayStatuses = (statuses: readonly string[]): string => {
   const seen = new Set(PLAY_STATUSES.map((status) => status.toLowerCase()));
-  for (const status of statuses) {
-    const name = status.trim();
+  const list = Array.isArray(statuses) ? statuses : [];
+  for (const status of list) {
+    const name = typeof status === "string" ? status.trim() : "";
     if (!name || name.length > 40) return "Play status names must contain 1–40 characters.";
     if (seen.has(name.toLowerCase())) return `Play status '${name}' already exists.`;
     // Legacy aliases (e.g. "Replaying") would be rewritten to a built-in status on save.
