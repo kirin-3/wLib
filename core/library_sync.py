@@ -766,8 +766,16 @@ class SyncManager:
         # Capture payload and its timestamp under one SQLite write lock.
         with closing(database.get_connection()) as connection:
             _ = connection.execute("BEGIN IMMEDIATE")
-            modified = self._setting("local_modified_at") or utc_now()
+            cursor = connection.cursor()
+            _ = cursor.execute("SELECT value FROM settings WHERE key = ?", ("sync_local_modified_at",))
+            row = cast(tuple[object, ...] | None, cursor.fetchone())
+            modified = str(row[0]) if row and row[0] is not None else ""
+            if not modified:
+                modified = utc_now()
             device = socket.gethostname()
+
+            # build_sync_backup uses its own connection inside, which is allowed in WAL mode, but since we hold BEGIN IMMEDIATE,
+            # it might be blocked if it tries to write, but it only reads. Wait, reads might be blocked? No, SQLite allows concurrent reads.
             backup = build_sync_backup(modified, device)
             connection.commit()
         document = backup
@@ -828,8 +836,27 @@ class SyncManager:
         last_revision = self._setting("last_revision") or None
         revision = location.revision()
         first = not self._setting("last_synced_at")
-        local_modified = self._setting("local_modified_at")
-        local_changed = self.local_changed()
+        # Instead of wrapping in BEGIN IMMEDIATE (which can deadlock if self._setting opens a new connection),
+        # we can just read the value and let apply_library_backup catch it if it changes.
+        # BUT WAIT: the issue in _run_once is that `local_modified` is checked against `remote_time`.
+        with closing(database.get_connection()) as connection:
+            _ = connection.execute("BEGIN IMMEDIATE")
+
+            def _get_setting_locked(key: str) -> str:
+                cursor = connection.cursor()
+                _ = cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+                row = cast(tuple[object, ...] | None, cursor.fetchone())
+                return str(row[0]) if row and row[0] is not None else ""
+
+            local_modified = _get_setting_locked("sync_local_modified_at")
+            last_synced = _get_setting_locked("sync_last_synced_at")
+            loc = _get_setting_locked("sync_location")
+            enc = _get_setting_locked("sync_encryption_change")
+
+            local_changed = bool(loc) and (
+                timestamp(local_modified) > timestamp(last_synced) or bool(enc)
+            )
+            connection.commit()
         remote_changed = revision != last_revision
         if not first and not local_changed and not remote_changed:
             database.update_setting("sync_last_error", "")
@@ -867,6 +894,9 @@ class SyncManager:
                 if not push_only:
                     self._pull(backup, revision, local_modified)
                 return
+            else:
+                if not push_only:
+                    _ = apply_library_backup(backup, {"sections": SYNC_SECTIONS}, sync=True, merge_mode="fill_missing")
         if local_changed:
             self._push(location, revision)
 

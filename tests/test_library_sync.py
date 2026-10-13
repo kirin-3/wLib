@@ -712,3 +712,102 @@ print(json.dumps({'success': True}))
         environment.pop("XDG_DATA_HOME", None)
         result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
         assert json.loads(result.stdout)["success"]
+
+def test_pull_loses_concurrent_edit(tmp_path, monkeypatch):
+    import json
+    import threading
+    import time
+    from core.library_sync import SyncManager
+    from core import database
+
+    class SlowLocation:
+        def __init__(self, data):
+            self.rev = "2"
+            self.data = data
+            self.delay = 0.5
+            self.reads = 0
+
+        def revision(self):
+            return self.rev
+
+        def read(self):
+            self.reads += 1
+            if self.delay > 0:
+                time.sleep(self.delay)
+            return self.data, self.rev
+
+        def write(self, data, expected_revision):
+            self.data = data
+            self.rev = str(int(self.rev) + 1)
+            return self.rev
+
+    backup = remote_backup()
+
+    location = SlowLocation(json.dumps(backup).encode())
+    sync = SyncManager(location)
+    sync.set_folder("/fake")
+    database.update_settings({"sync_location": "folder", "sync_last_revision": "1", "sync_last_synced_at": "2026-10-09T10:00:00Z", "sync_local_modified_at": "2026-10-09T10:00:00Z"})
+
+    def background_edit():
+        time.sleep(0.1)
+        database.add_game("Local New", "/path2")
+        database.update_setting("sync_local_modified_at", "2026-10-09T13:00:00Z")
+
+    t = threading.Thread(target=background_edit)
+    t.start()
+
+    sync.run()
+    t.join()
+
+    backup_read = json.loads(location.data.decode())
+    assert len(backup_read["games"]) == 2
+
+def test_push_loses_concurrent_edit(tmp_path, monkeypatch):
+    import threading
+    import time
+    from core.library_sync import SyncManager
+    from core import database
+
+    class SlowLocation:
+        def __init__(self):
+            self.rev = "1"
+            self.data = None
+            self.delay = 0.5
+
+        def revision(self):
+            return self.rev
+
+        def read(self):
+            return self.data, self.rev
+
+        def write(self, data, expected_revision):
+            if self.delay > 0:
+                time.sleep(self.delay)
+            self.data = data
+            self.rev = str(int(self.rev) + 1)
+            return self.rev
+
+    location = SlowLocation()
+    sync = SyncManager(location)
+
+    database.add_game("First Game", "/path1")
+    sync.set_folder("/fake")
+    database.update_settings({"sync_location": "folder"})
+
+    sync.run()
+
+    game_id = database.get_all_games()[0]["id"]
+    database.update_game(game_id, {"rating": "5"})
+
+    def background_edit():
+        time.sleep(0.1)
+        database.update_game(game_id, {"rating": "9"})
+
+    t = threading.Thread(target=background_edit)
+    t.start()
+
+    sync.run()
+    t.join()
+
+    assert database.get_all_games()[0]["rating"] == "9"
+    assert sync.local_changed()
