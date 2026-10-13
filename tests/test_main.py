@@ -1121,3 +1121,108 @@ def test_focus_running_instance_only_trusts_wlib_replies(monkeypatch, reply, exp
     request = opener.open.call_args.args[0]
     assert request.full_url == "http://127.0.0.1:8183/api/open"
     assert request.get_header("X-wlib-extension") == "1"
+
+
+def test_log_renderer_diagnostics_does_not_kill_startup_when_data_dir_unwritable(
+    monkeypatch, tmp_path, capsys
+):
+    data_file = tmp_path / "file-not-dir"
+    data_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(data_file))
+    monkeypatch.setattr(
+        main, "RENDERER_DIAGNOSTICS_LOG", str(data_file / "renderer.log")
+    )
+
+    # Must not raise even though APP_DATA_DIR cannot be created.
+    main.log_renderer_diagnostics("startup", {"k": "v"})
+
+    assert "Renderer diagnostics (startup)" in capsys.readouterr().out
+
+
+def test_main_does_not_share_db_when_port_held_by_other_app(monkeypatch, capsys):
+    load_webview = MagicMock()
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "bind_extension_server", lambda: None)
+    monkeypatch.setattr(main, "focus_running_instance", lambda: False)
+    monkeypatch.setattr(main, "load_webview_module", load_webview)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    load_webview.assert_not_called()
+    assert "not starting a second copy" in capsys.readouterr().err
+
+
+def test_main_terminates_vite_when_webview_fails(monkeypatch):
+    vite_process = MagicMock()
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _m: {})
+    monkeypatch.setattr(main, "bind_extension_server", MagicMock())
+    fake_webview = MagicMock()
+    fake_webview.create_window.return_value = MagicMock()
+    monkeypatch.setattr(main, "load_webview_module", lambda: fake_webview)
+    monkeypatch.setattr(main, "cleanup_legacy_browser_data_async", lambda: None)
+    monkeypatch.setattr(main, "DEV_MODE", True)
+    monkeypatch.setattr(main, "start_vite_dev_server", lambda: vite_process)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    class FakeApi:
+        library_sync = MagicMock()
+
+        def sync_extension_files(self):
+            return {"success": True}
+
+        def set_startup_extension_sync_status(self, _s):
+            return None
+
+        def set_window(self, _w):
+            return None
+
+    monkeypatch.setattr(main, "Api", FakeApi)
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+
+    def fail_webview(*_a, **_k):
+        raise RuntimeError("webview failed")
+
+    monkeypatch.setattr(main, "start_webview", fail_webview)
+
+    with pytest.raises(RuntimeError, match="webview failed"):
+        main.main()
+
+    vite_process.terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("path", ["/api/checkpoint", "/api/check-evil", "/api/openx"])
+def test_extension_get_rejects_prefix_squat_paths(monkeypatch, extension_server, path):
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    monkeypatch.setattr(
+        main.ExtensionRequestHandler, "_find_matching_game", lambda _s, _u: None
+    )
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.request(
+            "GET",
+            f"{path}?url=https://f95zone.to/threads/demo.123/",
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+        )
+        response = connection.getresponse()
+        _ = response.read()
+        assert response.status == 404
+        window.evaluate_js.assert_not_called()
+    finally:
+        connection.close()

@@ -373,7 +373,6 @@ def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
     for key, value in details.items():
         entry_lines.append(f"{key}={_format_renderer_log_value(value)}")
 
-    os.makedirs(APP_DATA_DIR, exist_ok=True)
     entry_text = "\n".join(entry_lines) + "\n"
     with renderer_log_lock:
         for target in _renderer_log_targets():
@@ -779,7 +778,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     "utf-8"
                 )
             )
-        elif self.path.startswith("/api/check"):
+        elif urlparse(self.path).path == "/api/check":
             from urllib.parse import urlparse, parse_qs
 
             query = parse_qs(urlparse(self.path).query)
@@ -811,7 +810,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             _ = self.wfile.write(json.dumps(check_payload).encode())
-        elif self.path.startswith("/api/open"):
+        elif urlparse(self.path).path == "/api/open":
             from urllib.parse import urlparse, parse_qs
 
             # Any web page can fire this GET without an Origin (e.g. <img src>);
@@ -1095,8 +1094,16 @@ def main() -> None:
 
     # A second copy would share the database.
     extension_server = bind_extension_server()
-    if extension_server is None and focus_running_instance():
-        print("[wLib] wLib is already running; showing its window instead.")
+    if extension_server is None:
+        if focus_running_instance():
+            print("[wLib] wLib is already running; showing its window instead.")
+            return
+        print(
+            "[wLib] Could not bind extension server on 127.0.0.1:8183 "
+            + "(port in use by another application); not starting a second copy "
+            + "to avoid sharing the database.",
+            file=sys.stderr,
+        )
         return
 
     _ = configure_qt_runtime_environment()
@@ -1152,12 +1159,12 @@ def main() -> None:
 
     cleanup_legacy_browser_data_async()
 
-    # Start the extension background server in a daemon thread
-    if extension_server is not None:
-        cast(ExtensionServer, extension_server).sync_api = api
-        api.library_sync.server_available = True
-        print("Starting extension HTTP receiver on port 8183...")
-        threading.Thread(target=extension_server.serve_forever, daemon=True).start()
+    # Start the extension background server in a daemon thread.
+    # extension_server is guaranteed here: bind failure returns early above.
+    cast(ExtensionServer, extension_server).sync_api = api
+    api.library_sync.server_available = True
+    print("Starting extension HTTP receiver on port 8183...")
+    threading.Thread(target=extension_server.serve_forever, daemon=True).start()
 
     api.library_sync.start()
 
@@ -1172,10 +1179,13 @@ def main() -> None:
         )
     finally:
         api.library_sync.finish(timeout=10)
-
-    # Cleanup Vite server when window closes
-    if vite_process:
-        vite_process.terminate()
+        # Cleanup Vite server when window closes, including when the
+        # WebView fails to start (otherwise the npm dev process leaks).
+        if vite_process is not None:
+            try:
+                vite_process.terminate()
+            except Exception as e:
+                print(f"[wLib] Failed to stop Vite dev server: {e}")
 
 
 if __name__ == "__main__":
