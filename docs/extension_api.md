@@ -32,13 +32,17 @@ Allows the extension to decorate an F95Zone page based on ownership.
   {
     "exists": true,
     "playStatus": "Playing",
-    "wishlisted": false
+    "wishlisted": false,
+    "app_version": "0.3.8",
+    "extension_version": "1.0.11"
   }
   ```
 - **Contract Notes:**
   - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
   - `playStatus` is optional enrichment for matching games only. It may contain a canonical desktop status or a custom name (at most 40 characters).
   - `wishlisted` is present for matching games. It is `true` when `exe_path` is empty after trimming.
+  - `app_version` is the running wLib app version without a leading `v`. It is present on every check response, including checks without a `url` parameter and checks whose library lookup fails.
+  - `extension_version` is the manifest version currently installed in the synced Chromium extension folder. It is omitted when startup extension sync did not succeed or the installed version is unknown.
 
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={f95_url}`**
@@ -95,6 +99,8 @@ Saves the thread directly as a library game with an empty executable path. The b
 
 ## Installed Extension Files
 
+Extension version `1.0.11` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.11` also warns without blocking when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.8`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
+
 Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
 
 The scraper's `_extract_version_from_title` mirrors these title rules exactly (both parsers are tested against `tests/version_title_cases.json`), so a version stored by the extension is not later reported as an update. Hyphenated releases such as `[v1.0.0-beta2]` are kept whole. 1.0.7 also sends `X-wLib-Extension` on open and add requests and reports wLib's `{"success": false}` replies as failures instead of success.
@@ -104,7 +110,7 @@ The packaged extension files used by browsers live under `~/.local/share/wLib/ex
 - `chrome/`: unpacked extension directory for Chromium-based browsers
 - `firefox/wLib.xpi`: signed Firefox archive in release builds, or an unsigned generated fallback in local development builds
 
-wLib updates that directory automatically on startup when the bundled manifest version changes, the bundled signed Firefox archive changes, or the installed files are missing. Release builds copy the signed Firefox XPI bundled with the app; local development builds generate an unsigned fallback XPI when no signed artifact is bundled. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed so the user knows to reload the browser addon.
+wLib updates that directory automatically on startup when the bundled manifest version changes, the bundled signed Firefox archive changes, or the installed files are missing. The Chromium folder is replaced with a staged swap instead of deleting the whole extension directory: new files are copied into `chrome.new` (with its manifest patched there), then `chrome` is renamed to `chrome.old` and `chrome.new` to `chrome` before `chrome.old` is removed, so the live path never holds a partially copied folder. Leftover `chrome.new`/`chrome.old` folders from an interrupted sync are removed at the start of the next sync. The Firefox XPI is written through a temporary file and moved into place. Release builds copy the signed Firefox XPI bundled with the app; local development builds generate an unsigned fallback XPI when no signed artifact is bundled. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed naming the new version: Chromium browsers pick it up on the next F95Zone page and Firefox updates automatically.
 
 Firefox users install release XPIs through **Add-ons and themes** using **Install Add-on From File**. The `about:debugging` temporary add-on flow is only relevant to local development and is not the normal release installation path.
 

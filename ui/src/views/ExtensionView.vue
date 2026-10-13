@@ -240,6 +240,11 @@ onUnmounted(() => {
             </li>
             <li>The wLib extension icon should appear in your toolbar</li>
           </ol>
+          <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
+            Note: the extension reloads itself on your next F95Zone page
+            after wLib syncs a new version. If you loaded it before
+            automatic updates existed, restart your Chromium browser once.
+          </p>
         </div>
 
         <!-- Firefox -->
@@ -279,8 +284,10 @@ onUnmounted(() => {
             <li>Confirm the installation when Firefox prompts you</li>
           </ol>
           <p class="text-xs mt-3 italic" style="color: var(--text-muted)">
-            Note: Release builds include a signed XPI for normal Firefox
-            installation.
+            Note: Firefox updates the add-on automatically after
+            installation. If you installed it before automatic updates
+            existed, install the XPI once more. Release builds include a
+            signed XPI for normal Firefox installation.
           </p>
         </div>
       </section>

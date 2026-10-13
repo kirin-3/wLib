@@ -233,6 +233,13 @@ def _redirect_extension_dir(monkeypatch, persistent_dir):
     monkeypatch.setattr("core.api.get_extension_dir", lambda: str(persistent_dir))
 
 
+def _bundled_extension_version():
+    manifest_path = (
+        Path(__file__).resolve().parent.parent / "extension" / "manifest.json"
+    )
+    return json.loads(manifest_path.read_text(encoding="utf-8"))["version"]
+
+
 def _write_existing_cheat_engine(ce_dir, content: bytes = b"old engine"):
     executable = ce_dir / "Lunar Engine" / "lunarengine-x86_64.exe"
     executable.parent.mkdir(parents=True, exist_ok=True)
@@ -782,12 +789,20 @@ def test_thread_completion_write_reports_only_new_transition():
     game_id = add_game("Finished", "", f95_url=url)
     assert game_id is not None
 
-    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == [game_id]
+    assert api._update_thread_edit_metadata_for_url(
+        url, {"thread_completed": True}
+    ) == [game_id]
     assert get_all_games()[0]["thread_completed"] == 1
-    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == []
-    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": False}) == []
+    assert (
+        api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == []
+    )
+    assert (
+        api._update_thread_edit_metadata_for_url(url, {"thread_completed": False}) == []
+    )
     assert get_all_games()[0]["thread_completed"] == 0
-    assert api._update_thread_edit_metadata_for_url(url, {"thread_completed": True}) == [game_id]
+    assert api._update_thread_edit_metadata_for_url(
+        url, {"thread_completed": True}
+    ) == [game_id]
 
 
 def test_check_for_updates_reports_newly_finished_for_wishlist_only(monkeypatch):
@@ -1604,7 +1619,7 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
     chrome_content = (chrome_dir / "content.js").read_text()
 
-    assert chrome_manifest["version"] == "1.0.10"
+    assert chrome_manifest["version"] == _bundled_extension_version()
     assert "scripts" not in chrome_manifest["background"]
     assert (
         "*://f95zone.to/sam/latest_alpha*"
@@ -1773,7 +1788,7 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
         json.dumps(
             {
                 "manifest_version": 3,
-                "version": "1.0.10",
+                "version": _bundled_extension_version(),
                 "background": {
                     "service_worker": "background.js",
                 },
@@ -1789,8 +1804,109 @@ def test_sync_extension_files_skips_copy_when_versions_match(monkeypatch, tmp_pa
     assert result["success"] is True
     assert result.get("updated") is False
     assert result.get("reason") == "up-to-date"
-    assert result.get("installed_version") == "1.0.10"
+    assert result.get("installed_version") == _bundled_extension_version()
     assert (chrome_dir / "content.js").read_text() == sentinel
+
+
+def test_sync_extension_files_staged_swap_leaves_complete_chrome(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    chrome_dir.mkdir(parents=True)
+    (chrome_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "1.0.1",
+                "background": {"service_worker": "background.js"},
+            }
+        )
+    )
+    (chrome_dir / "content.js").write_text("old-content")
+    (persistent_dir / "firefox").mkdir(parents=True)
+    (persistent_dir / "firefox" / "wLib.xpi").write_text("outdated")
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert not (persistent_dir / "chrome.new").exists()
+    assert not (persistent_dir / "chrome.old").exists()
+    chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
+    assert chrome_manifest["version"] == result.get("installed_version")
+    assert chrome_manifest["version"] != "1.0.1"
+    assert "scripts" not in chrome_manifest["background"]
+    assert (chrome_dir / "content.js").is_file()
+    assert (chrome_dir / "background.js").is_file()
+
+
+def test_sync_extension_files_cleans_leftover_staging_folders(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    chrome_dir.mkdir(parents=True)
+    (chrome_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "1.0.1",
+                "background": {"service_worker": "background.js"},
+            }
+        )
+    )
+    (persistent_dir / "firefox").mkdir(parents=True)
+    (persistent_dir / "firefox" / "wLib.xpi").write_text("outdated")
+    stale_new = persistent_dir / "chrome.new"
+    stale_old = persistent_dir / "chrome.old"
+    stale_new.mkdir()
+    (stale_new / "partial.json").write_text("interrupted copy")
+    stale_old.mkdir()
+    (stale_old / "previous.json").write_text("interrupted swap")
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert not stale_new.exists()
+    assert not stale_old.exists()
+    assert json.loads((chrome_dir / "manifest.json").read_text())["version"] == (
+        result.get("installed_version")
+    )
+
+
+def test_sync_extension_files_copy_failure_keeps_old_chrome(monkeypatch, tmp_path):
+    import shutil
+
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    chrome_dir.mkdir(parents=True)
+    old_manifest = {
+        "manifest_version": 3,
+        "version": "1.0.1",
+        "background": {"service_worker": "background.js"},
+    }
+    (chrome_dir / "manifest.json").write_text(json.dumps(old_manifest))
+    (chrome_dir / "content.js").write_text("old-content")
+    (persistent_dir / "firefox").mkdir(parents=True)
+    (persistent_dir / "firefox" / "wLib.xpi").write_text("outdated")
+
+    def fail_copytree(*_args, **_kwargs):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(shutil, "copytree", fail_copytree)
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is False
+    assert json.loads((chrome_dir / "manifest.json").read_text()) == old_manifest
+    assert (chrome_dir / "content.js").read_text() == "old-content"
 
 
 def test_startup_extension_sync_status_defaults_and_updates():
@@ -2311,7 +2427,9 @@ def test_bulk_prefix_fetch_only_for_changed_wishlist(
     url = "https://f95zone.to/threads/wishlist.126/"
     game_id = add_game("Wishlist", exe_path, f95_url=url, version="1.0")
     conn = get_connection()
-    conn.execute("UPDATE games SET latest_version = ? WHERE id = ?", (old_latest, game_id))
+    conn.execute(
+        "UPDATE games SET latest_version = ? WHERE id = ?", (old_latest, game_id)
+    )
     conn.commit()
     conn.close()
 
@@ -2383,7 +2501,9 @@ def test_bulk_prefix_fetch_failure_preserves_version_and_completion(monkeypatch)
     monkeypatch.setattr(
         api.scraper,
         "check_versions",
-        lambda urls, callback: callback(urls[0], {"success": True, "version": "1.1"}) or {},
+        lambda urls, callback: (
+            callback(urls[0], {"success": True, "version": "1.1"}) or {}
+        ),
     )
 
     assert api.check_all_updates()["success"]

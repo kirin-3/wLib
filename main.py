@@ -793,6 +793,19 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     print(f"[wLib] Database error during extension check: {e}")
                     check_payload = {"exists": False}
 
+            check_payload["app_version"] = APP_VERSION
+            sync_api = getattr(getattr(self, "server", None), "sync_api", None)
+            if sync_api is None:
+                sync_api = api_ref
+            if sync_api is not None:
+                try:
+                    sync_status = sync_api.get_startup_extension_sync_status()
+                    installed_version = sync_status.get("installed_version")
+                    if sync_status.get("success") and installed_version:
+                        check_payload["extension_version"] = installed_version
+                except Exception:
+                    pass
+
             self.send_response(200)
             self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")

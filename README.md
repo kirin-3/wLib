@@ -283,7 +283,7 @@ wLib includes a browser extension that adds quick-action buttons directly to F95
 
 The app synchronizes browser extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows, and exposes the resolved folder through **Open Extension Folder**.
 
-If the bundled extension version changes, wLib shows a startup toast telling you to reload the browser addon so the new files take effect.
+The extension updates itself: Chromium browsers pick up the synced files on the next F95Zone page, and Firefox installs new versions automatically from the release's update manifest. If you installed the extension before automatic updates existed, restart your Chromium browser once or install the Firefox XPI once more; new installs need no extra step.
 
 ### Chrome, Chromium, Brave, Edge
 
@@ -293,12 +293,14 @@ If the bundled extension version changes, wLib shows a startup toast telling you
 4. Click **Load unpacked** and select `chrome/` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/chrome/` on Linux or `%LOCALAPPDATA%\wLib\extension\chrome` on Windows.
 5. Visit any F95Zone thread to see the wLib integration buttons!
 
+The extension reloads itself on the next F95Zone page after future updates.
+
 ### Firefox
 
 1. Open Firefox **Add-ons and themes**.
 2. Click the gear icon and choose **Install Add-on From File...**.
 3. Select `firefox/wLib.xpi` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/firefox/wLib.xpi` on Linux or `%LOCALAPPDATA%\wLib\extension\firefox\wLib.xpi` on Windows.
-4. Confirm the installation when Firefox prompts you.
+4. Confirm the installation when Firefox prompts you. Firefox updates the add-on automatically afterwards.
 
 > [!WARNING]
 > Do NOT load the raw `extension/` directory directly in Firefox. Release builds include a signed `.xpi` for normal Firefox installation; local development builds may generate an unsigned fallback XPI for smoke checks.

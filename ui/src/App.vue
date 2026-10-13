@@ -247,8 +247,8 @@ onMounted(() => {
         const version = extensionSync.installed_version || extensionSync.bundled_version;
         notify(
           version
-            ? `Synced browser extension files to v${version}. Reload the browser addon to pick up the update.`
-            : "Synced browser extension files. Reload the browser addon to pick up the update.",
+            ? `Browser extension updated to v${version}. Chromium browsers apply it on your next F95Zone page; Firefox updates automatically.`
+            : "Browser extension updated. Chromium browsers apply it on your next F95Zone page; Firefox updates automatically.",
           "info",
           "Extension Updated",
         );

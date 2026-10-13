@@ -654,6 +654,8 @@ class Api:
         bundled_ext_dir = self._get_bundled_extension_dir()
         persistent_ext_dir = self._get_persistent_extension_dir()
         chrome_dir = os.path.join(persistent_ext_dir, "chrome")
+        chrome_new_dir = os.path.join(persistent_ext_dir, "chrome.new")
+        chrome_old_dir = os.path.join(persistent_ext_dir, "chrome.old")
         firefox_dir = os.path.join(persistent_ext_dir, "firefox")
         bundled_manifest = os.path.join(bundled_ext_dir, "manifest.json")
         installed_manifest = os.path.join(chrome_dir, "manifest.json")
@@ -689,17 +691,22 @@ class Api:
                         reason = "signed-firefox-xpi-changed"
 
             if needs_copy and os.path.isdir(bundled_ext_dir):
-                if os.path.exists(persistent_ext_dir):
-                    shutil.rmtree(persistent_ext_dir)
                 os.makedirs(persistent_ext_dir, exist_ok=True)
+
+                # Drop staging folders left behind by an interrupted earlier sync.
+                for stale_dir in (chrome_new_dir, chrome_old_dir):
+                    if os.path.isdir(stale_dir):
+                        shutil.rmtree(stale_dir)
+                    elif os.path.lexists(stale_dir):
+                        os.remove(stale_dir)
 
                 _ = shutil.copytree(
                     bundled_ext_dir,
-                    chrome_dir,
+                    chrome_new_dir,
                     ignore=shutil.ignore_patterns("firefox"),
                 )
 
-                chrome_manifest_path = os.path.join(chrome_dir, "manifest.json")
+                chrome_manifest_path = os.path.join(chrome_new_dir, "manifest.json")
                 import json
 
                 with open(chrome_manifest_path, "r", encoding="utf-8") as f:
@@ -717,14 +724,34 @@ class Api:
                     with open(chrome_manifest_path, "w", encoding="utf-8") as f:
                         json.dump(chrome_manifest, f, indent=4)
 
+                # Swap the staged folder into place. The live path holds either
+                # the complete old version or the complete new version; only
+                # the renames themselves briefly remove it.
+                if os.path.isdir(chrome_dir) or os.path.lexists(chrome_dir):
+                    os.rename(chrome_dir, chrome_old_dir)
+                os.rename(chrome_new_dir, chrome_dir)
+                if os.path.isdir(chrome_old_dir):
+                    shutil.rmtree(chrome_old_dir)
+                elif os.path.lexists(chrome_old_dir):
+                    os.remove(chrome_old_dir)
+
                 os.makedirs(firefox_dir, exist_ok=True)
-                if os.path.isfile(bundled_firefox_xpi):
-                    _ = shutil.copy2(bundled_firefox_xpi, installed_firefox_xpi)
-                else:
-                    self._write_unsigned_firefox_xpi(
-                        bundled_ext_dir, installed_firefox_xpi
-                    )
-                installed_version = self._read_manifest_version(chrome_manifest_path)
+                firefox_tmp_path = installed_firefox_xpi + ".tmp"
+                try:
+                    if os.path.isfile(bundled_firefox_xpi):
+                        _ = shutil.copy2(bundled_firefox_xpi, firefox_tmp_path)
+                    else:
+                        self._write_unsigned_firefox_xpi(
+                            bundled_ext_dir, firefox_tmp_path
+                        )
+                    os.replace(firefox_tmp_path, installed_firefox_xpi)
+                finally:
+                    if os.path.lexists(firefox_tmp_path):
+                        with suppress(OSError):
+                            os.remove(firefox_tmp_path)
+                installed_version = self._read_manifest_version(
+                    os.path.join(chrome_dir, "manifest.json")
+                )
 
             return {
                 "success": True,

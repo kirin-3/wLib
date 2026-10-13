@@ -115,7 +115,22 @@ function normalizeCheckResult(data) {
         exists,
         playStatus,
         wishlisted: exists && Boolean(data.wishlisted),
+        appOutdated: Boolean(data && typeof data === 'object' && data.appOutdated),
     };
+}
+
+function isExtensionContextInvalidated() {
+    try {
+        return typeof chrome !== 'undefined' && !!chrome.runtime && chrome.runtime.id === undefined;
+    } catch (_error) {
+        return false;
+    }
+}
+
+function wlibConnectionStatusMessage() {
+    return isExtensionContextInvalidated()
+        ? 'wLib extension updated. Refresh this page.'
+        : 'Error: Make sure wLib is open.';
 }
 
 function checkGameInWLib(url) {
@@ -126,7 +141,7 @@ function checkGameInWLib(url) {
         }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn('wLib extension: Could not connect to background wLib service.', chrome.runtime.lastError);
-                resolve({ exists: false, playStatus: '', wishlisted: false });
+                resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false });
                 return;
             }
 
@@ -136,7 +151,7 @@ function checkGameInWLib(url) {
             }
 
             console.warn('wLib extension: Check request failed.', response?.error || response);
-            resolve({ exists: false, playStatus: '', wishlisted: false });
+            resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false });
         });
     });
 }
@@ -161,6 +176,7 @@ async function initThreadPageExtension() {
     gameInfo.existsInWLib = checkResult.exists;
     gameInfo.playStatus = checkResult.playStatus;
     gameInfo.wishlisted = checkResult.wishlisted;
+    gameInfo.appOutdated = checkResult.appOutdated;
     injectUI(gameInfo);
 }
 
@@ -563,7 +579,7 @@ function injectUI(gameInfo) {
                 url: gameInfo.url
             }, (response) => {
                 if (chrome.runtime.lastError || !response?.success) {
-                    statusEl.textContent = 'Error: Make sure wLib is open.';
+                    statusEl.textContent = wlibConnectionStatusMessage();
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
                     return;
@@ -583,7 +599,7 @@ function injectUI(gameInfo) {
             }, (response) => {
                 if (chrome.runtime.lastError) {
                     const err = chrome.runtime.lastError.message;
-                    statusEl.textContent = 'Error: Make sure wLib is open.';
+                    statusEl.textContent = wlibConnectionStatusMessage();
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                     console.error('wLib Extension Error:', err);
@@ -598,7 +614,7 @@ function injectUI(gameInfo) {
                         setTimeout(() => container.remove(), 300);
                     }, 3000);
                 } else {
-                    statusEl.textContent = 'Error: Make sure wLib is open.';
+                    statusEl.textContent = wlibConnectionStatusMessage();
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                 }
@@ -639,7 +655,9 @@ function injectUI(gameInfo) {
                     wishlistBtn.disabled = false;
                     btn.disabled = false;
                     wishlistBtn.textContent = 'Retry';
-                    statusEl.textContent = 'Make sure wLib is open';
+                    statusEl.textContent = isExtensionContextInvalidated()
+                        ? 'wLib extension updated. Refresh this page.'
+                        : 'Make sure wLib is open';
                 }
             });
         });
@@ -648,6 +666,12 @@ function injectUI(gameInfo) {
 
     container.appendChild(headerRow);
     actionRow.prepend(btn);
+    if (gameInfo.appOutdated) {
+        const outdatedNote = document.createElement('p');
+        outdatedNote.className = 'wlib-outdated-warning';
+        outdatedNote.textContent = 'Your wLib app is out of date. Some actions may not work.';
+        body.appendChild(outdatedNote);
+    }
     body.appendChild(actionRow);
     if (libraryStatusBlock.childElementCount) {
         body.appendChild(libraryStatusBlock);

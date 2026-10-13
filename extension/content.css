@@ -290,6 +290,18 @@
     text-align: center;
 }
 
+.wlib-outdated-warning {
+    margin: 0;
+    padding: 0.5rem 0.65rem;
+    border-radius: 10px;
+    border: 1px solid rgba(251, 191, 36, 0.55);
+    background: rgba(251, 191, 36, 0.14);
+    color: #fde68a;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    text-align: center;
+}
+
 .wlib-status:empty {
     display: none;
 }

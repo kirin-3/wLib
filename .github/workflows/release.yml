@@ -30,7 +30,7 @@ jobs:
           node-version: '20'
 
       - name: Lint Firefox extension
-        run: npx --yes web-ext@10.7.0 lint --source-dir=extension
+        run: npx --yes web-ext@10.7.0 lint --source-dir=extension --self-hosted
 
       # AMO accepts each extension version once, so only tagged releases sign;
       # manual dry runs package an unsigned XPI instead of burning the version.
@@ -268,6 +268,30 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Download validated extension
+        uses: actions/download-artifact@v4
+        with:
+          name: wlib-validated-extension
+          path: validated-extension
+
+      - name: Prepare Firefox update assets
+        run: |
+          set -euo pipefail
+          EXTVER="$(jq -r .version extension/manifest.json)"
+          test -n "$EXTVER"
+          XPI_SRC="$(find validated-extension -maxdepth 1 -name '*.xpi' -print -quit)"
+          test -n "$XPI_SRC"
+          mkdir -p release-artifacts
+          cp "$XPI_SRC" "release-artifacts/wlib-firefox-${EXTVER}.xpi"
+          XPI_SHA="$(sha256sum "release-artifacts/wlib-firefox-${EXTVER}.xpi" | cut -d' ' -f1)"
+          jq -n \
+            --arg ver "$EXTVER" \
+            --arg link "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/wlib-firefox-${EXTVER}.xpi" \
+            --arg hash "sha256:${XPI_SHA}" \
+            '{addons: {"wlib@thekirin.net": {updates: [{version: $ver, update_link: $link, update_hash: $hash}]}}}' \
+            > release-artifacts/updates.json
+          cat release-artifacts/updates.json
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -296,7 +320,7 @@ jobs:
         with:
           name: wLib ${{ github.ref_name }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: false
           files: release-artifacts/**
           body: |
@@ -308,6 +332,7 @@ jobs:
 
             - Windows x64: per-user MSI or portable ZIP (with SHA-256 checksums)
             - Linux x86_64: AppImage, tarball, DEB, RPM, and AUR metadata
+            - Firefox add-on: signed `wlib-firefox-<extver>.xpi` plus `updates.json`; install the XPI once through Add-ons and themes → Install Add-on From File and Firefox updates it automatically afterwards
 
             Windows launches `.exe`, `.bat`, `.cmd`, and `.jar` games natively.
             Wine, Proton, Winetricks, Wayland, and Linux runtime installers are Linux-only.

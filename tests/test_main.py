@@ -168,7 +168,9 @@ def test_cleanup_legacy_browser_data_removes_owned_dirs_only(monkeypatch, tmp_pa
     assert (shared / "keep.txt").exists()
 
 
-def test_cleanup_legacy_browser_data_logs_failure_and_continues(monkeypatch, tmp_path, capsys):
+def test_cleanup_legacy_browser_data_logs_failure_and_continues(
+    monkeypatch, tmp_path, capsys
+):
     data = tmp_path / "data"
     monkeypatch.setenv("WLIB_DATA_DIR", str(data))
     for name in ("browser_session", "playwright"):
@@ -238,9 +240,7 @@ def test_ensure_packaged_webview_cache_fresh_clears_first_launch_cache(
     assert (paths["webview_storage"] / "prefs").read_text(encoding="utf-8") == "keep"
 
 
-def test_ensure_packaged_webview_cache_fresh_clears_legacy_cache(
-    monkeypatch, tmp_path
-):
+def test_ensure_packaged_webview_cache_fresh_clears_legacy_cache(monkeypatch, tmp_path):
     paths = _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path)
     paths["cache_path"].mkdir(parents=True, exist_ok=True)
     (paths["cache_path"] / "profile-cache").write_text("old", encoding="utf-8")
@@ -653,6 +653,7 @@ def test_extension_check_payload_includes_play_status_for_matches():
         "exists": True,
         "playStatus": "Playing",
         "wishlisted": False,
+        "app_version": main.APP_VERSION,
     }
 
 
@@ -665,6 +666,7 @@ def test_extension_check_reports_wishlisted_for_empty_executable():
     assert json.loads(handler.wfile.getvalue()) == {
         "exists": True,
         "wishlisted": True,
+        "app_version": main.APP_VERSION,
     }
 
 
@@ -680,14 +682,95 @@ def test_extension_check_payload_omits_play_status_for_missing_matches():
 
     assert json.loads(response_body) == {
         "exists": False,
+        "app_version": main.APP_VERSION,
     }
+
+
+def _mock_startup_sync(monkeypatch, status):
+    sync_api = MagicMock()
+    sync_api.get_startup_extension_sync_status.return_value = status
+    monkeypatch.setattr(main, "api_ref", sync_api)
+    return sync_api
+
+
+def test_extension_check_includes_app_and_extension_versions(monkeypatch):
+    _mock_startup_sync(monkeypatch, {"success": True, "installed_version": "1.0.11"})
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/",
+        matching_game={
+            "id": 1,
+            "title": "Demo",
+            "f95_url": "https://f95zone.to/threads/demo.123/",
+            "play_status": "Playing",
+            "exe_path": "/tmp/demo.sh",
+        },
+    )
+
+    handler.do_GET()
+
+    assert json.loads(cast(BytesIO, handler.wfile).getvalue().decode("utf-8")) == {
+        "exists": True,
+        "playStatus": "Playing",
+        "wishlisted": False,
+        "app_version": main.APP_VERSION,
+        "extension_version": "1.0.11",
+    }
+
+
+def test_extension_check_without_url_still_reports_versions(monkeypatch):
+    _mock_startup_sync(monkeypatch, {"success": True, "installed_version": "1.0.11"})
+    handler = _make_extension_handler("/api/check")
+
+    handler.do_GET()
+
+    assert json.loads(cast(BytesIO, handler.wfile).getvalue().decode("utf-8")) == {
+        "exists": False,
+        "app_version": main.APP_VERSION,
+        "extension_version": "1.0.11",
+    }
+
+
+def test_extension_check_reports_versions_on_lookup_error(monkeypatch):
+    _mock_startup_sync(monkeypatch, {"success": True, "installed_version": "1.0.11"})
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/"
+    )
+    handler._find_matching_game = MagicMock(side_effect=RuntimeError("db down"))
+
+    handler.do_GET()
+
+    assert json.loads(cast(BytesIO, handler.wfile).getvalue().decode("utf-8")) == {
+        "exists": False,
+        "app_version": main.APP_VERSION,
+        "extension_version": "1.0.11",
+    }
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {"success": False, "error": "sync failed"},
+        {"success": True, "installed_version": ""},
+        {"success": True},
+    ],
+)
+def test_extension_check_omits_extension_version_when_sync_failed(monkeypatch, status):
+    _mock_startup_sync(monkeypatch, status)
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/demo.123/",
+        matching_game={"exe_path": "  "},
+    )
+
+    handler.do_GET()
+
+    payload = json.loads(cast(BytesIO, handler.wfile).getvalue().decode("utf-8"))
+    assert payload["app_version"] == main.APP_VERSION
+    assert "extension_version" not in payload
 
 
 @pytest.fixture
 def extension_server():
-    server = main.ThreadingHTTPServer(
-        ("127.0.0.1", 0), main.ExtensionRequestHandler
-    )
+    server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.ExtensionRequestHandler)
     thread = threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
     )
@@ -845,7 +928,9 @@ def test_extension_wishlist_saves_without_executable_and_rejects_duplicate(
         connection = HTTPConnection(*extension_server.server_address, timeout=3)
         try:
             connection.request(
-                "POST", "/api/wishlist", body,
+                "POST",
+                "/api/wishlist",
+                body,
                 headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
             )
             reply = connection.getresponse()
@@ -885,7 +970,8 @@ def test_extension_wishlist_rejects_web_origin_and_oversized_body(
         connection.putheader("Host", "localhost:8183")
         connection.putheader("Origin", origin)
         connection.putheader(
-            "Content-Length", str(main.MAX_EXTENSION_BODY_BYTES + 1) if oversized else "2"
+            "Content-Length",
+            str(main.MAX_EXTENSION_BODY_BYTES + 1) if oversized else "2",
         )
         connection.endheaders(b"{}" if not oversized else None)
         reply = connection.getresponse()
@@ -912,7 +998,9 @@ def test_extension_wishlist_requires_title_and_thread_url(
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
     try:
         connection.request(
-            "POST", "/api/wishlist", json.dumps(payload),
+            "POST",
+            "/api/wishlist",
+            json.dumps(payload),
             headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
         )
         reply = connection.getresponse()
@@ -959,7 +1047,10 @@ def test_extension_check_remains_responsive_while_open_waits(
         )
         try:
             assert evaluating.wait(3)
-            assert request("/api/check?url=__ping__") == {"exists": False}
+            assert request("/api/check?url=__ping__") == {
+                "exists": False,
+                "app_version": main.APP_VERSION,
+            }
         finally:
             release.set()
         assert pending_open.result(timeout=3) == {"success": True}
@@ -1003,7 +1094,9 @@ def test_start_vite_dev_server_uses_platform_npm_command(monkeypatch):
     monkeypatch.setattr(main.subprocess, "Popen", popen)
     assert main.start_vite_dev_server() is process
     assert popen.call_args.args[0] == [
-        "npm.cmd" if os.name == "nt" else "npm", "run", "dev"
+        "npm.cmd" if os.name == "nt" else "npm",
+        "run",
+        "dev",
     ]
 
 
