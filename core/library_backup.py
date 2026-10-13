@@ -499,11 +499,21 @@ def load_library_backup(
         raise BackupValidationError("Backup file does not exist.", "file_not_found")
 
     try:
-        with open(backup_path, encoding="utf-8") as backup_file:
+        # utf-8-sig also accepts a byte-order mark, which Windows editors add.
+        with open(backup_path, encoding="utf-8-sig") as backup_file:
             payload = cast(object, json.load(backup_file))
     except json.JSONDecodeError as exc:
         raise BackupValidationError(
             f"Backup file is not valid JSON: {exc}", "invalid_json"
+        ) from exc
+    except UnicodeError as exc:
+        raise BackupValidationError(
+            f"Backup file is not valid UTF-8 JSON: {exc}", "invalid_json"
+        ) from exc
+    except RecursionError as exc:
+        raise BackupValidationError(
+            "Backup file is not valid JSON: it is nested too deeply.",
+            "invalid_json",
         ) from exc
     except OSError as exc:
         raise BackupValidationError(
@@ -564,18 +574,33 @@ def validate_library_backup(payload: object) -> dict[str, object]:
     return backup
 
 
+def _backup_game_carries_section(game: Mapping[str, object], section: str) -> bool:
+    """True when a game record actually carries data for a backup section."""
+    if section not in game:
+        return False
+    if section == SECTION_LAUNCH_TARGETS:
+        # An empty list carries no targets; treating it as data would clear
+        # local targets on import.
+        return bool(_coerce_sequence(game[section]))
+    return bool(_coerce_mapping(game[section]))
+
+
 def _available_backup_sections(backup: Mapping[str, object]) -> list[str]:
     selected = set(
         str(section) for section in _coerce_sequence(backup.get("selected_sections"))
     )
+    games = [_coerce_mapping(game) for game in _coerce_sequence(backup.get("games"))]
     available: list[str] = []
-    if any(
-        _game_section(_coerce_mapping(game), SECTION_METADATA)
-        for game in _coerce_sequence(backup.get("games"))
-    ):
+    if any(_game_section(game, SECTION_METADATA) for game in games):
         available.append(SECTION_METADATA)
 
-    available.extend(section for section in SUPPORTED_SECTIONS if section in selected)
+    # Backups written by other tools may omit the section manifest; a section
+    # the file actually carries stays importable instead of being dropped.
+    for section in SUPPORTED_SECTIONS:
+        if section in selected or any(
+            _backup_game_carries_section(game, section) for game in games
+        ):
+            available.append(section)
 
     settings = _coerce_mapping(backup.get("settings"))
     if "general" in settings and SECTION_SETTINGS_GENERAL not in available:
@@ -608,6 +633,7 @@ def _match_imported_game(
     metadata = _game_section(imported_game, "metadata")
     title = _coerce_text(metadata.get("title")).strip()
     f95_url = normalize_thread_url(metadata.get("f95_url"))
+    title_key, developer_key = _fallback_identity_key(metadata)
 
     if f95_url:
         f95_matches = [
@@ -631,9 +657,34 @@ def _match_imported_game(
                 "candidate_count": len(f95_matches),
                 "candidate_ids": [game["id"] for game in f95_matches],
             }
+        # The thread is not in this library, but the same game may have been
+        # added manually with matching title and developer and no URL yet.
+        # Only those URL-less copies are merged; two different threads that
+        # share a title and developer stay separate entries.
+        url_less_matches = [
+            game
+            for game in local_games
+            if _fallback_identity_key(game) == (title_key, developer_key)
+            and not _coerce_text(game.get("f95_url")).strip()
+        ]
+        if len(url_less_matches) == 1:
+            return {
+                "status": "matched",
+                "game": imported_game,
+                "local_id": int(str(url_less_matches[0].get("id", 0))),
+                "match_type": "title_developer",
+            }
+        if len(url_less_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "game": imported_game,
+                "title": title,
+                "reason": "Multiple local games share this title and developer.",
+                "candidate_count": len(url_less_matches),
+                "candidate_ids": [game["id"] for game in url_less_matches],
+            }
         return {"status": "new", "game": imported_game, "title": title}
 
-    title_key, developer_key = _fallback_identity_key(metadata)
     # Manually added games have no developer; their executable identifies them.
     exe_key = _coerce_text(
         _game_section(imported_game, SECTION_EXECUTABLE_PATHS).get("exe_path")
@@ -665,6 +716,35 @@ def _match_imported_game(
                 "reason": f"Multiple local games share this title and {second_key}.",
                 "candidate_count": len(fallback_matches),
                 "candidate_ids": [game["id"] for game in fallback_matches],
+            }
+
+    if title_key and not developer_key and not exe_key and not sync:
+        # The record carries no identity beyond its title (for example an export
+        # without executable paths). Match it when exactly one local game has
+        # that title so re-importing never duplicates the game. Local games with
+        # their own thread URL or developer are never merged on title alone.
+        title_matches = [
+            game
+            for game in local_games
+            if _normalize_identity_text(game.get("title")) == title_key
+            and not _coerce_text(game.get("f95_url")).strip()
+            and not _coerce_text(game.get("developer")).strip()
+        ]
+        if len(title_matches) == 1:
+            return {
+                "status": "matched",
+                "game": imported_game,
+                "local_id": int(str(title_matches[0].get("id", 0))),
+                "match_type": "title",
+            }
+        if len(title_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "game": imported_game,
+                "title": title,
+                "reason": "Multiple local games share this title.",
+                "candidate_count": len(title_matches),
+                "candidate_ids": [game["id"] for game in title_matches],
             }
 
     return {"status": "new", "game": imported_game, "title": title}
@@ -1078,6 +1158,9 @@ MERGE_MODES = ("overwrite", "fill_missing")
 
 def _is_fill_missing_empty(field: str, local_value: object) -> bool:
     """True when a local value counts as missing for fill-missing merges."""
+    if field == "collections":
+        # Membership is stored as a JSON list; "[]" means no collections yet.
+        return _coerce_text(local_value).strip() in ("", "[]")
     if field == "play_status":
         if local_value is None:
             return True
