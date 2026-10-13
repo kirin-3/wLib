@@ -40,14 +40,15 @@ const scheduleCheck = (value: string, kind: PathCheckKind) => {
   clearTimer();
   // Empty fields show nothing: optional ones may stay empty, and required
   // ones already say so when the form is submitted.
-  if (!value.trim()) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) {
     requestId++;
     status.value = null;
     return;
   }
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
-    void checkNow(value, kind);
+    void checkNow(trimmed, kind);
   }, 300);
 };
 

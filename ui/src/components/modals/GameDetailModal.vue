@@ -237,8 +237,11 @@ const averagePersonalRating = computed(() => {
   return avg > 0 ? avg.toFixed(1) : "—";
 });
 
+// The footer Play launches the primary executable, so it needs a path to launch.
+const isCurrentlyWishlisted = computed(() => !exePath.value.trim());
+
 const hasUpdate = computed(() => hasAvailableUpdate({
-  exe_path: props.game?.exe_path || "",
+  exe_path: exePath.value.trim() || props.game?.exe_path || "",
   version: version.value,
   latest_version: latestVersion.value,
 }));
@@ -405,6 +408,9 @@ watch(
         collectionMembership.value = [...(g.collections || [])];
         newCollectionName.value = "";
         collectionError.value = "";
+        showSavePanel.value = false;
+        saveResults.value = [];
+        searchingSaves.value = false;
         resetLaunchTargetForms();
         if (typeof g.tags === "string" && g.tags) {
           tags.value = g.tags
@@ -473,6 +479,11 @@ watch(
       void Promise.all(loaders);
     } else {
       engineMenuOpen.value = false;
+      showSavePanel.value = false;
+      saveResults.value = [];
+      searchingSaves.value = false;
+      newTag.value = "";
+      activeTab.value = "Overview";
       executableModifiedAt.value = null;
       executableModifiedKnown.value = false;
       loadingExecutableModifiedAt.value = false;
@@ -559,6 +570,11 @@ onBeforeUnmount(() => {
 
 const close = () => {
   engineMenuOpen.value = false;
+  showSavePanel.value = false;
+  saveResults.value = [];
+  searchingSaves.value = false;
+  newTag.value = "";
+  activeTab.value = "Overview";
   emit("update:modelValue", false);
 };
 
@@ -800,6 +816,7 @@ const cancelEditLaunchTarget = () => {
 };
 
 const addLaunchTarget = async () => {
+  if (addingLaunchTarget.value) return;
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
   const label = newTargetLabel.value.trim();
@@ -835,6 +852,7 @@ const addLaunchTarget = async () => {
 };
 
 const saveLaunchTarget = async (target: LaunchTarget) => {
+  if (savingTargetId.value !== null) return;
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
   const label = editTargetLabel.value.trim();
@@ -871,6 +889,7 @@ const saveLaunchTarget = async (target: LaunchTarget) => {
 };
 
 const deleteLaunchTarget = async (target: LaunchTarget) => {
+  if (deletingTargetId.value !== null) return;
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
   if (!confirm(`Remove launch target "${target.label}"?`)) return;
@@ -897,6 +916,7 @@ const deleteLaunchTarget = async (target: LaunchTarget) => {
 };
 
 const moveLaunchTarget = async (index: number, direction: -1 | 1) => {
+  if (reorderingLaunchTargets.value) return;
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
   const nextIndex = index + direction;
@@ -940,27 +960,36 @@ const moveLaunchTarget = async (index: number, direction: -1 | 1) => {
 };
 
 const browseCustomPrefix = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   try {
     const p = await api.browseDirectory(customPrefix.value || "");
-    if (p) {
+    if (p && isCurrentGame(gameId)) {
       customPrefix.value = p;
     }
   } catch (e) {
     console.error("Failed to browse directory", e);
-    notifyError("Error browsing directory: " + String(e));
+    if (isCurrentGame(gameId)) {
+      notifyError("Error browsing directory: " + String(e));
+    }
   }
 };
 
 const installRtpsToPrefix = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   notify("RTP installation has started in the background. It may take several minutes to complete.");
   try {
     const res = await api.installRpgmakerRtp(customPrefix.value, protonVersion.value);
+    if (!isCurrentGame(gameId)) return;
     if (res && res.success === false) {
       notifyError("Failed to install RTPs: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to install RTPs", e);
-    notifyError("Error installing RTPs: " + String(e));
+    if (isCurrentGame(gameId)) {
+      notifyError("Error installing RTPs: " + String(e));
+    }
   }
 };
 
@@ -998,6 +1027,9 @@ const createModalCollection = async () => {
     newCollectionName.value = "";
     collectionError.value = "";
     if (!gameInCollection(name)) collectionMembership.value = [...collectionMembership.value, name];
+  } catch (e) {
+    console.error("Failed to create collection", e);
+    collectionError.value = "Error creating collection: " + String(e);
   } finally {
     collectionBusy.value = false;
   }
@@ -1005,6 +1037,10 @@ const createModalCollection = async () => {
 
 const save = async () => {
   if (!props.game || typeof props.game.id !== "number" || saving.value) return;
+  if (!title.value.trim()) {
+    notifyError("Game title is required.");
+    return;
+  }
   saving.value = true;
   try {
     const res = await api.updateGame(props.game.id, {
@@ -1627,7 +1663,7 @@ const openInBrowser = async () => {
                       {{ exePath || "No executable selected" }}
                     </div>
                   </div>
-                  <button v-if="!isRunning && game && !isWishlisted(game) && exePath.trim()" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
+                  <button v-if="!isRunning && game && exePath.trim()" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
                     <IconPlayerPlayFilled class="ui-action-icon" />
                     Play
                   </button>
@@ -1709,7 +1745,7 @@ const openInBrowser = async () => {
                           <IconChevronDown class="ui-action-icon" />
                         </button>
                       </div>
-                      <button v-if="!isRunning && game && !isWishlisted(game)" @click="launchTarget(target)" class="launch-target-action ui-play-btn ui-action-btn">
+                      <button v-if="!isRunning && game && target.exe_path.trim()" @click="launchTarget(target)" class="launch-target-action ui-play-btn ui-action-btn">
                         <IconPlayerPlayFilled class="ui-action-icon" />
                         Play
                       </button>
@@ -2241,7 +2277,7 @@ const openInBrowser = async () => {
               <span class="text-xs" style="color: var(--text-muted)">Unsaved changes</span>
               <button
                 @click="save"
-                :disabled="saving"
+                :disabled="saving || !title.trim()"
                 class="save-btn ui-action-btn disabled:opacity-50"
               >
                 <IconDeviceFloppyFilled class="ui-action-icon" />
@@ -2249,13 +2285,13 @@ const openInBrowser = async () => {
               </button>
             </template>
             <button
-              @click="game && isWishlisted(game) ? selectTab('Launch') : isRunning && game ? emit('stop', game.id) : launchGame()"
-              :title="game && isWishlisted(game) ? 'Choose an executable in the Launch tab' : isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
+              @click="game && isCurrentlyWishlisted ? selectTab('Launch') : isRunning && game ? emit('stop', game.id) : launchGame()"
+              :title="game && isCurrentlyWishlisted ? 'Choose an executable in the Launch tab' : isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
               class="launch-btn footer-launch-btn ui-play-btn ui-action-btn"
             >
-              <IconPlayerStopFilled v-if="isRunning && game && !isWishlisted(game)" class="ui-action-icon" />
-              <IconPlayerPlayFilled v-else-if="game && !isWishlisted(game)" class="ui-action-icon" />
-              {{ game && isWishlisted(game) ? 'Set up' : isRunning ? 'Stop' : 'Play' }}
+              <IconPlayerStopFilled v-if="isRunning && game && !isCurrentlyWishlisted" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else-if="game && !isCurrentlyWishlisted" class="ui-action-icon" />
+              {{ game && isCurrentlyWishlisted ? 'Set up' : isRunning ? 'Stop' : 'Play' }}
             </button>
           </div>
         </div>

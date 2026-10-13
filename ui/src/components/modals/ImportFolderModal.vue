@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { IconLoader2, IconX } from "@tabler/icons-vue";
 import { api, type ScannedGame } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
@@ -22,12 +22,25 @@ const selectedGames = computed(() =>
   games.value.filter((game) => selected.value.has(game.exe_path)),
 );
 
-const close = () => {
-  if (importing.value) return;
+const resetState = () => {
   folder.value = "";
   games.value = [];
   selected.value = new Set();
   scanned.value = false;
+};
+
+watch(
+  () => props.modelValue,
+  (isOpen) => {
+    if (!isOpen) {
+      resetState();
+    }
+  },
+);
+
+const close = () => {
+  if (importing.value) return;
+  resetState();
   emit("update:modelValue", false);
 };
 
@@ -58,7 +71,7 @@ const scan = async () => {
 
 const browse = async () => {
   const path = await api.browseDirectory(folder.value);
-  if (path) {
+  if (path && props.modelValue) {
     folder.value = path;
     void scan();
   }
@@ -84,6 +97,10 @@ const importSelected = async () => {
     const { added, errors } = await api.importGames(selectedGames.value);
     if (errors.length) notifyError(`Some games could not be added:\n\n${errors.join("\n")}`);
     if (added) notify(`Added ${added} game${added === 1 ? "" : "s"} to your library.`, "success");
+  } catch (e) {
+    console.error("Failed to import games", e);
+    notifyError(`Failed to import games: ${String(e)}`);
+    return;
   } finally {
     importing.value = false;
   }
