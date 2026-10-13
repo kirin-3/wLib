@@ -241,7 +241,7 @@ find dist/wlib-bin -name "libgdk_pixbuf-2.0.so*" -exec rm -f {} + || true
 rm -rf dist/wlib-bin/_internal/gi dist/wlib-bin/_internal/gi_typelibs dist/wlib-bin/_internal/gio_modules || true
 
 # Move the built binary to the package folder
-cp -r dist/wlib-bin/* "$BUILD_DIR/$PACKAGE_NAME/"
+cp -a dist/wlib-bin/. "$BUILD_DIR/$PACKAGE_NAME/"
 
 # ── Assemble Package ──
 echo "📋 Assembling package..."
@@ -273,7 +273,7 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
 
 # Copy the full app into the AppDir
-cp -r "$BUILD_DIR/$PACKAGE_NAME"/* "$APPDIR/usr/bin/"
+cp -a "$BUILD_DIR/$PACKAGE_NAME"/. "$APPDIR/usr/bin/"
 
 # Desktop file + icon
 cp "$PROJECT_DIR/wlib.desktop" "$APPDIR/usr/share/applications/"
