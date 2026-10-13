@@ -6,15 +6,20 @@ import { normalizePlayStatus } from "./playStatus.ts";
 // "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
 // normalize_version() in core/api.py.
 export const normalizeVersion = (version: string | null | undefined): string =>
-  (version || "").replace(/\s+/g, "").toLowerCase().replace(/^v(?=\d)/, "");
+  (version || "")
+    .replace(/\s+/g, "")
+    .toLowerCase()
+    .replace(/^v(?=\d)/, "");
 
 export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
   !String(game.exe_path || "").trim();
 
 export const hasAvailableUpdate = (
-  game: Pick<GameRecord, "version" | "latest_version"> & Partial<Pick<GameRecord, "exe_path">>,
+  game: Pick<GameRecord, "version" | "latest_version"> &
+    Partial<Pick<GameRecord, "exe_path">>,
 ): boolean => {
-  if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">)) return false;
+  if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">))
+    return false;
   const remote = normalizeVersion(game.latest_version);
   return !!remote && remote !== normalizeVersion(game.version);
 };
@@ -74,6 +79,10 @@ export const compareLibraryGames = (
   };
   const left = value(a),
     right = value(b);
+  // Missing values (no date, unrated, never played) sink to the bottom in both directions.
+  const leftEmpty = left === "" || left === 0,
+    rightEmpty = right === "" || right === 0;
+  if (leftEmpty !== rightEmpty) return leftEmpty ? 1 : -1;
   const order =
     typeof left === "string" && typeof right === "string"
       ? left.localeCompare(right, undefined, { numeric: true })
@@ -82,6 +91,14 @@ export const compareLibraryGames = (
         : left > right
           ? 1
           : 0;
+  // Ties fall back to ascending title so the order doesn't depend on load order.
+  if (order === 0 && field !== "title")
+    return (a.title || "")
+      .trim()
+      .toLowerCase()
+      .localeCompare((b.title || "").trim().toLowerCase(), undefined, {
+        numeric: true,
+      });
   return direction === "asc" ? order : -order;
 };
 

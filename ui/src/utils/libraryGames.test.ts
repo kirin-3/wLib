@@ -27,7 +27,10 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
     false,
   );
   assert.equal(
-    hasAvailableUpdate({ version: "Ch. 2 Final", latest_version: "ch.2 final" }),
+    hasAvailableUpdate({
+      version: "Ch. 2 Final",
+      latest_version: "ch.2 final",
+    }),
     false,
   );
   assert.equal(
@@ -45,24 +48,43 @@ test("updates ignore whitespace, include unknown installed versions, and disappe
 test("games without an executable are wishlisted and have no update indicator", () => {
   assert.equal(isWishlisted({ exe_path: "  " }), true);
   assert.equal(isWishlisted({ exe_path: "/games/demo.sh" }), false);
-  assert.equal(hasAvailableUpdate({ exe_path: "", version: "1.0", latest_version: "2.0" }), false);
-  assert.equal(hasAvailableUpdate({ exe_path: "/games/demo.sh", version: "1.0", latest_version: "2.0" }), true);
+  assert.equal(
+    hasAvailableUpdate({ exe_path: "", version: "1.0", latest_version: "2.0" }),
+    false,
+  );
+  assert.equal(
+    hasAvailableUpdate({
+      exe_path: "/games/demo.sh",
+      version: "1.0",
+      latest_version: "2.0",
+    }),
+    true,
+  );
 });
 
 test("new since finished matches any normalized difference and skips unfinished games", () => {
-  assert.equal(hasNewSinceFinished({ version: "0.7", finished_version: "0.5" }), true);
+  assert.equal(
+    hasNewSinceFinished({ version: "0.7", finished_version: "0.5" }),
+    true,
+  );
   assert.equal(
     hasNewSinceFinished({ version: "0.7", finished_version: "v0.7" }),
     false,
   );
-  assert.equal(hasNewSinceFinished({ version: "0.7", finished_version: "" }), false);
+  assert.equal(
+    hasNewSinceFinished({ version: "0.7", finished_version: "" }),
+    false,
+  );
   assert.equal(hasNewSinceFinished({ version: "0.7" }), false);
   assert.equal(
     hasNewSinceFinished({ version: " 0.7 ", finished_version: " V 0.7 " }),
     false,
   );
   // "Differs" includes downgrades; versions are not ordered.
-  assert.equal(hasNewSinceFinished({ version: "0.5", finished_version: "0.7" }), true);
+  assert.equal(
+    hasNewSinceFinished({ version: "0.5", finished_version: "0.7" }),
+    true,
+  );
 });
 
 test("search includes title, developer, engine and normalized tags in both storage formats", () => {
@@ -129,6 +151,16 @@ test("table sorts versions naturally, statuses through normalization, and recent
       "asc",
     ) < 0,
   );
+  const unplayed: GameRecord = { id: 4, title: "D", exe_path: "" };
+  for (const direction of ["asc", "desc"] as const) {
+    assert.ok(compareLibraryGames(unplayed, a, "last_played", direction) > 0);
+    assert.ok(
+      compareLibraryGames(a, unplayed, "playtime_seconds", direction) < 0,
+    );
+    assert.ok(
+      compareLibraryGames({ ...a, title: "Z" }, a, "engine", direction) > 0,
+    );
+  }
 });
 
 test("folder actions preserve POSIX and Windows roots and reject bare commands", () => {
