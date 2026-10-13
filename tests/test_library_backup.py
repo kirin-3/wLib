@@ -1256,3 +1256,23 @@ def test_paths_export_includes_library_settings_excludes_dismissals(tmp_path):
     assert "library_folder_pattern" in paths
     assert paths["downloads_folder"] == "/downloads"
     assert "dismissed_download_archives" not in paths
+
+
+def test_fill_missing_settings_keeps_local_values_and_fills_empty(tmp_path):
+    update_setting("enable_logging", "true")
+    update_setting("collections", "[]")
+
+    payload = base_backup([])
+    payload["settings"] = {
+        "general": {"enable_logging": "false", "collections": '["Backup"]'}
+    }
+    backup_path = write_backup(tmp_path / "settings_fill.json", payload)
+
+    result = Api().import_library_backup(
+        str(backup_path),
+        options={"sections": [SECTION_SETTINGS_GENERAL], "merge_mode": "fill_missing"},
+    )
+
+    assert result["success"] is True
+    assert get_setting("enable_logging") == "true"
+    assert get_setting("collections") == '["Backup"]'

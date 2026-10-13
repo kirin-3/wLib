@@ -1011,7 +1011,10 @@ def _replace_launch_targets(
 
 
 def _import_setting_groups(
-    cursor: sqlite3.Cursor, backup: Mapping[str, object], sections: set[str]
+    cursor: sqlite3.Cursor,
+    backup: Mapping[str, object],
+    sections: set[str],
+    merge_mode: str = "overwrite",
 ) -> int:
     settings = _coerce_mapping(backup.get("settings"))
     groups: list[tuple[str, Sequence[str]]] = []
@@ -1029,6 +1032,16 @@ def _import_setting_groups(
             value = _coerce_text(group.get(key))
             if group_name == "paths" and not _is_host_path_setting(value.strip()):
                 continue
+            if merge_mode == "fill_missing":
+                row = cast(
+                    tuple[object] | None,
+                    cursor.execute(
+                        "SELECT value FROM settings WHERE key = ?", (key,)
+                    ).fetchone(),
+                )
+                local_value = str(row[0] or "").strip() if row else ""
+                if local_value not in ("", "[]") or value.strip() in ("", "[]"):
+                    continue
             _ = cursor.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
                 (key, value, value),
@@ -1215,7 +1228,9 @@ def apply_library_backup(
                             continue
                     _replace_launch_targets(cursor, game_id, imported_game)
 
-            settings_updated = _import_setting_groups(cursor, backup, sections)
+            settings_updated = _import_setting_groups(
+                cursor, backup, sections, merge_mode
+            )
             if mirror:
                 for game_id in original_ids - keep_ids:
                     _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
