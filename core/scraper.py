@@ -179,8 +179,8 @@ class Scraper:
             return ""
         normalized = url.strip()
         if "attachments.f95zone.to/" in normalized:
-            while "/thumb/" in normalized:
-                normalized = normalized.replace("/thumb/", "/", 1)
+            if "/thumb/" in normalized:
+                normalized = re.sub(r"/thumb(?=/)", "", normalized)
         return normalized
 
     def _error(self, code: str, message: str) -> ScraperResult:

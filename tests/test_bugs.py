@@ -45,7 +45,7 @@ def setup_test_db(tmp_path, monkeypatch):
 
 def test_update_game_sql_injection_vulnerability():
     """
-    BUG FOUND: update_game uses string formatting for column names.
+    BUG FIXED: update_game uses string formatting for column names, now wrapped in quotes.
     While values are parameterized, column names are not validated beyond the allowlist.
     This test documents the current behavior - the allowlist prevents injection,
     but the pattern is risky.
@@ -414,10 +414,10 @@ def test_scraper_normalize_cover_image_url_edge_cases():
             "https://attachments.f95zone.to/2025/04/thumb/image.png",
             "https://attachments.f95zone.to/2025/04/image.png",
         ),
-        # BUG: Multiple /thumb/ only replaces first occurrence
-        # This test documents the bug - expected is what SHOULD happen, actual is buggy behavior
-        # ("https://attachments.f95zone.to/2025/04/thumb/thumb/image.png",
-        #  "https://attachments.f95zone.to/2025/04/image.png"),  # Multiple /thumb/ - BUG NOT FIXED
+
+
+        ("https://attachments.f95zone.to/2025/04/thumb/thumb/image.png",
+        "https://attachments.f95zone.to/2025/04/image.png"),
         (
             "https://attachments.f95zone.to/2025/04/image.png",
             "https://attachments.f95zone.to/2025/04/image.png",  # Already clean

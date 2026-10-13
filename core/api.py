@@ -1983,7 +1983,7 @@ class Api:
                     fields["cover_image_path"] = cover_value
 
                 if fields:
-                    set_clause = ", ".join(f"{key} = ?" for key in fields)
+                    set_clause = ", ".join(f"\"{key}\" = ?" for key in fields)
                     values: list[str | int] = list(fields.values()) + [game_id]
                     _ = cursor.execute(
                         f"UPDATE games SET {set_clause} WHERE id = ?", values
@@ -2052,7 +2052,7 @@ class Api:
                 if not fields:
                     continue
 
-                set_clause = ", ".join(f"{field} = ?" for field in fields)
+                set_clause = ", ".join(f"\"{field}\" = ?" for field in fields)
                 _ = cursor.execute(
                     f"UPDATE games SET {set_clause} WHERE id = ?",
                     (*fields.values(), game_id),

@@ -649,7 +649,7 @@ def update_game_launch_target(
         return get_game_launch_target(target_id)
 
     safe_fields["updated_at"] = datetime.now().isoformat()
-    set_clause = ", ".join([f"{key} = ?" for key in safe_fields.keys()])
+    set_clause = ", ".join([f"\"{key}\" = ?" for key in safe_fields.keys()])
     values = tuple(safe_fields.values()) + (target_id,)
 
     with closing(get_connection()) as conn:
@@ -815,7 +815,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                     stored["version"] or ""
                 )
 
-        set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
+        set_clause = ", ".join([f"\"{k}\" = ?" for k in safe_fields.keys()])
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)
         _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
         conn.commit()
