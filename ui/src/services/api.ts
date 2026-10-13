@@ -2035,8 +2035,8 @@ export const api = new ApiService();
 export function onWebviewReady(callback: () => void): void {
   if (window.pywebview) {
     callback();
-  } else if (/QtWebEngine\//.test(navigator.userAgent)) {
-    // Desktop shell (always gui="qt"): the API is injected after load, so wait
+  } else if (navigator.userAgent.includes("pywebview") || /QtWebEngine\//.test(navigator.userAgent)) {
+    // Desktop shell: the API is injected after load, so wait
     // instead of running once against mocks and again for real.
     window.addEventListener("pywebviewready", callback, { once: true });
   } else {
