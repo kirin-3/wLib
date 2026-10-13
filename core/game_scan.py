@@ -28,10 +28,12 @@ _VERSION_SUFFIX_RE = re.compile(
     re.I,
 )
 _SKIPPED_EXECUTABLES_RE = re.compile(
-    r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|dxsetup|"
-    + r"dxwebsetup|vc_?redist\S*|python\w*|zsync\w*|.*-32)\.exe$",
+    r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|crashreport\w*|"
+    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*)(?:\.exe)?$|"
+    + r"^.*-32\.exe$",
     re.I,
 )
+_GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 _LAUNCHER_EXTENSIONS = (
     ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar"
 )
@@ -99,6 +101,20 @@ def inspect_game_path(exe_path: str) -> GameGuess:
     }
 
 
+def _best_launcher(game_dir: str, names: list[str]) -> str:
+    """Prefer a name matching the folder title, then a generic game launcher."""
+    def squash(text: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    title = squash(guess_title_and_version(os.path.basename(game_dir))[0])
+    stems = {name: os.path.splitext(name)[0].lower() for name in names}
+    return (
+        next((n for n in names if title and title in squash(stems[n])), None)
+        or next((n for n in names if stems[n] in _GENERIC_LAUNCHER_STEMS), None)
+        or names[0]
+    )
+
+
 def find_launcher(game_dir: str, depth: int = 2) -> str:
     """Best launch file in game_dir, looking one folder deeper when it holds none."""
     try:
@@ -122,20 +138,26 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
         or is_elf(os.path.join(game_dir, name))
     ]
     if is_linux() and native:
-        script = next((name for name in native if name.lower().endswith(".sh")), native[0])
-        return os.path.join(game_dir, script)
+        scripts = [name for name in native if name.lower().endswith(".sh")]
+        return os.path.join(game_dir, _best_launcher(game_dir, scripts or native))
     preferred = (".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64")
     for ext in (*preferred, ".jar"):
         matches = [name for name in files if name.lower().endswith(ext)]
         if matches:
-            return os.path.join(game_dir, matches[0])
+            return os.path.join(game_dir, _best_launcher(game_dir, matches))
     for name in ("index.html", "index.htm"):
         if name in (f.lower() for f in files):
             return os.path.join(game_dir, next(f for f in files if f.lower() == name))
     if files:
         return os.path.join(game_dir, files[0])
     if depth > 1:
-        subdirs = [entry.path for entry in entries if entry.is_dir()]
+        subdirs = [
+            entry.path
+            for entry in entries
+            if entry.is_dir()
+            and entry.name.lower() not in ("__macosx", ".git")
+            and not entry.name.startswith(".wlib-staging-")  # archive_install.STAGING_PREFIX
+        ]
         if len(subdirs) == 1:
             return find_launcher(subdirs[0], depth - 1)
     return ""

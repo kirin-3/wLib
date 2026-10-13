@@ -7,10 +7,12 @@ import zipfile
 import pytest
 
 from core.archive_install import (
+    ArchiveInstallError,
     ArchiveSafetyError,
     apply_execute_bits,
     build_destination,
     can_remove_old_folder,
+    check_archive_entry_safe,
     check_symlinks_inside_staging,
     cleanup_stale_staging,
     copy_infolder_saves,
@@ -682,3 +684,160 @@ def test_7z_listing_skips_archive_self_entry(monkeypatch, tmp_path):
     assert ai.extract_with_tool("/usr/bin/7z", archive, str(staging)) == 2
     # list-entries ("l") runs once directly and once inside extract ("l", "x").
     assert [c[1] for c in calls] == ["l", "l", "x"]
+
+
+def test_check_archive_entry_safe_drive_relative_and_reserved_names():
+    for bad in ("D:evil.txt", "c:secret.txt", "D:\\evil.txt", "d:/evil.txt"):
+        with pytest.raises(ArchiveSafetyError):
+            check_archive_entry_safe(bad)
+
+    for reserved in (
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9", "con.txt", "nul.tar",
+        "CON ", "NUL .txt", "dir/aux",
+    ):
+        with pytest.raises(ArchiveSafetyError):
+            check_archive_entry_safe(reserved)
+
+    for invalid in ("", "   ", "evil\x00file.txt", "sub/\x00/file"):
+        with pytest.raises(ArchiveSafetyError):
+            check_archive_entry_safe(invalid)
+
+
+def test_zip_extract_drive_relative_and_reserved_traversal_aborts(tmp_path):
+    for evil in ("D:evil.txt", "CON", "NUL"):
+        archive = tmp_path / f"evil_{abs(hash(evil)) % 10000}.zip"
+        _make_zip(str(archive), {evil: b"x", "ok.txt": b"y"})
+        staging = tmp_path / f"staging_{abs(hash(evil)) % 10000}"
+        staging.mkdir()
+        with pytest.raises(ArchiveSafetyError):
+            extract_zip(str(archive), str(staging))
+        assert not list(staging.iterdir())
+
+
+def test_zip_encrypted_archive_raises_install_error(tmp_path):
+    import io
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("secret.txt", b"secret data")
+    raw = bytearray(buf.getvalue())
+    cd_idx = raw.find(b"PK\x01\x02")
+    assert cd_idx != -1
+    raw[cd_idx + 8] |= 0x1
+
+    archive = tmp_path / "encrypted.zip"
+    archive.write_bytes(raw)
+
+    staging = tmp_path / "staging_enc"
+    staging.mkdir()
+    with pytest.raises(ArchiveInstallError, match=r"encrypted|password"):
+        extract_zip(str(archive), str(staging))
+
+
+def test_zip_extract_cp437_utf8_filename(tmp_path):
+    import io
+
+    # Write a zip where UTF-8 bytes were written into an archive with bit 11 cleared.
+    ascii_placeholder = b"cafe__game.exe"
+    utf8_target = "café_game.exe".encode("utf-8")
+    assert len(ascii_placeholder) == len(utf8_target)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(ascii_placeholder.decode("ascii"), b"game payload")
+
+    raw = bytearray(buf.getvalue().replace(ascii_placeholder, utf8_target))
+    archive = tmp_path / "cp437.zip"
+    archive.write_bytes(raw)
+
+    staging = tmp_path / "staging_cp437"
+    staging.mkdir()
+    count = extract_zip(str(archive), str(staging))
+    assert count == 1
+    assert (staging / "café_game.exe").is_file()
+
+
+def test_hardlink_escape_detected(tmp_path):
+    staging = tmp_path / "staging_hardlink"
+    staging.mkdir()
+    outside = tmp_path / "outside_secret.txt"
+    outside.write_text("outside data")
+    try:
+        os.link(str(outside), str(staging / "link.txt"))
+    except (OSError, NotImplementedError):
+        pytest.skip("Hard links not supported in this environment")
+
+    with pytest.raises(ArchiveSafetyError, match=r"outside the destination"):
+        check_symlinks_inside_staging(str(staging))
+
+
+def test_uncompressed_size_7z_with_tool(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    archive = str(tmp_path / "game.7z")
+    (tmp_path / "game.7z").touch()
+
+    monkeypatch.setattr(ai, "detect_archive_tool", lambda _p: ("/usr/bin/7z", None))
+
+    class _Listing:
+        returncode = 0
+        stdout = (
+            "Path = game.7z\n"
+            "Type = 7z\n"
+            "----\n"
+            "Path = Game.exe\n"
+            "Size = 10485760\n"
+            "Path = data.bin\n"
+            "Size = 5242880\n"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(ai.subprocess, "run", lambda *a, **k: _Listing())
+    size = ai.uncompressed_size(archive)
+    assert size == 10485760 + 5242880
+
+
+def test_7z_tool_non_interactive_flags_passed(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    archive = str(tmp_path / "game.7z")
+    staging = tmp_path / "staging_tool"
+    staging.mkdir()
+
+    calls: list[dict[str, object]] = []
+
+    def _mock_run(cmd, **kwargs):
+        calls.append({"cmd": list(cmd), "kwargs": kwargs})
+
+        class _Res:
+            returncode = 0
+            stdout = "Path = game.7z\nType = 7z\nPath = Game.exe\n"
+            stderr = ""
+
+        return _Res()
+
+    monkeypatch.setattr(ai.subprocess, "run", _mock_run)
+    ai.extract_with_tool("/usr/bin/7z", archive, str(staging))
+
+    extract_call = next(c for c in calls if "x" in c["cmd"])
+    assert "-p" in extract_call["cmd"]
+    assert "-y" in extract_call["cmd"]
+    assert extract_call["kwargs"].get("stdin") == ai.subprocess.DEVNULL
+
+
+def test_flatten_single_wrapper_ignores_macosx(tmp_path):
+    staging = tmp_path / "staging_mac"
+    staging.mkdir()
+    game_dir = staging / "Game-1.0"
+    game_dir.mkdir()
+    (game_dir / "Game.exe").write_text("game payload")
+
+    macosx_dir = staging / "__MACOSX"
+    macosx_dir.mkdir()
+    (macosx_dir / "._Game-1.0").write_text("metadata")
+
+    (staging / ".DS_Store").write_text("ds_store")
+
+    assert flatten_single_wrapper(str(staging)) is True
+    assert (staging / "Game.exe").is_file()
+    assert not (staging / "__MACOSX").exists()

@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
 from typing import cast
 
@@ -158,22 +159,30 @@ def _is_absolute_entry(entry: str) -> bool:
         return True
     if normalized.startswith("/"):
         return True
-    # Windows drive-absolute (C:/, C:\) or UNC (//server).
-    if re.match(r"^[a-zA-Z]:[\\/]", entry) or re.match(r"^[a-zA-Z]:[\\/]", normalized):
+    # Windows drive-absolute (C:/, C:\), drive-relative (C:foo), or UNC (//server).
+    if re.match(r"^[a-zA-Z]:", entry) or re.match(r"^[a-zA-Z]:", normalized):
         return True
     return False
 
 
 def check_archive_entry_safe(entry: str) -> None:
-    """Raise ArchiveSafetyError for absolute paths or `..` components."""
+    """Raise ArchiveSafetyError for absolute paths, `..` components, or device names."""
     if not entry or entry.strip() == "":
         raise ArchiveSafetyError(f"Archive entry has an empty name: {entry!r}")
+    if "\x00" in entry:
+        raise ArchiveSafetyError(f"Archive entry contains null byte: {entry!r}")
     normalized = entry.replace("\\", "/")
     if _is_absolute_entry(entry) or _is_absolute_entry(normalized):
         raise ArchiveSafetyError(f"Archive entry is unsafe (absolute path): {entry!r}")
     parts = [p for p in normalized.split("/") if p not in ("", ".")]
     if any(p == ".." for p in parts):
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
+    for part in parts:
+        base = part.split(".")[0].rstrip(" ").upper()
+        if base in _WINDOWS_RESERVED_NAMES:
+            raise ArchiveSafetyError(
+                f"Archive entry uses reserved device name: {entry!r}"
+            )
 
 
 def _target_inside_staging(staging: str, entry: str) -> str:
@@ -206,13 +215,23 @@ def build_host_open_env() -> dict[str, str]:
     return clean_env
 
 
+def _zip_entry_name(info: zipfile.ZipInfo) -> str:
+    """Entry name, recovering UTF-8 names stored without the UTF-8 flag (bit 11)."""
+    name = info.filename
+    if not info.flag_bits & 0x800:
+        try:
+            name = name.encode("cp437").decode("utf-8")
+        except UnicodeError:
+            pass
+    return name.replace("\\", "/")
+
+
 def extract_zip(archive_path: str, staging_dir: str) -> int:
     """Extract a zip into staging with per-entry validation.
 
     Returns the number of entries extracted. Raises ArchiveSafetyError for
-    traversal entries and ArchiveInstallError for corrupt archives.
+    traversal entries and ArchiveInstallError for corrupt or encrypted archives.
     """
-    import zipfile
 
     os.makedirs(staging_dir, exist_ok=True)
     count = 0
@@ -221,13 +240,17 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
             infos = zf.infolist()
             # Pre-validate every entry before writing anything.
             for info in infos:
-                name = info.filename.replace("\\", "/")
-                if name == "" or name.endswith("/") and name.strip("/") == "":
+                if info.flag_bits & 0x1:
+                    raise ArchiveInstallError(
+                        f"Archive is password-protected or encrypted: {info.filename!r}"
+                    )
+                name = _zip_entry_name(info)
+                if name == "" or (name.endswith("/") and name.strip("/") == ""):
                     raise ArchiveSafetyError(f"Archive entry is unsafe: {name!r}")
                 check_archive_entry_safe(name)
                 _ = _target_inside_staging(staging_dir, name)
             for info in infos:
-                name = info.filename.replace("\\", "/")
+                name = _zip_entry_name(info)
                 target = _target_inside_staging(staging_dir, name)
                 if name.endswith("/"):
                     os.makedirs(target, exist_ok=True)
@@ -245,10 +268,29 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
                     except OSError:
                         pass
                 count += 1
-    except zipfile.BadZipFile as exc:
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        msg = str(exc)
+        if "encrypted" in msg.lower() or "password" in msg.lower():
+            raise ArchiveInstallError(
+                f"Archive is password-protected or encrypted: {exc}"
+            ) from exc
         raise ArchiveInstallError(f"Archive is corrupt or incomplete: {exc}") from exc
     check_symlinks_inside_staging(staging_dir)
     return count
+
+
+def _tool_failure(
+    completed: subprocess.CompletedProcess[str], what: str
+) -> ArchiveInstallError:
+    detail = (
+        (completed.stderr or "").strip()
+        or (completed.stdout or "").strip()
+        or f"exit {completed.returncode}"
+    )
+    lowered = detail.lower()
+    if "password" in lowered or "encrypted" in lowered:
+        return ArchiveInstallError(f"Archive is password-protected or encrypted ({detail})")
+    return ArchiveInstallError(f"{what} ({detail})")
 
 
 def _tool_basename(tool: str) -> str:
@@ -265,12 +307,11 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
             env=env,
         )
         if completed.returncode != 0:
-            raise ArchiveInstallError(
-                f"Could not list archive contents: {(completed.stderr or '').strip() or f'exit {completed.returncode}'}"
-            )
+            raise _tool_failure(completed, "Could not list archive contents")
         return [
             line.strip()
             for line in (completed.stdout or "").splitlines()
@@ -282,12 +323,11 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
             capture_output=True,
             text=True,
             check=False,
+            stdin=subprocess.DEVNULL,
             env=env,
         )
         if completed.returncode != 0:
-            raise ArchiveInstallError(
-                f"Could not list archive contents: {(completed.stderr or '').strip() or f'exit {completed.returncode}'}"
-            )
+            raise _tool_failure(completed, "Could not list archive contents")
         entries: list[str] = []
         for line in (completed.stdout or "").splitlines():
             line = line.strip()
@@ -298,16 +338,15 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         return entries
     # 7z/7zz/7za (also a raw 7z.exe path on Windows).
     completed = subprocess.run(
-        [tool, "l", "-slt", archive_path],
+        [tool, "l", "-slt", "-p", archive_path],
         capture_output=True,
         text=True,
         check=False,
+        stdin=subprocess.DEVNULL,
         env=env,
     )
     if completed.returncode != 0:
-        raise ArchiveInstallError(
-            f"Could not list archive contents: {(completed.stderr or '').strip() or f'exit {completed.returncode}'}"
-        )
+        raise _tool_failure(completed, "Could not list archive contents")
     entries = []
     archive_real = os.path.abspath(archive_path)
     for line in (completed.stdout or "").splitlines():
@@ -321,8 +360,10 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
 
 
 def check_symlinks_inside_staging(staging_dir: str) -> None:
-    """Reject symlinks whose resolved target escapes staging."""
+    """Reject symlinks and hard links whose resolved target escapes staging."""
     staging_real = os.path.realpath(os.path.abspath(staging_dir))
+    inode_counts: dict[tuple[int, int], int] = {}
+    file_records: list[tuple[str, os.stat_result]] = []
     for root, _dirs, files in os.walk(staging_dir, followlinks=False):
         candidates: list[str] = []
         try:
@@ -348,7 +389,8 @@ def check_symlinks_inside_staging(staging_dir: str) -> None:
         for name in files:
             path = os.path.join(root, name)
             try:
-                if os.path.islink(path):
+                st = os.lstat(path)
+                if stat.S_ISLNK(st.st_mode):
                     target_real = os.path.realpath(path)
                     if target_real != staging_real and not target_real.startswith(
                         staging_real + os.sep
@@ -356,8 +398,21 @@ def check_symlinks_inside_staging(staging_dir: str) -> None:
                         raise ArchiveSafetyError(
                             f"Archive link points outside the destination: {os.path.relpath(path, staging_dir)!r}"
                         )
+                else:
+                    key = (st.st_dev, st.st_ino)
+                    inode_counts[key] = inode_counts.get(key, 0) + 1
+                    file_records.append((path, st))
             except OSError:
                 continue
+
+    # A hard link with more names than staging holds also lives outside it.
+    for path, st in file_records:
+        if st.st_nlink > 1:
+            key = (st.st_dev, st.st_ino)
+            if st.st_nlink > inode_counts.get(key, 0):
+                raise ArchiveSafetyError(
+                    f"Archive link points outside the destination: {os.path.relpath(path, staging_dir)!r}"
+                )
 
 
 def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
@@ -376,16 +431,20 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
     elif "bsdtar" in base or base == "tar":
         cmd = [tool, "-xf", archive_path, "-C", staging_dir]
     else:
-        cmd = [tool, "x", archive_path, f"-o{staging_dir}", "-y"]
+        cmd = [tool, "x", archive_path, f"-o{staging_dir}", "-y", "-p"]
     try:
         completed = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, env=env
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=env,
         )
     except OSError as exc:
         raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
     if completed.returncode != 0:
-        detail = (completed.stderr or "").strip() or f"exit {completed.returncode}"
-        raise ArchiveInstallError(f"Extraction failed ({detail})")
+        raise _tool_failure(completed, "Extraction failed")
     check_symlinks_inside_staging(staging_dir)
     return len(entries)
 
@@ -396,6 +455,8 @@ def apply_execute_bits(root: str) -> int:
     Returns the number of files made executable. Uses `is_elf` so zips made
     on Windows (no mode data) still launch.
     """
+    if _is_windows():
+        return 0
     from core.launcher import is_elf
 
     changed = 0
@@ -433,9 +494,25 @@ def flatten_single_wrapper(staging_dir: str) -> bool:
         entries = os.listdir(staging_dir)
     except OSError:
         return False
-    if len(entries) != 1:
+    # Clean up and ignore metadata/junk entries (__MACOSX, .DS_Store, Thumbs.db)
+    junk = {"__macosx", ".ds_store", "thumbs.db", "desktop.ini"}
+    meaningful: list[str] = []
+    for entry in entries:
+        candidate = os.path.join(staging_dir, entry)
+        if entry.lower() in junk:
+            try:
+                if os.path.isdir(candidate) and not os.path.islink(candidate):
+                    shutil.rmtree(candidate, ignore_errors=True)
+                elif os.path.isfile(candidate) or os.path.islink(candidate):
+                    os.remove(candidate)
+            except OSError:
+                pass
+        else:
+            meaningful.append(entry)
+
+    if len(meaningful) != 1:
         return False
-    wrapper = os.path.join(staging_dir, entries[0])
+    wrapper = os.path.join(staging_dir, meaningful[0])
     if not os.path.isdir(wrapper) or os.path.islink(wrapper):
         return False
     try:
@@ -518,7 +595,6 @@ def ensure_free_space(library_folder: str, required_bytes: int | None) -> None:
 
 def uncompressed_size(archive_path: str) -> int | None:
     """Best-effort uncompressed size in bytes (None when unknown)."""
-    import zipfile
 
     fmt = archive_format(archive_path)
     if fmt == "zip":
@@ -527,8 +603,29 @@ def uncompressed_size(archive_path: str) -> int | None:
                 return sum(info.file_size for info in zf.infolist())
         except OSError:
             return None
-    # 7z listing carries sizes, but parsing is tool-specific; skip for now and
-    # let ensure_free_space no-op when unknown.
+    if fmt in ("7z", "rar"):
+        tool, _err = detect_archive_tool(archive_path)
+        if tool and "7z" in _tool_basename(tool):
+            try:
+                completed = subprocess.run(
+                    [tool, "l", "-slt", "-p", archive_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                    env=build_host_open_env(),
+                )
+                if completed.returncode == 0:
+                    total = 0
+                    for line in (completed.stdout or "").splitlines():
+                        if line.startswith("Size = "):
+                            try:
+                                total += int(line[len("Size = ") :].strip())
+                            except ValueError:
+                                pass
+                    return total if total > 0 else None
+            except OSError:
+                return None
     return None
 
 
