@@ -53,6 +53,7 @@ import {
   normalizePlayStatus,
   type PlayStatus,
 } from "../../utils/playStatus";
+import PathStatus from "../PathStatus.vue";
 
 type UpdateCheckState = {
   running: boolean;
@@ -166,6 +167,12 @@ const savingTargetId = ref<number | null>(null);
 const deletingTargetId = ref<number | null>(null);
 const addingLaunchTarget = ref(false);
 const reorderingLaunchTargets = ref(false);
+// Collections: chips toggle local state; membership is written on Save.
+const collectionOptions = ref<string[]>([]);
+const collectionMembership = ref<string[]>([]);
+const newCollectionName = ref("");
+const collectionError = ref("");
+const collectionBusy = ref(false);
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref("");
@@ -348,6 +355,7 @@ const formSnapshot = (): string =>
     custom_prefix: customPrefix.value,
     proton_version: protonVersion.value,
     launch_mode: launchMode.value,
+    collections: collectionMembership.value,
   });
 const savedSnapshot = ref("");
 const quickFields = (): Record<string, unknown> => ({
@@ -393,6 +401,9 @@ watch(
         launchMode.value = normalizeLaunchMode(g.launch_mode);
         useCustomPrefix.value = !!g.custom_prefix;
         activeTab.value = "Overview";
+        collectionMembership.value = [...(g.collections || [])];
+        newCollectionName.value = "";
+        collectionError.value = "";
         resetLaunchTargetForms();
         if (typeof g.tags === "string" && g.tags) {
           tags.value = g.tags
@@ -435,6 +446,12 @@ watch(
       rpgmakerLinuxRunnerError.value = "";
       urmStatus.value = {};
       urmError.value = "";
+      void api
+        .getCollections()
+        .then((collections) => {
+          collectionOptions.value = collections;
+        })
+        .catch(console.error);
       const loaders = [loadExecutableModifiedTime(), loadLaunchTargets(), loadGameExtras()];
       if (platformCapabilities.value.cheat_engine_injection) {
         loaders.push(loadCheatEngineStatus());
@@ -460,6 +477,9 @@ watch(
       loadingExecutableModifiedAt.value = false;
       loadingLaunchTargets.value = false;
       launchTargets.value = [];
+      collectionOptions.value = [];
+      newCollectionName.value = "";
+      collectionError.value = "";
       resetLaunchTargetForms();
     }
   },
@@ -937,6 +957,44 @@ const installRtpsToPrefix = async () => {
   }
 };
 
+// Membership is matched case-insensitively, like everywhere else.
+const gameInCollection = (name: string): boolean => {
+  const key = name.toLowerCase();
+  return collectionMembership.value.some((entry) => entry.toLowerCase() === key);
+};
+
+const toggleModalCollection = (name: string) => {
+  collectionError.value = "";
+  const key = name.toLowerCase();
+  collectionMembership.value = gameInCollection(name)
+    ? collectionMembership.value.filter((entry) => entry.toLowerCase() !== key)
+    : [...collectionMembership.value, name];
+};
+
+// Creates the collection now (empty) and selects its chip; the game joins it
+// when the modal is saved, like every other membership change here.
+const createModalCollection = async () => {
+  const name = newCollectionName.value.trim();
+  if (!name) {
+    collectionError.value = "Enter a collection name.";
+    return;
+  }
+  collectionBusy.value = true;
+  try {
+    const result = await api.createCollection(name);
+    if (!result.success) {
+      collectionError.value = result.error || "Could not create the collection.";
+      return;
+    }
+    collectionOptions.value = result.collections || collectionOptions.value;
+    newCollectionName.value = "";
+    collectionError.value = "";
+    if (!gameInCollection(name)) collectionMembership.value = [...collectionMembership.value, name];
+  } finally {
+    collectionBusy.value = false;
+  }
+};
+
 const save = async () => {
   if (!props.game || typeof props.game.id !== "number") return;
   saving.value = true;
@@ -977,6 +1035,22 @@ const save = async () => {
     if (res && res.success === false) {
       notifyError("Failed to save game: " + (res.error || "Unknown error"));
     } else {
+      const previousCollections = props.game.collections || [];
+      const membershipChanged =
+        JSON.stringify(previousCollections) !==
+        JSON.stringify(collectionMembership.value);
+      if (membershipChanged) {
+        const collectionsResult = await api.setGameCollections(
+          props.game.id,
+          collectionMembership.value,
+        );
+        if (collectionsResult && collectionsResult.success === false) {
+          notifyError(
+            "Failed to save collections: " +
+              (collectionsResult.error || "Unknown error"),
+          );
+        }
+      }
       savedSnapshot.value = formSnapshot();
       savedQuickFields.value = quickFields();
       emit("updated");
@@ -1370,6 +1444,57 @@ const openInBrowser = async () => {
           </div>
 
           <div>
+            <h3 class="modal-label mb-3">Collections</h3>
+            <div>
+              <p
+                v-if="!collectionOptions.length"
+                class="text-xs mb-2"
+                style="color: var(--text-muted)"
+              >
+                No collections yet.
+              </p>
+              <div v-else class="flex flex-wrap gap-1.5 mb-2">
+                <button
+                  v-for="name in collectionOptions"
+                  :key="name"
+                  type="button"
+                  :aria-pressed="gameInCollection(name)"
+                  class="collection-chip"
+                  :class="{ 'collection-chip-active': gameInCollection(name) }"
+                  @click="toggleModalCollection(name)"
+                >
+                  {{ name }}
+                </button>
+              </div>
+              <div class="flex gap-2">
+                <input
+                  v-model="newCollectionName"
+                  aria-label="New collection name"
+                  type="text"
+                  placeholder="New collection"
+                  class="modal-input flex-1 !py-1.5 !text-xs"
+                  @keydown.enter.prevent="createModalCollection"
+                />
+                <button
+                  class="modal-btn"
+                  :disabled="collectionBusy"
+                  @click="createModalCollection"
+                >
+                  Add
+                </button>
+              </div>
+              <p
+                v-if="collectionError"
+                role="alert"
+                class="text-xs mt-2"
+                style="color: var(--danger-text)"
+              >
+                {{ collectionError }}
+              </p>
+            </div>
+          </div>
+
+          <div>
             <h3
               class="ui-section-heading text-sm font-bold mb-3"
               style="color: var(--text-secondary)"
@@ -1475,6 +1600,7 @@ const openInBrowser = async () => {
                   Browse
                 </button>
               </div>
+              <PathStatus :path="exePath" kind="file" />
             </div>
 
             <div class="col-span-2">
@@ -1525,6 +1651,7 @@ const openInBrowser = async () => {
                           Browse
                         </button>
                       </div>
+                      <PathStatus :path="editTargetPath" kind="file" />
                     </div>
                     <div class="launch-target-form-actions">
                       <button @click="cancelEditLaunchTarget" class="modal-btn">
@@ -1610,6 +1737,7 @@ const openInBrowser = async () => {
                           Browse
                         </button>
                       </div>
+                      <PathStatus :path="newTargetPath" kind="file" />
                     </div>
                     <div class="launch-target-form-actions">
                       <button @click="cancelAddLaunchTarget" class="modal-btn">
@@ -1763,7 +1891,7 @@ const openInBrowser = async () => {
                     </span>
                     <span
                       v-if="!ceInstalled"
-                      class="text-[10px] uppercase px-1.5 py-0.5 rounded font-bold"
+                      class="text-[0.625rem] uppercase px-1.5 py-0.5 rounded font-bold"
                       style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
                     >
                       Not Installed
@@ -1845,6 +1973,7 @@ const openInBrowser = async () => {
                       Browse
                     </button>
                   </div>
+                  <PathStatus :path="customPrefix" kind="dir" />
                 </div>
 
                 <div class="pt-2 border-t border-gray-700/50">
@@ -2035,14 +2164,14 @@ const openInBrowser = async () => {
                 {{ result.description }}
               </p>
               <p
-                class="text-[10px] truncate font-mono"
+                class="text-[0.625rem] truncate font-mono"
                 style="color: var(--text-muted)"
               >
                 {{ result.path }}
               </p>
             </div>
             <span
-              class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+              class="text-[0.625rem] px-1.5 py-0.5 rounded shrink-0"
               style="
                 background: var(--bg-raised);
                 color: var(--text-muted);
@@ -2052,7 +2181,7 @@ const openInBrowser = async () => {
             >
           </button>
         </div>
-        <p class="text-[10px] mt-2 italic" style="color: var(--text-muted)">
+        <p class="text-[0.625rem] mt-2 italic" style="color: var(--text-muted)">
           ⚠ Auto-detection is best-effort. Some games store saves in
           non-standard locations.
         </p>
@@ -2621,7 +2750,35 @@ const openInBrowser = async () => {
 }
 
 .status-chip {
-  border-radius: 0.625rem;
+  border-radius: 0.55rem;
+}
+.collection-chip {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease;
+}
+.collection-chip:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+.collection-chip:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.collection-chip-active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+}
+.collection-chip-active:hover {
+  background: var(--brand);
+  color: var(--on-brand);
 }
 
 .status-chip-active {

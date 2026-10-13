@@ -22,6 +22,7 @@ export type FilterCollection =
 export type FilterInstallState = "" | "installed" | "wishlist";
 
 export interface FilterSections {
+  presets: boolean;
   collections: boolean;
   status: boolean;
   engines: boolean;
@@ -40,7 +41,34 @@ export interface LibraryViewState {
   filterTags: string[];
   isFiltersCollapsed: boolean;
   filterSections: FilterSections;
+  // Selected user collection tab; "" means "All". Validated against the
+  // loaded collection list, falling back to "" when the name is gone.
+  activeCollection: string;
 }
+
+// A named snapshot of the filters and sort order, saved as a preset and
+// carried through backup and sync as the `library_filter_presets` setting.
+export interface LibraryFilterPreset {
+  name: string;
+  filterCollection: FilterCollection;
+  filterStatuses: string[];
+  filterInstallState: FilterInstallState;
+  filterEngines: string[];
+  filterTags: string[];
+  sortBy: SortField;
+  sortDir: SortDir;
+}
+
+export type NormalizedFilterAndSort = Pick<
+  LibraryFilterPreset,
+  | "filterCollection"
+  | "filterStatuses"
+  | "filterInstallState"
+  | "filterEngines"
+  | "filterTags"
+  | "sortBy"
+  | "sortDir"
+>;
 
 export type LibraryViewStateSource = "default" | "current" | "legacy";
 
@@ -52,6 +80,7 @@ interface LibraryViewStateResult {
 interface NormalizeLibraryViewStateOptions {
   validEngines?: Iterable<string>;
   validTags?: Iterable<string>;
+  validCollections?: Iterable<string>;
 }
 
 export const LIBRARY_VIEW_STATE_STORAGE_KEY = "wlib-library-view-state";
@@ -63,6 +92,7 @@ export const LIBRARY_VIEW_STATE_VERSION = 1;
 export const LIBRARY_PLAY_STATUSES = PLAY_STATUSES;
 
 export const DEFAULT_FILTER_SECTIONS: FilterSections = {
+  presets: true,
   collections: true,
   status: true,
   engines: true,
@@ -81,10 +111,11 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   filterTags: [],
   isFiltersCollapsed: true,
   filterSections: { ...DEFAULT_FILTER_SECTIONS },
+  activeCollection: "",
 };
 
 const VALID_LAYOUT_MODES = new Set<LayoutMode>(["grid", "list", "compact"]);
-const VALID_SORT_FIELDS = new Set<SortField>([
+export const VALID_SORT_FIELDS = new Set<SortField>([
   "title",
   "version",
   "play_status",
@@ -170,6 +201,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
   const source = isRecord(value) ? value : null;
 
   return {
+    presets:
+      typeof source?.presets === "boolean"
+        ? source.presets
+        : DEFAULT_FILTER_SECTIONS.presets,
     collections:
       typeof source?.collections === "boolean"
         ? source.collections
@@ -189,16 +224,13 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
   };
 };
 
-export const normalizeLibraryViewState = (
+// Shared by the view state and the saved filter presets so both drop the
+// same unknown values.
+export const normalizeFilterAndSort = (
   value: unknown,
   options: NormalizeLibraryViewStateOptions = {},
-): LibraryViewState => {
+): NormalizedFilterAndSort => {
   const source = isRecord(value) ? value : {};
-
-  const layoutMode =
-    typeof source.layoutMode === "string" && VALID_LAYOUT_MODES.has(source.layoutMode as LayoutMode)
-      ? (source.layoutMode as LayoutMode)
-      : DEFAULT_LIBRARY_VIEW_STATE.layoutMode;
 
   const sortBy =
     typeof source.sortBy === "string" && VALID_SORT_FIELDS.has(source.sortBy as SortField)
@@ -230,21 +262,70 @@ export const normalizeLibraryViewState = (
   const filterTags = filterAllowedValues(normalizeStringArray(source.filterTags), options.validTags);
 
   return {
-    version: LIBRARY_VIEW_STATE_VERSION,
-    layoutMode,
-    sortBy,
-    sortDir,
     filterCollection,
     filterStatuses,
     filterInstallState,
     filterEngines,
     filterTags,
+    sortBy,
+    sortDir,
+  };
+};
+
+// Returns null for entries without a usable 1–40 character name; malformed
+// values fall back to the defaults instead of failing the whole list.
+export const normalizeFilterPreset = (
+  value: unknown,
+  options: NormalizeLibraryViewStateOptions = {},
+): LibraryFilterPreset | null => {
+  const source = isRecord(value) ? value : {};
+  const name = typeof source.name === "string" ? source.name.trim() : "";
+  if (!name || name.length > 40) return null;
+  return { name, ...normalizeFilterAndSort(source, options) };
+};
+
+export const normalizeLibraryViewState = (
+  value: unknown,
+  options: NormalizeLibraryViewStateOptions = {},
+): LibraryViewState => {
+  const source = isRecord(value) ? value : {};
+
+  const layoutMode =
+    typeof source.layoutMode === "string" && VALID_LAYOUT_MODES.has(source.layoutMode as LayoutMode)
+      ? (source.layoutMode as LayoutMode)
+      : DEFAULT_LIBRARY_VIEW_STATE.layoutMode;
+
+  const activeCollection = normalizeActiveCollection(
+    source.activeCollection,
+    options.validCollections,
+  );
+
+  return {
+    version: LIBRARY_VIEW_STATE_VERSION,
+    layoutMode,
+    ...normalizeFilterAndSort(source, options),
     isFiltersCollapsed:
       typeof source.isFiltersCollapsed === "boolean"
         ? source.isFiltersCollapsed
         : DEFAULT_LIBRARY_VIEW_STATE.isFiltersCollapsed,
     filterSections: normalizeFilterSections(source.filterSections),
+    activeCollection,
   };
+};
+
+// "" means the "All" tab. Without a collection list the stored value is kept;
+// the caller re-normalises once the real list has loaded.
+export const normalizeActiveCollection = (
+  value: unknown,
+  validCollections?: Iterable<string>,
+): string => {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) return "";
+  if (!validCollections) return name;
+  for (const collection of validCollections) {
+    if (collection.toLowerCase() === name.toLowerCase()) return collection;
+  }
+  return "";
 };
 
 const readLegacyLibraryViewState = (storage: Storage): LibraryViewState | null => {

@@ -5,6 +5,7 @@ import { IconLoader2, IconX } from "@tabler/icons-vue";
 import { api, type ScannedGame } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
@@ -139,6 +140,7 @@ const importSelected = async () => {
             <span v-else>Scan</span>
           </button>
         </div>
+        <PathStatus :path="folder" kind="dir" />
 
         <p v-if="scanned && !games.length" class="text-sm" style="color: var(--text-muted)">
           No games found in this folder's subfolders.

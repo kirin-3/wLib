@@ -9,6 +9,7 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
   modelValue: boolean;
@@ -303,6 +304,7 @@ watch(
             Browse
           </button>
         </div>
+        <PathStatus :path="archive" kind="file" />
 
         <p v-if="inspectError" class="text-sm" style="color: var(--error-text)">{{ inspectError }}</p>
         <p v-if="toolError" class="text-sm" style="color: var(--error-text)">{{ toolError }}</p>

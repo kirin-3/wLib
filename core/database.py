@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import os
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime
 from typing import TypedDict, cast
@@ -21,7 +21,13 @@ DEFAULT_LAUNCH_MODE = "auto"
 RPGMAKER_LINUX_LAUNCH_MODE = "rpgmaker_linux"
 RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
 DEFAULT_LIBRARY_FOLDER_PATTERN = "{creator}/{title}/{version}"
-GENERAL_SETTINGS_KEYS = ("enable_logging", "auto_update_check", "custom_play_statuses")
+GENERAL_SETTINGS_KEYS = (
+    "enable_logging",
+    "auto_update_check",
+    "custom_play_statuses",
+    "collections",
+    "library_filter_presets",
+)
 SYNC_GAME_COLUMNS = (
     "title",
     "developer",
@@ -44,6 +50,7 @@ SYNC_GAME_COLUMNS = (
     "playtime_seconds",
     "last_played",
     "date_added",
+    "collections",
 )
 CANONICAL_LAUNCH_MODES = (
     DEFAULT_LAUNCH_MODE,
@@ -409,6 +416,7 @@ def init_db() -> None:
             ("thread_completed", "BOOLEAN DEFAULT 0"),
             ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
             ("finished_version", "TEXT DEFAULT ''"),
+            ("collections", "TEXT DEFAULT '[]'"),
         ]
 
         for col_name, col_type in new_columns:
@@ -704,10 +712,18 @@ def get_all_games() -> list[dict[str, object]]:
     targets_by_game = list_launch_targets_for_games(
         [int(str(cast(object, game["id"]))) for game in games]
     )
+    # Membership is matched by name, case-insensitively; names that no longer
+    # belong to any collection are hidden rather than shown as ghost tabs.
+    canonical_collections = {name.casefold(): name for name in get_collections()}
     result: list[dict[str, object]] = []
     for game in games:
         game_dict = {str(key): cast(object, game[key]) for key in game.keys()}
         game_dict["launch_mode"] = normalize_launch_mode(game_dict.get("launch_mode"))
+        game_dict["collections"] = [
+            canonical_collections[name.casefold()]
+            for name in _decode_game_collections(game_dict.get("collections"))
+            if name.casefold() in canonical_collections
+        ]
         game_id = int(str(game_dict["id"]))
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
         result.append(game_dict)
@@ -887,3 +903,292 @@ def update_custom_play_statuses(statuses: Sequence[str]) -> None:
             ("custom_play_statuses", json.dumps(list(statuses))),
         )
         conn.commit()
+
+
+# Collection Operations
+RESERVED_COLLECTION_KEYS = {"all"}
+
+
+def _validated_collection_list(raw: object) -> list[str]:
+    try:
+        stored = cast(object, json.loads(str(raw or "[]")))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(stored, list):
+        return []
+    # Imports and sync store this list unvalidated. "All" belongs to the
+    # built-in tab, so it stays reserved.
+    seen = set(RESERVED_COLLECTION_KEYS)
+    result: list[str] = []
+    for name in cast(list[object], stored):
+        if not isinstance(name, str):
+            continue
+        normalized = name.strip()
+        if not 1 <= len(normalized) <= 40 or normalized.casefold() in seen:
+            continue
+        seen.add(normalized.casefold())
+        result.append(normalized)
+    return result
+
+
+def _read_collections(cursor: sqlite3.Cursor) -> list[str]:
+    _ = cursor.execute("SELECT value FROM settings WHERE key = 'collections'")
+    row = cast(tuple[object, ...] | None, cursor.fetchone())
+    if row is None:
+        return []
+    return _validated_collection_list(row[0])
+
+
+def get_collections() -> list[str]:
+    return _validated_collection_list(get_setting("collections"))
+
+
+def _validate_new_collection_name(name: object, collections: Sequence[str]) -> str:
+    normalized = str(name or "").strip()
+    if not 1 <= len(normalized) <= 40:
+        raise ValueError("Collection names must contain 1–40 characters")
+    if normalized.casefold() in RESERVED_COLLECTION_KEYS:
+        raise ValueError("'All' is reserved for the library-wide tab")
+    if any(normalized.casefold() == other.casefold() for other in collections):
+        raise ValueError(f"A collection named '{normalized}' already exists")
+    return normalized
+
+
+def _write_collections_setting(
+    cursor: sqlite3.Cursor, collections: Sequence[str]
+) -> None:
+    _ = cursor.execute(
+        "INSERT INTO settings (key, value) VALUES ('collections', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (json.dumps(list(collections)),),
+    )
+
+
+def _read_game_collections(cursor: sqlite3.Cursor, game_id: int) -> list[str] | None:
+    _ = cursor.execute("SELECT collections FROM games WHERE id = ?", (game_id,))
+    row = cast(tuple[object, ...] | None, cursor.fetchone())
+    if row is None:
+        return None
+    return _decode_game_collections(row[0])
+
+
+def _write_game_collections(
+    cursor: sqlite3.Cursor, game_id: int, names: Sequence[str]
+) -> None:
+    _ = cursor.execute(
+        "UPDATE games SET collections = ? WHERE id = ?",
+        (json.dumps(list(names)), game_id),
+    )
+
+
+def _decode_game_collections(raw: object) -> list[str]:
+    try:
+        stored = cast(object, json.loads(str(raw or "[]")))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(stored, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for name in cast(list[object], stored):
+        if not isinstance(name, str):
+            continue
+        normalized = name.strip()
+        if not normalized or normalized.casefold() in seen:
+            continue
+        seen.add(normalized.casefold())
+        names.append(normalized)
+    return names
+
+
+def _rewrite_game_collection_memberships(
+    cursor: sqlite3.Cursor, rewrite: Callable[[list[str]], list[str]]
+) -> None:
+    _ = cursor.execute(
+        "SELECT id, collections FROM games WHERE collections IS NOT NULL AND collections != '[]'"
+    )
+    for row in cast(list[sqlite3.Row], cursor.fetchall()):
+        game_id = int(str(cast(object, row["id"])))
+        names = _decode_game_collections(cast(object, row["collections"]))
+        rewritten = rewrite(names)
+        if rewritten != names:
+            _write_game_collections(cursor, game_id, rewritten)
+
+
+def create_collection(name: object, game_id: int | None = None) -> list[str]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        collections = _read_collections(cursor)
+        normalized = _validate_new_collection_name(name, collections)
+        collections.append(normalized)
+        _write_collections_setting(cursor, collections)
+        if game_id is not None:
+            members = _read_game_collections(cursor, game_id)
+            if members is None:
+                raise ValueError("Game not found")
+            members.append(normalized)
+            _write_game_collections(cursor, game_id, members)
+        conn.commit()
+    return collections
+
+
+def rename_collection(old_name: object, new_name: object) -> list[str]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        collections = _read_collections(cursor)
+        old_key = str(old_name or "").strip().casefold()
+        old_index = next(
+            (
+                index
+                for index, name in enumerate(collections)
+                if name.casefold() == old_key
+            ),
+            None,
+        )
+        if old_index is None:
+            raise ValueError(f"Collection '{old_name}' does not exist")
+        new_normalized = str(new_name or "").strip()
+        if not 1 <= len(new_normalized) <= 40:
+            raise ValueError("Collection names must contain 1–40 characters")
+        if new_normalized.casefold() in RESERVED_COLLECTION_KEYS:
+            raise ValueError("'All' is reserved for the library-wide tab")
+        new_key = new_normalized.casefold()
+        if any(
+            new_key == name.casefold()
+            for index, name in enumerate(collections)
+            if index != old_index
+        ):
+            raise ValueError(f"A collection named '{new_normalized}' already exists")
+        collections[old_index] = new_normalized
+        _write_collections_setting(cursor, collections)
+        # Rename keeps members: rewrite matching names in the same transaction.
+        _rewrite_game_collection_memberships(
+            cursor, lambda names: [new_normalized if name.casefold() == old_key else name for name in names]
+        )
+        conn.commit()
+    return collections
+
+
+def delete_collection(name: object) -> list[str]:
+    key = str(name or "").strip().casefold()
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        collections = _read_collections(cursor)
+        if not any(name.casefold() == key for name in collections):
+            raise ValueError(f"Collection '{name}' does not exist")
+        remaining = [name for name in collections if name.casefold() != key]
+        _write_collections_setting(cursor, remaining)
+        # Games keep everything but this membership.
+        _rewrite_game_collection_memberships(
+            cursor, lambda names: [name for name in names if name.casefold() != key]
+        )
+        conn.commit()
+    return remaining
+
+
+def reorder_collections(names: Sequence[object]) -> list[str]:
+    with closing(get_connection()) as conn:
+        cursor = conn.cursor()
+        collections = _read_collections(cursor)
+        canonical_by_key = {name.casefold(): name for name in collections}
+        reordered: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            key = str(name or "").strip().casefold()
+            canonical = canonical_by_key.get(key)
+            if canonical is None or key in seen:
+                raise ValueError("Collection order must list every collection once")
+            seen.add(key)
+            reordered.append(canonical)
+        if len(reordered) != len(collections):
+            raise ValueError("Collection order must list every collection once")
+        _write_collections_setting(cursor, reordered)
+        conn.commit()
+    return reordered
+
+
+def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if _read_game_collections(cursor, game_id) is None:
+            raise ValueError("Game not found")
+        canonical_by_key = {
+            name.casefold(): name for name in _read_collections(cursor)
+        }
+        members: list[str] = []
+        seen: set[str] = set()
+        for name in names:
+            key = str(name or "").strip().casefold()
+            canonical = canonical_by_key.get(key)
+            if canonical is None:
+                raise ValueError(f"Collection '{name}' does not exist")
+            if key in seen:
+                raise ValueError(f"Collection '{canonical}' is listed twice")
+            seen.add(key)
+            members.append(canonical)
+        _write_game_collections(cursor, game_id, members)
+        conn.commit()
+    return members
+
+
+# Filter Preset Operations
+FILTER_PRESET_INSTALL_STATES = ("", "installed", "wishlist")
+FILTER_PRESET_SORT_DIRECTIONS = ("asc", "desc")
+
+
+def normalize_filter_preset(entry: object) -> dict[str, object] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    source = cast(Mapping[str, object], entry)
+    raw_name = source.get("name")
+    if not isinstance(raw_name, str):
+        return None
+    name = raw_name.strip()
+    if not 1 <= len(name) <= 40:
+        return None
+
+    def string_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in cast(list[object], value) if isinstance(item, str)]
+
+    install_state = str(source.get("filterInstallState") or "")
+    sort_dir = str(source.get("sortDir") or "")
+    return {
+        "name": name,
+        "filterCollection": str(source.get("filterCollection") or ""),
+        "filterStatuses": string_list(source.get("filterStatuses")),
+        "filterInstallState": (
+            install_state if install_state in FILTER_PRESET_INSTALL_STATES else ""
+        ),
+        "filterEngines": string_list(source.get("filterEngines")),
+        "filterTags": string_list(source.get("filterTags")),
+        "sortBy": str(source.get("sortBy") or ""),
+        "sortDir": sort_dir if sort_dir in FILTER_PRESET_SORT_DIRECTIONS else "",
+    }
+
+
+def get_library_filter_presets() -> list[dict[str, object]]:
+    try:
+        stored = cast(object, json.loads(get_setting("library_filter_presets") or "[]"))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(stored, list):
+        return []
+    # Imports and sync store this list unvalidated: keep only readable
+    # presets with unique names.
+    seen: set[str] = set()
+    result: list[dict[str, object]] = []
+    for entry in cast(list[object], stored):
+        preset = normalize_filter_preset(entry)
+        if preset is None:
+            continue
+        key = str(preset["name"]).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(preset)
+    return result

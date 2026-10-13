@@ -10,6 +10,7 @@ import {
   LIBRARY_PLAY_STATUSES,
   LIBRARY_VIEW_STATE_STORAGE_KEY,
   clearLegacyLibraryViewState,
+  normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
   saveLibraryViewState,
@@ -96,8 +97,7 @@ test("normalizeLibraryViewState falls back on invalid static values", () => {
   assert.deepEqual(state.filterSections, {
     ...DEFAULT_FILTER_SECTIONS,
     collections: false,
-  });
-});
+  });});
 
 test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   const storage = new MemoryStorage();
@@ -114,6 +114,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   assert.equal(restored.state.layoutMode, "compact");
   assert.equal(restored.state.isFiltersCollapsed, false);
   assert.deepEqual(restored.state.filterSections, {
+    presets: true,
     collections: false,
     status: true,
     engines: true,
@@ -142,12 +143,14 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
     filterTags: ["keep", "drop"],
     isFiltersCollapsed: false,
     filterSections: { collections: true, status: false, engines: false, tags: true },
+    activeCollection: "Backlog",
   };
 
   saveLibraryViewState(storage, state);
   const restored = readLibraryViewState(storage, {
     validEngines: ["keep-engine"],
     validTags: ["keep"],
+    validCollections: ["Backlog"],
   });
 
   assert.equal(restored.source, "current");
@@ -157,12 +160,92 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
   assert.deepEqual(restored.state.filterStatuses, ["Completed"]);
   assert.deepEqual(restored.state.filterEngines, ["keep-engine"]);
   assert.deepEqual(restored.state.filterTags, ["keep"]);
+  assert.equal(restored.state.activeCollection, "Backlog");
   assert.deepEqual(restored.state.filterSections, {
+    presets: true,
     collections: true,
     status: false,
     engines: false,
     tags: true,
   });
+});
+
+test("active collection restores, falls back to All, and defaults for legacy state", () => {
+  const storage = new MemoryStorage();
+  saveLibraryViewState(storage, normalizeLibraryViewState({ activeCollection: "Backlog" }));
+  assert.equal(readLibraryViewState(storage).state.activeCollection, "Backlog");
+
+  // Unknown names (deleted, renamed, or synced away) fall back to "" = All.
+  const pruned = readLibraryViewState(storage, { validCollections: ["Best of"] });
+  assert.equal(pruned.state.activeCollection, "");
+
+  // Matching is case-insensitive and keeps the stored spelling.
+  const recased = readLibraryViewState(storage, { validCollections: ["backlog"] });
+  assert.equal(recased.state.activeCollection, "backlog");
+
+  // Legacy blobs without the field restore as "" without failing.
+  storage.setItem(
+    LIBRARY_VIEW_STATE_STORAGE_KEY,
+    JSON.stringify({ version: 1, layoutMode: "grid" }),
+  );
+  assert.equal(readLibraryViewState(storage).state.activeCollection, "");
+  assert.equal(normalizeLibraryViewState({ activeCollection: 7 }).activeCollection, "");
+  assert.equal(normalizeLibraryViewState({ activeCollection: "  " }).activeCollection, "");
+});
+
+test("normalizeFilterPreset keeps a valid preset and drops unknown values", () => {
+  const valid = normalizeFilterPreset(
+    {
+      name: " Ren'Py now ",
+      filterCollection: "Favorites",
+      filterStatuses: ["Playing"],
+      filterInstallState: "installed",
+      filterEngines: ["Ren'Py"],
+      filterTags: ["dating-sim"],
+      sortBy: "rating",
+      sortDir: "desc",
+    },
+  );
+  assert.deepEqual(valid, {
+    name: "Ren'Py now",
+    filterCollection: "Favorites",
+    filterStatuses: ["Playing"],
+    filterInstallState: "installed",
+    filterEngines: ["Ren'Py"],
+    filterTags: ["dating-sim"],
+    sortBy: "rating",
+    sortDir: "desc",
+  });
+
+  // Unknown engines, tags and enum values are dropped on apply.
+  const pruned = normalizeFilterPreset(
+    {
+      name: "Pruned",
+      filterCollection: "FavoritesOnly",
+      filterStatuses: ["Playing", "Ghost"],
+      filterInstallState: "bogus",
+      filterEngines: ["Ren'Py", "Ghost"],
+      filterTags: ["dating-sim", "ghost-tag"],
+      sortBy: "developer",
+      sortDir: "sideways",
+    },
+    { validEngines: ["Ren'Py"], validTags: ["dating-sim"] },
+  );
+  assert.deepEqual(pruned, {
+    name: "Pruned",
+    filterCollection: "All",
+    filterStatuses: ["Playing", "Ghost"],
+    filterInstallState: "",
+    filterEngines: ["Ren'Py"],
+    filterTags: ["dating-sim"],
+    sortBy: "title",
+    sortDir: "asc",
+  });
+
+  // Entries without a usable name are refused.
+  for (const bad of [null, {}, { name: "" }, { name: "   " }, { name: "x".repeat(41) }, "corrupt"]) {
+    assert.equal(normalizeFilterPreset(bad), null);
+  }
 });
 
 test("normalizeLibraryViewState preserves the expanded supported status set", () => {

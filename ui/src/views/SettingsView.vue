@@ -31,7 +31,13 @@ import {
   themePreference,
   type ThemePreference,
 } from "../utils/themePreference";
+import {
+  TEXT_SIZE_OPTIONS,
+  setTextSizePreference,
+  textSizePreference,
+} from "../utils/textSizePreference";
 import type {
+  CollectionsResponse,
   InstallProgressStatus,
   ProtonDownloadStatus,
   PlatformCapabilities,
@@ -43,6 +49,7 @@ import type {
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../services/api";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
+import PathStatus from "../components/PathStatus.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
@@ -52,13 +59,19 @@ const availableRunners = ref<RunnerInfo[]>([]);
 const customStatuses = ref<string[]>([]);
 const newStatus = ref("");
 const statusError = ref("");
+// Collections apply immediately through the collection API, unlike the
+// save-bar fields below.
+const collectionList = ref<string[]>([]);
+const newCollectionName = ref("");
+const collectionError = ref("");
+const renamingCollection = ref<string | null>(null);
+const renameCollectionDraft = ref("");
 const urmPath = ref("");
 const prefixPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
 const libraryFolder = ref("");
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
-const downloadsFolderExists = ref(true);
 const downloadDetectionEnabled = ref(true);
 const enableLogging = ref(false);
 const savingLogging = ref(false);
@@ -125,13 +138,13 @@ const rpgmakerLinuxRunnerStatusText = computed(() => {
 
 const applySettings = (data: SettingsResponse) => {
   customStatuses.value = [...(data.custom_play_statuses || [])];
+  collectionList.value = [...(data.collections || [])];
   urmPath.value = data.urm_rpa_path || "";
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
   libraryFolder.value = data.library_folder || "";
   libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
   downloadsFolder.value = data.downloads_folder || "";
-  downloadsFolderExists.value = data.downloads_folder_exists !== false;
   downloadDetectionEnabled.value = data.download_detection_enabled !== false;
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
@@ -592,6 +605,97 @@ const removeStatus = async (name: string) => {
   }
 };
 
+// Collections: each action goes straight to the backend in one transaction,
+// so the library tabs follow this list immediately.
+const applyCollectionsResult = (result: CollectionsResponse) => {
+  if (result.collections) collectionList.value = [...result.collections];
+};
+
+const addCollection = async () => {
+  const name = newCollectionName.value.trim();
+  if (!name) {
+    collectionError.value = "Enter a collection name.";
+    return;
+  }
+  const result = await api.createCollection(name);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not create the collection.";
+    return;
+  }
+  applyCollectionsResult(result);
+  newCollectionName.value = "";
+  collectionError.value = "";
+};
+
+const startCollectionRename = (name: string) => {
+  collectionError.value = "";
+  renamingCollection.value = name;
+  renameCollectionDraft.value = name;
+};
+
+const cancelCollectionRename = () => {
+  renamingCollection.value = null;
+  renameCollectionDraft.value = "";
+};
+
+const commitCollectionRename = async () => {
+  const oldName = renamingCollection.value;
+  const newName = renameCollectionDraft.value.trim();
+  if (!oldName) return;
+  if (!newName || newName === oldName) {
+    cancelCollectionRename();
+    return;
+  }
+  const result = await api.renameCollection(oldName, newName);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not rename the collection.";
+    return;
+  }
+  applyCollectionsResult(result);
+  cancelCollectionRename();
+};
+
+const moveCollection = async (name: string, offset: -1 | 1) => {
+  const index = collectionList.value.indexOf(name);
+  const target = index + offset;
+  if (index === -1 || target < 0 || target >= collectionList.value.length) return;
+  const next = [...collectionList.value];
+  const moved = next[index];
+  const swapped = next[target];
+  if (moved === undefined || swapped === undefined) return;
+  next[index] = swapped;
+  next[target] = moved;
+  const result = await api.reorderCollections(next);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not move the collection.";
+    return;
+  }
+  applyCollectionsResult(result);
+};
+
+const removeCollection = async (name: string) => {
+  let count = 0;
+  try {
+    const games = await api.getGames();
+    count = games.filter((game) =>
+      (game.collections || []).some((entry) => entry.toLowerCase() === name.toLowerCase()),
+    ).length;
+  } catch (_error) {
+    // The confirm wording works without the count too.
+  }
+  const note = count
+    ? ` Its ${count} game${count === 1 ? "" : "s"} will stay in your library.`
+    : " Games stay in your library.";
+  if (!confirm(`Remove the collection '${name}'?${note}`)) return;
+  const result = await api.deleteCollection(name);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not remove the collection.";
+    return;
+  }
+  applyCollectionsResult(result);
+  collectionError.value = "";
+};
+
 const browseUrm = async () => {
   const path = await api.browseUrmFile(urmPath.value);
   if (path) urmPath.value = path;
@@ -685,6 +789,82 @@ const browseUrm = async () => {
         </div>
 
         <div class="space-y-3">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Collections</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Your own groups of games, shown as tabs above the library. Changes apply right away.
+            </p>
+          </div>
+          <div class="flex gap-3">
+            <input
+              v-model="newCollectionName"
+              @keydown.enter.prevent="addCollection"
+              type="text"
+              class="settings-input flex-1"
+              placeholder="Collection name"
+              aria-label="New collection name"
+            />
+            <button @click="addCollection" class="settings-btn">Add Collection</button>
+          </div>
+          <p v-if="collectionError" role="alert" class="text-xs text-red-400">{{ collectionError }}</p>
+          <p
+            v-if="!collectionList.length"
+            class="text-xs"
+            style="color: var(--text-muted)"
+          >
+            No collections yet.
+          </p>
+          <div
+            v-for="(name, index) in collectionList"
+            :key="name"
+            class="setting-row flex items-center justify-between gap-3 px-4 py-2 rounded-lg"
+          >
+            <form
+              v-if="renamingCollection === name"
+              class="flex items-center gap-2 min-w-0 flex-1"
+              @submit.prevent="commitCollectionRename"
+            >
+              <input
+                v-model="renameCollectionDraft"
+                type="text"
+                class="settings-input flex-1"
+                :aria-label="`Rename ${name}`"
+                @keydown.escape.prevent="cancelCollectionRename"
+              />
+              <button type="submit" class="settings-btn" title="Save the new name">Save</button>
+              <button type="button" class="settings-btn" @click="cancelCollectionRename">Cancel</button>
+            </form>
+            <template v-else>
+              <span class="text-sm truncate" style="color: var(--text-primary)">{{ name }}</span>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button
+                  class="settings-btn"
+                  :disabled="index === 0"
+                  :aria-label="`Move ${name} up`"
+                  title="Move up"
+                  @click="moveCollection(name, -1)"
+                >
+                  ↑
+                </button>
+                <button
+                  class="settings-btn"
+                  :disabled="index === collectionList.length - 1"
+                  :aria-label="`Move ${name} down`"
+                  title="Move down"
+                  @click="moveCollection(name, 1)"
+                >
+                  ↓
+                </button>
+                <button class="settings-btn" @click="startCollectionRename(name)">Rename</button>
+                <button class="settings-btn" :aria-label="`Remove ${name}`" @click="removeCollection(name)">
+                  Remove
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="space-y-3">
           <h4 class="ui-section-heading text-sm font-medium" style="color: var(--text-primary)">
             <IconKeyboard class="w-4 h-4" style="color: var(--text-muted)" />
             Keyboard Shortcuts
@@ -728,6 +908,7 @@ const browseUrm = async () => {
             />
             <button @click="browseLibraryFolder" class="settings-btn ui-action-btn">Browse</button>
           </div>
+          <PathStatus :path="libraryFolder" kind="dir" />
         </div>
 
         <div class="space-y-3">
@@ -767,9 +948,7 @@ const browseUrm = async () => {
             />
             <button @click="browseDownloadsFolder" class="settings-btn ui-action-btn">Browse</button>
           </div>
-          <p v-if="downloadsFolder && !downloadsFolderExists" role="alert" class="text-xs" style="color: var(--warning-text)">
-            This folder does not exist, so automatic detection will find nothing.
-          </p>
+          <PathStatus :path="downloadsFolder" kind="dir" />
         </div>
 
         <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
@@ -863,6 +1042,28 @@ const browseUrm = async () => {
 
         <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Text size</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Scales text and spacing across the whole interface. Kept on this device.
+            </p>
+          </div>
+          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" role="group" aria-label="Text size">
+            <button
+              v-for="option in TEXT_SIZE_OPTIONS"
+              :key="option.value"
+              type="button"
+              class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              :class="textSizePreference === option.value ? 'motion-option-active' : ''"
+              :aria-pressed="textSizePreference === option.value"
+              @click="setTextSizePreference(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
               Turn non-essential UI motion on or off. Loading indicators stay visible either way.
@@ -945,6 +1146,7 @@ const browseUrm = async () => {
               Browse
             </button>
           </div>
+          <PathStatus :path="protonPath" kind="runner" />
           <div v-if="protonDownload" class="mt-3 space-y-1.5" role="status">
             <div class="flex justify-between text-xs" style="color: var(--text-secondary)">
               <span>{{ protonDownload.stage }}…</span>
@@ -998,6 +1200,7 @@ const browseUrm = async () => {
               Browse
             </button>
           </div>
+          <PathStatus :path="prefixPath" kind="dir" />
           <p id="settings-prefix-help" class="text-xs mt-2" style="color: var(--text-muted)">
             The location where game dependencies and save files will be isolated.
           </p>
@@ -1039,6 +1242,7 @@ const browseUrm = async () => {
                 Browse
               </button>
             </div>
+            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="file" />
 
             <p
               class="copyable-feedback text-xs"

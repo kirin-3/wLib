@@ -11,6 +11,7 @@ import { getLaunchModeOptions } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import PathStatus from "../PathStatus.vue";
 
 interface AddGamePayload {
   title: string;
@@ -291,6 +292,7 @@ const save = () => {
             />
             <button @click="browseExe" class="modal-btn !py-3">Browse</button>
           </div>
+          <PathStatus :path="exePath" kind="file" />
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             The .exe or .sh file that launches the game.
             <template v-if="engine || version">

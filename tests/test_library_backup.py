@@ -11,11 +11,14 @@ from core.api import Api
 from core.database import (
     add_game,
     add_game_launch_target,
+    create_collection,
     get_all_games,
+    get_collections,
     get_connection,
     get_setting,
     init_db,
     list_game_launch_targets,
+    set_game_collections,
     update_game,
     update_setting,
 )
@@ -249,6 +252,170 @@ def test_missing_targets_preserved_and_empty_targets_clear(tmp_path, include_tar
     path = write_backup(tmp_path / "targets.json", base_backup([game]))
     assert Api().import_library_backup(str(path))["success"] is True
     assert len(list_game_launch_targets(game_id)) == (0 if include_targets else 1)
+
+
+def test_library_filter_presets_round_trip_through_backup(tmp_path):
+    api = Api()
+    saved = api.save_library_filter_presets(
+        [
+            {
+                "name": "Ren'Py now",
+                "filterCollection": "Favorites",
+                "filterStatuses": ["Playing"],
+                "filterInstallState": "installed",
+                "filterEngines": ["Ren'Py"],
+                "filterTags": ["dating-sim"],
+                "sortBy": "rating",
+                "sortDir": "desc",
+            }
+        ]
+    )
+    assert saved["success"]
+
+    sections = [SECTION_SETTINGS_GENERAL]
+    destination = tmp_path / "presets.json"
+    result = api.export_library_backup({"sections": sections}, str(destination))
+    assert result["success"]
+    backup = json.loads(destination.read_text(encoding="utf-8"))
+    assert json.loads(backup["settings"]["general"]["library_filter_presets"]) == [
+        {
+            "name": "Ren'Py now",
+            "filterCollection": "Favorites",
+            "filterStatuses": ["Playing"],
+            "filterInstallState": "installed",
+            "filterEngines": ["Ren'Py"],
+            "filterTags": ["dating-sim"],
+            "sortBy": "rating",
+            "sortDir": "desc",
+        }
+    ]
+
+    update_setting("library_filter_presets", "[]")
+    result = api.import_library_backup(str(destination), {"sections": sections})
+    assert result["success"]
+    assert [preset["name"] for preset in api.get_settings()["library_filter_presets"]] == [
+        "Ren'Py now"
+    ]
+
+
+def test_collections_and_membership_round_trip(tmp_path):
+    api = Api()
+    game_id = add_game(
+        "Collected",
+        "/tmp/game.exe",
+        f95_url="https://f95zone.to/threads/collected.123/",
+    )
+    assert game_id is not None
+    create_collection("Backlog", game_id=game_id)
+    create_collection("Best of")
+    assert set_game_collections(game_id, ["Backlog", "Best of"]) == [
+        "Backlog",
+        "Best of",
+    ]
+    sections = [
+        SECTION_USER_STATE,
+        SECTION_SETTINGS_GENERAL,
+    ]
+    destination = tmp_path / "backup.json"
+    result = api.export_library_backup({"sections": sections}, str(destination))
+    assert result["success"]
+    backup = json.loads(destination.read_text(encoding="utf-8"))
+    exported_game = backup["games"][0]
+    assert exported_game[SECTION_USER_STATE]["collections"] == ["Backlog", "Best of"]
+    assert json.loads(backup["settings"]["general"]["collections"]) == [
+        "Backlog",
+        "Best of",
+    ]
+
+    # Wipe local state, then import restores collections and membership.
+    update_setting("collections", "[]")
+    conn = get_connection()
+    conn.execute("UPDATE games SET collections = '[]'")
+    conn.commit()
+    conn.close()
+    result = api.import_library_backup(str(destination), {"sections": sections})
+    assert result["success"]
+    assert get_collections() == ["Backlog", "Best of"]
+    game = get_all_games()[0]
+    assert game["collections"] == ["Backlog", "Best of"]
+
+
+def test_older_backup_without_collections_leaves_them_unchanged(tmp_path):
+    api = Api()
+    game_id = add_game(
+        "Legacy",
+        "/tmp/legacy.exe",
+        f95_url="https://f95zone.to/threads/legacy.124/",
+    )
+    assert game_id is not None
+    create_collection("Backlog", game_id=game_id)
+
+    older = tmp_path / "older.json"
+    older.write_text(
+        json.dumps(
+            {
+                "format": BACKUP_FORMAT,
+                "format_version": BACKUP_FORMAT_VERSION,
+                "exported_at": "2020-01-01T00:00:00",
+                "app": {"name": "wLib", "version": "0.0.1"},
+                "selected_sections": [SECTION_USER_STATE],
+                "games": [
+                    {
+                        "metadata": {
+                            "title": "Legacy",
+                            "f95_url": "https://f95zone.to/threads/legacy.124/",
+                        },
+                        SECTION_USER_STATE: {"play_status": "Playing"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = api.import_library_backup(str(older))
+    assert result["success"]
+    assert get_collections() == ["Backlog"]
+    game = get_all_games()[0]
+    assert game["collections"] == ["Backlog"]
+
+
+def test_imported_membership_for_unknown_collection_is_ignored(tmp_path):
+    api = Api()
+    add_game(
+        "Ghost member",
+        "/tmp/ghost.exe",
+        f95_url="https://f95zone.to/threads/ghost.125/",
+    )
+    create_collection("Backlog")
+
+    source = tmp_path / "ghost.json"
+    source.write_text(
+        json.dumps(
+            {
+                "format": BACKUP_FORMAT,
+                "format_version": BACKUP_FORMAT_VERSION,
+                "exported_at": "2020-01-01T00:00:00",
+                "app": {"name": "wLib", "version": "0.0.1"},
+                "selected_sections": [SECTION_USER_STATE],
+                "games": [
+                    {
+                        "metadata": {
+                            "title": "Ghost member",
+                            "f95_url": "https://f95zone.to/threads/ghost.125/",
+                        },
+                        SECTION_USER_STATE: {
+                            "collections": ["Ghost", "Backlog"],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = api.import_library_backup(str(source))
+    assert result["success"]
+    game = get_all_games()[0]
+    assert game["collections"] == ["Backlog"]
 
 
 def test_custom_status_and_urm_settings_round_trip(tmp_path):

@@ -88,6 +88,7 @@ Stores the library records and their associated configuration flags.
 | `thread_main_post_last_edit_at` | `TIMESTAMP` | Last edit timestamp from F95Zone thread main post. |
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |
 | `thread_completed` | `BOOLEAN DEFAULT 0` | Whether the F95 thread currently has a `Completed` prefix. Added to existing databases during `init_db()`. |
+| `collections` | `TEXT DEFAULT '[]'` | JSON array of collection names the game belongs to. Read back as a decoded `list[str]`, matched against the collection list case-insensitively; names that no longer exist are hidden. Part of `SYNC_GAME_COLUMNS`, so membership changes bump the sync time. |
 
 ### Table: `game_launch_targets`
 Stores additional executable targets for games that ship with multiple playable parts. The canonical default executable remains `games.exe_path`; this table only contains extra named targets.
@@ -113,6 +114,10 @@ A simple generic key-value store for application-wide persistence.
 Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
 
 `custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
+
+`collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, `reorder_collections`, and `set_game_collections` each rewrite the setting and the affected games' `collections` column in one transaction. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. Both `collections` and `library_filter_presets` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
+
+`library_filter_presets` stores a JSON list of `{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}` objects (default `[]`). `get_library_filter_presets()` drops entries without a 1–40 character name and case-insensitive duplicate names; the frontend further normalises each preset through `normalizeFilterPreset` so unknown engines/tags are dropped on apply.
 
 ## JSON Migration Backups
 

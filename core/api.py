@@ -1188,6 +1188,112 @@ class Api:
                 game["metadata_pending"] = True
         return games
 
+    # ==========================
+    # Collections
+    # ==========================
+    def get_collections(self) -> list[str]:
+        from core.database import get_collections as fetch_collections
+
+        return fetch_collections()
+
+    def create_collection(
+        self, name: str, game_id: int | None = None
+    ) -> dict[str, object]:
+        from core.database import create_collection
+
+        try:
+            collections = create_collection(name, game_id)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "collections": collections}
+
+    def rename_collection(self, old_name: str, new_name: str) -> dict[str, object]:
+        from core.database import rename_collection
+
+        try:
+            collections = rename_collection(old_name, new_name)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "collections": collections}
+
+    def delete_collection(self, name: str) -> dict[str, object]:
+        from core.database import delete_collection
+
+        try:
+            collections = delete_collection(name)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "collections": collections}
+
+    def reorder_collections(self, names: Sequence[str]) -> dict[str, object]:
+        from core.database import reorder_collections
+
+        try:
+            collections = reorder_collections(names)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "collections": collections}
+
+    def set_game_collections(
+        self, game_id: int, names: Sequence[str]
+    ) -> dict[str, object]:
+        from core.database import set_game_collections
+
+        try:
+            collections = set_game_collections(game_id, names)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True, "collections": collections}
+
+    def check_path(self, path: str, kind: str) -> dict[str, object]:
+        """Report whether a typed path points at what its field expects.
+
+        Purely informational: a not-found result never blocks saving.
+        """
+        import shutil
+
+        if kind not in ("file", "dir", "parent", "runner"):
+            return {"success": False, "error": f"Unknown path kind '{kind}'"}
+
+        value = str(path or "").strip()
+        if not value:
+            return {"ok": False, "reason": "Enter a path"}
+        expanded = os.path.expanduser(value)
+
+        if kind == "runner":
+            has_separator = "/" in expanded or os.sep in expanded
+            if not has_separator and os.altsep is not None:
+                has_separator = os.altsep in expanded
+            if not has_separator:
+                if shutil.which(expanded) is not None:
+                    return {"ok": True, "reason": ""}
+                return {"ok": False, "reason": "Command not found on PATH"}
+            if os.path.isfile(expanded):
+                return {"ok": True, "reason": ""}
+            return {"ok": False, "reason": "File not found"}
+
+        if kind == "file":
+            if os.path.isfile(expanded):
+                return {"ok": True, "reason": ""}
+            if os.path.isdir(expanded):
+                return {"ok": False, "reason": "Expected a file"}
+            return {"ok": False, "reason": "File not found"}
+
+        if kind == "dir":
+            if os.path.isdir(expanded):
+                return {"ok": True, "reason": ""}
+            if os.path.isfile(expanded):
+                return {"ok": False, "reason": "Expected a folder"}
+            return {"ok": False, "reason": "Folder not found"}
+
+        # parent: the file may not exist yet, but its folder must.
+        if os.path.isdir(expanded):
+            return {"ok": False, "reason": "Expected a file"}
+        parent = os.path.dirname(expanded) or "."
+        if os.path.isdir(parent):
+            return {"ok": True, "reason": ""}
+        return {"ok": False, "reason": "Folder not found"}
+
     def inspect_game_path(self, exe_path: str) -> dict[str, object]:
         from core.game_scan import inspect_game_path
 
@@ -3216,7 +3322,9 @@ class Api:
     def get_settings(self) -> dict[str, object]:
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
+            get_collections,
             get_custom_play_statuses,
+            get_library_filter_presets,
             get_setting,
         )
 
@@ -3230,6 +3338,8 @@ class Api:
             "proton_path": str(get_setting_fn("proton_path") or ""),
             "wine_prefix_path": str(get_setting_fn("wine_prefix_path") or ""),
             "custom_play_statuses": get_custom_play_statuses(),
+            "collections": get_collections(),
+            "library_filter_presets": get_library_filter_presets(),
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -3357,6 +3467,30 @@ class Api:
             )
         if "custom_play_statuses" in settings:
             update_custom_play_statuses(custom_statuses)
+        return {"success": True}
+
+    def save_library_filter_presets(self, presets: object) -> dict[str, object]:
+        import json
+
+        from core.database import normalize_filter_preset, update_setting
+
+        if not isinstance(presets, list):
+            return {"success": False, "error": "Filter presets must be a list"}
+        validated: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for entry in cast(list[object], presets):
+            preset = normalize_filter_preset(entry)
+            if preset is None:
+                return {
+                    "success": False,
+                    "error": "Each filter preset needs a name of 1–40 characters",
+                }
+            name = str(preset["name"])
+            if name.casefold() in seen:
+                return {"success": False, "error": f"Filter preset '{name}' already exists"}
+            seen.add(name.casefold())
+            validated.append(preset)
+        update_setting("library_filter_presets", json.dumps(validated))
         return {"success": True}
 
     def browse_urm_file(self, start_path: str = "") -> str:

@@ -7,6 +7,8 @@
 
 import type { LaunchMode } from "../utils/launchMode";
 import { LAUNCH_MODE_OPTIONS } from "../utils/launchMode";
+import type { LibraryFilterPreset } from "../utils/libraryViewState";
+import { VALID_SORT_FIELDS } from "../utils/libraryViewState";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 import { hasAvailableUpdate } from "../utils/libraryGames";
@@ -466,6 +468,8 @@ export interface GameRecord {
   thread_main_post_checked_at?: string | null;
   thread_completed?: boolean | number;
   launch_targets?: LaunchTarget[];
+  // Decoded collection membership; names always match the collection list.
+  collections?: string[];
   // F95 metadata is still being fetched in the background after adding.
   metadata_pending?: boolean;
 }
@@ -496,6 +500,8 @@ export interface PlatformCapabilities {
 
 export interface SettingsPayload {
   custom_play_statuses?: string[];
+  collections?: string[];
+  library_filter_presets?: LibraryFilterPreset[];
   urm_rpa_path?: string;
   proton_path?: string;
   wine_prefix_path?: string;
@@ -515,6 +521,8 @@ export interface UrmStatusResponse extends ApiBasicResponse {
 
 export interface SettingsResponse {
   custom_play_statuses: string[];
+  collections: string[];
+  library_filter_presets: LibraryFilterPreset[];
   urm_rpa_path: string;
   proton_path: string;
   wine_prefix_path: string;
@@ -528,10 +536,23 @@ export interface SettingsResponse {
   download_detection_enabled: boolean;
 }
 
+export interface CollectionsResponse extends ApiBasicResponse {
+  collections?: string[];
+}
+
+export type PathCheckKind = "file" | "dir" | "parent" | "runner";
+
+export interface PathCheckResponse extends ApiBasicResponse {
+  ok?: boolean;
+  reason?: string;
+}
+
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   custom_play_statuses: [],
+  collections: [],
+  library_filter_presets: [],
   urm_rpa_path: "",
   proton_path: "",
   wine_prefix_path: "",
@@ -600,6 +621,78 @@ const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
   return targets.reduce((max, target) => Math.max(max, target.id), 0) + 1;
 };
 
+const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[] => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const presets: LibraryFilterPreset[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const source = entry as Record<string, unknown>;
+    const name = typeof source.name === "string" ? source.name.trim() : "";
+    if (!name || name.length > 40 || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    presets.push({
+      name,
+      filterCollection:
+        typeof source.filterCollection === "string" &&
+        ["All", "Favorites", "Updates available", "New since finished", "Recently played"].includes(source.filterCollection)
+          ? (source.filterCollection as LibraryFilterPreset["filterCollection"])
+          : "All",
+      filterStatuses: Array.isArray(source.filterStatuses)
+        ? source.filterStatuses.filter((status): status is string => typeof status === "string")
+        : [],
+      filterInstallState:
+        source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
+          ? source.filterInstallState
+          : "",
+      filterEngines: Array.isArray(source.filterEngines)
+        ? source.filterEngines.filter((engine): engine is string => typeof engine === "string")
+        : [],
+      filterTags: Array.isArray(source.filterTags)
+        ? source.filterTags.filter((tag): tag is string => typeof tag === "string")
+        : [],
+      sortBy:
+        typeof source.sortBy === "string" && VALID_SORT_FIELDS.has(source.sortBy as LibraryFilterPreset["sortBy"])
+          ? (source.sortBy as LibraryFilterPreset["sortBy"])
+          : "title",
+      sortDir: source.sortDir === "desc" ? "desc" : "asc",
+    });
+  }
+  return presets;
+};
+
+// Mirrors the backend's name rules: 1–40 characters, unique ignoring case,
+// and "All" reserved for the built-in tab.
+const validateMockCollectionList = (names: readonly string[]): string => {
+  const seen = new Set(["all"]);
+  for (const raw of names) {
+    const name = raw.trim();
+    if (!name || name.length > 40) return "Collection names must contain 1–40 characters.";
+    if (name.toLowerCase() === "all") return "'All' is reserved for the library-wide tab.";
+    if (seen.has(name.toLowerCase())) return `A collection named '${name}' already exists.`;
+    seen.add(name.toLowerCase());
+  }
+  return "";
+};
+
+const rewriteMockGameCollections = (
+  rewrite: (names: string[], game: GameRecord) => string[],
+): void => {
+  const games = readMockGames().map((game) => ({
+    ...game,
+    collections: rewrite(game.collections || [], game),
+  }));
+  try {
+    localStorage.setItem("wlib-mock-games", JSON.stringify(games));
+  } catch (_error) {
+    // Ignore browser mock persistence failures and keep the desktop contract unchanged.
+  }
+};
+
+const writeMockCollections = (collections: string[]): void => {
+  writeMockSettings({ ...readMockSettings(), collections });
+};
+
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rpgmakerRunnerPath =
@@ -613,6 +706,8 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
 
   return {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
+    collections: Array.isArray(source.collections) ? source.collections.filter((name): name is string => typeof name === "string") : [],
+    library_filter_presets: normalizeMockFilterPresets(source.library_filter_presets),
     urm_rpa_path: typeof source.urm_rpa_path === "string" ? source.urm_rpa_path : "",
     proton_path: typeof source.proton_path === "string" ? source.proton_path : DEFAULT_MOCK_SETTINGS.proton_path,
     wine_prefix_path:
@@ -743,6 +838,50 @@ class ApiService {
 
   async getGames(): Promise<GameRecord[]> {
     return this.invoke<GameRecord[]>("get_games");
+  }
+
+  async getCollections(): Promise<string[]> {
+    return this.invoke<string[]>("get_collections");
+  }
+
+  async createCollection(name: string, gameId?: number): Promise<CollectionsResponse> {
+    return this.invokeLibraryChange<CollectionsResponse>(
+      "create_collection",
+      name,
+      gameId ?? null,
+    );
+  }
+
+  async renameCollection(oldName: string, newName: string): Promise<CollectionsResponse> {
+    return this.invokeLibraryChange<CollectionsResponse>(
+      "rename_collection",
+      oldName,
+      newName,
+    );
+  }
+
+  async deleteCollection(name: string): Promise<CollectionsResponse> {
+    return this.invokeLibraryChange<CollectionsResponse>("delete_collection", name);
+  }
+
+  async reorderCollections(names: string[]): Promise<CollectionsResponse> {
+    return this.invokeLibraryChange<CollectionsResponse>("reorder_collections", names);
+  }
+
+  async setGameCollections(gameId: number, names: string[]): Promise<CollectionsResponse> {
+    return this.invokeLibraryChange<CollectionsResponse>(
+      "set_game_collections",
+      gameId,
+      names,
+    );
+  }
+
+  async saveLibraryFilterPresets(presets: LibraryFilterPreset[]): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("save_library_filter_presets", presets);
+  }
+
+  async checkPath(path: string, kind: PathCheckKind): Promise<PathCheckResponse> {
+    return this.invoke<PathCheckResponse>("check_path", path, kind);
   }
 
   private async invokeLibraryChange<T extends ApiBasicResponse>(method: string, ...args: unknown[]): Promise<T> {
@@ -1270,6 +1409,132 @@ class ApiService {
       }
       case "get_settings":
         return readMockSettings();
+      case "get_collections":
+        return readMockSettings().collections;
+      case "create_collection": {
+        const name = String(args[0] || "");
+        const gameId = args[1] == null ? null : Number(args[1]);
+        const collections = readMockSettings().collections;
+        const error = validateMockCollectionList([...collections, name]);
+        if (error) return { success: false, mock: true, error };
+        const trimmed = name.trim();
+        collections.push(trimmed);
+        writeMockCollections(collections);
+        if (gameId != null && Number.isFinite(gameId)) {
+          rewriteMockGameCollections((names, game) =>
+            game.id === gameId ? [...names, trimmed] : names,
+          );
+        }
+        return { success: true, mock: true, collections };
+      }
+      case "rename_collection": {
+        const oldName = String(args[0] || "");
+        const newName = String(args[1] || "");
+        const collections = readMockSettings().collections;
+        const oldKey = oldName.trim().toLowerCase();
+        const index = collections.findIndex((name) => name.toLowerCase() === oldKey);
+        if (index === -1) return { success: false, mock: true, error: `Collection '${oldName}' does not exist` };
+        const trimmed = newName.trim();
+        const error = validateMockCollectionList([
+          ...collections.filter((_name, i) => i !== index),
+          trimmed,
+        ]);
+        if (error) return { success: false, mock: true, error };
+        collections[index] = trimmed;
+        writeMockCollections(collections);
+        rewriteMockGameCollections((names) =>
+          names.map((name) => (name.toLowerCase() === oldKey ? trimmed : name)),
+        );
+        return { success: true, mock: true, collections };
+      }
+      case "delete_collection": {
+        const key = String(args[0] || "").trim().toLowerCase();
+        const collections = readMockSettings().collections;
+        if (!collections.some((name) => name.toLowerCase() === key)) {
+          return { success: false, mock: true, error: `Collection '${args[0]}' does not exist` };
+        }
+        const remaining = collections.filter((name) => name.toLowerCase() !== key);
+        writeMockCollections(remaining);
+        rewriteMockGameCollections((names) => names.filter((name) => name.toLowerCase() !== key));
+        return { success: true, mock: true, collections: remaining };
+      }
+      case "reorder_collections": {
+        const requested = Array.isArray(args[0]) ? (args[0] as unknown[]).map(String) : [];
+        const collections = readMockSettings().collections;
+        const byKey = new Map(collections.map((name) => [name.toLowerCase(), name]));
+        const reordered: string[] = [];
+        for (const name of requested) {
+          const canonical = byKey.get(name.trim().toLowerCase());
+          if (!canonical || reordered.includes(canonical)) {
+            return { success: false, mock: true, error: "Collection order must list every collection once" };
+          }
+          reordered.push(canonical);
+        }
+        if (reordered.length !== collections.length) {
+          return { success: false, mock: true, error: "Collection order must list every collection once" };
+        }
+        writeMockCollections(reordered);
+        return { success: true, mock: true, collections: reordered };
+      }
+      case "set_game_collections": {
+        const gameId = Number(args[0]);
+        const requested = Array.isArray(args[1]) ? (args[1] as unknown[]).map(String) : [];
+        const games = readMockGames();
+        if (!games.some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found" };
+        }
+        const collections = readMockSettings().collections;
+        const byKey = new Map(collections.map((name) => [name.toLowerCase(), name]));
+        const members: string[] = [];
+        for (const name of requested) {
+          const canonical = byKey.get(name.trim().toLowerCase());
+          if (!canonical) return { success: false, mock: true, error: `Collection '${name}' does not exist` };
+          if (members.includes(canonical)) {
+            return { success: false, mock: true, error: `Collection '${canonical}' is listed twice` };
+          }
+          members.push(canonical);
+        }
+        rewriteMockGameCollections((_names, game) => (game.id === gameId ? [...members] : _names));
+        return { success: true, mock: true, collections: members };
+      }
+      case "save_library_filter_presets": {
+        const presets = Array.isArray(args[0]) ? args[0] : null;
+        if (!presets) return { success: false, mock: true, error: "Filter presets must be a list" };
+        const names = presets.map((preset) =>
+          typeof preset === "object" && preset !== null ? String((preset as Record<string, unknown>).name ?? "") : "",
+        );
+        if (names.some((name) => !name.trim() || name.trim().length > 40)) {
+          return { success: false, mock: true, error: "Filter preset names must contain 1–40 characters" };
+        }
+        const seen = new Set<string>();
+        for (const name of names) {
+          if (seen.has(name.trim().toLowerCase())) {
+            return { success: false, mock: true, error: `Filter preset '${name.trim()}' already exists` };
+          }
+          seen.add(name.trim().toLowerCase());
+        }
+        const next = readMockSettings();
+        next.library_filter_presets = normalizeMockFilterPresets(presets);
+        writeMockSettings(next);
+        return { success: true, mock: true };
+      }
+      case "check_path": {
+        const path = String(args[0] || "").trim();
+        const kind = String(args[1] || "");
+        if (!["file", "dir", "parent", "runner"].includes(kind)) {
+          return { success: false, mock: true, error: `Unknown path kind '${kind}'` };
+        }
+        if (!path) return { ok: false, reason: "Enter a path" };
+        // The mock has no filesystem: paths naming "missing" report missing.
+        if (!path.toLowerCase().includes("missing")) return { ok: true, reason: "" };
+        const reason =
+          kind === "file"
+            ? "File not found"
+            : kind === "runner"
+              ? "Command not found on PATH"
+              : "Folder not found";
+        return { ok: false, reason };
+      }
       case "save_settings": {
         const payload = isRecord(args[0]) ? args[0] : {};
         if (Array.isArray(payload.custom_play_statuses)) {

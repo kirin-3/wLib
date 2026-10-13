@@ -1,5 +1,7 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import json
+
 import pytest
 import os
 from typing import cast
@@ -19,7 +21,9 @@ from core.database import (
     update_game,
     update_game_launch_target,
     get_all_games,
+    get_collections,
     get_custom_play_statuses,
+    get_library_filter_presets,
     get_setting,
     update_setting,
     normalize_launch_mode,
@@ -27,6 +31,11 @@ from core.database import (
     reorder_game_launch_targets,
     update_custom_play_statuses,
     update_playtime,
+    create_collection,
+    rename_collection,
+    delete_collection,
+    reorder_collections,
+    set_game_collections,
 )
 
 
@@ -798,3 +807,203 @@ def test_default_downloads_folder_ignores_xdg_home_fallback(monkeypatch):
     )
 
     assert default_downloads_folder() == os.path.join(home, "Downloads")
+
+
+def test_existing_database_gains_collections_with_empty_default():
+    """Databases from before collections existed gain the column as []."""
+    game_id = add_game("Older Collection Game", "/tmp/old.exe")
+    assert game_id is not None
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN collections")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT collections FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None and row[0] == "[]"
+
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    _ = set_game_collections(game_id, [])
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET collections = ? WHERE id = ?",
+        ('["Backlog"]', game_id),
+    )
+    conn.commit()
+    conn.close()
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_collections_crud_rename_keeps_members_and_delete_removes_membership():
+    backlog_id = add_game("Backlogged", "/tmp/backlog.exe")
+    best_id = add_game("Best Game", "/tmp/best.exe")
+    assert backlog_id is not None
+    assert best_id is not None
+
+    create_collection("Backlog", game_id=backlog_id)
+    create_collection("Best of", game_id=backlog_id)
+    set_game_collections(best_id, ["Best of"])
+    assert get_collections() == ["Backlog", "Best of"]
+
+    games_by_title = {game["title"]: game for game in get_all_games()}
+    assert games_by_title["Backlogged"]["collections"] == ["Backlog", "Best of"]
+    assert games_by_title["Best Game"]["collections"] == ["Best of"]
+
+    # Rename keeps members.
+    rename_collection("Backlog", "To play")
+    games_by_title = {game["title"]: game for game in get_all_games()}
+    assert games_by_title["Backlogged"]["collections"] == ["To play", "Best of"]
+    assert "Backlog" not in get_collections()
+
+    # Delete keeps games and removes only that membership.
+    delete_collection("Best of")
+    games_by_title = {game["title"]: game for game in get_all_games()}
+    assert games_by_title["Backlogged"]["collections"] == ["To play"]
+    assert games_by_title["Best Game"]["collections"] == []
+    assert get_collections() == ["To play"]
+
+    # Reorder changes the stored order without touching membership.
+    create_collection("Zed")
+    reorder_collections(["Zed", "To play"])
+    assert get_collections() == ["Zed", "To play"]
+    assert {game["title"]: game for game in get_all_games()}["Backlogged"][
+        "collections"
+    ] == ["To play"]
+
+
+def test_collection_names_are_validated_on_create_and_rename():
+    create_collection("Backlog")
+    for bad_name in ("", "   ", "All", "all", "x" * 41):
+        with pytest.raises(ValueError, match="1–40|reserved"):
+            create_collection(bad_name)
+    with pytest.raises(ValueError, match="already exists"):
+        create_collection("backlog")
+
+    with pytest.raises(ValueError, match="already exists"):
+        create_collection("backlog")
+
+    # A case-only rename is allowed and keeps the single entry.
+    rename_collection("Backlog", "BACKLOG")
+    assert get_collections() == ["BACKLOG"]
+
+    create_collection("Other")
+    with pytest.raises(ValueError, match="already exists"):
+        rename_collection("BACKLOG", "other")
+    with pytest.raises(ValueError, match="does not exist"):
+        rename_collection("Missing", "Whatever")
+    with pytest.raises(ValueError, match="does not exist"):
+        delete_collection("Missing")
+    with pytest.raises(ValueError, match="1–40"):
+        rename_collection("BACKLOG", "x" * 41)
+
+
+def test_imported_collection_list_is_validated_and_stale_membership_filtered():
+    game_id = add_game("Synced", "/tmp/synced.exe")
+    assert game_id is not None
+    # A sync or import can store any list, and any membership names.
+    update_setting(
+        "collections",
+        json.dumps([" Backlog ", "backlog", "All", "x" * 41, 3, "Best"]),
+    )
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET collections = ? WHERE id = ?",
+        ('["backlog", "Ghost", "Best", 7]', game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    assert get_collections() == ["Backlog", "Best"]
+    # Membership is matched case-insensitively against the current list and
+    # canonicalized; stale names are hidden.
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["collections"] == ["Backlog", "Best"]
+
+
+def test_set_game_collections_validates_names_and_game():
+    game_id = add_game("Member", "/tmp/member.exe")
+    other_id = add_game("Other Member", "/tmp/other.exe")
+    assert game_id is not None
+    assert other_id is not None
+    create_collection("Backlog")
+    create_collection("Best of")
+
+    assert set_game_collections(game_id, ["best of", "Backlog"]) == [
+        "Best of",
+        "Backlog",
+    ]
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["collections"] == ["Best of", "Backlog"]
+
+    with pytest.raises(ValueError, match="does not exist"):
+        set_game_collections(game_id, ["Ghost"])
+    with pytest.raises(ValueError, match="twice"):
+        set_game_collections(game_id, ["Backlog", "BACKLOG"])
+    with pytest.raises(ValueError, match="Game not found"):
+        set_game_collections(999999, ["Backlog"])
+    with pytest.raises(ValueError, match="Game not found"):
+        create_collection("With game", game_id=999999)
+
+
+def test_reorder_collections_requires_every_collection_once():
+    create_collection("One")
+    create_collection("Two")
+    with pytest.raises(ValueError, match="every collection once"):
+        reorder_collections(["One"])
+    with pytest.raises(ValueError, match="every collection once"):
+        reorder_collections(["One", "One", "Two"])
+    with pytest.raises(ValueError, match="every collection once"):
+        reorder_collections(["One", "Ghost"])
+    assert reorder_collections(["two", "ONE"]) == ["Two", "One"]
+
+
+def test_library_filter_presets_drop_invalid_entries_and_duplicates():
+    update_setting(
+        "library_filter_presets",
+        json.dumps(
+            [
+                {
+                    "name": "Ren'Py now",
+                    "filterCollection": "Favorites",
+                    "filterStatuses": ["Playing"],
+                    "filterInstallState": "installed",
+                    "filterEngines": ["Ren'Py"],
+                    "filterTags": ["dating-sim"],
+                    "sortBy": "rating",
+                    "sortDir": "desc",
+                },
+                {"name": "   "},
+                {"nope": True},
+                "corrupt",
+                {"name": "ren'py now", "sortBy": "title"},
+                {
+                    "name": "Broken enums",
+                    "filterInstallState": "bogus",
+                    "sortDir": "sideways",
+                    "filterStatuses": "nope",
+                    "filterEngines": [1, "Ren'Py"],
+                },
+            ]
+        ),
+    )
+    presets = get_library_filter_presets()
+    assert [preset["name"] for preset in presets] == ["Ren'Py now", "Broken enums"]
+    assert presets[0]["filterStatuses"] == ["Playing"]
+    assert presets[0]["sortBy"] == "rating"
+    assert presets[1]["filterInstallState"] == ""
+    assert presets[1]["sortDir"] == ""
+    assert presets[1]["filterStatuses"] == []
+    assert presets[1]["filterEngines"] == ["Ren'Py"]
+
+    update_setting("library_filter_presets", "not json")
+    assert get_library_filter_presets() == []
+    update_setting("library_filter_presets", '"also not a list"')
+    assert get_library_filter_presets() == []

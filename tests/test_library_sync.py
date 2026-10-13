@@ -623,6 +623,47 @@ def test_two_data_directories_folder_sync(tmp_path, monkeypatch, encrypted):
     assert (db_b.parent / "sync" / "last-local.json").exists()
 
 
+def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeypatch):
+    folder = tmp_path / "shared"
+    folder.mkdir()
+    db_a, db_b = tmp_path / "a" / "wlib.db", tmp_path / "b" / "wlib.db"
+    db_a.parent.mkdir()
+    db_b.parent.mkdir()
+    monkeypatch.setattr(database, "DB_PATH", str(db_a))
+    database.init_db()
+    alpha = database.add_game("Alpha", "/a/alpha.exe")
+    beta = database.add_game("Beta", "/a/beta.exe")
+    database.create_collection("Backlog", alpha)
+    database.create_collection("Best of")
+    database.set_game_collections(beta, ["Backlog", "Best of"])
+    preset = {"name": "Unity", "filterEngines": ["Unity"], "sortBy": "rating", "sortDir": "desc"}
+    assert Api().save_library_filter_presets([preset])["success"]
+    a = SyncManager()
+    a.set_folder(str(folder))
+    a.run()
+
+    monkeypatch.setattr(database, "DB_PATH", str(db_b))
+    database.init_db()
+    b = SyncManager()
+    b.set_folder(str(folder))
+    b.run()
+    members = {game["title"]: game["collections"] for game in database.get_all_games()}
+    assert database.get_collections() == ["Backlog", "Best of"]
+    assert members == {"Alpha": ["Backlog"], "Beta": ["Backlog", "Best of"]}
+    assert [p["name"] for p in database.get_library_filter_presets()] == ["Unity"]
+
+    # Rename and change membership on B; A picks up both on its next sync.
+    database.rename_collection("Backlog", "To play")
+    beta_b = next(g for g in database.get_all_games() if g["title"] == "Beta")
+    database.set_game_collections(int(str(beta_b["id"])), ["Best of"])
+    b.run()
+    monkeypatch.setattr(database, "DB_PATH", str(db_a))
+    a.run()
+    members = {game["title"]: game["collections"] for game in database.get_all_games()}
+    assert database.get_collections() == ["To play", "Best of"]
+    assert members == {"Alpha": ["To play"], "Beta": ["Best of"]}
+
+
 @pytest.mark.parametrize("encrypted", [False, True])
 def test_two_home_processes_folder_sync(tmp_path, encrypted):
     folder = tmp_path / "shared-processes"

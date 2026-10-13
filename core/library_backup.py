@@ -93,6 +93,7 @@ USER_STATE_FIELDS = (
     "playtime_seconds",
     "last_played",
     "date_added",
+    "collections",
 )
 LAUNCH_CONFIG_FIELDS = (
     "command_line_args",
@@ -834,6 +835,24 @@ def inspect_library_backup(
     }
 
 
+def _collections_json_text(value: object) -> str:
+    # Backups carry membership as a JSON array; sync rows may hold JSON text.
+    parsed_value: object = None
+    if isinstance(value, str):
+        try:
+            parsed_value = cast(object, json.loads(value))
+        except (ValueError, TypeError):
+            parsed_value = None
+    else:
+        parsed_value = value
+    names: list[str] = []
+    if isinstance(parsed_value, list):
+        for name in cast(list[object], parsed_value):
+            if isinstance(name, str) and name.strip():
+                names.append(name.strip())
+    return json.dumps(names)
+
+
 def _normalize_game_field(field: str, value: object) -> object:
     if field == "title":
         return _coerce_text(value).strip() or "Imported Game"
@@ -845,6 +864,8 @@ def _normalize_game_field(field: str, value: object) -> object:
         return normalize_play_status(value)
     if field == "launch_mode":
         return normalize_launch_mode(value)
+    if field == "collections":
+        return _collections_json_text(value)
     if field in BOOLEAN_GAME_FIELDS:
         return 1 if _coerce_bool(value) else 0
     if field in INTEGER_GAME_FIELDS:

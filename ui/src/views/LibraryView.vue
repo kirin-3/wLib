@@ -4,7 +4,9 @@ import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   IconArchive,
+  IconCheck,
   IconChevronDown,
+  IconArrowLeft,
   IconArrowUp,
   IconClock,
   IconColumns2Filled,
@@ -19,6 +21,7 @@ import {
   IconPhotoFilled,
   IconPlayerStopFilled,
   IconPlayerPlayFilled,
+  IconPlus,
   IconRefresh,
   IconSparkles,
   IconZoom,
@@ -39,6 +42,8 @@ import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
   clearLegacyLibraryViewState,
+  normalizeActiveCollection,
+  normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
   saveLibraryViewState,
@@ -46,6 +51,7 @@ import {
   type FilterInstallState,
   type FilterSections,
   type LayoutMode,
+  type LibraryFilterPreset,
   type LibraryViewState,
   type SortDir,
   type SortField,
@@ -110,6 +116,22 @@ const router = useRouter();
 const games = ref<GameRecord[]>([]);
 const runningGameIds = ref(new Set<number>());
 const customStatuses = ref<string[]>([]);
+// User-defined collections shown as tabs; activeCollection "" means "All".
+const userCollections = ref<string[]>([]);
+const activeCollection = ref(DEFAULT_LIBRARY_VIEW_STATE.activeCollection);
+const newCollectionName = ref("");
+const showNewCollectionInline = ref(false);
+const collectionError = ref("");
+const renamingCollection = ref<string | null>(null);
+const renameCollectionDraft = ref("");
+const newCollectionInput = ref<HTMLInputElement | null>(null);
+const collectionTabsElement = ref<HTMLElement | null>(null);
+const collectionTabMenu = ref<{ name: string; x: number; y: number } | null>(null);
+const collectionTabMenuElement = ref<HTMLElement | null>(null);
+// Saved filter presets listed at the top of the filters pane.
+const savedPresets = ref<LibraryFilterPreset[]>([]);
+const newPresetName = ref("");
+const presetError = ref("");
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const showDetailModal = ref(false);
@@ -122,6 +144,11 @@ const contextMenu = ref<{ game: GameRecord; x: number; y: number } | null>(
   null,
 );
 const contextMenuElement = ref<HTMLElement | null>(null);
+// "actions" is the button list; "collections" switches the body to the
+// membership checklist so no second popup needs positioning.
+const contextMenuView = ref<"actions" | "collections">("actions");
+const contextNewCollectionName = ref("");
+const contextNewCollectionError = ref("");
 let contextMenuTrigger: HTMLElement | null = null;
 
 const tableColumns: Array<{ key: SortField; label: string; class?: string }> = [
@@ -320,6 +347,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   filterTags.value = [...state.filterTags];
   isFiltersCollapsed.value = state.isFiltersCollapsed;
   filterSections.value = { ...state.filterSections };
+  activeCollection.value = state.activeCollection;
 };
 
 const buildLibraryViewState = (): LibraryViewState =>
@@ -334,6 +362,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterTags: filterTags.value,
     isFiltersCollapsed: isFiltersCollapsed.value,
     filterSections: filterSections.value,
+    activeCollection: activeCollection.value,
   });
 
 const sameStringArray = (
@@ -359,6 +388,15 @@ const restoreLibraryViewState = () => {
 
 const filteredGames = computed(() => {
   let result = [...games.value];
+  // The selected collection tab limits everything below it.
+  if (activeCollection.value) {
+    const activeKey = activeCollection.value.toLowerCase();
+    result = result.filter((game) =>
+      (game.collections || []).some(
+        (name) => name.toLowerCase() === activeKey,
+      ),
+    );
+  }
   if (searchQuery.value.trim())
     result = result.filter((game) =>
       matchesGameSearch(game, searchQuery.value),
@@ -399,6 +437,265 @@ const filteredGames = computed(() => {
   result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
 });
+
+// Tab counts show each collection's size and ignore the active filters.
+const collectionCounts = computed(() => {
+  const valid = new Set(userCollections.value.map((name) => name.toLowerCase()));
+  const counts = new Map<string, number>();
+  games.value.forEach((game) =>
+    (game.collections || []).forEach((name) => {
+      const key = name.toLowerCase();
+      if (!valid.has(key)) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }),
+  );
+  return counts;
+});
+
+const collectionCount = (name: string): number =>
+  collectionCounts.value.get(name.toLowerCase()) || 0;
+
+const applyCollectionsFromPayload = (collections: string[] | undefined) => {
+  if (Array.isArray(collections)) userCollections.value = [...collections];
+};
+
+const startInlineCollectionCreate = async () => {
+  collectionError.value = "";
+  showNewCollectionInline.value = true;
+  await nextTick();
+  newCollectionInput.value?.focus();
+};
+
+const cancelInlineCollectionCreate = () => {
+  showNewCollectionInline.value = false;
+  newCollectionName.value = "";
+  collectionError.value = "";
+};
+
+const createCollectionFromTab = async () => {
+  const name = newCollectionName.value.trim();
+  if (!name) {
+    collectionError.value = "Enter a collection name.";
+    return;
+  }
+  const result = await api.createCollection(name);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not create the collection.";
+    return;
+  }
+  applyCollectionsFromPayload(result.collections);
+  cancelInlineCollectionCreate();
+};
+
+const openCollectionTabMenu = (name: string, event: MouseEvent) => {
+  event.preventDefault();
+  // The menu is small; clamp so it stays inside the window.
+  collectionTabMenu.value = {
+    name,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 180)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 130)),
+  };
+};
+
+const closeCollectionTabMenu = () => {
+  collectionTabMenu.value = null;
+};
+
+const startCollectionRename = async (name: string) => {
+  closeCollectionTabMenu();
+  renamingCollection.value = name;
+  renameCollectionDraft.value = name;
+  await nextTick();
+  const input = collectionTabsElement.value?.querySelector<HTMLInputElement>(
+    "[data-rename-input]",
+  );
+  input?.focus();
+  input?.select();
+};
+
+const cancelCollectionRename = () => {
+  renamingCollection.value = null;
+  renameCollectionDraft.value = "";
+  collectionError.value = "";
+};
+
+const commitCollectionRename = async () => {
+  const oldName = renamingCollection.value;
+  const newName = renameCollectionDraft.value.trim();
+  if (!oldName) return;
+  if (!newName || newName === oldName) {
+    cancelCollectionRename();
+    return;
+  }
+  const result = await api.renameCollection(oldName, newName);
+  if (!result.success) {
+    collectionError.value = result.error || "Could not rename the collection.";
+    return;
+  }
+  applyCollectionsFromPayload(result.collections);
+  if (activeCollection.value.toLowerCase() === oldName.toLowerCase()) {
+    activeCollection.value = newName;
+  }
+  cancelCollectionRename();
+};
+
+const deleteCollectionFromTab = async (name: string) => {
+  closeCollectionTabMenu();
+  const count = collectionCount(name);
+  const membershipNote = count
+    ? ` Its ${count} game${count === 1 ? "" : "s"} stay in your library.`
+    : " Games stay in your library.";
+  if (!confirm(`Delete the collection "${name}"?${membershipNote}`)) return;
+  const result = await api.deleteCollection(name);
+  if (!result.success) {
+    notifyError(result.error || "Could not delete the collection.");
+    return;
+  }
+  applyCollectionsFromPayload(result.collections);
+};
+
+// Arrow keys move focus and selection across the tab strip.
+const handleCollectionTabsKeyboard = (event: KeyboardEvent) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [
+    ...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>(
+      "[data-collection-tab]",
+    ) ?? []),
+  ];
+  if (!tabs.length) return;
+  event.preventDefault();
+  const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
+  let next: number;
+  if (event.key === "ArrowLeft") next = index === -1 ? 0 : (index - 1 + tabs.length) % tabs.length;
+  else if (event.key === "ArrowRight") next = index === -1 ? 0 : (index + 1) % tabs.length;
+  else if (event.key === "Home") next = 0;
+  else next = tabs.length - 1;
+  const tab = tabs[next];
+  tab?.focus();
+  activeCollection.value = tab?.dataset.collection ?? "";
+};
+
+const scrollSelectedCollectionTabIntoView = async () => {
+  await nextTick();
+  collectionTabsElement.value
+    ?.querySelector('[aria-selected="true"]')
+    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+};
+
+const gameInCollection = (game: GameRecord, name: string): boolean => {
+  const key = name.toLowerCase();
+  return (game.collections || []).some((entry) => entry.toLowerCase() === key);
+};
+
+// The context menu holds its own copy of the game, so membership is written to
+// both it and the library list. Updating before the save lets a second toggle
+// build on the first even while the first is still in flight.
+const setLocalMembership = (gameId: number, names: string[]) => {
+  const listed = games.value.find((entry) => entry.id === gameId);
+  if (listed) listed.collections = names;
+  if (contextMenu.value?.game.id === gameId) contextMenu.value.game.collections = names;
+};
+
+const toggleGameCollection = async (game: GameRecord, name: string) => {
+  const key = name.toLowerCase();
+  const current =
+    games.value.find((entry) => entry.id === game.id)?.collections || game.collections || [];
+  const next = current.some((entry) => entry.toLowerCase() === key)
+    ? current.filter((entry) => entry.toLowerCase() !== key)
+    : [...current, name];
+  setLocalMembership(game.id, next);
+  const result = await api.setGameCollections(game.id, next);
+  if (!result.success) {
+    notifyError(result.error || "Could not update the collection.");
+    await loadGames();
+  }
+};
+
+const createCollectionForGame = async (game: GameRecord, name: string) => {
+  const result = await api.createCollection(name, game.id);
+  if (!result.success) return result.error || "Could not create the collection.";
+  applyCollectionsFromPayload(result.collections);
+  await loadGames();
+  const refreshed = games.value.find((entry) => entry.id === game.id);
+  if (refreshed) setLocalMembership(game.id, refreshed.collections || []);
+  return "";
+};
+
+const contextCreateForGame = async (game: GameRecord) => {
+  const name = contextNewCollectionName.value.trim();
+  if (!name) {
+    contextNewCollectionError.value = "Enter a collection name.";
+    return;
+  }
+  const error = await createCollectionForGame(game, name);
+  if (error) {
+    contextNewCollectionError.value = error;
+    return;
+  }
+  contextNewCollectionName.value = "";
+  contextNewCollectionError.value = "";
+};
+
+// Saved filter presets.
+const applyFilterPreset = (preset: LibraryFilterPreset) => {
+  const normalized = normalizeFilterPreset(preset, {
+    validEngines: uniqueEngines.value,
+    validTags: uniqueTags.value,
+  });
+  if (!normalized) return;
+  filterCollection.value = normalized.filterCollection;
+  filterStatuses.value = [...normalized.filterStatuses];
+  filterInstallState.value = normalized.filterInstallState;
+  filterEngines.value = [...normalized.filterEngines];
+  filterTags.value = [...normalized.filterTags];
+  sortBy.value = normalized.sortBy;
+  sortDir.value = normalized.sortDir;
+};
+
+const saveFilterPreset = async () => {
+  const name = newPresetName.value.trim();
+  if (!name || name.length > 40) {
+    presetError.value = "Preset names must contain 1–40 characters.";
+    return;
+  }
+  const existing = savedPresets.value.find(
+    (preset) => preset.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (existing && !confirm(`Replace the saved filter "${name}"?`)) return;
+  const preset: LibraryFilterPreset = {
+    name,
+    filterCollection: filterCollection.value,
+    filterStatuses: [...filterStatuses.value],
+    filterInstallState: filterInstallState.value,
+    filterEngines: [...filterEngines.value],
+    filterTags: [...filterTags.value],
+    sortBy: sortBy.value,
+    sortDir: sortDir.value,
+  };
+  const next = existing
+    ? savedPresets.value.map((entry) => (entry === existing ? preset : entry))
+    : [...savedPresets.value, preset];
+  const result = await api.saveLibraryFilterPresets(next);
+  if (!result.success) {
+    presetError.value = result.error || "Could not save the filter.";
+    return;
+  }
+  savedPresets.value = next;
+  newPresetName.value = "";
+  presetError.value = "";
+};
+
+const deleteFilterPreset = async (name: string) => {
+  if (!confirm(`Delete the saved filter "${name}"?`)) return;
+  const next = savedPresets.value.filter((preset) => preset.name !== name);
+  const result = await api.saveLibraryFilterPresets(next);
+  if (!result.success) {
+    presetError.value = result.error || "Could not delete the filter.";
+    return;
+  }
+  savedPresets.value = next;
+  presetError.value = "";
+};
 
 const updatingId = ref<number | null>(null);
 const modalUpdateState = ref<ModalUpdateState>({
@@ -491,6 +788,18 @@ const loadGames = async () => {
   } catch (e) {
     console.error("Failed to load games", e);
   }
+};
+
+// Sync and imports can replace the collection list and presets, not just games.
+const handleLibraryRefresh = () => {
+  void loadGames();
+  void api
+    .getSettings()
+    .then((settings) => {
+      applyCollectionsFromPayload(settings.collections);
+      savedPresets.value = settings.library_filter_presets || [];
+    })
+    .catch(console.error);
 };
 
 const openDetail = (game: GameRecord) => {
@@ -722,6 +1031,9 @@ const markAsUpdated = async (game: GameRecord) => {
 const closeContextMenu = (restoreFocus = true) => {
   if (!contextMenu.value) return;
   contextMenu.value = null;
+  contextMenuView.value = "actions";
+  contextNewCollectionName.value = "";
+  contextNewCollectionError.value = "";
   if (restoreFocus) contextMenuTrigger?.focus();
 };
 
@@ -826,11 +1138,14 @@ const runContextAction = async (
 
 const handleDocumentClick = () => {
   closeLaunchTargetMenus();
+  closeCollectionTabMenu();
   closeContextMenu(false);
 };
 const handleLibraryScroll = (event: Event) => {
   if (!contextMenuElement.value?.contains(event.target as Node))
     closeContextMenu(false);
+  if (!collectionTabMenuElement.value?.contains(event.target as Node))
+    closeCollectionTabMenu();
 };
 const handleLibraryKeyboard = (event: KeyboardEvent) => {
   if (contextMenu.value && event.key === "Escape") {
@@ -910,12 +1225,23 @@ watch(
     filterTags,
     isFiltersCollapsed,
     filterSections,
+    activeCollection,
   ],
   () => {
     persistLibraryViewState();
   },
   { deep: true },
 );
+
+// A saved tab naming a deleted or renamed collection falls back to "All".
+watch(userCollections, (collections) => {
+  const normalized = normalizeActiveCollection(activeCollection.value, collections);
+  if (normalized !== activeCollection.value) activeCollection.value = normalized;
+});
+
+watch(activeCollection, () => {
+  void scrollSelectedCollectionTabIntoView();
+});
 
 watch(uniqueEngines, (engines) => {
   const normalizedEngines = normalizeLibraryViewState(
@@ -948,7 +1274,7 @@ watch(showDetailModal, (open) => {
 onMounted(() => {
   restoreLibraryViewState();
 
-  window.addEventListener("wlib-refresh-library", loadGames);
+  window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.addEventListener("click", handleDocumentClick);
   document.addEventListener("keydown", handleLibraryKeyboard);
@@ -957,13 +1283,17 @@ onMounted(() => {
   onWebviewReady(() => {
     void loadGames();
     void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
-    void api.getSettings().then((settings) => { customStatuses.value = settings.custom_play_statuses || []; }).catch(console.error);
+    void api.getSettings().then((settings) => {
+      customStatuses.value = settings.custom_play_statuses || [];
+      applyCollectionsFromPayload(settings.collections);
+      savedPresets.value = settings.library_filter_presets || [];
+    }).catch(console.error);
   });
 });
 
 onUnmounted(() => {
   gamesRequest++;
-  window.removeEventListener("wlib-refresh-library", loadGames);
+  window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.removeEventListener("click", handleDocumentClick);
   document.removeEventListener("keydown", handleLibraryKeyboard);
@@ -977,7 +1307,7 @@ onUnmounted(() => {
 
 <template>
   <div class="h-full flex overflow-hidden">
-    <!-- Smart Collections Sidebar -->
+    <!-- Filters Sidebar -->
     <aside
       :inert="isFiltersCollapsed"
       :aria-hidden="isFiltersCollapsed"
@@ -987,13 +1317,84 @@ onUnmounted(() => {
       ]"
     >
       <div class="w-64 h-full flex flex-col overflow-y-auto">
-        <div class="p-6 pb-2">
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('presets')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Saved filters</span>
+            <span class="text-sm">{{
+              filterSections.presets ? "▾" : "▸"
+            }}</span>
+          </button>
+          <div v-show="filterSections.presets" class="space-y-1 mt-3">
+            <p
+              v-if="!savedPresets.length"
+              class="px-3 text-xs"
+              style="color: var(--text-muted)"
+            >
+              Save the current filters and sort under a name to reuse them.
+            </p>
+            <div
+              v-for="preset in savedPresets"
+              :key="preset.name"
+              class="flex items-center gap-1"
+            >
+              <button
+                @click="applyFilterPreset(preset)"
+                class="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface text-left"
+                style="color: var(--text-secondary)"
+                :title="`Apply the saved filter '${preset.name}'`"
+              >
+                <IconSparkles class="w-4 h-4 shrink-0" />
+                <span class="truncate">{{ preset.name }}</span>
+              </button>
+              <button
+                @click="deleteFilterPreset(preset.name)"
+                class="ui-icon-btn p-1.5 rounded-lg shrink-0"
+                style="color: var(--text-muted)"
+                :aria-label="`Delete the saved filter ${preset.name}`"
+                title="Delete saved filter"
+              >
+                <IconX class="w-4 h-4" />
+              </button>
+            </div>
+            <form class="flex gap-1 pt-1" @submit.prevent="saveFilterPreset">
+              <input
+                v-model="newPresetName"
+                type="text"
+                aria-label="Saved filter name"
+                placeholder="Name for current filters"
+                class="library-search-input flex-1 min-w-0 rounded-lg px-2 py-1.5 text-xs"
+              />
+              <button
+                type="submit"
+                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs font-semibold border active:scale-95 active:bg-[var(--bg-overlay)]"
+                style="color: var(--text-secondary); border-color: var(--border)"
+                title="Save the current filters and sort under this name"
+              >
+                Save
+              </button>
+            </form>
+            <p
+              v-if="presetError"
+              role="alert"
+              class="px-3 text-xs"
+              style="color: var(--danger-text)"
+            >
+              {{ presetError }}
+            </p>
+          </div>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
           <button
             @click="toggleFilterSection('collections')"
             class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
             style="color: var(--text-muted)"
           >
-            <span>Smart Collections</span>
+            <span>Quick filters</span>
             <span class="text-sm">{{
               filterSections.collections ? "▾" : "▸"
             }}</span>
@@ -1076,7 +1477,7 @@ onUnmounted(() => {
               <button
                 v-if="filterEngines.length"
                 @click="filterEngines = []"
-                class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal transition-colors"
+                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
                 style="color: var(--text-muted)"
               >
                 Clear
@@ -1087,7 +1488,7 @@ onUnmounted(() => {
                 v-for="engine in uniqueEngines"
                 :key="engine"
                 @click="toggleFilter(filterEngines, engine)"
-                class="filter-tag-btn px-2.5 py-1 rounded-full text-[11px] font-medium"
+                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
                 :style="
                   filterEngines.includes(engine)
                     ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
@@ -1131,7 +1532,7 @@ onUnmounted(() => {
               <button
                 v-if="filterTags.length"
                 @click="filterTags = []"
-                class="cursor-pointer hover:text-red-400 text-[10px] normal-case tracking-normal transition-colors"
+                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
                 style="color: var(--text-muted)"
               >
                 Clear
@@ -1143,7 +1544,7 @@ onUnmounted(() => {
                 :key="tag"
                 @click="toggleFilter(filterTags, tag)"
                 :aria-pressed="filterTags.includes(tag)"
-                class="filter-tag-btn px-2.5 py-1 rounded-full text-[11px] font-medium"
+                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
                 :style="
                   filterTags.includes(tag)
                     ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
@@ -1232,6 +1633,112 @@ onUnmounted(() => {
         </div>
       </header>
 
+      <!-- Collection tabs -->
+      <div class="mb-3 shrink-0">
+        <div
+          ref="collectionTabsElement"
+          class="flex items-center gap-1.5 overflow-x-auto collections-tab-strip"
+          role="tablist"
+          aria-label="Collections"
+          @keydown="handleCollectionTabsKeyboard"
+        >
+          <button
+            data-collection-tab=""
+            role="tab"
+            :aria-selected="activeCollection === ''"
+            class="collection-tab shrink-0"
+            title="Every game in your library"
+            @click="activeCollection = ''"
+          >
+            All
+          </button>
+          <template v-for="name in userCollections" :key="name">
+            <form
+              v-if="renamingCollection === name"
+              class="shrink-0 flex items-center gap-1"
+              @submit.prevent="commitCollectionRename"
+            >
+              <input
+                data-rename-input
+                v-model="renameCollectionDraft"
+                type="text"
+                aria-label="Collection name"
+                class="library-search-input rounded-lg px-2 py-1 text-sm w-36"
+                @keydown.escape.prevent="cancelCollectionRename"
+              />
+              <button type="submit" class="ui-icon-btn p-1 rounded" title="Save name">
+                <IconCheck class="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                class="ui-icon-btn p-1 rounded"
+                title="Cancel rename"
+                @click="cancelCollectionRename"
+              >
+                <IconX class="w-4 h-4" />
+              </button>
+            </form>
+            <button
+              v-else
+              data-collection-tab=""
+              :data-collection="name"
+              role="tab"
+              :aria-selected="activeCollection === name"
+              class="collection-tab shrink-0"
+              :title="name"
+              @click="activeCollection = name"
+              @contextmenu.prevent.stop="openCollectionTabMenu(name, $event)"
+            >
+              <span class="truncate max-w-40">{{ name }}</span>
+              <span class="collection-count">{{ collectionCount(name) }}</span>
+            </button>
+          </template>
+          <form
+            v-if="showNewCollectionInline"
+            class="shrink-0 flex items-center gap-1"
+            @submit.prevent="createCollectionFromTab"
+          >
+            <input
+              ref="newCollectionInput"
+              v-model="newCollectionName"
+              type="text"
+              aria-label="New collection name"
+              placeholder="Collection name"
+              class="library-search-input rounded-lg px-2 py-1 text-sm w-36"
+              @keydown.escape.prevent="cancelInlineCollectionCreate"
+            />
+            <button type="submit" class="ui-icon-btn p-1 rounded" title="Create collection">
+              <IconCheck class="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              class="ui-icon-btn p-1 rounded"
+              title="Cancel"
+              @click="cancelInlineCollectionCreate"
+            >
+              <IconX class="w-4 h-4" />
+            </button>
+          </form>
+          <button
+            v-else
+            class="collection-tab collection-tab-add shrink-0"
+            title="New collection"
+            aria-label="New collection"
+            @click="startInlineCollectionCreate"
+          >
+            <IconPlus class="w-4 h-4" />
+          </button>
+        </div>
+        <p
+          v-if="collectionError"
+          role="alert"
+          class="text-xs mt-1"
+          style="color: var(--danger-text)"
+        >
+          {{ collectionError }}
+        </p>
+      </div>
+
       <!-- Search & Filter Bar -->
       <div class="mb-4 space-y-3 shrink-0">
         <div class="flex items-center gap-3">
@@ -1273,7 +1780,7 @@ onUnmounted(() => {
             <span>Filters</span>
             <span
               v-if="activeFilterCount > 0"
-              class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[10px] font-bold flex items-center justify-center"
+              class="absolute -top-1.5 -right-1.5 min-w-5 h-5 rounded-full px-1 text-[0.625rem] font-bold flex items-center justify-center"
               style="background: var(--brand); color: var(--on-brand)"
             >
               {{ activeFilterCount }}
@@ -1831,70 +2338,169 @@ onUnmounted(() => {
           >
             {{ contextMenu.game.title }}
           </p>
-          <button @click="runContextAction('play')">
-            {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
-          </button>
-          <button
-            @click="runContextAction('folder')"
-            :disabled="!gameFolder(contextMenu.game.exe_path)"
-          >
-            Open folder
-          </button>
-          <button
-            @click="runContextAction('thread')"
-            :disabled="!contextMenu.game.f95_url"
-          >
-            Open F95 thread
-          </button>
-          <button
-            @click="runContextAction('check')"
-            :disabled="!contextMenu.game.f95_url || updatingId !== null"
-          >
-            Check update
-          </button>
-          <button
-            v-if="hasAvailableUpdate(contextMenu.game)"
-            @click="runContextAction('mark-updated')"
-            :disabled="markingUpdatedIds.has(contextMenu.game.id)"
-          >
-            Mark as updated to {{ contextMenu.game.latest_version }}
-          </button>
-          <label
-            class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
-            >Set status
-            <select
-              :value="
-                normalizePlayStatus(
-                  contextMenu.game.play_status,
-                  contextMenu.game.status,
-                )
-              "
-              @change="
-                runContextAction(
-                  'status',
-                  ($event.target as HTMLSelectElement).value,
-                )
-              "
-              class="min-w-0 max-w-36 rounded px-1 py-1"
-              style="background: var(--bg-raised); color: var(--text-primary)"
+          <template v-if="contextMenuView === 'actions'">
+            <button @click="runContextAction('play')">
+              {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
+            </button>
+            <button
+              @click="runContextAction('folder')"
+              :disabled="!gameFolder(contextMenu.game.exe_path)"
             >
-              <option
-                v-for="status in allStatuses"
-                :key="status.value"
-                :value="status.value"
+              Open folder
+            </button>
+            <button
+              @click="runContextAction('thread')"
+              :disabled="!contextMenu.game.f95_url"
+            >
+              Open F95 thread
+            </button>
+            <button
+              @click="runContextAction('check')"
+              :disabled="!contextMenu.game.f95_url || updatingId !== null"
+            >
+              Check update
+            </button>
+            <button
+              v-if="hasAvailableUpdate(contextMenu.game)"
+              @click="runContextAction('mark-updated')"
+              :disabled="markingUpdatedIds.has(contextMenu.game.id)"
+            >
+              Mark as updated to {{ contextMenu.game.latest_version }}
+            </button>
+            <label
+              class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
+              >Set status
+              <select
+                :value="
+                  normalizePlayStatus(
+                    contextMenu.game.play_status,
+                    contextMenu.game.status,
+                  )
+                "
+                @change="
+                  runContextAction(
+                    'status',
+                    ($event.target as HTMLSelectElement).value,
+                  )
+                "
+                class="min-w-0 max-w-36 rounded px-1 py-1"
+                style="background: var(--bg-raised); color: var(--text-primary)"
               >
-                {{ status.label }}
-              </option>
-            </select>
-          </label>
-          <button @click="runContextAction('favorite')">
-            {{ contextMenu.game.is_favorite ? "Unfavorite" : "Favorite" }}
+                <option
+                  v-for="status in allStatuses"
+                  :key="status.value"
+                  :value="status.value"
+                >
+                  {{ status.label }}
+                </option>
+              </select>
+            </label>
+            <button @click="contextMenuView = 'collections'">
+              Collections…
+            </button>
+            <button @click="runContextAction('favorite')">
+              {{ contextMenu.game.is_favorite ? "Unfavorite" : "Favorite" }}
+            </button>
+            <button
+              @click="runContextAction('remove')"
+              style="color: var(--danger-text)"
+            >
+              Remove
+            </button>
+          </template>
+          <template v-else>
+            <button
+              class="flex items-center gap-2"
+              @click="contextMenuView = 'actions'"
+            >
+              <IconArrowLeft class="w-3.5 h-3.5" />
+              Back
+            </button>
+            <div class="max-h-64 overflow-y-auto">
+              <p
+                v-if="!userCollections.length"
+                class="px-2 py-1.5 text-xs"
+                style="color: var(--text-muted)"
+              >
+                No collections yet.
+              </p>
+              <label
+                v-for="name in userCollections"
+                :key="name"
+                class="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer rounded ui-hover-surface"
+                :style="
+                  gameInCollection(contextMenu.game, name)
+                    ? 'color: var(--text-primary)'
+                    : 'color: var(--text-secondary)'
+                "
+              >
+                <input
+                  type="checkbox"
+                  :checked="gameInCollection(contextMenu.game, name)"
+                  @change="toggleGameCollection(contextMenu.game, name)"
+                  class="rounded"
+                />
+                <span class="truncate">{{ name }}</span>
+              </label>
+            </div>
+            <form
+              class="flex gap-1 px-1 pt-1"
+              @submit.prevent="
+                contextCreateForGame(contextMenu.game)
+              "
+            >
+              <input
+                v-model="contextNewCollectionName"
+                type="text"
+                aria-label="New collection name"
+                placeholder="New collection"
+                class="library-search-input min-w-0 flex-1 rounded px-1.5 py-1 text-xs"
+              />
+              <button
+                type="submit"
+                class="rounded px-2 py-1 text-xs font-semibold border"
+                style="color: var(--text-secondary); border-color: var(--border)"
+              >
+                Add
+              </button>
+            </form>
+            <p
+              v-if="contextNewCollectionError"
+              role="alert"
+              class="px-2 py-1 text-xs"
+              style="color: var(--danger-text)"
+            >
+              {{ contextNewCollectionError }}
+            </p>
+          </template>
+        </div>
+
+        <!-- Collection tab menu -->
+        <div
+          v-if="collectionTabMenu"
+          ref="collectionTabMenuElement"
+          role="menu"
+          :aria-label="`Actions for collection ${collectionTabMenu.name}`"
+          class="game-context-menu"
+          :style="{
+            left: `${collectionTabMenu.x}px`,
+            top: `${collectionTabMenu.y}px`,
+          }"
+          @click.stop
+          @contextmenu.prevent
+        >
+          <p class="truncate px-2 py-1 text-xs font-bold" :title="collectionTabMenu.name">
+            {{ collectionTabMenu.name }}
+          </p>
+          <button role="menuitem" @click="startCollectionRename(collectionTabMenu.name)">
+            Rename
           </button>
           <button
-            @click="runContextAction('remove')"
+            role="menuitem"
             style="color: var(--danger-text)"
+            @click="deleteCollectionFromTab(collectionTabMenu.name)"
           >
-            Remove
+            Delete
           </button>
         </div>
       </Teleport>
@@ -1953,6 +2559,50 @@ onUnmounted(() => {
   padding: 0.15rem 0.35rem;
   font-size: 0.65rem;
   font-weight: 700;
+}
+.collections-tab-strip {
+  scrollbar-width: thin;
+}
+.collection-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.collection-tab:not(.collection-tab-add) {
+  border-color: var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.collection-tab[aria-selected="true"] {
+  border-color: var(--brand-deep);
+  background: var(--brand-glow-strong);
+  color: var(--text-primary);
+}
+.collection-tab:hover {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+.collection-tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.collection-tab-add {
+  color: var(--text-muted);
+}
+.collection-tab .collection-count {
+  background: var(--bg-overlay);
+  color: var(--text-secondary);
+}
+.collection-tab[aria-selected="true"] .collection-count {
+  background: var(--brand);
+  color: var(--on-brand);
 }
 .wishlist-pill,
 .finished-pill {

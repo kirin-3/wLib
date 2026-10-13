@@ -100,3 +100,38 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 - The choice is stored in localStorage under `wlib-accent` (a preset name or `#rrggbb`), applied before mount by `utils/accentPreference.ts`, and is not part of library backup or sync.
 - Play/launch actions use the fixed green `--play` / `--on-play` through the shared `.ui-play-btn` class and never follow the accent. Other primary actions use the accent fill. Native checkboxes and radios follow the accent through the global `accent-color: var(--brand)`.
 - `--text-muted` is kept at 4.5:1 or better against surface and raised backgrounds in both themes.
+
+### Text size
+
+- Settings Appearance offers Small (14 px), Default (16 px), Large (18 px), and Extra large (20 px) via `utils/textSizePreference.ts` (localStorage key `wlib-text-size`), applied to `document.documentElement.style.fontSize` before mount by `main.ts`. Unknown values fall back to Default.
+- Because layout uses `rem` units, the choice scales text and spacing together. The former `text-[10px]` / `text-[11px]` badges and counts are `text-[0.625rem]` / `text-[0.6875rem]` so small labels scale too.
+- The choice is per-device and is not included in backup or sync.
+
+### Library collections
+
+- The library header is followed by a collection tab strip (`role="tablist"` with arrow-key navigation): All first, then each user collection in Settings order with its game count, then a `+` button with inline create. The strip scrolls sideways. Right-clicking a tab offers Rename (inline) and Delete (with confirmation; games stay in the library).
+- The selected tab (`activeCollection` in `utils/libraryViewState.ts`, `""` means All) filters the library before search, quick filters, and sort. Counts ignore other filters. Deleting the open tab falls back to All; unknown saved names also fall back to All.
+- Membership is edited from the game right-click menu (Collections checklist view with toggles, New collection that also adds the game, and Back) and from the Collections chip picker in `GameDetailModal.vue` (saved with the modal's Save; closing without saving changes nothing).
+- Settings lists Collections next to custom play statuses with add, inline rename, move up/down, and delete with confirmation; the tab order follows Settings.
+- The filters pane heading is "Quick filters" (not "Smart Collections") so "collection" only means user-made groups.
+
+### Saved filter presets
+
+- The filters pane top "Saved filters" block lists presets (`{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}`) from the `library_filter_presets` setting. Clicking applies the preset; the delete button removes it without changing current filters; the name field saves the current filters and sort, asking before replacing an existing name.
+- Applying replaces the built-in collection filter, statuses, install state, engines, tags, sort field and direction, after normalising through `normalizeFilterPreset` (unknown engines/tags dropped). It keeps the collection tab, layout, and search text. Search text is never stored in a preset.
+
+### Path field indicators
+
+- `components/PathStatus.vue` (`path`, `kind` props) debounces 300 ms, calls `api.checkPath`, ignores stale responses, and renders an icon plus text ("Found" or the backend reason) under the input. Empty fields show nothing: optional ones may stay empty, and required ones are checked when their form is submitted. Saving stays possible while a field shows not found.
+- Kinds (`core/api.py:check_path`): `file` wants an existing file, `dir` an existing folder, `parent` an existing folder for a file wLib will create, `runner` an existing file when the value has separators or a command found on PATH otherwise. `~` is expanded.
+
+| Field | Kind |
+|---|---|
+| Add Game and Game Detail executable, launch target paths | file |
+| Install archive, backup import file, external library file | file |
+| Settings library folder, Import Folder source | dir |
+| Settings downloads folder | dir |
+| Export destination | parent |
+| Settings Wine prefix, per-game custom prefix | dir |
+| Settings Proton / Wine path | runner |
+| Settings RPGMaker runner | file |

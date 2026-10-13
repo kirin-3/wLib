@@ -18,6 +18,7 @@ import {
   IconUserCheck,
 } from "@tabler/icons-vue";
 import { api } from "../services/api";
+import PathStatus from "../components/PathStatus.vue";
 import type {
   ExternalLibraryImportResponse,
   ExternalLibraryInspectResponse,
@@ -498,6 +499,7 @@ const runImport = async () => {
               Browse
             </button>
           </div>
+          <PathStatus :path="exportPath" kind="parent" />
         </div>
 
         <div class="backup-section-list">
@@ -562,6 +564,7 @@ const runImport = async () => {
               Browse
             </button>
           </div>
+          <PathStatus :path="importPath" kind="file" />
         </div>
 
         <button
@@ -682,6 +685,7 @@ const runImport = async () => {
               Browse
             </button>
           </div>
+          <PathStatus :path="externalPath" kind="file" />
         </div>
 
         <button
