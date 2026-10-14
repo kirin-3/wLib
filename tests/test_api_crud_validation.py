@@ -226,3 +226,15 @@ def test_metadata_pending_uses_lock(api):
     for t in threads:
         t.join()
     assert not errors
+
+
+def test_malformed_f95_url_does_not_raise(api, tmp_path):
+    from core.f95zone import extract_thread_id, normalize_thread_url
+
+    assert normalize_thread_url("http://[invalid") == ""
+    assert extract_thread_id("http://[invalid") == ""
+    exe = tmp_path / "game.exe"
+    exe.write_text("x")
+    res = api.add_game(title="T", exe_path=str(exe), f95_url="http://[invalid")
+    assert res["success"] is True
+    assert api.update_game(res["id"], {"f95_url": "http://[invalid"})["success"] is True

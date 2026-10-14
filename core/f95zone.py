@@ -39,7 +39,10 @@ def extract_thread_id(url: object) -> str:
     if not normalized:
         return ""
 
-    parsed = urlparse(normalized)
+    try:
+        parsed = urlparse(normalized)
+    except ValueError:  # e.g. malformed IPv6 netloc
+        return ""
     # Thread IDs are only meaningful on F95Zone; another site's /threads/<id>/
     # must not be matched or scraped as an F95 thread.
     if parsed.netloc and parsed.hostname not in F95_HOSTS:
@@ -54,7 +57,10 @@ def normalize_thread_url(url: object) -> str:
     if not normalized:
         return ""
 
-    parsed = urlparse(normalized)
+    try:
+        parsed = urlparse(normalized)
+    except ValueError:  # e.g. malformed IPv6 netloc
+        return ""
     if not parsed.netloc:
         return normalized
 

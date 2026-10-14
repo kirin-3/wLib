@@ -1965,6 +1965,8 @@ class Api:
         return response
 
     def get_launch_targets(self, game_id: object = None) -> list[dict[str, object]]:
+        import sqlite3
+
         from core.database import list_game_launch_targets
 
         coerced_id = self._coerce_db_id(game_id)
@@ -1977,7 +1979,8 @@ class Api:
 
         try:
             return list_targets_fn(coerced_id)
-        except Exception:
+        except (sqlite3.Error, TypeError, OverflowError) as exc:
+            print(f"Failed to list launch targets for game {coerced_id}: {exc}")
             return []
 
     def create_launch_target(
@@ -3799,22 +3802,21 @@ class Api:
                 return str(settings_map.get(key, "") or "")
             return str(get_setting_fn(key) or default)
 
-        rpgmaker_linux_runner_path = str(
-            get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
-        ).strip()
-        raw_enable_logging = (
-            settings_map.get("enable_logging")
-            if "enable_logging" in settings_map
-            else get_setting_fn("enable_logging")
-        )
-        enable_logging = (
-            "true"
-            if raw_enable_logging is True
-            or str(raw_enable_logging).strip().lower() == "true"
-            else "false"
-        )
-
         try:
+            rpgmaker_linux_runner_path = str(
+                get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
+            ).strip()
+            raw_enable_logging = (
+                settings_map.get("enable_logging")
+                if "enable_logging" in settings_map
+                else get_setting_fn("enable_logging")
+            )
+            enable_logging = (
+                "true"
+                if raw_enable_logging is True
+                or str(raw_enable_logging).strip().lower() == "true"
+                else "false"
+            )
             update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
             update_setting_fn(
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
@@ -4222,7 +4224,8 @@ class Api:
             except sqlite3.IntegrityError:
                 pass
             else:
-                self._metadata_pending.add(installed_id)
+                with self._metadata_lock:
+                    self._metadata_pending.add(installed_id)
                 threading.Thread(
                     target=self._fetch_added_game_metadata,
                     args=(installed_id, f95_url, True),
