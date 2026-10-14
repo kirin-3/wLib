@@ -37,6 +37,7 @@ from core.database import (
     delete_collection,
     reorder_collections,
     set_game_collections,
+    _coerce_sort_order,
 )
 
 
@@ -1067,3 +1068,103 @@ def test_update_game_tags_list_and_thread_completed():
     ).fetchone()
     conn.close()
     assert row is not None and row[0] == 1
+
+
+def test_update_game_ignores_legacy_status_field():
+    """Legacy `status` must not be writable: it would overwrite play_status on restart."""
+    game_id = add_game("Hold Game", "/tmp/hold.exe")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "On Hold"})
+
+    applied = update_game(game_id, {"status": "completed"})
+    assert "status" not in applied
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT play_status, status FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "On Hold"
+    assert row[1] == ""
+
+    init_db()
+    game = next(g for g in get_all_games() if g["id"] == game_id)
+    assert game["play_status"] == "On Hold"
+
+
+def test_update_game_coerces_boolean_fields():
+    """String/number booleans must land as 0/1 ints, not truthy strings."""
+    game_id = add_game("Bool Game", "/tmp/bool.exe")
+    assert game_id is not None
+
+    cases = [
+        ("false", 0),
+        ("true", 1),
+        ("0", 0),
+        ("1", 1),
+        ("no", 0),
+        ("yes", 1),
+        ("", 0),
+        (0, 0),
+        (1, 1),
+        (True, 1),
+        (False, 0),
+    ]
+    for raw, expected in cases:
+        update_game(game_id, {"thread_completed": raw})
+        update_game(game_id, {"is_favorite": raw})
+        update_game(game_id, {"run_wayland": raw})
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT thread_completed, is_favorite, run_wayland FROM games WHERE id = ?",
+            (game_id,),
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == expected, f"thread_completed {raw!r} -> {row[0]!r}"
+        assert row[1] == expected, f"is_favorite {raw!r} -> {row[1]!r}"
+        assert row[2] == expected, f"run_wayland {raw!r} -> {row[2]!r}"
+
+
+def test_coerce_sort_order_handles_floats_and_bools():
+    assert _coerce_sort_order(2.7) == 2
+    assert _coerce_sort_order("2.7") == 2
+    assert _coerce_sort_order(True) == 1
+    assert _coerce_sort_order(False) == 0
+    assert _coerce_sort_order("3") == 3
+    assert _coerce_sort_order(None) == 0
+    assert _coerce_sort_order("") == 0
+    assert _coerce_sort_order(-5) == 0
+    assert _coerce_sort_order(float("inf")) == 0
+    assert _coerce_sort_order("-inf") == 0
+    assert _coerce_sort_order(float("nan")) == 0
+
+    game_id = add_game("Order Game", "/tmp/order.exe")
+    assert game_id is not None
+    target = add_game_launch_target(game_id, "Float", "/tmp/f.exe", sort_order=2.7)
+    assert target["sort_order"] == 2
+
+
+def test_create_collection_dedupes_stale_membership():
+    """A stale game membership must not duplicate when the collection is created."""
+    game_id = add_game("Stale Member", "/tmp/stale.exe")
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET collections = ? WHERE id = ?",
+        ('["Backlog"]', game_id),
+    )
+    conn.commit()
+    conn.close()
+    assert get_collections() == []
+
+    create_collection("Backlog", game_id=game_id)
+
+    conn = get_connection()
+    raw = conn.execute(
+        "SELECT collections FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert raw is not None
+    assert json.loads(str(raw[0])) == ["Backlog"]

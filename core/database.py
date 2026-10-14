@@ -270,9 +270,26 @@ def _normalize_launch_target_path(exe_path: object) -> str:
 
 def _coerce_sort_order(sort_order: object) -> int:
     try:
-        return max(0, int(str(sort_order)))
-    except (TypeError, ValueError):
+        if isinstance(sort_order, bool):
+            return 1 if sort_order else 0
+        if isinstance(sort_order, int):
+            return max(0, sort_order)
+        if isinstance(sort_order, float):
+            return max(0, int(sort_order))
+        text = str(sort_order or "").strip()
+        if not text:
+            return 0
+        return max(0, int(float(text)))
+    except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _coerce_bool_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int | float):
+        return 1 if value != 0 else 0
+    return 1 if str(value or "").strip().lower() in {"1", "true", "yes", "on"} else 0
 
 
 def find_game_by_f95_url(
@@ -500,7 +517,7 @@ def add_game(
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
-        tags = ", ".join(tags)
+        tags = ", ".join(str(tag) for tag in tags)
 
     normalized_url = normalize_thread_url(f95_url)
 
@@ -527,9 +544,9 @@ def add_game(
                 rating,
                 developer,
                 engine,
-                run_japanese_locale,
-                run_wayland,
-                auto_inject_ce,
+                _coerce_bool_int(run_japanese_locale),
+                _coerce_bool_int(run_wayland),
+                _coerce_bool_int(auto_inject_ce),
                 custom_prefix,
                 proton_version,
                 normalize_launch_mode(launch_mode),
@@ -757,7 +774,6 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "tags",
         "rating",
         "command_line_args",
-        "status",
         "rating_graphics",
         "rating_story",
         "rating_fappability",
@@ -788,8 +804,15 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             str(tag) for tag in cast(list[object], raw_tags)
         )
 
-    if "thread_completed" in safe_fields:
-        safe_fields["thread_completed"] = int(bool(safe_fields["thread_completed"]))
+    for bool_column in (
+        "thread_completed",
+        "is_favorite",
+        "run_japanese_locale",
+        "run_wayland",
+        "auto_inject_ce",
+    ):
+        if bool_column in safe_fields:
+            safe_fields[bool_column] = _coerce_bool_int(safe_fields[bool_column])
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
@@ -1037,8 +1060,9 @@ def create_collection(name: object, game_id: int | None = None) -> list[str]:
             members = _read_game_collections(cursor, game_id)
             if members is None:
                 raise ValueError("Game not found")
-            members.append(normalized)
-            _write_game_collections(cursor, game_id, members)
+            if normalized.casefold() not in {m.casefold() for m in members}:
+                members.append(normalized)
+                _write_game_collections(cursor, game_id, members)
         conn.commit()
     return collections
 
