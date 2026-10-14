@@ -46,6 +46,9 @@ test('wishlist message passes duplicate code and serializes tags', async () => {
       };
     },
     console,
+    AbortController,
+    setTimeout,
+    clearTimeout,
   });
   const response = await new Promise(resolve => listener({
     action: 'wishlistGameInWLib',
@@ -80,4 +83,138 @@ test('extension parses post versions exactly like the scraper', () => {
   for (const [html, version] of cases) {
     assert.equal(extractFromTitle('Game', [], html).version || 'Unknown', version, html);
   }
+});
+
+const pageHelpers = source.slice(
+  source.indexOf('const WLIB_UPDATES_PAGE_PATH'),
+  source.indexOf('function normalizeCheckResult'),
+);
+
+const runPageHelper = (code, pathname = '/') => {
+  const context = {
+    window: { location: { href: `https://f95zone.to${pathname}`, origin: 'https://f95zone.to', pathname } },
+    document: {},
+    chrome: {},
+    console,
+    URL,
+  };
+  vm.createContext(context);
+  vm.runInContext(pageHelpers, context);
+  return vm.runInContext(code, context);
+};
+
+test('latest-alpha badges tolerate a missing trailing slash', () => {
+  // The manifest match (sam/latest_alpha*) fires with and without the slash.
+  assert.equal(runPageHelper('isLatestAlphaPage()', '/sam/latest_alpha/'), true);
+  assert.equal(runPageHelper('isLatestAlphaPage()', '/sam/latest_alpha'), true);
+  assert.equal(runPageHelper('isLatestAlphaPage()', '/threads/game.123/'), false);
+  assert.equal(runPageHelper('isThreadPage()', '/threads/game.123/'), true);
+});
+
+test('thread identity rejects non-F95 hosts like the backend does', () => {
+  const f95 = runPageHelper(`getThreadIdentity('https://f95zone.to/threads/game.123/page-2')`);
+  assert.equal(f95.id, '123');
+  assert.equal(f95.canonicalUrl, 'https://f95zone.to/threads/game.123/');
+  const www = runPageHelper(`getThreadIdentity('https://www.f95zone.to/threads/456/')`);
+  assert.equal(www.id, '456');
+  // core/f95zone.py extract_thread_id returns '' off F95 hosts; the content
+  // script must agree instead of checking foreign /threads/<id>/ URLs.
+  const foreign = runPageHelper(`getThreadIdentity('https://example.com/threads/123/')`);
+  assert.equal(foreign.id, '');
+});
+
+test('cover fallback prefers lazy-load data-src over placeholder src', () => {
+  const lazyImg = {
+    src: 'data:image/gif;base64,placeholder',
+    getAttribute: (name) => (name === 'data-src' ? 'https://attachments.f95zone.to/real.jpg' : null),
+  };
+  const plainImg = { src: 'https://attachments.f95zone.to/plain.jpg', getAttribute: () => null };
+  const extractWithCover = (img) => {
+    const context = {
+      getThreadIdentity: () => ({ canonicalUrl: 'https://f95zone.to/threads/game.123/', id: '123' }),
+      document: {
+        querySelector: (selector) => {
+          if (selector === 'h1.p-title-value') {
+            return {
+              textContent: 'Game [Dev]',
+              querySelectorAll: () => [],
+              cloneNode() { return { textContent: 'Game [Dev]', querySelectorAll: () => [] }; },
+            };
+          }
+          if (selector === '.message-inner') return { querySelector: () => img };
+          return null;
+        },
+        querySelectorAll: () => [],
+      },
+      console,
+    };
+    return vm.runInNewContext(`${parser}\nextractGameInfo()`, context);
+  };
+  assert.equal(extractWithCover(lazyImg).coverImage, 'https://attachments.f95zone.to/real.jpg');
+  assert.equal(extractWithCover(plainImg).coverImage, 'https://attachments.f95zone.to/plain.jpg');
+});
+
+const runBackground = (stubs) => {
+  const context = {
+    chrome: { runtime: { onMessage: { addListener: () => {} } } },
+    fetch: async () => { throw new Error('fetch stub not set'); },
+    console,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    ...stubs,
+  };
+  vm.createContext(context);
+  vm.runInContext(backgroundSource, context);
+  return context;
+};
+
+test('version comparison orders releases and ignores v-prefix/suffix', () => {
+  const context = runBackground({});
+  const compare = (a, b) => vm.runInContext(`compareVersions(${JSON.stringify(a)}, ${JSON.stringify(b)})`, context);
+  assert.equal(compare('1.0.12', '1.0.2'), 1);
+  assert.equal(compare('0.3.8', '0.3.9'), -1);
+  assert.equal(compare('1.0.12', '1.0.12'), 0);
+  assert.equal(compare('v0.3.9', '0.3.9'), 0);
+  assert.equal(compare('0.4.0-rc1', '0.4.0'), 0);
+  assert.equal(compare('', '0.3.9'), -1);
+});
+
+test('desktop requests abort instead of hanging forever', async () => {
+  let captured;
+  const context = runBackground({
+    fetch: (url, options) => {
+      captured = { url, options };
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('Aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    },
+  });
+  await assert.rejects(
+    vm.runInContext('fetchWithTimeout("http://localhost:8183/api/check?url=x", undefined, 20)', context),
+    (error) => error && error.name === 'AbortError',
+  );
+  assert.ok(captured.options.signal instanceof AbortSignal);
+});
+
+test('check request carries an abort signal so a stuck app cannot wedge the widget', async () => {
+  let listener;
+  let captured;
+  const context = runBackground({
+    chrome: { runtime: { onMessage: { addListener: (value) => { listener = value; } } } },
+    fetch: async (url, options) => {
+      captured = { url, options };
+      return { ok: true, status: 200, json: async () => ({ exists: false }) };
+    },
+  });
+  const checkResponse = await new Promise((resolve) => listener(
+    { action: 'checkGameInWLib', url: 'https://f95zone.to/threads/game.123/' }, {}, resolve,
+  ));
+  assert.equal(checkResponse.success, true);
+  assert.ok(captured.options.signal instanceof AbortSignal);
+  assert.equal(captured.options.signal.aborted, false);
 });

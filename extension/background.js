@@ -3,6 +3,34 @@
 // send it without a CORS preflight, which wLib rejects for non-extension origins.
 const WLIB_HEADERS = { "X-wLib-Extension": "1" };
 
+// The desktop app may be starting, busy, or gone; its HTTP server may accept
+// a connection it never answers. Abort every request after a timeout so the
+// content script always gets an answer and its buttons never stick on
+// "Adding..." / "Opening..." (or never appear, for the pre-inject check).
+const WLIB_REQUEST_TIMEOUT_MS = 10000;
+
+function fetchWithTimeout(url, options, timeoutMs = WLIB_REQUEST_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let request;
+    try {
+        request = fetch(url, { ...(options || {}), signal: controller.signal });
+    } catch (error) {
+        clearTimeout(timer);
+        throw error;
+    }
+    return request.then(
+        (response) => {
+            clearTimeout(timer);
+            return response;
+        },
+        (error) => {
+            clearTimeout(timer);
+            throw error;
+        }
+    );
+}
+
 async function readWLibResponse(response) {
     const data = await response.json();
     if (!response.ok || data.success === false) {
@@ -118,7 +146,7 @@ function maybeReloadForNewExtensionVersion(data) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "checkGameInWLib") {
-        fetch(`http://localhost:8183/api/check?url=${encodeURIComponent(message.url)}`)
+        fetchWithTimeout(`http://localhost:8183/api/check?url=${encodeURIComponent(message.url)}`)
             .then(async (response) => {
                 const data = await response.json();
                 if (!response.ok) {
@@ -135,7 +163,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "addGameToWLib") {
-        fetch("http://localhost:8183/api/add", {
+        fetchWithTimeout("http://localhost:8183/api/add", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -158,7 +186,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "wishlistGameInWLib") {
-        fetch("http://localhost:8183/api/wishlist", {
+        fetchWithTimeout("http://localhost:8183/api/wishlist", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...WLIB_HEADERS },
             body: JSON.stringify({
@@ -179,7 +207,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "openWLib") {
-        fetch(`http://localhost:8183/api/open?url=${encodeURIComponent(message.url)}`, { headers: WLIB_HEADERS })
+        fetchWithTimeout(`http://localhost:8183/api/open?url=${encodeURIComponent(message.url)}`, { headers: WLIB_HEADERS })
             .then(readWLibResponse)
             .then(data => sendResponse({ success: true, data }))
             .catch(error => sendResponse({ success: false, error: error.message }));

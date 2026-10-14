@@ -66,6 +66,16 @@ let wlibLatestAlphaHashListenerAttached = false;
 function getThreadIdentity(rawUrl = window.location.href) {
     try {
         const parsed = new URL(rawUrl, window.location.origin);
+        // Thread IDs are only meaningful on F95Zone (same host allowlist as
+        // F95_HOSTS in core/f95zone.py). Another site's /threads/<id>/ must
+        // not be checked against the library as an F95 thread.
+        const host = (parsed.hostname || '').toLowerCase();
+        if (host !== 'f95zone.to' && host !== 'www.f95zone.to') {
+            return {
+                id: '',
+                canonicalUrl: parsed.toString(),
+            };
+        }
         const match = parsed.pathname.match(/^\/threads\/(?:(.+)\.)?(\d+)(?:\/.*)?$/);
         if (match) {
             const slug = (match[1] || '').replace(/^\.+|\.+$/g, '');
@@ -102,7 +112,11 @@ function isThreadPage() {
 }
 
 function isLatestAlphaPage() {
-    return window.location.pathname === WLIB_UPDATES_PAGE_PATH;
+    // Tolerate a missing trailing slash: the manifest match
+    // (sam/latest_alpha*) fires for both, and F95 links omit it at times.
+    // window.location.pathname never contains the query string.
+    const canonical = WLIB_UPDATES_PAGE_PATH.replace(/\/+$/, '');
+    return window.location.pathname.replace(/\/+$/, '') === canonical;
 }
 
 function normalizeCheckResult(data) {
@@ -452,7 +466,13 @@ function extractGameInfo() {
             if (firstPost) {
                 const firstImg = firstPost.querySelector('.bbImage');
                 if (firstImg) {
-                    info.coverImage = firstImg.src;
+                    // F95 lazy-loads post images: the real URL lives in
+                    // data-src while src may be a placeholder. The scraper
+                    // (core/scraper.py) prefers data-src for the same reason.
+                    const lazySrc = typeof firstImg.getAttribute === 'function'
+                        ? firstImg.getAttribute('data-src')
+                        : '';
+                    info.coverImage = lazySrc || firstImg.src || '';
                 }
             }
         }
