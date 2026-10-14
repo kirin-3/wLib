@@ -315,6 +315,23 @@ jobs:
             echo "compare=$COMPARE"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Build download links
+        id: downloads
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          link() {
+            local f
+            f="$(find release-artifacts -maxdepth 1 -name "$1" -printf '%f\n' -quit)"
+            if [ -z "$f" ]; then echo "::error::No release asset matches $1" >&2; exit 1; fi
+            printf '[%s](%s/%s)' "${2:-$f}" "$BASE" "$f"
+          }
+          {
+            echo "windows=$(link '*windows-x64.msi' MSI) · $(link '*windows-x64-portable.zip' 'Portable ZIP') · $(link '*SHA256SUMS.txt' 'SHA-256 checksums')"
+            echo "linux=$(link '*.AppImage' AppImage) · $(link '*linux-x86_64.tar.gz' Tarball) · $(link '*.deb' DEB) · $(link '*.rpm' RPM)"
+            echo "firefox=$(link 'wlib-firefox-*.xpi')"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -330,9 +347,10 @@ jobs:
 
             ## Downloads
 
-            - Windows x64: per-user MSI or portable ZIP (with SHA-256 checksums)
-            - Linux x86_64: AppImage, tarball, DEB, RPM, and AUR metadata
-            - Firefox add-on: signed `wlib-firefox-<extver>.xpi` plus `updates.json`; install the XPI once through Add-ons and themes → Install Add-on From File and Firefox updates it automatically afterwards
+            - Windows x64 (per-user): ${{ steps.downloads.outputs.windows }}
+            - Linux x86_64: ${{ steps.downloads.outputs.linux }}
+            - Arch Linux (AUR): `paru -S wlib-bin` or `yay -S wlib-bin`
+            - Firefox add-on (signed): ${{ steps.downloads.outputs.firefox }}. Install the XPI once through Add-ons and themes → Install Add-on From File and Firefox updates it automatically afterwards
 
             Windows launches `.exe`, `.bat`, `.cmd`, and `.jar` games natively.
             Wine, Proton, Winetricks, Wayland, and Linux runtime installers are Linux-only.
