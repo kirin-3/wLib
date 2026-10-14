@@ -300,6 +300,7 @@ class Api:
         }
         # Games whose F95 metadata is still being fetched after add_game returned.
         self._metadata_pending: set[int] = set()
+        self._metadata_lock: threading.Lock = threading.Lock()
         self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
@@ -333,6 +334,49 @@ class Api:
 
     def set_window(self, window: Window | None) -> None:
         self.window = window
+
+    @staticmethod
+    def _coerce_db_id(value: object) -> int | None:
+        """Validate a SQLite row id from the JS bridge.
+
+        Returns the int id, or None for missing/wrong-type/negative/huge ids.
+        Bool is rejected (True == 1 in SQLite and would delete the wrong row).
+        """
+        if isinstance(value, bool):
+            return None
+        try:
+            if isinstance(value, int):
+                candidate = value
+            elif isinstance(value, str) and value.strip():
+                candidate = int(value.strip())
+            else:
+                candidate = int(str(value))
+        except (TypeError, ValueError):
+            return None
+        # SQLite INTEGER is signed 64-bit; larger Python ints raise OverflowError
+        # on bind. Game/target ids are positive autoincrement values.
+        if not 1 <= candidate <= 9223372036854775807:
+            return None
+        return candidate
+
+    @staticmethod
+    def _coerce_names_sequence(value: object) -> list[object] | None:
+        """Validate a collection/target name list from the JS bridge."""
+        if isinstance(value, str) or not isinstance(value, Sequence):
+            return None
+        return list(value)
+
+    @staticmethod
+    def _normalize_compare_path(value: object) -> str:
+        raw = str(value or "")
+        if not raw.strip():
+            return ""
+        expanded = os.path.expanduser(raw)
+        try:
+            resolved = os.path.realpath(os.path.abspath(expanded))
+        except (OSError, ValueError):
+            resolved = os.path.abspath(expanded)
+        return os.path.normcase(resolved)
 
     def get_platform_capabilities(self) -> PlatformCapabilities:
         return resolve_platform_capabilities()
@@ -1211,7 +1255,8 @@ class Api:
         from core.database import get_all_games
 
         games = get_all_games()
-        pending = set(self._metadata_pending)
+        with self._metadata_lock:
+            pending = set(self._metadata_pending)
         for game in games:
             if game.get("id") in pending:
                 game["metadata_pending"] = True
@@ -1226,55 +1271,114 @@ class Api:
         return fetch_collections()
 
     def create_collection(
-        self, name: str, game_id: int | None = None
+        self, name: object = "", game_id: object = None
     ) -> dict[str, object]:
+        import sqlite3
+
         from core.database import create_collection
 
+        coerced_game_id: int | None = None
+        if game_id is not None:
+            coerced_game_id = self._coerce_db_id(game_id)
+            if coerced_game_id is None:
+                return {
+                    "success": False,
+                    "error": "Game not found",
+                    "error_code": "game_not_found",
+                }
+
         try:
-            collections = create_collection(name, game_id)
+            collections = create_collection(name, coerced_game_id)
         except ValueError as e:
             return {"success": False, "error": str(e)}
+        except (sqlite3.Error, TypeError, OverflowError) as e:
+            return {"success": False, "error": str(e) or "Could not create collection"}
         return {"success": True, "collections": collections}
 
-    def rename_collection(self, old_name: str, new_name: str) -> dict[str, object]:
+    def rename_collection(
+        self, old_name: object = "", new_name: object = ""
+    ) -> dict[str, object]:
+        import sqlite3
+
         from core.database import rename_collection
 
         try:
             collections = rename_collection(old_name, new_name)
         except ValueError as e:
             return {"success": False, "error": str(e)}
+        except (sqlite3.Error, TypeError, OverflowError) as e:
+            return {"success": False, "error": str(e) or "Could not rename collection"}
         return {"success": True, "collections": collections}
 
-    def delete_collection(self, name: str) -> dict[str, object]:
+    def delete_collection(self, name: object = "") -> dict[str, object]:
+        import sqlite3
+
         from core.database import delete_collection
 
         try:
             collections = delete_collection(name)
         except ValueError as e:
             return {"success": False, "error": str(e)}
+        except (sqlite3.Error, TypeError, OverflowError) as e:
+            return {"success": False, "error": str(e) or "Could not delete collection"}
         return {"success": True, "collections": collections}
 
-    def reorder_collections(self, names: Sequence[str]) -> dict[str, object]:
+    def reorder_collections(self, names: object = None) -> dict[str, object]:
+        import sqlite3
+
         from core.database import reorder_collections
 
+        coerced = self._coerce_names_sequence(names)
+        if coerced is None:
+            return {
+                "success": False,
+                "error": "Collection order must be a list of collection names",
+            }
+
         try:
-            collections = reorder_collections(names)
+            collections = reorder_collections(coerced)
         except ValueError as e:
             return {"success": False, "error": str(e)}
+        except (sqlite3.Error, TypeError, OverflowError) as e:
+            return {
+                "success": False,
+                "error": str(e) or "Could not reorder collections",
+            }
         return {"success": True, "collections": collections}
 
     def set_game_collections(
-        self, game_id: int, names: Sequence[str]
+        self, game_id: object = None, names: object = None
     ) -> dict[str, object]:
+        import sqlite3
+
         from core.database import set_game_collections
 
+        coerced_game_id = self._coerce_db_id(game_id)
+        if coerced_game_id is None:
+            return {
+                "success": False,
+                "error": "Game not found",
+                "error_code": "game_not_found",
+            }
+        coerced_names = self._coerce_names_sequence(names)
+        if coerced_names is None:
+            return {
+                "success": False,
+                "error": "Collections must be a list of collection names",
+            }
+
         try:
-            collections = set_game_collections(game_id, names)
+            collections = set_game_collections(coerced_game_id, coerced_names)
         except ValueError as e:
             return {"success": False, "error": str(e)}
+        except (sqlite3.Error, TypeError, OverflowError) as e:
+            return {
+                "success": False,
+                "error": str(e) or "Could not update game collections",
+            }
         return {"success": True, "collections": collections}
 
-    def check_path(self, path: str, kind: str) -> dict[str, object]:
+    def check_path(self, path: object = "", kind: object = "") -> dict[str, object]:
         """Report whether a typed path points at what its field expects.
 
         Purely informational: a not-found result never blocks saving.
@@ -1323,33 +1427,40 @@ class Api:
             return {"ok": True, "reason": ""}
         return {"ok": False, "reason": "Folder not found"}
 
-    def inspect_game_path(self, exe_path: str) -> dict[str, object]:
+    def inspect_game_path(self, exe_path: object = "") -> dict[str, object]:
         from core.game_scan import inspect_game_path
 
-        exe_path = os.path.expanduser(str(exe_path or "").strip())
-        if not exe_path or not os.path.isfile(exe_path):
+        exe_path_str = os.path.expanduser(str(exe_path or "").strip())
+        if not exe_path_str or not os.path.isfile(exe_path_str):
             return {"success": False, "error": "File not found"}
-        return {"success": True, **inspect_game_path(exe_path)}
+        try:
+            return {"success": True, **inspect_game_path(exe_path_str)}
+        except (OSError, ValueError) as e:
+            return {"success": False, "error": str(e) or "File not found"}
 
-    def scan_games_folder(self, folder: str) -> dict[str, object]:
+    def scan_games_folder(self, folder: object = "") -> dict[str, object]:
         from core.database import get_all_games
         from core.game_scan import scan_games_folder
 
-        folder = os.path.expanduser(str(folder or "").strip())
-        if not folder or not os.path.isdir(folder):
+        folder_str = os.path.expanduser(str(folder or "").strip())
+        if not folder_str or not os.path.isdir(folder_str):
             return {"success": False, "error": "Folder not found"}
-        known = {
-            os.path.normcase(os.path.abspath(str(game.get("exe_path") or "")))
-            for game in get_all_games()
-        }
-        games = [
-            {
-                **game,
-                "in_library": os.path.normcase(os.path.abspath(game["exe_path"]))
-                in known,
+        try:
+            known = {
+                self._normalize_compare_path(game.get("exe_path"))
+                for game in get_all_games()
+                if str(game.get("exe_path") or "").strip()
             }
-            for game in scan_games_folder(folder)
-        ]
+            games = [
+                {
+                    **game,
+                    "in_library": self._normalize_compare_path(game["exe_path"])
+                    in known,
+                }
+                for game in scan_games_folder(folder_str)
+            ]
+        except (OSError, ValueError) as e:
+            return {"success": False, "error": str(e) or "Could not scan folder"}
         return {"success": True, "games": games}
 
     def _refresh_synced_library(self) -> None:
@@ -1602,8 +1713,8 @@ class Api:
 
     def add_game(
         self,
-        title: object,
-        exe_path: str,
+        title: object = "",
+        exe_path: object = None,
         f95_url: str = "",
         version: str = "",
         cover_image: str = "",
@@ -1630,6 +1741,13 @@ class Api:
                 "error_code": "invalid_title",
             }
         title = title.strip()
+
+        if not isinstance(exe_path, str):
+            return {
+                "success": False,
+                "error": "Game executable path must be a string",
+                "error_code": "invalid_exe_path",
+            }
 
         add_game_fn = cast(
             Callable[..., int | None],
@@ -1660,6 +1778,8 @@ class Api:
             )
         except sqlite3.IntegrityError as exc:
             return self._integrity_error_response(exc)
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {"success": False, "error": str(exc) or "Could not add game"}
 
         metadata_pending = bool(normalized_url) and game_id is not None
         if metadata_pending:
@@ -1671,7 +1791,8 @@ class Api:
             )
             # F95 requests are paced app-wide and can queue behind a folder import,
             # so the game is saved now and its card shows a loading state until this finishes.
-            self._metadata_pending.add(game_id)
+            with self._metadata_lock:
+                self._metadata_pending.add(game_id)
             threading.Thread(
                 target=self._fetch_added_game_metadata,
                 args=(game_id, normalized_url, needs_metadata_backfill),
@@ -1707,7 +1828,8 @@ class Api:
         except Exception as e:
             print(f"Failed to fetch metadata for game {game_id}: {e}")
         finally:
-            self._metadata_pending.discard(game_id)
+            with self._metadata_lock:
+                self._metadata_pending.discard(game_id)
             if self.window:
                 with suppress(Exception):
                     self.window.evaluate_js(
@@ -1726,19 +1848,55 @@ class Api:
             }
         return {"success": False, "error": str(exc)}
 
-    def delete_game(self, game_id: int) -> dict[str, bool]:
-        from core.database import delete_game
+    def delete_game(self, game_id: object = None) -> dict[str, object]:
+        import sqlite3
 
-        delete_game_fn = cast(Callable[[int], None], delete_game)
+        from core.database import delete_game, get_connection
 
-        delete_game_fn(game_id)
-        self._metadata_pending.discard(game_id)
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+
+        try:
+            with closing(get_connection()) as conn:
+                exists = cast(
+                    object,
+                    conn.execute(
+                        "SELECT 1 FROM games WHERE id = ?", (coerced_id,)
+                    ).fetchone(),
+                )
+            if exists is None:
+                return {
+                    "success": False,
+                    "error": "Game was not found",
+                    "error_code": "game_not_found",
+                }
+            delete_game_fn = cast(Callable[[int], None], delete_game)
+            delete_game_fn(coerced_id)
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {"success": False, "error": str(exc) or "Could not delete game"}
+        with self._metadata_lock:
+            self._metadata_pending.discard(coerced_id)
         return {"success": True}
 
-    def update_game(self, game_id: int, fields: object) -> dict[str, object]:
+    def update_game(
+        self, game_id: object = None, fields: object = None
+    ) -> dict[str, object]:
         import sqlite3
 
         from core.database import get_connection, update_game
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
 
         if fields is not None and not isinstance(fields, Mapping):
             return {
@@ -1770,11 +1928,11 @@ class Api:
                 exists = cast(
                     object,
                     conn.execute(
-                        "SELECT 1 FROM games WHERE id = ?", (game_id,)
+                        "SELECT 1 FROM games WHERE id = ?", (coerced_id,)
                     ).fetchone(),
                 )
-        except sqlite3.Error as exc:
-            return {"success": False, "error": str(exc)}
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {"success": False, "error": str(exc) or "Could not update game"}
         if exists is None:
             return {
                 "success": False,
@@ -1792,9 +1950,11 @@ class Api:
             )
 
         try:
-            applied_fields = update_game_fn(game_id, updated_fields)
+            applied_fields = update_game_fn(coerced_id, updated_fields)
         except sqlite3.IntegrityError as exc:
             return self._integrity_error_response(exc)
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {"success": False, "error": str(exc) or "Could not update game"}
 
         response: dict[str, object] = {"success": True}
         if (
@@ -1804,25 +1964,40 @@ class Api:
             response["finished_version"] = applied_fields["finished_version"]
         return response
 
-    def get_launch_targets(self, game_id: int) -> list[dict[str, object]]:
+    def get_launch_targets(self, game_id: object = None) -> list[dict[str, object]]:
         from core.database import list_game_launch_targets
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return []
 
         list_targets_fn = cast(
             Callable[[int], list[dict[str, object]]], list_game_launch_targets
         )
 
-        return list_targets_fn(game_id)
+        try:
+            return list_targets_fn(coerced_id)
+        except Exception:
+            return []
 
     def create_launch_target(
         self,
-        game_id: int,
-        label: str,
-        exe_path: str,
-        sort_order: int | None = None,
+        game_id: object = None,
+        label: object = "",
+        exe_path: object = "",
+        sort_order: object | None = None,
     ) -> dict[str, object]:
         import sqlite3
 
         from core.database import add_game_launch_target
+
+        coerced_game_id = self._coerce_db_id(game_id)
+        if coerced_game_id is None:
+            return {
+                "success": False,
+                "error": "Parent game was not found",
+                "error_code": "game_not_found",
+            }
 
         add_target_fn = cast(
             Callable[[int, object, object, object | None], dict[str, object]],
@@ -1830,7 +2005,7 @@ class Api:
         )
 
         try:
-            target = add_target_fn(game_id, label, exe_path, sort_order)
+            target = add_target_fn(coerced_game_id, label, exe_path, sort_order)
         except ValueError as exc:
             return {"success": False, "error": str(exc), "error_code": "invalid_target"}
         except sqlite3.IntegrityError:
@@ -1839,13 +2014,35 @@ class Api:
                 "error": "Parent game was not found",
                 "error_code": "game_not_found",
             }
+        except (sqlite3.Error, TypeError, OverflowError) as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not create launch target",
+                "error_code": "invalid_target",
+            }
 
         return {"success": True, "target": target}
 
     def update_launch_target(
-        self, target_id: int, fields: Mapping[str, object] | None
+        self, target_id: object = None, fields: object = None
     ) -> dict[str, object]:
+        import sqlite3
+
         from core.database import update_game_launch_target
+
+        coerced_id = self._coerce_db_id(target_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Launch target was not found",
+                "error_code": "target_not_found",
+            }
+        if fields is not None and not isinstance(fields, Mapping):
+            return {
+                "success": False,
+                "error": "Fields must be an object",
+                "error_code": "invalid_target",
+            }
 
         update_target_fn = cast(
             Callable[[int, Mapping[str, object]], dict[str, object] | None],
@@ -1853,9 +2050,17 @@ class Api:
         )
 
         try:
-            target = update_target_fn(target_id, dict(fields or {}))
+            target = update_target_fn(
+                coerced_id, dict(cast(Mapping[str, object], fields or {}))
+            )
         except ValueError as exc:
             return {"success": False, "error": str(exc), "error_code": "invalid_target"}
+        except (sqlite3.Error, TypeError, OverflowError) as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not update launch target",
+                "error_code": "invalid_target",
+            }
 
         if target is None:
             return {
@@ -1866,12 +2071,30 @@ class Api:
 
         return {"success": True, "target": target}
 
-    def delete_launch_target(self, target_id: int) -> dict[str, object]:
+    def delete_launch_target(self, target_id: object = None) -> dict[str, object]:
+        import sqlite3
+
         from core.database import delete_game_launch_target
+
+        coerced_id = self._coerce_db_id(target_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Launch target was not found",
+                "error_code": "target_not_found",
+            }
 
         delete_target_fn = cast(Callable[[int], bool], delete_game_launch_target)
 
-        if not delete_target_fn(target_id):
+        try:
+            deleted = delete_target_fn(coerced_id)
+        except (sqlite3.Error, TypeError, OverflowError) as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not delete launch target",
+                "error_code": "target_not_found",
+            }
+        if not deleted:
             return {
                 "success": False,
                 "error": "Launch target was not found",
@@ -1881,9 +2104,19 @@ class Api:
         return {"success": True}
 
     def reorder_launch_targets(
-        self, game_id: int, target_ids: object
+        self, game_id: object = None, target_ids: object = None
     ) -> dict[str, object]:
+        import sqlite3
+
         from core.database import reorder_game_launch_targets
+
+        coerced_game_id = self._coerce_db_id(game_id)
+        if coerced_game_id is None:
+            return {
+                "success": False,
+                "error": "Parent game was not found",
+                "error_code": "game_not_found",
+            }
 
         reorder_targets_fn = cast(
             Callable[[int, Sequence[int]], list[dict[str, object]]],
@@ -1899,11 +2132,17 @@ class Api:
 
         try:
             normalized_ids = [int(str(target_id)) for target_id in target_ids]
-            targets = reorder_targets_fn(game_id, normalized_ids)
+            targets = reorder_targets_fn(coerced_game_id, normalized_ids)
         except (TypeError, ValueError) as exc:
             return {
                 "success": False,
                 "error": str(exc),
+                "error_code": "invalid_target_order",
+            }
+        except (sqlite3.Error, OverflowError) as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not reorder launch targets",
                 "error_code": "invalid_target_order",
             }
 
@@ -3489,7 +3728,9 @@ class Api:
             == "true",
         }
 
-    def save_settings(self, settings: Mapping[str, object]) -> dict[str, object]:
+    def save_settings(self, settings: object = None) -> dict[str, object]:
+        import sqlite3
+
         from core.database import (
             CANONICAL_PLAY_STATUSES,
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -3499,9 +3740,13 @@ class Api:
             update_setting,
         )
 
+        if not isinstance(settings, Mapping):
+            return {"success": False, "error": "Settings must be an object"}
+
+        settings_map = cast(Mapping[str, object], settings)
         custom_statuses: list[str] = []
-        if "custom_play_statuses" in settings:
-            raw_statuses = settings["custom_play_statuses"]
+        if "custom_play_statuses" in settings_map:
+            raw_statuses = settings_map["custom_play_statuses"]
             if not isinstance(raw_statuses, list):
                 return {
                     "success": False,
@@ -3529,20 +3774,37 @@ class Api:
                 seen.add(name.casefold())
                 custom_statuses.append(name)
 
+        for key in (
+            "proton_path",
+            "wine_prefix_path",
+            "urm_rpa_path",
+            "library_folder",
+            "library_folder_pattern",
+            "downloads_folder",
+            RPGMAKER_LINUX_RUNNER_SETTING,
+        ):
+            if key in settings_map:
+                value = settings_map[key]
+                if value is not None and not isinstance(value, str):
+                    return {
+                        "success": False,
+                        "error": f"Setting '{key}' must be a string",
+                    }
+
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         update_setting_fn = cast(Callable[[str, str], None], update_setting)
 
         def get_payload_or_existing(key: str, default: str = "") -> str:
-            if key in settings:
-                return str(settings.get(key, "") or "")
+            if key in settings_map:
+                return str(settings_map.get(key, "") or "")
             return str(get_setting_fn(key) or default)
 
         rpgmaker_linux_runner_path = str(
             get_payload_or_existing(RPGMAKER_LINUX_RUNNER_SETTING) or ""
         ).strip()
         raw_enable_logging = (
-            settings.get("enable_logging")
-            if "enable_logging" in settings
+            settings_map.get("enable_logging")
+            if "enable_logging" in settings_map
             else get_setting_fn("enable_logging")
         )
         enable_logging = (
@@ -3552,45 +3814,52 @@ class Api:
             else "false"
         )
 
-        update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
-        update_setting_fn(
-            "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
-        )
-        update_setting_fn("enable_logging", enable_logging)
-        update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
-        update_setting_fn(
-            "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()
-        )
-        if "library_folder" in settings:
+        try:
+            update_setting_fn("proton_path", get_payload_or_existing("proton_path"))
             update_setting_fn(
-                "library_folder",
-                str(settings.get("library_folder") or "").strip(),
+                "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
-        if "library_folder_pattern" in settings:
-            raw_pattern = str(settings.get("library_folder_pattern") or "").strip()
+            update_setting_fn("enable_logging", enable_logging)
+            update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
             update_setting_fn(
-                "library_folder_pattern",
-                raw_pattern or DEFAULT_LIBRARY_FOLDER_PATTERN,
+                "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()
             )
-        if "downloads_folder" in settings:
-            update_setting_fn(
-                "downloads_folder",
-                str(settings.get("downloads_folder") or "").strip(),
-            )
-        if "download_detection_enabled" in settings:
-            raw_detection = settings.get("download_detection_enabled")
-            update_setting_fn(
-                "download_detection_enabled",
-                "true"
-                if raw_detection is True or str(raw_detection).strip().lower() == "true"
-                else "false",
-            )
-        if "custom_play_statuses" in settings:
-            update_custom_play_statuses(custom_statuses)
+            if "library_folder" in settings_map:
+                update_setting_fn(
+                    "library_folder",
+                    str(settings_map.get("library_folder") or "").strip(),
+                )
+            if "library_folder_pattern" in settings_map:
+                raw_pattern = str(
+                    settings_map.get("library_folder_pattern") or ""
+                ).strip()
+                update_setting_fn(
+                    "library_folder_pattern",
+                    raw_pattern or DEFAULT_LIBRARY_FOLDER_PATTERN,
+                )
+            if "downloads_folder" in settings_map:
+                update_setting_fn(
+                    "downloads_folder",
+                    str(settings_map.get("downloads_folder") or "").strip(),
+                )
+            if "download_detection_enabled" in settings_map:
+                raw_detection = settings_map.get("download_detection_enabled")
+                update_setting_fn(
+                    "download_detection_enabled",
+                    "true"
+                    if raw_detection is True
+                    or str(raw_detection).strip().lower() == "true"
+                    else "false",
+                )
+            if "custom_play_statuses" in settings_map:
+                update_custom_play_statuses(custom_statuses)
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}
 
-    def save_library_filter_presets(self, presets: object) -> dict[str, object]:
+    def save_library_filter_presets(self, presets: object = None) -> dict[str, object]:
         import json
+        import sqlite3
 
         from core.database import normalize_filter_preset, update_setting
 
@@ -3613,7 +3882,13 @@ class Api:
                 }
             seen.add(name.casefold())
             validated.append(preset)
-        update_setting("library_filter_presets", json.dumps(validated))
+        try:
+            update_setting("library_filter_presets", json.dumps(validated))
+        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not save filter presets",
+            }
         return {"success": True}
 
     def browse_urm_file(self, start_path: str = "") -> str:
