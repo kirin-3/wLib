@@ -116,6 +116,8 @@ PATH_SETTINGS_KEYS = (
     "downloads_folder",
     "download_detection_enabled",
 )
+# Exported with the path settings but not filesystem paths, so never host-checked.
+NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
 
 BOOLEAN_GAME_FIELDS = (
     "thread_completed",
@@ -838,6 +840,8 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
     settings = _coerce_mapping(backup.get("settings"))
     path_settings = _coerce_mapping(settings.get("paths"))
     for key in PATH_SETTINGS_KEYS:
+        if key in NON_PATH_SETTINGS_KEYS:
+            continue
         path_text = _coerce_text(path_settings.get(key)).strip()
         if not _is_host_path_setting(path_text):
             warnings.append(
@@ -1110,7 +1114,11 @@ def _import_setting_groups(
             if key not in group:
                 continue
             value = _coerce_text(group.get(key))
-            if group_name == "paths" and not _is_host_path_setting(value.strip()):
+            if (
+                group_name == "paths"
+                and key not in NON_PATH_SETTINGS_KEYS
+                and not _is_host_path_setting(value.strip())
+            ):
                 continue
             if merge_mode == "fill_missing":
                 row = cast(
