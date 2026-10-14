@@ -168,9 +168,13 @@ def unsupported_on_host(feature: str) -> dict[str, object]:
 
 FLATPAK_INFO_PATH = "/.flatpak-info"
 
+# `kill -0 $g` covers the window before the child has called setsid (no group
+# yet). The trap escalates to SIGKILL on the host because flatpak-spawn cannot
+# forward the sandbox-side SIGKILL from Launcher.stop().
 _HOST_SUPERVISOR_SCRIPT = (
-    'setsid "$@" & g=$!; trap "kill -TERM -$g" TERM INT HUP; '
-    "while kill -0 -$g 2>/dev/null; do sleep 1; done"
+    'setsid "$@" & g=$!; '
+    'trap "kill -TERM -$g 2>/dev/null; (sleep 4; kill -KILL -$g 2>/dev/null) &" TERM INT HUP; '
+    "while kill -0 $g 2>/dev/null || kill -0 -$g 2>/dev/null; do sleep 1; done"
 )
 
 

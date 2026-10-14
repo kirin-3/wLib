@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import shutil
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from core.host_platform import (
     get_cache_root,
@@ -209,6 +213,33 @@ def test_host_command_supervisor_wrapping(monkeypatch):
     assert "setsid" in inner[2]
     assert "kill -TERM" in inner[2]
     assert inner[4:] == ["wine", "/games/game.exe"]
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("setsid") is None,
+    reason="needs a POSIX sh and util-linux setsid",
+)
+def test_host_supervisor_script_tracks_group_and_stops_it():
+    import signal
+    import subprocess
+    import time
+
+    from core.host_platform import _HOST_SUPERVISOR_SCRIPT
+
+    def supervise(*cmd: str) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(["sh", "-c", _HOST_SUPERVISOR_SCRIPT, "sh", *cmd])
+
+    # Launcher stub exits at once; its child keeps the group alive.
+    start = time.monotonic()
+    proc = supervise("sh", "-c", "sleep 2 & exit 0")
+    assert proc.wait(timeout=10) == 0
+    assert time.monotonic() - start >= 1.5
+
+    # SIGTERM stops the group, escalating to SIGKILL for children ignoring TERM.
+    proc = supervise("sh", "-c", "trap '' TERM; sleep 60")
+    time.sleep(1.5)
+    proc.send_signal(signal.SIGTERM)
+    _ = proc.wait(timeout=10)
 
 
 def test_host_which_outside_flatpak_uses_path(monkeypatch):
