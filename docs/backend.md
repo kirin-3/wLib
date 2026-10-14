@@ -50,6 +50,8 @@ The core strength of wLib relies on its native Python backend, divided primarily
 
 Centralizes Linux/Windows detection, data/cache/extension paths, and platform capabilities. `Api.get_platform_capabilities()` exposes these through `getPlatformCapabilities()` in the frontend bridge. Linux-only runtime installers return `success: false` with `code: "unsupported_platform"` before starting downloads or subprocesses on Windows. Windows file/folder and HTML opening uses system associations. See [Platform Paths](architecture.md#platform-paths) for defaults and environment overrides.
 
+`Api.get_install_status(prefix_path, proton_path)` reports `success`, `deps`/`rtps` progress payloads (`running`, `done`, `total`, `current`, `error`), and the derived `dlls_installed`/`rtps_installed` flags for the resolved prefix. On hosts without runtime installers it keeps that same shape and reports `success: false` with `code: "unsupported_platform"`, so the polling dialog can read either response the same way.
+
 ### `core/api.py` (The API Bridge)
 The `Api` class acts as the single point of entry for the Vue frontend. All methods defined without a leading underscore (e.g. `get_games`, `launch_game`) are automatically serialized into Promises on the `window.pywebview.api` object.
 - **Concurrency**: UI calls are technically asynchronous on the JS side but block the pywebview worker pool on the Python side. The `Api` class heavily uses background thread spawning (`threading.Thread`) for long tasks (like downloading updates or mass-scraping metadata) so the UI doesn't freeze.

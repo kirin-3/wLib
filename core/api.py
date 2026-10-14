@@ -3145,12 +3145,26 @@ class Api:
     ) -> dict[str, object]:
         """Returns the current status of background DLL and RTP installs, plus whether they've previously completed."""
         if not is_linux():
+            # The frontend types deps/rtps as full progress payloads, so report
+            # idle installers here instead of empty objects.
             return {
                 "success": False,
                 "error": "Wine/Proton runtime installers are only available on Linux.",
                 "code": "unsupported_platform",
-                "deps": {},
-                "rtps": {},
+                "deps": {
+                    "running": False,
+                    "done": 0,
+                    "total": 0,
+                    "current": "",
+                    "error": "",
+                },
+                "rtps": {
+                    "running": False,
+                    "done": 0,
+                    "total": 0,
+                    "current": "",
+                    "error": "",
+                },
                 "dlls_installed": False,
                 "rtps_installed": False,
             }
@@ -3186,6 +3200,7 @@ class Api:
         target = self._resolve_runtime_install_target(prefix_path, proton_path)
 
         return {
+            "success": True,
             "deps": deps_status,
             "rtps": rtp_status,
             "dlls_installed": self._dlls_installed_in_prefix(target["resolved_prefix"]),
