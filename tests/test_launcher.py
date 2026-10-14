@@ -1881,3 +1881,159 @@ def test_non_flatpak_wine_launch_argv_unchanged(monkeypatch):
         assert Launcher().launch("/tmp/game.exe", game_id=7)["success"] is True
     argv = popen.call_args.args[0]
     assert argv == ["wine", "/tmp/game.exe"]
+
+
+def test_html_auto_strips_wine_env_and_keeps_locale(monkeypatch):
+    monkeypatch.setenv("WINEPREFIX", "/stale/prefix")
+    monkeypatch.setenv("STEAM_COMPAT_DATA_PATH", "/stale/compat")
+    monkeypatch.setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", "/stale/client")
+    monkeypatch.setenv("UMU_ID", "stale")
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        result = Launcher().launch("/tmp/game.html", run_japanese_locale=True)
+    assert result["success"] is True
+    assert popen.call_args.args[0][0] == "xdg-open"
+    env = popen.call_args.kwargs["env"]
+    assert "WINEPREFIX" not in env
+    assert "STEAM_COMPAT_DATA_PATH" not in env
+    assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
+    assert "UMU_ID" not in env
+    assert env.get("LC_ALL") == "ja_JP.UTF-8"
+    assert env.get("LANG") == "ja_JP.UTF-8"
+
+
+def test_windows_launch_strips_packaged_runtime_env(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setenv("PYTHONHOME", "/tmp/wlib/python")
+    monkeypatch.setenv("PYTHONPATH", "/tmp/wlib/lib")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("PYWEBVIEW_GUI", "qt")
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        result = Launcher().launch(r"C:\Games\game.exe")
+    assert result["success"] is True
+    env = popen.call_args.kwargs["env"]
+    assert "PYTHONHOME" not in env
+    assert "PYTHONPATH" not in env
+    assert "QT_QPA_PLATFORM" not in env
+    assert "PYWEBVIEW_GUI" not in env
+
+
+def test_rpgmaker_www_uses_parent_as_cwd():
+    def isfile(path):
+        return path in ("/opt/runner/run.sh", "/games/myrpg/package.json")
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isfile", side_effect=isfile),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        launcher = Launcher()
+        launcher.get_rpgmaker_linux_runner_status = lambda: {  # type: ignore[method-assign]
+            "available": True,
+            "path": "/opt/runner/run.sh",
+            "source": "test",
+            "configured_path": "",
+            "error": "",
+        }
+        with patch("core.launcher.get_setting", return_value="false"):
+            assert (
+                launcher.launch(
+                    "/games/myrpg/www/index.html", launch_mode="rpgmaker_linux"
+                )["success"]
+                is True
+            )
+    cmd = popen.call_args.args[0]
+    assert cmd == ["/opt/runner/run.sh", "--gamepath", "/games/myrpg"]
+    assert popen.call_args.kwargs["cwd"] == "/games/myrpg"
+
+
+def test_elf_binary_named_exe_runs_natively():
+    with (
+        patch("os.path.exists", side_effect=lambda path: path == "/tmp/game.exe"),
+        patch("os.access", return_value=True),
+        patch("core.launcher.is_elf", return_value=True),
+        patch("core.launcher.is_script", return_value=False),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        popen.return_value = MagicMock()
+        assert Launcher().launch("/tmp/game.exe")["success"] is True
+    assert popen.call_args.args[0] == ["/tmp/game.exe"]
+
+
+def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
+    game_exe = "/tmp/game.exe"
+    ce_dir = tmp_path / "ce"
+    ce_dir.mkdir()
+    ce_exe = ce_dir / "lunarengine-x86_64.exe"
+    ce_exe.write_bytes(b"MZ")
+
+    def exists(path):
+        if path == game_exe:
+            return True
+        return str(path).replace("\\", "/").endswith("lunarengine-x86_64.exe")
+
+    game_proc = MagicMock(pid=111)
+    game_proc.poll.return_value = 0
+    ce_proc = MagicMock(pid=222)
+    popen_calls: list[list[str]] = []
+    waited: list[bool] = []
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append([str(part).replace("\\", "/") for part in cmd])
+        if any(
+            str(part).replace("\\", "/").endswith("lunarengine-x86_64.exe")
+            for part in cmd
+        ):
+            ce_proc.wait = MagicMock(
+                side_effect=lambda *a, **k: waited.append(True) or 0
+            )  # type: ignore[method-assign]
+            return ce_proc
+        return game_proc
+
+    started_targets: list[object] = []
+
+    def fake_thread(*, target, daemon):
+        assert daemon is True
+        started_targets.append(target)
+        target()
+        return MagicMock()
+
+    monkeypatch.setattr("threading.Thread", fake_thread)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    with (
+        patch("os.path.exists", side_effect=exists),
+        patch("os.path.isdir", return_value=False),
+        patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
+        patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
+        patch("os.makedirs", return_value=None),
+        patch("builtins.open", MagicMock()),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: {
+                "wine_prefix_path": "/tmp/pfx",
+                "proton_path": "",
+                "enable_logging": "false",
+            }.get(key, ""),
+        ),
+        patch("subprocess.Popen", side_effect=fake_popen),
+    ):
+        assert Launcher().launch(game_exe, auto_inject_ce=True)["success"] is True
+    assert any(
+        any("lunarengine-x86_64.exe" in part for part in cmd) for cmd in popen_calls
+    )
+    assert waited, "Cheat Engine helper was never waited on (zombie risk)"

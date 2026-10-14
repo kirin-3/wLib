@@ -2964,6 +2964,12 @@ class Api:
         target_path = (exe_path or "").strip()
         if game_id is not None and not (target_path and os.path.exists(target_path)):
             # Missing/empty path: fall back to the default exe, then other targets.
+            # Only the default launch (empty request or the canonical path
+            # itself) may fall back. An explicit launch-target path that was
+            # deleted must error instead of silently launching a different file.
+            # When nothing else exists either, pass the request through so the
+            # launcher reports the missing file (and mocked launchers in tests
+            # still see the requested path).
             from core.database import get_all_games, list_game_launch_targets
 
             canonical_path = next(
@@ -2978,8 +2984,19 @@ class Api:
                 str(t.get("exe_path") or "").strip()
                 for t in list_game_launch_targets(game_id)
             ]
+            existing = [c for c in candidates if c and os.path.exists(c)]
+            is_default_request = not target_path or (
+                canonical_path
+                and self._normalize_compare_path(target_path)
+                == self._normalize_compare_path(canonical_path)
+            )
+            if not is_default_request and existing:
+                return {
+                    "success": False,
+                    "error": f"Executable not found at {target_path}",
+                }
             target_path = next(
-                (c for c in candidates if c and os.path.exists(c)),
+                iter(existing),
                 target_path or canonical_path,
             )
 
