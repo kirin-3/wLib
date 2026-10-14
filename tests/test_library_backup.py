@@ -1914,3 +1914,28 @@ def test_import_duplicate_url_fill_missing_keeps_targets_from_same_import(tmp_pa
     assert result["success"] is True
     targets = list_game_launch_targets(local_id)
     assert [target["label"] for target in targets] == ["First"]
+
+
+def test_import_out_of_range_playtime_is_clamped(tmp_path):
+    """A finite value beyond SQLite's INTEGER range must not abort the import."""
+    api = Api()
+    url = "https://f95zone.to/threads/huge.559/"
+    backup_path = write_backup(
+        tmp_path / "huge.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "Huge", "f95_url": url},
+                    "user_state": {"playtime_seconds": 10**30},
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_USER_STATE]}
+    )
+
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["playtime_seconds"] == 0

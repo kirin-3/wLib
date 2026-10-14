@@ -21,6 +21,7 @@ from core.backup_format import (
     BACKUP_FORMAT,
     BACKUP_FORMAT_VERSION,
     ENCRYPTED_FORMAT,
+    SQLITE_INTEGER_MAX,
     BackupValidationError,
 )
 from core.database import (
@@ -284,9 +285,11 @@ def _coerce_bool(value: object) -> bool:
 
 def _coerce_non_negative_int(value: object) -> int:
     try:
-        return max(0, int(float(str(value or 0))))
+        result = max(0, int(float(str(value or 0))))
     except (TypeError, ValueError, OverflowError):
         return 0
+    # Values beyond SQLite's INTEGER range would fail at bind time.
+    return result if result <= SQLITE_INTEGER_MAX else 0
 
 
 def _coerce_float(value: object) -> float:

@@ -13,6 +13,9 @@ BACKUP_FORMAT = "wlib.library_migration"
 BACKUP_FORMAT_VERSION = 1
 ENCRYPTED_FORMAT = "wlib.encrypted"
 
+#: Largest value SQLite accepts for an INTEGER column.
+SQLITE_INTEGER_MAX = 9223372036854775807
+
 
 class BackupValidationError(ValueError):
     def __init__(self, message: str, error_code: str = "invalid_backup") -> None:

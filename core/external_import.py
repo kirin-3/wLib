@@ -14,6 +14,7 @@ the source app can keep running during the import.
 from __future__ import annotations
 
 import json
+import math
 import ntpath
 import os
 import posixpath
@@ -30,6 +31,7 @@ from urllib.parse import urlparse
 from core.backup_format import (
     BACKUP_FORMAT,
     BACKUP_FORMAT_VERSION,
+    SQLITE_INTEGER_MAX,
     BackupValidationError,
 )
 from core.f95zone import F95_HOSTS, extract_thread_id, normalize_thread_url
@@ -287,6 +289,21 @@ def _coerce_rating(value: object) -> float | None:
     return rating if rating > 0 else None
 
 
+def _coerce_playtime_seconds(value: object, multiplier: float = 1.0) -> int | None:
+    """Parse a source playtime into whole seconds, or None when unusable.
+
+    Non-finite or out-of-SQLite-range values are omitted so a corrupt source
+    value cannot abort the import or overwrite local playtime with 0.
+    """
+    try:
+        seconds = float(_as_str(value) or "0") * multiplier
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(seconds) or not 0 < seconds <= SQLITE_INTEGER_MAX:
+        return None
+    return int(seconds)
+
+
 # ---------------------------------------------------------------------------
 # F95Checker reader
 # ---------------------------------------------------------------------------
@@ -311,7 +328,7 @@ def _f95checker_base_dir(conn: sqlite3.Connection) -> str:
             object,
             json.loads(_as_str(_row_dict(fetched).get("default_exe_dir")) or "{}"),
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return ""
     mapping = _as_dict(decoded)
     if not mapping:
@@ -353,7 +370,7 @@ def _parse_json_list(value: object) -> list[str]:
         return [_as_str(item) for item in items]
     try:
         decoded = cast(object, json.loads(_as_str(value) or "[]"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return []
     return [_as_str(item) for item in _as_list(decoded)]
 
@@ -458,12 +475,9 @@ def _translate_f95checker_game(
     if finished:
         user_state["finished_version"] = finished
     if has_playtime:
-        try:
-            playtime = float(_as_str(record.get("playtime")) or "0")
-        except (TypeError, ValueError):
-            playtime = 0.0
-        if playtime > 0:
-            user_state["playtime_seconds"] = int(playtime)
+        playtime_seconds = _coerce_playtime_seconds(record.get("playtime"))
+        if playtime_seconds is not None:
+            user_state["playtime_seconds"] = playtime_seconds
     last_played = parse_timestamp(record.get("last_launched"))
     if last_played:
         user_state["last_played"] = last_played
@@ -659,12 +673,9 @@ def _translate_xlibrary_game(
             rating = _coerce_rating(ratings.get(source_key))
             if rating is not None:
                 user_state[target_key] = rating
-    try:
-        playtime = float(_as_str(data.get("totalPlaytime")) or "0")
-    except (TypeError, ValueError):
-        playtime = 0.0
-    if playtime > 0:
-        user_state["playtime_seconds"] = int(playtime)
+    playtime_seconds = _coerce_playtime_seconds(data.get("totalPlaytime"))
+    if playtime_seconds is not None:
+        user_state["playtime_seconds"] = playtime_seconds
     last_played = parse_timestamp(data.get("lastPlayedAt"))
     if last_played:
         user_state["last_played"] = last_played
@@ -698,7 +709,7 @@ def read_xlibrary_library(path: str) -> tuple[dict[str, object], dict[str, objec
         raise _validation_error(
             "The file is not an XLibrary library.", "invalid_source"
         ) from exc
-    except UnicodeDecodeError as exc:
+    except (UnicodeDecodeError, RecursionError) as exc:
         raise _validation_error(
             "The file is not an XLibrary library.", "invalid_source"
         ) from exc
@@ -830,12 +841,11 @@ def _translate_atlas_game(
         if rating is not None:
             user_state[target_key] = rating
 
-    try:
-        playtime_minutes = float(_as_str(record.get("total_playtime")) or "0")
-    except (TypeError, ValueError):
-        playtime_minutes = 0.0
-    if playtime_minutes > 0:
-        user_state["playtime_seconds"] = int(playtime_minutes * 60)
+    playtime_seconds = _coerce_playtime_seconds(
+        record.get("total_playtime"), multiplier=60.0
+    )
+    if playtime_seconds is not None:
+        user_state["playtime_seconds"] = playtime_seconds
     last_played = parse_timestamp(record.get("last_played_r"))
     if last_played:
         user_state["last_played"] = last_played
