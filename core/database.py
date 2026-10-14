@@ -211,7 +211,7 @@ def _normalize_game_f95_urls(cursor: sqlite3.Cursor) -> None:
         if not normalized or normalized == stored:
             continue
         # Leave true duplicates alone rather than merging two library entries.
-        if _find_matching_game_row(cursor, normalized, exclude_id=game_id) is not None:
+        if find_matching_game_row(cursor, normalized, exclude_id=game_id) is not None:
             continue
         try:
             _ = cursor.execute(
@@ -221,7 +221,7 @@ def _normalize_game_f95_urls(cursor: sqlite3.Cursor) -> None:
             continue
 
 
-def _find_matching_game_row(
+def find_matching_game_row(
     cursor: sqlite3.Cursor, url: object, exclude_id: int | None = None
 ) -> sqlite3.Row | None:
     lookup_url = normalize_thread_url(url)
@@ -298,7 +298,7 @@ def find_game_by_f95_url(
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        row = _find_matching_game_row(cursor, url, exclude_id=exclude_id)
+        row = find_matching_game_row(cursor, url, exclude_id=exclude_id)
     if row is None:
         return None
     return {str(key): cast(object, row[key]) for key in row.keys()}
@@ -528,7 +528,7 @@ def add_game(
         cursor = conn.cursor()
         if (
             normalized_url
-            and _find_matching_game_row(cursor, normalized_url) is not None
+            and find_matching_game_row(cursor, normalized_url) is not None
         ):
             raise sqlite3.IntegrityError("duplicate f95_url")
 
@@ -828,7 +828,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         updated_url = safe_fields.get("f95_url")
-        if updated_url and _find_matching_game_row(
+        if updated_url and find_matching_game_row(
             cursor,
             str(updated_url),
             exclude_id=game_id,

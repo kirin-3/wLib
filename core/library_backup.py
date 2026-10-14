@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
+import math
 import secrets
 import ntpath
 import os
@@ -28,6 +29,7 @@ from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     get_all_games,
     get_connection,
+    find_matching_game_row,
     normalize_launch_mode,
     normalize_play_status,
 )
@@ -283,15 +285,18 @@ def _coerce_bool(value: object) -> bool:
 def _coerce_non_negative_int(value: object) -> int:
     try:
         return max(0, int(float(str(value or 0))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
 def _coerce_float(value: object) -> float:
     try:
-        return float(str(value or 0))
-    except (TypeError, ValueError):
+        result = float(str(value or 0))
+    except (TypeError, ValueError, OverflowError):
         return 0.0
+    if not math.isfinite(result):
+        return 0.0
+    return result
 
 
 def _coerce_text(value: object) -> str:
@@ -537,8 +542,25 @@ def validate_library_backup(payload: object) -> dict[str, object]:
         raise BackupValidationError("Backup file is not a supported wLib export.")
 
     try:
-        version = int(str(backup.get("format_version", "0")))
-    except ValueError as exc:
+        raw_version = backup.get("format_version", "0")
+        if isinstance(raw_version, bool):
+            raise ValueError("non-integer version")
+        if isinstance(raw_version, int):
+            version = raw_version
+        elif isinstance(raw_version, float):
+            if not raw_version.is_integer():
+                raise ValueError("non-integer version")
+            version = int(raw_version)
+        else:
+            text = str(raw_version or "0").strip()
+            if "." in text:
+                float_value = float(text)
+                if not float_value.is_integer():
+                    raise ValueError("non-integer version")
+                version = int(float_value)
+            else:
+                version = int(text)
+    except (ValueError, TypeError, OverflowError) as exc:
         raise BackupValidationError("Backup format version is invalid.") from exc
 
     if version > BACKUP_FORMAT_VERSION:
@@ -1094,6 +1116,26 @@ def _replace_launch_targets(
         )
 
 
+def _coerce_setting_value(key: str, raw: object) -> str:
+    """Serialize a backup setting value without mangling foreign types.
+
+    Exports store every setting as TEXT (JSON-encoded for lists). Foreign
+    backups may use native JSON types instead: lists/dicts must be re-encoded
+    as JSON (``_coerce_text`` would join a list with ", " and corrupt
+    ``collections`` etc.), and booleans must use the lowercase "true"/"false"
+    strings the app reads (``str(True)`` is "True").
+    """
+    if isinstance(raw, bool):
+        return "true" if raw else "false"
+    if isinstance(raw, (list, dict)):
+        return json.dumps(raw, ensure_ascii=False)
+    if key in ("enable_logging", "download_detection_enabled") and isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in ("true", "false"):
+            return lowered
+    return _coerce_text(raw)
+
+
 def _import_setting_groups(
     cursor: sqlite3.Cursor,
     backup: Mapping[str, object],
@@ -1113,7 +1155,7 @@ def _import_setting_groups(
         for key in allowed_keys:
             if key not in group:
                 continue
-            value = _coerce_text(group.get(key))
+            value = _coerce_setting_value(key, group.get(key))
             if (
                 group_name == "paths"
                 and key not in NON_PATH_SETTINGS_KEYS
@@ -1162,6 +1204,31 @@ def build_sync_backup(modified_at: str, device: str) -> dict[str, object]:
 
 
 MERGE_MODES = ("overwrite", "fill_missing")
+
+
+def _filter_fill_missing(
+    cursor: sqlite3.Cursor,
+    game_id: int,
+    fields: Mapping[str, object],
+) -> dict[str, object]:
+    """Keep only the imported fields that are empty on the stored row.
+
+    The stored row is re-read for every match: an earlier game in the same
+    import may already have applied a value, and fill-missing must see that
+    instead of the snapshot taken before the import started.
+    """
+    row = cast(
+        sqlite3.Row | None,
+        cursor.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone(),
+    )
+    if row is None:
+        return dict(fields)
+    local_row = {str(key): cast(object, row[key]) for key in row.keys()}
+    return {
+        key: value
+        for key, value in fields.items()
+        if _is_fill_missing_empty(key, local_row.get(key))
+    }
 
 
 def _is_fill_missing_empty(field: str, local_value: object) -> bool:
@@ -1260,9 +1327,7 @@ def apply_library_backup(
                     int(str(candidate))
                     for candidate in _coerce_sequence(item.get("candidate_ids"))
                 )
-            local_rows = _local_games()
-            local_by_id = {int(str(game["id"])): game for game in local_rows}
-            original_ids = set(local_by_id)
+            original_ids = {int(str(game["id"])) for game in _local_games()}
             if mirror:
                 from core import database
 
@@ -1272,6 +1337,7 @@ def apply_library_backup(
                     os.path.join(snapshot_dir, "last-local.json"),
                     {"sections": SUPPORTED_SECTIONS},
                 )
+
             for item in plan:
                 imported_game = _coerce_mapping(item.get("game"))
                 status = str(item.get("status") or "")
@@ -1280,7 +1346,24 @@ def apply_library_backup(
                     skipped += 1
                     continue
 
+                local_id: int | None = None
                 if status == "matched":
+                    local_id = int(str(item.get("local_id", 0)))
+                else:
+                    # A backup may repeat a thread (two copies of one game, or
+                    # the same thread under an old and a new slug). A later
+                    # copy merges into the row created earlier in this import
+                    # instead of adding a second game for the same thread.
+                    duplicate_row = find_matching_game_row(
+                        cursor,
+                        _game_section(imported_game, SECTION_METADATA).get(
+                            "f95_url"
+                        ),
+                    )
+                    if duplicate_row is not None:
+                        local_id = int(str(cast(object, duplicate_row["id"])))
+
+                if local_id is not None:
                     fields = _import_fields_for_game(
                         imported_game,
                         sections,
@@ -1288,18 +1371,17 @@ def apply_library_backup(
                     )
                     if sync and not fields.get("cover_image_path"):
                         _ = fields.pop("cover_image_path", None)
-                    local_id = int(str(item.get("local_id", 0)))
                     if merge_mode == "fill_missing":
-                        local_row = local_by_id.get(local_id, {})
-                        fields = {
-                            key: value
-                            for key, value in fields.items()
-                            if _is_fill_missing_empty(key, local_row.get(key))
-                        }
+                        fields = _filter_fill_missing(cursor, local_id, fields)
                     _update_game_row(cursor, local_id, fields)
                     game_id = local_id
                     updated += 1
                     updated_ids.append(local_id)
+                    if status != "matched":
+                        # The URL matched a row that is only identical from
+                        # the database's point of view; mirror sync must keep
+                        # it because the backup also references it.
+                        keep_ids.add(local_id)
                 else:
                     fields = _import_fields_for_game(
                         imported_game,
@@ -1311,11 +1393,14 @@ def apply_library_backup(
                     created_ids.append(game_id)
 
                 if SECTION_LAUNCH_TARGETS in sections:
-                    if merge_mode == "fill_missing" and status == "matched":
-                        local_targets = _coerce_sequence(
-                            local_by_id.get(game_id, {}).get("launch_targets")
+                    if merge_mode == "fill_missing" and local_id is not None:
+                        # Read through the import cursor so targets written
+                        # earlier in this uncommitted transaction count.
+                        _ = cursor.execute(
+                            "SELECT 1 FROM game_launch_targets WHERE game_id = ? LIMIT 1",
+                            (game_id,),
                         )
-                        if local_targets:
+                        if cursor.fetchone() is not None:
                             continue
                     _replace_launch_targets(cursor, game_id, imported_game)
 

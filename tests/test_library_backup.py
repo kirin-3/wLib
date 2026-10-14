@@ -293,9 +293,9 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
     update_setting("library_filter_presets", "[]")
     result = api.import_library_backup(str(destination), {"sections": sections})
     assert result["success"]
-    assert [preset["name"] for preset in api.get_settings()["library_filter_presets"]] == [
-        "Ren'Py now"
-    ]
+    assert [
+        preset["name"] for preset in api.get_settings()["library_filter_presets"]
+    ] == ["Ren'Py now"]
 
 
 def test_collections_and_membership_round_trip(tmp_path):
@@ -1257,7 +1257,9 @@ def test_import_selected_metadata_updates_matched_game(tmp_path):
     assert game["progress"] == ""
 
 
-def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(tmp_path):
+def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(
+    tmp_path,
+):
     game_id = add_game(
         "Finished thread", "", f95_url="https://f95zone.to/threads/finished.445/"
     )
@@ -1268,7 +1270,9 @@ def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(t
     conn.close()
 
     api = Api()
-    exported = api.export_library_backup(destination_path=str(tmp_path / "wishlist.json"))
+    exported = api.export_library_backup(
+        destination_path=str(tmp_path / "wishlist.json")
+    )
     assert exported["success"] is True
     path = Path(str(exported["path"]))
     backup = json.loads(path.read_text(encoding="utf-8"))
@@ -1278,12 +1282,16 @@ def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(t
     conn.execute("UPDATE games SET thread_completed = 0 WHERE id = ?", (game_id,))
     conn.commit()
     conn.close()
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
     assert get_all_games()[0]["thread_completed"] == 1
 
     del backup["games"][0]["metadata"]["thread_completed"]
     path.write_text(json.dumps(backup), encoding="utf-8")
-    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
     assert get_all_games()[0]["thread_completed"] == 1
 
 
@@ -1549,7 +1557,8 @@ def test_non_path_settings_import_without_path_warnings(tmp_path):
     inspected = api.inspect_library_backup(str(backup_path))
     assert inspected["success"] is True
     assert not [
-        w for w in inspected["warnings"]
+        w
+        for w in inspected["warnings"]
         if w.get("field") in ("library_folder_pattern", "download_detection_enabled")
     ]
 
@@ -1579,3 +1588,329 @@ def test_fill_missing_settings_keeps_local_values_and_fills_empty(tmp_path):
     assert result["success"] is True
     assert get_setting("enable_logging") == "true"
     assert get_setting("collections") == '["Backup"]'
+
+
+def test_import_merges_backup_games_sharing_a_thread_url(tmp_path):
+    """Backup rows repeating a thread URL must merge instead of aborting.
+
+    Regression: games.f95_url carries a unique index, so a second INSERT of the
+    same thread raised IntegrityError, rolled the whole transaction back and
+    left the library untouched. Copies written under different F95 URL slugs
+    (added after a thread rename) normalize to the same thread, so the local
+    row and the multiplied backup rows all collapse onto one game.
+    """
+    api = Api()
+    url = "https://f95zone.to/threads/duplicate.555/"
+    local_id = add_game("Local Copy", "/local/game.sh", f95_url=url, version="1.0")
+    assert local_id is not None
+    add_game_launch_target(local_id, "Existing", "/local/existing.sh")
+
+    backup_path = write_backup(
+        tmp_path / "duplicate-url.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Backup Copy A",
+                        "f95_url": "https://f95zone.to/threads/old-slug.555/",
+                        "version": "2.0",
+                    },
+                    "user_state": {"progress": "From copy A"},
+                    "launch_targets": [
+                        {"label": "Target A", "exe_path": "/backup/a.sh"}
+                    ],
+                },
+                {
+                    "metadata": {
+                        "title": "Backup Copy B",
+                        "f95_url": url,
+                        "version": "3.0",
+                    },
+                    "user_state": {"progress": "From copy B"},
+                    "launch_targets": [
+                        {"label": "Target B", "exe_path": "/backup/b.sh"}
+                    ],
+                },
+                {
+                    "metadata": {
+                        "title": "Backup Copy C",
+                        "f95_url": "https://f95zone.to/threads/duplicate.555/page-3/",
+                    },
+                    "user_state": {"progress": "From copy C"},
+                },
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path))
+
+    assert result["success"] is True
+    games = get_all_games()
+    # The duplicated rows merge onto the one game that owns the thread.
+    assert [game["id"] for game in games] == [local_id]
+    assert games[0]["version"] == "3.0"
+    assert games[0]["progress"] == "From copy C"
+    targets = list_game_launch_targets(local_id)
+    assert [target["game_id"] for target in targets] == [local_id]
+    assert [target["label"] for target in targets] == ["Target B"]
+
+
+def test_import_merges_duplicate_new_rows_added_within_one_backup(tmp_path):
+    """A backup that repeats a URL that is not local must import one row."""
+    api = Api()
+    url = "https://f95zone.to/threads/repeated.556/"
+    backup_path = write_backup(
+        tmp_path / "repeated-new.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "First", "f95_url": url},
+                    "user_state": {"progress": "First"},
+                },
+                {
+                    "metadata": {"title": "Second", "f95_url": url},
+                    "user_state": {"progress": "Second"},
+                },
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path))
+
+    assert result["success"] is True
+    assert result["created"] == 1
+    games = get_all_games()
+    assert len(games) == 1
+    assert games[0]["progress"] == "Second"
+    assert list_game_launch_targets(games[0]["id"]) == []
+
+
+def test_import_duplicate_url_fill_missing_keeps_local_values(tmp_path):
+    """fill-missing must still see local values for a duplicate-URL row."""
+    api = Api()
+    url = "https://f95zone.to/threads/fill-dup.557/"
+    game_id = add_game("Local", "/local.exe", f95_url=url)
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET playtime_seconds = ?, progress = ? WHERE id = ?",
+        (100, "Local progress", game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    backup_path = write_backup(
+        tmp_path / "fill-dup.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "Backup", "f95_url": url},
+                    "user_state": {
+                        "progress": "Backup progress",
+                        "playtime_seconds": 5,
+                    },
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path), {"merge_mode": "fill_missing"})
+
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["id"] == game_id
+    assert game["progress"] == "Local progress"
+    assert game["playtime_seconds"] == 100
+
+
+def test_import_oversized_playtime_value_is_clamped(tmp_path):
+    """A huge numeric string must be clamped, not raise OverflowError."""
+    api = Api()
+    url = "https://f95zone.to/threads/huge.558/"
+    backup_path = write_backup(
+        tmp_path / "huge.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "Huge", "f95_url": url},
+                    "user_state": {"playtime_seconds": "9" * 5000},
+                }
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_USER_STATE]}
+    )
+
+    assert result["success"] is True
+    game = get_all_games()[0]
+    assert game["playtime_seconds"] == 0
+
+
+def test_validate_accepts_integer_valued_format_versions():
+    from core.library_backup import validate_library_backup
+
+    assert (
+        validate_library_backup(
+            {"format": BACKUP_FORMAT, "format_version": 1.0, "games": []}
+        )["format_version"]
+        == 1.0
+    )
+    assert (
+        validate_library_backup(
+            {"format": BACKUP_FORMAT, "format_version": "1.0", "games": []}
+        )["format_version"]
+        == "1.0"
+    )
+    with pytest.raises(BackupValidationError):
+        validate_library_backup(
+            {"format": BACKUP_FORMAT, "format_version": 1.5, "games": []}
+        )
+    with pytest.raises(BackupValidationError):
+        validate_library_backup(
+            {"format": BACKUP_FORMAT, "format_version": True, "games": []}
+        )
+
+
+def test_import_settings_preserves_json_types(tmp_path):
+    """Native JSON settings must be stored JSON-encoded, not Python-repr."""
+    api = Api()
+    update_setting("collections", "[]")
+    update_setting("custom_play_statuses", "[]")
+    update_setting("library_filter_presets", "[]")
+
+    backup_path = write_backup(
+        tmp_path / "typed-settings.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "general": {
+                    "collections": ["Backlog", "Best of"],
+                    "custom_play_statuses": ["Backlog"],
+                    "library_filter_presets": [
+                        {
+                            "name": "Ren'Py now",
+                            "filterCollection": "Favorites",
+                            "filterStatuses": ["Playing"],
+                            "filterInstallState": "installed",
+                            "filterEngines": ["Ren'Py"],
+                            "filterTags": ["dating-sim"],
+                            "sortBy": "rating",
+                            "sortDir": "desc",
+                        }
+                    ],
+                    "enable_logging": True,
+                    "auto_update_check": "hourly",
+                }
+            },
+        },
+    )
+
+    result = api.import_library_backup(
+        str(backup_path), {"sections": [SECTION_SETTINGS_GENERAL]}
+    )
+
+    assert result["success"] is True
+    assert get_collections() == ["Backlog", "Best of"]
+    settings = api.get_settings()
+    assert settings["custom_play_statuses"] == ["Backlog"]
+    assert settings["library_filter_presets"] == [
+        {
+            "name": "Ren'Py now",
+            "filterCollection": "Favorites",
+            "filterStatuses": ["Playing"],
+            "filterInstallState": "installed",
+            "filterEngines": ["Ren'Py"],
+            "filterTags": ["dating-sim"],
+            "sortBy": "rating",
+            "sortDir": "desc",
+        }
+    ]
+    assert settings["enable_logging"] is True
+    assert get_setting("auto_update_check") == "hourly"
+
+
+def test_import_settings_normalizes_boolean_strings(tmp_path):
+    """Mixed-case booleans must be stored as the lowercase "true"/"false"."""
+    api = Api()
+    backup_path = write_backup(
+        tmp_path / "bool-settings.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "general": {"enable_logging": "TRUE"},
+                "paths": {"download_detection_enabled": "False"},
+            },
+        },
+    )
+
+    result = api.import_library_backup(
+        str(backup_path),
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]},
+    )
+
+    assert result["success"] is True
+    assert api.get_settings()["enable_logging"] is True
+    assert api.get_settings()["download_detection_enabled"] is False
+
+
+def test_import_merges_new_rows_for_one_thread_under_different_slugs(tmp_path):
+    """Copies of one non-local thread under old and new slugs import once."""
+    api = Api()
+    backup_path = write_backup(
+        tmp_path / "renamed-thread.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Old Name",
+                        "f95_url": "https://f95zone.to/threads/old-slug.557/",
+                    },
+                },
+                {
+                    "metadata": {
+                        "title": "New Name",
+                        "f95_url": "https://f95zone.to/threads/new-slug.557/",
+                    },
+                },
+            ]
+        ),
+    )
+
+    result = api.import_library_backup(str(backup_path))
+
+    assert result["success"] is True
+    assert result["created"] == 1
+    games = get_all_games()
+    assert len(games) == 1
+    assert games[0]["title"] == "New Name"
+
+
+def test_import_duplicate_url_fill_missing_keeps_targets_from_same_import(tmp_path):
+    """fill-missing must see launch targets written earlier in the import."""
+    api = Api()
+    url = "https://f95zone.to/threads/targets.558/"
+    local_id = add_game("Local", "/local/game.sh", f95_url=url)
+    assert local_id is not None
+    backup = base_backup(
+        [
+            {
+                "metadata": {"title": "First", "f95_url": url},
+                "launch_targets": [{"label": "First", "exe_path": "/b/first.sh"}],
+            },
+            {
+                "metadata": {"title": "Second", "f95_url": url},
+                "launch_targets": [{"label": "Second", "exe_path": "/b/second.sh"}],
+            },
+        ]
+    )
+    backup_path = write_backup(tmp_path / "targets.json", backup)
+
+    result = api.import_library_backup(
+        str(backup_path), {"merge_mode": "fill_missing"}
+    )
+
+    assert result["success"] is True
+    targets = list_game_launch_targets(local_id)
+    assert [target["label"] for target in targets] == ["First"]
