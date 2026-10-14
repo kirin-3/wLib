@@ -14,18 +14,19 @@ const normalizeMotionPreference = (value: string | null): MotionPreference =>
 const getRootElement = (): HTMLElement | null =>
   typeof document !== "undefined" ? document.documentElement : null;
 
-const readMotionStorage = (storage: Storage): MotionPreference => {
+// Storage defaults to localStorage inside the try: touching it can throw (or be undefined in Node).
+const readMotionStorage = (storage?: Storage): MotionPreference => {
   try {
-    return normalizeMotionPreference(storage.getItem(MOTION_PREFERENCE_STORAGE_KEY));
+    return normalizeMotionPreference((storage ?? localStorage).getItem(MOTION_PREFERENCE_STORAGE_KEY));
   } catch (error) {
     console.warn("Failed to read motion preference", error);
     return "on";
   }
 };
 
-const writeMotionStorage = (storage: Storage, enabled: boolean): void => {
+const writeMotionStorage = (storage: Storage | undefined, enabled: boolean): void => {
   try {
-    storage.setItem(MOTION_PREFERENCE_STORAGE_KEY, enabled ? "on" : "off");
+    (storage ?? localStorage).setItem(MOTION_PREFERENCE_STORAGE_KEY, enabled ? "on" : "off");
   } catch (error) {
     console.warn("Failed to write motion preference", error);
   }
@@ -44,13 +45,13 @@ export const applyMotionPreference = (enabled: boolean): void => {
   applyRootMotionState(enabled);
 };
 
-export const loadMotionPreference = (storage: Storage = localStorage): boolean => {
+export const loadMotionPreference = (storage?: Storage): boolean => {
   const enabled = readMotionStorage(storage) === "on";
   applyMotionPreference(enabled);
   return enabled;
 };
 
-export const saveMotionPreference = (enabled: boolean, storage: Storage = localStorage): void => {
+export const saveMotionPreference = (enabled: boolean, storage?: Storage): void => {
   applyMotionPreference(enabled);
   writeMotionStorage(storage, enabled);
 };

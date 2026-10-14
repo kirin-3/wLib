@@ -135,7 +135,14 @@ const externalError = ref("");
 const externalInspecting = ref(false);
 const externalImporting = ref(false);
 const externalResult = ref<ExternalLibraryImportResponse | null>(null);
-watch(importPath, () => { importPassphrase.value = ""; importNeedsPassphrase.value = false; inspectResult.value = null; importSections.value = []; });
+watch(importPath, () => {
+  importPassphrase.value = "";
+  importNeedsPassphrase.value = false;
+  inspectResult.value = null;
+  importSections.value = [];
+  importMessage.value = "";
+  importError.value = "";
+});
 watch(encryptExport, () => { exportPassphrase.value = ""; exportConfirmation.value = ""; });
 
 const importCounts = computed(() => inspectResult.value?.counts || null);
@@ -199,16 +206,24 @@ const toggleExternalSection = (id: LibraryBackupSection) => {
   toggleSectionValue(externalSections, id);
 };
 
+const browsing = ref(false);
+
 const browseExportDestination = async () => {
+  if (browsing.value) return;
+  browsing.value = true;
   try {
     const selected = await api.browseDirectory(exportPath.value || "");
     if (selected) exportPath.value = selected;
   } catch (error) {
     exportError.value = `Could not open destination picker: ${String(error)}`;
+  } finally {
+    browsing.value = false;
   }
 };
 
 const browseImportFile = async () => {
+  if (browsing.value) return;
+  browsing.value = true;
   try {
     const selected = await api.browseBackupFile(importPath.value || "");
     if (selected) {
@@ -220,6 +235,8 @@ const browseImportFile = async () => {
     }
   } catch (error) {
     importError.value = `Could not open backup picker: ${String(error)}`;
+  } finally {
+    browsing.value = false;
   }
 };
 
@@ -267,6 +284,7 @@ const inspectImport = async () => {
       return;
     }
     inspectResult.value = result;
+    importNeedsPassphrase.value = false;
     importSections.value = (result.available_sections || []).filter(
       (section) => section !== "settings_paths",
     );
@@ -304,6 +322,8 @@ const openExternalTab = () => {
 };
 
 const browseExternalFile = async () => {
+  if (browsing.value) return;
+  browsing.value = true;
   try {
     const selected = await api.browseExternalLibraryFile(
       externalSource.value,
@@ -318,6 +338,8 @@ const browseExternalFile = async () => {
     }
   } catch (error) {
     externalError.value = `Could not open library picker: ${String(error)}`;
+  } finally {
+    browsing.value = false;
   }
 };
 
@@ -394,6 +416,7 @@ watch(externalPath, () => {
   externalPreview.value = null;
   externalResult.value = null;
   externalMessage.value = "";
+  externalError.value = "";
 });
 
 const runImport = async () => {

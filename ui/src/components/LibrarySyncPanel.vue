@@ -19,6 +19,9 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let requestVersion = 0;
 let previousState = "";
 let pollRunning = false;
+// Only status-read failures are cleared by a later successful read; action errors stay.
+let errorFromStatus = false;
+let browsing = false;
 const disabled = computed(() => loading.value || busy.value || status.value.state === "syncing");
 const connected = computed(() => Boolean(status.value.location));
 const stateLabel = computed(() => ({ off: "Sync is off", idle: "Ready to sync", syncing: "Syncing your library...", needs_choice: "Choose which library to use", needs_passphrase: "Passphrase required", error: "Sync needs attention" })[status.value.state || "off"]);
@@ -50,10 +53,17 @@ async function refreshStatus() {
     const result = await api.getSyncStatus();
     if (version === requestVersion) {
       acceptStatus(result);
-      if (result.success === false) error.value = result.error || "Could not read sync status.";
+      if (result.success === false) {
+        error.value = result.error || "Could not read sync status.";
+        errorFromStatus = true;
+      } else if (errorFromStatus) {
+        error.value = "";
+        errorFromStatus = false;
+      }
     }
   } catch {
     error.value = "Could not read sync status. Try again.";
+    errorFromStatus = true;
   } finally {
     loading.value = false;
     pollRunning = false;
@@ -65,6 +75,7 @@ async function act(action: () => Promise<LibrarySyncStatus>, closeOnSuccess = fa
   busy.value = true;
   requestVersion++;
   error.value = dialogError.value = "";
+  errorFromStatus = false;
   try {
     const result = await action();
     if (result.success === false) {
@@ -88,12 +99,17 @@ async function changeLocation() {
   if (!location.value) await act(() => api.disconnectSync());
 }
 async function browseFolder() {
+  if (browsing) return;
+  browsing = true;
+  let folder: string | null = null;
   try {
-    const folder = await api.browseDirectory(status.value.folder_path || "");
-    if (folder) await act(() => api.setSyncFolder(folder));
+    folder = await api.browseDirectory(status.value.folder_path || "");
   } catch {
     error.value = "Could not open the folder picker.";
+  } finally {
+    browsing = false;
   }
+  if (folder) await act(() => api.setSyncFolder(folder));
 }
 function choose(choice: LibrarySyncChoice) { return act(() => api.resolveSyncChoice(choice), true); }
 function toggleEncryption(event: Event) {
@@ -149,7 +165,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); requestVersion++; });
         <strong>{{ loading ? "Loading sync status..." : stateLabel }}</strong>
         <dl v-if="connected"><div><dt>Last synced</dt><dd>{{ lastSynced }}</dd></div><div><dt>Last device</dt><dd>{{ status.last_device || "Not synced yet" }}</dd></div></dl>
       </div>
-      <p v-if="error || status.last_error" class="sync-error" role="alert">{{ error || status.last_error }}</p>
+      <p v-if="error || (status.last_error && status.state !== 'syncing')" class="sync-error" role="alert">{{ error || status.last_error }}</p>
       <div class="sync-controls">
         <button v-if="connected" type="button" :class="status.state === 'needs_choice' || status.state === 'needs_passphrase' ? 'sync-btn' : 'sync-primary'" :disabled="disabled" @click="act(() => api.syncNow())">{{ status.state === 'syncing' ? 'Syncing...' : 'Sync now' }}</button>
         <button v-if="status.state === 'needs_choice'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'choice'">Choose library</button>

@@ -44,6 +44,7 @@ const loadDownloadOffers = async () => {
 };
 
 const installUpdate = (game: GameRecord) => {
+  if (status.value.running) return;
   openInstallArchive({
     gameId: game.id,
     archivePath: downloadOffers.value.get(game.id)?.archive_path,
@@ -55,7 +56,7 @@ const openGame = (game: GameRecord) => {
 };
 
 const recheck = async (game: GameRecord) => {
-  if (!game.f95_url || recheckingIds.value.has(game.id)) return;
+  if (!game.f95_url || recheckingIds.value.has(game.id) || status.value.running) return;
   recheckingIds.value.add(game.id);
   try {
     const result = await api.checkForUpdates(game.f95_url);
@@ -78,7 +79,7 @@ const recheck = async (game: GameRecord) => {
 };
 
 const markAsUpdated = async (game: GameRecord) => {
-  if (markingUpdatedIds.value.has(game.id)) return;
+  if (markingUpdatedIds.value.has(game.id) || status.value.running) return;
   markingUpdatedIds.value.add(game.id);
   try {
     const result = await api.markGameUpdated(game);
@@ -286,8 +287,12 @@ const loadAppUpdate = async () => {
   }
 };
 
+const handleLibraryRefresh = async () => {
+  await Promise.all([loadGames(), loadDownloadOffers()]);
+};
+
 onMounted(() => {
-  window.addEventListener("wlib-refresh-library", loadGames);
+  window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   onWebviewReady(async () => {
     void loadAppUpdate();
     await loadGames();
@@ -305,7 +310,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   gamesRequest++;
-  window.removeEventListener("wlib-refresh-library", loadGames);
+  window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   if (pollInterval) {
     clearInterval(pollInterval);
     pollInterval = null;
@@ -591,7 +596,8 @@ onUnmounted(() => {
             <div class="flex items-center gap-3 shrink-0">
               <button
                 @click="installUpdate(game)"
-                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs"
+                :disabled="status.running"
+                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
                 style="
                   background: var(--brand-glow);
                   color: var(--brand);
@@ -612,7 +618,7 @@ onUnmounted(() => {
               </span>
               <button
                 @click="markAsUpdated(game)"
-                :disabled="markingUpdatedIds.has(game.id)"
+                :disabled="markingUpdatedIds.has(game.id) || status.running"
                 class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
                 style="
                   background: var(--success-bg);

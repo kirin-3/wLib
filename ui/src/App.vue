@@ -44,8 +44,16 @@ const mainRef = ref<HTMLElement | null>(null);
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
-const isNavCollapsed = ref(false);
 const navCollapsedStorageKey = "wlib-nav-collapsed";
+const getInitialNavCollapsed = (): boolean => {
+  try {
+    return localStorage.getItem(navCollapsedStorageKey) === "true";
+  } catch (error) {
+    console.warn("Could not read nav state", error);
+    return false;
+  }
+};
+const isNavCollapsed = ref(getInitialNavCollapsed());
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 const availableUpdateCount = ref(0);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
@@ -226,15 +234,6 @@ const handleExtensionOpen = (event: Event) => {
 };
 
 onMounted(() => {
-  try {
-    const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
-    if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
-      isNavCollapsed.value = savedNavCollapsed === "true";
-    }
-  } catch (error) {
-    console.warn("Could not read nav state", error);
-  }
-
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
