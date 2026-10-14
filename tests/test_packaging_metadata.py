@@ -139,6 +139,12 @@ def test_flatpak_metainfo_and_desktop_ids_match():
     # Manifest installs desktop entry, icons and metainfo under the app ID.
     assert "io.github.kirin_3.wLib.metainfo.xml" in manifest_text
     assert "wlib.desktop" in manifest_text
+    assert "io.github.kirin_3.wLib.desktop" in manifest_text
+    # rename-* module keys are not supported by flatpak-builder (CI caught
+    # "Unknown property rename-desktop-file/rename-icon"), so the manifest
+    # installs files directly under their final app-ID names.
+    assert "rename-desktop-file" not in manifest_text
+    assert "rename-icon" not in manifest_text
 
 
 def test_flatpak_build_reuses_staged_release_folder():

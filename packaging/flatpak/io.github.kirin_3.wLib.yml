@@ -17,16 +17,15 @@ finish-args:
 modules:
   - name: wlib
     buildsystem: simple
-    rename-desktop-file: wlib.desktop
-    rename-icon: wlib
     build-commands:
+      - mkdir -p /app/lib/wlib
       - cp -a . /app/lib/wlib/
       - mkdir -p /app/bin
       - ln -sf /app/lib/wlib/wlib /app/bin/wlib
-      - install -Dm644 wlib.desktop /app/share/applications/wlib.desktop
-      - sed -i 's/^Icon=wlib$/Icon=io.github.kirin_3.wLib/' /app/share/applications/wlib.desktop
-      - install -Dm644 wlib.png /app/share/icons/hicolor/256x256/apps/wlib.png
-      - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/wlib.svg
+      - install -Dm644 wlib.desktop /app/share/applications/io.github.kirin_3.wLib.desktop
+      - sed -i 's/^Icon=wlib$/Icon=io.github.kirin_3.wLib/' /app/share/applications/io.github.kirin_3.wLib.desktop
+      - install -Dm644 wlib.png /app/share/icons/hicolor/256x256/apps/io.github.kirin_3.wLib.png
+      - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/io.github.kirin_3.wLib.svg
       - install -Dm644 io.github.kirin_3.wLib.metainfo.xml /app/share/metainfo/io.github.kirin_3.wLib.metainfo.xml
     sources:
       - type: dir
