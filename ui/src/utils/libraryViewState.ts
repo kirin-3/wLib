@@ -81,6 +81,7 @@ interface NormalizeLibraryViewStateOptions {
   validEngines?: Iterable<string>;
   validTags?: Iterable<string>;
   validCollections?: Iterable<string>;
+  validStatuses?: Iterable<string>;
 }
 
 export const LIBRARY_VIEW_STATE_STORAGE_KEY = "wlib-library-view-state";
@@ -178,6 +179,32 @@ const filterAllowedValues = (values: readonly string[], allowed?: Iterable<strin
   }
 };
 
+// Status names are free text, so matching is case-insensitive and the stored
+// spelling is kept. Without a list every name survives, so a restore that runs
+// before Settings has loaded still applies.
+export const normalizeFilterStatuses = (
+  value: unknown,
+  validStatuses?: Iterable<string>,
+): string[] => {
+  // Play statuses are capped at 40 characters, so a longer name can never match.
+  const statuses = normalizeStringArray(value).filter((status) => status.length <= 40);
+  if (!validStatuses) return statuses;
+
+  let allowed: Set<string>;
+  try {
+    allowed = new Set<string>();
+    for (const status of validStatuses) {
+      if (typeof status === "string" && status.trim()) {
+        allowed.add(status.trim().toLowerCase());
+      }
+    }
+  } catch {
+    return statuses;
+  }
+
+  return statuses.filter((status) => allowed.has(status.toLowerCase()));
+};
+
 const readStorageItem = (storage: Storage, key: string): string | null => {
   try {
     return storage.getItem(key);
@@ -257,7 +284,7 @@ export const normalizeFilterAndSort = (
       ? (source.filterCollection as FilterCollection)
       : DEFAULT_LIBRARY_VIEW_STATE.filterCollection;
 
-  const filterStatuses = normalizeStringArray(source.filterStatuses).filter((status) => status.length <= 40);
+  const filterStatuses = normalizeFilterStatuses(source.filterStatuses, options.validStatuses);
   const filterInstallState: FilterInstallState =
     source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
       ? source.filterInstallState

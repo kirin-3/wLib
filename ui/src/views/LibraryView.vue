@@ -43,6 +43,7 @@ import {
   DEFAULT_LIBRARY_VIEW_STATE,
   clearLegacyLibraryViewState,
   normalizeActiveCollection,
+  normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
@@ -116,6 +117,8 @@ const router = useRouter();
 const games = ref<GameRecord[]>([]);
 const runningGameIds = ref(new Set<number>());
 const customStatuses = ref<string[]>([]);
+// True once Settings has answered, so the custom status list is authoritative.
+const customStatusesLoaded = ref(false);
 // User-defined collections shown as tabs; activeCollection "" means "All".
 const userCollections = ref<string[]>([]);
 const activeCollection = ref(DEFAULT_LIBRARY_VIEW_STATE.activeCollection);
@@ -498,14 +501,25 @@ const openCollectionTabMenu = async (name: string, event: MouseEvent | KeyboardE
   const rect = collectionTabMenuTrigger?.getBoundingClientRect?.();
   const rawX = event instanceof MouseEvent && event.clientX ? event.clientX : rect ? rect.left : 8;
   const rawY = event instanceof MouseEvent && event.clientY ? event.clientY : rect ? rect.bottom : 8;
-  // The menu is small; clamp so it stays inside the window.
-  collectionTabMenu.value = {
-    name,
-    x: Math.max(8, Math.min(rawX, window.innerWidth - 180)),
-    y: Math.max(8, Math.min(rawY, window.innerHeight - 130)),
-  };
+  collectionTabMenu.value = { name, x: Math.max(8, rawX), y: Math.max(8, rawY) };
   await nextTick();
-  collectionTabMenuElement.value?.querySelector<HTMLButtonElement>("button")?.focus();
+  // The menu is 15rem wide: clamp against its measured size so Rename and
+  // Delete stay inside the window next to a tab near the right edge.
+  const menu = collectionTabMenuElement.value;
+  if (collectionTabMenu.value && menu) {
+    collectionTabMenu.value = {
+      ...collectionTabMenu.value,
+      x: Math.max(
+        8,
+        Math.min(collectionTabMenu.value.x, window.innerWidth - menu.offsetWidth - 8),
+      ),
+      y: Math.max(
+        8,
+        Math.min(collectionTabMenu.value.y, window.innerHeight - menu.offsetHeight - 8),
+      ),
+    };
+  }
+  menu?.querySelector<HTMLButtonElement>("button")?.focus();
 };
 
 const closeCollectionTabMenu = (restoreFocus = true) => {
@@ -572,8 +586,11 @@ const deleteCollectionFromTab = async (name: string) => {
 
 // Arrow keys move focus and selection across the tab strip.
 const handleCollectionTabsKeyboard = (event: KeyboardEvent) => {
-  // Leave caret keys alone in the inline rename/create inputs.
-  if ((event.target as HTMLElement).tagName === "INPUT") return;
+  const target = event.target as HTMLElement | null;
+  // Leave caret keys alone in the inline rename/create controls. No tab button
+  // lives inside that form, so this also stops the keys from stealing focus
+  // while a rename is being typed.
+  if (target?.tagName === "INPUT" || target?.closest("form")) return;
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   const tabs = [
     ...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>(
@@ -659,6 +676,7 @@ const applyFilterPreset = (preset: LibraryFilterPreset) => {
   const normalized = normalizeFilterPreset(preset, {
     validEngines: uniqueEngines.value,
     validTags: uniqueTags.value,
+    validStatuses: allStatuses.value.map((status) => status.value),
   });
   if (!normalized) return;
   filterCollection.value = normalized.filterCollection;
@@ -821,6 +839,7 @@ const handleLibraryRefresh = () => {
     .getSettings()
     .then((settings) => {
       customStatuses.value = settings.custom_play_statuses || [];
+      customStatusesLoaded.value = true;
       applyCollectionsFromPayload(settings.collections);
       savedPresets.value = settings.library_filter_presets || [];
     })
@@ -1106,9 +1125,11 @@ const handleContextMenuKeyboard = (event: KeyboardEvent) => {
   const targetTag = (event.target as HTMLElement).tagName;
   if ((targetTag === "SELECT" || targetTag === "INPUT") && event.key !== "Tab")
     return;
+  // The collections view also holds a checkbox and a text input; without them
+  // Tab would only ever cycle between Back and Add.
   const controls = [
     ...contextMenuElement.value!.querySelectorAll<HTMLElement>(
-      "button:not(:disabled), select",
+      "button:not(:disabled), select, input:not(:disabled)",
     ),
   ];
   const index = controls.indexOf(document.activeElement as HTMLElement);
@@ -1301,6 +1322,24 @@ watch(uniqueTags, (tags) => {
   }
 });
 
+// A custom status deleted in Settings (or a preset from another device) leaves
+// the saved name in the view state. Unlike engines and tags it has no pill to
+// uncheck, so drop it here or the library shows "No games found" with every
+// filter looking clear.
+watch(allStatuses, (statuses) => {
+  // Wait for both sources of status names: games may still be loading, and a
+  // custom status with no games yet only comes from Settings.
+  if (!games.value.length || !customStatusesLoaded.value) return;
+  const normalizedStatuses = normalizeFilterAndSort(
+    { filterStatuses: filterStatuses.value },
+    { validStatuses: statuses.map((status) => status.value) },
+  ).filterStatuses;
+
+  if (!sameStringArray(normalizedStatuses, filterStatuses.value)) {
+    filterStatuses.value = normalizedStatuses;
+  }
+});
+
 watch(showDetailModal, (open) => {
   if (!open) {
     clearModalUpdateState();
@@ -1329,6 +1368,7 @@ onMounted(() => {
     void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
     void api.getSettings().then((settings) => {
       customStatuses.value = settings.custom_play_statuses || [];
+      customStatusesLoaded.value = true;
       applyCollectionsFromPayload(settings.collections);
       savedPresets.value = settings.library_filter_presets || [];
     }).catch(console.error);

@@ -981,7 +981,7 @@ class ApiService {
 
   async markGameUpdated(game: GameRecord): Promise<ApiBasicResponse> {
     if (!hasAvailableUpdate(game)) return { success: false, error: "No newer version is available." };
-    return this.updateGame(game.id, { version: game.latest_version!.trim() });
+    return this.updateGame(game.id, { version: String(game.latest_version).trim() });
   }
 
   async openExtensionFolder(): Promise<ExtensionSyncStatus> {

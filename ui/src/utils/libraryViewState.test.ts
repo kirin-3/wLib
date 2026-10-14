@@ -10,6 +10,7 @@ import {
   LIBRARY_PLAY_STATUSES,
   LIBRARY_VIEW_STATE_STORAGE_KEY,
   clearLegacyLibraryViewState,
+  normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
@@ -254,6 +255,61 @@ test("normalizeLibraryViewState preserves the expanded supported status set", ()
   });
 
   assert.deepEqual(state.filterStatuses, [...LIBRARY_PLAY_STATUSES, "Unknown"]);
+});
+
+test("unknown statuses are pruned only once the status list is known", () => {
+  // Without a list nothing is dropped: restoreLibraryViewState() reads the blob
+  // before Settings has loaded, so a real status must survive that window.
+  assert.deepEqual(normalizeFilterAndSort({ filterStatuses: ["Playing", "Backlog"] }).filterStatuses, [
+    "Playing",
+    "Backlog",
+  ]);
+
+  // With the live list (custom status renamed or deleted, preset from another
+  // device) the stale name goes instead of silently matching nothing. Spelling
+  // and case are kept; only exact duplicates collapse.
+  assert.deepEqual(
+    normalizeFilterAndSort(
+      { filterStatuses: ["playing", "Backlog", "Ghost", "Playing", "Backlog"] },
+      { validStatuses: ["Playing", "Completed", "Backlog"] },
+    ).filterStatuses,
+    ["playing", "Backlog", "Playing"],
+  );
+  assert.deepEqual(
+    normalizeFilterAndSort({ filterStatuses: ["Backlog"] }, { validStatuses: [] }).filterStatuses,
+    [],
+  );
+  assert.deepEqual(
+    normalizeFilterPreset(
+      { name: "Ghost free", filterStatuses: ["Backlog", "Ghost"] },
+      { validStatuses: ["Backlog"] },
+    )?.filterStatuses,
+    ["Backlog"],
+  );
+
+  // Case-only differences survive because the status filter itself matches
+  // case-insensitively, and the stored spelling is kept.
+  assert.deepEqual(
+    normalizeFilterAndSort(
+      { filterStatuses: ["playing"] },
+      { validStatuses: ["Playing"] },
+    ).filterStatuses,
+    ["playing"],
+  );
+
+  // Names past the 40-character status cap can never match and are always dropped.
+  assert.deepEqual(
+    normalizeFilterAndSort({ filterStatuses: ["Playing", "x".repeat(41)] }).filterStatuses,
+    ["Playing"],
+  );
+
+  // A non-iterable status list behaves like no list at all.
+  assert.doesNotThrow(() =>
+    normalizeFilterAndSort(
+      { filterStatuses: ["Playing"] },
+      { validStatuses: 42 as unknown as Iterable<string> },
+    ),
+  );
 });
 
 test("normalizeActiveCollection and filterAllowedValues handle non-string and non-iterable collections safely", () => {
