@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ref } from "vue";
+import { ref, shallowRef } from "vue";
 
 import {
   handleModalKeydown,
@@ -96,7 +96,7 @@ test("handleModalKeydown traps Tab key within the top modal", () => {
   } as unknown as HTMLElement;
 
   modalStack.push({
-    container: ref(containerEl),
+    container: shallowRef(containerEl),
     onEscape: () => {},
     opener: null,
   });

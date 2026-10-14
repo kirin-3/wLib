@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { nextTick, onBeforeUnmount, toRaw, watch, type Ref } from "vue";
+import { nextTick, onBeforeUnmount, watch, type Ref } from "vue";
 
 export const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -36,14 +36,10 @@ export const handleModalKeydown = (event: KeyboardEvent): void => {
   if (!first || !last) return;
   const active = typeof document !== "undefined" ? document.activeElement : null;
   const outside = !root.contains(active);
-  const rawActive = active ? toRaw(active) : null;
-  const isRoot = active === root || (rawActive !== null && rawActive === toRaw(root));
-  const isFirst = active === first || (rawActive !== null && rawActive === toRaw(first));
-  const isLast = active === last || (rawActive !== null && rawActive === toRaw(last));
-  if (event.shiftKey && (isFirst || isRoot || outside)) {
+  if (event.shiftKey && (active === first || active === root || outside)) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && (isLast || isRoot || outside)) {
+  } else if (!event.shiftKey && (active === last || active === root || outside)) {
     event.preventDefault();
     first.focus();
   }

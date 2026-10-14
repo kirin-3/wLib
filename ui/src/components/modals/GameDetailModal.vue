@@ -1045,6 +1045,9 @@ const save = async () => {
     return;
   }
   const gameId = props.game.id;
+  // Snapshot before awaiting: the sync watcher replaces these if props.game changes mid-save.
+  const previousCollections = [...(props.game.collections || [])];
+  const desiredCollections = [...collectionMembership.value];
   saving.value = true;
   try {
     const res = await api.updateGame(gameId, {
@@ -1083,14 +1086,13 @@ const save = async () => {
     if (res && res.success === false) {
       notifyError("Failed to save game: " + (res.error || "Unknown error"));
     } else {
-      const previousCollections = props.game?.id === gameId ? (props.game.collections || []) : [];
       const membershipChanged =
         JSON.stringify(previousCollections) !==
-        JSON.stringify(collectionMembership.value);
+        JSON.stringify(desiredCollections);
       if (membershipChanged) {
         const collectionsResult = await api.setGameCollections(
           gameId,
-          collectionMembership.value,
+          desiredCollections,
         );
         if (collectionsResult && collectionsResult.success === false) {
           notifyError(

@@ -153,9 +153,9 @@ const browseArchive = async () => {
     const path = await api.browseArchiveFile(archive.value);
     if (path && props.modelValue) {
       archive.value = path;
+      version.value = "";
       if (!isUpdate.value) {
         title.value = "";
-        version.value = "";
         creator.value = "";
       }
       await inspect();
@@ -269,7 +269,8 @@ watch(
       title.value = props.game.title || "";
       creator.value = props.game.developer || "";
       f95Url.value = props.game.f95_url || "";
-      version.value = props.game.latest_version?.trim() || props.game.version || "";
+      // The installed version is never the update's version; let the archive name fill it.
+      version.value = props.game.latest_version?.trim() || "";
     }
     void loadLibraryFolder().then(() => {
       if (!props.modelValue) return;
