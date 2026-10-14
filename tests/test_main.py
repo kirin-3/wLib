@@ -1212,3 +1212,47 @@ def test_extension_get_rejects_prefix_squat_paths(monkeypatch, extension_server,
         window.evaluate_js.assert_not_called()
     finally:
         connection.close()
+
+
+def test_log_renderer_diagnostics_bounds_log_size(monkeypatch, tmp_path):
+    renderer_log = tmp_path / "renderer-diagnostics.log"
+    monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
+    monkeypatch.delenv("WLIB_LAUNCH_LOG", raising=False)
+    monkeypatch.delenv("WLIB_APPIMAGE_LAUNCH_LOG", raising=False)
+    with open(renderer_log, "w", encoding="utf-8") as f:
+        for i in range(20000):
+            _ = f.write(f"old-line-{i:05d} padding-padding-padding-padding\n")
+    assert renderer_log.stat().st_size > main.RENDERER_DIAGNOSTICS_MAX_BYTES
+
+    main.log_renderer_diagnostics("startup", {"probe": "new-entry"})
+
+    content = renderer_log.read_text(encoding="utf-8")
+    assert "probe=new-entry" in content
+    assert content.startswith("old-line-")
+    assert renderer_log.stat().st_size <= main.RENDERER_DIAGNOSTICS_MAX_BYTES
+
+
+def test_trim_renderer_log_does_not_follow_symlinks(monkeypatch, tmp_path):
+    log_path = str(tmp_path / "linked.log")
+    monkeypatch.setattr(main.os.path, "islink", lambda p: p == log_path)
+    monkeypatch.setattr(main.os.path, "getsize", lambda p: pytest.fail("followed link"))
+
+    main._trim_renderer_log_file(log_path)
+
+
+def test_clear_webview_cache_path_removes_symlink_not_target(monkeypatch, tmp_path):
+    link_path = str(tmp_path / "cache-link")
+    monkeypatch.setattr(main.os.path, "lexists", lambda p: p == link_path)
+    monkeypatch.setattr(main.os.path, "islink", lambda p: p == link_path)
+    monkeypatch.setattr(main.os.path, "isdir", lambda p: p == link_path)
+    removed: list[str] = []
+    monkeypatch.setattr(main.os, "remove", removed.append)
+    monkeypatch.setattr(main.shutil, "rmtree", lambda *a, **k: pytest.fail("rmtree called"))
+
+    main._clear_webview_cache_path(link_path)
+
+    assert removed == [link_path]
+
+
+def test_extension_handler_times_out_slow_clients():
+    assert main.ExtensionRequestHandler.timeout == 10

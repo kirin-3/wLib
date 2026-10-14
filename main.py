@@ -41,6 +41,7 @@ OAUTH_CALLBACKS = {
     "/gdrive/callback": ("complete_gdrive_callback", "Google Drive"),
 }
 MAX_EXTENSION_BODY_BYTES = 1024 * 1024
+RENDERER_DIAGNOSTICS_MAX_BYTES = 512 * 1024
 renderer_log_lock = threading.Lock()
 
 if TYPE_CHECKING:
@@ -155,7 +156,12 @@ def is_packaged_wlib_runtime() -> bool:
 
 
 def _clear_webview_cache_path(cache_path: str) -> None:
-    if not os.path.exists(cache_path):
+    if not os.path.lexists(cache_path):
+        return
+    # Remove a symlinked cache path itself; rmtree() refuses links, which would
+    # leave a stale cache behind, and must never touch the link target.
+    if os.path.islink(cache_path):
+        os.remove(cache_path)
         return
     if os.path.isdir(cache_path):
         shutil.rmtree(cache_path)
@@ -360,6 +366,24 @@ def _renderer_log_targets() -> list[str]:
     return targets
 
 
+def _trim_renderer_log_file(path: str) -> None:
+    # Keep only the newest half once the log passes the cap. Never rewrite
+    # through a symlink: that would truncate whatever file it points at.
+    try:
+        if os.path.islink(path) or os.path.getsize(path) <= RENDERER_DIAGNOSTICS_MAX_BYTES:
+            return
+        with open(path, "rb") as log_file:
+            _ = log_file.seek(-(RENDERER_DIAGNOSTICS_MAX_BYTES // 2), os.SEEK_END)
+            tail = log_file.read()
+        newline = tail.find(b"\n")
+        if newline != -1:
+            tail = tail[newline + 1 :]
+        with open(path, "wb") as log_file:
+            _ = log_file.write(tail)
+    except OSError as e:
+        print(f"[wLib] Failed to trim renderer diagnostics {path}: {e}")
+
+
 def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     header = f"[wLib] Renderer diagnostics ({stage})"
@@ -382,6 +406,7 @@ def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
                     os.makedirs(target_dir, exist_ok=True)
                 with open(target, "a", encoding="utf-8") as log_file:
                     _ = log_file.write(entry_text)
+                _trim_renderer_log_file(target)
             except OSError as e:
                 print(f"[wLib] Failed to write renderer diagnostics to {target}: {e}")
 
@@ -647,6 +672,9 @@ def start_webview(
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
+    # Idle or stalled clients would otherwise hold a server thread forever.
+    timeout = 10  # pyright: ignore[reportUnannotatedClassAttribute]
+
     @override
     def parse_request(self) -> bool:
         if not super().parse_request():
