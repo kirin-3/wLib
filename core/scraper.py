@@ -9,12 +9,12 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from html import unescape
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 from typing import Protocol, TypeAlias, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id
+from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
 ScraperResultValue: TypeAlias = bool | str | list[str]
 ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
@@ -56,6 +56,31 @@ def get_request_interval_seconds() -> int:
     return max(1, min(value, 30))
 
 
+def _get_f95_ssl_context() -> ssl.SSLContext:
+    cafile = (os.environ.get("SSL_CERT_FILE") or "").strip()
+    if cafile and not os.path.isfile(cafile):
+        cafile = ""
+    return ssl.create_default_context(cafile=cafile or None)
+
+
+def _normalize_prefix_label(label: str) -> str:
+    return normalize_prefix_label(label)
+
+
+_POST_VERSION_SUFFIX_RE = re.compile(
+    r"^(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)",
+    re.I,
+)
+
+
+def _parse_post_version_text(raw: str) -> str:
+    text = unescape(raw).strip()
+    if not text or not text[0].isdigit():
+        return ""
+    match = _POST_VERSION_SUFFIX_RE.match(text)
+    return match.group(1).strip() if match else ""
+
+
 def _f95_get(url: str) -> tuple[int, str]:
     global _f95_last_request_finished
     with _F95_REQUEST_LOCK:
@@ -70,7 +95,7 @@ def _f95_get(url: str) -> tuple[int, str]:
             try:
                 with cast(
                     HTTPResponse,
-                    urlopen(request, timeout=30, context=ssl.create_default_context()),
+                    urlopen(request, timeout=30, context=_get_f95_ssl_context()),
                 ) as response:
                     encoding = response.headers.get_content_charset() or "utf-8"
                     return response.status, response.read().decode(
@@ -91,7 +116,7 @@ def _f95_get(url: str) -> tuple[int, str]:
                 else "scraper_error"
             )
             raise _F95RequestError(code, str(exc.reason)) from exc
-        except (OSError, ValueError) as exc:
+        except (HTTPException, OSError, ValueError) as exc:
             raise _F95RequestError("scraper_error", str(exc)) from exc
         finally:
             _f95_last_request_finished = time.monotonic()
@@ -130,7 +155,16 @@ class Scraper:
         # Keep these rules aligned with extractGameInfo() in extension/content.js.
         if not isinstance(title, str):
             return "Unknown"
-        title = re.sub(r"^\[[^\]]+\]\s*", "", title.strip())
+        stripped = title.strip()
+        while True:
+            leading = re.match(r"^\[([^\]]+)\]\s*", stripped)
+            if not leading:
+                break
+            inner = leading.group(1).strip()
+            if _BRACKETED_VERSION_RE.match(inner) or _CHAPTER_VERSION_RE.match(inner):
+                break
+            stripped = stripped[leading.end() :]
+        title = stripped
         brackets = cast(list[str], re.findall(r"\[([^\]]*)\]", title))
         for bracket in brackets:
             inner = bracket.strip()
@@ -159,18 +193,17 @@ class Scraper:
         for pattern in html_patterns:
             match = re.search(pattern, html, re.I)
             if match:
-                raw = unescape(match.group(1)).strip()
-                version = raw.split()[0] if raw else ""
-                if re.match(r"^\d", version):
+                version = _parse_post_version_text(match.group(1))
+                if version:
                     return version
         text_patterns = [
-            r"(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)",
-            r"Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)",
+            r"(?:Current\s+)?Version\s*:?\s*v?(\d[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)",
+            r"Ver(?:\.|sion)?\s*:?\s*v?(\d[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)",
             r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
         ]
         for pattern in text_patterns:
             match = re.search(pattern, _text(html), re.I)
-            if match and re.match(r"^\d", match.group(1)):
+            if match:
                 return match.group(1).strip()
         return "Unknown"
 
@@ -258,13 +291,20 @@ class Scraper:
     def _extract_page(self, html: str) -> ScraperResult:
         h1 = next(_blocks(html, "h1", "p-title-value"), ("", ""))[1]
         labels = [_text(content) for _, content in _blocks(h1, "a", "labelLink")]
-        appended_labels = [_text(content) for _, content in _blocks(h1, "span", "label-append")]
+        appended_labels = [
+            _text(content) for _, content in _blocks(h1, "span", "label-append")
+        ]
         engine = next(
-            (label for label in labels if label.casefold() not in NON_ENGINE_PREFIXES),
+            (
+                label
+                for label in labels
+                if _normalize_prefix_label(label) not in NON_ENGINE_PREFIXES
+            ),
             "",
         )
         thread_completed = any(
-            label.casefold() == "completed" for label in (*labels, *appended_labels)
+            _normalize_prefix_label(label) == "completed"
+            for label in (*labels, *appended_labels)
         )
         clean_h1 = re.sub(
             r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
@@ -358,13 +398,20 @@ class Scraper:
                     thread_id: self._error(issue["code"], issue["error"])
                     for thread_id in ids
                 }
+            if status >= 500:
+                return {
+                    thread_id: self._error(
+                        "scraper_error", f"F95Zone returned HTTP {status}"
+                    )
+                    for thread_id in ids
+                }
             if status == 200:
                 payload = cast(object, json.loads(text))
                 if isinstance(payload, dict):
                     data = cast(dict[str, object], payload)
                     if data.get("status") == "ok" and isinstance(data.get("msg"), dict):
                         versions = cast(dict[str, object], data["msg"])
-        except (_F95RequestError, ValueError):
+        except (_F95RequestError, ValueError, HTTPException):
             pass
         results: dict[str, ScraperResult | None] = {}
         for thread_id in ids:

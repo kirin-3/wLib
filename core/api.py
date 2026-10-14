@@ -2233,7 +2233,10 @@ class Api:
     def _backfill_missing_metadata_for_url(
         self, url: str, metadata: Mapping[str, object]
     ) -> int:
-        if not url.strip():
+        from core.f95zone import normalize_prefix_label as _norm_prefix
+
+        normalized_url = normalize_thread_url(url)
+        if not normalized_url:
             return 0
 
         engine_value = str(metadata.get("engine") or "").strip()
@@ -2253,7 +2256,7 @@ class Api:
             cursor = conn.cursor()
             _ = cursor.execute(
                 "SELECT id, engine, tags, cover_image_path FROM games WHERE f95_url = ?",
-                (url.strip(),),
+                (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
 
@@ -2271,7 +2274,7 @@ class Api:
                 # Older scrapes stored a non-engine prefix such as "VN"; replace it.
                 if engine_value and (
                     self._is_missing_text(engine_current)
-                    or engine_current.casefold() in NON_ENGINE_PREFIXES
+                    or _norm_prefix(engine_current) in NON_ENGINE_PREFIXES
                 ):
                     fields["engine"] = engine_value
                 if tags_value and self._is_missing_text(tags_current):
@@ -2732,7 +2735,15 @@ class Api:
                     self._update_running = False
 
         thread = threading.Thread(target=run_checks, daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            with self._update_lock:
+                self._update_running = False
+                self._update_outcome = "failed"
+                self._update_error = f"Update check failed to start: {exc}"
+                self._update_current = ""
+            return {"success": False, "error": f"Update check failed to start: {exc}"}
         with self._update_lock:
             total = self._update_total
             delay_seconds = self._update_delay_seconds

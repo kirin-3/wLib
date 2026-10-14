@@ -951,6 +951,56 @@ def test_thread_metadata_replaces_stored_non_engine_prefix():
     assert get_all_games()[0]["engine"] == "Ren'Py"
 
 
+def test_backfill_normalizes_unnormalized_url():
+    url = "https://f95zone.to/threads/demo.123/"
+    add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url, engine="")
+
+    updated = Api()._backfill_missing_metadata_for_url(
+        "http://www.f95zone.to/threads/demo.123",
+        {"engine": "Unity", "tags": [], "cover_image": ""},
+    )
+
+    assert updated == 1
+    assert get_all_games()[0]["engine"] == "Unity"
+
+
+def test_backfill_replaces_on_hold_prefix_with_normalization():
+    url = "https://f95zone.to/threads/demo.123/"
+    add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url, engine="On Hold")
+
+    updated = Api()._backfill_missing_metadata_for_url(
+        url, {"engine": "Godot", "tags": [], "cover_image": ""}
+    )
+
+    assert updated == 1
+    assert get_all_games()[0]["engine"] == "Godot"
+
+
+def test_check_all_updates_thread_start_failure_resets_running(monkeypatch):
+    import core.api as api_module
+
+    api = Api()
+    _ = add_game(
+        title="Game",
+        exe_path="/tmp/game.sh",
+        f95_url="https://f95zone.to/threads/game.1/",
+    )
+
+    class _FailingThread:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        def start(self):
+            raise OSError("no thread")
+
+    monkeypatch.setattr(api_module.threading, "Thread", _FailingThread)
+    result = api.check_all_updates()
+    assert result["success"] is False
+    status = api.get_update_status()
+    assert status["running"] is False
+    assert status["outcome"] == "failed"
+
+
 def test_check_for_updates_refreshes_thread_edit_metadata_without_overwriting_existing_fields(
     monkeypatch,
 ):

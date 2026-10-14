@@ -333,10 +333,12 @@ function extractGameInfo() {
         const h1 = document.querySelector('h1.p-title-value');
         if (h1) {
             // Same list as NON_ENGINE_PREFIXES in core/f95zone.py.
+            // Compared after lowercasing and stripping spaces/hyphens/underscores.
             const nonEngineLabels = new Set(['completed', 'abandoned', 'onhold', 'vn', 'collection', 'siterip', 'readme']);
+            const normalizePrefix = (label) => String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
             const engineLabel = [...h1.querySelectorAll('a.labelLink')]
                 .map(label => label.textContent.trim())
-                .find(label => label && !nonEngineLabels.has(label.toLowerCase()));
+                .find(label => label && !nonEngineLabels.has(normalizePrefix(label)));
             info.engine = engineLabel || '';
 
             const h1Clone = h1.cloneNode(true);
@@ -345,7 +347,16 @@ function extractGameInfo() {
             let fullTitleText = h1Clone.textContent.trim();
             fullTitleText = fullTitleText.replace(/^xLibrary\s*-\s*/i, '');
             fullTitleText = fullTitleText.replace(/^wLib\s*-\s*/i, '');
-            fullTitleText = fullTitleText.replace(/^\[[^\]]+\]\s*/, '');
+            // Strip leading non-version brackets (e.g. "[RenPy]"), but keep a
+            // leading version like "[v1.0]" so it is not lost.
+            for (;;) {
+                const leadingBracket = fullTitleText.match(/^\[([^\]]+)\]\s*/);
+                if (!leadingBracket) break;
+                const innerBracket = leadingBracket[1].trim();
+                if (/^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$/i.test(innerBracket)) break;
+                if (/^(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)/i.test(innerBracket)) break;
+                fullTitleText = fullTitleText.slice(leadingBracket[0].length);
+            }
 
             const bracketedVersions = [...fullTitleText.matchAll(/\[([^\]]*)\]/g)];
             for (const m of bracketedVersions) {
@@ -398,17 +409,21 @@ function extractGameInfo() {
                 for (const pattern of htmlPatterns) {
                     const htmlMatch = firstPost.innerHTML.match(pattern);
                     if (htmlMatch) {
-                        info.version = htmlMatch[1].trim().split(/\s/)[0];
-                        found = true;
-                        break;
+                        const postVersion = String(htmlMatch[1] || '').trim();
+                        const versionMatch = postVersion.match(/^(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)/i);
+                        if (versionMatch) {
+                            info.version = versionMatch[1].trim();
+                            found = true;
+                            break;
+                        }
                     }
                 }
 
                 if (!found) {
                     const postText = firstPost.textContent;
                     const textPatterns = [
-                        /(?:Current\s+)?Version\s*:?\s*v?([^\s,;\n]+)/i,
-                        /Ver(?:\.|sion)?\s*:?\s*v?([^\s,;\n]+)/i,
+                        /(?:Current\s+)?Version\s*:?\s*v?(\d[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)/i,
+                        /Ver(?:\.|sion)?\s*:?\s*v?(\d[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)/i,
                         /Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)/i,
                     ];
                     for (const pattern of textPatterns) {
