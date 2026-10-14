@@ -11,5 +11,8 @@
   ["Game [Ch. 2 v0.5] [Dev]", "Ch. 2 v0.5"],
   ["Game [Ch. 2] [v0.5] [Dev]", "Ch. 2"],
   ["Game [S2 E3] [Dev]", "S2 E3"],
-  ["Game [Final] [Dev]", "Final"]
+  ["Game [Final] [Dev]", "Final"],
+  ["[v1.0] Game [Dev]", "1.0"],
+  ["[RenPy] Game [v1.0] [Dev]", "1.0"],
+  ["[Ch. 3] Game [Dev]", "Ch. 3"]
 ]

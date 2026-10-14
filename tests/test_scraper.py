@@ -125,11 +125,13 @@ def test_starter_metadata_and_nested_wrapper(thread_html):
         (["VN"], "", False),
     ],
 )
-def test_thread_prefixes_choose_engine_and_completion(thread_html, labels, engine, completed):
+def test_thread_prefixes_choose_engine_and_completion(
+    thread_html, labels, engine, completed
+):
     prefix_html = "".join(f'<a class="labelLink">{label}</a>' for label in labels)
     html = thread_html.replace(
         '<a class="labelLink"><span>Ren\'Py</span></a>', prefix_html
-    ).replace('<span class="label-append">Completed</span>', '')
+    ).replace('<span class="label-append">Completed</span>', "")
     result = Scraper()._extract_page(html)
     assert result["engine"] == engine
     assert result["thread_completed"] is completed
@@ -452,4 +454,51 @@ def test_extract_version_from_title_real_f95_formats():
     assert (
         scraper._extract_version_from_title("RPG Game [Ch.12 v0.3] [RPG Dev]")
         == "Ch.12 v0.3"
+    )
+
+
+def test_post_versions_match_extension_parser():
+    # Shared with tests/extension_version.test.cjs so both parsers stay identical.
+    cases_path = Path(__file__).with_name("post_version_cases.json")
+    scraper = Scraper()
+    for html, version in json.loads(cases_path.read_text(encoding="utf-8")):
+        assert scraper._extract_version_from_post(html) == version, html
+
+
+def test_engine_prefix_ignores_spaces_and_hyphens(thread_html):
+    scraper = Scraper()
+    orig = '<a class="labelLink"><span>Ren\'Py</span></a>'
+    for labels, expected in [
+        (["On Hold", "RenPy"], "RenPy"),
+        (["on-hold", "RenPy"], "RenPy"),
+        (["Site Rip", "Unity"], "Unity"),
+    ]:
+        prefix = "".join(f'<a class="labelLink">{label}</a>' for label in labels)
+        html = thread_html.replace(orig, prefix).replace(
+            '<span class="label-append">Completed</span>', ""
+        )
+        assert scraper._extract_page(html)["engine"] == expected
+
+
+def test_http_exception_is_wrapped_as_scraper_error(monkeypatch):
+    import http.client
+
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    monkeypatch.setattr(
+        scraper_module,
+        "urlopen",
+        MagicMock(side_effect=http.client.BadStatusLine("bad")),
+    )
+    with pytest.raises(scraper_module._F95RequestError) as excinfo:
+        scraper_module._f95_get("https://f95zone.to/threads/1/")
+    assert excinfo.value.code == "scraper_error"
+
+
+def test_thread_id_matching_is_case_insensitive_for_threads_prefix():
+    from core.f95zone import extract_thread_id, thread_urls_match
+
+    assert extract_thread_id("HTTPS://F95ZONE.TO/THREADS/GAME.123/") == "123"
+    assert thread_urls_match(
+        "https://f95zone.to/threads/game.123/",
+        "HTTPS://F95ZONE.TO/THREADS/GAME.123/",
     )

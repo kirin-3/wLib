@@ -8,14 +8,20 @@ const source = readFileSync(path.join(__dirname, '..', 'extension', 'content.js'
 const backgroundSource = readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8');
 const parser = source.slice(source.indexOf('function extractGameInfo()'), source.indexOf('function getPlayStatusToneClass'));
 
-const extractFromTitle = (title, labels = []) => {
+const extractFromTitle = (title, labels = [], postHtml = null) => {
   const heading = {
     textContent: title,
     querySelectorAll: (selector) => selector === 'a.labelLink'
       ? labels.map(textContent => ({ textContent })) : [],
     cloneNode() { return { textContent: title, querySelectorAll: () => [] }; },
   };
-  const context = { getThreadIdentity: () => ({ canonicalUrl: '', id: 1 }), document: { querySelector: (selector) => selector === 'h1.p-title-value' ? heading : null, querySelectorAll: () => [] }, console };
+  const context = { getThreadIdentity: () => ({ canonicalUrl: '', id: 1 }), document: { querySelector: (selector) => {
+    if (selector === 'h1.p-title-value') return heading;
+    if (selector === '.message-body .bbWrapper' && postHtml !== null) {
+      return { innerHTML: postHtml, textContent: postHtml.replace(/<[^>]+>/g, ' ') };
+    }
+    return null;
+  }, querySelectorAll: () => [] }, console };
   return vm.runInNewContext(`${parser}\nextractGameInfo()`, context);
 };
 
@@ -65,5 +71,13 @@ test('extension keeps the last bracket as developer for non-numeric releases', (
     assert.equal(info.version, version);
     assert.equal(info.developer, 'Dev');
     assert.equal(info.title, 'Game');
+  }
+});
+
+test('extension parses post versions exactly like the scraper', () => {
+  // Shared with tests/test_scraper.py; the scraper reports a missing version as "Unknown".
+  const cases = JSON.parse(readFileSync(path.join(__dirname, 'post_version_cases.json'), 'utf8'));
+  for (const [html, version] of cases) {
+    assert.equal(extractFromTitle('Game', [], html).version || 'Unknown', version, html);
   }
 });

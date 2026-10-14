@@ -1,0 +1,13 @@
+[
+  ["<b>Version</b>: v1.0 Beta<br>", "1.0 Beta"],
+  ["<b>Version</b>: 1.2 Hotfix<br>", "1.2 Hotfix"],
+  ["<b>Ver.</b>: 2.5a<br>", "2.5a"],
+  ["<b>Version</b>: v1.0.0-beta<br>", "1.0.0-beta"],
+  ["<b>Version</b>: 0.4-hotfix<br>", "0.4-hotfix"],
+  ["<b>Version</b>: 0.9.1 Public<br>", "0.9.1"],
+  ["<b>Version</b>: Final<br>Version: 3.1<br>", "3.1"],
+  ["Version: 1.0.0-beta, Ren'Py", "1.0.0-beta"],
+  ["Version: 1.2 Hotfix", "1.2 Hotfix"],
+  ["Release: v4.0", "4.0"],
+  ["No version here", "Unknown"]
+]
