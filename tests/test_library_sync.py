@@ -131,7 +131,9 @@ def test_first_connection_choice(choice):
     assert titles == (
         {"Remote"}
         if choice == "use-remote"
-        else {"Local", "Remote"} if choice == "merge-once" else {"Local"}
+        else {"Local", "Remote"}
+        if choice == "merge-once"
+        else {"Local"}
     )
     assert location.writes == (0 if choice == "use-remote" else 1)
 
@@ -378,7 +380,14 @@ def test_gdrive_refresh_lookup_download_and_upload(monkeypatch):
         [
             response({"access_token": "access", "expires_in": 300}),
             response({"files": []}),
-            response({"files": [{"id": "early", "md5Checksum": "5"}, {"id": "late", "md5Checksum": "9"}]}),
+            response(
+                {
+                    "files": [
+                        {"id": "early", "md5Checksum": "5"},
+                        {"id": "late", "md5Checksum": "9"},
+                    ]
+                }
+            ),
             response({"files": [{"id": "early", "md5Checksum": "5"}]}),
             response(b"file"),
             response({"files": []}),
@@ -452,7 +461,9 @@ def test_gdrive_account_name_and_revoke(monkeypatch):
         monkeypatch,
         [
             response({"access_token": "a"}),
-            response({"user": {"displayName": "Name", "emailAddress": "me@example.com"}}),
+            response(
+                {"user": {"displayName": "Name", "emailAddress": "me@example.com"}}
+            ),
             response({"user": {"displayName": "Name"}}),
             response({}),
             response(b""),
@@ -512,7 +523,9 @@ def test_gdrive_signin_state_exchange_and_disconnect(monkeypatch):
         "core.library_sync._token_request",
         lambda *args: {"refresh_token": "secret", "access_token": "access"},
     )
-    monkeypatch.setattr(GoogleDriveLocation, "account_name", lambda self: "me@example.com")
+    monkeypatch.setattr(
+        GoogleDriveLocation, "account_name", lambda self: "me@example.com"
+    )
     assert sync.complete_gdrive("code", query["state"][0])["success"]
     assert database.get_setting("sync_gdrive_refresh_token") == "secret"
     status = sync.status()
@@ -636,7 +649,12 @@ def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeyp
     database.create_collection("Backlog", alpha)
     database.create_collection("Best of")
     database.set_game_collections(beta, ["Backlog", "Best of"])
-    preset = {"name": "Unity", "filterEngines": ["Unity"], "sortBy": "rating", "sortDir": "desc"}
+    preset = {
+        "name": "Unity",
+        "filterEngines": ["Unity"],
+        "sortBy": "rating",
+        "sortDir": "desc",
+    }
     assert Api().save_library_filter_presets([preset])["success"]
     a = SyncManager()
     a.set_folder(str(folder))
@@ -707,10 +725,27 @@ else:
 print(json.dumps({'success': True}))
 """
     for home, action in (("a", "seed"), ("b", "join"), ("a", "edit"), ("b", "verify")):
-        environment = {**os.environ, "HOME": str(tmp_path / home), "LOCALAPPDATA": str(tmp_path / home)}
+        environment = {
+            **os.environ,
+            "HOME": str(tmp_path / home),
+            "LOCALAPPDATA": str(tmp_path / home),
+        }
         environment.pop("WLIB_DATA_DIR", None)
         environment.pop("XDG_DATA_HOME", None)
-        result = subprocess.run([sys.executable, "-c", worker, action, str(folder), "yes" if encrypted else "no"], env=environment, text=True, capture_output=True, check=True)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                action,
+                str(folder),
+                "yes" if encrypted else "no",
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
         assert json.loads(result.stdout)["success"]
 
 
@@ -793,7 +828,11 @@ def test_folder_write_survives_unsupported_flock(tmp_path, monkeypatch):
     def no_flock(*_args):
         raise OSError(95, "Operation not supported")
 
-    monkeypatch.setattr(library_sync, "_fcntl_module", types.SimpleNamespace(flock=no_flock, LOCK_EX=2, LOCK_UN=8))
+    monkeypatch.setattr(
+        library_sync,
+        "_fcntl_module",
+        types.SimpleNamespace(flock=no_flock, LOCK_EX=2, LOCK_UN=8),
+    )
     location = FolderLocation(str(tmp_path))
     assert location.write(b"data", None) == location.revision()
     assert (tmp_path / "wlib-library.json").read_bytes() == b"data"
@@ -873,9 +912,154 @@ def test_start_run_status_not_stuck_at_syncing_when_lock_held():
 def test_open_signin_clears_pending_on_browser_failure():
     api = Api()
     api.library_sync.server_available = True
-    api.open_in_browser = MagicMock(return_value={"success": False, "error": "No browser"})
+    api.open_in_browser = MagicMock(
+        return_value={"success": False, "error": "No browser"}
+    )
     result = api.connect_dropbox()
     assert not result["success"]
     assert result["error_code"] == "browser_failed"
     assert api.library_sync.status()["connecting"] is False
 
+
+def test_folder_read_missing_is_conflict(tmp_path):
+    location = FolderLocation(str(tmp_path))
+    with open(tmp_path / "wlib-library.json", "wb") as f:
+        _ = f.write(b'{"a": 1}')
+    assert location.revision() is not None
+    (tmp_path / "wlib-library.json").unlink()
+    with pytest.raises(SyncConflict):
+        _ = location.read()
+
+
+def test_folder_delete_race_recovers_via_push(tmp_path):
+    folder = tmp_path / "shared"
+    folder.mkdir()
+    sync = SyncManager()
+    sync.set_folder(str(folder))
+    database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    last_rev = database.get_setting("sync_last_revision")
+    assert last_rev
+    real = FolderLocation(str(folder))
+    # Externally replace with newer remote content so next run must read.
+    new_doc = remote_backup("Remote", "2026-10-10T10:00:00Z")
+    rev_after_external = real.write(json.dumps(new_doc).encode(), real.revision())
+    assert rev_after_external != last_rev
+
+    class DeleteRace:
+        def __init__(self, inner: FolderLocation) -> None:
+            self.inner = inner
+            self.deleted = False
+
+        def revision(self):
+            rev = self.inner.revision()
+            if not self.deleted:
+                self.deleted = True
+                (folder / "wlib-library.json").unlink()
+            return rev
+
+        def read(self):
+            return self.inner.read()
+
+        def write(self, data, expected_revision):
+            return self.inner.write(data, expected_revision)
+
+    sync._location_override = DeleteRace(FolderLocation(str(folder)))
+    result = sync.run()
+    assert result["state"] == "idle"
+    assert result["success"]
+    assert (folder / "wlib-library.json").exists()
+
+
+def test_dropbox_download_not_found_is_conflict(monkeypatch):
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2" in url or "api.dropboxapi.com/oauth2" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        raise http_error(409, {"error_summary": "path/not_found/.."})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncConflict):
+        _ = DropboxLocation("refresh").read()
+
+
+def test_dropbox_download_bad_json_is_request_failed(monkeypatch):
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2" in url or "token" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        raise HTTPError(
+            "https://content.dropboxapi.com/2/files/download",
+            409,
+            "error",
+            {},
+            io.BytesIO(b"<html>not json</html>"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncError) as exc:
+        _ = DropboxLocation("refresh").read()
+    assert exc.value.error_code == "dropbox_request_failed"
+
+
+def test_gdrive_404_is_conflict(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2.googleapis.com/token" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        if "drive/v3/files?" in url:
+            return response({"files": [{"id": "f", "md5Checksum": "abc"}]})
+        raise http_error(404, {"error": "not found"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncConflict):
+        _ = GoogleDriveLocation("refresh").read()
+    with pytest.raises(SyncConflict):
+        _ = GoogleDriveLocation("refresh").write(b"data", "abc")
+
+
+def test_token_non_json_is_auth_failed(monkeypatch):
+    monkeypatch.setattr(
+        "core.library_sync._form_post", lambda url, params: b"<html>nope</html>"
+    )
+    from core.library_sync import _token_request
+
+    with pytest.raises(SyncError) as exc:
+        _ = _token_request(
+            "https://example.com/token", {"a": "b"}, "Dropbox", "dropbox_auth_failed"
+        )
+    assert exc.value.error_code == "dropbox_auth_failed"
+
+
+def test_choice_when_not_first_is_rejected():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    assert sync.run()["state"] == "idle"
+    result = sync.run("use-remote")
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_sync_choice"
+
+
+def test_api_resolve_choice_when_not_needed():
+    api = Api()
+    location = MemoryLocation(remote_backup())
+    api.library_sync._location_override = location
+    # Make Api synchronous for the test without changing contracts.
+    api.library_sync.start_run = api.library_sync.run  # type: ignore[method-assign]
+    database.update_setting("sync_location", "folder")
+    assert api.sync_now()["state"] == "idle"
+    result = api.resolve_sync_choice("use-remote")
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_sync_choice"
+
+
+def test_first_use_remote_with_empty_remote_wipes_local():
+    database.add_game("Local", "/local.exe")
+    location = MemoryLocation(remote_backup("", "2026-10-09T10:00:00Z"))
+    sync = manager(location)
+    result = sync.run("use-remote")
+    assert result["success"]
+    assert database.get_all_games() == []
+    assert location.writes == 0

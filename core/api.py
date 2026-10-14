@@ -1529,6 +1529,12 @@ class Api:
                 "error": "Choose a valid library option.",
                 "error_code": "invalid_sync_choice",
             }
+        if self.library_sync.status().get("state") != "needs_choice":
+            return {
+                "success": False,
+                "error": "No library choice is needed.",
+                "error_code": "invalid_sync_choice",
+            }
         return self.library_sync.start_run(choice)
 
     def set_sync_passphrase(self, passphrase: str | None) -> dict[str, object]:
