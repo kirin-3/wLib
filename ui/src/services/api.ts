@@ -161,7 +161,7 @@ export interface InstallProgressStatus {
   error: string;
 }
 
-export interface InstallStatusResponse {
+export interface InstallStatusResponse extends ApiBasicResponse {
   deps: InstallProgressStatus;
   rtps: InstallProgressStatus;
   dlls_installed: boolean;
@@ -198,9 +198,11 @@ export interface AppVersionResponse {
   version: string;
 }
 
+// `supported` is false on hosts that cannot inject into a Wine prefix.
 export interface CheatEngineStatusResponse {
   installed: boolean;
   path: string;
+  supported?: boolean;
 }
 
 export interface DownloadCheatEngineResponse extends ApiBasicResponse {
@@ -376,12 +378,15 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   success: boolean;
   created?: number;
   updated?: number;
+  deleted?: number;
   skipped?: number;
   ambiguous?: number;
   warnings?: number;
   warning_records?: LibraryBackupWarning[];
   settings_updated?: number;
   selected_sections?: LibraryBackupSection[];
+  created_ids?: number[];
+  updated_ids?: number[];
 }
 
 export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary";
@@ -419,9 +424,11 @@ export interface ExternalLibraryImportOptions {
   merge_mode?: ExternalLibraryMergeMode;
 }
 
+// The external reader always applies metadata to matches and reports the
+// follow-up metadata check the backend started for the imported games.
 export interface ExternalLibraryImportResponse extends LibraryBackupImportResponse {
-  created_ids?: number[];
-  updated_ids?: number[];
+  source?: string;
+  schema_version?: string | number;
   skipped_no_identity?: number;
   dropped_paths?: number;
   metadata_check?: "started" | "busy" | "none";
@@ -1630,6 +1637,7 @@ class ApiService {
           success: true,
           mock: true,
           created: 0,
+          deleted: 0,
           updated: 0,
           skipped: 0,
           ambiguous: 0,
@@ -1637,6 +1645,8 @@ class ApiService {
           warning_records: [],
           settings_updated: 0,
           selected_sections: sections,
+          created_ids: [],
+          updated_ids: [],
         };
       }
       case "get_sync_status":
@@ -1650,7 +1660,7 @@ class ApiService {
       case "unlock_sync": {
         let stored: LibrarySyncStatus = {};
         try { stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}"); } catch { /* Start with sync off when mock data is invalid. */ }
-        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, gdrive_available: true, ...stored };
+        const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, dropbox_unavailable_reason: "", gdrive_available: true, gdrive_unavailable_reason: "", connecting: false, ...stored };
         if (method === "set_sync_folder") Object.assign(status, { state: "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
         if (method === "connect_dropbox") Object.assign(status, { state: "idle", location: "dropbox", account: "Browser mock account", last_error: "" });
         if (method === "connect_gdrive") Object.assign(status, { state: "idle", location: "gdrive", account: "mock@example.com", last_error: "" });
@@ -1673,6 +1683,69 @@ class ApiService {
       case "browse_external_library_file":
       case "browse_directory":
         return "";
+      // Bridges with no browser-side equivalent. Actions that need no host
+      // still answer with the real payload shape so the view flow works;
+      // download/install actions explain that they need the desktop app.
+      case "open_in_browser":
+      case "open_folder":
+      case "open_extension_folder":
+      case "open_dev_tools":
+      case "check_all_updates":
+      case "cancel_update_check":
+      case "set_auto_check_setting":
+      case "check_app_updates":
+      case "download_proton_ge":
+      case "install_rpgmaker_dependencies":
+      case "install_rpgmaker_rtp":
+      case "download_cheat_engine": {
+        // Mocks mirror the real payloads: the actions that need no backend
+        // report success, and the ones that download or install runtime
+        // software report why they cannot run in a browser.
+        if (method === "open_in_browser") {
+          const url = String(args[0] || "");
+          if (!/^https?:\/\//i.test(url)) return { success: false, mock: true, error: "Invalid URL" };
+          window.open(url, "_blank", "noopener");
+          return { success: true, mock: true };
+        }
+        if (method === "open_folder") return { success: true, mock: true };
+        if (method === "open_extension_folder") {
+          return {
+            success: true,
+            mock: true,
+            updated: false,
+            path: "",
+            bundled_version: "",
+            installed_version: "",
+            reason: "mock",
+          };
+        }
+        if (method === "open_dev_tools") return undefined;
+        if (method === "check_all_updates") {
+          return {
+            success: true,
+            mock: true,
+            total: readMockGames().filter((game) => (game.f95_url || "").trim()).length,
+            delay_seconds: 2,
+          };
+        }
+        if (method === "set_auto_check_setting") {
+          try { localStorage.setItem("wlib-mock-auto-check", String(args[0])); } catch { /* Preview just forgets the choice. */ }
+        }
+        if (method === "cancel_update_check" || method === "set_auto_check_setting") {
+          return { success: true, mock: true };
+        }
+        const reason =
+          method === "check_app_updates"
+            ? "Release checks require the desktop app runtime."
+            : method === "download_proton_ge"
+              ? "GE-Proton downloads require the desktop app runtime."
+              : method === "install_rpgmaker_dependencies"
+                ? "Runtime dependency installs require the desktop app runtime."
+                : method === "install_rpgmaker_rtp"
+                  ? "RPG Maker RTP installs require the desktop app runtime."
+                  : "Cheat Engine downloads require the desktop app runtime.";
+        return { success: false, mock: true, error: reason };
+      }
       case "detect_external_library": {
         const source = typeof args[0] === "string" ? args[0] : "";
         return { success: true, mock: true, source, path: "", checked: [] };
@@ -1722,6 +1795,7 @@ class ApiService {
           success: true,
           mock: true,
           created: 0,
+          deleted: 0,
           updated: 0,
           skipped: 0,
           ambiguous: 0,
@@ -1734,6 +1808,8 @@ class ApiService {
           skipped_no_identity: 0,
           dropped_paths: 0,
           metadata_check: "none" as const,
+          source: typeof args[0] === "string" ? args[0] : "",
+          schema_version: "",
         };
       }
       case "inspect_archive": {
@@ -1828,6 +1904,7 @@ class ApiService {
       case "get_update_status":
         return {
           running: false,
+          cancelling: false,
           outcome: "idle",
           error: "",
           total: 0,
@@ -1837,7 +1914,7 @@ class ApiService {
           delay_seconds: 2,
         };
       case "get_auto_check_setting":
-        return { frequency: "weekly", last_check: "" };
+        try { return { frequency: localStorage.getItem("wlib-mock-auto-check") || "weekly", last_check: "" }; } catch { return { frequency: "weekly", last_check: "" }; }
       case "maybe_auto_check":
         return { triggered: false, reason: "mock" };
       case "get_proton_download_status":

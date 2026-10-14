@@ -2179,6 +2179,28 @@ def test_install_rpgmaker_dependencies_reports_background_failure(
     assert status["dlls_installed"] is False
 
 
+def test_get_install_status_keeps_progress_shape_on_unsupported_hosts(monkeypatch):
+    """Browsers/frontends type `deps`/`rtps` as full progress payloads."""
+    api = Api()
+    monkeypatch.setattr("core.api.is_linux", lambda: False)
+
+    status = api.get_install_status("", "")
+
+    assert status["success"] is False
+    assert status["code"] == "unsupported_platform"
+    for key in ("deps", "rtps"):
+        progress = cast(dict[str, object], status[key])
+        assert progress == {
+            "running": False,
+            "done": 0,
+            "total": 0,
+            "current": "",
+            "error": "",
+        }
+    assert status["dlls_installed"] is False
+    assert status["rtps_installed"] is False
+
+
 def test_installs_refuse_to_run_in_parallel(monkeypatch, tmp_path):
     api = Api()
     prefix_path = str(tmp_path / "prefix")
