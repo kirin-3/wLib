@@ -91,7 +91,7 @@ test("handleModalKeydown traps Tab key within the top modal", () => {
 
   const containerEl = {
     querySelectorAll: () => [button1, button2],
-    contains: (el: unknown) => el === button1 || el === button2,
+    contains: (el: unknown) => el === containerEl || el === button1 || el === button2,
     focus: () => {},
   } as unknown as HTMLElement;
 
@@ -134,6 +134,34 @@ test("handleModalKeydown traps Tab key within the top modal", () => {
 
     assert.equal(prevented, true);
     assert.equal(focusedElement, button2, "Shift+Tab from first element should wrap to last element");
+
+    // Pressing Tab from containerEl should focus first button (button1)
+    (globalThis.document as unknown as { activeElement: HTMLElement }).activeElement = containerEl;
+    prevented = false;
+    handleModalKeydown({
+      key: "Tab",
+      shiftKey: false,
+      preventDefault: () => {
+        prevented = true;
+      },
+    } as KeyboardEvent);
+
+    assert.equal(prevented, true);
+    assert.equal(focusedElement, button1, "Tab from container element should wrap to first element");
+
+    // Pressing Shift+Tab from containerEl should focus last button (button2)
+    (globalThis.document as unknown as { activeElement: HTMLElement }).activeElement = containerEl;
+    prevented = false;
+    handleModalKeydown({
+      key: "Tab",
+      shiftKey: true,
+      preventDefault: () => {
+        prevented = true;
+      },
+    } as KeyboardEvent);
+
+    assert.equal(prevented, true);
+    assert.equal(focusedElement, button2, "Shift+Tab from container element should wrap to last element");
   } finally {
     globalThis.document = origDocument;
     modalStack.length = 0;
