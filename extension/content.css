@@ -169,14 +169,9 @@
 
 .wlib-action-row {
     display: flex;
+    flex-direction: column;
     gap: 0.5rem;
     width: 100%;
-}
-
-.wlib-action-row .wlib-add-btn {
-    flex: 1;
-    min-width: 0;
-    padding-inline: 0.45rem;
 }
 
 .wlib-wishlist-btn {
