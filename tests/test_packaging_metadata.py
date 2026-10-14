@@ -154,4 +154,6 @@ def test_flatpak_build_reuses_staged_release_folder():
     assert 'WLIB_BUILD_FLATPAK="${WLIB_BUILD_FLATPAK:-auto}"' in build_script
     assert 'FLATPAK_NAME="${APP_NAME}-${VERSION}-x86_64.flatpak"' in build_script
     assert "flatpak-builder" in build_script
+    assert "org.flatpak.Builder" in build_script
+    assert "dbus-run-session" in build_script
     assert "flatpak build-bundle" in build_script

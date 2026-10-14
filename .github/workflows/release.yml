@@ -138,6 +138,10 @@ jobs:
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
+      - name: Install Flatpak builder
+        run: |
+          flatpak install --user -y flathub org.flatpak.Builder
+
       - name: Build packages
         env:
           WLIB_BUILD_NATIVE_PACKAGES: '1'

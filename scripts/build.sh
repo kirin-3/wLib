@@ -85,7 +85,8 @@ should_build_flatpak() {
             return 1
             ;;
         auto)
-            command -v flatpak-builder >/dev/null 2>&1
+            command -v flatpak-builder >/dev/null 2>&1 \
+                || flatpak info --user org.flatpak.Builder >/dev/null 2>&1
             ;;
         *)
             echo "Invalid WLIB_BUILD_FLATPAK value: $WLIB_BUILD_FLATPAK" >&2
@@ -100,18 +101,31 @@ build_flatpak() {
         return
     fi
 
-    if ! command -v flatpak-builder >/dev/null 2>&1; then
-        echo "flatpak-builder is required to build the Flatpak bundle." >&2
-        exit 1
-    fi
-
     if ! command -v flatpak >/dev/null 2>&1; then
         echo "flatpak is required to build the Flatpak bundle." >&2
         exit 1
     fi
 
-    echo "📦 Creating Flatpak bundle..."
     local flatpak_dir="$BUILD_DIR/flatpak"
+    # Prefer Flathub's org.flatpak.Builder: distro builders as old as 1.2.x
+    # invoke the legacy `appstream-compose` binary that current SDKs no longer
+    # ship, while the modern builder runs `appstreamcli compose`. The Builder's
+    # dependency install needs a session bus, which headless CI runners lack,
+    # so provide one with dbus-run-session when available.
+    local builder=()
+    if flatpak info --user org.flatpak.Builder >/dev/null 2>&1; then
+        if command -v dbus-run-session >/dev/null 2>&1; then
+            builder=(dbus-run-session --)
+        fi
+        builder+=(flatpak run --user "--filesystem=$flatpak_dir" org.flatpak.Builder)
+    elif command -v flatpak-builder >/dev/null 2>&1; then
+        builder=(flatpak-builder)
+    else
+        echo "flatpak-builder (or Flathub's org.flatpak.Builder) is required to build the Flatpak bundle." >&2
+        exit 1
+    fi
+
+    echo "📦 Creating Flatpak bundle..."
     rm -rf "$flatpak_dir"
     mkdir -p "$flatpak_dir"
     cp "$PROJECT_DIR/packaging/flatpak/io.github.kirin_3.wLib.yml" "$flatpak_dir/"
@@ -122,7 +136,7 @@ build_flatpak() {
 
     (
         cd "$flatpak_dir"
-        flatpak-builder --force-clean --user \
+        "${builder[@]}" --force-clean --user \
             --install-deps-from=flathub \
             --repo="$flatpak_dir/repo" \
             "$flatpak_dir/build" \

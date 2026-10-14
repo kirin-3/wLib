@@ -205,6 +205,8 @@ WLIB_BUILD_FLATPAK=0 bash scripts/build.sh "1.2.0"
 
 `WLIB_BUILD_FLATPAK` accepts `auto|1|0` like `WLIB_BUILD_NATIVE_PACKAGES`. `auto` builds only when `flatpak-builder` exists, so local builds without Flatpak tooling still produce the other artifacts. The bundle is written to `dist/wLib-<version>-x86_64.flatpak` and starts through the shared `packaging/wlib-launcher`, keeping GPU detection, crash guard handling, SSL setup and launch logging.
 
+The build prefers Flathub's `org.flatpak.Builder` when it is installed (the release workflow installs it): distro `flatpak-builder` packages as old as 1.2.x invoke the legacy `appstream-compose` binary that current SDKs no longer ship, while the modern builder runs `appstreamcli compose`. Its dependency install is wrapped in `dbus-run-session` when available, since headless runners provide no session bus. A `flatpak-builder` on `PATH` is used as fallback.
+
 ## AUR Metadata
 
 The AUR package is `wlib-bin` because it repackages a prebuilt upstream binary release.
