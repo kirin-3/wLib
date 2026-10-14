@@ -122,13 +122,13 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
-    if (!title.value.trim() || phase.value === "inspecting") title.value = info.title || "";
+    if (!title.value.trim()) title.value = isUpdate.value ? (props.game?.title || info.title || "") : (info.title || "");
     if (props.game?.latest_version?.trim()) {
       version.value = props.game.latest_version.trim();
     } else if (!version.value.trim()) {
       version.value = info.version || "";
     }
-    if (!creator.value.trim()) creator.value = info.creator || "";
+    if (!creator.value.trim()) creator.value = isUpdate.value ? (props.game?.developer || info.creator || "") : (info.creator || "");
     destination.value = info.destination || "";
     toolError.value = info.tool_error || "";
     oldFolder.value = info.old_folder || "";
@@ -149,20 +149,26 @@ const inspect = async () => {
 };
 
 const browseArchive = async () => {
-  const path = await api.browseArchiveFile(archive.value);
-  if (path && props.modelValue) {
-    archive.value = path;
-    title.value = "";
-    version.value = "";
-    creator.value = "";
-    await inspect();
+  try {
+    const path = await api.browseArchiveFile(archive.value);
+    if (path && props.modelValue) {
+      archive.value = path;
+      if (!isUpdate.value) {
+        title.value = "";
+        version.value = "";
+        creator.value = "";
+      }
+      await inspect();
+    }
+  } catch (e) {
+    console.error("Failed to browse archive", e);
   }
 };
 
 const browseLibraryFolder = async () => {
-  const path = await api.browseDirectory(libraryFolder.value);
-  if (!path || !props.modelValue) return;
   try {
+    const path = await api.browseDirectory(libraryFolder.value);
+    if (!path || !props.modelValue) return;
     const res = await api.saveSettings({ library_folder: path });
     if (!props.modelValue) return;
     if (res?.success === false) throw new Error(res.error || "Could not save library folder");
@@ -194,17 +200,15 @@ const pollStatus = () => {
   const tick = async () => {
     try {
       const status = await api.getArchiveInstallStatus();
-      if (id !== pollId) return;
+      if (id !== pollId || phase.value !== "installing") return;
       if (status?.stage) installStage.value = status.stage;
-      if (!status || !status.running) return;
     } catch (e) {
       console.error("Failed to poll install status", e);
-      return;
     }
-    if (id !== pollId) return;
+    if (id !== pollId || phase.value !== "installing") return;
     pollTimer = setTimeout(() => {
       pollTimer = null;
-      if (id === pollId) void tick();
+      if (id === pollId && phase.value === "installing") void tick();
     }, 500);
   };
   void tick();

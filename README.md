@@ -69,30 +69,78 @@ Light and dark themes, an adjustable text size, and the whole thing is open sour
 
 <table>
   <tr>
-    <td align="center"><b>Library View (Small Grid)</b></td>
-    <td align="center"><b>Library View (Grid)</b></td>
+    <td align="center"><b>Library</b></td>
+    <td align="center"><b>List view</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/library1.png" alt="Library View List" /></td>
-    <td><img src="docs/screenshots/library2.png" alt="Library View Grid" /></td>
+    <td><img src="docs/screenshots/library.png" alt="Library" /></td>
+    <td><img src="docs/screenshots/library-list.png" alt="List view" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Update Tracker</b></td>
-    <td align="center"><b>Browser Extension</b></td>
+    <td align="center"><b>Game details</b></td>
+    <td align="center"><b>Launch options</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/updates.png" alt="Update Tracker" /></td>
-    <td><img src="docs/screenshots/extension.png" alt="Browser Extension" /></td>
+    <td><img src="docs/screenshots/game-overview.png" alt="Game details" /></td>
+    <td><img src="docs/screenshots/game-launch.png" alt="Launch options" /></td>
   </tr>
   <tr>
-    <td align="center"><b>App Settings</b></td>
-    <td align="center"><b>Game Configurations</b></td>
+    <td align="center"><b>Updates</b></td>
+    <td align="center"><b>Browser extension</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/settings1.png" alt="App Settings" /></td>
-    <td><img src="docs/screenshots/settings2.png" alt="Game Configurations" /></td>
+    <td><img src="docs/screenshots/updates.png" alt="Updates" /></td>
+    <td><img src="docs/screenshots/extension.png" alt="Browser extension" /></td>
   </tr>
 </table>
+
+<details>
+<summary>More screenshots</summary>
+
+<table>
+  <tr>
+    <td align="center"><b>Compact sidebar</b></td>
+    <td align="center"><b>Game info and finished version</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/library-compact.png" alt="Compact sidebar" /></td>
+    <td><img src="docs/screenshots/game-info.png" alt="Game info and finished version" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Ratings and tags</b></td>
+    <td align="center"><b>Backup and restore</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/game-tags.png" alt="Ratings and tags" /></td>
+    <td><img src="docs/screenshots/import-export.png" alt="Backup and restore" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Import from another app</b></td>
+    <td align="center"><b>Sync</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/import-other-apps.png" alt="Import from another app" /></td>
+    <td><img src="docs/screenshots/sync.png" alt="Sync" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Settings</b></td>
+    <td align="center"><b>Library folder and appearance</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings-general.png" alt="Settings" /></td>
+    <td><img src="docs/screenshots/settings-library.png" alt="Library folder and appearance" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Wine and Proton</b></td>
+    <td align="center"><b>Tools and Ren'Py</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings-wine.png" alt="Wine and Proton" /></td>
+    <td><img src="docs/screenshots/settings-tools.png" alt="Tools and Ren'Py" /></td>
+  </tr>
+</table>
+
+</details>
 
 ## Installing
 

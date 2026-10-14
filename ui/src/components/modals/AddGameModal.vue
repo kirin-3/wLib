@@ -178,7 +178,7 @@ const inspectExePath = async () => {
   if (!path) return;
   try {
     const guess = await api.inspectGamePath(path);
-    if (request !== inspectRequest || !guess?.success) return;
+    if (request !== inspectRequest || !props.modelValue || !guess?.success) return;
     if (!title.value || title.value === guessed.value.title) title.value = guess.title || "";
     if (!version.value || version.value === guessed.value.version) version.value = guess.version || "";
     if (!engine.value || engine.value === guessed.value.engine) engine.value = guess.engine || "";
@@ -189,10 +189,15 @@ const inspectExePath = async () => {
 };
 
 const browseExe = async () => {
-  const p = await api.browseFile(exePath.value || "");
-  if (p) {
-    exePath.value = p;
-    void inspectExePath();
+  try {
+    const p = await api.browseFile(exePath.value || "");
+    if (!props.modelValue) return;
+    if (p) {
+      exePath.value = p;
+      void inspectExePath();
+    }
+  } catch (e) {
+    console.error("Failed to browse file", e);
   }
 };
 

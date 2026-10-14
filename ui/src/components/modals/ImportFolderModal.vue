@@ -51,6 +51,9 @@ const scan = async () => {
   const path = folder.value.trim();
   if (!path || scanning.value) return;
   scanning.value = true;
+  games.value = [];
+  selected.value = new Set();
+  scanned.value = false;
   try {
     const result = await api.scanGamesFolder(path);
     if (!props.modelValue || folder.value.trim() !== path) return;
@@ -70,10 +73,14 @@ const scan = async () => {
 };
 
 const browse = async () => {
-  const path = await api.browseDirectory(folder.value);
-  if (path && props.modelValue) {
-    folder.value = path;
-    void scan();
+  try {
+    const path = await api.browseDirectory(folder.value);
+    if (path && props.modelValue) {
+      folder.value = path;
+      void scan();
+    }
+  } catch (e) {
+    console.error("Failed to browse directory", e);
   }
 };
 

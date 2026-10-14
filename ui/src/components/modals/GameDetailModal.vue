@@ -241,7 +241,7 @@ const averagePersonalRating = computed(() => {
 const isCurrentlyWishlisted = computed(() => !exePath.value.trim());
 
 const hasUpdate = computed(() => hasAvailableUpdate({
-  exe_path: exePath.value.trim() || props.game?.exe_path || "",
+  exe_path: exePath.value.trim(),
   version: version.value,
   latest_version: latestVersion.value,
 }));
@@ -478,6 +478,7 @@ watch(
       }
       void Promise.all(loaders);
     } else {
+      executableModifiedRequestId.value++;
       engineMenuOpen.value = false;
       showSavePanel.value = false;
       saveResults.value = [];
@@ -580,6 +581,7 @@ const close = () => {
 
 // User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
 const requestClose = () => {
+  if (saving.value || deleting.value) return;
   if (hasUnsavedChanges.value && !confirm("Discard unsaved changes to this game?")) {
     return;
   }
@@ -682,6 +684,7 @@ const browseExe = async () => {
     const p = await api.browseFile(exePath.value || "");
     if (p && isCurrentGame(gameId)) {
       exePath.value = p;
+      void loadExecutableModifiedTime();
     }
   } catch (e) {
     console.error("Failed to browse file", e);
@@ -1041,9 +1044,10 @@ const save = async () => {
     notifyError("Game title is required.");
     return;
   }
+  const gameId = props.game.id;
   saving.value = true;
   try {
-    const res = await api.updateGame(props.game.id, {
+    const res = await api.updateGame(gameId, {
       title: title.value.trim(),
       exe_path: exePath.value.trim(),
       f95_url: f95Url.value.trim(),
@@ -1079,13 +1083,13 @@ const save = async () => {
     if (res && res.success === false) {
       notifyError("Failed to save game: " + (res.error || "Unknown error"));
     } else {
-      const previousCollections = props.game.collections || [];
+      const previousCollections = props.game?.id === gameId ? (props.game.collections || []) : [];
       const membershipChanged =
         JSON.stringify(previousCollections) !==
         JSON.stringify(collectionMembership.value);
       if (membershipChanged) {
         const collectionsResult = await api.setGameCollections(
-          props.game.id,
+          gameId,
           collectionMembership.value,
         );
         if (collectionsResult && collectionsResult.success === false) {
@@ -1095,8 +1099,10 @@ const save = async () => {
           );
         }
       }
-      savedSnapshot.value = formSnapshot();
-      savedQuickFields.value = quickFields();
+      if (isCurrentGame(gameId)) {
+        savedSnapshot.value = formSnapshot();
+        savedQuickFields.value = quickFields();
+      }
       emit("updated");
       close();
     }
@@ -1288,21 +1294,23 @@ const loadExecutableModifiedTime = async () => {
   executableModifiedKnown.value = false;
 
   const path = exePath.value.trim();
-  if (!path) {
+  if (!path || !props.modelValue) {
+    loadingExecutableModifiedAt.value = false;
+    executableModifiedKnown.value = !path;
     return;
   }
 
   loadingExecutableModifiedAt.value = true;
   try {
     const result = await api.getExecutableModifiedTime(path);
-    if (executableModifiedRequestId.value !== requestId) {
+    if (executableModifiedRequestId.value !== requestId || !props.modelValue) {
       return;
     }
 
     executableModifiedKnown.value = true;
     executableModifiedAt.value = result.success ? result.modified_at : null;
   } catch (e) {
-    if (executableModifiedRequestId.value !== requestId) {
+    if (executableModifiedRequestId.value !== requestId || !props.modelValue) {
       return;
     }
 
@@ -1333,9 +1341,10 @@ const threadMainPostEditedDisplay = computed(() => {
 });
 
 const openInBrowser = async () => {
-  if (f95Url.value) {
+  const url = f95Url.value.trim();
+  if (url) {
     try {
-      const res = await api.openInBrowser(f95Url.value);
+      const res = await api.openInBrowser(url);
       if (res && res.success === false) {
         notifyError("Failed to open browser: " + (res.error || "Unknown error"));
       }
@@ -1396,7 +1405,7 @@ const openInBrowser = async () => {
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
             <button
-              v-if="f95Url"
+              v-if="f95Url.trim()"
               @click="openInBrowser"
               class="modal-toolbar-action ui-action-btn"
               style="color: var(--text-primary)"
@@ -1644,6 +1653,7 @@ const openInBrowser = async () => {
                   v-model="exePath" id="detail-exe"
                   type="text"
                   class="modal-input flex-1 font-mono"
+                  @change="loadExecutableModifiedTime"
                 />
                 <button @click="browseExe" class="modal-btn ui-action-btn">
                   <IconFolderOpenFilled class="ui-action-icon" />
