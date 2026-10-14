@@ -8,24 +8,36 @@ export const MOTION_DISABLED_CLASS = "motion-off";
 
 export const motionEnabled = ref(true);
 
-const normalizeMotionPreference = (value: string | null): MotionPreference =>
+export const normalizeMotionPreference = (value: string | null): MotionPreference =>
   value === "off" ? "off" : "on";
 
 const getRootElement = (): HTMLElement | null =>
   typeof document !== "undefined" ? document.documentElement : null;
 
-const readMotionStorage = (storage: Storage): MotionPreference => {
+const getLocalStorage = (): Storage | null => {
   try {
-    return normalizeMotionPreference(storage.getItem(MOTION_PREFERENCE_STORAGE_KEY));
+    return typeof localStorage !== "undefined" ? localStorage : null;
+  } catch {
+    return null;
+  }
+};
+
+const readMotionStorage = (storage?: Storage | null): MotionPreference => {
+  try {
+    const s = storage !== undefined ? storage : getLocalStorage();
+    return s ? normalizeMotionPreference(s.getItem(MOTION_PREFERENCE_STORAGE_KEY)) : "on";
   } catch (error) {
     console.warn("Failed to read motion preference", error);
     return "on";
   }
 };
 
-const writeMotionStorage = (storage: Storage, enabled: boolean): void => {
+const writeMotionStorage = (storage: Storage | null | undefined, enabled: boolean): void => {
   try {
-    storage.setItem(MOTION_PREFERENCE_STORAGE_KEY, enabled ? "on" : "off");
+    const s = storage !== undefined ? storage : getLocalStorage();
+    if (s) {
+      s.setItem(MOTION_PREFERENCE_STORAGE_KEY, enabled ? "on" : "off");
+    }
   } catch (error) {
     console.warn("Failed to write motion preference", error);
   }
@@ -44,13 +56,14 @@ export const applyMotionPreference = (enabled: boolean): void => {
   applyRootMotionState(enabled);
 };
 
-export const loadMotionPreference = (storage: Storage = localStorage): boolean => {
+export const loadMotionPreference = (storage?: Storage | null): boolean => {
   const enabled = readMotionStorage(storage) === "on";
   applyMotionPreference(enabled);
   return enabled;
 };
 
-export const saveMotionPreference = (enabled: boolean, storage: Storage = localStorage): void => {
+export const saveMotionPreference = (enabled: boolean, storage?: Storage | null): void => {
   applyMotionPreference(enabled);
   writeMotionStorage(storage, enabled);
 };
+

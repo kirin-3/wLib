@@ -39,6 +39,10 @@ const routes: RouteRecordRaw[] = [
     name: "settings",
     component: SettingsView,
   },
+  {
+    path: "/:pathMatch(.*)*",
+    redirect: "/",
+  },
 ];
 
 // We use HashHistory here for PyWebView local file loading compatibility

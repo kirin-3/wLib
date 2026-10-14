@@ -44,8 +44,15 @@ const mainRef = ref<HTMLElement | null>(null);
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
-const isNavCollapsed = ref(false);
 const navCollapsedStorageKey = "wlib-nav-collapsed";
+const getInitialNavCollapsed = (): boolean => {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(navCollapsedStorageKey) === "true";
+  } catch {
+    return false;
+  }
+};
+const isNavCollapsed = ref(getInitialNavCollapsed());
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 const availableUpdateCount = ref(0);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
@@ -225,7 +232,10 @@ const handleExtensionOpen = (event: Event) => {
   }
 };
 
+let isAppMounted = false;
+
 onMounted(() => {
+  isAppMounted = true;
   try {
     const savedNavCollapsed = localStorage.getItem(navCollapsedStorageKey);
     if (savedNavCollapsed === "true" || savedNavCollapsed === "false") {
@@ -243,6 +253,7 @@ onMounted(() => {
 
   // Check for App Updates on Startup
   onWebviewReady(async () => {
+    if (!isAppMounted) return;
     void refreshUpdateCount();
     void scanDownloadOffers();
     // Listen only once the backend is injected: a focus event at startup would
@@ -286,6 +297,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  isAppMounted = false;
   updateCountRequest++;
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
@@ -295,6 +307,7 @@ onUnmounted(() => {
   window.removeEventListener("focus", handleWindowFocus);
   if (updatePollInterval) clearInterval(updatePollInterval);
 });
+
 </script>
 
 <template>

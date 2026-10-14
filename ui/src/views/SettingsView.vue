@@ -1096,7 +1096,7 @@ const browseUrm = async () => {
       <section class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconAutomation class="ui-section-icon" />
-          {{ supportsLinuxRuntimes ? "Wine / Proton" : "Windows Environment" }}
+          {{ supportsLinuxRuntimes ? "Wine / Proton" : platformCapabilities.platform === 'windows' ? "Windows Environment" : "Platform Environment" }}
         </h3>
 
         <div
@@ -1106,6 +1106,13 @@ const browseUrm = async () => {
         >
           Windows games launch directly. Proton, Wine, Winetricks, Wine
           prefixes, and Linux runtime installers are not used on Windows.
+        </div>
+        <div
+          v-else-if="!supportsLinuxRuntimes"
+          class="setting-row p-4 rounded-lg text-sm"
+          style="color: var(--text-secondary)"
+        >
+          Wine, Proton, and Linux runtime installers are not supported on this platform.
         </div>
 
         <div v-if="supportsLinuxRuntimes">

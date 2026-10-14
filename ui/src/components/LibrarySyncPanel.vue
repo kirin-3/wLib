@@ -37,6 +37,9 @@ function acceptStatus(result: LibrarySyncStatus, forceLocation = false) {
     if (result.state !== previousState) {
       if (result.state === "needs_choice") dialog.value = "choice";
       if (result.state === "needs_passphrase") dialog.value = "unlock";
+      if (previousState === "syncing" && result.state === "idle" && !result.last_error) {
+        window.dispatchEvent(new Event("wlib-refresh-library"));
+      }
       previousState = result.state;
     }
   }
@@ -51,6 +54,7 @@ async function refreshStatus() {
     if (version === requestVersion) {
       acceptStatus(result);
       if (result.success === false) error.value = result.error || "Could not read sync status.";
+      else error.value = "";
     }
   } catch {
     error.value = "Could not read sync status. Try again.";
@@ -88,11 +92,15 @@ async function changeLocation() {
   if (!location.value) await act(() => api.disconnectSync());
 }
 async function browseFolder() {
+  if (busy.value) return;
+  busy.value = true;
   try {
     const folder = await api.browseDirectory(status.value.folder_path || "");
     if (folder) await act(() => api.setSyncFolder(folder));
   } catch {
     error.value = "Could not open the folder picker.";
+  } finally {
+    busy.value = false;
   }
 }
 function choose(choice: LibrarySyncChoice) { return act(() => api.resolveSyncChoice(choice), true); }
@@ -149,7 +157,8 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); requestVersion++; });
         <strong>{{ loading ? "Loading sync status..." : stateLabel }}</strong>
         <dl v-if="connected"><div><dt>Last synced</dt><dd>{{ lastSynced }}</dd></div><div><dt>Last device</dt><dd>{{ status.last_device || "Not synced yet" }}</dd></div></dl>
       </div>
-      <p v-if="error || status.last_error" class="sync-error" role="alert">{{ error || status.last_error }}</p>
+      <p v-if="error || (status.last_error && status.state !== 'syncing')" class="sync-error" role="alert">{{ error || status.last_error }}</p>
+
       <div class="sync-controls">
         <button v-if="connected" type="button" :class="status.state === 'needs_choice' || status.state === 'needs_passphrase' ? 'sync-btn' : 'sync-primary'" :disabled="disabled" @click="act(() => api.syncNow())">{{ status.state === 'syncing' ? 'Syncing...' : 'Sync now' }}</button>
         <button v-if="status.state === 'needs_choice'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'choice'">Choose library</button>
