@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -176,6 +177,8 @@ def check_archive_entry_safe(entry: str) -> None:
     if _is_absolute_entry(entry) or _is_absolute_entry(normalized):
         raise ArchiveSafetyError(f"Archive entry is unsafe (absolute path): {entry!r}")
     parts = [p for p in normalized.split("/") if p not in ("", ".")]
+    if not parts:
+        raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     if any(p == ".." for p in parts):
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     for part in parts:
@@ -240,6 +243,7 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
         with zipfile.ZipFile(archive_path, "r") as zf:
             infos = zf.infolist()
             # Pre-validate every entry before writing anything.
+            names: list[str] = []
             for info in infos:
                 if info.flag_bits & 0x1:
                     raise ArchiveInstallError(
@@ -250,6 +254,8 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
                     raise ArchiveSafetyError(f"Archive entry is unsafe: {name!r}")
                 check_archive_entry_safe(name)
                 _ = _target_inside_staging(staging_dir, name)
+                names.append(name)
+            check_archive_entries_no_collisions(names)
             for info in infos:
                 name = _zip_entry_name(info)
                 target = _target_inside_staging(staging_dir, name)
@@ -418,15 +424,43 @@ def check_symlinks_inside_staging(staging_dir: str) -> None:
                 )
 
 
+def check_archive_entries_no_collisions(entries: list[str]) -> None:
+    """Reject duplicate or case-insensitive-colliding archive members.
+
+    Two entries that differ only by case (`Game.exe` vs `game.exe`) coexist
+    on Linux but silently overwrite each other on Windows/macOS, losing data.
+    Exact duplicates (`a.txt` twice) mean the first copy is silently dropped.
+    """
+    seen_exact: set[str] = set()
+    seen_fold: dict[str, str] = {}
+    for raw in entries:
+        # normpath folds `./a`, `a//b`, `a/./b` and a trailing `/` into the
+        # one path extraction writes to.
+        key = posixpath.normpath(raw.replace("\\", "/"))
+        if key in seen_exact:
+            raise ArchiveSafetyError(f"Archive has duplicate entry: {raw!r}")
+        seen_exact.add(key)
+        folded = key.casefold()
+        first = seen_fold.get(folded)
+        if first is not None and first != key:
+            raise ArchiveSafetyError(
+                f"Archive entries collide (differ only by case): {first!r} and {raw!r}"
+            )
+        _ = seen_fold.setdefault(folded, key)
+
+
 def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
     """Extract via an external tool after a listing-based safety pre-check."""
     os.makedirs(staging_dir, exist_ok=True)
     entries = list_tool_entries(tool, archive_path)
+    meaningful: list[str] = []
     for entry in entries:
         # 7z lists the archive itself as "." or empty in some outputs; skip those.
         if entry.strip() in ("", ".", "./"):
             continue
         check_archive_entry_safe(entry)
+        meaningful.append(entry)
+    check_archive_entries_no_collisions(meaningful)
     base = _tool_basename(tool)
     env = build_host_open_env()
     if "unrar" in base:
@@ -449,7 +483,7 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
     if completed.returncode != 0:
         raise _tool_failure(completed, "Extraction failed")
     check_symlinks_inside_staging(staging_dir)
-    return len(entries)
+    return len(meaningful)
 
 
 def apply_execute_bits(root: str) -> int:
@@ -470,6 +504,10 @@ def apply_execute_bits(root: str) -> int:
                 if os.path.islink(path):
                     continue
                 mode = os.stat(path).st_mode
+                # FIFOs/sockets/devices would block is_elf on open; only
+                # regular files can be launchers.
+                if not stat.S_ISREG(mode):
+                    continue
             except OSError:
                 continue
             if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
@@ -935,14 +973,18 @@ def install_archive(
 
     old_exe = ""
     old_root = ""
+    game_found = game_id is None
     if game_id is not None:
         for game in get_all_games():
             try:
                 if int(str(game.get("id"))) == int(game_id):
                     old_exe = str(game.get("exe_path") or "")
+                    game_found = True
                     break
             except (TypeError, ValueError):
                 continue
+        if not game_found:
+            raise ArchiveInstallError("The game to update was not found.")
         if old_exe:
             old_root = os.path.dirname(os.path.abspath(old_exe))
 
@@ -994,10 +1036,15 @@ def install_archive(
         except OSError:
             pass
         _ = flatten_single_wrapper(staging)
+        # Flattening moves a wrapper's entries up one level, which changes
+        # what relative symlinks resolve to (staging/Game/link -> ../x means
+        # something different at staging/link). Re-check after the move.
+        check_symlinks_inside_staging(staging)
 
         if old_root and os.path.isdir(old_root):
             _progress("carrying saves")
             _ = copy_infolder_saves(old_root, staging)
+            check_symlinks_inside_staging(staging)
 
         _progress("moving into place")
         old_backup = ""
@@ -1048,7 +1095,7 @@ def install_archive(
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
 
-        exe_path = _pick_exe(destination, old_exe, old_backup or old_root)
+        exe_path = _pick_exe(destination, old_exe, old_root)
         if not exe_path:
             raise ArchiveInstallError(
                 "No launchable file was found. The extracted folder was kept; choose the executable manually."
@@ -1096,7 +1143,7 @@ def install_archive(
                     for t in targets
                 ]
                 updated_targets, unmoved = relocate_launch_targets(
-                    old_backup or old_root, destination, target_dicts
+                    old_root, destination, target_dicts
                 )
                 for before, after in zip(targets, updated_targets):
                     if str(before.get("exe_path") or "") != str(
