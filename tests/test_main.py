@@ -1212,3 +1212,73 @@ def test_extension_get_rejects_prefix_squat_paths(monkeypatch, extension_server,
         window.evaluate_js.assert_not_called()
     finally:
         connection.close()
+
+
+def test_main_does_not_share_db_when_port_held_by_other_app(monkeypatch, capsys):
+    load_webview = MagicMock()
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "bind_extension_server", lambda: None)
+    monkeypatch.setattr(main, "focus_running_instance", lambda: False)
+    monkeypatch.setattr(main, "load_webview_module", load_webview)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    load_webview.assert_not_called()
+    assert "not starting a second copy" in capsys.readouterr().err
+
+
+def test_log_renderer_diagnostics_bounds_log_size(monkeypatch, tmp_path):
+    renderer_log = tmp_path / "renderer-diagnostics.log"
+    monkeypatch.setattr(main, "RENDERER_DIAGNOSTICS_LOG", str(renderer_log))
+    monkeypatch.delenv("WLIB_LAUNCH_LOG", raising=False)
+    monkeypatch.delenv("WLIB_APPIMAGE_LAUNCH_LOG", raising=False)
+    # Pre-fill beyond the cap: each line is small, total > 512 KiB.
+    with open(renderer_log, "w", encoding="utf-8") as f:
+        for i in range(20000):
+            _ = f.write(f"old-line-{i:05d} padding-padding-padding-padding\n")
+
+    assert renderer_log.stat().st_size > main.RENDERER_DIAGNOSTICS_MAX_BYTES
+
+    main.log_renderer_diagnostics("startup", {"probe": "new-entry"})
+
+    content = renderer_log.read_text(encoding="utf-8")
+    assert "probe=new-entry" in content
+    assert renderer_log.stat().st_size <= main.RENDERER_DIAGNOSTICS_MAX_BYTES + 4096
+
+
+def test_clear_webview_cache_path_does_not_follow_symlinks(monkeypatch, tmp_path):
+    target_dir = tmp_path / "user-data"
+    target_dir.mkdir()
+    (target_dir / "precious.txt").write_text("keep", encoding="utf-8")
+    link_path = str(tmp_path / "cache-link")
+
+    monkeypatch.setattr(
+        main.os.path,
+        "lexists",
+        lambda p: True if p == link_path else os.path.lexists(p),
+    )
+    monkeypatch.setattr(
+        main.os.path, "islink", lambda p: True if p == link_path else os.path.islink(p)
+    )
+    # Simulate a symlink to a directory: isdir follows the link.
+    monkeypatch.setattr(
+        main.os.path, "isdir", lambda p: True if p == link_path else os.path.isdir(p)
+    )
+    removed: list[str] = []
+    monkeypatch.setattr(main.os, "remove", lambda p: removed.append(p))
+    rmtree_calls: list[str] = []
+    monkeypatch.setattr(
+        main.shutil, "rmtree", lambda p, *a, **k: rmtree_calls.append(p)
+    )
+
+    main._clear_webview_cache_path(link_path)
+
+    assert removed == [link_path]
+    assert rmtree_calls == []
+    assert (target_dir / "precious.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_extension_handler_times_out_slow_clients():
+    assert main.ExtensionRequestHandler.timeout is not None
+    assert 1 <= main.ExtensionRequestHandler.timeout <= 30

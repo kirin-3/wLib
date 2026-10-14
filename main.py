@@ -41,6 +41,7 @@ OAUTH_CALLBACKS = {
     "/gdrive/callback": ("complete_gdrive_callback", "Google Drive"),
 }
 MAX_EXTENSION_BODY_BYTES = 1024 * 1024
+RENDERER_DIAGNOSTICS_MAX_BYTES = 512 * 1024
 renderer_log_lock = threading.Lock()
 
 if TYPE_CHECKING:
@@ -155,7 +156,12 @@ def is_packaged_wlib_runtime() -> bool:
 
 
 def _clear_webview_cache_path(cache_path: str) -> None:
-    if not os.path.exists(cache_path):
+    if not os.path.lexists(cache_path):
+        return
+    # Never follow symlinks: rmtree() on a linked directory would delete the
+    # link target's contents (user data on Linux). Remove the link itself.
+    if os.path.islink(cache_path):
+        os.remove(cache_path)
         return
     if os.path.isdir(cache_path):
         shutil.rmtree(cache_path)
@@ -360,6 +366,26 @@ def _renderer_log_targets() -> list[str]:
     return targets
 
 
+def _trim_renderer_log_file(path: str) -> None:
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return
+    if size <= RENDERER_DIAGNOSTICS_MAX_BYTES:
+        return
+    try:
+        with open(path, "rb") as log_file:
+            _ = log_file.seek(-(RENDERER_DIAGNOSTICS_MAX_BYTES // 2), os.SEEK_END)
+            tail = log_file.read()
+        newline = tail.find(b"\n")
+        if newline != -1:
+            tail = tail[newline + 1 :]
+        with open(path, "wb") as log_file:
+            _ = log_file.write(tail)
+    except OSError as e:
+        print(f"[wLib] Failed to trim renderer diagnostics {path}: {e}")
+
+
 def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     header = f"[wLib] Renderer diagnostics ({stage})"
@@ -382,6 +408,7 @@ def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
                     os.makedirs(target_dir, exist_ok=True)
                 with open(target, "a", encoding="utf-8") as log_file:
                     _ = log_file.write(entry_text)
+                _trim_renderer_log_file(target)
             except OSError as e:
                 print(f"[wLib] Failed to write renderer diagnostics to {target}: {e}")
 
@@ -647,6 +674,10 @@ def start_webview(
 
 
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
+    # Idle connections (connect + send nothing, or claim a large body and stall)
+    # would otherwise hold a server thread forever (default blocking sockets).
+    timeout = 10  # pyright: ignore[reportUnannotatedClassAttribute]
+
     @override
     def parse_request(self) -> bool:
         if not super().parse_request():
@@ -1094,8 +1125,16 @@ def main() -> None:
 
     # A second copy would share the database.
     extension_server = bind_extension_server()
-    if extension_server is None and focus_running_instance():
-        print("[wLib] wLib is already running; showing its window instead.")
+    if extension_server is None:
+        if focus_running_instance():
+            print("[wLib] wLib is already running; showing its window instead.")
+            return
+        print(
+            "[wLib] Could not bind extension server on 127.0.0.1:8183 "
+            + "(port in use by another application); not starting a second copy "
+            + "to avoid sharing the database.",
+            file=sys.stderr,
+        )
         return
 
     _ = configure_qt_runtime_environment()
@@ -1151,12 +1190,12 @@ def main() -> None:
 
     cleanup_legacy_browser_data_async()
 
-    # Start the extension background server in a daemon thread
-    if extension_server is not None:
-        cast(ExtensionServer, extension_server).sync_api = api
-        api.library_sync.server_available = True
-        print("Starting extension HTTP receiver on port 8183...")
-        threading.Thread(target=extension_server.serve_forever, daemon=True).start()
+    # Start the extension background server in a daemon thread.
+    # extension_server is guaranteed here: bind failure returns early above.
+    cast(ExtensionServer, extension_server).sync_api = api
+    api.library_sync.server_available = True
+    print("Starting extension HTTP receiver on port 8183...")
+    threading.Thread(target=extension_server.serve_forever, daemon=True).start()
 
     api.library_sync.start()
 
