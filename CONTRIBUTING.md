@@ -71,32 +71,24 @@ npm install
 
 ### Running the App Locally
 
-On either platform, you can run the frontend in a normal browser with mock API responses. On Linux, run the frontend and backend in two separate terminals for desktop hot reload:
+For desktop hot reload, activate your virtual environment and run from the repository root:
 
-**Terminal 1 (Frontend):**
-```bash
-cd ui
-npm run dev
-```
-*This starts the Vite dev server on `http://localhost:5173` with hot module replacement enabled.*
-
-**Terminal 2 (Backend):**
-Ensure your virtual environment is activated, then run:
 ```bash
 DEV_MODE=1 python main.py
 ```
-*Setting `DEV_MODE=1` instructs the Python backend to load the frontend from the Vite development server instead of the compiled static files in `ui/dist/`, enabling Hot Module Replacement (HMR).*
 
-**Windows desktop (PowerShell, active `.venv`):**
+On Windows PowerShell:
 
 ```powershell
-Set-Location ui
-npm run build
-Set-Location ..
+$env:DEV_MODE = "1"
 python main.py
 ```
 
-Rebuild `ui/dist/` after frontend edits when testing the real desktop bridge on Windows. PowerShell uses `$env:DEV_MODE = "1"` to enable desktop hot reload, but the current bootstrap invokes `npm` directly and can fail with `WinError 2` on installations that provide only `npm.cmd`. Browser-only `npm run dev` remains available for frontend work.
+*`DEV_MODE=1` starts the Vite dev server (`npm run dev` in `ui/`, or `npm.cmd` on Windows) and loads the frontend from `http://localhost:5173` instead of the compiled files in `ui/dist/`, so frontend edits apply through Hot Module Replacement (HMR).*
+
+Without `DEV_MODE`, `python main.py` loads `ui/dist/`; rebuild it with `npm run build` in `ui/` after frontend edits.
+
+For frontend-only work, run `npm run dev` in `ui/` and open it in a normal browser. `ui/src/services/api.ts` returns mock responses when PyWebView isn't present.
 
 **Backend Initialization:** On startup, `main.py`:
 1. Configures the Qt runtime environment (Linux release launchers handle GPU detection)

@@ -17,59 +17,54 @@
 
 ---
 
-wLib is a Linux and Windows desktop application for managing, launching, and updating your F95Zone game library. It wraps a Vue 3 + TypeScript frontend inside a PyWebView shell and tracks updates by scraping F95Zone thread pages. Linux supports native, Wine, Proton, and optional RPGMaker Linux runner modes. Windows launches supported game targets directly and does not require Wine, Proton, or Winetricks.
+wLib keeps your F95Zone games in one place. It tells you when a game has an update, helps you install it, and launches it for you, on Linux or Windows.
 
-## Platform behavior
+It started as an open-source answer to Windows-only managers like XLibrary. On Linux it can run Windows games through Wine or Proton. On Windows it just launches them directly.
 
-On Windows, Auto Detect launches `.exe` files directly, `.bat`/`.cmd` files through `cmd.exe`, `.jar` files through `java -jar` (Java must be on `PATH`), and `.html`/`.htm` files in the default browser. HTML games do not support playtime tracking. Wine/Proton, Winetricks/RTP installers, Wayland, the RPGMaker Linux runner, and Cheat Engine injection are Linux-only; their controls are hidden on Windows. Imported per-game launch options are preserved, but an unavailable launch mode must be changed to Auto Detect before launching on Windows.
+## Features
 
-## 💡 Why wLib?
+### Your library
 
-wLib was inspired by tools like **xLibrary** and other Windows-only game managers. Unlike them, wLib is built from the ground up to be:
+- Add games with cover art, tags, ratings, notes and a play status. wLib tracks how long you've played each one.
+- Sort games into your own collections, which show up as tabs above the library. Save a filter and sort you use often, and get it back with one click.
+- Keep a wishlist of games you haven't installed yet. wLib lets you know when one of them is marked Completed on F95Zone.
+- When you finish a game, wLib remembers which version you finished. The **New since finished** collection shows finished games that have had updates since.
+- Give a game more than one executable if it comes in several parts. One of them stays the default for the Play button.
 
-| | |
-|:--|:--|
-| 🔓 **100% Open-Source** | Every component — backend, frontend, and extension — is fully open-source and auditable. |
-| 🖥️ **Cross-Platform Desktop App** | Python + Vue in a PyWebView Qt WebEngine shell, with native releases for Linux and Windows. |
-| 🍷 **First-class Launching** | Native Windows launching plus Wine, Proton-GE, native Linux runtimes, and optional RPGMaker Linux runner workflows on Linux. |
+### Updates and installing
 
-The same library can move between Linux and Windows through semantic JSON import/export. Platform-specific launch settings are preserved but only offered where supported.
+- Check your whole library for updates in one go. wLib compares your versions with F95Zone and fills in missing details from the thread page.
+- Install a new game or an update straight from a downloaded `.zip`, `.7z` or `.rar`. wLib puts it in your library folder, moves your saves over and removes the old version. It also notices matching archives in your Downloads folder. For `.7z` and `.rar` you need 7-Zip on Windows, or `7z`, `bsdtar` or `unrar` on Linux.
+- wLib can check GitHub for a newer version of itself from the Updates page.
 
-## ✨ Features
+### Moving and syncing your library
 
-### 🎮 Library & Organization
-- **Smart Game Library** — Add, organize, rate, and track your games with cover art, tags, and progress status.
-- **Playtime Tracking** — Automatically monitors game processes to calculate precisely how long you've played.
-- **Collections & Saved Filters** — Group games into your own collections, shown as tabs under the library header, and save filter + sort combinations as presets. A built-in **New since finished** collection lists completed games that got updates after you finished them.
-- **Wishlist** — Keep games you haven't installed yet in the library. They stay out of update counts and show **Set up** instead of **Play**; you're notified when a wishlisted thread is marked Completed.
-- **Finished Version Tracking** — Moving a game to Completed records the version you finished, separate from the installed version.
-- **Portable JSON Migration** — Export and import your library, playtime, launch options, collections, and selected settings with one JSON file, optionally encrypted with a passphrase.
-- **Import From Other Apps** — Bring your library over from **F95Checker**, **Atlas**, or **XLibrary**, choosing whether matched games are overwritten or only have missing fields filled.
-- **Library Sync** — Optionally keep your library in sync between machines through a folder (Syncthing, MEGA, etc.), Dropbox, or Google Drive, with optional passphrase encryption. Paths and launch settings stay per machine; see the [privacy policy](PRIVACY.md).
-- **Additional Launch Targets** — Add named executables for multi-part games while keeping one canonical default launch path.
-- **Install From Archive** — Install a new game or an update from a downloaded `.zip`, `.7z`, or `.rar` into a managed library folder, with save carry-over and safe removal of the old version. `.7z`/`.rar` need 7-Zip on Windows or `7z`/`bsdtar`/`unrar` on Linux; matching archives in your Downloads folder are offered automatically.
-- **Path Checks** — Path fields show whether the file or folder exists.
-- **Dark & Light Themes, Text Size** — Toggle between dark and light themes and scale the interface with a per-device text size setting.
+- Bring your library over from F95Checker, Atlas or XLibrary.
+- Back up everything to one JSON file and restore it on another machine, including Linux to Windows and back. You can protect the file with a passphrase.
+- Keep your library in sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what gets synced.
 
-### 🚀 Advanced Launcher
-- **Universal Engine Support** — Seamlessly launch and manage games built on Ren'Py, Unity, Unreal Engine, Godot, RPG Maker (MV/MZ/VX/XP), Wolf RPG Editor, and native Linux engines.
-- **Launch Modes** — Auto Detect on both platforms; Linux also offers Linux Native, Wine / Proton, and RPGMaker Linux with an external runner you install or configure.
-- **Wine / Proton Integration (Linux)** — Support for Wine, Proton, native Linux binaries, and shell scripts. Both platforms can launch `.jar` files with Java installed.
-- **Engine Auto-Configuration (Linux)** — Automatically applies Wine environment tweaks (like `winegstreamer=d` for RPGMaker/NW.js) to fix common black screens.
-- **Japanese Locale Mode (Linux)** — Sets `LC_ALL=ja_JP.UTF-8`; this environment override is not applied to native Windows launches.
-- **Wayland Support (Linux)** — Applies Wayland compatibility settings with a single toggle.
-- **Cheat Engine Injection (Linux)** — Auto-downloads and injects Lunar Engine (a Cheat Engine fork) into games running through Wine/Proton.
-- **Dependency Installers (Linux)** — One-click Wine installers for common visual novel and RPG runtime dependencies (DirectX, VCRedist, fonts) and RPGMaker RTPs/DLLs. On Windows, install any game-required runtimes using their native installers.
+### Launching
 
-### 🌐 F95Zone Integration & Automation
-- **Automated Update Checker**: Compares local versions with F95Zone's `checker.php` endpoint in batches of up to 100 games. Guest thread pages provide metadata and a fallback for missing versions.
-- **Engine Detection** — Reads the engine from thread prefixes (ignoring tags like `[VN]`, `Collection`, or `SiteRip`) and from game files when importing a folder.
-- **Browser Extension** — A Chrome/Firefox extension that adds "Add to wLib", "Wishlist", and "Open in wLib" buttons to F95Zone thread pages and updates itself.
+- Works with Ren'Py, Unity, Unreal, Godot, RPG Maker (XP, VX, MV, MZ), Wolf RPG and native Linux games. wLib works out the engine from the thread or the game folder.
+- On Windows, `.exe`, `.bat` and `.cmd` files run directly, `.jar` games run through Java, and HTML games open in your browser. Playtime isn't tracked for HTML games.
+- On Linux you can pick native, Wine, Proton or an RPG Maker Linux runner for each game. wLib also has:
+  - automatic fixes for common black screens in RPG Maker and NW.js games
+  - a Japanese locale option for games that need it
+  - a Wayland toggle
+  - one-click installs of common runtimes (DirectX, VC++ redistributables, fonts, RPG Maker RTPs)
+  - optional Cheat Engine (Lunar Engine) for Wine and Proton games
 
-> [!TIP]
-> wLib can check for newer GitHub releases and open the latest release page directly from the Updates view.
+  None of these options appear on Windows. If you bring a library over from Linux, switch any game that uses a Linux-only mode back to Auto Detect.
 
-## 📸 Screenshots
+### On F95Zone
+
+The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads. It keeps itself up to date. See [Browser extension](#browser-extension) for setup.
+
+### Everything else
+
+Light and dark themes, an adjustable text size, and the whole thing is open source: app, interface and extension.
+
+## Screenshots
 
 <table>
   <tr>
@@ -98,110 +93,53 @@ The same library can move between Linux and Windows through semantic JSON import
   </tr>
 </table>
 
-## 📋 Requirements
+## Installing
 
-### System Dependencies
+Download wLib from the [Releases](https://github.com/kirin-3/wLib/releases) page. Every release lists SHA-256 hashes next to the downloads if you want to check a file.
 
-Windows x64 users can install the MSI or extract the portable ZIP without installing Python, Node, Wine, Proton, Winetricks, or GTK. Game versions and metadata are fetched over guest HTTP requests without downloading a browser.
+### Windows
 
-| Dependency | Platform / when needed | Purpose |
-|------------|------------------------|---------|
-| **Python 3.12** | Linux and Windows, source/dev only | Backend development and CI toolchain |
-| **Node.js 22.12+ and npm** | Linux and Windows, source/frontend builds only | Compiles the Vue frontend and runs unit tests |
-| **Wine / Proton** | Linux, Windows game launches | Runs Windows game executables on Linux |
-| **Winetricks** | Linux, optional runtime installers | Installs DLLs and runtime libraries into Wine prefixes |
-| **GTK 3 / PyGObject** | Linux desktop integration | Optional native desktop integrations; Windows uses its native dialogs |
-| **Java** | Either platform, `.jar` games only | Provides the `java` command used by the launcher |
+There are two Windows downloads. Pick one:
 
-> [!NOTE]
-> Binary releases bundle Python dependencies. The source-tree `wlib.sh` launcher creates a Python virtual environment and installs missing **pip** dependencies when running from source.
+- **Installer** (`wLib-<version>-windows-x64.msi`): installs wLib for your user account and adds a Start Menu shortcut. Later versions install over it.
+- **Portable** (`wLib-<version>-windows-x64-portable.zip`): extract it anywhere and run `wLib.exe`.
 
-### GPU & Rendering
+You don't need Python, Wine or anything else. Your library is stored in `%LOCALAPPDATA%\wLib` either way, and it stays there if you uninstall.
 
-wLib uses Qt WebEngine on both platforms. Linux release launchers include automatic GPU detection and a crash guard system for cross-distro compatibility:
+The Windows builds aren't signed yet, so the first time you open wLib, Windows shows "Windows protected your PC". Click **More info**, then **Run anyway**. For the portable ZIP you can also right-click the file before extracting, open **Properties** and tick **Unblock**.
 
-- **GPU Detection**: On startup, release launchers probe your GPU using `glxinfo` and `/sys/class/drm/` to determine hardware acceleration availability
-- **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically falls back to software rendering via `QT_QUICK_BACKEND=software`
-- **Renderer Diagnostics**: GPU detection results and Qt backend choices are logged to `~/.local/share/wLib/renderer-diagnostics.log` and the active launcher log.
+### Linux
 
-Windows lets Qt select the native platform and renderer, and writes diagnostics to `%LOCALAPPDATA%\wLib\renderer-diagnostics.log`. Linux `xcb`/Wayland overrides and the shell launcher's GPU crash guard do not apply to Windows.
+Choose whichever format suits your distro.
 
-### Install Linux System Packages
-
-<details>
-<summary><b>Ubuntu / Debian</b></summary>
-
-```bash
-sudo apt update
-sudo apt install python3 python3-venv python3-gi python3-gi-cairo \
-                 gir1.2-gtk-3.0 wine winetricks nodejs npm
-```
-</details>
-
-<details>
-<summary><b>Fedora / RHEL</b></summary>
-
-```bash
-sudo dnf install python3 python3-gobject gtk3 wine winetricks nodejs npm
-```
-</details>
-
-<details>
-<summary><b>Arch / Manjaro</b></summary>
-
-```bash
-sudo pacman -S python python-gobject gtk3 wine winetricks nodejs npm
-```
-</details>
-
-## 🚀 Installation
-
-### Windows x64: MSI or Portable ZIP
-
-Download either Windows artifact from the [Releases](https://github.com/kirin-3/wLib/releases) page:
-
-- `wLib-<version>-windows-x64.msi` installs per-user under `%LOCALAPPDATA%\Programs\wLib`, adds a Start Menu shortcut (desktop shortcut optional), and supports upgrades, repair, and clean uninstall.
-- `wLib-<version>-windows-x64-portable.zip` can be extracted anywhere and run with `wLib.exe`.
-
-The MSI removes only installed program files and shortcuts. Library data and settings under `%LOCALAPPDATA%\wLib` remain after uninstall. The portable ZIP uses that same data directory; its library is not stored beside `wLib.exe`. SHA-256 hashes are published beside the artifacts.
-
-Windows builds are currently unsigned, so Windows SmartScreen shows "Windows protected your PC" on first launch. Click **More info → Run anyway**. If you downloaded the portable ZIP, you can instead right-click it before extracting, open **Properties**, and tick **Unblock**. Verify the download against the published SHA-256 hashes if you want to be sure it is the official build.
-
-### Linux Option 1: AppImage
-
-Download the latest `.AppImage` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
+**AppImage**, which works on most distros:
 
 ```bash
 chmod +x wLib-*.AppImage
 ./wLib-*.AppImage
 ```
 
-> [!IMPORTANT]
-> Some AppImages require FUSE to run. If your distribution doesn't have it enabled by default (like Ubuntu 22.04+), install `libfuse2`.
+If it won't start, you may need FUSE. On Ubuntu 22.04 and newer, install `libfuse2`.
 
-### Linux Option 2: Native Packages
-
-Download the latest `.deb` or `.rpm` from the [Releases](https://github.com/kirin-3/wLib/releases) page:
+**Debian, Ubuntu, Mint:**
 
 ```bash
-# Debian / Ubuntu / Mint
 sudo apt install ./wLib-*-linux-x86_64.deb
+```
 
-# Fedora / RPM-family
+**Fedora and other RPM distros:**
+
+```bash
 sudo dnf install ./wLib-*-linux-x86_64.rpm
 ```
 
-Native packages install wLib under `/opt/wlib` and expose the `wlib` command through `/usr/bin/wlib`.
-
-### Linux Option 3: AUR
-
-Arch users can install the binary release package as `wlib-bin` after the generated AUR metadata is published:
+**Arch** (AUR package `wlib-bin`):
 
 ```bash
 paru -S wlib-bin
 ```
 
-### Linux Option 4: tar.gz Archive
+**Plain archive:**
 
 ```bash
 tar xzf wLib-*-linux-x86_64.tar.gz
@@ -209,126 +147,113 @@ cd wLib-*/
 ./wlib
 ```
 
-### Run from Source on Linux
+Your library is stored in `~/.local/share/wLib`.
+
+### Optional extras
+
+wLib runs on its own, but some games need a bit more:
+
+| You want to | Install |
+|---|---|
+| Play Windows games on Linux | Wine, or use Proton (wLib can download Proton-GE for you) |
+| Use the one-click runtime installers on Linux | Winetricks |
+| Play `.jar` games | Java |
+| Install games from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux |
+
+For example, on Ubuntu or Debian: `sudo apt install wine winetricks`.
+
+## Browser extension
+
+The extension adds wLib buttons to F95Zone threads. It only talks to wLib on your own computer (port `8183`), so wLib has to be running for the buttons to work.
+
+wLib keeps the extension files in its data folder. Click **Open Extension Folder** in wLib to find them.
+
+### Chrome, Brave, Edge and other Chromium browsers
+
+1. Go to `chrome://extensions/`.
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and pick the `chrome` folder inside the extension folder.
+4. Open any F95Zone thread. The wLib buttons should now appear.
+
+### Firefox
+
+1. Open **Add-ons and themes**.
+2. Click the gear icon, then **Install Add-on From File...**.
+3. Pick `firefox/wLib.xpi` inside the extension folder and confirm.
+
+Don't load the `extension/` folder from this repository in Firefox. Use the `.xpi` file.
+
+### Updates
+
+The extension updates itself in both browsers, so you only have to install it once. If you set it up before automatic updates were added (before wLib 0.3.9), restart Chrome once, or install the Firefox `.xpi` one more time.
+
+If the extension says your wLib app is out of date, update wLib. The buttons keep working in the meantime, but some may not behave correctly.
+
+## Troubleshooting
+
+**The window is blank or crashes on startup (Linux).** wLib checks your GPU on startup. If it crashes with hardware acceleration, it switches to software rendering on the next launch by itself. The details are logged in `~/.local/share/wLib/renderer-diagnostics.log` (`%LOCALAPPDATA%\wLib\renderer-diagnostics.log` on Windows).
+
+**A Windows game shows a black screen on Linux.** Try Proton instead of Wine in the game's settings, and make sure its runtimes are installed with the one-click installers.
+
+**More detail for a bug report.** Turn on **Enable Debug Logging** in Settings, then reproduce the problem.
+
+## Reporting bugs
+
+[Open an issue](https://github.com/kirin-3/wLib/issues/new?template=bug_report.yml) and tell us:
+
+- what you did, what you expected, and what happened instead
+- your OS: the Windows version, or your Linux distro and whether you use X11 or Wayland
+- how you installed wLib (installer, portable ZIP, AppImage, package, or from source)
+- your Wine or Proton version, if the game runs through one
+- logs, if you have them (see Troubleshooting above)
+
+## Building from source
+
+You'll need Python 3.12, Node.js 22.12 or newer, and Git.
+
+**Linux:**
 
 ```bash
 git clone https://github.com/kirin-3/wLib.git
 cd wLib
-
-# Build the Vue frontend
-cd ui && npm install && npm run typecheck && npm run build && cd ..
-
-# Launch (auto-creates venv and installs Python deps)
+cd ui && npm install && npm run build && cd ..
 ./wlib.sh
 ```
 
-### Run from Source on Windows (PowerShell)
+`wlib.sh` sets up a Python virtual environment and installs what it needs the first time you run it. GTK 3 and PyGObject are optional; they add native desktop integration on Linux.
 
-Install Python 3.12, Git, and Node.js 22.12+ with npm, then run:
+**Windows (PowerShell):**
 
 ```powershell
 git clone https://github.com/kirin-3/wLib.git
 Set-Location wLib
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
-
 Set-Location ui
 npm ci
-npm run typecheck
 npm run build
 Set-Location ..
-
 .\.venv\Scripts\python.exe main.py
 ```
 
-Build Windows release artifacts with `scripts\build-windows.ps1`; see [Build & Packaging](docs/build.md). For contributor dependencies and checks, see [CONTRIBUTING.md](CONTRIBUTING.md).
+To build release packages, see [Build & Packaging](docs/build.md).
 
-## 🛠️ Development
+## Contributing
 
-### Dev Mode with Hot Reload
+Help is welcome, whether it's an RPG Maker quirk you tracked down or a cleanup in the interface code. Read the [contributing guide](CONTRIBUTING.md) before opening a pull request. It covers setup, tests and checks.
 
-For active development on Linux, wLib supports a Vite dev server with hot module replacement:
+To work on the interface with live reload, run this from the repository root after `npm install` in `ui/`:
 
 ```bash
-# Terminal 1: Start the Vite dev server
-cd ui
-npm install
-npm run dev
-
-# Terminal 2: Launch wLib in dev mode
 DEV_MODE=1 python main.py
 ```
 
-This connects PyWebView natively to `http://localhost:5173` so you receive instant frontend updates without a separate rebuild step.
+wLib starts the Vite dev server for you and loads the interface from it, so your changes show up right away. On Windows PowerShell, set `$env:DEV_MODE = "1"` first. You can also run `npm run dev` in `ui/` on its own and open the interface in a normal browser; it uses fake data there.
 
-On Windows, `npm run dev` works for browser-only frontend development with mock API responses. Desktop `DEV_MODE` currently invokes `npm` directly and can fail with `WinError 2` when Node provides only `npm.cmd`; use the source-run steps above to rebuild `ui/dist/` and test the real desktop bridge. See the [contributing guide](CONTRIBUTING.md#running-the-app-locally) for platform-specific commands.
+To check the backend without opening a window, run `python scripts/smoke_backend.py`.
 
-Before submitting frontend changes, run:
+How the code fits together is explained in the [developer documentation](docs/README.md).
 
-```bash
-cd ui
-npm run typecheck
-npm run build
-```
+## License
 
-### Quick Backend Verification
-
-Use the smoke backend test to verify your environment without opening the UI. It sets temporary HOME and `WLIB_DATA_DIR` paths automatically on Linux and Windows. See the [contributing guide](CONTRIBUTING.md#smoke-backend-test) for source and packaged asset checks.
-
-```bash
-python scripts/smoke_backend.py
-```
-
-This runs extension sync and Qt initialization with temporary HOME and app-data paths.
-
-> [!NOTE]
-> Read the complete architectural breakdown and module specifications in the [Developer Documentation](docs/README.md).
-
-## 🌐 Browser Extension
-
-wLib includes a browser extension that adds quick-action buttons directly to F95Zone thread pages. These buttons communicate securely with your running wLib app over a local HTTP server on port `8183`.
-
-The app synchronizes browser extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows, and exposes the resolved folder through **Open Extension Folder**.
-
-The extension updates itself: Chromium browsers pick up the synced files on the next F95Zone page, and Firefox installs new versions automatically from the release's update manifest. If you installed the extension before automatic updates existed, restart your Chromium browser once or install the Firefox XPI once more; new installs need no extra step.
-
-### Chrome, Chromium, Brave, Edge
-
-1. Open your Chromium-based browser.
-2. Navigate to `chrome://extensions/`.
-3. Enable **Developer mode** in the top right.
-4. Click **Load unpacked** and select `chrome/` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/chrome/` on Linux or `%LOCALAPPDATA%\wLib\extension\chrome` on Windows.
-5. Visit any F95Zone thread to see the wLib integration buttons!
-
-The extension reloads itself on the next F95Zone page after future updates.
-
-### Firefox
-
-1. Open Firefox **Add-ons and themes**.
-2. Click the gear icon and choose **Install Add-on From File...**.
-3. Select `firefox/wLib.xpi` inside the folder shown by **Open Extension Folder**: `~/.local/share/wLib/extension/firefox/wLib.xpi` on Linux or `%LOCALAPPDATA%\wLib\extension\firefox\wLib.xpi` on Windows.
-4. Confirm the installation when Firefox prompts you. Firefox updates the add-on automatically afterwards.
-
-> [!WARNING]
-> Do NOT load the raw `extension/` directory directly in Firefox. Release builds include a signed `.xpi` for normal Firefox installation; local development builds may generate an unsigned fallback XPI for smoke checks.
-
-## 🐛 Reporting Bugs
-
-Found a bug? Please [open an issue](https://github.com/kirin-3/wLib/issues/new?template=bug_report.yml) and include:
-
-- **Steps to reproduce** the issue
-- **Expected vs actual behavior**
-- Your **operating system and version**: Windows version/build or Linux distribution and display server (X11/Wayland)
-- Your **installation format** (Windows MSI/portable ZIP, Linux package/AppImage, or source)
-- Your **Wine/Proton version** (Linux compatibility launches only)
-- Any **error logs** (enable logging in Settings → Debug Logging)
-
-## 🤝 Contributing
-
-Contributions are highly welcome! Whether it's tracking down an RPGMaker engine quirk or refactoring Vue components, we'd love your help. 
-
-Please read the [Contributing Guide](CONTRIBUTING.md) to initialize your dev environment properly before submitting pull requests.
-
-## 📄 License
-
-This project is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+wLib is licensed under the [GNU General Public License v3.0 or later](LICENSE). The [privacy policy](PRIVACY.md) explains what wLib stores and what it sends.
