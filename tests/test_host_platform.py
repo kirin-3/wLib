@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+from unittest.mock import MagicMock, patch
 
 from core.host_platform import (
     get_cache_root,
@@ -22,9 +23,9 @@ def test_windows_paths_use_local_app_data(tmp_path):
 
 
 def test_windows_paths_fall_back_to_user_home(tmp_path):
-    assert get_data_dir(platform="win32", environ={}, home=str(tmp_path)) == os.path.join(
-        str(tmp_path), "AppData", "Local", "wLib"
-    )
+    assert get_data_dir(
+        platform="win32", environ={}, home=str(tmp_path)
+    ) == os.path.join(str(tmp_path), "AppData", "Local", "wLib")
 
 
 def test_linux_paths_preserve_xdg_defaults(tmp_path):
@@ -40,9 +41,9 @@ def test_linux_paths_preserve_xdg_defaults(tmp_path):
 
 
 def test_linux_paths_preserve_home_fallbacks(tmp_path):
-    assert get_data_dir(platform="linux", environ={}, home=str(tmp_path)) == os.path.join(
-        str(tmp_path), ".local", "share", "wLib"
-    )
+    assert get_data_dir(
+        platform="linux", environ={}, home=str(tmp_path)
+    ) == os.path.join(str(tmp_path), ".local", "share", "wLib")
 
 
 def test_linux_xdg_data_home_keeps_existing_legacy_library(tmp_path):
@@ -100,3 +101,137 @@ def test_open_windows_system_target_platform_parameter():
     opened, error = open_windows_system_target("https://example.com", platform="linux")
     assert opened is False
     assert "Windows system associations are unavailable" in error
+
+
+def _simulate_flatpak(monkeypatch, enabled=True):
+    import core.host_platform as host_platform
+
+    real_isfile = os.path.isfile
+
+    def _isfile(path):
+        if path == host_platform.FLATPAK_INFO_PATH:
+            return enabled
+        try:
+            return real_isfile(path)
+        except OSError:
+            return False
+
+    monkeypatch.setattr(os.path, "isfile", _isfile)
+    monkeypatch.setattr(host_platform.os.path, "isfile", _isfile)
+
+
+def test_is_flatpak_false_outside_sandbox(monkeypatch):
+    from core.host_platform import is_flatpak
+
+    _simulate_flatpak(monkeypatch, enabled=False)
+    assert is_flatpak() is False
+
+
+def test_is_flatpak_true_inside_sandbox(monkeypatch):
+    from core.host_platform import is_flatpak
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+    assert is_flatpak() is True
+
+
+def test_host_command_identity_outside_flatpak(monkeypatch):
+    from core.host_platform import host_command
+
+    _simulate_flatpak(monkeypatch, enabled=False)
+    monkeypatch.setenv("WINEPREFIX", "/prefix")
+    cmd = ["wine", "/games/game.exe"]
+    assert host_command(cmd, env={"WINEPREFIX": "/prefix"}, cwd="/games") == cmd
+    assert host_command(cmd, supervise=True) == cmd
+
+
+def test_host_command_flatpak_argv_shape(monkeypatch):
+    from core.host_platform import host_command
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+    monkeypatch.delenv("WINEPREFIX", raising=False)
+    argv = host_command(
+        ["wine", "/games/game.exe"],
+        env={"WINEPREFIX": "/prefix"},
+        cwd="/games",
+    )
+    assert argv[:4] == ["flatpak-spawn", "--host", "--watch-bus", "--directory=/games"]
+    assert "--env=WINEPREFIX=/prefix" in argv
+    assert argv[-2:] == ["wine", "/games/game.exe"]
+    assert argv[argv.index("--") + 1] == "wine"
+
+
+def test_host_command_forwards_env_diff_only(monkeypatch):
+    from core.host_platform import host_command
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+    monkeypatch.setenv("KEEP", "same")
+    monkeypatch.setenv("CHANGED", "old")
+    argv = host_command(
+        ["winetricks", "-q", "corefonts"],
+        env={
+            "KEEP": "same",
+            "CHANGED": "new",
+            "WINEPREFIX": "/prefix",
+            "LD_LIBRARY_PATH": "/sandbox/lib",
+            "QT_QPA_PLATFORM": "xcb",
+            "PYTHONHOME": "/sandbox/python",
+            "FLATPAK_ID": "io.github.kirin_3.wLib",
+            "QTWEBENGINE_DISABLE_SANDBOX": "1",
+        },
+    )
+    assert "--env=KEEP=same" not in argv
+    assert "--env=CHANGED=new" in argv
+    assert "--env=WINEPREFIX=/prefix" in argv
+    for blocked in (
+        "LD_LIBRARY_PATH",
+        "QT_QPA_PLATFORM",
+        "PYTHONHOME",
+        "FLATPAK_ID",
+        "QTWEBENGINE_DISABLE_SANDBOX",
+    ):
+        assert not any(part.startswith(f"--env={blocked}=") for part in argv), blocked
+
+
+def test_host_command_supervisor_wrapping(monkeypatch):
+    from core.host_platform import host_command
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+    monkeypatch.delenv("WINEPREFIX", raising=False)
+    argv = host_command(
+        ["wine", "/games/game.exe"],
+        env={"WINEPREFIX": "/prefix"},
+        supervise=True,
+    )
+    assert argv[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    sep = argv.index("--")
+    inner = argv[sep + 1 :]
+    assert inner[0:4] == ["sh", "-c", inner[2], "sh"]
+    assert "setsid" in inner[2]
+    assert "kill -TERM" in inner[2]
+    assert inner[4:] == ["wine", "/games/game.exe"]
+
+
+def test_host_which_outside_flatpak_uses_path(monkeypatch):
+    import core.host_platform as host_platform
+
+    _simulate_flatpak(monkeypatch, enabled=False)
+    monkeypatch.setattr(host_platform.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert host_platform.host_which("wine") == "/usr/bin/wine"
+
+
+def test_host_which_inside_flatpak_hit_and_miss(monkeypatch):
+    import core.host_platform as host_platform
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+
+    hit = MagicMock(returncode=0, stdout="/usr/bin/wine\n")
+    with patch("subprocess.run", return_value=hit) as run:
+        assert host_platform.host_which("wine") == "/usr/bin/wine"
+        assert run.call_args.args[0][:3] == ["flatpak-spawn", "--host", "sh"]
+
+    miss = MagicMock(returncode=1, stdout="")
+    with patch("subprocess.run", return_value=miss):
+        assert host_platform.host_which("missing-tool") is None
+
+    with patch("subprocess.run", side_effect=OSError("no spawn")):
+        assert host_platform.host_which("wine") is None

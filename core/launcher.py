@@ -4,7 +4,6 @@ import os
 import posixpath
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,8 @@ from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_laun
 from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
+    host_command,
+    host_which,
     is_windows,
     open_windows_system_target,
 )
@@ -297,23 +298,38 @@ class Launcher:
         with self._running_lock:
             running = self._running.get(game_id)
             proc = running.proc if running is not None else None
-            prefix = running.kill_info[1].get("WINEPREFIX") if running and running.kill_info else None
+            prefix = (
+                running.kill_info[1].get("WINEPREFIX")
+                if running and running.kill_info
+                else None
+            )
             # wineserver -k ends every process in the prefix, so spare games that share it.
             prefix_shared = any(
-                other.kill_info is not None and other.kill_info[1].get("WINEPREFIX") == prefix
+                other.kill_info is not None
+                and other.kill_info[1].get("WINEPREFIX") == prefix
                 for other_id, other in self._running.items()
                 if other_id != game_id and prefix is not None
             )
         if running is None:
-            return {"success": False, "code": "not_running", "error": "Game is not running"}
+            return {
+                "success": False,
+                "code": "not_running",
+                "error": "Game is not running",
+            }
         if proc is None:
-            return {"success": False, "code": "starting", "error": "Game is still starting"}
+            return {
+                "success": False,
+                "code": "starting",
+                "error": "Game is still starting",
+            }
         pid = proc.pid
         try:
             if is_windows():
                 result = subprocess.run(
                     ["taskkill", "/T", "/F", "/PID", str(pid)],
-                    capture_output=True, timeout=5, check=False,
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
                 )
                 if result.returncode:
                     return {
@@ -325,8 +341,11 @@ class Launcher:
                     wineserver, env = running.kill_info
                     try:
                         _ = subprocess.run(
-                            [wineserver, "-k"], env=env, capture_output=True,
-                            timeout=2, check=False,
+                            host_command([wineserver, "-k"], env=env),
+                            env=env,
+                            capture_output=True,
+                            timeout=2,
+                            check=False,
                         )
                     except (OSError, subprocess.TimeoutExpired):
                         pass
@@ -357,7 +376,7 @@ class Launcher:
         path_module = _host_path_module()
         expanded_path = path_module.expanduser(raw_path.strip())
         if path_module.sep not in expanded_path and not expanded_path.startswith("."):
-            path_match = shutil.which(expanded_path)
+            path_match = host_which(expanded_path)
             if path_match:
                 return path_module.abspath(path_match)
         return path_module.abspath(expanded_path)
@@ -430,7 +449,7 @@ class Launcher:
             }
 
         candidates: list[tuple[str, str]] = []
-        path_runner = shutil.which("rpgmaker-linux")
+        path_runner = host_which("rpgmaker-linux")
         if path_runner:
             candidates.append(("path", path_runner))
         candidates.extend(
@@ -488,7 +507,11 @@ class Launcher:
         """
         with self._running_lock:
             if game_id in self._running:
-                return {"success": False, "code": "already_running", "error": "Game is already running"}
+                return {
+                    "success": False,
+                    "code": "already_running",
+                    "error": "Game is already running",
+                }
         if not isinstance(exe_path, str) or not exe_path.strip():
             return {
                 "success": False,
@@ -582,7 +605,11 @@ class Launcher:
             )
             with self._running_lock:
                 if game_id in self._running:
-                    return {"success": False, "code": "already_running", "error": "Game is already running"}
+                    return {
+                        "success": False,
+                        "code": "already_running",
+                        "error": "Game is already running",
+                    }
                 if game_id is not None:
                     self._running[game_id] = entry
             try:
@@ -600,7 +627,7 @@ class Launcher:
 
                 try:
                     game_proc = subprocess.Popen(
-                        cmd,
+                        host_command(cmd, env=env_vars, cwd=game_dir, supervise=True),
                         env=env_vars,
                         stdout=log_file if log_file is not None else subprocess.DEVNULL,
                         stderr=(
@@ -675,7 +702,7 @@ class Launcher:
                             ce_cmd.append(ce_exe)
 
                             _ = subprocess.Popen(
-                                ce_cmd,
+                                host_command(ce_cmd, env=env_vars),
                                 env=env_vars,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
@@ -725,7 +752,10 @@ class Launcher:
                             delta = int(now - last_saved_time)
                             with self._running_lock:
                                 # shutdown() may have taken the entry and flushed it.
-                                owned = game_id is None or self._running.get(game_id) is entry
+                                owned = (
+                                    game_id is None
+                                    or self._running.get(game_id) is entry
+                                )
                                 if owned:
                                     entry.last_saved_time = now
                             if not owned:
@@ -754,7 +784,9 @@ class Launcher:
                                 pass
                         now = time.monotonic()
                         if should_report_exit and on_exit_callback is not None:
-                            _ = on_exit_callback(max(0, int(now - last_saved_time)), True)
+                            _ = on_exit_callback(
+                                max(0, int(now - last_saved_time)), True
+                            )
 
                 threading.Thread(target=track_playtime_thread, daemon=True).start()
 
@@ -797,9 +829,7 @@ class Launcher:
             runtime_dirs: set[str] = set()
             meipass = str(getattr(sys, "_MEIPASS", "") or "").strip()
             if meipass:
-                runtime_dirs.add(
-                    path_module.abspath(path_module.expanduser(meipass))
-                )
+                runtime_dirs.add(path_module.abspath(path_module.expanduser(meipass)))
 
             executable_dir = path_module.dirname(path_module.abspath(sys.executable))
             runtime_dirs.add(path_module.join(executable_dir, "_internal"))
@@ -865,8 +895,7 @@ class Launcher:
                 library_paths = [
                     entry
                     for entry in library_path.split(path_module.pathsep)
-                    if entry
-                    and not is_packaged_runtime_library_path(entry)
+                    if entry and not is_packaged_runtime_library_path(entry)
                 ]
                 if library_paths:
                     clean_env["LD_LIBRARY_PATH"] = path_module.pathsep.join(
@@ -1020,9 +1049,7 @@ class Launcher:
 
             process_env = without_wine_proton_env(env)
             if ext == ".exe":
-                return execute_process(
-                    build_command([exe_path], args), process_env
-                )
+                return execute_process(build_command([exe_path], args), process_env)
             if ext in (".bat", ".cmd"):
                 command_processor = os.environ.get("COMSPEC") or "cmd.exe"
                 base_command = [
@@ -1033,9 +1060,7 @@ class Launcher:
                     "call",
                     exe_path,
                 ]
-                return execute_process(
-                    build_command(base_command, args), process_env
-                )
+                return execute_process(build_command(base_command, args), process_env)
             if ext == ".jar":
                 return execute_process(
                     build_command(["java", "-jar", exe_path], args), process_env
@@ -1049,7 +1074,10 @@ class Launcher:
 
         if launch_mode == "custom":
             if not args:
-                return {"success": False, "error": "Custom Command mode needs a command"}
+                return {
+                    "success": False,
+                    "error": "Custom Command mode needs a command",
+                }
             command = build_command([exe_path], args) if "%command%" in args else args
             return execute_process(command, build_host_tool_env(env))
 
@@ -1084,7 +1112,9 @@ class Launcher:
             wine_prefix = get_default_wine_prefix()
             os.makedirs(wine_prefix, exist_ok=True)
 
-        is_proton = proton_path and "proton" in path_module.basename(proton_path).lower()
+        is_proton = (
+            proton_path and "proton" in path_module.basename(proton_path).lower()
+        )
 
         base_cmd = [proton_path] if proton_path else ["wine"]
         if is_proton:
@@ -1147,7 +1177,9 @@ class Launcher:
         wineserver = ""
         if is_proton and proton_path:
             for layout in ("files", "dist"):
-                candidate = path_module.join(path_module.dirname(proton_path), layout, "bin", "wineserver")
+                candidate = path_module.join(
+                    path_module.dirname(proton_path), layout, "bin", "wineserver"
+                )
                 if os.path.isfile(candidate):
                     wineserver = candidate
                     break
@@ -1158,9 +1190,15 @@ class Launcher:
                 if proton_path and path_module.dirname(proton_path)
                 else ""
             )
-            wineserver = sibling if sibling and os.path.isfile(sibling) else shutil.which("wineserver") or ""
+            wineserver = (
+                sibling
+                if sibling and os.path.isfile(sibling)
+                else host_which("wineserver") or ""
+            )
         kill_env = env.copy()
-        kill_env["WINEPREFIX"] = path_module.join(wine_prefix, "pfx") if is_proton else wine_prefix
+        kill_env["WINEPREFIX"] = (
+            path_module.join(wine_prefix, "pfx") if is_proton else wine_prefix
+        )
         return execute_process(
             command,
             env,

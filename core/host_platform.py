@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict
 
 
@@ -162,6 +164,98 @@ def unsupported_on_host(feature: str) -> dict[str, object]:
         "code": "unsupported_platform",
         "error_code": "unsupported_platform",
     }
+
+
+FLATPAK_INFO_PATH = "/.flatpak-info"
+
+_HOST_SUPERVISOR_SCRIPT = (
+    'setsid "$@" & g=$!; trap "kill -TERM -$g" TERM INT HUP; '
+    "while kill -0 -$g 2>/dev/null; do sleep 1; done"
+)
+
+
+def is_flatpak() -> bool:
+    """True when running inside a Flatpak sandbox (design D4).
+
+    Uses `os.path.isfile` (the marker is a file) so blanket
+    `patch("os.path.exists", return_value=True)` fixtures in unrelated tests
+    do not flip sandbox mode on.
+    """
+    try:
+        return os.path.isfile(FLATPAK_INFO_PATH)
+    except OSError:
+        return False
+
+
+def _is_sandbox_only_env_var(name: str) -> bool:
+    if name == "LD_LIBRARY_PATH":
+        return True
+    return name.startswith(("QT_", "PYTHON", "FLATPAK_", "QTWEBENGINE_"))
+
+
+def host_which(name: str) -> str | None:
+    """Find `name` on the host PATH (design D4).
+
+    Outside Flatpak this is `shutil.which`. Inside, the sandbox PATH is
+    invisible, so resolve via `flatpak-spawn --host`.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return None
+    if not is_flatpak():
+        return shutil.which(cleaned)
+    try:
+        completed = subprocess.run(
+            ["flatpak-spawn", "--host", "sh", "-c", 'command -v "$1"', "sh", cleaned],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    path = (completed.stdout or "").strip().splitlines()
+    if not path or not path[0].strip():
+        return None
+    return path[0].strip()
+
+
+def host_command(
+    cmd: Sequence[str],
+    env: Mapping[str, str] | None = None,
+    cwd: str | None = None,
+    supervise: bool = False,
+) -> list[str]:
+    """Prefix `cmd` so it runs on the host when inside Flatpak (design D4/D5).
+
+    Outside Flatpak the command is returned unchanged. Inside, the result is
+    `flatpak-spawn --host --watch-bus [--directory=cwd] [--env=K=V ...] --
+    <cmd>`, where only env vars that differ from `os.environ` are passed and
+    sandbox-only vars are never forwarded. With `supervise=True` the host-side
+    command is wrapped in a small `sh`/`setsid` supervisor so process-group
+    tracking keeps working across the sandbox boundary.
+    """
+    base = [str(part) for part in cmd]
+    if not is_flatpak():
+        return base
+    inner: list[str] = base
+    if supervise:
+        inner = ["sh", "-c", _HOST_SUPERVISOR_SCRIPT, "sh", *base]
+    argv: list[str] = ["flatpak-spawn", "--host", "--watch-bus"]
+    if cwd is not None:
+        argv.append(f"--directory={cwd}")
+    if env:
+        for key, value in env.items():
+            if _is_sandbox_only_env_var(key):
+                continue
+            if os.environ.get(key) == value:
+                continue
+            argv.append(f"--env={key}={value}")
+    argv.append("--")
+    argv.extend(inner)
+    return argv
 
 
 def open_windows_system_target(

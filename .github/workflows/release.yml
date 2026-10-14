@@ -131,12 +131,18 @@ jobs:
           sudo apt-get install -y \
             ca-certificates libfuse2 libxcb-xkb1 libxcb-shape0 \
             libxcb-icccm4 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 \
-            libxcb-util1 libxcb-render-util0 libxkbcommon-x11-0
+            libxcb-util1 libxcb-render-util0 libxkbcommon-x11-0 \
+            flatpak flatpak-builder
+
+      - name: Add Flathub remote
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 
       - name: Build packages
         env:
           WLIB_BUILD_NATIVE_PACKAGES: '1'
           WLIB_BUILD_AUR: '1'
+          WLIB_BUILD_FLATPAK: '1'
           WLIB_REQUIRE_PACKAGE_METADATA: ${{ startsWith(github.ref, 'refs/tags/') && '1' || '0' }}
           WLIB_MAINTAINER: ${{ vars.WLIB_MAINTAINER }}
           WLIB_GDRIVE_CLIENT_SECRET: ${{ secrets.WLIB_GDRIVE_CLIENT_SECRET }}
@@ -155,6 +161,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.rpm
+            dist/*.flatpak
             dist/aur/PKGBUILD
             dist/aur/.SRCINFO
 
@@ -328,7 +335,7 @@ jobs:
           }
           {
             echo "windows=$(link '*windows-x64.msi' MSI) · $(link '*windows-x64-portable.zip' 'Portable ZIP') · $(link '*SHA256SUMS.txt' 'SHA-256 checksums')"
-            echo "linux=$(link '*.AppImage' AppImage) · $(link '*linux-x86_64.tar.gz' Tarball) · $(link '*.deb' DEB) · $(link '*.rpm' RPM)"
+            echo "linux=$(link '*.AppImage' AppImage) · $(link '*linux-x86_64.tar.gz' Tarball) · $(link '*.deb' DEB) · $(link '*.rpm' RPM) · $(link '*.flatpak' Flatpak)"
             echo "firefox=$(link 'wlib-firefox-*.xpi')"
           } >> "$GITHUB_OUTPUT"
 

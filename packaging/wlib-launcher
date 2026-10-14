@@ -8,6 +8,19 @@ APP_DIR="${WLIB_APP_DIR:-$SELF_DIR}"
 LAUNCHER_NAME="${WLIB_LAUNCHER_NAME:-Release}"
 if [ -n "${WLIB_DATA_DIR:-}" ]; then
     DATA_DIR="$WLIB_DATA_DIR"
+elif [ -e "/.flatpak-info" ]; then
+    # Inside Flatpak keep the library at the host path so users can switch
+    # formats without losing their library (design D6). Flatpak exports the
+    # host's XDG_DATA_HOME as HOST_XDG_DATA_HOME when the host sets it.
+    if [ -n "${HOST_XDG_DATA_HOME:-}" ]; then
+        DATA_DIR="$HOST_XDG_DATA_HOME/wLib"
+    else
+        DATA_DIR="$HOME/.local/share/wLib"
+    fi
+    # Same legacy fallback as below and get_data_dir(): keep a pre-XDG library.
+    if [ ! -d "$DATA_DIR" ] && [ -d "$HOME/.local/share/wLib" ]; then
+        DATA_DIR="$HOME/.local/share/wLib"
+    fi
 else
     DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
     # Same fallback as get_data_dir(): keep a pre-XDG library. Resolve before any

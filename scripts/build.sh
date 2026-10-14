@@ -18,7 +18,10 @@ APPIMAGE_NAME="${APP_NAME}-${VERSION}-x86_64.AppImage"
 PACKAGE_VERSION="${VERSION#v}"
 WLIB_BUILD_NATIVE_PACKAGES="${WLIB_BUILD_NATIVE_PACKAGES:-auto}"
 WLIB_BUILD_AUR="${WLIB_BUILD_AUR:-auto}"
+WLIB_BUILD_FLATPAK="${WLIB_BUILD_FLATPAK:-auto}"
 WLIB_PACKAGE_RELEASE="${WLIB_PACKAGE_RELEASE:-1}"
+FLATPAK_APP_ID="io.github.kirin_3.wLib"
+FLATPAK_NAME="${APP_NAME}-${VERSION}-x86_64.flatpak"
 
 echo "🔨 Building $APP_NAME $VERSION"
 
@@ -71,6 +74,66 @@ should_generate_aur_metadata() {
             exit 1
             ;;
     esac
+}
+
+should_build_flatpak() {
+    case "$WLIB_BUILD_FLATPAK" in
+        1|true|yes)
+            return 0
+            ;;
+        0|false|no)
+            return 1
+            ;;
+        auto)
+            command -v flatpak-builder >/dev/null 2>&1
+            ;;
+        *)
+            echo "Invalid WLIB_BUILD_FLATPAK value: $WLIB_BUILD_FLATPAK" >&2
+            exit 1
+            ;;
+    esac
+}
+
+build_flatpak() {
+    if ! should_build_flatpak; then
+        echo "📦 Skipping Flatpak bundle build (WLIB_BUILD_FLATPAK=$WLIB_BUILD_FLATPAK)"
+        return
+    fi
+
+    if ! command -v flatpak-builder >/dev/null 2>&1; then
+        echo "flatpak-builder is required to build the Flatpak bundle." >&2
+        exit 1
+    fi
+
+    if ! command -v flatpak >/dev/null 2>&1; then
+        echo "flatpak is required to build the Flatpak bundle." >&2
+        exit 1
+    fi
+
+    echo "📦 Creating Flatpak bundle..."
+    local flatpak_dir="$BUILD_DIR/flatpak"
+    rm -rf "$flatpak_dir"
+    mkdir -p "$flatpak_dir"
+    cp "$PROJECT_DIR/packaging/flatpak/io.github.kirin_3.wLib.yml" "$flatpak_dir/"
+    rm -rf "$flatpak_dir/staged"
+    cp -a "$BUILD_DIR/$PACKAGE_NAME" "$flatpak_dir/staged"
+    cp "$PROJECT_DIR/packaging/flatpak/io.github.kirin_3.wLib.metainfo.xml" \
+        "$flatpak_dir/staged/io.github.kirin_3.wLib.metainfo.xml"
+
+    (
+        cd "$flatpak_dir"
+        flatpak-builder --force-clean --user \
+            --install-deps-from=flathub \
+            --repo="$flatpak_dir/repo" \
+            "$flatpak_dir/build" \
+            "$flatpak_dir/io.github.kirin_3.wLib.yml"
+        flatpak build-bundle \
+            "$flatpak_dir/repo" \
+            "$DIST_DIR/${FLATPAK_NAME}" \
+            "$FLATPAK_APP_ID"
+    )
+
+    echo "   ✅ $DIST_DIR/${FLATPAK_NAME}"
 }
 
 build_native_packages() {
@@ -264,6 +327,7 @@ echo "   ✅ $DIST_DIR/${PACKAGE_NAME}.tar.gz"
 
 build_native_packages
 generate_aur_metadata
+build_flatpak
 
 # ── Create AppImage ──
 echo "🖼  Creating AppImage..."

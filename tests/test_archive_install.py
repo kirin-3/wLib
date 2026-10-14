@@ -692,8 +692,19 @@ def test_check_archive_entry_safe_drive_relative_and_reserved_names():
             check_archive_entry_safe(bad)
 
     for reserved in (
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9", "con.txt", "nul.tar",
-        "CON ", "NUL .txt", "dir/aux",
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM9",
+        "LPT1",
+        "LPT9",
+        "con.txt",
+        "nul.tar",
+        "CON ",
+        "NUL .txt",
+        "dir/aux",
     ):
         with pytest.raises(ArchiveSafetyError):
             check_archive_entry_safe(reserved)
@@ -841,3 +852,58 @@ def test_flatten_single_wrapper_ignores_macosx(tmp_path):
     assert flatten_single_wrapper(str(staging)) is True
     assert (staging / "Game.exe").is_file()
     assert not (staging / "__MACOSX").exists()
+
+
+def _simulate_flatpak_archive(monkeypatch, enabled=True):
+    import core.host_platform as host_platform
+
+    real_isfile = os.path.isfile
+
+    def _isfile(path):
+        if path == host_platform.FLATPAK_INFO_PATH:
+            return enabled
+        try:
+            return real_isfile(path)
+        except OSError:
+            return False
+
+    monkeypatch.setattr(os.path, "isfile", _isfile)
+    monkeypatch.setattr(host_platform.os.path, "isfile", _isfile)
+
+
+def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    staging = tmp_path / "staging-flatpak"
+    staging.mkdir()
+    archive = str(tmp_path / "game.7z")
+
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["Game.exe"])
+
+    calls: list[list[str]] = []
+
+    class _Res:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return _Res()
+
+    monkeypatch.setattr(ai.subprocess, "run", _run)
+
+    # Default path is unchanged outside Flatpak.
+    _simulate_flatpak_archive(monkeypatch, enabled=False)
+    assert ai.extract_with_tool("/usr/bin/7z", archive, str(staging)) == 1
+    assert calls[-1][0] == "/usr/bin/7z"
+
+    # Inside Flatpak the extractor runs on the host.
+    _simulate_flatpak_archive(monkeypatch, enabled=True)
+    assert ai.extract_with_tool("/usr/bin/7z", archive, str(staging)) == 1
+    assert calls[-1][:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    sep = calls[-1].index("--")
+    inner = calls[-1][sep + 1 :]
+    assert inner[0] == "/usr/bin/7z"
+    assert inner[1] == "x"
+    assert inner[2] == archive

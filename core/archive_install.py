@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
+from core.host_platform import host_command, host_which
 
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -114,7 +115,7 @@ def detect_archive_tool(
 
     `.zip` needs no tool → (None, None). For `.7z`/`.rar`, search
     `7zz`/`7z`/`7za`, then `bsdtar`, then `unrar` (rar only), plus the
-    Windows `Program Files\\7-Zip` paths. Uses `shutil.which` and
+    Windows `Program Files\\7-Zip` paths. Uses `host_which` and
     `os.path.isfile` so tests can monkeypatch them.
     """
     fmt = archive_format(archive_path)
@@ -124,14 +125,14 @@ def detect_archive_tool(
         return None, f"Unsupported archive format: {archive_path or '(none)'}"
 
     for candidate in ("7zz", "7z", "7za"):
-        found = shutil.which(candidate)
+        found = host_which(candidate)
         if found:
             return found, None
-    found = shutil.which("bsdtar")
+    found = host_which("bsdtar")
     if found:
         return found, None
     if fmt == "rar":
-        found = shutil.which("unrar")
+        found = host_which("unrar")
         if found:
             return found, None
 
@@ -289,7 +290,9 @@ def _tool_failure(
     )
     lowered = detail.lower()
     if "password" in lowered or "encrypted" in lowered:
-        return ArchiveInstallError(f"Archive is password-protected or encrypted ({detail})")
+        return ArchiveInstallError(
+            f"Archive is password-protected or encrypted ({detail})"
+        )
     return ArchiveInstallError(f"{what} ({detail})")
 
 
@@ -303,7 +306,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
     env = build_host_open_env()
     if "unrar" in base:
         completed = subprocess.run(
-            [tool, "lb", archive_path],
+            host_command([tool, "lb", archive_path], env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -319,7 +322,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         ]
     if "bsdtar" in base or base == "tar":
         completed = subprocess.run(
-            [tool, "-tf", archive_path],
+            host_command([tool, "-tf", archive_path], env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -338,7 +341,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         return entries
     # 7z/7zz/7za (also a raw 7z.exe path on Windows).
     completed = subprocess.run(
-        [tool, "l", "-slt", "-p", archive_path],
+        host_command([tool, "l", "-slt", "-p", archive_path], env=env),
         capture_output=True,
         text=True,
         check=False,
@@ -434,7 +437,7 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
         cmd = [tool, "x", archive_path, f"-o{staging_dir}", "-y", "-p"]
     try:
         completed = subprocess.run(
-            cmd,
+            host_command(cmd, env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -607,13 +610,14 @@ def uncompressed_size(archive_path: str) -> int | None:
         tool, _err = detect_archive_tool(archive_path)
         if tool and "7z" in _tool_basename(tool):
             try:
+                env = build_host_open_env()
                 completed = subprocess.run(
-                    [tool, "l", "-slt", "-p", archive_path],
+                    host_command([tool, "l", "-slt", "-p", archive_path], env=env),
                     capture_output=True,
                     text=True,
                     check=False,
                     stdin=subprocess.DEVNULL,
-                    env=build_host_open_env(),
+                    env=env,
                 )
                 if completed.returncode == 0:
                     total = 0

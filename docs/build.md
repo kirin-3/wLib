@@ -188,6 +188,23 @@ nFPM reads `packaging/nfpm.yaml` and receives these environment variables from t
 - `WLIB_PACKAGE_RELEASE`: package revision, default `1`.
 - `WLIB_MAINTAINER`: maintainer metadata for deb/rpm packages.
 
+## Flatpak Bundle
+
+The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and `flatpak-builder` on the build host, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 24.08 runtime.
+
+```bash
+# Build AppImage/tar.gz and, if flatpak-builder is installed, the Flatpak bundle
+bash scripts/build.sh "1.2.0"
+
+# Force Flatpak generation and fail if flatpak-builder is unavailable
+WLIB_BUILD_FLATPAK=1 bash scripts/build.sh "1.2.0"
+
+# Skip the Flatpak bundle explicitly
+WLIB_BUILD_FLATPAK=0 bash scripts/build.sh "1.2.0"
+```
+
+`WLIB_BUILD_FLATPAK` accepts `auto|1|0` like `WLIB_BUILD_NATIVE_PACKAGES`. `auto` builds only when `flatpak-builder` exists, so local builds without Flatpak tooling still produce the other artifacts. The bundle is written to `dist/wLib-<version>-x86_64.flatpak` and starts through the shared `packaging/wlib-launcher`, keeping GPU detection, crash guard handling, SSL setup and launch logging.
+
 ## AUR Metadata
 
 The AUR package is `wlib-bin` because it repackages a prebuilt upstream binary release.
@@ -221,3 +238,7 @@ The resulting artifacts are placed in `dist/`. With nFPM available, the output i
 - `wLib-1.2.0-linux-x86_64.rpm`
 - `dist/aur/PKGBUILD`
 - `dist/aur/.SRCINFO`
+
+With `flatpak-builder` available, or with `WLIB_BUILD_FLATPAK=1`, it also includes:
+
+- `wLib-1.2.0-x86_64.flatpak`

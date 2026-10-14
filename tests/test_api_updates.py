@@ -2905,3 +2905,64 @@ def test_library_downloads_settings_round_trip(tmp_path):
     assert settings["download_detection_enabled"] is False
     downloads.mkdir()
     assert api.get_settings()["downloads_folder_exists"] is True
+
+
+def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_path):
+    """Simulated Flatpak winetricks run produces flatpak-spawn --host argv with WINEPREFIX."""
+    import core.host_platform as host_platform
+
+    api = Api()
+    prefix_path = tmp_path / "prefix"
+
+    real_isfile = os.path.isfile
+
+    def _isfile(path):
+        if path == host_platform.FLATPAK_INFO_PATH:
+            return True
+        try:
+            return real_isfile(path)
+        except OSError:
+            return False
+
+    monkeypatch.setattr(os.path, "isfile", _isfile)
+    monkeypatch.setattr(host_platform.os.path, "isfile", _isfile)
+    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    monkeypatch.setattr(
+        "core.api.host_which",
+        lambda name: (
+            "/usr/bin/winetricks" if name == "winetricks" else f"/usr/bin/{name}"
+        ),
+    )
+
+    captured: list[list[str]] = []
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    class OkRun:
+        returncode = 0
+
+    def _fake_run(cmd, **kwargs):
+        captured.append(list(cmd))
+        return OkRun()
+
+    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    result = api.install_rpgmaker_dependencies(str(prefix_path), "")
+    assert result["success"] is True
+    assert captured, "expected winetricks to run"
+    first = captured[0]
+    assert first[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    assert "--" in first
+    assert any(part.startswith("--env=WINEPREFIX=") for part in first)
+    assert (
+        first[-2:] == ["-q", "corefonts"]
+        or first[-3:-1] == ["-q", "corefonts"]
+        or "corefonts" in first
+    )

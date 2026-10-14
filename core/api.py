@@ -26,6 +26,8 @@ from core.host_platform import (
     get_platform_capabilities as resolve_platform_capabilities,
     get_proton_dir,
     get_rtp_dir,
+    host_command,
+    host_which,
     is_linux,
     is_windows,
     open_windows_system_target,
@@ -1277,8 +1279,6 @@ class Api:
 
         Purely informational: a not-found result never blocks saving.
         """
-        import shutil
-
         if kind not in ("file", "dir", "parent", "runner"):
             return {"success": False, "error": f"Unknown path kind '{kind}'"}
 
@@ -1292,7 +1292,7 @@ class Api:
             if not has_separator and os.altsep is not None:
                 has_separator = os.altsep in expanded
             if not has_separator:
-                if shutil.which(expanded) is not None:
+                if host_which(expanded) is not None:
                     return {"ok": True, "reason": ""}
                 return {"ok": False, "reason": "Command not found on PATH"}
             if os.path.isfile(expanded):
@@ -2360,7 +2360,8 @@ class Api:
                             not callback_error
                             and wishlisted
                             and str(game.get("latest_version") or "").strip()
-                            and str(game.get("latest_version") or "").strip() != remote_version
+                            and str(game.get("latest_version") or "").strip()
+                            != remote_version
                         ):
                             try:
                                 # A thread-page fallback already read the prefixes; skip a second request.
@@ -2640,7 +2641,6 @@ class Api:
             return {"success": True, "runners": []}
 
         import os
-        import shutil
         from pathlib import Path
 
         runners: list[dict[str, str]] = []
@@ -2653,7 +2653,7 @@ class Api:
                 runners.append({"name": name, "path": path})
 
         # Check system wine
-        system_wine = shutil.which("wine")
+        system_wine = host_which("wine")
         if system_wine:
             add_runner("System Wine", "wine", system_wine)
 
@@ -2858,10 +2858,9 @@ class Api:
         if not is_linux():
             return unsupported_on_host("Winetricks dependency installation")
 
-        import shutil
         import subprocess
 
-        winetricks_path = shutil.which("winetricks")
+        winetricks_path = host_which("winetricks")
         if not winetricks_path:
             return {
                 "success": False,
@@ -2931,7 +2930,7 @@ class Api:
                         self._deps_install_status["current"] = verb
                     print(f"Installing winetricks verb {i + 1}/{len(verbs)}: {verb}")
                     result = subprocess.run(
-                        [winetricks_path, "-q", verb],
+                        host_command([winetricks_path, "-q", verb], env=env),
                         env=env,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -2986,7 +2985,7 @@ class Api:
                 }
             runner_command = [target["proton_path"], "run"]
         else:
-            wine_binary = shutil.which("wine")
+            wine_binary = host_which("wine")
             if not wine_binary:
                 return {
                     "success": False,
@@ -3078,7 +3077,7 @@ class Api:
                 command = [*runner_command, setup_exe_str, "/S", "/v/qn"]
                 try:
                     _ = subprocess.run(
-                        command,
+                        host_command(command, env=env),
                         env=env,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -3219,8 +3218,6 @@ class Api:
                 "code": "unsupported_platform",
             }
 
-        import shutil
-
         commands = {
             "dnf": {
                 "name": "Fedora / RHEL",
@@ -3245,7 +3242,7 @@ class Api:
         }
 
         for pkg_mgr, info in commands.items():
-            if shutil.which(pkg_mgr):
+            if host_which(pkg_mgr):
                 return {
                     "detected": True,
                     "package_manager": pkg_mgr,
@@ -3610,7 +3607,10 @@ class Api:
                 }
             name = str(preset["name"])
             if name.casefold() in seen:
-                return {"success": False, "error": f"Filter preset '{name}' already exists"}
+                return {
+                    "success": False,
+                    "error": f"Filter preset '{name}' already exists",
+                }
             seen.add(name.casefold())
             validated.append(preset)
         update_setting("library_filter_presets", json.dumps(validated))

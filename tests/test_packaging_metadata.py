@@ -101,3 +101,51 @@ def test_release_notes_declare_gplv3_or_later_license_change():
         "Starting with v0.3.4, wLib is licensed under GPL-3.0-or-later."
         in release_workflow
     )
+
+
+def _read_flatpak_manifest_text() -> str:
+    manifest = PROJECT_ROOT / "packaging/flatpak/io.github.kirin_3.wLib.yml"
+    return manifest.read_text(encoding="utf-8")
+
+
+def test_flatpak_manifest_declares_app_id_and_runtime():
+    text = _read_flatpak_manifest_text()
+
+    assert "app-id: io.github.kirin_3.wLib" in text
+    assert "runtime: org.freedesktop.Platform" in text
+    assert "24.08" in text
+    assert "buildsystem: simple" in text
+
+
+def test_flatpak_manifest_requires_host_access_finish_args():
+    text = _read_flatpak_manifest_text()
+
+    assert "--talk-name=org.freedesktop.Flatpak" in text
+    assert "--filesystem=host" in text
+    assert "--device=dri" in text
+    assert "QTWEBENGINE_DISABLE_SANDBOX=1" in text
+
+
+def test_flatpak_metainfo_and_desktop_ids_match():
+    manifest_text = _read_flatpak_manifest_text()
+    metainfo = (
+        PROJECT_ROOT / "packaging/flatpak/io.github.kirin_3.wLib.metainfo.xml"
+    ).read_text(encoding="utf-8")
+
+    assert "<id>io.github.kirin_3.wLib</id>" in metainfo
+    assert "io.github.kirin_3.wLib.desktop" in metainfo
+    # Metainfo states host execution.
+    assert "host" in metainfo.lower()
+    # Manifest installs desktop entry, icons and metainfo under the app ID.
+    assert "io.github.kirin_3.wLib.metainfo.xml" in manifest_text
+    assert "wlib.desktop" in manifest_text
+
+
+def test_flatpak_build_reuses_staged_release_folder():
+    build_script = (PROJECT_ROOT / "scripts/build.sh").read_text(encoding="utf-8")
+
+    assert "build_flatpak()" in build_script
+    assert 'WLIB_BUILD_FLATPAK="${WLIB_BUILD_FLATPAK:-auto}"' in build_script
+    assert 'FLATPAK_NAME="${APP_NAME}-${VERSION}-x86_64.flatpak"' in build_script
+    assert "flatpak-builder" in build_script
+    assert "flatpak build-bundle" in build_script

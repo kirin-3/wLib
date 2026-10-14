@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.kirin_3.wLib</id>
+  <name>wLib</name>
+  <summary>Linux Game Manager for F95Zone</summary>
+  <description>
+    <p>wLib keeps your F95Zone games in one place. It tells you when a game has an update, helps you install it, and launches it for you.</p>
+    <p>This Flatpak runs the manager interface in a sandbox, but games and runners (Wine, Proton, winetricks, archive extractors and native game binaries) run on the host system, using the host tools and the shared library at ~/.local/share/wLib. Host filesystem and host command execution access are required.</p>
+  </description>
+  <launchable type="desktop-id">io.github.kirin_3.wLib.desktop</launchable>
+  <icon type="stock">io.github.kirin_3.wLib</icon>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <keywords>
+    <keyword>games</keyword>
+    <keyword>library</keyword>
+    <keyword>manager</keyword>
+    <keyword>f95zone</keyword>
+    <keyword>wine</keyword>
+    <keyword>proton</keyword>
+  </keywords>
+  <project_license>GPL-3.0-or-later</project_license>
+  <metadata_license>CC0-1.0</metadata_license>
+  <developer>
+    <name>kirin-3</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <url type="homepage">https://github.com/kirin-3/wLib</url>
+  <url type="bugtracker">https://github.com/kirin-3/wLib/issues</url>
+</component>

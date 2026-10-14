@@ -196,6 +196,15 @@ cd wLib-*/
 ./wlib
 ```
 
+**Flatpak** (single-file bundle, for immutable distros and Steam Deck desktop mode):
+
+```bash
+flatpak install --user wLib-<version>-x86_64.flatpak
+flatpak run io.github.kirin_3.wLib
+```
+
+The Flatpak reuses your existing library at `~/.local/share/wLib`, so you can switch formats without losing games. Games and runners still run on the host: install Wine/Proton, winetricks and archive extractors on the host as below.
+
 Your library is stored in `~/.local/share/wLib`.
 
 ### Optional extras
