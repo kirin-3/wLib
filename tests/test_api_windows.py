@@ -152,7 +152,9 @@ def test_save_discovery_uses_launcher_proton_prefix(monkeypatch, tmp_path, layou
     assert {os.path.normpath(entry["path"]) for entry in results} == {str(saves)}
 
 
-def test_api_launch_game_fallback_to_valid_target_and_handles_none_game_id(tmp_path, monkeypatch):
+def test_api_launch_game_fallback_to_valid_target_and_handles_none_game_id(
+    tmp_path, monkeypatch
+):
     from core.database import add_game, add_game_launch_target
 
     real_exe = tmp_path / "valid_game.exe"
@@ -186,3 +188,29 @@ def test_api_launch_game_fallback_to_valid_target_and_handles_none_game_id(tmp_p
     res_none = api.launch_game(game_id=None, exe_path=str(real_exe))
     assert res_none["success"] is True
     assert launched == [str(real_exe)]
+
+
+def test_api_explicit_missing_target_does_not_fallback(tmp_path, monkeypatch):
+    from core.database import add_game, add_game_launch_target
+
+    real_exe = tmp_path / "canonical.exe"
+    real_exe.write_bytes(b"MZ")
+    missing_exe = tmp_path / "deleted_target.exe"
+
+    game_id = add_game(title="Explicit Target", exe_path=str(real_exe))
+    assert game_id is not None
+    _ = add_game_launch_target(game_id, "Deleted", str(missing_exe))
+
+    api = Api()
+    launched: list[str] = []
+
+    def mock_launch(target_path, *args, **kwargs):
+        launched.append(target_path)
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", mock_launch)
+
+    res = api.launch_game(game_id=game_id, exe_path=str(missing_exe))
+    assert res["success"] is False
+    assert "not found" in str(res.get("error", "")).lower()
+    assert launched == []

@@ -592,8 +592,10 @@ class Launcher:
             run_ce: bool = False,
             game_exe: str = "",
             kill_info: tuple[str, dict[str, str]] | None = None,
+            cwd_override: str | None = None,
         ) -> dict[str, object]:
             log_file = None
+            effective_cwd = cwd_override or game_dir
             # Reserve the slot under the lock, but start the process outside it so a
             # UAC prompt doesn't block stop/get_running_games or other games' exits.
             entry = RunningGame(
@@ -627,7 +629,9 @@ class Launcher:
 
                 try:
                     game_proc = subprocess.Popen(
-                        host_command(cmd, env=env_vars, cwd=game_dir, supervise=True),
+                        host_command(
+                            cmd, env=env_vars, cwd=effective_cwd, supervise=True
+                        ),
                         env=env_vars,
                         stdout=log_file if log_file is not None else subprocess.DEVNULL,
                         stderr=(
@@ -635,7 +639,7 @@ class Launcher:
                             if log_file is not None
                             else subprocess.DEVNULL
                         ),
-                        cwd=game_dir,
+                        cwd=effective_cwd,
                         start_new_session=not is_windows(),
                     )
                 except OSError as exc:
@@ -648,7 +652,7 @@ class Launcher:
                         )
                         log_file.close()
                         log_file = None
-                    game_proc = _ElevatedProcess(cmd, game_dir)
+                    game_proc = _ElevatedProcess(cmd, effective_cwd)
                 # Do not count time spent waiting for UAC approval as playtime.
                 start_time = time.monotonic()
                 with self._running_lock:
@@ -701,12 +705,14 @@ class Launcher:
                                 ce_cmd.append("run")
                             ce_cmd.append(ce_exe)
 
-                            _ = subprocess.Popen(
+                            ce_proc = subprocess.Popen(
                                 host_command(ce_cmd, env=env_vars),
                                 env=env_vars,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
                             )
+                            # Reap the helper so it cannot linger as a zombie.
+                            threading.Thread(target=ce_proc.wait, daemon=True).start()
                         else:
                             print(
                                 f"Cheat Engine executable not found for auto-injection at {ce_exe}"
@@ -814,6 +820,13 @@ class Launcher:
                 "UMU_ID",
             ):
                 _ = clean_env.pop(var, None)
+            # Host WINE/Proton/Steam-compat tuning (e.g. WINEARCH, WINEESYNC,
+            # PROTON_USE_WINED3D, STEAM_COMPAT_TOOL_PATHS) must not leak into
+            # games: the launcher sets a fresh prefix/compat env per launch.
+            # Explicit user VAR=value prefixes are re-applied afterwards.
+            for var in list(clean_env.keys()):
+                if var.startswith(("WINE", "PROTON", "STEAM_COMPAT", "UMU_")):
+                    _ = clean_env.pop(var, None)
             return clean_env
 
         def is_packaged_runtime_library_path(raw_path: str) -> bool:
@@ -884,6 +897,22 @@ class Launcher:
                 "PYWEBVIEW_GUI",
             ):
                 _ = clean_env.pop(var, None)
+            # wLib's own Qt/Python/Flatpak runtime tuning must not leak into
+            # games (e.g. QT_SCALE_FACTOR, QTWEBENGINE_DISABLE_SANDBOX,
+            # PYTHONSAFEPATH, FLATPAK_ID). Explicit user VAR=value prefixes
+            # are re-applied afterwards via build_host_tool_env().
+            for var in list(clean_env.keys()):
+                if var.startswith(
+                    (
+                        "QT_",
+                        "PYTHON",
+                        "FLATPAK_",
+                        "QTWEBENGINE_",
+                        "WLIB_",
+                        "PYWEBVIEW_",
+                    )
+                ):
+                    _ = clean_env.pop(var, None)
 
             original_library_path = str(
                 clean_env.pop("LD_LIBRARY_PATH_ORIG", "") or ""
@@ -935,9 +964,11 @@ class Launcher:
 
             command = build_command(base_cmd, args)
             print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
-            return execute_process(command, build_host_tool_env(env))
+            return execute_process(
+                command, build_host_tool_env(env), cwd_override=runner_game_dir
+            )
 
-        def execute_html_game(strip_wine_env: bool = False) -> dict[str, object]:
+        def execute_html_game() -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
             abs_path = path_module.abspath(exe_path)
             if is_windows():
@@ -954,10 +985,10 @@ class Launcher:
             command = ["xdg-open", file_url]
             print(f"Opening HTML game in default browser: {file_url}")
             try:
-                # Use clean environment without Wine/Proton/AppImage variables that might interfere
-                clean_env = build_host_tool_env(
-                    os.environ.copy(), strip_wine_env=strip_wine_env
-                )
+                # Use clean environment without Wine/Proton/AppImage variables
+                # that might interfere. Reuse the launch env so Japanese
+                # locale / Wayland / user VAR=value prefixes still apply.
+                clean_env = build_host_tool_env(env)
 
                 proc = subprocess.Popen(
                     command,
@@ -1007,11 +1038,17 @@ class Launcher:
             # Playtime tracking is not supported because browser processes cannot
             # be reliably monitored when other tabs or windows are open.
             if ext in [".html", ".htm"]:
-                return execute_html_game(strip_wine_env=strict_native)
+                return execute_html_game()
 
             # 4. Native Linux Binary (Executable without .exe/.bat/.cmd extension)
             # Some native Linux games like Godot have no extension or .x86_64.
-            if os.access(exe_path, os.X_OK) and ext not in [".exe", ".bat", ".cmd"]:
+            # An ELF binary misnamed with a Windows extension still runs
+            # natively; forcing it through Wine would only fail.
+            if os.access(exe_path, os.X_OK) and (
+                ext not in [".exe", ".bat", ".cmd"]
+                or is_elf(exe_path)
+                or is_script(exe_path)
+            ):
                 command = build_command([exe_path], args)
                 print(f"Executing Linux binary natively: {' '.join(command)}")
                 return execute_process(command, process_env)
@@ -1047,7 +1084,7 @@ class Launcher:
                     "code": "unsupported_platform",
                 }
 
-            process_env = without_wine_proton_env(env)
+            process_env = build_host_tool_env(env)
             if ext == ".exe":
                 return execute_process(build_command([exe_path], args), process_env)
             if ext in (".bat", ".cmd"):
@@ -1066,7 +1103,7 @@ class Launcher:
                     build_command(["java", "-jar", exe_path], args), process_env
                 )
             if ext in (".html", ".htm"):
-                return execute_html_game(strip_wine_env=True)
+                return execute_html_game()
             return {
                 "success": False,
                 "error": f"Unsupported Windows game target: {exe_path}",
