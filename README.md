@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/kirin-3/wLib/releases"><img src="https://img.shields.io/github/downloads/kirin-3/wLib/total.svg" alt="Downloads" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3%2B-blue.svg" alt="License: GPLv3 or later" /></a>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg" alt="Platform: Linux and Windows" />
   <img src="https://img.shields.io/badge/python-3.12+-yellow.svg" alt="Python 3.12+" />
