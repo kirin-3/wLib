@@ -9,6 +9,7 @@ import {
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
+  normalizeVersion,
 } from "./libraryGames.ts";
 import type { GameRecord } from "../services/api.ts";
 
@@ -104,6 +105,31 @@ test("search includes title, developer, engine and normalized tags in both stora
     "fantasy",
     "sci-fi",
   ]);
+});
+
+test("versions normalize the same way the Python mirror does, including non-strings", () => {
+  // normalize_version() in core/api.py coerces with str(value or ""); the UI must
+  // not throw on a version that arrived as a number or array, or a single bad
+  // row breaks the whole library (updateCount and the sort read every game).
+  assert.equal(normalizeVersion("v0.8"), "0.8");
+  assert.equal(normalizeVersion("  V 0.8 "), "0.8");
+  assert.equal(normalizeVersion(1 as unknown as string), "1");
+  assert.equal(normalizeVersion(0 as unknown as string), "");
+  assert.equal(normalizeVersion(["1.0"] as unknown as string), "1.0");
+  assert.doesNotThrow(() => normalizeVersion({} as unknown as string));
+  assert.equal(normalizeVersion(null), "");
+  assert.equal(normalizeVersion(undefined), "");
+
+  assert.equal(hasAvailableUpdate({ version: 1 as unknown as string, latest_version: "2.0" }), true);
+  assert.equal(
+    hasAvailableUpdate({ version: "1.0", latest_version: 1 as unknown as string }),
+    true,
+  );
+  assert.equal(
+    hasAvailableUpdate({ version: 1 as unknown as string, latest_version: 1 as unknown as string }),
+    false,
+  );
+  assert.equal(hasNewSinceFinished({ version: 1 as unknown as string, finished_version: "0.5" }), true);
 });
 
 test("table sorts versions naturally, statuses through normalization, and recent dates with missing values last", () => {
