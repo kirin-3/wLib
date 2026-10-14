@@ -892,3 +892,102 @@ def test_sqlite_copy_failure_reports_read_failed(tmp_path, monkeypatch):
         with pytest.raises(BackupValidationError, match="Could not read"):
             read_external_library(source_name, str(source))
         monkeypatch.undo()
+
+
+def test_xlibrary_deeply_nested_reports_invalid_source(tmp_path):
+    from core.backup_format import BackupValidationError
+
+    source = tmp_path / "library.games.json"
+    depth = 5000
+    source.write_text('{"a":' * depth + "0" + "}" * depth, encoding="utf-8")
+    with pytest.raises(BackupValidationError, match="not an XLibrary library"):
+        read_external_library("xlibrary", str(source))
+
+
+def test_f95checker_deeply_nested_json_does_not_crash(tmp_path):
+    nested_array = "[" * 5000 + "]" * 5000
+    nested_object = '{"a":' * 5000 + "0" + "}" * 5000
+    source = tmp_path / "db.sqlite3"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE settings (default_exe_dir TEXT DEFAULT '{}')")
+    conn.execute("INSERT INTO settings VALUES (?)", (nested_object,))
+    conn.execute(
+        "CREATE TABLE games (id INTEGER PRIMARY KEY, custom INTEGER, "
+        "name TEXT, url TEXT, executables TEXT, "
+        "last_launched INTEGER DEFAULT 0, added_on INTEGER DEFAULT 0)"
+    )
+    conn.execute(
+        "INSERT INTO games VALUES (100, 0, 'Deep', "
+        "'https://f95zone.to/threads/deep.100/', ?, 0, 0)",
+        (nested_array,),
+    )
+    conn.commit()
+    conn.close()
+    backup, _stats = read_external_library("f95checker", str(source))
+    assert len(backup["games"]) == 1
+    assert backup["games"][0]["metadata"]["title"] == "Deep"
+
+
+def test_nonfinite_and_huge_playtime_is_omitted(tmp_path):
+    source = tmp_path / "library.games.json"
+    huge = _xgame("Huge", links=[_xlink(931)])
+    huge["totalPlaytime"] = 10**30
+    infinite = _xgame("Infinite", links=[_xlink(932)])
+    infinite["totalPlaytime"] = float("inf")
+    _write_xlibrary_live(source, [huge, infinite])
+    backup, _stats = read_external_library("xlibrary", str(source))
+    by_title = {game["metadata"]["title"]: game for game in backup["games"]}
+    assert "playtime_seconds" not in by_title["Huge"].get("user_state", {})
+    assert "playtime_seconds" not in by_title["Infinite"].get("user_state", {})
+
+    from core.library_backup import import_external_library as run_import
+
+    result = run_import("xlibrary", str(source), {"merge_mode": "overwrite"})
+    assert result["created"] == 2
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["Huge"]["playtime_seconds"] == 0
+    assert games["Infinite"]["playtime_seconds"] == 0
+
+
+def test_sqlite_nonfinite_playtime_is_omitted(tmp_path):
+    f95_source = tmp_path / "f95.db"
+    _write_f95checker_db(
+        f95_source,
+        [
+            {
+                "id": 941,
+                "custom": 0,
+                "name": "F95 Inf",
+                "url": "https://f95zone.to/threads/inf.941/",
+                "executables": json.dumps(["/games/inf/Game.sh"]),
+                "playtime": float("inf"),
+            }
+        ],
+    )
+    backup, _stats = read_external_library("f95checker", str(f95_source))
+    assert "playtime_seconds" not in backup["games"][0].get("user_state", {})
+
+    atlas_source = tmp_path / "atlas.db"
+    conn = sqlite3.connect(str(atlas_source))
+    conn.execute(
+        "CREATE TABLE games (record_id INTEGER PRIMARY KEY, title TEXT, "
+        "creator TEXT, engine TEXT, last_played_r REAL DEFAULT 0, "
+        "total_playtime REAL DEFAULT 0, date_added INTEGER DEFAULT 0, "
+        "playstate TEXT, selected_version_id INTEGER)"
+    )
+    conn.execute(
+        "CREATE TABLE versions (record_id INTEGER, version TEXT, "
+        "game_path TEXT, exec_path TEXT, date_added INTEGER, playstate TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO games VALUES (1, 'Atlas Inf', 'Creator', '', 0, ?, 0, "
+        "'played', NULL)",
+        (float("inf"),),
+    )
+    conn.execute(
+        "INSERT INTO versions VALUES (1, '0.1', '/games/atlas', 'Game.sh', 0, 'played')"
+    )
+    conn.commit()
+    conn.close()
+    backup, _stats = read_external_library("atlas", str(atlas_source))
+    assert "playtime_seconds" not in backup["games"][0].get("user_state", {})
