@@ -142,9 +142,14 @@ class FolderLocation:
 
     def read(self) -> tuple[bytes, str]:
         self._check_folder()
-        with self.path.open("rb") as source:
-            stat = os.fstat(source.fileno())
-            data = source.read()
+        try:
+            with self.path.open("rb") as source:
+                stat = os.fstat(source.fileno())
+                data = source.read()
+        except FileNotFoundError as exc:
+            # Deleted between revision() and read(): retry as a conflict so
+            # the next attempt sees revision None and pushes.
+            raise SyncConflict() from exc
         revision = _folder_revision(stat)
         if self.revision() != revision:
             raise SyncConflict()
@@ -258,7 +263,9 @@ def _token_request(
 ) -> dict[str, object]:
     try:
         return _json_object(_form_post(url, parameters))
-    except (OSError, urllib.error.URLError) as exc:
+    except (OSError, urllib.error.URLError, SyncError) as exc:
+        # SyncError: a non-JSON reply (e.g. an HTML error page) is a sign-in
+        # failure, not a broken sync file.
         raise SyncError(
             f"{provider} sign-in could not be completed. Connect again.", error_code
         ) from exc
@@ -366,11 +373,19 @@ class DropboxLocation(_OAuthLocation):
                 if exc.code == 409:
                     if endpoint == "files/upload":
                         raise SyncConflict() from exc
-                    error = _json_object(exc.read())
-                    if endpoint == "files/get_metadata" and str(
-                        error.get("error_summary", "")
-                    ).startswith("path/not_found"):
-                        return b"null", ""
+                    try:
+                        error = _json_object(exc.read())
+                    except SyncError:
+                        error = {}
+                    if str(error.get("error_summary", "")).startswith(
+                        "path/not_found"
+                    ):
+                        if endpoint == "files/get_metadata":
+                            return b"null", ""
+                        if endpoint == "files/download":
+                            # Deleted between revision() and read(): retry so
+                            # the next attempt sees a missing file and pushes.
+                            raise SyncConflict() from exc
                 raise SyncError(
                     "Dropbox rejected the request. Check the connection and permissions.",
                     "dropbox_request_failed",
@@ -471,6 +486,7 @@ class GoogleDriveLocation(_OAuthLocation):
         *,
         data: bytes | None = None,
         content_type: str = "application/json",
+        file_request: bool = False,
     ) -> bytes:
         for attempt in range(2):
             if not self._access_token or time.monotonic() >= self._expires_at:
@@ -500,6 +516,10 @@ class GoogleDriveLocation(_OAuthLocation):
                         f"{self.provider} sign-in expired. Connect again.",
                         self.auth_error,
                     ) from exc
+                if exc.code == 404 and file_request:
+                    # The resolved file was deleted before download/upload:
+                    # retry so the next attempt re-resolves it.
+                    raise SyncConflict() from exc
                 raise SyncError(
                     "Google Drive rejected the request. Check the connection and permissions.",
                     "gdrive_request_failed",
@@ -550,7 +570,9 @@ class GoogleDriveLocation(_OAuthLocation):
             raise SyncConflict()
         file_id, checksum = found
         data = self._request(
-            "GET", GDRIVE_API + "files/" + urllib.parse.quote(file_id) + "?alt=media"
+            "GET",
+            GDRIVE_API + "files/" + urllib.parse.quote(file_id) + "?alt=media",
+            file_request=True,
         )
         return data, checksum
 
@@ -567,6 +589,7 @@ class GoogleDriveLocation(_OAuthLocation):
                 + urllib.parse.quote(self._file_id)
                 + "?uploadType=media&fields=md5Checksum",
                 data=data,
+                file_request=True,
             )
         else:
             boundary = secrets.token_hex(16)
@@ -891,6 +914,8 @@ class SyncManager:
         last_revision = self._setting("last_revision") or None
         revision = location.revision()
         first = not self._setting("last_synced_at")
+        if choice is not None and not first:
+            raise SyncError("No library choice is needed.", "invalid_sync_choice")
         local_modified = self._setting("local_modified_at")
         local_changed = self.local_changed()
         remote_changed = revision != last_revision
@@ -927,7 +952,9 @@ class SyncManager:
                         "sync_last_error",
                         "Some games matched more than one local game and were left unchanged.",
                     )
-            elif choice == "use-local" or (local_games and not remote_games):
+            elif choice == "use-local" or (
+                choice is None and local_games and not remote_games
+            ):
                 self._push(location, revision)
             else:
                 self._pull(backup, revision, local_modified)

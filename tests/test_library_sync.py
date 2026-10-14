@@ -879,3 +879,162 @@ def test_open_signin_clears_pending_on_browser_failure():
     assert result["error_code"] == "browser_failed"
     assert api.library_sync.status()["connecting"] is False
 
+
+
+def test_folder_read_missing_is_conflict(tmp_path):
+    location = FolderLocation(str(tmp_path))
+    with open(tmp_path / "wlib-library.json", "wb") as f:
+        _ = f.write(b'{"a": 1}')
+    assert location.revision() is not None
+    (tmp_path / "wlib-library.json").unlink()
+    with pytest.raises(SyncConflict):
+        _ = location.read()
+
+
+def test_folder_delete_race_recovers_via_push(tmp_path):
+    folder = tmp_path / "shared"
+    folder.mkdir()
+    sync = SyncManager()
+    sync.set_folder(str(folder))
+    database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    last_rev = database.get_setting("sync_last_revision")
+    assert last_rev
+    real = FolderLocation(str(folder))
+    # Externally replace with newer remote content so next run must read.
+    new_doc = remote_backup("Remote", "2026-10-10T10:00:00Z")
+    rev_after_external = real.write(json.dumps(new_doc).encode(), real.revision())
+    assert rev_after_external != last_rev
+
+    class DeleteRace:
+        def __init__(self, inner: FolderLocation) -> None:
+            self.inner = inner
+            self.deleted = False
+
+        def revision(self):
+            rev = self.inner.revision()
+            if not self.deleted:
+                self.deleted = True
+                (folder / "wlib-library.json").unlink()
+            return rev
+
+        def read(self):
+            return self.inner.read()
+
+        def write(self, data, expected_revision):
+            return self.inner.write(data, expected_revision)
+
+    sync._location_override = DeleteRace(FolderLocation(str(folder)))
+    result = sync.run()
+    assert result["state"] == "idle"
+    assert result["success"]
+    assert (folder / "wlib-library.json").exists()
+
+
+def test_dropbox_download_not_found_is_conflict(monkeypatch):
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2" in url or "api.dropboxapi.com/oauth2" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        raise http_error(409, {"error_summary": "path/not_found/.."})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncConflict):
+        _ = DropboxLocation("refresh").read()
+
+
+def test_dropbox_download_bad_json_is_request_failed(monkeypatch):
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2" in url or "token" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        raise HTTPError(
+            "https://content.dropboxapi.com/2/files/download",
+            409,
+            "error",
+            {},
+            io.BytesIO(b"<html>not json</html>"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncError) as exc:
+        _ = DropboxLocation("refresh").read()
+    assert exc.value.error_code == "dropbox_request_failed"
+
+
+def test_gdrive_404_is_conflict(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2.googleapis.com/token" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        if "drive/v3/files?" in url:
+            return response({"files": [{"id": "f", "md5Checksum": "abc"}]})
+        raise http_error(404, {"error": "not found"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncConflict):
+        _ = GoogleDriveLocation("refresh").read()
+    with pytest.raises(SyncConflict):
+        _ = GoogleDriveLocation("refresh").write(b"data", "abc")
+
+
+def test_token_non_json_is_auth_failed(monkeypatch):
+    monkeypatch.setattr(
+        "core.library_sync._form_post", lambda url, params: b"<html>nope</html>"
+    )
+    from core.library_sync import _token_request
+
+    with pytest.raises(SyncError) as exc:
+        _ = _token_request(
+            "https://example.com/token", {"a": "b"}, "Dropbox", "dropbox_auth_failed"
+        )
+    assert exc.value.error_code == "dropbox_auth_failed"
+
+
+def test_choice_when_not_first_is_rejected():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    assert sync.run()["state"] == "idle"
+    result = sync.run("use-remote")
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_sync_choice"
+
+
+def test_api_resolve_choice_when_not_needed():
+    api = Api()
+    location = MemoryLocation(remote_backup())
+    api.library_sync._location_override = location
+    # Make Api synchronous for the test without changing contracts.
+    api.library_sync.start_run = api.library_sync.run  # type: ignore[method-assign]
+    database.update_setting("sync_location", "folder")
+    assert api.sync_now()["state"] == "idle"
+    result = api.resolve_sync_choice("use-remote")
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_sync_choice"
+
+
+def test_first_use_remote_with_empty_remote_wipes_local():
+    database.add_game("Local", "/local.exe")
+    location = MemoryLocation(remote_backup("", "2026-10-09T10:00:00Z"))
+    sync = manager(location)
+    result = sync.run("use-remote")
+    assert result["success"]
+    assert database.get_all_games() == []
+    assert location.writes == 0
+
+
+def test_gdrive_404_outside_file_request_is_request_failed(monkeypatch):
+    monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
+
+    def fake_urlopen(request, **kwargs):
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if "oauth2.googleapis.com/token" in url:
+            return response({"access_token": "a", "expires_in": 300})
+        raise http_error(404, {"error": "not found"})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SyncError) as exc:
+        _ = GoogleDriveLocation("refresh").revision()
+    assert exc.value.error_code == "gdrive_request_failed"
