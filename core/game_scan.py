@@ -108,9 +108,15 @@ def _best_launcher(game_dir: str, names: list[str]) -> str:
 
     title = squash(guess_title_and_version(os.path.basename(game_dir))[0])
     stems = {name: os.path.splitext(name)[0].lower() for name in names}
+    if title:
+        exact = [n for n in names if squash(stems[n]) == title]
+        if exact:
+            return sorted(exact, key=str.lower)[0]
+        containing = [n for n in names if title in squash(stems[n])]
+        if containing:
+            return sorted(containing, key=lambda n: (len(squash(stems[n])), n.lower()))[0]
     return (
-        next((n for n in names if title and title in squash(stems[n])), None)
-        or next((n for n in names if stems[n] in _GENERIC_LAUNCHER_STEMS), None)
+        next((n for n in names if stems[n] in _GENERIC_LAUNCHER_STEMS), None)
         or names[0]
     )
 
@@ -124,7 +130,8 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
     files = [
         entry.name
         for entry in entries
-        if entry.is_file()
+        if not entry.is_symlink()
+        and entry.is_file(follow_symlinks=False)
         and (
             entry.name.lower().endswith(_LAUNCHER_EXTENSIONS)
             or (not os.path.splitext(entry.name)[1] and is_elf(entry.path))
@@ -154,7 +161,8 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
         subdirs = [
             entry.path
             for entry in entries
-            if entry.is_dir()
+            if not entry.is_symlink()
+            and entry.is_dir(follow_symlinks=False)
             and entry.name.lower() not in ("__macosx", ".git")
             and not entry.name.startswith(".wlib-staging-")  # archive_install.STAGING_PREFIX
         ]
@@ -167,7 +175,11 @@ def scan_games_folder(root: str) -> list[GameGuess]:
     """One game per direct subfolder of root that holds a launch file."""
     try:
         subdirs = sorted(
-            (entry.path for entry in os.scandir(root) if entry.is_dir()),
+            (
+                entry.path
+                for entry in os.scandir(root)
+                if not entry.is_symlink() and entry.is_dir(follow_symlinks=False)
+            ),
             key=str.lower,
         )
     except OSError:

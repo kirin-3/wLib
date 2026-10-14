@@ -907,3 +907,151 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     assert inner[0] == "/usr/bin/7z"
     assert inner[1] == "x"
     assert inner[2] == archive
+def test_dot_entries_rejected(tmp_path):
+    for evil in (".", "./", "/"):
+        with pytest.raises(ArchiveSafetyError):
+            check_archive_entry_safe(evil)
+    archive = tmp_path / "dot.zip"
+    _make_zip(str(archive), {".": b"x", "ok.txt": b"y"})
+    staging = tmp_path / "staging-dot"
+    staging.mkdir()
+    with pytest.raises(ArchiveSafetyError):
+        extract_zip(str(archive), str(staging))
+    assert not list(staging.iterdir())
+
+
+def test_duplicate_zip_entries_rejected(tmp_path):
+    archive = tmp_path / "dup.zip"
+    with zipfile.ZipFile(str(archive), "w") as zf:
+        zf.writestr("a.txt", b"first")
+        zf.writestr("a.txt", b"second")
+    staging = tmp_path / "staging-dup"
+    staging.mkdir()
+    with pytest.raises(ArchiveSafetyError, match="duplicate"):
+        extract_zip(str(archive), str(staging))
+    assert not list(staging.iterdir())
+
+
+def test_case_insensitive_collision_rejected(tmp_path):
+    archive = tmp_path / "case.zip"
+    _make_zip(str(archive), {"Game.exe": b"upper", "game.exe": b"lower"})
+    staging = tmp_path / "staging-case"
+    staging.mkdir()
+    with pytest.raises(ArchiveSafetyError, match="[Cc]ollide|duplicate"):
+        extract_zip(str(archive), str(staging))
+    assert not list(staging.iterdir())
+
+
+def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["a.txt", "a.txt"])
+    called = []
+
+    def _fail(cmd, **kwargs):
+        called.append(cmd)
+        raise AssertionError("subprocess must not run")
+
+    monkeypatch.setattr(ai.subprocess, "run", _fail)
+    with pytest.raises(ArchiveSafetyError, match="duplicate"):
+        ai.extract_with_tool("/usr/bin/7z", "game.7z", str(tmp_path / "s"))
+    assert called == []
+
+
+def test_external_tool_case_collision_precheck(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["Game.exe", "game.exe"])
+
+    def _fail(cmd, **kwargs):
+        raise AssertionError("subprocess must not run")
+
+    monkeypatch.setattr(ai.subprocess, "run", _fail)
+    with pytest.raises(ArchiveSafetyError, match="[Cc]ollide"):
+        ai.extract_with_tool("/usr/bin/7z", "game.7z", str(tmp_path / "s2"))
+
+
+def test_install_same_folder_preserves_custom_exe(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "MyAdventure"
+    dest.mkdir(parents=True)
+    (dest / "Custom.exe").write_text("old")
+    (dest / "MyAdventure.exe").write_text("old-title")
+    game_id = db.add_game("MyAdventure", str(dest / "Custom.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "upd.zip"
+    _write_game_zip(archive, {"Custom.exe": b"new", "MyAdventure.exe": b"newtitle"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="MyAdventure",
+        version="2.0",
+        game_id=int(game_id),
+    )
+    assert result["success"] is True
+    assert str(result["exe_path"]).endswith("Custom.exe")
+
+
+def test_install_unknown_game_id_rejected(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "g.zip"
+    _write_game_zip(archive, {"Game.exe": b"x"})
+    with pytest.raises(ArchiveInstallError, match="not found"):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}/{version}",
+            title="Game",
+            version="1.0",
+            game_id=9999,
+        )
+    assert not (lib / "Game").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux")
+def test_flatten_relative_symlink_rechecked(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "wrap.zip"
+    _write_game_zip(archive, {"Game/Game.exe": b"x"})
+    real_extract = ai.extract_zip
+
+    def _plant_symlink(archive_path, staging_dir):
+        _ = real_extract(archive_path, staging_dir)
+        os.symlink("../evil", os.path.join(staging_dir, "Game", "link"))
+        return 2
+
+    monkeypatch.setattr(ai, "extract_zip", _plant_symlink)
+    with pytest.raises(ArchiveSafetyError, match="outside"):
+        ai.install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="1.0",
+        )
+    assert not (lib / "Game").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX FIFOs need Linux")
+def test_apply_execute_bits_skips_fifo(tmp_path):
+    import concurrent.futures
+
+    fifo = tmp_path / "blocker"
+    os.mkfifo(str(fifo))
+    (tmp_path / "run.sh").write_text("#!/bin/sh\n")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(apply_execute_bits, str(tmp_path))
+        changed = future.result(timeout=5)
+    assert isinstance(changed, int)

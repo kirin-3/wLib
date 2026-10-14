@@ -147,3 +147,50 @@ def test_scan_ignores_staging_folder(tmp_path):
     (folder / "Inner" / "Inner.exe").touch()
 
     assert find_launcher(str(folder)) == str(folder / "Inner" / "Inner.exe")
+def test_scan_prefers_exact_title_over_setup(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "MyGame"
+    folder.mkdir()
+    (folder / "MyGame-Setup.exe").touch()
+    (folder / "MyGame.exe").touch()
+
+    assert find_launcher(str(folder)) == str(folder / "MyGame.exe")
+
+
+def test_scan_ignores_symlinked_exe(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "Game"
+    folder.mkdir()
+    (folder / "Real.exe").touch()
+    target = tmp_path / "outside.exe"
+    target.touch()
+    link = folder / "Link.exe"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks need privileges")
+    assert find_launcher(str(folder)) == str(folder / "Real.exe")
+
+
+def test_scan_ignores_symlinked_subdir(tmp_path):
+    from core.game_scan import find_launcher, scan_games_folder
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "Evil.exe").touch()
+    folder = tmp_path / "Game"
+    folder.mkdir()
+    try:
+        (folder / "Link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need privileges")
+    assert find_launcher(str(folder)) == ""
+    root = tmp_path / "lib"
+    root.mkdir()
+    try:
+        (root / "LinkedGame").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need privileges")
+    assert scan_games_folder(str(root)) == []
