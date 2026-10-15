@@ -174,10 +174,15 @@ build_native_packages() {
     export WLIB_PACKAGE_RELEASE
     local nfpm_config="$BUILD_DIR/nfpm.yaml"
     local maintainer="${WLIB_MAINTAINER:-wLib Maintainers <maintainers@example.invalid>}"
-    local escaped_maintainer
-    escaped_maintainer="$(printf '%s' "$maintainer" | sed -e 's/[&|]/\\&/g')"
+    local yaml_escaped_maintainer
+    local sed_escaped_maintainer
+    # YAML-escape first (backslash, double quote: the value lands in a
+    # double-quoted scalar), then escape sed-replacement metacharacters
+    # (&, the | delimiter, backslash) so the value survives the substitution.
+    yaml_escaped_maintainer="$(printf '%s' "$maintainer" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    sed_escaped_maintainer="$(printf '%s' "$yaml_escaped_maintainer" | sed -e 's/\\/\\\\/g' -e 's/[&|]/\\&/g')"
     sed \
-        -e "s|^maintainer: .*|maintainer: \"$escaped_maintainer\"|" \
+        -e "s|^maintainer: .*|maintainer: \"$sed_escaped_maintainer\"|" \
         "$PROJECT_DIR/packaging/nfpm.yaml" > "$nfpm_config"
 
     (
@@ -388,7 +393,7 @@ APPIMAGETOOL="$BUILD_DIR/appimagetool"
 if [ ! -f "$APPIMAGETOOL" ]; then
     echo "   Downloading appimagetool..."
     ARCH=$(uname -m)
-    curl -sSL "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" -o "$APPIMAGETOOL"
+    curl -sSL --fail "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" -o "$APPIMAGETOOL"
     chmod +x "$APPIMAGETOOL"
 fi
 
