@@ -68,18 +68,25 @@ const showInstallModal = ref(false);
 const installGame = ref<GameRecord | null>(null);
 const installArchivePath = ref("");
 
+let installRequestId = 0;
+
 const handleInstallArchiveRequest = async (event: Event) => {
   const detail = (event as CustomEvent<InstallArchiveRequest>).detail || {};
-  installArchivePath.value = detail.archivePath || "";
-  installGame.value = null;
+  const requestId = ++installRequestId;
+  let game: GameRecord | null = null;
   if (detail.gameId != null) {
     try {
       const games = await api.getGames();
-      installGame.value = games.find((game) => game.id === detail.gameId) || null;
+      game = games.find((entry) => entry.id === detail.gameId) || null;
     } catch (error) {
       console.error("Failed to resolve game for install dialog", error);
     }
   }
+  // A newer request superseded this one while the game was resolving.
+  if (requestId !== installRequestId) return;
+  // Set game and archive together so an open dialog re-seeds once per request.
+  installGame.value = game;
+  installArchivePath.value = detail.archivePath || "";
   showInstallModal.value = true;
 };
 

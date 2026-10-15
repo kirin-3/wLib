@@ -42,7 +42,12 @@ const result = ref<ArchiveInstallResponse | null>(null);
 const duplicateGameId = ref<number | null>(null);
 const inspecting = ref(false);
 
-const isUpdate = computed(() => !!props.game);
+// The game the form was seeded for. Hosted once in App.vue, a new request can
+// change props.game while the dialog is open (or installing); every read below
+// goes through this snapshot so the header, inspect and install never mix games.
+const target = ref<GameRecord | null>(null);
+const seededArchive = ref("");
+const isUpdate = computed(() => !!target.value);
 const canInstall = computed(
   () =>
     phase.value === "ready" &&
@@ -110,7 +115,7 @@ const inspect = async () => {
   installError.value = "";
   duplicateGameId.value = null;
   try {
-    const info = await api.inspectArchive(path, props.game?.id ?? null);
+    const info = await api.inspectArchive(path, target.value?.id ?? null);
     if (requestId !== inspectRequestId || !props.modelValue) return;
     // The field was edited without committing; wait for its change event.
     if (archive.value.trim() !== path) {
@@ -122,13 +127,13 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
-    if (!title.value.trim()) title.value = isUpdate.value ? (props.game?.title || info.title || "") : (info.title || "");
-    if (props.game?.latest_version?.trim()) {
-      version.value = props.game.latest_version.trim();
+    if (!title.value.trim()) title.value = isUpdate.value ? (target.value?.title || info.title || "") : (info.title || "");
+    if (target.value?.latest_version?.trim()) {
+      version.value = target.value.latest_version.trim();
     } else if (!version.value.trim()) {
       version.value = info.version || "";
     }
-    if (!creator.value.trim()) creator.value = isUpdate.value ? (props.game?.developer || info.creator || "") : (info.creator || "");
+    if (!creator.value.trim()) creator.value = isUpdate.value ? (target.value?.developer || info.creator || "") : (info.creator || "");
     destination.value = info.destination || "";
     toolError.value = info.tool_error || "";
     oldFolder.value = info.old_folder || "";
@@ -228,7 +233,7 @@ const install = async () => {
   try {
     const res = await api.installArchive({
       archive_path: archive.value.trim(),
-      game_id: props.game?.id ?? undefined,
+      game_id: target.value?.id ?? undefined,
       title: title.value.trim(),
       version: version.value.trim(),
       creator: creator.value.trim(),
@@ -256,31 +261,55 @@ const install = async () => {
   }
 };
 
+const seed = () => {
+  reset();
+  target.value = props.game ?? null;
+  seededArchive.value = props.preselectedArchive || "";
+  if (target.value) {
+    title.value = target.value.title || "";
+    creator.value = target.value.developer || "";
+    f95Url.value = target.value.f95_url || "";
+    // The installed version is never the update's version; let the archive name fill it.
+    version.value = target.value.latest_version?.trim() || "";
+  }
+  void loadLibraryFolder().then(() => {
+    if (!props.modelValue) return;
+    if (seededArchive.value) {
+      archive.value = seededArchive.value;
+      void inspect();
+    }
+  });
+};
+
+const hasPendingRequest = () =>
+  (props.game?.id ?? null) !== (target.value?.id ?? null) ||
+  (props.preselectedArchive || "") !== seededArchive.value;
+
+// Re-seed when the dialog opens or a new request (another game or archive) lands
+// while it is open; a superseded inspection is cheap to cancel. A running install
+// owns the form, so the request waits until the install ends (see below).
 watch(
-  () => props.modelValue,
-  (open) => {
+  () => [props.modelValue, props.game?.id ?? null, props.preselectedArchive] as const,
+  ([open]) => {
     if (!open) {
       stopPolling();
       reset();
+      target.value = null;
+      seededArchive.value = "";
       return;
     }
-    reset();
-    if (props.game) {
-      title.value = props.game.title || "";
-      creator.value = props.game.developer || "";
-      f95Url.value = props.game.f95_url || "";
-      // The installed version is never the update's version; let the archive name fill it.
-      version.value = props.game.latest_version?.trim() || "";
-    }
-    void loadLibraryFolder().then(() => {
-      if (!props.modelValue) return;
-      if (props.preselectedArchive) {
-        archive.value = props.preselectedArchive;
-        void inspect();
-      }
-    });
+    if (phase.value !== "installing") seed();
   },
 );
+
+// A failed install returns the form to "ready"; apply a request that arrived
+// meanwhile instead of letting a retry reuse the old game's fields. A finished
+// install keeps showing its result for the game it installed.
+watch(phase, (next, prev) => {
+  if (prev !== "installing" || next !== "ready" || !props.modelValue || !hasPendingRequest()) return;
+  if (installError.value) notifyError(`Install for ${target.value?.title || "archive"} failed: ${installError.value}`);
+  seed();
+});
 </script>
 
 <template>
@@ -301,7 +330,7 @@ watch(
       >
         <div>
           <h3 id="install-archive-title" class="text-xl font-bold" style="color: var(--text-primary)">
-            {{ isUpdate ? `Install update for ${props.game?.title}` : "Install from archive" }}
+            {{ isUpdate ? `Install update for ${target?.title}` : "Install from archive" }}
           </h3>
           <p class="text-xs mt-1" style="color: var(--text-muted)">
             {{

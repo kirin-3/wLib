@@ -173,6 +173,8 @@ const collectionMembership = ref<string[]>([]);
 const newCollectionName = ref("");
 const collectionError = ref("");
 const collectionBusy = ref(false);
+// Bumped when the modal closes so a late createCollection answer is dropped.
+let collectionRequestId = 0;
 
 // F95Zone rating (read-only, from scraper)
 const f95Rating = ref("");
@@ -490,6 +492,7 @@ watch(
       loadingExecutableModifiedAt.value = false;
       loadingLaunchTargets.value = false;
       launchTargets.value = [];
+      collectionRequestId++;
       collectionOptions.value = [];
       newCollectionName.value = "";
       collectionError.value = "";
@@ -1014,6 +1017,9 @@ const toggleModalCollection = (name: string) => {
 // when the modal is saved, like every other membership change here.
 const createModalCollection = async () => {
   if (collectionBusy.value) return;
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const requestId = ++collectionRequestId;
   const name = newCollectionName.value.trim();
   if (!name) {
     collectionError.value = "Enter a collection name.";
@@ -1022,17 +1028,25 @@ const createModalCollection = async () => {
   collectionBusy.value = true;
   try {
     const result = await api.createCollection(name);
+    // The collection list is global, so keep it fresh in any open modal.
+    if (result.success && result.collections && props.modelValue) {
+      collectionOptions.value = result.collections;
+    }
+    // Closing the modal mid-request is allowed, so the answer can arrive after it
+    // was reopened (on this or another game): never touch that form's membership.
+    if (requestId !== collectionRequestId || !isCurrentGame(gameId)) return;
     if (!result.success) {
       collectionError.value = result.error || "Could not create the collection.";
       return;
     }
-    collectionOptions.value = result.collections || collectionOptions.value;
     newCollectionName.value = "";
     collectionError.value = "";
     if (!gameInCollection(name)) collectionMembership.value = [...collectionMembership.value, name];
   } catch (e) {
     console.error("Failed to create collection", e);
-    collectionError.value = "Error creating collection: " + String(e);
+    if (requestId === collectionRequestId && isCurrentGame(gameId)) {
+      collectionError.value = "Error creating collection: " + String(e);
+    }
   } finally {
     collectionBusy.value = false;
   }
