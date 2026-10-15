@@ -17,7 +17,7 @@ import { notify, notifyError } from "../utils/toast";
 import { openInstallArchive } from "../utils/installArchive";
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { isNewerVersion } from "../utils/appVersion";
-import type { DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
+import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -154,6 +154,23 @@ const setFrequency = async (freq: string) => {
 };
 
 const startingCheck = ref(false);
+const statusError = ref("");
+
+// The optimistic snapshot keeps the "Cancel" state honest while the first
+// status read is in flight, so a failed read can't make the view look idle.
+const applyRunningCheck = (started: BulkUpdateStartResponse) => {
+  status.value = {
+    ...status.value,
+    running: true,
+    outcome: "running",
+    cancelling: false,
+    total: Number(started.total) || status.value.total,
+    checked: 0,
+    current: "",
+    results: [],
+    delay_seconds: Number(started.delay_seconds) || status.value.delay_seconds,
+  };
+};
 
 const startCheck = async () => {
   if (startingCheck.value || status.value.running) return;
@@ -165,7 +182,9 @@ const startCheck = async () => {
         "Failed to start check: " + (result.error || "Unknown error"),
       );
     } else if (result && result.success) {
+      statusError.value = "";
       lastCheckTime.value = new Date().toLocaleTimeString();
+      applyRunningCheck(result);
       startPolling();
     }
   } catch (e) {
@@ -190,16 +209,33 @@ const cancelCheck = async () => {
   }
 };
 
+// Without a readable status the loop cannot see the check finish, so keeping it
+// alive would poll every 2 s forever and never run the completion handlers.
+const stopPolling = () => {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+};
+
+const failPolling = (message: string) => {
+  stopPolling();
+  statusError.value = message;
+};
+
 const pollStatus = async () => {
   try {
     const s = await api.getUpdateStatus();
     if (s && s.success === false) {
       console.error("Poll status failed:", s.error);
+      failPolling(
+        "Could not read the update-check status: " + (s.error || "Unknown error"),
+      );
     } else if (s) {
+      statusError.value = "";
       status.value = s;
-      if (!s.running && pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
+      if (!s.running) {
+        stopPolling();
         await loadGames();
         await loadAutoCheckSetting();
         await loadDownloadOffers();
@@ -207,13 +243,19 @@ const pollStatus = async () => {
     }
   } catch (e) {
     console.error("Poll failed", e);
+    failPolling("Could not read the update-check status: " + String(e));
   }
 };
 
 const startPolling = () => {
-  if (pollInterval) clearInterval(pollInterval);
+  stopPolling();
   pollInterval = setInterval(pollStatus, 2000);
   pollStatus();
+};
+
+const retryStatus = () => {
+  statusError.value = "";
+  startPolling();
 };
 
 const openInBrowser = async (url?: string) => {
@@ -298,12 +340,23 @@ onMounted(() => {
     await loadGames();
     await loadAutoCheckSetting();
     await loadDownloadOffers();
-    const s = await api.getUpdateStatus();
-    if (s && s.running) {
-      status.value = s;
-      startPolling();
+    let s: UpdateStatusResponse | null;
+    try {
+      s = await api.getUpdateStatus();
+    } catch (e) {
+      console.error("Poll status failed:", e);
+      failPolling("Could not read the update-check status: " + String(e));
+      return;
+    }
+    if (s && s.success === false) {
+      console.error("Poll status failed:", s.error);
+      failPolling(
+        "Could not read the update-check status: " + (s.error || "Unknown error"),
+      );
     } else if (s) {
+      statusError.value = "";
       status.value = s;
+      if (s.running) startPolling();
     }
   });
 });
@@ -311,10 +364,7 @@ onMounted(() => {
 onUnmounted(() => {
   gamesRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
+  stopPolling();
 });
 </script>
 
@@ -513,7 +563,21 @@ onUnmounted(() => {
         </div>
 
         <p
-          v-if="!status.running && status.outcome && status.outcome !== 'idle'"
+          v-if="statusError"
+          class="text-sm text-red-400"
+          role="alert"
+        >
+          {{ statusError }}
+          <button
+            type="button"
+            class="ml-2 underline font-semibold"
+            @click="retryStatus"
+          >
+            Try again
+          </button>
+        </p>
+        <p
+          v-else-if="!status.running && status.outcome && status.outcome !== 'idle'"
           class="text-sm"
           style="color: var(--text-secondary)"
           role="status"

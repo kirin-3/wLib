@@ -22,8 +22,10 @@ export const loadPlatformCapabilities = async (): Promise<PlatformCapabilities> 
     })
     .catch((error: unknown) => {
       console.error("Failed to load platform capabilities", error);
-      cachedCapabilities = conservativePlatformCapabilities();
-      return cachedCapabilities;
+      // Report the conservative fallback without caching it: a single failed
+      // read must not pin Wine/Proton and the Linux runtime tools to hidden
+      // for the rest of the session.
+      return conservativePlatformCapabilities();
     })
     .finally(() => {
       pendingCapabilities = null;

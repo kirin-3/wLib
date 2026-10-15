@@ -115,6 +115,15 @@ const supportsLinuxRuntimes = computed(
 );
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+// Set when this page closes, so a late status read cannot arm a poll that
+// onUnmounted has already run past.
+let pageDisposed = false;
+// The proton path this page attached with, so a download that finishes while
+// it is open never overwrites an edit made in the meantime.
+let trackedProtonPath = "";
+// True while this page's own downloadProton() call is pending; its finally
+// block then owns resetting the button.
+let protonRequestPending = false;
 
 const defaultRpgmakerLinuxRunnerStatus: RpgmakerLinuxRunnerStatus = {
   available: false,
@@ -234,6 +243,12 @@ const toggleLogging = async () => {
 const loadSettings = async () => {
   try {
     platformCapabilities.value = await loadPlatformCapabilities();
+    // Read the GE-Proton status before the settings snapshot: a download that
+    // finishes in between then shows up in the snapshot (or in the poll's own
+    // settings read), so a stale proton_path is never loaded and saved back.
+    const protonStatus = supportsLinuxRuntimes.value
+      ? await api.getProtonDownloadStatus()
+      : null;
     const data = await api.getSettings();
     if (data) {
       applySettings(data);
@@ -249,6 +264,17 @@ const loadSettings = async () => {
       await pollInstallStatus();
       // An install started before leaving this page is still running; keep tracking it.
       if (installingDeps.value || installingRtps.value) startPolling();
+
+      // The same applies to a GE-Proton download: it keeps running in the
+      // backend after this page is closed, so re-attach to its progress
+      // instead of offering a button the backend would refuse. Leaving again
+      // before this read lands must not arm a timer nobody will clear.
+      if (protonStatus?.running && !pageDisposed) {
+        downloadingProton.value = true;
+        trackedProtonPath = protonPath.value;
+        protonDownload.value = protonStatus;
+        startProtonDownloadPolling();
+      }
 
       const sysDeps = await api.getSystemDepsCommand();
       if (sysDeps) systemDeps.value = sysDeps;
@@ -377,13 +403,55 @@ const openRpgmakerLinuxRepo = async () => {
   }
 };
 
+const stopProtonDownloadPolling = () => {
+  if (protonDownloadTimer) clearInterval(protonDownloadTimer);
+  protonDownloadTimer = null;
+};
+
 const pollProtonDownload = async () => {
+  if (!downloadingProton.value) return;
   try {
     const status = await api.getProtonDownloadStatus();
-    if (downloadingProton.value && status?.running) protonDownload.value = status;
+    if (!downloadingProton.value) return;
+    if (status?.running) {
+      protonDownload.value = status;
+      return;
+    }
+    // The download finished (or failed) while this page was open: drop the
+    // progress UI and adopt the path the backend just saved. Only when the
+    // field still holds what this page attached with, so an edit made while
+    // the download ran is never overwritten (downloadProton reports success
+    // and failure itself).
+    downloadingProton.value = false;
+    protonDownload.value = null;
+    stopProtonDownloadPolling();
+    const settings = await api.getSettings();
+    if (
+      settings?.proton_path &&
+      settings.proton_path !== trackedProtonPath &&
+      protonPath.value === trackedProtonPath
+    ) {
+      protonPath.value = settings.proton_path;
+      savedValues.value = { ...savedValues.value, protonPath: settings.proton_path };
+    }
   } catch (e) {
+    // Without a readable status the loop cannot see the download end, so stop
+    // it and free the button instead of polling (and spinning) forever.
     console.error("Failed to read GE-Proton download status", e);
+    stopProtonDownloadPolling();
+    // A pending downloadProton() call still tracks the download and resets
+    // the button when it returns; only a re-attached view has nothing left.
+    if (!protonRequestPending) {
+      downloadingProton.value = false;
+      protonDownload.value = null;
+    }
+    protonError.value = "Could not read the GE-Proton download status: " + String(e);
   }
+};
+
+const startProtonDownloadPolling = () => {
+  if (protonDownloadTimer) return;
+  protonDownloadTimer = setInterval(pollProtonDownload, 500);
 };
 
 const formatMegabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
@@ -392,13 +460,16 @@ const downloadProton = async () => {
   downloadingProton.value = true;
   protonError.value = "";
   protonDownload.value = { running: true, stage: "Starting", done: 0, total: 0 };
-  protonDownloadTimer = setInterval(pollProtonDownload, 500);
+  trackedProtonPath = protonPath.value;
+  protonRequestPending = true;
+  startProtonDownloadPolling();
   try {
     const result = await api.downloadProtonGe();
     if (result && result.success && result.path) {
       // The backend already saved proton_path; other unsaved edits stay unsaved.
       protonPath.value = result.path;
       savedValues.value = { ...savedValues.value, protonPath: result.path };
+      protonError.value = "";
       notify(`GE-Proton installed to ${result.path}.`, "success");
     } else {
       protonError.value = result?.error || "Failed to download Proton.";
@@ -406,10 +477,10 @@ const downloadProton = async () => {
   } catch (e) {
     protonError.value = String(e);
   } finally {
+    protonRequestPending = false;
     downloadingProton.value = false;
     protonDownload.value = null;
-    if (protonDownloadTimer) clearInterval(protonDownloadTimer);
-    protonDownloadTimer = null;
+    stopProtonDownloadPolling();
   }
 };
 
@@ -500,7 +571,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  if (protonDownloadTimer) clearInterval(protonDownloadTimer);
+  pageDisposed = true;
+  stopProtonDownloadPolling();
   if (pollTimer) {
     clearTimeout(pollTimer);
     pollTimer = null;
