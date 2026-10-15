@@ -110,6 +110,59 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     });
     assert.equal(external.source, "f95checker");
     assert.equal(external.deleted, 0);
+
+    // Payload shapes the desktop backend always returns.
+    const installStatus = await api.getInstallStatus();
+    assert.equal(installStatus.success, true);
+    const extensionService = await api.getExtensionServiceStatus();
+    assert.equal(extensionService.success, true);
+    assert.equal(extensionService.reachable, false);
+    const systemDeps = await api.getSystemDepsCommand();
+    assert.equal(systemDeps.code, "unsupported_platform");
+
+    // check_for_updates only fails on a blank URL: an unknown thread URL
+    // reports an update like the backend does (unknown installed version).
+    assert.equal((await api.checkForUpdates("")).success, false);
+    const unknownThread = await api.checkForUpdates("https://f95zone.to/threads/unknown.1/");
+    assert.equal(unknownThread.success, true);
+    assert.equal(unknownThread.has_update, true);
+    assert.ok(unknownThread.version);
+    assert.equal(unknownThread.metadata_updated, 0);
+
+    // A sync run reports the state SyncManager.start_run() answers with.
+    localStorage.setItem("wlib-mock-sync", JSON.stringify({ state: "idle", location: "folder" }));
+    const running = await api.syncNow();
+    assert.equal(running.state, "syncing");
+    assert.equal((await api.getSyncStatus()).connecting, false);
+
+    // Export reports the sections it wrote and the games it serialised.
+    const exported = await api.exportLibraryBackup(
+      { sections: ["metadata", "user_state"] },
+      "/tmp/wlib-library-export.json",
+    );
+    assert.deepEqual(exported.selected_sections, ["metadata", "user_state"]);
+    assert.equal(exported.game_count, 0);
+
+    // Collections and launch targets refuse ids that match no game.
+    const missingCollection = await api.createCollection("Ghost", 4242);
+    assert.equal(missingCollection.success, false);
+    assert.equal(missingCollection.error, "Game not found");
+    const missingTarget = await api.createLaunchTarget(4242, "Ghost", "/tmp/ghost.exe");
+    assert.equal(missingTarget.success, false);
+    assert.equal(missingTarget.error_code, "game_not_found");
+
+    // inspect_archive guesses from the archive name and only fills blanks from
+    // the stored game; .7z/.rar report the missing extraction tool.
+    const archive = await api.inspectArchive("/tmp/Eternum-0.6.zip");
+    assert.equal(archive.title, "Eternum");
+    assert.equal(archive.version, "0.6");
+    assert.equal(archive.tool_error, "");
+    assert.equal(
+      (await api.inspectArchive("/tmp/Eternum-0.6.7z")).tool_error,
+      "Install 7-Zip (7z) or bsdtar to extract .7z archives.",
+    );
+    const added = await api.addGame("Eternum", "/tmp/Eternum-0.6-pc/Eternum.exe");
+    assert.equal(added.title, "Eternum");
   } finally {
     await server.close();
     delete globalThis.window;
