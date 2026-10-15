@@ -157,3 +157,32 @@ def test_flatpak_build_reuses_staged_release_folder():
     assert "org.flatpak.Builder" in build_script
     assert "dbus-run-session" in build_script
     assert "flatpak build-bundle" in build_script
+
+
+def test_build_script_fails_appimagetool_download_on_http_errors():
+    build_script = (PROJECT_ROOT / "scripts/build.sh").read_text(encoding="utf-8")
+
+    # Without --fail, curl exits 0 on HTTP errors and the HTML error page
+    # would be chmod +x'd as appimagetool, failing confusingly later.
+    assert "curl -sSL --fail" in build_script
+
+
+def test_build_script_yaml_escapes_nfpm_maintainer_value():
+    build_script = (PROJECT_ROOT / "scripts/build.sh").read_text(encoding="utf-8")
+
+    # The maintainer lands in a YAML double-quoted scalar: an unescaped
+    # double quote breaks parsing and a backslash is silently eaten by sed.
+    assert "'s/\"/\\\\\"/g'" in build_script
+    assert "$sed_escaped_maintainer" in build_script
+    assert '"$escaped_maintainer"' not in build_script
+
+
+def test_aur_generator_escapes_backslashes_in_substitutions():
+    generator = (PROJECT_ROOT / "scripts/generate-aur-package.sh").read_text(
+        encoding="utf-8"
+    )
+
+    # sed drops a backslash before an ordinary character in the replacement
+    # (\S -> S), silently corrupting values such as a maintainer name with a
+    # backslash. Backslashes must be doubled before &-escaping.
+    assert "'s/\\\\/\\\\\\\\/g'" in generator

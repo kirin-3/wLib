@@ -52,7 +52,9 @@ SRCINFO_OUT="$OUT_DIR/.SRCINFO"
 mkdir -p "$OUT_DIR"
 
 sed_escape() {
-    printf '%s' "$1" | sed -e 's/[&|]/\\&/g'
+    # Escape backslashes first so the value survives the outer substitution
+    # (GNU sed drops a backslash before an ordinary character, e.g. \S -> S).
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/[&|]/\\&/g'
 }
 
 sed \
