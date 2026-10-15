@@ -8,6 +8,7 @@ import {
   type GameRecord,
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
+import { canReseedInstallArchiveDialog } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import PathStatus from "../PathStatus.vue";
 
@@ -256,12 +257,29 @@ const install = async () => {
   }
 };
 
+// Hosted once in App.vue, so a request for another game (or another archive) can
+// arrive while the dialog is already open: the dialog must re-seed from it.
+// Keys on the game id rather than the record so a background library refresh
+// that swaps the record mid-edit does not wipe the form.
 watch(
-  () => props.modelValue,
-  (open) => {
+  () =>
+    [
+      props.modelValue,
+      props.game?.id ?? null,
+      props.preselectedArchive,
+    ] as const,
+  ([open]) => {
     if (!open) {
       stopPolling();
       reset();
+      return;
+    }
+    if (
+      !canReseedInstallArchiveDialog({
+        modelValue: props.modelValue,
+        installing: phase.value === "installing",
+      })
+    ) {
       return;
     }
     reset();

@@ -14,3 +14,19 @@ export const openInstallArchive = (request: InstallArchiveRequest = {}): void =>
     new CustomEvent<InstallArchiveRequest>(INSTALL_ARCHIVE_EVENT, { detail: request }),
   );
 };
+
+export interface InstallArchiveReseedState {
+  modelValue: boolean;
+  /** True while an install owns the dialog: its progress and result must survive. */
+  installing: boolean;
+}
+
+/**
+ * The dialog is hosted once, so a request can arrive while it is already open
+ * (download-offer toasts sit above the dialog backdrop). The form must re-seed
+ * from the new request — a superseded inspection is cheap to cancel — but never
+ * while an install is running, because that job owns the fields, the progress
+ * display and the result.
+ */
+export const canReseedInstallArchiveDialog = (state: InstallArchiveReseedState): boolean =>
+  state.modelValue && !state.installing;

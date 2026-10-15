@@ -1014,6 +1014,8 @@ const toggleModalCollection = (name: string) => {
 // when the modal is saved, like every other membership change here.
 const createModalCollection = async () => {
   if (collectionBusy.value) return;
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
   const name = newCollectionName.value.trim();
   if (!name) {
     collectionError.value = "Enter a collection name.";
@@ -1022,6 +1024,9 @@ const createModalCollection = async () => {
   collectionBusy.value = true;
   try {
     const result = await api.createCollection(name);
+    // Closing the modal mid-request is allowed, so the answer can arrive after
+    // the user opened a different game: never touch the new game's membership.
+    if (!isCurrentGame(gameId)) return;
     if (!result.success) {
       collectionError.value = result.error || "Could not create the collection.";
       return;
@@ -1032,7 +1037,9 @@ const createModalCollection = async () => {
     if (!gameInCollection(name)) collectionMembership.value = [...collectionMembership.value, name];
   } catch (e) {
     console.error("Failed to create collection", e);
-    collectionError.value = "Error creating collection: " + String(e);
+    if (isCurrentGame(gameId)) {
+      collectionError.value = "Error creating collection: " + String(e);
+    }
   } finally {
     collectionBusy.value = false;
   }
