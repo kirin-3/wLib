@@ -173,6 +173,9 @@ export interface SystemDepsCommandResponse {
   package_manager: string;
   distro: string;
   command: string;
+  // Hosts without Linux runtime installers report why, with an error code.
+  error?: string;
+  code?: string;
 }
 
 export interface DownloadProtonResponse extends ApiBasicResponse {
@@ -457,8 +460,10 @@ export interface GameRecord {
   play_status?: string;
   finished_version?: string;
   playtime_seconds?: number;
-  last_played?: string;
-  date_added?: string;
+  // Timestamps are nullable columns: a game that was never played reports
+  // null for last_played, and older rows carry no date_added.
+  last_played?: string | null;
+  date_added?: string | null;
   command_line_args?: string;
   run_japanese_locale?: boolean;
   run_wayland?: boolean;
@@ -1348,7 +1353,8 @@ class ApiService {
             window.dispatchEvent(new Event("wlib-refresh-library"));
           }, 3000);
         }
-        return { success: true, id, mock: true, metadata_pending: metadataPending };
+        // Mirrors the backend: success, id, title and metadata_pending.
+        return { success: true, mock: true, id, title: game.title, metadata_pending: metadataPending };
       }
       case "update_game": {
         const games = readMockGames();
@@ -1420,14 +1426,25 @@ class ApiService {
         return readMockSettings().collections;
       case "create_collection": {
         const name = String(args[0] || "");
-        const gameId = args[1] == null ? null : Number(args[1]);
+        const rawGameId = args[1];
+        const gameId = rawGameId == null ? null : Number(rawGameId);
         const collections = readMockSettings().collections;
         const error = validateMockCollectionList([...collections, name]);
         if (error) return { success: false, mock: true, error };
+        // The backend rejects ids that are not usable row ids before it touches
+        // the collection, and refuses ids that match no game.
+        if (gameId !== null) {
+          if (!Number.isInteger(gameId) || gameId < 1) {
+            return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
+          }
+          if (!readMockGames().some((game) => game.id === gameId)) {
+            return { success: false, mock: true, error: "Game not found" };
+          }
+        }
         const trimmed = name.trim();
         collections.push(trimmed);
         writeMockCollections(collections);
-        if (gameId != null && Number.isFinite(gameId)) {
+        if (gameId !== null && Number.isFinite(gameId)) {
           rewriteMockGameCollections((names, game) =>
             game.id === gameId ? [...names, trimmed] : names,
           );
@@ -1579,8 +1596,10 @@ class ApiService {
           success: true,
           mock: true,
           path,
-          selected_sections: sections,
-          game_count: 0,
+          // write_library_backup reports the sorted written sections and the
+          // number of games it serialised.
+          selected_sections: [...sections].sort(),
+          game_count: readMockGames().length,
           encrypted: typeof args[2] === "string" && args[2].length > 0,
         };
       }
@@ -1661,18 +1680,43 @@ class ApiService {
         let stored: LibrarySyncStatus = {};
         try { stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}"); } catch { /* Start with sync off when mock data is invalid. */ }
         const status: LibrarySyncStatus = { success: true, mock: true, state: "off", location: "", folder_path: "", account: "", encrypted: false, last_synced_at: "", last_device: "", last_error: "", dropbox_available: true, dropbox_unavailable_reason: "", gdrive_available: true, gdrive_unavailable_reason: "", connecting: false, ...stored };
+        // Every successful action goes through SyncManager.start_run(), which
+        // puts the syncer in "syncing" before it answers; the poll then reads
+        // the finished state. connect_* only starts the OAuth round-trip and
+        // answers with the sign-in URL instead of a status payload.
         if (method === "set_sync_folder") Object.assign(status, { state: "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
         if (method === "connect_dropbox") Object.assign(status, { state: "idle", location: "dropbox", account: "Browser mock account", last_error: "" });
         if (method === "connect_gdrive") Object.assign(status, { state: "idle", location: "gdrive", account: "mock@example.com", last_error: "" });
         if (method === "disconnect_sync") Object.assign(status, { state: "off", location: "", encrypted: false, account: "", folder_path: "", last_synced_at: "", last_device: "", last_error: "" });
-        if (method === "sync_now" && status.state === "idle") Object.assign(status, { last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });
-        if (method === "resolve_sync_choice") Object.assign(status, { state: "idle", last_error: "", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" });
+        if (method === "resolve_sync_choice") Object.assign(status, { state: "idle", last_error: "" });
         if (method === "set_sync_passphrase") status.encrypted = args[0] !== null;
         if (method === "unlock_sync") {
           if (args[0] !== "mock-passphrase") return { ...status, success: false, error: "The file could not be decrypted.", error_code: "decrypt_failed" };
           Object.assign(status, { state: "idle", encrypted: true, last_error: "" });
         }
         localStorage.setItem("wlib-mock-sync", JSON.stringify(status));
+        // SyncManager.start_run() only reports a run when a location is set;
+        // otherwise status() keeps answering "off".
+        if (status.location && ["set_sync_folder", "sync_now", "resolve_sync_choice", "set_sync_passphrase", "unlock_sync"].includes(method)) {
+          // The run is asynchronous: report "syncing" now and let the stored
+          // status settle once the simulated run finishes.
+          const running: LibrarySyncStatus = { ...status, state: "syncing", last_error: "" };
+          localStorage.setItem("wlib-mock-sync", JSON.stringify(running));
+          setTimeout(() => {
+            try {
+              let finished: LibrarySyncStatus = { ...running };
+              const stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}") as LibrarySyncStatus;
+              if (stored.state === "syncing") finished = { ...stored, state: "idle", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" };
+              localStorage.setItem("wlib-mock-sync", JSON.stringify(finished));
+            } catch { /* Ignore storage that vanished with the preview page. */ }
+          }, 900);
+          return running;
+        }
+        if (method === "connect_dropbox" || method === "connect_gdrive") {
+          // The desktop bridge answers with the sign-in URL it opened; the
+          // status the panel renders comes from the next get_sync_status poll.
+          return { success: true, mock: true, url: "" };
+        }
         return status;
       }
       case "browse_file":
@@ -1816,23 +1860,47 @@ class ApiService {
         const fileName = String(args[0]).split(/[/\\]/).pop() || "";
         const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");
         const versionMatch = stem.match(/[-_ ]v?(\d[\d._]*[a-z]?)$/i);
-        const version = versionMatch?.[1] ? versionMatch[1].replace(/_/g, ".") : "";
-        const title = (versionMatch ? stem.slice(0, versionMatch.index) : stem).replace(/[_-]+/g, " ").trim() || stem;
+        const guessedVersion = versionMatch?.[1] ? versionMatch[1].replace(/_/g, ".") : "";
+        const guessedTitle = (versionMatch ? stem.slice(0, versionMatch.index) : stem).replace(/[_-]+/g, " ").trim() || stem;
         const settings = readMockSettings();
         const gameId = typeof args[1] === "number" ? args[1] : null;
         const game = gameId !== null ? readMockGames().find((entry) => entry.id === gameId) : undefined;
+        // Mirrors inspect_archive: the archive name is the primary guess, the
+        // stored game only fills blanks (and overwrites the version when it has
+        // a known latest_version).
+        const title = guessedTitle || (game?.title ?? "");
+        const version = game?.latest_version?.trim() ? game.latest_version : guessedVersion;
+        const creator = game?.developer ?? "";
+        // build_destination substitutes the pattern tokens and drops segments
+        // that end up empty, falling back to the title.
         const pattern = settings.library_folder_pattern || DEFAULT_MOCK_SETTINGS.library_folder_pattern;
-        const destination = settings.library_folder && title
-          ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${pattern.replace("{title}", title).replace("{version}", version || "1.0").replace("{creator}", "").replace("{engine}", "").replace(/\/+/g, "/").replace(/^\/|\/$/g, "")}`
+        const segments = pattern
+          .split(/[/\\]+/)
+          .map((part) => part
+            .replace("{creator}", creator)
+            .replace("{title}", title)
+            .replace("{version}", version)
+            .replace("{engine}", "")
+            .replace(/\{[^{}]*\}/g, "")
+            .trim())
+          .filter(Boolean);
+        const destination = settings.library_folder
+          ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [title || "game"]).join("/")}`
           : "";
+        const archiveFormat = /\.7z$/i.test(fileName) ? "7z" : /\.rar$/i.test(fileName) ? "rar" : "zip";
+        const toolError = archiveFormat === "7z"
+          ? "Install 7-Zip (7z) or bsdtar to extract .7z archives."
+          : archiveFormat === "rar"
+            ? "Install 7-Zip (7z), bsdtar, or unrar to extract .rar archives."
+            : "";
         return {
           success: true,
           mock: true,
-          title: game?.title || title,
-          version: version || game?.latest_version || "1.0",
-          creator: "",
+          title,
+          version,
+          creator,
           destination,
-          tool_error: "",
+          tool_error: toolError,
           old_folder: game ? game.exe_path.split(/[/\\]/).slice(0, -1).join("/") : "",
           removable: !!game,
           remove_reason: game ? "" : "No previous install.",
@@ -1864,10 +1932,18 @@ class ApiService {
       case "dismiss_download_offer":
         return { success: true, mock: true };
       case "inspect_game_path": {
+        // The backend rejects a missing file; the mock has no filesystem, so it
+        // keeps the same error for the one case it can detect.
+        if (!String(args[0] || "").trim()) {
+          return { success: false, mock: true, error: "File not found" };
+        }
         const folder = String(args[0]).split(/[\/]/).slice(-2, -1)[0] || "";
         return { success: true, mock: true, title: folder, version: "", engine: "", exe_path: String(args[0]) };
       }
       case "scan_games_folder": {
+        if (!String(args[0] || "").trim()) {
+          return { success: false, mock: true, error: "Folder not found" };
+        }
         const root = String(args[0]).replace(/[\/]+$/, "");
         const known = new Set(readMockGames().map((game) => game.exe_path));
         return { success: true, mock: true, games: [
@@ -1882,9 +1958,15 @@ class ApiService {
           { name: "wine-ge (Lutris)", path: "/home/user/.local/share/lutris/runners/wine/wine-ge/bin/wine" },
         ] : [] };
       case "check_for_updates": {
+        const url = String(args[0] || "").trim();
+        if (!url) return { success: false, mock: true, error: "A valid thread URL is required" };
         const games = readMockGames();
-        const game = games.find((entry) => entry.f95_url === String(args[0]));
-        if (!game) return { success: false, error: "Game not found", mock: true };
+        const game = games.find((entry) => entry.f95_url === url);
+        // The backend scrapes the thread and stores the version for every URL
+        // it is given; a URL that matches no local game simply reports no update.
+        if (!game) {
+          return { success: true, mock: true, version: "", has_update: false, newly_finished: false, metadata_updated: 0 };
+        }
         const completedIds = JSON.parse(localStorage.getItem("wlib-mock-completed-threads") || "[]") as unknown;
         const completed = Array.isArray(completedIds) && completedIds.includes(game.id);
         const newlyFinished = completed && !game.thread_completed && !game.exe_path.trim();
@@ -1899,6 +1981,7 @@ class ApiService {
           version: game.latest_version || game.version || "",
           has_update: !!game.exe_path.trim() && !!game.latest_version && game.latest_version !== game.version,
           newly_finished: newlyFinished,
+          metadata_updated: 0,
         };
       }
       case "get_update_status":
@@ -1921,6 +2004,9 @@ class ApiService {
         return { running: false, stage: "", done: 0, total: 0 };
       case "get_install_status":
         return {
+          // The backend always reports success for the status read itself; only
+          // the unsupported-platform payload reports success: false.
+          success: true,
           deps: { running: false, done: 0, total: 0, current: "", error: "" },
           rtps: { running: false, done: 0, total: 0, current: "", error: "" },
           dlls_installed: false,
@@ -1940,10 +2026,14 @@ class ApiService {
           distro: "Unknown",
           command:
             "# Backend unavailable in browser mode. Run this in the desktop app.",
+          error: "System dependency detection requires the desktop app runtime.",
+          code: "unsupported_platform",
         };
       case "get_extension_service_status":
+        // get_extension_service_status only reports reachability; the read itself
+        // succeeds even when the extension server is down.
         return {
-          success: false,
+          success: true,
           mock: true,
           reachable: false,
           error: "Extension service status requires the desktop app runtime.",
@@ -1974,7 +2064,17 @@ class ApiService {
         const gameId = Number(args[0]);
         const label = typeof args[1] === "string" ? args[1].trim() : "";
         const exePath = typeof args[2] === "string" ? args[2].trim() : "";
-        if (!Number.isFinite(gameId) || !label || !exePath) {
+        // game_launch_targets has a FOREIGN KEY on games(id), so the backend
+        // reports a missing parent game instead of creating an orphan target.
+        if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+          return {
+            success: false,
+            mock: true,
+            error: "Parent game was not found",
+            error_code: "game_not_found",
+          };
+        }
+        if (!label || !exePath) {
           return {
             success: false,
             mock: true,

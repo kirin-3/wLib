@@ -2796,10 +2796,12 @@ class Api:
         except OSError as e:
             return {"success": False, "modified_at": None, "error": str(e)}
 
-        return {
-            "success": True,
-            "modified_at": datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
-        }
+        try:
+            modified_at = datetime.fromtimestamp(stat_result.st_mtime).isoformat()
+        except (OSError, OverflowError, ValueError) as e:
+            return {"success": False, "modified_at": None, "error": str(e)}
+
+        return {"success": True, "modified_at": modified_at}
 
     def get_auto_check_setting(self) -> dict[str, str]:
         """Get the auto update check frequency setting."""
@@ -2916,7 +2918,13 @@ class Api:
 
         proton_dir = get_proton_dir()
         if os.path.exists(proton_dir):
-            for entry in sorted(os.listdir(proton_dir)):
+            try:
+                proton_entries = sorted(os.listdir(proton_dir))
+            except OSError as e:
+                # An unreadable proton folder must not fail the whole listing.
+                print(f"[wLib] Could not read {proton_dir}: {e}")
+                proton_entries = []
+            for entry in proton_entries:
                 full_path = os.path.join(proton_dir, entry)
                 if os.path.isdir(full_path):
                     proton_exec = os.path.join(full_path, "proton")
@@ -3063,6 +3071,8 @@ class Api:
         return os.path.dirname(os.path.abspath(exe_path))
 
     def get_urm_status(self, game_id: int) -> dict[str, object]:
+        import sqlite3
+
         from core.database import get_setting
 
         try:
@@ -3079,11 +3089,12 @@ class Api:
                 "source_configured": source.lower().endswith(".rpa")
                 and os.path.isfile(source),
             }
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
 
     def set_urm_installed(self, game_id: int, installed: object) -> dict[str, object]:
         import shutil
+        import sqlite3
         import tempfile
         from core.database import get_setting
 
@@ -3114,7 +3125,7 @@ class Api:
             elif os.path.lexists(target):
                 os.remove(target)
             return self.get_urm_status(game_id)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
         finally:
             if temporary and os.path.exists(temporary):
@@ -3926,7 +3937,9 @@ class Api:
         return {"success": True}
 
     def browse_urm_file(self, start_path: str = "") -> str:
-        file_types = ("Ren'Py Archives (*.rpa)",)
+        # pywebview validates every filter label against [\w ]+, so the label
+        # cannot carry the apostrophe in "Ren'Py" on the Qt dialog path.
+        file_types = ("RenPy Archives (*.rpa)",)
         if sys.platform.startswith("linux"):
             return self._browse_linux_dialog(
                 "file", directory=start_path, file_types=file_types
@@ -4366,7 +4379,11 @@ class Api:
             renpy_base = os.path.expanduser("~/.renpy")
         if os.path.isdir(renpy_base):
             # Try to match by game name or title
-            for entry in os.listdir(renpy_base):
+            try:
+                renpy_entries = os.listdir(renpy_base)
+            except OSError:
+                renpy_entries = []
+            for entry in renpy_entries:
                 entry_lower = entry.lower()
                 if (
                     title_clean
@@ -4468,7 +4485,11 @@ class Api:
                 ("Documents", "Documents"),
                 ("Saved Games", "Saved Games"),
             ]
-            for user_folder in os.listdir(users_dir):
+            try:
+                user_folders = os.listdir(users_dir)
+            except OSError:
+                user_folders = []
+            for user_folder in user_folders:
                 user_path = os.path.join(users_dir, user_folder)
                 if not os.path.isdir(user_path) or user_folder in ("Public",):
                     continue
@@ -4532,8 +4553,18 @@ class Api:
         return self._open_path_with_system_handler(path)
 
     def open_dev_tools(self) -> None:
-        if self.window:
-            self.window.toggle_inspect()
+        # pywebview 4 removed Window.toggle_inspect(); the Qt backend only offers
+        # devtools through its context menu. Resolve it dynamically so a backend
+        # without the method degrades to a no-op instead of raising into the
+        # JS bridge (which would reject the promise the UI awaits).
+        toggle_inspect = (
+            getattr(self.window, "toggle_inspect", None) if self.window else None
+        )
+        if callable(toggle_inspect):
+            try:
+                _ = toggle_inspect()
+            except Exception as e:
+                print(f"[wLib] Could not open developer tools: {e}")
 
     def check_app_updates(self) -> dict[str, object]:
         """Latest wLib release, fetched once per session (GitHub allows 60 anonymous calls/hour)."""

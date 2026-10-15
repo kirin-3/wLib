@@ -1234,7 +1234,7 @@ const handleLibraryKeyboard = (event: KeyboardEvent) => {
   }
 };
 
-const formatLastPlayed = (value?: string): string => {
+const formatLastPlayed = (value?: string | null): string => {
   const date = new Date(value || "");
   return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleDateString();
 };

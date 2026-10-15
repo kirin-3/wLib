@@ -1481,6 +1481,78 @@ def test_browse_directory_returns_empty_string_when_linux_picker_cancelled(monke
     assert qt_calls == []
 
 
+def test_qt_browse_filters_pass_pywebview_validation(monkeypatch):
+    """pywebview parses every filter it is handed; a label or pattern it cannot
+    parse raises out of the bridge instead of opening the dialog."""
+    parse_file_type = pytest.importorskip("webview.util").parse_file_type
+    api = Api()
+    recorded: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr("core.api.sys.platform", "win32")
+
+    def fake_browse_qt_dialog(dialog_kind, directory="", file_types=()):
+        _ = (dialog_kind, directory)
+        recorded.append(tuple(file_types))
+        return ""
+
+    monkeypatch.setattr(api, "_browse_qt_dialog", fake_browse_qt_dialog)
+
+    api.browse_urm_file()
+    for source in ("f95checker", "atlas", "xlibrary"):
+        api.browse_external_library_file(source)
+    api.browse_file()
+    api.browse_runner_file()
+    api.browse_backup_file()
+    api.browse_archive_file()
+
+    assert recorded
+    for file_types in recorded:
+        for file_type in file_types:
+            parse_file_type(file_type)
+
+
+def test_open_dev_tools_tolerates_backends_without_toggle_inspect():
+    """pywebview 6 has no Window.toggle_inspect; the bridge must not raise."""
+    api = Api()
+
+    class _WindowWithoutInspect:
+        pass
+
+    class _WindowWithInspect:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def toggle_inspect(self) -> None:
+            self.calls += 1
+
+    api.window = cast(object, _WindowWithoutInspect())
+    assert api.open_dev_tools() is None
+
+    window_with_inspect = _WindowWithInspect()
+    api.window = cast(object, window_with_inspect)
+    assert api.open_dev_tools() is None
+    assert window_with_inspect.calls == 1
+
+
+def test_get_urm_status_reports_database_error(monkeypatch, tmp_path):
+    import sqlite3
+
+    api = Api()
+    broken_db = tmp_path / "broken.db"
+    broken_db.write_bytes(b"not a database at all")
+
+    def broken_connection():
+        return cast(object, sqlite3.connect(str(broken_db)))
+
+    monkeypatch.setattr("core.database.get_connection", broken_connection)
+
+    assert api.get_urm_status(1) == {
+        "success": False,
+        "error": "file is not a database",
+    }
+    assert api.set_urm_installed(1, False)["success"] is False
+
+
 def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     api = Api()
     recorded: dict[str, object] = {}

@@ -53,13 +53,17 @@ SOURCE_LABELS = {
     "xlibrary": "XLibrary",
 }
 
+# pywebview rejects a filter whose patterns are not all "*.ext" (see
+# webview.util.parse_file_type), which would make browse_external_library_file
+# raise on the Qt dialog path. The wildcard patterns still match the default
+# file names, and the Linux backends parse the same strings.
 EXTERNAL_IMPORT_FILE_FILTERS = {
     "f95checker": (
-        "F95Checker Databases (db.sqlite3;*.sqlite3;*.db)",
+        "F95Checker Databases (*.sqlite3;*.db)",
         "All files (*.*)",
     ),
     "atlas": (
-        "Atlas Databases (data.db;*.db)",
+        "Atlas Databases (*.db)",
         "All files (*.*)",
     ),
     "xlibrary": (
