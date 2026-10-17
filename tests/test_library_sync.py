@@ -118,6 +118,34 @@ def test_finished_version_round_trips_between_libraries(tmp_path, monkeypatch):
     assert game["finished_version"] == "0.5"
 
 
+def test_screenshots_round_trip_between_libraries(tmp_path, monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game(
+        "Shots", "/shots.exe", f95_url="https://f95zone.to/threads/shots.400/"
+    )
+    conn = database.get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?",
+        ('["https://example.com/sync-a.png"]', game_id),
+    )
+    conn.commit()
+    conn.close()
+    assert sync.run()["state"] == "idle"
+
+    pushed = json.loads(location.data)
+    assert pushed["games"][0]["metadata"]["screenshots"] == [
+        "https://example.com/sync-a.png"
+    ]
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-library.db"))
+    database.init_db()
+    other = manager(location)
+    assert other.run()["state"] == "idle"
+    game = database.get_all_games()[0]
+    assert game["screenshots"] == ["https://example.com/sync-a.png"]
+
+
 @pytest.mark.parametrize("choice", ["use-remote", "use-local", "merge-once"])
 def test_first_connection_choice(choice):
     database.add_game("Local", "/local.exe", developer="Dev")

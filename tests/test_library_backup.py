@@ -1939,3 +1939,125 @@ def test_import_out_of_range_playtime_is_clamped(tmp_path):
     assert result["success"] is True
     game = get_all_games()[0]
     assert game["playtime_seconds"] == 0
+
+
+def test_screenshots_export_and_import_round_trip(tmp_path):
+    import json as json_module
+
+    from core.database import get_connection as _get_connection
+
+    api = Api()
+    url = "https://f95zone.to/threads/shots-backup.300/"
+    game_id = add_game("Shots Backup", "/tmp/shots.exe", f95_url=url)
+    assert game_id is not None
+    conn = _get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?",
+        (
+            json_module.dumps(
+                ["https://example.com/a.png", "https://example.com/b.png"]
+            ),
+            game_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    destination = tmp_path / "shots.json"
+    exported = api.export_library_backup({}, str(destination))
+    assert exported["success"] is True
+    backup = json_module.loads(destination.read_text(encoding="utf-8"))
+    assert backup["games"][0]["metadata"]["screenshots"] == [
+        "https://example.com/a.png",
+        "https://example.com/b.png",
+    ]
+
+    conn = _get_connection()
+    conn.execute("UPDATE games SET screenshots = '[]' WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    result = api.import_library_backup(str(destination))
+    assert result["success"] is True
+    assert get_all_games()[0]["screenshots"] == [
+        "https://example.com/a.png",
+        "https://example.com/b.png",
+    ]
+
+
+def test_screenshots_fill_missing_and_missing_field(tmp_path):
+    import json as json_module
+
+    api = Api()
+    empty_url = "https://f95zone.to/threads/empty.301/"
+    full_url = "https://f95zone.to/threads/full.302/"
+    empty_id = add_game("Empty", "/tmp/empty.exe", f95_url=empty_url)
+    full_id = add_game("Full", "/tmp/full.exe", f95_url=full_url)
+    assert empty_id is not None and full_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?",
+        (json_module.dumps(["https://example.com/kept.png"]), full_id),
+    )
+    conn.commit()
+    conn.close()
+
+    payload = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Empty",
+                    "f95_url": empty_url,
+                    "screenshots": ["https://example.com/filled.png"],
+                }
+            },
+            {
+                "metadata": {
+                    "title": "Full",
+                    "f95_url": full_url,
+                    "screenshots": ["https://example.com/new.png"],
+                }
+            },
+        ]
+    )
+    path = write_backup(tmp_path / "fill.json", payload)
+    result = api.import_library_backup(str(path), {"merge_mode": "fill_missing"})
+    assert result["success"] is True
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["Empty"]["screenshots"] == ["https://example.com/filled.png"]
+    assert games["Full"]["screenshots"] == ["https://example.com/kept.png"]
+
+    older = base_backup(
+        [{"metadata": {"title": "Full", "f95_url": full_url}}]
+    )
+    older_path = write_backup(tmp_path / "older.json", older)
+    result = api.import_library_backup(str(older_path))
+    assert result["success"] is True
+    assert get_all_games()[1]["screenshots"] == ["https://example.com/kept.png"]
+
+
+def test_screenshots_malformed_values_dropped(tmp_path):
+    from core.library_backup import _screenshots_json_text
+
+    assert _screenshots_json_text('["https://example.com/a.png", 7, "", "ftp://x/y"]') == '["https://example.com/a.png"]'
+    assert _screenshots_json_text("not json") == "[]"
+    many = [f"https://example.com/{i}.png" for i in range(25)]
+    assert len(json.loads(_screenshots_json_text(many))) == 20
+
+    api = Api()
+    url = "https://f95zone.to/threads/malformed.303/"
+    game_id = add_game("Malformed", "/tmp/mal.exe", f95_url=url)
+    assert game_id is not None
+    payload = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Malformed",
+                    "f95_url": url,
+                    "screenshots": ["not a url", 7, "https://example.com/ok.png"],
+                }
+            }
+        ]
+    )
+    path = write_backup(tmp_path / "mal.json", payload)
+    assert api.import_library_backup(str(path))["success"] is True
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/ok.png"]

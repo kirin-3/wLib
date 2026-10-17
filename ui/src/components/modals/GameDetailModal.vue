@@ -25,6 +25,7 @@ import { api } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { hasAvailableUpdate, isWishlisted } from "../../utils/libraryGames";
 import type {
   GameRecord,
@@ -134,6 +135,24 @@ const engineMenuOpen = ref(false);
 const detailTabs = ["Overview", "Launch", "Info"] as const;
 const activeTab = ref<(typeof detailTabs)[number]>("Overview");
 const coverImageFailed = ref(false);
+const lightboxIndex = ref<number | null>(null);
+const failedScreenshots = ref<Set<string>>(new Set());
+const gameScreenshots = computed(() => props.game?.screenshots ?? []);
+const hasCoverImage = computed(() => !!coverImage.value && !coverImageFailed.value);
+const galleryImages = computed(() => [
+  ...(hasCoverImage.value ? [coverImage.value] : []),
+  ...gameScreenshots.value,
+]);
+const hasGallery = computed(() => galleryImages.value.length > 0);
+const openLightboxAt = (index: number) => {
+  lightboxIndex.value = index;
+};
+const closeLightbox = () => {
+  lightboxIndex.value = null;
+};
+const markScreenshotFailed = (url: string) => {
+  failedScreenshots.value = new Set([...failedScreenshots.value, url]);
+};
 const runJapaneseLocale = ref(false);
 const runWayland = ref(false);
 const autoInjectCe = ref(false);
@@ -435,9 +454,12 @@ watch(
         ratingGameplay.value = g.rating_gameplay || 0;
         savedSnapshot.value = formSnapshot();
         savedQuickFields.value = quickFields();
+        lightboxIndex.value = null;
+        failedScreenshots.value = new Set();
       }
     } else if (!isOpen) {
       lastSyncedId.value = null;
+      lightboxIndex.value = null;
     }
   },
   { immediate: true },
@@ -1404,7 +1426,16 @@ const openInBrowser = async () => {
 
       <header class="detail-header px-6 py-5">
         <div class="game-header">
-          <div class="game-cover">
+          <button
+            v-if="hasCoverImage && hasGallery"
+            type="button"
+            class="game-cover game-cover-button"
+            aria-label="View cover and screenshots"
+            @click="openLightboxAt(0)"
+          >
+            <img :src="coverImage" :alt="`${title || game.title} cover`" @error="coverImageFailed = true" />
+          </button>
+          <div v-else class="game-cover">
             <img v-if="coverImage && !coverImageFailed" :src="coverImage" :alt="`${title || game.title} cover`" @error="coverImageFailed = true" />
             <IconDeviceGamepad2Filled v-else class="h-10 w-10" role="img" aria-label="No cover image" />
           </div>
@@ -1499,6 +1530,41 @@ const openInBrowser = async () => {
                 />
                 {{ item.value }}
               </p>
+            </div>
+          </div>
+
+          <div v-if="game.f95_url">
+            <h3 class="modal-label mb-3">Screenshots</h3>
+            <div v-if="gameScreenshots.length" class="screenshot-strip" role="list" aria-label="Game screenshots">
+              <button
+                v-for="(url, index) in gameScreenshots"
+                v-show="!failedScreenshots.has(url)"
+                :key="url"
+                type="button"
+                role="listitem"
+                class="screenshot-thumb-button"
+                :aria-label="`View screenshot ${index + 1}`"
+                @click="openLightboxAt(index + (hasCoverImage ? 1 : 0))"
+              >
+                <img
+                  :src="url"
+                  :alt="`Screenshot ${index + 1}`"
+                  loading="lazy"
+                  class="screenshot-thumb"
+                  @error="markScreenshotFailed(url)"
+                />
+              </button>
+            </div>
+            <div v-else class="screenshot-empty">
+              <p class="text-xs" style="color: var(--text-muted)">Screenshots load from the F95 thread.</p>
+              <button
+                type="button"
+                class="modal-btn"
+                :disabled="updateCheckState.running"
+                @click="requestUpdateCheck"
+              >
+                {{ updateCheckState.running ? "Checking..." : "Check thread now" }}
+              </button>
             </div>
           </div>
 
@@ -2323,6 +2389,11 @@ const openInBrowser = async () => {
         </div>
       </div>
     </div>
+    <ScreenshotLightbox
+      :images="galleryImages"
+      :start-index="lightboxIndex"
+      @close="closeLightbox"
+    />
   </div>
 </template>
 
@@ -2427,6 +2498,67 @@ const openInBrowser = async () => {
   gap: 0.25rem 1rem;
   font-size: 0.6875rem;
   color: var(--text-muted);
+}
+
+.game-cover-button {
+  cursor: pointer;
+  padding: 0;
+}
+
+.game-cover-button:hover {
+  border-color: var(--brand);
+}
+
+.game-cover-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.screenshot-strip {
+  display: flex;
+  gap: 0.5rem;
+  height: 6rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.25rem;
+}
+
+.screenshot-thumb-button {
+  flex: 0 0 auto;
+  height: 6rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  padding: 0;
+  cursor: pointer;
+}
+
+.screenshot-thumb-button:hover {
+  border-color: var(--brand);
+}
+
+.screenshot-thumb-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.screenshot-thumb {
+  height: 6rem;
+  width: auto;
+  display: block;
+  object-fit: cover;
+}
+
+.screenshot-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: 6rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px dashed var(--border);
+  background: var(--bg-inset);
 }
 
 @media (max-width: 640px) {

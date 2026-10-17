@@ -801,3 +801,120 @@ def test_login_required_does_not_open_window(monkeypatch, thread_html):
     # No window, so the second request still tried urllib first.
     assert get.call_count == 2
     _reset_scraper_globals()
+
+
+def test_screenshots_collected_in_post_order(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    assert result["screenshots"] == [
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg",
+        "https://attachments.f95zone.to/2026/01/shot2-full.jpg",
+        "https://example.com/external-shot.png",
+    ]
+
+
+def test_screenshots_exclude_cover_smilie_and_reply(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    screenshots = result["screenshots"]
+    assert result["cover_image"] not in screenshots
+    assert not any("smilie" in url for url in screenshots)
+    assert "https://example.com/reply.png" not in screenshots
+
+
+def test_screenshots_thumb_stripped_and_external_verbatim(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    assert "https://attachments.f95zone.to/2026/01/shot1-full.jpg" in result["screenshots"]
+    assert not any("/thumb/" in url for url in result["screenshots"])
+    assert "https://example.com/external-shot.png" in result["screenshots"]
+
+
+def test_screenshots_dedupe_thumb_and_full(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    assert result["screenshots"].count(
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg"
+    ) == 1
+
+
+def test_screenshots_cap_at_20():
+    images = "".join(
+        f'<img class="bbImage" src="https://example.com/shot{i:02d}.png">'
+        for i in range(25)
+    )
+    html = (
+        "<title>Game [v1.0]</title>"
+        '<h1 class="p-title-value">Game [v1.0]</h1>'
+        '<article class="message-threadStarterPost">'
+        f'<div class="bbWrapper"><img class="bbImage" src="https://example.com/cover.png">{images}</div>'
+        "</article>"
+    )
+    result = Scraper()._extract_page(html)
+    assert result["cover_image"] == "https://example.com/cover.png"
+    assert len(result["screenshots"]) == 20
+    assert result["screenshots"][0] == "https://example.com/shot00.png"
+    assert result["screenshots"][-1] == "https://example.com/shot19.png"
+
+
+def test_screenshots_empty_for_post_without_images():
+    html = (
+        "<title>Game [v1.0]</title>"
+        '<h1 class="p-title-value">Game [v1.0]</h1>'
+        '<article class="message-threadStarterPost">'
+        '<div class="bbWrapper"><b>Version</b>: v1.0<br>No images here</div>'
+        "</article>"
+    )
+    assert Scraper()._extract_page(html)["screenshots"] == []
+
+
+def test_screenshots_carry_through_page_fallback_without_extra_request(
+    monkeypatch, thread_html
+):
+    get = MagicMock(
+        side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)]
+    )
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    scraper = Scraper()
+    result = scraper.get_thread_version(
+        "https://f95zone.to/threads/1/", include_metadata=True
+    )
+    assert result["success"] is True
+    assert result["screenshots"] == [
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg",
+        "https://attachments.f95zone.to/2026/01/shot2-full.jpg",
+        "https://example.com/external-shot.png",
+    ]
+    assert get.call_count == 2
+
+
+def test_screenshots_carry_through_batch_and_metadata_fetch(
+    monkeypatch, thread_html
+):
+    get = MagicMock(
+        side_effect=[checker_response(["1"]), (200, thread_html)]
+    )
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    scraper = Scraper()
+    result = scraper.get_thread_version(
+        "https://f95zone.to/threads/1/", include_metadata=True
+    )
+    assert result["success"] is True
+    assert result["screenshots"] == [
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg",
+        "https://attachments.f95zone.to/2026/01/shot2-full.jpg",
+        "https://example.com/external-shot.png",
+    ]
+    assert get.call_count == 2
+
+
+def test_check_versions_page_fallback_carries_screenshots(
+    monkeypatch, thread_html
+):
+    get = MagicMock(
+        side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)]
+    )
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    results = Scraper().check_versions(["https://f95zone.to/threads/1/"])
+    assert results["https://f95zone.to/threads/1/"]["screenshots"] == [
+        "https://attachments.f95zone.to/2026/01/shot1-full.jpg",
+        "https://attachments.f95zone.to/2026/01/shot2-full.jpg",
+        "https://example.com/external-shot.png",
+    ]
+    assert get.call_count == 2

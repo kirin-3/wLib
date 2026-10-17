@@ -72,6 +72,20 @@ def test_sync_change_tracking():
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
 
 
+def test_screenshot_only_update_does_not_bump_sync_time():
+    game_id = add_game("Sync Shots", "/tmp/sync.exe")
+    assert game_id is not None
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?",
+        ('["https://example.com/a.png"]', game_id),
+    )
+    conn.commit()
+    conn.close()
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+
+
 def assert_raises_value_error(message: str, callback):
     try:
         callback()
@@ -1168,3 +1182,58 @@ def test_create_collection_dedupes_stale_membership():
     conn.close()
     assert raw is not None
     assert json.loads(str(raw[0])) == ["Backlog"]
+
+
+def test_screenshots_migration_and_decoding():
+    game_id = add_game("Screenshot Game", "/tmp/shot.exe")
+    assert game_id is not None
+    assert get_all_games()[0]["screenshots"] == []
+
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN screenshots")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT screenshots FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert row is not None and row[0] == "[]"
+    assert get_all_games()[0]["screenshots"] == []
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?",
+        ('["https://example.com/a.png", "", 7, " https://example.com/b.png "]', game_id),
+    )
+    conn.commit()
+    conn.close()
+    assert get_all_games()[0]["screenshots"] == [
+        "https://example.com/a.png",
+        "https://example.com/b.png",
+    ]
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET screenshots = ? WHERE id = ?", ("not json", game_id)
+    )
+    conn.commit()
+    conn.close()
+    assert get_all_games()[0]["screenshots"] == []
+
+    conn = get_connection()
+    conn.execute("UPDATE games SET screenshots = NULL WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    assert get_all_games()[0]["screenshots"] == []
+
+    applied = update_game(game_id, {"screenshots": ["https://example.com/c.png"]})
+    assert "screenshots" not in applied
+    assert get_all_games()[0]["screenshots"] == []
+    assert "screenshots" not in SYNC_GAME_COLUMNS

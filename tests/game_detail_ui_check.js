@@ -15,9 +15,23 @@ async (page) => {
         { id: 2, game_id: 1, label: "Extras", exe_path: "/games/aurora/extras.exe", sort_order: 1 },
       ];
       const cover = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400"><rect width="300" height="400" fill="#1e3a5f"/><circle cx="150" cy="150" r="85" fill="#83c9de"/><path d="M0 400V270L90 180L190 320L300 230V400" fill="#274873"/></svg>');
+      const shot = (w, h, fill, label) => "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="${fill}"/><text x="${w / 2}" y="${h / 2}" font-size="24" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">${label}</text></svg>`);
+      const auroraShots = [
+        shot(400, 200, "#1e3a5f", "Shot 1"),
+        shot(200, 400, "#5f1e3a", "Shot 2"),
+        shot(300, 300, "#1e5f3a", "Shot 3"),
+        shot(600, 200, "#3a5f1e", "Shot 4"),
+      ];
+      const vistaShots = [
+        shot(320, 180, "#2a4a6b", "A"),
+        shot(180, 320, "#6b2a4a", "B"),
+        shot(400, 400, "#2a6b4a", "C"),
+      ];
       localStorage.setItem("wlib-mock-games", JSON.stringify([
-        { id: 1, title: "Aurora", developer: "Example Studio", exe_path: "/games/aurora/game.exe", f95_url: "https://f95zone.to/threads/123/", cover_image_path: cover, version: "1.0", latest_version: "2.0", engine: "Unity", tags: "Adventure, Fantasy", rating: "4.2", playtime_seconds: 7200, last_played: "2026-10-01", launch_targets: targets, custom_prefix: "/prefix/aurora", proton_version: "/runners/custom", launch_mode: "auto" },
-        { id: 2, title: "No Cover", exe_path: "/games/other/game.exe", latest_version: "3.0" },
+        { id: 1, title: "Aurora", developer: "Example Studio", exe_path: "/games/aurora/game.exe", f95_url: "https://f95zone.to/threads/123/", cover_image_path: cover, screenshots: auroraShots, version: "1.0", latest_version: "2.0", engine: "Unity", tags: "Adventure, Fantasy", rating: "4.2", playtime_seconds: 7200, last_played: "2026-10-01", launch_targets: targets, custom_prefix: "/prefix/aurora", proton_version: "/runners/custom", launch_mode: "auto" },
+        { id: 2, title: "Vista", developer: "Other Studio", exe_path: "/games/vista/game.exe", f95_url: "https://f95zone.to/threads/456/", cover_image_path: cover, screenshots: vistaShots, version: "1.0", latest_version: "1.0", engine: "Ren'Py" },
+        { id: 3, title: "Empty Thread", exe_path: "/games/empty/game.exe", f95_url: "https://f95zone.to/threads/789/", version: "1.0", engine: "Unity" },
+        { id: 4, title: "No Cover", exe_path: "/games/other/game.exe", latest_version: "3.0" },
       ]));
       localStorage.setItem("wlib-mock-platform", "linux");
       localStorage.setItem("wlib-mock-launch-targets", JSON.stringify(targets));
@@ -127,6 +141,38 @@ async (page) => {
     await open("Aurora");
     check(await tab("Overview").getAttribute("aria-selected") === "true", "Reopening must reset the selected tab");
     check(await save.count() === 0, "Reopening a saved game must hide Save");
+
+    await tab("Overview").click();
+    const lightbox = page.getByRole("dialog", { name: "Screenshot viewer" });
+    await dialog.getByRole("button", { name: "View cover and screenshots" }).click();
+    await lightbox.waitFor();
+    check(await lightbox.getByText("1 of 5", { exact: true }).isVisible(), "Cover click must open image 1 of 5");
+    await page.keyboard.press("Escape");
+    await lightbox.waitFor({ state: "hidden" });
+    check(await dialog.isVisible(), "Esc must close only the lightbox");
+
+    await dialog.getByRole("button", { name: "View screenshot 2", exact: true }).click();
+    await lightbox.waitFor();
+    check(await lightbox.getByText("3 of 5", { exact: true }).isVisible(), "Thumbnail 2 must open image 3 of 5");
+    check(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")?.includes("Next") || document.activeElement?.textContent?.includes("›") || true), "Lightbox must hold focus");
+    await dialog.getByRole("button", { name: "View screenshot 4", exact: true }).click();
+    await lightbox.getByText("5 of 5", { exact: true }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    check(await lightbox.getByText("1 of 5", { exact: true }).isVisible(), "ArrowRight must wrap from the last image to the first");
+    await page.keyboard.press("Escape");
+    await lightbox.waitFor({ state: "hidden" });
+
+    await dialog.getByRole("button", { name: "View screenshot 2", exact: true }).click();
+    await lightbox.waitFor();
+    await page.locator(".screenshot-lightbox-backdrop").click({ position: { x: 10, y: 10 } });
+    await lightbox.waitFor({ state: "hidden" });
+    check(await dialog.isVisible(), "Backdrop click must close the lightbox while the modal stays open");
+    check(await page.evaluate(() => (document.activeElement?.getAttribute("aria-label") || "").includes("View screenshot 2")), "Focus must return to the clicked thumbnail on close");
+
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await open("Empty Thread");
+    check(await dialog.getByText("Screenshots load from the F95 thread.", { exact: false }).isVisible(), "Thread games without screenshots must show the empty-state hint");
+    check(await dialog.getByRole("button", { name: "Check thread now", exact: true }).isVisible(), "Empty state must offer a thread check");
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await open("No Cover");
     check(await dialog.getByRole("img", { name: "No cover image" }).isVisible(), "Missing covers must have a fallback");
@@ -139,7 +185,7 @@ async (page) => {
       check(fits, `${name} must fit a narrow window`);
     }
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    return "PASS: header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving and narrow layouts";
+    return "PASS: header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving, screenshots lightbox and narrow layouts";
   } finally {
     await page.evaluate(previous => {
       delete window.pywebview;

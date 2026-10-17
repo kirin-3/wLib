@@ -89,6 +89,7 @@ Stores the library records and their associated configuration flags.
 | `thread_main_post_checked_at` | `TIMESTAMP` | When the thread was last checked for updates. |
 | `thread_completed` | `BOOLEAN DEFAULT 0` | Whether the F95 thread currently has a `Completed` prefix. Added to existing databases during `init_db()`. |
 | `collections` | `TEXT DEFAULT '[]'` | JSON array of collection names the game belongs to. Read back as a decoded `list[str]`, matched against the collection list case-insensitively; names that no longer exist are hidden. Part of `SYNC_GAME_COLUMNS`, so membership changes bump the sync time. |
+| `screenshots` | `TEXT DEFAULT '[]'` | JSON list of remote screenshot URLs collected from the thread starter post. Refreshed from thread page reads alongside thread edit metadata; an empty page result keeps the stored list. Read back as a decoded `list[str]` of non-empty strings, empty when none are stored. Not user-editable (`update_game` ignores it) and not part of `SYNC_GAME_COLUMNS`, so a refresh alone does not bump the sync time. |
 
 ### Table: `game_launch_targets`
 Stores additional executable targets for games that ship with multiple playable parts. The canonical default executable remains `games.exe_path`; this table only contains extra named targets.

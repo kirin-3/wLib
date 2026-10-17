@@ -484,6 +484,8 @@ export interface GameRecord {
   launch_targets?: LaunchTarget[];
   // Decoded collection membership; names always match the collection list.
   collections?: string[];
+  // Remote screenshot URLs collected from the thread starter post.
+  screenshots?: string[];
   // F95 metadata is still being fetched in the background after adding.
   metadata_pending?: boolean;
 }
@@ -589,6 +591,24 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null;
 };
+
+const mockScreenshotUri = (width: number, height: number, fill: string, label: string): string => {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${fill}"/><text x="${width / 2}" y="${height / 2}" font-size="24" text-anchor="middle" dominant-baseline="middle" fill="#ffffff">${label}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+};
+
+const MOCK_SCREENSHOT_SET_A: string[] = [
+  mockScreenshotUri(400, 200, "#1e3a5f", "Shot 1"),
+  mockScreenshotUri(200, 400, "#5f1e3a", "Shot 2"),
+  mockScreenshotUri(300, 300, "#1e5f3a", "Shot 3"),
+  mockScreenshotUri(600, 200, "#3a5f1e", "Shot 4"),
+];
+
+const MOCK_SCREENSHOT_SET_B: string[] = [
+  mockScreenshotUri(320, 180, "#2a4a6b", "A"),
+  mockScreenshotUri(180, 320, "#6b2a4a", "B"),
+  mockScreenshotUri(400, 400, "#2a6b4a", "C"),
+];
 
 const normalizeMockLaunchTarget = (value: unknown): LaunchTarget | null => {
   if (!isRecord(value)) return null;
@@ -2001,9 +2021,10 @@ class ApiService {
         const completedIds = JSON.parse(localStorage.getItem("wlib-mock-completed-threads") || "[]") as unknown;
         const completed = Array.isArray(completedIds) && completedIds.includes(game.id);
         const newlyFinished = completed && !game.thread_completed && !game.exe_path.trim();
-        if (completed !== Boolean(game.thread_completed)) {
+        const needsScreenshots = !(game.screenshots && game.screenshots.length);
+        if (completed !== Boolean(game.thread_completed) || needsScreenshots) {
           localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((entry) =>
-            entry.id === game.id ? { ...entry, thread_completed: completed } : entry,
+            entry.id === game.id ? { ...entry, thread_completed: completed, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
           )));
         }
         return {

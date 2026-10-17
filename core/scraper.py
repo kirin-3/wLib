@@ -231,6 +231,67 @@ class Scraper:
                 normalized = normalized.replace("/thumb/", "/", 1)
         return normalized
 
+    def _collect_screenshots(self, wrapper: str, normalized_cover: str) -> list[str]:
+        """Collect starter-post screenshot URLs in post order.
+
+        Scans the starter ``bbWrapper`` for lbContainer-zoomer data-src values,
+        bbImage data-src/src values, and hrefs of anchors wrapping a bbImage
+        that point at attachments.f95zone.to. Each value is normalized like the
+        cover, the cover is dropped, duplicates collapse keeping first-seen
+        order, and at most 20 URLs are kept.
+        """
+        if not wrapper:
+            return []
+        candidates: list[tuple[int, str]] = []
+        for match in re.finditer(r"<[^/!][^>]*>", wrapper):
+            opening = match.group()
+            classes = _attribute(opening, "class").split()
+            if "lbContainer-zoomer" in classes:
+                value = _attribute(opening, "data-src")
+                if value:
+                    candidates.append((match.start(), value))
+            tag_name = re.match(r"<\s*([a-zA-Z0-9]+)", opening)
+            if (
+                tag_name
+                and tag_name.group(1).lower() == "img"
+                and "bbImage" in classes
+            ):
+                value = _attribute(opening, "data-src") or _attribute(
+                    opening, "src"
+                )
+                if value:
+                    candidates.append((match.start(), value))
+        for match in re.finditer(
+            r"<a\b[^>]*>.*?</a>", wrapper, re.I | re.S
+        ):
+            opening_end = match.group().find(">")
+            opening = match.group()[: opening_end + 1] if opening_end != -1 else ""
+            href = _attribute(opening, "href")
+            if not href or "attachments.f95zone.to" not in href:
+                continue
+            inner = match.group()[opening_end + 1 :] if opening_end != -1 else ""
+            has_bb_image = False
+            for img_match in re.finditer(r"<img\b[^>]*>", inner, re.I):
+                if "bbImage" in _attribute(img_match.group(), "class").split():
+                    has_bb_image = True
+                    break
+            if has_bb_image:
+                candidates.append((match.start(), href))
+        candidates.sort(key=lambda item: item[0])
+        seen: set[str] = set()
+        screenshots: list[str] = []
+        if normalized_cover:
+            seen.add(normalized_cover)
+        for _, raw in candidates:
+            normalized = self._normalize_cover_image_url(raw)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            screenshots.append(normalized)
+            if len(screenshots) >= 20:
+                break
+        return screenshots
+
     def _error(
         self, code: str, message: str, browser_fallback: str | None = None
     ) -> ScraperResult:
@@ -461,6 +522,8 @@ class Scraper:
                     )
                     if cover:
                         break
+        normalized_cover = self._normalize_cover_image_url(cover)
+        screenshots = self._collect_screenshots(wrapper, normalized_cover)
         last_edit = ""
         for tag in ("div", "span"):
             edit = next(_blocks(starter, tag, "message-lastEdit"), ("", ""))[1]
@@ -475,7 +538,8 @@ class Scraper:
             "engine": engine,
             "thread_completed": thread_completed,
             "tags": tags,
-            "cover_image": self._normalize_cover_image_url(cover),
+            "cover_image": normalized_cover,
+            "screenshots": screenshots,
             "thread_main_post_last_edit_at": last_edit,
             "thread_main_post_checked_at": datetime.now().isoformat(),
         }

@@ -59,6 +59,13 @@ wLib uses `vue-router` for top-level views:
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
 
+## Game screenshot gallery
+
+`GameRecord.screenshots?: string[]` carries remote screenshot URLs from the thread starter post. Browser mocks use data-URI SVG placeholders of different aspect ratios; one mock thread game keeps no screenshots to exercise the empty state.
+
+- **Overview strip** (`GameDetailModal.vue`): shown only for games with an F95 URL. A fixed-height (`6rem`) horizontally scrolling row of lazy thumbnail buttons in stored order; thumbnails that fail to load are hidden. Thumbnail *i* opens the lightbox at `i + (hasCover ? 1 : 0)`. Thread games without screenshots show a hint plus a **Check thread now** button that calls the existing single-game update check (disabled while a check runs). Games without a thread URL show neither the strip nor the hint.
+- **Lightbox** (`ui/src/components/ScreenshotLightbox.vue`, `<script setup lang="ts">`): props `images: string[]` and `startIndex: number | null` (`null` means closed), emits `close`. Teleported to `body` above the modal and registered with `useModalKeyboard`, so Esc closes only the lightbox, focus stays trapped inside it, and focus returns to the opener on close. The gallery is `[displayed cover if loaded, ...screenshots]`; the cover tile is a labelled **View cover and screenshots** button opening at 0 when the gallery is non-empty. The lightbox handles ←/→ on its own container with wrap-around (the modal tab-list never sees them), hides prev/next buttons for a single image, shows a position indicator (`X of N`), fits the image within 90% of the window keeping aspect ratio (scaling small images up and large ones down, refitted on resize), and shows an unavailable placeholder on load error. A backdrop click closes it; an image click does not. The backdrop is a fixed dark scrim in both themes with explicit light-on-dark controls; transitions are removed under `.motion-off`.
+
 ## Backend-to-Frontend Events
 
 Backend background tasks push updates into the UI using webview JS evaluation. The frontend listens via DOM events:

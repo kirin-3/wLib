@@ -434,6 +434,7 @@ def init_db() -> None:
             ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
             ("finished_version", "TEXT DEFAULT ''"),
             ("collections", "TEXT DEFAULT '[]'"),
+            ("screenshots", "TEXT DEFAULT '[]'"),
         ]
 
         for col_name, col_type in new_columns:
@@ -742,6 +743,7 @@ def get_all_games() -> list[dict[str, object]]:
             for name in _decode_game_collections(game_dict.get("collections"))
             if name.casefold() in canonical_collections
         ]
+        game_dict["screenshots"] = _decode_game_screenshots(game_dict.get("screenshots"))
         game_id = int(str(game_dict["id"]))
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
         result.append(game_dict)
@@ -1032,6 +1034,23 @@ def _decode_game_collections(raw: object) -> list[str]:
         seen.add(normalized.casefold())
         names.append(normalized)
     return names
+
+
+def _decode_game_screenshots(raw: object) -> list[str]:
+    try:
+        stored = cast(object, json.loads(str(raw or "[]")))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(stored, list):
+        return []
+    urls: list[str] = []
+    for url in cast(list[object], stored):
+        if not isinstance(url, str):
+            continue
+        normalized = url.strip()
+        if normalized:
+            urls.append(normalized)
+    return urls
 
 
 def _rewrite_game_collection_memberships(

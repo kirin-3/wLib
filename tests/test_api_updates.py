@@ -3155,3 +3155,141 @@ def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_
         or first[-3:-1] == ["-q", "corefonts"]
         or "corefonts" in first
     )
+
+
+def test_screenshots_refresh_on_page_reads(monkeypatch):
+    import json as json_module
+
+    api = Api()
+    url = "https://f95zone.to/threads/shots.200/"
+    game_id = add_game("Shots", "/tmp/shots.exe", f95_url=url, version="1.0")
+    assert game_id is not None
+    assert get_all_games()[0]["screenshots"] == []
+
+    api._update_thread_edit_metadata_for_url(
+        url,
+        {
+            "thread_main_post_checked_at": "2026-10-08T00:00:00",
+            "screenshots": [
+                "https://example.com/a.png",
+                "https://example.com/b.png",
+            ],
+        },
+    )
+    assert get_all_games()[0]["screenshots"] == [
+        "https://example.com/a.png",
+        "https://example.com/b.png",
+    ]
+
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "version": "1.1",
+            "thread_main_post_checked_at": "2026-10-09T00:00:00",
+            "screenshots": ["https://example.com/c.png"],
+        },
+    )
+    result = api.check_for_updates(url)
+    assert result["success"] is True
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/c.png"]
+
+    api._update_thread_edit_metadata_for_url(
+        url,
+        {
+            "thread_main_post_checked_at": "2026-10-10T00:00:00",
+            "screenshots": [],
+        },
+    )
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/c.png"]
+
+    api._update_thread_edit_metadata_for_url(url, {"version": "1.1"})
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/c.png"]
+
+    conn = get_connection()
+    raw = conn.execute(
+        "SELECT screenshots FROM games WHERE id = ?", (game_id,)
+    ).fetchone()
+    conn.close()
+    assert raw is not None
+    assert json_module.loads(str(raw[0])) == ["https://example.com/c.png"]
+
+
+def test_screenshots_only_result_passes_early_return_guard():
+    api = Api()
+    url = "https://f95zone.to/threads/shots-only.201/"
+    game_id = add_game("Shots Only", "/tmp/only.exe", f95_url=url)
+    assert game_id is not None
+    api._update_thread_edit_metadata_for_url(
+        url, {"screenshots": ["https://example.com/only.png"]}
+    )
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/only.png"]
+
+
+def test_add_game_fetch_stores_screenshots(monkeypatch):
+    api = Api()
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "thread_main_post_checked_at": "2026-10-08T00:00:00",
+            "screenshots": ["https://example.com/added.png"],
+        },
+    )
+    result = api.add_game(
+        title="Added Shots",
+        exe_path="/tmp/added.exe",
+        f95_url="https://f95zone.to/threads/added.202/",
+    )
+    assert result["id"] is not None
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/added.png"]
+
+
+def test_bulk_wishlist_fallback_stores_screenshots(monkeypatch):
+    import time
+
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist-shots.203/"
+    game_id = add_game("Wishlist Shots", "", f95_url=url)
+    conn = get_connection()
+    conn.execute("UPDATE games SET latest_version = '1.0' WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    fetch = MagicMock()
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch)
+    page_result = {
+        "success": True,
+        "version": "1.1",
+        "thread_completed": False,
+        "thread_main_post_checked_at": "2026-10-13T00:00:00",
+        "screenshots": ["https://example.com/bulk.png"],
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    assert api.check_all_updates()["success"]
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    fetch.assert_not_called()
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/bulk.png"]
+
+
+def test_screenshot_only_update_does_not_bump_sync_time():
+    game_id = add_game("Sync Shots", "/tmp/sync.exe", f95_url="https://f95zone.to/threads/sync.204/")
+    assert game_id is not None
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    Api()._update_thread_edit_metadata_for_url(
+        "https://f95zone.to/threads/sync.204/",
+        {
+            "thread_main_post_checked_at": "2026-10-08T00:00:00",
+            "screenshots": ["https://example.com/sync.png"],
+        },
+    )
+    assert get_all_games()[0]["screenshots"] == ["https://example.com/sync.png"]
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"

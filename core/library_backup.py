@@ -82,6 +82,7 @@ METADATA_FIELDS = (
     "latest_version",
     "thread_completed",
     "cover_image_path",
+    "screenshots",
 )
 USER_STATE_FIELDS = (
     "play_status",
@@ -962,6 +963,28 @@ def _collections_json_text(value: object) -> str:
     return json.dumps(names)
 
 
+def _screenshots_json_text(value: object) -> str:
+    parsed_value: object = None
+    if isinstance(value, str):
+        try:
+            parsed_value = cast(object, json.loads(value))
+        except (ValueError, TypeError):
+            parsed_value = None
+    else:
+        parsed_value = value
+    urls: list[str] = []
+    if isinstance(parsed_value, list):
+        for item in cast(list[object], parsed_value):
+            if not isinstance(item, str):
+                continue
+            stripped = item.strip()
+            if stripped.startswith(("https://", "http://")):
+                urls.append(stripped)
+                if len(urls) >= 20:
+                    break
+    return json.dumps(urls)
+
+
 def _normalize_game_field(field: str, value: object) -> object:
     if field == "title":
         return _coerce_text(value).strip() or "Imported Game"
@@ -975,6 +998,8 @@ def _normalize_game_field(field: str, value: object) -> object:
         return normalize_launch_mode(value)
     if field == "collections":
         return _collections_json_text(value)
+    if field == "screenshots":
+        return _screenshots_json_text(value)
     if field in BOOLEAN_GAME_FIELDS:
         return 1 if _coerce_bool(value) else 0
     if field in INTEGER_GAME_FIELDS:
@@ -1238,6 +1263,8 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
     """True when a local value counts as missing for fill-missing merges."""
     if field == "collections":
         # Membership is stored as a JSON list; "[]" means no collections yet.
+        return _coerce_text(local_value).strip() in ("", "[]")
+    if field == "screenshots":
         return _coerce_text(local_value).strip() in ("", "[]")
     if field == "play_status":
         if local_value is None:

@@ -2329,12 +2329,20 @@ class Api:
         ).strip()
         has_edit_metadata = bool(checked_at_value)
         has_completion = "thread_completed" in metadata
-        if not has_edit_metadata and not has_completion:
+        raw_screenshots = metadata.get("screenshots")
+        incoming_screenshots: list[str] = []
+        if isinstance(raw_screenshots, list):
+            for item in cast(list[object], raw_screenshots):
+                if isinstance(item, str) and item.strip():
+                    incoming_screenshots.append(item.strip())
+        has_screenshots = len(incoming_screenshots) > 0
+        if not has_edit_metadata and not has_completion and not has_screenshots:
             return []
 
         last_edit_raw = str(metadata.get("thread_main_post_last_edit_at") or "").strip()
         last_edit_value: str | None = last_edit_raw or None
 
+        import json
         import sqlite3
 
         from core.database import get_connection
@@ -2345,7 +2353,7 @@ class Api:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed FROM games WHERE f95_url = ?",
+                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed, screenshots FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -2371,6 +2379,20 @@ class Api:
                         fields["thread_completed"] = int(completed)
                         if completed:
                             newly_finished_ids.append(game_id)
+                if has_screenshots:
+                    try:
+                        stored_raw = cast(object, game["screenshots"])
+                        parsed_screenshots = cast(
+                            object, json.loads(str(stored_raw or "[]"))
+                        )
+                        if isinstance(parsed_screenshots, list):
+                            stored_values = cast(list[object], parsed_screenshots)
+                        else:
+                            stored_values = []
+                    except (ValueError, TypeError):
+                        stored_values = []
+                    if stored_values != incoming_screenshots:
+                        fields["screenshots"] = json.dumps(incoming_screenshots)
                 if not fields:
                     continue
 
