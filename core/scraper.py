@@ -6,7 +6,7 @@ import socket
 import ssl
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from html import unescape
 from http.client import HTTPException, HTTPResponse
@@ -14,6 +14,7 @@ from typing import Protocol, TypeAlias, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from core import extension_bridge
 from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
 ScraperResultValue: TypeAlias = bool | str | list[str]
@@ -46,6 +47,11 @@ _BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
 # if we ever add another host.
 _F95_REQUEST_LOCK = threading.Lock()
 _f95_last_request_finished: float | None = None
+# Extension-first window: set only by a plain-HTTP `blocked` result, kept in
+# memory only, 15 minutes. While active and an eligible extension is connected,
+# F95 requests go straight to the extension without trying plain HTTP first.
+_prefer_extension_until: float | None = None
+_PREFER_EXTENSION_WINDOW_SECONDS = 15 * 60
 
 
 def get_request_interval_seconds() -> int:
@@ -64,7 +70,14 @@ _POST_VERSION_RE = re.compile(
 )
 
 
-def _f95_get(url: str) -> tuple[int, str]:
+def _run_paced_f95_request(
+    transport: Callable[[], tuple[int, str]],
+) -> tuple[int, str]:
+    """Run one F95 transport inside the global lock and minimum interval.
+
+    Both plain HTTP and extension fetches go through here, so a urllib
+    request followed by an extension request never overlap and stay spaced.
+    """
     global _f95_last_request_finished
     with _F95_REQUEST_LOCK:
         if _f95_last_request_finished is not None:
@@ -74,35 +87,53 @@ def _f95_get(url: str) -> tuple[int, str]:
             if remaining > 0:
                 time.sleep(remaining)
         try:
-            request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            try:
-                with cast(
-                    HTTPResponse,
-                    urlopen(request, timeout=30, context=ssl.create_default_context()),
-                ) as response:
-                    encoding = response.headers.get_content_charset() or "utf-8"
-                    return response.status, response.read().decode(
-                        encoding, errors="replace"
-                    )
-            except HTTPError as exc:
-                with exc:
-                    encoding = exc.headers.get_content_charset() or "utf-8"
-                    return exc.code, exc.read().decode(encoding, errors="replace")
-        except (TimeoutError, socket.timeout) as exc:
-            raise _F95RequestError(
-                "navigation_timeout", "F95Zone request timed out"
-            ) from exc
-        except URLError as exc:
-            code = (
-                "navigation_timeout"
-                if isinstance(exc.reason, TimeoutError)
-                else "scraper_error"
-            )
-            raise _F95RequestError(code, str(exc.reason)) from exc
-        except (HTTPException, OSError, ValueError) as exc:
-            raise _F95RequestError("scraper_error", str(exc)) from exc
+            return transport()
         finally:
             _f95_last_request_finished = time.monotonic()
+
+
+def _urllib_f95_get(url: str) -> tuple[int, str]:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with cast(
+            HTTPResponse,
+            urlopen(request, timeout=30, context=ssl.create_default_context()),
+        ) as response:
+            encoding = response.headers.get_content_charset() or "utf-8"
+            return response.status, response.read().decode(
+                encoding, errors="replace"
+            )
+    except HTTPError as exc:
+        with exc:
+            encoding = exc.headers.get_content_charset() or "utf-8"
+            return exc.code, exc.read().decode(encoding, errors="replace")
+    except (TimeoutError, socket.timeout) as exc:
+        raise _F95RequestError(
+            "navigation_timeout", "F95Zone request timed out"
+        ) from exc
+    except URLError as exc:
+        code = (
+            "navigation_timeout"
+            if isinstance(exc.reason, TimeoutError)
+            else "scraper_error"
+        )
+        raise _F95RequestError(code, str(exc.reason)) from exc
+    except (HTTPException, OSError, ValueError) as exc:
+        raise _F95RequestError("scraper_error", str(exc)) from exc
+
+
+def _f95_get(url: str) -> tuple[int, str]:
+    return _run_paced_f95_request(lambda: _urllib_f95_get(url))
+
+
+def _f95_get_via_extension(url: str) -> tuple[int, str]:
+    """Fetch one F95 URL through the connected extension, paced like HTTP."""
+
+    def _transport() -> tuple[int, str]:
+        response = extension_bridge.fetch(url, timeout=30)
+        return response.status, response.body
+
+    return _run_paced_f95_request(_transport)
 
 
 def _attribute(opening: str, name: str) -> str:
@@ -200,8 +231,102 @@ class Scraper:
                 normalized = normalized.replace("/thumb/", "/", 1)
         return normalized
 
-    def _error(self, code: str, message: str) -> ScraperResult:
-        return {"success": False, "code": code, "error": message}
+    def _error(
+        self, code: str, message: str, browser_fallback: str | None = None
+    ) -> ScraperResult:
+        result: ScraperResultDict = {
+            "success": False,
+            "code": code,
+            "error": message,
+        }
+        if browser_fallback in ("unavailable", "failed"):
+            result["browser_fallback"] = browser_fallback
+        return result
+
+    def _fetch_with_fallback(self, url: str) -> tuple[int, str, str | None]:
+        """Fetch one F95 URL with a single extension retry.
+
+        Returns ``(status, body, browser_fallback)`` where the flag is
+        ``None`` on success or when no fallback applied, ``"unavailable"``
+        when a blocked/login page had no eligible extension, and ``"failed"``
+        when the extension was tried but did not recover the page. Only
+        plain-HTTP ``blocked`` opens the 15-minute extension-first window.
+        Timeouts and network errors propagate without fallback.
+        """
+        global _prefer_extension_until
+        now = time.monotonic()
+        prefer_until = _prefer_extension_until
+        if prefer_until is not None and now < prefer_until:
+            try:
+                window_available = extension_bridge.is_available()
+            except Exception:
+                window_available = False
+            if window_available:
+                try:
+                    ext_status, ext_body = _f95_get_via_extension(url)
+                except (
+                    extension_bridge.BridgeUnavailable,
+                    extension_bridge.BridgeFailed,
+                ):
+                    pass
+                else:
+                    ext_issue = self._classify_page_issue(
+                        ext_status, self._page_title(ext_body), ext_body
+                    )
+                    if ext_issue and ext_issue["code"] in (
+                        "blocked",
+                        "login_required",
+                    ):
+                        return (ext_status, ext_body, "failed")
+                    return (ext_status, ext_body, None)
+                # Extension failed inside the window: use plain HTTP once,
+                # without a second fallback attempt.
+                try:
+                    status, body = _f95_get(url)
+                except _F95RequestError:
+                    raise
+                issue = self._classify_page_issue(
+                    status, self._page_title(body), body
+                )
+                if issue and issue["code"] == "blocked":
+                    _prefer_extension_until = (
+                        time.monotonic() + _PREFER_EXTENSION_WINDOW_SECONDS
+                    )
+                    return (status, body, "failed")
+                if issue and issue["code"] == "login_required":
+                    return (status, body, "failed")
+                return (status, body, None)
+            # No eligible extension: fall through to the normal path.
+
+        try:
+            status, body = _f95_get(url)
+        except _F95RequestError:
+            raise
+        issue = self._classify_page_issue(status, self._page_title(body), body)
+        if issue and issue["code"] == "blocked":
+            _prefer_extension_until = (
+                time.monotonic() + _PREFER_EXTENSION_WINDOW_SECONDS
+            )
+        if not issue or issue["code"] not in ("blocked", "login_required"):
+            return (status, body, None)
+        try:
+            window_available = extension_bridge.is_available()
+        except Exception:
+            window_available = False
+        if not window_available:
+            return (status, body, "unavailable")
+        try:
+            ext_status, ext_body = _f95_get_via_extension(url)
+        except extension_bridge.BridgeUnavailable:
+            return (status, body, "unavailable")
+        except extension_bridge.BridgeFailed:
+            return (status, body, "failed")
+        ext_issue = self._classify_page_issue(
+            ext_status, self._page_title(ext_body), ext_body
+        )
+        if ext_issue and ext_issue["code"] in ("blocked", "login_required"):
+            return (ext_status, ext_body, "failed")
+        return (ext_status, ext_body, None)
 
     def _is_non_actionable_version(self, version: object) -> bool:
         return str(version or "").strip().lower() in (
@@ -357,12 +482,18 @@ class Scraper:
 
     def _get_page(self, thread_id: str) -> ScraperResult:
         try:
-            status, html = _f95_get(f"https://f95zone.to/threads/{thread_id}/")
+            status, html, fallback = self._fetch_with_fallback(
+                f"https://f95zone.to/threads/{thread_id}/"
+            )
             issue = self._classify_page_issue(status, self._page_title(html), html)
             if issue:
-                return self._error(issue["code"], issue["error"])
+                return self._error(
+                    issue["code"], issue["error"], browser_fallback=fallback
+                )
             if status != 200:
-                return self._error("scraper_error", f"F95Zone returned HTTP {status}")
+                return self._error(
+                    "scraper_error", f"F95Zone returned HTTP {status}"
+                )
             return self._extract_page(html)
         except _F95RequestError as exc:
             return self._error(exc.code, str(exc))
@@ -372,14 +503,30 @@ class Scraper:
     def _check_chunk(self, ids: list[str]) -> dict[str, ScraperResult | None]:
         versions: dict[str, object] = {}
         try:
-            status, text = _f95_get(
+            status, text, fallback = self._fetch_with_fallback(
                 f"https://f95zone.to/sam/checker.php?threads={','.join(ids)}"
             )
             issue = self._classify_page_issue(status, self._page_title(text), text)
             # Falling back to 100 page requests would only hammer F95 harder.
-            if issue and issue["code"] in ("blocked", "rate_limited"):
+            if issue and issue["code"] == "blocked":
+                return {
+                    thread_id: self._error(
+                        issue["code"], issue["error"], browser_fallback=fallback
+                    )
+                    for thread_id in ids
+                }
+            if issue and issue["code"] == "rate_limited":
                 return {
                     thread_id: self._error(issue["code"], issue["error"])
+                    for thread_id in ids
+                }
+            if issue and issue["code"] == "login_required" and fallback is not None:
+                # Extension was tried for the batch and still shows login:
+                # fail directly instead of fanning out to 100 page requests.
+                return {
+                    thread_id: self._error(
+                        issue["code"], issue["error"], browser_fallback=fallback
+                    )
                     for thread_id in ids
                 }
             if status == 200:

@@ -757,6 +757,73 @@ def test_check_for_updates_propagates_structured_scraper_error(monkeypatch):
     assert "Blocked" in str(result.get("error", ""))
 
 
+def test_build_scraper_error_payload_blocked_unavailable():
+    api = Api()
+    result = api._build_scraper_error_payload(
+        {
+            "success": False,
+            "code": "blocked",
+            "error": "Blocked by anti-bot challenge",
+            "browser_fallback": "unavailable",
+        },
+        "Failed to check for updates",
+    )
+    assert result["error_code"] == "blocked"
+    assert result["browser_fallback"] == "unavailable"
+    assert "keep a browser with the wlib extension open" in str(
+        result["error"]
+    ).lower()
+
+
+def test_build_scraper_error_payload_blocked_failed():
+    api = Api()
+    result = api._build_scraper_error_payload(
+        {
+            "success": False,
+            "code": "blocked",
+            "error": "Blocked by anti-bot challenge",
+            "browser_fallback": "failed",
+        },
+        "Failed to check for updates",
+    )
+    assert result["error_code"] == "blocked"
+    assert result["browser_fallback"] == "failed"
+    assert "open f95zone in that browser" in str(result["error"]).lower()
+    assert "complete any check" in str(result["error"]).lower()
+
+
+def test_build_scraper_error_payload_login_required():
+    api = Api()
+    for fallback in ("unavailable", "failed", None):
+        payload: dict[str, object] = {
+            "success": False,
+            "code": "login_required",
+            "error": "Login is required",
+        }
+        if fallback is not None:
+            payload["browser_fallback"] = fallback
+        result = api._build_scraper_error_payload(payload, "Failed to check")
+        assert result["error_code"] == "login_required"
+        assert "log in to F95Zone in the browser" in str(result["error"]).lower() or (
+            "Log in to F95Zone in the browser" in str(result["error"])
+        )
+        if fallback is not None:
+            assert result["browser_fallback"] == fallback
+        else:
+            assert "browser_fallback" not in result
+
+
+def test_build_scraper_error_payload_rate_limited_unchanged():
+    api = Api()
+    result = api._build_scraper_error_payload(
+        {"success": False, "code": "rate_limited", "error": "Rate limited"},
+        "Failed",
+    )
+    assert result["error_code"] == "rate_limited"
+    assert "try again later" in str(result["error"])
+    assert "browser_fallback" not in result
+
+
 def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     api = Api()
     add_game(

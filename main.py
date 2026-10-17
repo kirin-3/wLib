@@ -8,6 +8,7 @@ import os
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -674,6 +675,7 @@ def start_webview(
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
     # Idle or stalled clients would otherwise hold a server thread forever.
     timeout = 10  # pyright: ignore[reportUnannotatedClassAttribute]
+    close_connection: bool
 
     @override
     def parse_request(self) -> bool:
@@ -769,7 +771,77 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         self._send_cors_headers(allowed_origin)
         self.end_headers()
 
+    def _is_bridge_origin_allowed(self, origin: str) -> bool:
+        return origin.startswith(
+            ("chrome-extension://", "moz-extension://")
+        )
+
+    def _handle_bridge_upgrade(self) -> None:
+        upgrade = (self.headers.get("Upgrade") or "").lower()
+        if "websocket" not in upgrade:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(
+                b'{"success": false, "error": "WebSocket upgrade required"}'
+            )
+            return
+
+        origin = (self.headers.get("Origin") or "").strip()
+        if not self._is_bridge_origin_allowed(origin):
+            self._reject_origin()
+            return
+
+        key = (self.headers.get("Sec-WebSocket-Key") or "").strip()
+        if not key:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(
+                b'{"success": false, "error": "Missing Sec-WebSocket-Key"}'
+            )
+            return
+
+        try:
+            from core.extension_ws import websocket_accept_key
+
+            accept = websocket_accept_key(key)
+        except Exception:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(
+                b'{"success": false, "error": "Invalid Sec-WebSocket-Key"}'
+            )
+            return
+
+        self._discard_request_body()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.end_headers()
+        sock = cast(socket.socket, self.request)
+        try:
+            sock.settimeout(60)
+        except OSError:
+            pass
+        try:
+            from core import extension_bridge
+
+            extension_bridge.serve_bridge_connection(sock, self.rfile, self.wfile)
+        except Exception as exc:
+            print(f"[wLib] Bridge connection failed: {exc}")
+        finally:
+            self.close_connection = True
+
     def do_GET(self) -> None:
+        from urllib.parse import urlparse as _urlparse
+
+        if _urlparse(self.path).path == "/api/bridge":
+            self._handle_bridge_upgrade()
+            return
+
         allowed_origin = self._get_allowed_origin()
         if allowed_origin is None:
             self._reject_origin()

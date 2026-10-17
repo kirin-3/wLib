@@ -2177,6 +2177,7 @@ class Api:
     ) -> dict[str, str | bool]:
         code: str | None = None
         message = fallback_message
+        browser_fallback: str | None = None
 
         if isinstance(payload, dict):
             payload_dict = cast(dict[str, object], payload)
@@ -2188,20 +2189,37 @@ class Api:
                 or payload_dict.get("message")
                 or fallback_message
             )
+            fallback_value = payload_dict.get("browser_fallback")
+            if fallback_value in ("unavailable", "failed"):
+                browser_fallback = cast(str, fallback_value)
         elif isinstance(payload, str) and payload.strip():
             message = payload.strip()
 
         result = {"success": False, "error": message}
         if code:
             result["error_code"] = code
+        if browser_fallback is not None:
+            result["browser_fallback"] = browser_fallback
 
         if code == "blocked":
-            result["error"] = (
-                f"{message}. F95Zone is challenging HTTP requests; try again later."
-            )
+            if browser_fallback == "unavailable":
+                result["error"] = (
+                    f"{message}. Keep a browser with the wLib extension open "
+                    "and try again."
+                )
+            elif browser_fallback == "failed":
+                result["error"] = (
+                    f"{message}. Open F95Zone in that browser, complete any "
+                    "check it shows, and try again."
+                )
+            elif browser_fallback is None:
+                result["error"] = (
+                    f"{message}. F95Zone is challenging HTTP requests; try again later."
+                )
         elif code == "login_required":
             result["error"] = (
-                f"{message}. This thread is unavailable to guest HTTP requests."
+                f"{message}. Log in to F95Zone in the browser where the wLib "
+                "extension is installed."
             )
         elif code == "rate_limited":
             result["error"] = f"{message}; try again later."
@@ -2569,6 +2587,12 @@ class Api:
                     wishlisted = not str(game.get("exe_path") or "").strip()
                     callback_error = str(result_dict.get("error") or "")
                     callback_error_code = str(result_dict.get("code") or "")
+                    callback_fallback = result_dict.get("browser_fallback")
+                    callback_browser_fallback = (
+                        str(callback_fallback)
+                        if callback_fallback in ("unavailable", "failed")
+                        else ""
+                    )
                     if not result_dict.get("success") and not callback_error:
                         callback_error = "Update check failed"
 
@@ -2634,18 +2658,19 @@ class Api:
                         callback_error_code = "extract_failed"
 
                     with self._update_lock:
-                        self._update_results.append(
-                            {
-                                "id": game["id"],
-                                "title": game["title"],
-                                "current_version": game["version"],
-                                "latest_version": str(result_dict.get("version") or ""),
-                                "has_update": has_update,
-                                "newly_finished": newly_finished,
-                                "error": callback_error,
-                                "error_code": callback_error_code,
-                            }
-                        )
+                        result_entry: dict[str, object] = {
+                            "id": game["id"],
+                            "title": game["title"],
+                            "current_version": game["version"],
+                            "latest_version": str(result_dict.get("version") or ""),
+                            "has_update": has_update,
+                            "newly_finished": newly_finished,
+                            "error": callback_error,
+                            "error_code": callback_error_code,
+                        }
+                        if callback_browser_fallback:
+                            result_entry["browser_fallback"] = callback_browser_fallback
+                        self._update_results.append(result_entry)
                         self._update_checked += 1
                         self._update_current = next_title_by_url.get(url, "")
                     return True

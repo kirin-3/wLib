@@ -238,3 +238,247 @@ test('timeout also covers a response body that never finishes', async () => {
     (error) => error && error.name === 'AbortError',
   );
 });
+
+test('manifest 1.1.0 grants f95 host and alarms without tabs or cookies', () => {
+  const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
+  assert.equal(manifest.version, '1.1.0');
+  assert.ok((manifest.permissions || []).includes('storage'));
+  assert.ok((manifest.permissions || []).includes('alarms'));
+  assert.ok(!(manifest.permissions || []).includes('tabs'));
+  assert.ok(!(manifest.permissions || []).includes('cookies'));
+  assert.ok((manifest.host_permissions || []).includes('http://localhost:8183/*'));
+  assert.ok((manifest.host_permissions || []).includes('https://f95zone.to/*'));
+});
+
+test('bridge allowlist accepts thread and batch URLs', async () => {
+  const calls = [];
+  const context = runBackground({
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return { status: 200, url, text: async () => '<html>ok</html>' };
+    },
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const allowedThread = await vm.runInContext(
+    'bridgeFetchUrl("https://f95zone.to/threads/12345/")',
+    context,
+  );
+  assert.equal(allowedThread.ok, true);
+  assert.equal(allowedThread.status, 200);
+  assert.equal(allowedThread.body, '<html>ok</html>');
+  assert.equal(calls[0].options.credentials, 'include');
+  assert.equal(calls[0].options.method, 'GET');
+
+  const allowedBatch = await vm.runInContext(
+    'bridgeFetchUrl("https://f95zone.to/sam/checker.php?threads=1,2,3")',
+    context,
+  );
+  assert.equal(allowedBatch.ok, true);
+  assert.equal(calls.length, 2);
+});
+
+test('bridge refuses non-allowlisted URLs without fetching', async () => {
+  let fetched = false;
+  const context = runBackground({
+    fetch: async () => {
+      fetched = true;
+      throw new Error('must not fetch');
+    },
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const refused = await vm.runInContext(
+    'bridgeFetchUrl("https://example.com/")',
+    context,
+  );
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, 'refused');
+  assert.equal(fetched, false);
+  // background.js must not touch tabs, windows, offscreen, or cookies APIs.
+  assert.ok(!backgroundSource.includes('chrome.tabs'));
+  assert.ok(!backgroundSource.includes('chrome.windows'));
+  assert.ok(!backgroundSource.includes('chrome.offscreen'));
+  assert.ok(!backgroundSource.includes('chrome.cookies'));
+});
+
+test('bridge rejects off-site redirects without the body', async () => {
+  const context = runBackground({
+    fetch: async () => ({
+      status: 200,
+      url: 'https://example.com/',
+      text: async () => 'evil',
+    }),
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const result = await vm.runInContext(
+    'bridgeFetchUrl("https://f95zone.to/threads/12345/")',
+    context,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'offsite_redirect');
+  assert.equal(result.body, undefined);
+});
+
+test('bridge refuses oversized bodies', async () => {
+  const big = 'x'.repeat(4 * 1024 * 1024 + 1);
+  const context = runBackground({
+    fetch: async () => ({
+      status: 200,
+      url: 'https://f95zone.to/threads/12345/',
+      text: async () => big,
+    }),
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const result = await vm.runInContext(
+    'bridgeFetchUrl("https://f95zone.to/threads/12345/")',
+    context,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'too_large');
+});
+
+test('bridge fetch aborts on timeout', async () => {
+  const context = runBackground({
+    fetch: (url, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        const error = new Error('Aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    }),
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const result = await vm.runInContext('bridgeFetchUrl("https://f95zone.to/threads/12345/", 20)', context);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'timeout');
+});
+
+const makeBridgeHarness = ({ canFetch = true } = {}) => {
+  const sent = [];
+  const instances = [];
+  const timeouts = [];
+  const intervals = [];
+  class FakeWebSocket {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 0;
+      this.sent = sent;
+      instances.push(this);
+    }
+    send(data) {
+      sent.push(data);
+    }
+    close() {
+      this.readyState = 3;
+      if (this.onclose) this.onclose();
+    }
+  }
+  const chromeStub = {
+    runtime: {
+      onMessage: { addListener: () => {} },
+      getManifest: () => ({ version: '1.1.0' }),
+      onStartup: { addListener: () => {} },
+      onInstalled: { addListener: () => {} },
+    },
+    alarms: {
+      create: () => {},
+      onAlarm: { addListener: () => {} },
+    },
+    permissions: {
+      contains: async () => canFetch,
+      onAdded: { addListener: () => {} },
+      onRemoved: { addListener: () => {} },
+    },
+  };
+  const context = {
+    chrome: chromeStub,
+    WebSocket: FakeWebSocket,
+    fetch: async () => ({
+      status: 200,
+      url: 'https://f95zone.to/threads/12345/',
+      text: async () => '<html>ok</html>',
+    }),
+    console,
+    AbortController,
+    URL,
+    TextEncoder,
+    TextDecoder,
+    setTimeout: (fn, ms) => {
+      timeouts.push({ fn, ms });
+      return timeouts.length;
+    },
+    clearTimeout: () => {},
+    setInterval: (fn, ms) => {
+      intervals.push({ fn, ms });
+      return intervals.length;
+    },
+    clearInterval: () => {},
+  };
+  vm.createContext(context);
+  vm.runInContext(backgroundSource, context);
+  return { context, sent, instances, timeouts, intervals };
+};
+
+test('bridge hello carries protocol and can_fetch', async () => {
+  const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
+  vm.runInContext('ensureBridge()', context);
+  assert.equal(instances.length, 1);
+  instances[0].readyState = 1;
+  instances[0].onopen();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const hello = sent.map((raw) => JSON.parse(raw)).find((msg) => msg.type === 'hello');
+  assert.ok(hello);
+  assert.equal(hello.protocol, 1);
+  assert.equal(hello.extension_version, '1.1.0');
+  assert.equal(hello.can_fetch, true);
+});
+
+test('bridge fetch-request dispatches to fetch_result', async () => {
+  const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
+  vm.runInContext('ensureBridge()', context);
+  instances[0].readyState = 1;
+  instances[0].onopen();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  sent.length = 0;
+  instances[0].onmessage({
+    data: JSON.stringify({ type: 'fetch', id: 'abc123', url: 'https://f95zone.to/threads/12345/' }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const result = sent.map((raw) => JSON.parse(raw)).find((msg) => msg.type === 'fetch_result');
+  assert.ok(result);
+  assert.equal(result.id, 'abc123');
+  assert.equal(result.ok, true);
+  assert.equal(result.body, '<html>ok</html>');
+});
+
+test('bridge reconnects after close with backoff and no storm', async () => {
+  const { context, instances, timeouts } = makeBridgeHarness({ canFetch: true });
+  vm.runInContext('ensureBridge()', context);
+  assert.equal(instances.length, 1);
+  instances[0].readyState = 1;
+  instances[0].onopen();
+  await new Promise((resolve) => setImmediate(resolve));
+  const timersBefore = timeouts.length;
+  instances[0].onclose();
+  assert.ok(timeouts.length > timersBefore);
+  assert.equal(timeouts[timeouts.length - 1].ms, 5000);
+  // Second close while a reconnect is pending must not schedule another.
+  const timersAfterFirstClose = timeouts.length;
+  vm.runInContext('ensureBridge()', context);
+  // Still one socket (connecting/open guard) and no extra timer storm:
+  // ensureBridge with a pending reconnect timer must not create sockets in a loop.
+  assert.ok(instances.length <= 2);
+  assert.ok(timeouts.length - timersAfterFirstClose <= 1);
+});

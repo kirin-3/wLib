@@ -34,7 +34,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "playStatus": "Playing",
     "wishlisted": false,
     "app_version": "0.3.9",
-    "extension_version": "1.0.12"
+    "extension_version": "1.1.0"
   }
   ```
 - **Contract Notes:**
@@ -97,7 +97,34 @@ Saves the thread directly as a library game with an empty executable path. The b
 - **Action:** Calls the desktop API's `add_game` with `exe_path` set to an empty string, then emits `wlib-refresh-library` when the window is ready. The save can succeed while the window is unavailable.
 - **Response:** The `add_game` result, including `success`, `id`, `title`, and `metadata_pending` on success. A duplicate thread returns HTTP 409 with `{"success": false, "error_code": "duplicate_url", "error": "..."}`. Invalid bodies return HTTP 400; an API that is not ready returns HTTP 503.
 
+### 5. Bridge for Background Fetches
+**`GET /api/bridge` (WebSocket)**
+Lets a running browser retry a challenged or login-gated F95 request with its own cookies, without opening a tab. The app never sees cookies; it only receives the fetched HTML/JSON body.
+
+- **Handshake:** `GET /api/bridge` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
+- **Origin rules (stricter than the REST endpoints):** `Origin` must start with `chrome-extension://` or `moz-extension://`. Web origins (`https://example.com`), missing origins, missing upgrades (HTTP 400), and bad `Host` values (HTTP 403, same single-Host check as the other endpoints) are rejected before any message is exchanged.
+- **Socket:** the upgraded socket uses a 60-second timeout (plain endpoints use 10 seconds). One handler thread is held per browser; idle stalled peers drop on timeout.
+- **Protocol (`protocol: 1`, JSON text messages):**
+  ```json
+  // ext -> app (on connect, and on permission change)
+  {"type": "hello", "protocol": 1, "extension_version": "1.1.0", "can_fetch": true}
+  {"type": "status", "can_fetch": false}
+  {"type": "ping"}
+  // app -> ext
+  {"type": "pong"}
+  {"type": "fetch", "id": "<uuid4>", "url": "https://f95zone.to/threads/123/"}
+  // ext -> app
+  {"type": "fetch_result", "id": "...", "ok": true, "status": 200,
+   "final_url": "https://f95zone.to/threads/slug.123/", "body": "<html>..."}
+  {"type": "fetch_result", "id": "...", "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network"}
+  ```
+  A connection is eligible only after `hello` with `protocol == 1` and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are echoed.
+- **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB. Only the newest eligible connection receives a request.
+- **Security notes:** the bridge accepts only extension-scheme origins on the local host, but a local process can forge an `Origin` and pose as the bridge. It only receives F95 thread/batch URLs and can return forged page content; that content is treated as untrusted input at the same level as F95 HTML itself, and local attackers already have stronger options, so this is accepted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`.
+
 ## Installed Extension Files
+
+Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
 Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also warns without blocking when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
 

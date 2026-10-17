@@ -203,3 +203,331 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 });
+
+// ---- Extension fetch fallback (bridge client) ----
+// Background-only fetch proxy: allowlisted F95 URLs, credentialed GET,
+// 25-second abort, 4 MiB streamed cap, off-site redirect guard. No tabs,
+// windows, offscreen, or cookies API use.
+const F95_THREAD_FETCH_RE = /^https:\/\/f95zone\.to\/threads\/\d+\/$/;
+const F95_BATCH_FETCH_RE = /^https:\/\/f95zone\.to\/sam\/checker\.php\?threads=\d+(,\d+){0,99}$/;
+const BRIDGE_URL = "ws://localhost:8183/api/bridge";
+const BRIDGE_FETCH_TIMEOUT_MS = 25000;
+const BRIDGE_MAX_BODY_BYTES = 4 * 1024 * 1024;
+const BRIDGE_PING_INTERVAL_MS = 20000;
+const BRIDGE_ALARM_NAME = "wlib-bridge";
+const BRIDGE_BACKOFF_MIN_MS = 5000;
+const BRIDGE_BACKOFF_MAX_MS = 60000;
+
+function isBridgeUrlAllowed(url) {
+    return F95_THREAD_FETCH_RE.test(url) || F95_BATCH_FETCH_RE.test(url);
+}
+
+async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
+    if (!isBridgeUrlAllowed(url)) {
+        return { ok: false, error: "refused" };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            credentials: "include",
+            redirect: "follow",
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        let finalUrl = url;
+        try {
+            finalUrl = response.url || url;
+            if (new URL(finalUrl).hostname !== "f95zone.to") {
+                return { ok: false, error: "offsite_redirect" };
+            }
+        } catch (_urlError) {
+            return { ok: false, error: "offsite_redirect" };
+        }
+        // Streamed 4 MiB cap when a reader is available; otherwise read whole
+        // body and check its byte length.
+        if (response.body && typeof response.body.getReader === "function") {
+            const reader = response.body.getReader();
+            const chunks = [];
+            let total = 0;
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const size = value ? value.byteLength || value.length || 0 : 0;
+                    total += size;
+                    if (total > BRIDGE_MAX_BODY_BYTES) {
+                        try { controller.abort(); } catch (_abortError) {}
+                        try { await reader.cancel(); } catch (_cancelError) {}
+                        return { ok: false, error: "too_large" };
+                    }
+                    chunks.push(value);
+                }
+            } finally {
+                try { reader.releaseLock(); } catch (_lockError) {}
+            }
+            // Reassemble as text (tests stub getReader with string chunks).
+            let body = "";
+            for (const chunk of chunks) {
+                if (typeof chunk === "string") {
+                    body += chunk;
+                } else if (chunk instanceof Uint8Array) {
+                    body += new TextDecoder().decode(chunk, { stream: true });
+                } else if (chunk && typeof chunk.byteLength === "number") {
+                    body += new TextDecoder().decode(new Uint8Array(chunk.buffer || chunk), { stream: true });
+                }
+            }
+            if (body.length > BRIDGE_MAX_BODY_BYTES) {
+                return { ok: false, error: "too_large" };
+            }
+            return { ok: true, status: response.status || 200, final_url: finalUrl, body };
+        }
+        const body = await response.text();
+        const byteLength = typeof TextEncoder !== "undefined"
+            ? new TextEncoder().encode(body).length
+            : body.length;
+        if (byteLength > BRIDGE_MAX_BODY_BYTES) {
+            return { ok: false, error: "too_large" };
+        }
+        return { ok: true, status: response.status || 200, final_url: finalUrl, body };
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            return { ok: false, error: "timeout" };
+        }
+        return { ok: false, error: "network" };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// Bridge WebSocket client: persistent connection to the running app, hello
+// with can_fetch, 20-second ping, 1-minute alarm reconnect, 5-60s backoff,
+// console-only errors.
+let bridgeSocket = null;
+let bridgeBackoffMs = BRIDGE_BACKOFF_MIN_MS;
+let bridgePingTimer = null;
+let bridgeReconnectTimer = null;
+
+async function bridgeGetCanFetch() {
+    try {
+        if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.contains) {
+            const origins = ["https://f95zone.to/*"];
+            const maybe = chrome.permissions.contains({ origins });
+            const result = typeof maybe?.then === "function" ? await maybe : maybe;
+            // Callback-style chrome.permissions.contains is handled by callers
+            // that pass a fake returning a boolean; treat truthy as granted.
+            return !!result;
+        }
+    } catch (error) {
+        console.warn("wLib extension: permission check failed.", error);
+    }
+    return false;
+}
+
+function bridgeGetVersion() {
+    try {
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
+            return String(chrome.runtime.getManifest().version || "1.1.0");
+        }
+    } catch (error) {
+        console.warn("wLib extension: version read failed.", error);
+    }
+    return "1.1.0";
+}
+
+function bridgeClearPing() {
+    if (bridgePingTimer !== null) {
+        try { clearInterval(bridgePingTimer); } catch (_clearError) {}
+        bridgePingTimer = null;
+    }
+}
+
+function bridgeScheduleReconnect() {
+    if (bridgeReconnectTimer !== null) {
+        return;
+    }
+    const delay = bridgeBackoffMs;
+    bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS);
+    try {
+        bridgeReconnectTimer = setTimeout(() => {
+            bridgeReconnectTimer = null;
+            ensureBridge();
+        }, delay);
+    } catch (error) {
+        console.warn("wLib extension: reconnect scheduling failed.", error);
+        bridgeReconnectTimer = null;
+    }
+}
+
+async function bridgeSendHello() {
+    if (!bridgeSocket || bridgeSocket.readyState !== 1) {
+        return;
+    }
+    try {
+        const canFetch = await bridgeGetCanFetch();
+        bridgeSocket.send(JSON.stringify({
+            type: "hello",
+            protocol: 1,
+            extension_version: bridgeGetVersion(),
+            can_fetch: canFetch,
+        }));
+    } catch (error) {
+        console.warn("wLib extension: hello failed.", error);
+    }
+}
+
+async function bridgeSendStatus() {
+    if (!bridgeSocket || bridgeSocket.readyState !== 1) {
+        return;
+    }
+    try {
+        const canFetch = await bridgeGetCanFetch();
+        bridgeSocket.send(JSON.stringify({ type: "status", can_fetch: canFetch }));
+    } catch (error) {
+        console.warn("wLib extension: status update failed.", error);
+    }
+}
+
+async function bridgeHandleFetchMessage(message) {
+    const id = message && typeof message.id === "string" ? message.id : "";
+    const url = message && typeof message.url === "string" ? message.url : "";
+    if (!id || !url) {
+        return;
+    }
+    let result;
+    try {
+        const fetched = await bridgeFetchUrl(url);
+        if (fetched.ok) {
+            result = {
+                type: "fetch_result",
+                id,
+                ok: true,
+                status: fetched.status,
+                final_url: fetched.final_url,
+                body: fetched.body,
+            };
+        } else {
+            result = { type: "fetch_result", id, ok: false, error: fetched.error };
+        }
+    } catch (error) {
+        console.warn("wLib extension: bridge fetch failed.", error);
+        result = { type: "fetch_result", id, ok: false, error: "network" };
+    }
+    try {
+        if (bridgeSocket && bridgeSocket.readyState === 1) {
+            bridgeSocket.send(JSON.stringify(result));
+        }
+    } catch (error) {
+        console.warn("wLib extension: fetch result send failed.", error);
+    }
+}
+
+function ensureBridge() {
+    try {
+        if (typeof WebSocket === "undefined") {
+            return;
+        }
+        if (bridgeSocket && (bridgeSocket.readyState === 0 || bridgeSocket.readyState === 1)) {
+            return;
+        }
+        let socket;
+        try {
+            socket = new WebSocket(BRIDGE_URL);
+        } catch (error) {
+            console.warn("wLib extension: bridge connect failed.", error);
+            bridgeScheduleReconnect();
+            return;
+        }
+        bridgeSocket = socket;
+        socket.onopen = () => {
+            bridgeBackoffMs = BRIDGE_BACKOFF_MIN_MS;
+            if (bridgeReconnectTimer !== null) {
+                try { clearTimeout(bridgeReconnectTimer); } catch (_clearError) {}
+                bridgeReconnectTimer = null;
+            }
+            bridgeSendHello();
+            bridgeClearPing();
+            try {
+                bridgePingTimer = setInterval(() => {
+                    try {
+                        if (bridgeSocket && bridgeSocket.readyState === 1) {
+                            bridgeSocket.send(JSON.stringify({ type: "ping" }));
+                        }
+                    } catch (error) {
+                        console.warn("wLib extension: ping failed.", error);
+                    }
+                }, BRIDGE_PING_INTERVAL_MS);
+            } catch (error) {
+                console.warn("wLib extension: ping scheduling failed.", error);
+            }
+        };
+        socket.onmessage = (event) => {
+            let message;
+            try {
+                message = JSON.parse(typeof event.data === "string" ? event.data : "");
+            } catch (_parseError) {
+                return;
+            }
+            if (!message || typeof message.type !== "string") {
+                return;
+            }
+            if (message.type === "fetch") {
+                bridgeHandleFetchMessage(message);
+            }
+            // pong and unknown types are ignored.
+        };
+        const handleClose = () => {
+            bridgeClearPing();
+            if (bridgeSocket === socket) {
+                bridgeSocket = null;
+            }
+            bridgeScheduleReconnect();
+        };
+        socket.onclose = handleClose;
+        socket.onerror = () => {
+            // Errors stay console-only; onclose drives the reconnect.
+            try { console.warn("wLib extension: bridge socket error."); } catch (_logError) {}
+        };
+    } catch (error) {
+        console.warn("wLib extension: bridge ensure failed.", error);
+    }
+}
+
+try {
+    ensureBridge();
+} catch (_startupError) {}
+
+try {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onStartup) {
+        chrome.runtime.onStartup.addListener(() => ensureBridge());
+    }
+} catch (_startupListenerError) {}
+
+try {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onInstalled) {
+        chrome.runtime.onInstalled.addListener(() => ensureBridge());
+    }
+} catch (_installedListenerError) {}
+
+try {
+    if (typeof chrome !== "undefined" && chrome.alarms && chrome.alarms.create) {
+        chrome.alarms.create(BRIDGE_ALARM_NAME, { periodInMinutes: 1 });
+    }
+    if (typeof chrome !== "undefined" && chrome.alarms && chrome.alarms.onAlarm) {
+        chrome.alarms.onAlarm.addListener((alarm) => {
+            if (alarm && alarm.name === BRIDGE_ALARM_NAME) {
+                ensureBridge();
+            }
+        });
+    }
+} catch (_alarmError) {}
+
+try {
+    if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.onAdded) {
+        chrome.permissions.onAdded.addListener(() => bridgeSendStatus());
+    }
+    if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.onRemoved) {
+        chrome.permissions.onRemoved.addListener(() => bridgeSendStatus());
+    }
+} catch (_permissionListenerError) {}

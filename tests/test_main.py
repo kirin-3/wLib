@@ -1256,3 +1256,88 @@ def test_clear_webview_cache_path_removes_symlink_not_target(monkeypatch, tmp_pa
 
 def test_extension_handler_times_out_slow_clients():
     assert main.ExtensionRequestHandler.timeout == 10
+
+
+def _bridge_request(server, *, origin=None, host="localhost:8183", upgrade=True):
+    connection = HTTPConnection(*server.server_address, timeout=3)
+    try:
+        connection.putrequest("GET", "/api/bridge", skip_host=True)
+        connection.putheader("Host", host)
+        if origin is not None:
+            connection.putheader("Origin", origin)
+        if upgrade:
+            connection.putheader("Upgrade", "websocket")
+            connection.putheader("Connection", "Upgrade")
+            connection.putheader(
+                "Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="
+            )
+            connection.putheader("Sec-WebSocket-Version", "13")
+        connection.endheaders()
+        response = connection.getresponse()
+        body = response.read()
+        accept = response.getheader("Sec-WebSocket-Accept")
+        return response.status, body, accept
+    finally:
+        connection.close()
+
+
+def test_bridge_upgrades_for_extension_origin(extension_server, monkeypatch):
+    served = {}
+
+    def fake_serve(sock, rfile, wfile):
+        served["timeout"] = sock.gettimeout()
+        # Close immediately so the handler thread exits; the 101 was sent.
+        try:
+            sock.shutdown(2)
+        except OSError:
+            pass
+
+    monkeypatch.setattr("core.extension_bridge.serve_bridge_connection", fake_serve)
+    status, _body, accept = _bridge_request(
+        extension_server, origin="chrome-extension://wlib"
+    )
+    assert status == 101
+    assert accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    assert served.get("timeout") == 60
+
+
+def test_bridge_upgrades_for_firefox_origin(extension_server, monkeypatch):
+    monkeypatch.setattr(
+        "core.extension_bridge.serve_bridge_connection",
+        lambda *_args, **_kwargs: None,
+    )
+    status, _body, _accept = _bridge_request(
+        extension_server, origin="moz-extension://wlib"
+    )
+    assert status == 101
+
+
+def test_bridge_rejects_web_origin(extension_server):
+    status, body, _accept = _bridge_request(
+        extension_server, origin="https://example.com"
+    )
+    assert status == 403
+    assert json.loads(body)["success"] is False
+
+
+def test_bridge_rejects_missing_origin(extension_server):
+    status, body, _accept = _bridge_request(extension_server, origin=None)
+    assert status == 403
+    assert json.loads(body)["success"] is False
+
+
+def test_bridge_rejects_missing_upgrade(extension_server):
+    status, _body, _accept = _bridge_request(
+        extension_server, origin="chrome-extension://wlib", upgrade=False
+    )
+    assert status == 400
+
+
+def test_bridge_rejects_bad_host(extension_server):
+    status, body, _accept = _bridge_request(
+        extension_server,
+        origin="chrome-extension://wlib",
+        host="attacker.test:8183",
+    )
+    assert status == 403
+    assert json.loads(body)["success"] is False

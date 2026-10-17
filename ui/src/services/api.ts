@@ -104,6 +104,7 @@ export interface UpdateCheckResponse extends ApiBasicResponse {
   has_update?: boolean;
   newly_finished?: boolean;
   metadata_updated?: number;
+  browser_fallback?: "unavailable" | "failed";
 }
 
 export interface BulkUpdateStartResponse extends ApiBasicResponse {
@@ -121,6 +122,7 @@ export interface BulkUpdateResultItem {
   newly_finished?: boolean;
   error: string;
   error_code: string;
+  browser_fallback?: "unavailable" | "failed";
 }
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
@@ -1960,6 +1962,34 @@ class ApiService {
       case "check_for_updates": {
         const url = String(args[0] || "").trim();
         if (!url) return { success: false, mock: true, error: "A valid thread URL is required" };
+        // Mock scraper fallback failures (mirrors _build_scraper_error_payload).
+        if (url.includes("mock-blocked-unavailable")) {
+          return {
+            success: false,
+            mock: true,
+            error: "Blocked by anti-bot challenge. Keep a browser with the wLib extension open and try again.",
+            error_code: "blocked",
+            browser_fallback: "unavailable" as const,
+          };
+        }
+        if (url.includes("mock-blocked-failed")) {
+          return {
+            success: false,
+            mock: true,
+            error: "Blocked by anti-bot challenge. Open F95Zone in that browser, complete any check it shows, and try again.",
+            error_code: "blocked",
+            browser_fallback: "failed" as const,
+          };
+        }
+        if (url.includes("mock-login")) {
+          return {
+            success: false,
+            mock: true,
+            error: "Login is required. Log in to F95Zone in the browser where the wLib extension is installed.",
+            error_code: "login_required",
+            browser_fallback: "failed" as const,
+          };
+        }
         const games = readMockGames();
         const game = games.find((entry) => entry.f95_url === url);
         // The backend scrapes the thread for every URL it is given; with no
