@@ -2061,3 +2061,65 @@ def test_screenshots_malformed_values_dropped(tmp_path):
     path = write_backup(tmp_path / "mal.json", payload)
     assert api.import_library_backup(str(path))["success"] is True
     assert get_all_games()[0]["screenshots"] == ["https://example.com/ok.png"]
+
+
+def test_mirror_apply_prunes_deleted_game_attachments(tmp_path, monkeypatch):
+    from core import database
+    from core.game_attachments import add_attachment, attachments_dir, list_attachments
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(database, "DATA_DIR", str(data_dir))
+
+    keep_url = "https://f95zone.to/threads/keep.500/"
+    gone_url = "https://f95zone.to/threads/gone.501/"
+    keep_id = add_game("Keep", "/keep.exe", f95_url=keep_url)
+    gone_id = add_game("Gone", "/gone.exe", f95_url=gone_url)
+    assert keep_id is not None and gone_id is not None
+
+    keep_source = tmp_path / "keep-guide.pdf"
+    keep_source.write_bytes(b"%PDF-1.4 keep")
+    gone_source = tmp_path / "gone-guide.pdf"
+    gone_source.write_bytes(b"%PDF-1.4 gone")
+    assert add_attachment(keep_id, str(keep_source))["name"] == "keep-guide.pdf"
+    assert add_attachment(gone_id, str(gone_source))["name"] == "gone-guide.pdf"
+
+    payload = base_backup([{"metadata": {"title": "Keep", "f95_url": keep_url}}])
+    result = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert result["deleted"] == 1
+    import os
+
+    assert not os.path.exists(attachments_dir(gone_id))
+    assert [item["name"] for item in list_attachments(keep_id)] == ["keep-guide.pdf"]
+
+
+def test_export_carries_notes_but_not_attachments(tmp_path, monkeypatch):
+    from core import database
+    from core.game_attachments import add_attachment
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(database, "DATA_DIR", str(data_dir))
+
+    api = Api()
+    game_id = add_game("Noted", "/noted.exe")
+    assert game_id is not None
+    update_game(game_id, {"progress": "# My notes\nSome **markdown**"})
+    source = tmp_path / "walkthrough.pdf"
+    source.write_bytes(b"%PDF-1.4 walkthrough contents")
+    assert add_attachment(game_id, str(source))["name"] == "walkthrough.pdf"
+
+    destination = tmp_path / "export.json"
+    result = api.export_library_backup({}, str(destination))
+    assert result["success"] is True
+    exported_text = destination.read_text(encoding="utf-8")
+    exported = json.loads(exported_text)
+    assert exported["games"][0]["user_state"]["progress"] == "# My notes\nSome **markdown**"
+    assert "walkthrough.pdf" not in exported_text
+    assert "walkthrough contents" not in exported_text
+    assert "%PDF" not in exported_text

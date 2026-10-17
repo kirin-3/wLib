@@ -300,6 +300,27 @@ export interface LaunchTargetsResponse extends ApiBasicResponse {
   targets: LaunchTarget[];
 }
 
+export interface GameAttachment {
+  name: string;
+  size: number;
+}
+
+export interface GameAttachmentsResponse extends ApiBasicResponse {
+  success: boolean;
+  attachments: GameAttachment[];
+}
+
+export interface AddGameAttachmentResponse extends ApiBasicResponse {
+  success: boolean;
+  attachment?: GameAttachment;
+  attachments?: GameAttachment[];
+}
+
+export interface RemoveGameAttachmentResponse extends ApiBasicResponse {
+  success: boolean;
+  attachments?: GameAttachment[];
+}
+
 export type LibraryBackupSection =
   | "metadata"
   | "user_state"
@@ -486,6 +507,8 @@ export interface GameRecord {
   collections?: string[];
   // Remote screenshot URLs collected from the thread starter post.
   screenshots?: string[];
+  // Notes markdown stored in games.progress.
+  progress?: string;
   // F95 metadata is still being fetched in the background after adding.
   metadata_pending?: boolean;
 }
@@ -565,6 +588,7 @@ export interface PathCheckResponse extends ApiBasicResponse {
 
 const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
+const MOCK_ATTACHMENTS_STORAGE_KEY = "wlib-mock-attachments";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   custom_play_statuses: [],
   collections: [],
@@ -653,6 +677,45 @@ const writeMockLaunchTargets = (targets: LaunchTarget[]): void => {
 
 const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
   return targets.reduce((max, target) => Math.max(max, target.id), 0) + 1;
+};
+
+const normalizeMockAttachment = (value: unknown): GameAttachment | null => {
+  if (!isRecord(value)) return null;
+  const name = typeof value.name === "string" ? value.name : "";
+  const size = Number(value.size);
+  if (!name || !Number.isFinite(size)) return null;
+  return { name, size: Math.max(0, Math.trunc(size)) };
+};
+
+const readMockAttachments = (): Record<string, GameAttachment[]> => {
+  try {
+    const raw = localStorage.getItem(MOCK_ATTACHMENTS_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    if (!isRecord(parsed)) return {};
+    const result: Record<string, GameAttachment[]> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!Array.isArray(value)) continue;
+      result[key] = value
+        .map(normalizeMockAttachment)
+        .filter((item): item is GameAttachment => item !== null)
+        .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    }
+    return result;
+  } catch (_error) {
+    return {};
+  }
+};
+
+const writeMockAttachments = (attachments: Record<string, GameAttachment[]>): void => {
+  try {
+    localStorage.setItem(MOCK_ATTACHMENTS_STORAGE_KEY, JSON.stringify(attachments));
+  } catch (_error) {
+    // Ignore browser mock persistence failures and keep the desktop contract unchanged.
+  }
+};
+
+const mockAttachmentList = (gameId: number): GameAttachment[] => {
+  return readMockAttachments()[String(gameId)] || [];
 };
 
 const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[] => {
@@ -1241,6 +1304,40 @@ class ApiService {
     return this.invoke<string>("browse_backup_file", startPath);
   }
 
+  async browsePdfFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_pdf_file", startPath);
+  }
+
+  async listGameAttachments(gameId: number): Promise<GameAttachmentsResponse> {
+    return this.invoke<GameAttachmentsResponse>("list_game_attachments", gameId);
+  }
+
+  async addGameAttachment(
+    gameId: number,
+    sourcePath: string,
+  ): Promise<AddGameAttachmentResponse> {
+    return this.invoke<AddGameAttachmentResponse>(
+      "add_game_attachment",
+      gameId,
+      sourcePath,
+    );
+  }
+
+  async openGameAttachment(gameId: number, name: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("open_game_attachment", gameId, name);
+  }
+
+  async removeGameAttachment(
+    gameId: number,
+    name: string,
+  ): Promise<RemoveGameAttachmentResponse> {
+    return this.invoke<RemoveGameAttachmentResponse>(
+      "remove_game_attachment",
+      gameId,
+      name,
+    );
+  }
+
   async browseDirectory(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_directory", startPath);
   }
@@ -1411,6 +1508,9 @@ class ApiService {
         const gameId = Number(args[0]);
         localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().filter((game) => game.id !== gameId)));
         writeMockLaunchTargets(readMockLaunchTargets().filter((target) => target.game_id !== gameId));
+        const attachments = readMockAttachments();
+        delete attachments[String(gameId)];
+        writeMockAttachments(attachments);
         return { success: true, mock: true };
       }
       case "launch_game": {
@@ -1749,6 +1849,8 @@ class ApiService {
       case "browse_external_library_file":
       case "browse_directory":
         return "";
+      case "browse_pdf_file":
+        return "/mock/guide.pdf";
       // Bridges with no browser-side equivalent. Actions that need no host
       // still answer with the real payload shape so the view flow works;
       // download/install actions explain that they need the desktop app.
@@ -2252,6 +2354,68 @@ class ApiService {
       }
       case "find_save_files":
         return [];
+      case "list_game_attachments": {
+        const gameId = Number(args[0]);
+        if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
+        }
+        return { success: true, mock: true, attachments: mockAttachmentList(gameId) };
+      }
+      case "add_game_attachment": {
+        const gameId = Number(args[0]);
+        const sourcePath = typeof args[1] === "string" ? args[1] : "";
+        if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
+        }
+        if (!/\.pdf$/i.test(sourcePath.trim())) {
+          return { success: false, mock: true, error: "Only PDF files can be attached", error_code: "not_a_pdf" };
+        }
+        const baseName = sourcePath.split(/[/\\]/).pop() || "guide.pdf";
+        const store = readMockAttachments();
+        const existing = store[String(gameId)] || [];
+        const stem = baseName.replace(/\.pdf$/i, "");
+        let candidate = baseName;
+        let counter = 2;
+        const names = new Set(existing.map((item) => item.name.toLowerCase()));
+        while (names.has(candidate.toLowerCase())) {
+          candidate = `${stem} (${counter}).pdf`;
+          counter += 1;
+        }
+        const attachment = { name: candidate, size: 1024 };
+        const next = [...existing, attachment].sort((a, b) =>
+          a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+        );
+        store[String(gameId)] = next;
+        writeMockAttachments(store);
+        return { success: true, mock: true, attachment, attachments: next };
+      }
+      case "open_game_attachment": {
+        const gameId = Number(args[0]);
+        const name = typeof args[1] === "string" ? args[1] : "";
+        if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
+        }
+        const found = mockAttachmentList(gameId).some((item) => item.name === name);
+        if (!found) {
+          return { success: false, mock: true, error: "Attachment file is missing", error_code: "attachment_missing" };
+        }
+        return { success: true, mock: true };
+      }
+      case "remove_game_attachment": {
+        const gameId = Number(args[0]);
+        const name = typeof args[1] === "string" ? args[1] : "";
+        if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
+        }
+        const existing = mockAttachmentList(gameId);
+        if (!existing.some((item) => item.name === name)) {
+          return { success: false, mock: true, error: "Attachment file is missing", error_code: "attachment_missing" };
+        }
+        const store = readMockAttachments();
+        store[String(gameId)] = existing.filter((item) => item.name !== name);
+        writeMockAttachments(store);
+        return { success: true, mock: true, attachments: store[String(gameId)] || [] };
+      }
       default:
         return unavailable;
     }

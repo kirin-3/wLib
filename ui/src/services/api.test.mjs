@@ -169,3 +169,52 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     delete globalThis.localStorage;
   }
 });
+
+test("browser mock persists notes progress and attachment round-trip", async () => {
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    open: () => {},
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const created = await api.addGame("Noted", "/tmp/noted.exe");
+    const gameId = created.id;
+    assert.ok(gameId);
+
+    const saved = await api.updateGame(gameId, { progress: "# Notes\nHello" });
+    assert.equal(saved.success, true);
+    const games = await api.getGames();
+    assert.equal(games.find((game) => game.id === gameId).progress, "# Notes\nHello");
+
+    assert.equal(await api.browsePdfFile(""), "/mock/guide.pdf");
+
+    const empty = await api.listGameAttachments(gameId);
+    assert.deepEqual(empty.attachments, []);
+    const addedAttachment = await api.addGameAttachment(gameId, "/tmp/guide.pdf");
+    assert.equal(addedAttachment.success, true);
+    assert.equal(addedAttachment.attachment.name, "guide.pdf");
+    const listed = await api.listGameAttachments(gameId);
+    assert.deepEqual(listed.attachments.map((item) => item.name), ["guide.pdf"]);
+    assert.equal((await api.openGameAttachment(gameId, "guide.pdf")).success, true);
+    const removed = await api.removeGameAttachment(gameId, "guide.pdf");
+    assert.equal(removed.success, true);
+    assert.deepEqual((await api.listGameAttachments(gameId)).attachments, []);
+    assert.equal((await api.addGameAttachment(gameId, "/tmp/notes.txt")).error_code, "not_a_pdf");
+    assert.equal((await api.listGameAttachments(4242)).error_code, "game_not_found");
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

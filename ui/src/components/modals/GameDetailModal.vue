@@ -23,11 +23,15 @@ import {
 } from "@tabler/icons-vue";
 import { api } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+import { getSafeNotesLinkUrl } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { hasAvailableUpdate, isWishlisted } from "../../utils/libraryGames";
 import type {
+  GameAttachment,
   GameRecord,
   LaunchTarget,
   PlatformCapabilities,
@@ -132,8 +136,15 @@ const engine = ref<EngineOption>("Others");
 const newTag = ref("");
 const latestVersion = ref("");
 const engineMenuOpen = ref(false);
-const detailTabs = ["Overview", "Launch", "Info"] as const;
+const detailTabs = ["Overview", "Launch", "Info", "Notes"] as const;
 const activeTab = ref<(typeof detailTabs)[number]>("Overview");
+const notes = ref("");
+const notesEditing = ref(false);
+const attachments = ref<GameAttachment[]>([]);
+const loadingAttachments = ref(false);
+const attachingPdf = ref(false);
+const removingAttachment = ref<string | null>(null);
+let attachmentsRequestId = 0;
 const coverImageFailed = ref(false);
 const lightboxIndex = ref<number | null>(null);
 const failedScreenshots = ref<Set<string>>(new Set());
@@ -380,6 +391,7 @@ const formSnapshot = (): string =>
     proton_version: protonVersion.value,
     launch_mode: launchMode.value,
     collections: collectionMembership.value,
+    progress: notes.value,
   });
 const savedSnapshot = ref("");
 const quickFields = (): Record<string, unknown> => ({
@@ -425,6 +437,8 @@ watch(
         launchMode.value = normalizeLaunchMode(g.launch_mode);
         useCustomPrefix.value = !!g.custom_prefix;
         activeTab.value = "Overview";
+        notes.value = g.progress || "";
+        notesEditing.value = false;
         newTag.value = "";
         collectionMembership.value = [...(g.collections || [])];
         newCollectionName.value = "";
@@ -452,6 +466,11 @@ watch(
         ratingStory.value = g.rating_story || 0;
         ratingFappability.value = g.rating_fappability || 0;
         ratingGameplay.value = g.rating_gameplay || 0;
+        attachments.value = [];
+        attachmentsRequestId++;
+        loadingAttachments.value = false;
+        attachingPdf.value = false;
+        removingAttachment.value = null;
         savedSnapshot.value = formSnapshot();
         savedQuickFields.value = quickFields();
         lightboxIndex.value = null;
@@ -509,11 +528,17 @@ watch(
       searchingSaves.value = false;
       newTag.value = "";
       activeTab.value = "Overview";
+      notesEditing.value = false;
       executableModifiedAt.value = null;
       executableModifiedKnown.value = false;
       loadingExecutableModifiedAt.value = false;
       loadingLaunchTargets.value = false;
       launchTargets.value = [];
+      attachments.value = [];
+      attachmentsRequestId++;
+      loadingAttachments.value = false;
+      attachingPdf.value = false;
+      removingAttachment.value = null;
       collectionRequestId++;
       collectionOptions.value = [];
       newCollectionName.value = "";
@@ -538,6 +563,16 @@ watch(
   ([gameId]) => {
     if (props.game && typeof gameId === "number" && gameId === lastSyncedId.value) {
       syncReadonlyMetadata(props.game);
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [activeTab.value, props.game?.id] as const,
+  ([tab, gameId]) => {
+    if (props.modelValue && tab === "Notes" && typeof gameId === "number") {
+      void loadAttachments();
     }
   },
   { immediate: true },
@@ -601,6 +636,12 @@ const close = () => {
   searchingSaves.value = false;
   newTag.value = "";
   activeTab.value = "Overview";
+  notesEditing.value = false;
+  attachments.value = [];
+  attachmentsRequestId++;
+  loadingAttachments.value = false;
+  attachingPdf.value = false;
+  removingAttachment.value = null;
   emit("update:modelValue", false);
 };
 
@@ -1095,6 +1136,7 @@ const save = async () => {
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       ...quickFields(),
+      progress: notes.value,
       engine: normalizeEngine(engine.value),
       run_japanese_locale: platformCapabilities.value.wine_proton
         ? runJapaneseLocale.value
@@ -1392,6 +1434,147 @@ const openInBrowser = async () => {
     }
   }
 };
+
+const notesHtml = computed(() => {
+  const rendered = marked.parse(notes.value || "", { async: false });
+  const html = typeof rendered === "string" ? rendered : "";
+  return DOMPurify.sanitize(html);
+});
+
+const onNotesLinkClick = async (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null;
+  const anchor = target?.closest?.("a") as HTMLAnchorElement | null;
+  if (!anchor) return;
+  event.preventDefault();
+  const safeUrl = getSafeNotesLinkUrl(anchor.getAttribute("href"));
+  if (!safeUrl) return;
+  try {
+    const res = await api.openInBrowser(safeUrl);
+    if (res && res.success === false) {
+      notifyError("Failed to open browser: " + (res.error || "Unknown error"));
+    }
+  } catch (e) {
+    console.error("Failed to open notes link", e);
+    notifyError("Error opening browser: " + String(e));
+  }
+};
+
+const formatAttachmentSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0]!;
+  for (const next of units) {
+    unit = next;
+    if (value < 1024 || next === "GB") break;
+    value /= 1024;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+};
+
+const loadAttachments = async () => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const requestId = ++attachmentsRequestId;
+  loadingAttachments.value = true;
+  try {
+    const res = await api.listGameAttachments(gameId);
+    if (requestId !== attachmentsRequestId || !isCurrentGame(gameId)) return;
+    if (res && res.success === false) {
+      notifyError("Failed to load attachments: " + (res.error || "Unknown error"));
+      attachments.value = [];
+    } else {
+      attachments.value = res?.attachments || [];
+    }
+  } catch (e) {
+    console.error("Failed to load attachments", e);
+    if (requestId === attachmentsRequestId && isCurrentGame(gameId)) {
+      attachments.value = [];
+    }
+  } finally {
+    if (requestId === attachmentsRequestId && isCurrentGame(gameId)) {
+      loadingAttachments.value = false;
+    }
+  }
+};
+
+const attachPdf = async () => {
+  if (attachingPdf.value || !props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  attachingPdf.value = true;
+  try {
+    const picked = await api.browsePdfFile("");
+    if (!picked) return;
+    if (!isCurrentGame(gameId)) return;
+    const res = await api.addGameAttachment(gameId, picked);
+    if (!isCurrentGame(gameId)) return;
+    if (res && res.success === false) {
+      notifyError("Failed to attach PDF: " + (res.error || "Unknown error"));
+      if ((res as { error_code?: string }).error_code === "attachment_missing") {
+        await loadAttachments();
+      }
+      return;
+    }
+    attachments.value = res?.attachments || res?.attachment
+      ? res.attachments || (res.attachment ? [res.attachment] : [])
+      : attachments.value;
+    await loadAttachments();
+  } catch (e) {
+    console.error("Failed to attach PDF", e);
+    if (isCurrentGame(gameId)) {
+      notifyError("Error attaching PDF: " + String(e));
+    }
+  } finally {
+    attachingPdf.value = false;
+  }
+};
+
+const openAttachment = async (name: string) => {
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  try {
+    const res = await api.openGameAttachment(gameId, name);
+    if (!isCurrentGame(gameId)) return;
+    if (res && res.success === false) {
+      notifyError("Failed to open attachment: " + (res.error || "Unknown error"));
+      if ((res as { error_code?: string }).error_code === "attachment_missing") {
+        await loadAttachments();
+      }
+    }
+  } catch (e) {
+    console.error("Failed to open attachment", e);
+    if (isCurrentGame(gameId)) {
+      notifyError("Error opening attachment: " + String(e));
+    }
+  }
+};
+
+const removeAttachment = async (name: string) => {
+  if (removingAttachment.value !== null || !props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  if (!confirm(`Remove ${name}? The attached copy will be deleted.`)) return;
+  removingAttachment.value = name;
+  try {
+    const res = await api.removeGameAttachment(gameId, name);
+    if (!isCurrentGame(gameId)) return;
+    if (res && res.success === false) {
+      notifyError("Failed to remove attachment: " + (res.error || "Unknown error"));
+      if ((res as { error_code?: string }).error_code === "attachment_missing") {
+        await loadAttachments();
+      }
+      return;
+    }
+    attachments.value = res?.attachments || [];
+  } catch (e) {
+    console.error("Failed to remove attachment", e);
+    if (isCurrentGame(gameId)) {
+      notifyError("Error removing attachment: " + String(e));
+    }
+  } finally {
+    removingAttachment.value = null;
+  }
+};
 </script>
 
 <template>
@@ -1535,13 +1718,12 @@ const openInBrowser = async () => {
 
           <div v-if="game.f95_url">
             <h3 class="modal-label mb-3">Screenshots</h3>
-            <div v-if="gameScreenshots.length" class="screenshot-strip" role="list" aria-label="Game screenshots">
+            <div v-if="gameScreenshots.length" class="screenshot-strip" role="group" aria-label="Game screenshots">
               <button
                 v-for="(url, index) in gameScreenshots"
                 v-show="!failedScreenshots.has(url)"
                 :key="url"
                 type="button"
-                role="listitem"
                 class="screenshot-thumb-button"
                 :aria-label="`View screenshot ${index + 1}`"
                 @click="openLightboxAt(index + (hasCoverImage ? 1 : 0))"
@@ -2243,6 +2425,114 @@ const openInBrowser = async () => {
                 class="modal-input w-full"
               />
             </div>
+          </div>
+        </section>
+
+        <section v-show="activeTab === 'Notes'" id="game-detail-panel-Notes" role="tabpanel" aria-labelledby="game-detail-tab-Notes" tabindex="0" class="space-y-6">
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="modal-label !mb-0">Notes</h3>
+              <button
+                v-if="!notesEditing"
+                type="button"
+                class="modal-btn"
+                @click="notesEditing = true"
+              >
+                Edit
+              </button>
+              <button
+                v-else
+                type="button"
+                class="modal-btn"
+                @click="notesEditing = false"
+              >
+                Preview
+              </button>
+            </div>
+            <div v-if="!notesEditing">
+              <div
+                v-if="notes.trim()"
+                class="notes-markdown"
+                v-html="notesHtml"
+                @click="onNotesLinkClick"
+              ></div>
+              <div
+                v-else
+                class="rounded-lg p-4 text-sm"
+                style="background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)"
+              >
+                <p class="mb-3">No notes yet. Track routes, choices, or progress for this game.</p>
+                <button type="button" class="modal-btn" @click="notesEditing = true">
+                  Start writing
+                </button>
+              </div>
+            </div>
+            <div v-else>
+              <textarea
+                v-model="notes"
+                aria-label="Game notes"
+                rows="10"
+                placeholder="# Notes&#10;&#10;Track routes, choices, and progress here. Markdown is supported."
+                class="modal-input w-full font-mono notes-editor"
+              ></textarea>
+              <p class="text-xs mt-2" style="color: var(--text-muted)">
+                Markdown is supported. Changes save with Save Changes.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="modal-label !mb-0">Attachments</h3>
+              <button
+                type="button"
+                class="modal-btn ui-action-btn disabled:opacity-50"
+                :disabled="attachingPdf"
+                @click="attachPdf"
+              >
+                {{ attachingPdf ? "Attaching..." : "Attach PDF" }}
+              </button>
+            </div>
+            <div
+              v-if="loadingAttachments"
+              class="text-xs"
+              style="color: var(--text-muted)"
+            >
+              Loading attachments...
+            </div>
+            <p
+              v-else-if="!attachments.length"
+              class="text-xs"
+              style="color: var(--text-muted)"
+            >
+              No PDFs attached.
+            </p>
+            <ul v-else class="space-y-2">
+              <li
+                v-for="item in attachments"
+                :key="item.name"
+                class="flex items-center gap-2 rounded-lg p-2"
+                style="background: var(--bg-raised); border: 1px solid var(--border)"
+              >
+                <button
+                  type="button"
+                  class="flex-1 min-w-0 text-left"
+                  :title="`Open ${item.name}`"
+                  @click="openAttachment(item.name)"
+                >
+                  <span class="block truncate text-sm" style="color: var(--text-primary)">{{ item.name }}</span>
+                  <span class="block text-xs" style="color: var(--text-muted)">{{ formatAttachmentSize(item.size) }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="modal-btn !py-1 !text-xs disabled:opacity-50"
+                  :disabled="removingAttachment === item.name"
+                  @click="removeAttachment(item.name)"
+                >
+                  {{ removingAttachment === item.name ? "Removing..." : "Remove" }}
+                </button>
+              </li>
+            </ul>
           </div>
         </section>
       </div>
@@ -3029,4 +3319,137 @@ const openInBrowser = async () => {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.notes-editor {
+  min-height: 12rem;
+  resize: vertical;
+}
+
+.notes-markdown {
+  color: var(--text-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  padding: 1rem 1.25rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  line-height: 1.6;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.notes-markdown :deep(h1),
+.notes-markdown :deep(h2),
+.notes-markdown :deep(h3),
+.notes-markdown :deep(h4) {
+  color: var(--text-primary);
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+  line-height: 1.3;
+}
+
+.notes-markdown :deep(h1:first-child),
+.notes-markdown :deep(h2:first-child),
+.notes-markdown :deep(h3:first-child),
+.notes-markdown :deep(p:first-child),
+.notes-markdown :deep(ul:first-child),
+.notes-markdown :deep(ol:first-child) {
+  margin-top: 0;
+}
+
+.notes-markdown :deep(h1) { font-size: 1.25rem; }
+.notes-markdown :deep(h2) {
+  font-size: 1.125rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+.notes-markdown :deep(h3) { font-size: 1rem; }
+
+.notes-markdown :deep(p) {
+  margin: 0.5rem 0;
+  color: var(--text-primary);
+}
+
+.notes-markdown :deep(ul) {
+  list-style-type: disc;
+  margin: 0.5rem 0 0.5rem 1.5rem;
+}
+
+.notes-markdown :deep(ol) {
+  list-style-type: decimal;
+  margin: 0.5rem 0 0.5rem 1.5rem;
+}
+
+.notes-markdown :deep(li) { margin-bottom: 0.25rem; }
+.notes-markdown :deep(li::marker) { color: var(--text-muted); }
+
+.notes-markdown :deep(a) {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.notes-markdown :deep(a:hover) { filter: brightness(1.2); }
+
+.notes-markdown :deep(code) {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85em;
+  color: var(--text-primary);
+}
+
+.notes-markdown :deep(pre) {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+
+.notes-markdown :deep(pre code) {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.notes-markdown :deep(blockquote) {
+  border-left: 2px solid var(--brand);
+  padding-left: 0.75rem;
+  margin: 0.75rem 0;
+  color: var(--text-secondary);
+}
+
+.notes-markdown :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.8125rem;
+}
+
+.notes-markdown :deep(th),
+.notes-markdown :deep(td) {
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+
+.notes-markdown :deep(th) {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.notes-markdown :deep(td) { color: var(--text-secondary); }
+
+.notes-markdown :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1rem 0;
+}
+
+.notes-markdown :deep(img) { max-width: 100%; }
 </style>

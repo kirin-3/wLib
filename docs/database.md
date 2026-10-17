@@ -65,7 +65,7 @@ Stores the library records and their associated configuration flags.
 | `latest_version` | `TEXT` | The remote version identified by the scraper. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |
 | `cover_image_path` | `TEXT` | Path to local cover image. |
-| `progress` | `TEXT` | User notes or completion status (legacy). |
+| `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
 | `rating` | `TEXT` | Overall user rating. |
 | `rating_graphics` | `REAL` | Graphics rating (0-5). |
 | `rating_story` | `REAL` | Story rating (0-5). |
@@ -130,4 +130,5 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 - **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous; records with no developer or executable match a unique same-title local game that has no F95 URL or developer. A record whose thread URL is not in the library merges into a unique URL-less local game with the same title/developer.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
 - **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
+- **Game attachments**: attached PDFs live under `<data dir>/attachments/<game id>/` and are local-only; exports and sync never include PDF data or attachment names. Deleting a game removes its folder; mirror imports and sync deletions prune orphan numeric folders after the commit, and startup prunes folders for IDs not in the library. A reset or replaced database therefore removes orphan PDFs (IDs are `AUTOINCREMENT` and never reused).
 - **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Wine prefix imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.

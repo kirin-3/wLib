@@ -1452,6 +1452,15 @@ def apply_library_backup(
             conn.rollback()
             raise
 
+    if deleted > 0:
+        try:
+            from core.game_attachments import prune_orphan_attachments
+
+            remaining_ids = {int(str(game["id"])) for game in _local_games()}
+            prune_orphan_attachments(remaining_ids)
+        except Exception as exc:
+            print(f"[wLib] Failed to prune orphan attachments: {exc}")
+
     return {
         "created": created,
         "deleted": deleted,

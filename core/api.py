@@ -271,6 +271,20 @@ class Api:
         }
         # Make sure our database is initialized
         init_db()
+        try:
+            from core.database import get_all_games as _list_games_for_prune
+            from core.game_attachments import (
+                prune_orphan_attachments as _prune_on_startup,
+            )
+
+            _existing_ids = {
+                int(str(game.get("id")))
+                for game in _list_games_for_prune()
+                if isinstance(game.get("id"), int)
+            }
+            _prune_on_startup(_existing_ids)
+        except Exception as exc:
+            print(f"[wLib] Failed to prune orphan attachments on startup: {exc}")
         from core.library_sync import SyncManager
 
         self.library_sync: SyncManager = SyncManager(
@@ -1885,6 +1899,12 @@ class Api:
             delete_game_fn(coerced_id)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not delete game"}
+        try:
+            from core.game_attachments import remove_game_attachments
+
+            remove_game_attachments(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to remove attachments for game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         return {"success": True}
@@ -4069,6 +4089,183 @@ class Api:
         return self._browse_qt_dialog(
             "file", directory=start_path, file_types=file_types
         )
+
+    def browse_pdf_file(self, start_path: str = "") -> str:
+        """Opens a native file dialog to select a PDF file for attachments."""
+        file_types = (
+            "PDF Files (*.pdf)",
+            "All files (*.*)",
+        )
+
+        if sys.platform.startswith("linux"):
+            return self._browse_linux_dialog(
+                "file", directory=start_path, file_types=file_types
+            )
+
+        return self._browse_qt_dialog(
+            "file", directory=start_path, file_types=file_types
+        )
+
+    def _attachment_game_exists(self, game_id: int) -> bool:
+        import sqlite3
+
+        from core.database import get_connection
+
+        try:
+            with closing(get_connection()) as conn:
+                row = cast(
+                    object,
+                    conn.execute(
+                        "SELECT 1 FROM games WHERE id = ?", (game_id,)
+                    ).fetchone(),
+                )
+        except (sqlite3.Error, TypeError, ValueError, OverflowError):
+            return False
+        return row is not None
+
+    def list_game_attachments(self, game_id: object = None) -> dict[str, object]:
+        from core.game_attachments import list_attachments
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        if not self._attachment_game_exists(coerced_id):
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            attachments = list_attachments(coerced_id)
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not list attachments"}
+        return {"success": True, "attachments": attachments}
+
+    def add_game_attachment(
+        self, game_id: object = None, source_path: object = ""
+    ) -> dict[str, object]:
+        from core.game_attachments import (
+            NotAPdfError,
+            add_attachment,
+            list_attachments,
+        )
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        if not self._attachment_game_exists(coerced_id):
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            attachment = add_attachment(coerced_id, source_path)
+        except NotAPdfError as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Only PDF files can be attached",
+                "error_code": "not_a_pdf",
+            }
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc) or "Could not attach file"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not attach file"}
+        try:
+            attachments = list_attachments(coerced_id)
+        except Exception:
+            attachments = [attachment]
+        return {
+            "success": True,
+            "attachment": attachment,
+            "attachments": attachments,
+        }
+
+    def open_game_attachment(
+        self, game_id: object = None, name: object = ""
+    ) -> dict[str, object]:
+        from core.game_attachments import AttachmentMissingError, resolve_attachment
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        if not self._attachment_game_exists(coerced_id):
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            resolved = resolve_attachment(coerced_id, name)
+        except AttachmentMissingError as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Attachment file is missing",
+                "error_code": "attachment_missing",
+            }
+        except ValueError as exc:
+            return {"success": False, "error": str(exc) or "Invalid attachment name"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not open attachment"}
+        result = self._open_with_system_handler(resolved, "No PDF viewer opener found")
+        if not result.get("success"):
+            return {
+                "success": False,
+                "error": str(result.get("error") or "Could not open attachment"),
+            }
+        return {"success": True}
+
+    def remove_game_attachment(
+        self, game_id: object = None, name: object = ""
+    ) -> dict[str, object]:
+        from core.game_attachments import (
+            AttachmentMissingError,
+            list_attachments,
+            remove_attachment,
+        )
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        if not self._attachment_game_exists(coerced_id):
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            remove_attachment(coerced_id, name)
+        except AttachmentMissingError as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Attachment file is missing",
+                "error_code": "attachment_missing",
+            }
+        except ValueError as exc:
+            return {"success": False, "error": str(exc) or "Invalid attachment name"}
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not remove attachment"}
+        try:
+            attachments = list_attachments(coerced_id)
+        except Exception:
+            attachments = []
+        return {"success": True, "attachments": attachments}
 
     def inspect_archive(
         self, path: str, game_id: int | None = None

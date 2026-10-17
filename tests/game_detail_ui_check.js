@@ -5,7 +5,7 @@ async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const previousUrl = page.url();
   const previousViewport = page.viewportSize();
-  const keys = ["wlib-mock-games", "wlib-mock-platform", "wlib-mock-launch-targets", "wlib-library-view-state", "wlib-theme"];
+  const keys = ["wlib-mock-games", "wlib-mock-platform", "wlib-mock-launch-targets", "wlib-mock-attachments", "wlib-library-view-state", "wlib-theme"];
   const previous = await page.evaluate(keys => keys.map(key => [key, localStorage.getItem(key)]), keys);
   try {
     await page.evaluate(() => {
@@ -28,13 +28,14 @@ async (page) => {
         shot(400, 400, "#2a6b4a", "C"),
       ];
       localStorage.setItem("wlib-mock-games", JSON.stringify([
-        { id: 1, title: "Aurora", developer: "Example Studio", exe_path: "/games/aurora/game.exe", f95_url: "https://f95zone.to/threads/123/", cover_image_path: cover, screenshots: auroraShots, version: "1.0", latest_version: "2.0", engine: "Unity", tags: "Adventure, Fantasy", rating: "4.2", playtime_seconds: 7200, last_played: "2026-10-01", launch_targets: targets, custom_prefix: "/prefix/aurora", proton_version: "/runners/custom", launch_mode: "auto" },
+        { id: 1, title: "Aurora", developer: "Example Studio", exe_path: "/games/aurora/game.exe", f95_url: "https://f95zone.to/threads/123/", cover_image_path: cover, screenshots: auroraShots, version: "1.0", latest_version: "2.0", engine: "Unity", tags: "Adventure, Fantasy", rating: "4.2", playtime_seconds: 7200, last_played: "2026-10-01", launch_targets: targets, custom_prefix: "/prefix/aurora", proton_version: "/runners/custom", launch_mode: "auto", progress: "# Aurora notes\n\nA [guide](https://example.com/guide) for testing." },
         { id: 2, title: "Vista", developer: "Other Studio", exe_path: "/games/vista/game.exe", f95_url: "https://f95zone.to/threads/456/", cover_image_path: cover, screenshots: vistaShots, version: "1.0", latest_version: "1.0", engine: "Ren'Py" },
         { id: 3, title: "Empty Thread", exe_path: "/games/empty/game.exe", f95_url: "https://f95zone.to/threads/789/", version: "1.0", engine: "Unity" },
         { id: 4, title: "No Cover", exe_path: "/games/other/game.exe", latest_version: "3.0" },
       ]));
       localStorage.setItem("wlib-mock-platform", "linux");
       localStorage.setItem("wlib-mock-launch-targets", JSON.stringify(targets));
+      localStorage.removeItem("wlib-mock-attachments");
       localStorage.setItem("wlib-theme", "dark");
       localStorage.removeItem("wlib-library-view-state");
     });
@@ -103,11 +104,18 @@ async (page) => {
     check(await tab("Launch").getAttribute("aria-selected") === "true", "ArrowRight must select Launch");
     check(await tab("Launch").evaluate(el => el === document.activeElement), "Keyboard tab changes must move focus");
     await page.keyboard.press("End");
-    check(await tab("Info").getAttribute("aria-selected") === "true", "End must select the last tab");
+    check(await tab("Notes").getAttribute("aria-selected") === "true", "End must select the last tab");
     await page.keyboard.press("Home");
     check(await tab("Overview").getAttribute("aria-selected") === "true", "Home must select the first tab");
     await page.keyboard.press("ArrowLeft");
-    check(await tab("Info").getAttribute("aria-selected") === "true", "ArrowLeft must wrap to the last tab");
+    check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowLeft must wrap to the last tab");
+    const tabOrder = await dialog.getByRole("tab").allTextContents();
+    check(JSON.stringify(tabOrder) === JSON.stringify(["Overview", "Launch", "Info", "Notes"]), "Tabs must read Overview, Launch, Info, Notes");
+    await tab("Info").focus();
+    await page.keyboard.press("ArrowRight");
+    check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowRight from Info must select Notes");
+    await page.keyboard.press("ArrowRight");
+    check(await tab("Overview").getAttribute("aria-selected") === "true", "ArrowRight from Notes must wrap to Overview");
     await tab("Launch").click();
     await dialog.getByLabel("Runtime Mode").waitFor();
     await dialog.getByText("Enable this if the game has unreadable text", { exact: false }).waitFor();
@@ -127,12 +135,26 @@ async (page) => {
     await dialog.getByLabel("Title", { exact: true }).fill("Aurora");
     check(await save.count() === 0, "Reverting all edits must hide Save");
 
-    await dialog.locator("header").getByRole("button", { name: "Play", exact: true }).click();
-    await dialog.locator("header").getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await tab("Overview").click();
+    const overviewHeight = await dialog.evaluate(el => el.getBoundingClientRect().height);
+    await tab("Notes").click();
+    const notesPanel = dialog.getByRole("tabpanel", { name: "Notes" });
+    const notesHeight = await dialog.evaluate(el => el.getBoundingClientRect().height);
+    check(Math.abs(notesHeight - overviewHeight) < 2, "Switching to Notes must keep a stable modal height");
+    check(await notesPanel.getByRole("heading", { name: "Aurora notes" }).isVisible(), "Notes must render seeded markdown");
+    check(await notesPanel.getByRole("link", { name: "guide" }).isVisible(), "Notes must render markdown links");
+    await notesPanel.getByRole("button", { name: "Edit", exact: true }).click();
+    await dialog.getByLabel("Game notes").fill("# Aurora notes\n\nEdited notes.");
+    check(await save.count() === 1, "Editing notes must show Unsaved changes");
+    await dialog.getByLabel("Game notes").fill("# Aurora notes\n\nA [guide](https://example.com/guide) for testing.");
+    check(await save.count() === 0, "Restoring notes text must clear Unsaved changes");
+
+    await dialog.locator(".footer-launch-btn", { hasText: "Play" }).click();
+    await dialog.locator(".footer-launch-btn", { hasText: "Stop" }).waitFor();
     await tab("Launch").click();
     check(await dialog.locator(".launch-target-panel").getByRole("button", { name: "Play", exact: true }).count() === 0, "Target Play actions must hide while running");
-    await dialog.locator("header").getByRole("button", { name: "Stop", exact: true }).click();
-    await dialog.locator("header").getByRole("button", { name: "Play", exact: true }).waitFor();
+    await dialog.locator(".footer-launch-btn", { hasText: "Stop" }).click();
+    await dialog.locator(".footer-launch-btn", { hasText: "Play" }).waitFor();
     await tab("Info").click();
     await dialog.getByLabel("Version", { exact: true }).fill("2.0");
     await save.click();
@@ -155,7 +177,8 @@ async (page) => {
     await lightbox.waitFor();
     check(await lightbox.getByText("3 of 5", { exact: true }).isVisible(), "Thumbnail 2 must open image 3 of 5");
     check(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")?.includes("Next") || document.activeElement?.textContent?.includes("›") || true), "Lightbox must hold focus");
-    await dialog.getByRole("button", { name: "View screenshot 4", exact: true }).click();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
     await lightbox.getByText("5 of 5", { exact: true }).waitFor();
     await page.keyboard.press("ArrowRight");
     check(await lightbox.getByText("1 of 5", { exact: true }).isVisible(), "ArrowRight must wrap from the last image to the first");
@@ -179,13 +202,13 @@ async (page) => {
     check(await dialog.getByText("Update: 3.0").isVisible(), "Updates must be shown when the installed version is unknown");
     await page.setViewportSize({ width: 375, height: 812 });
     await page.evaluate(() => document.documentElement.classList.add("light"));
-    for (const name of ["Overview", "Launch", "Info"]) {
+    for (const name of ["Overview", "Launch", "Info", "Notes"]) {
       await tab(name).click();
       const fits = await dialog.getByRole("tabpanel", { name }).evaluate(panel => [...panel.querySelectorAll("div")].every(el => el.scrollWidth <= el.clientWidth + 2));
       check(fits, `${name} must fit a narrow window`);
     }
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    return "PASS: header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving, screenshots lightbox and narrow layouts";
+    return "PASS: header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving, screenshots lightbox, notes tab and narrow layouts";
   } finally {
     await page.evaluate(previous => {
       delete window.pywebview;
