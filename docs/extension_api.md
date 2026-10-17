@@ -33,8 +33,8 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "exists": true,
     "playStatus": "Playing",
     "wishlisted": false,
-    "app_version": "0.3.9",
-    "extension_version": "1.1.0"
+    "app_version": "0.4.0",
+    "extension_version": "1.1.1"
   }
   ```
 - **Contract Notes:**
@@ -107,7 +107,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (`protocol: 1`, JSON text messages):**
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.1.0", "can_fetch": true}
+  {"type": "hello", "protocol": 1, "extension_version": "1.1.1", "can_fetch": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
