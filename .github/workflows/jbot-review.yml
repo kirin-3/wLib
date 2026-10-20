@@ -71,7 +71,7 @@ jobs:
       fail-fast: false
       matrix:
         # A comma-separated model is a pool that picks one per run, so each reviewer gets its own job.
-        model: ${{ fromJSON(needs.command.outputs.models || '["opencode-go/muse-spark-1.3-contributor", "zai-coding-plan/glm-5.3"]') }}
+        model: ${{ fromJSON(needs.command.outputs.models || '["opencode-go/muse-spark-1.3-contributor"]') }}
     name: review (${{ matrix.model }})
     concurrency:
       group: jbot-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ matrix.model }}
