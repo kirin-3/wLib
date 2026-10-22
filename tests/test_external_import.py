@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core import host_platform
 from core.api import Api
 from core.database import add_game, get_all_games, init_db
 from core.external_import import (
@@ -537,6 +538,12 @@ def test_atlas_reader_mapping(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def _host_paths(monkeypatch):
+    # f69 fixtures point at real temp folders, so keep the host's own rule.
+    monkeypatch.setattr("core.external_import.is_windows", host_platform.is_windows)
+
+
 def _write_f69_db(path, install_root) -> None:
     conn = sqlite3.connect(str(path))
     conn.executescript(
@@ -608,7 +615,7 @@ def _write_f69_db(path, install_root) -> None:
     conn.close()
 
 
-def test_f69_reader_mapping(tmp_path):
+def test_f69_reader_mapping(tmp_path, _host_paths):
     source = tmp_path / "f69.db"
     games_root = tmp_path / "games"
     _write_f69_db(source, games_root)
@@ -660,7 +667,7 @@ def test_f69_reader_rejects_wrong_file(tmp_path):
         read_external_library("f69", str(source))
 
 
-def test_f69_import_creates_games_with_collections(tmp_path):
+def test_f69_import_creates_games_with_collections(tmp_path, _host_paths):
     source = tmp_path / "f69.db"
     _write_f69_db(source, tmp_path / "games")
     result = import_external_library("f69", str(source))
