@@ -1,5 +1,14 @@
 # Database & Schema
 
+## Tag colors
+
+`tag_colors` is a general setting containing a JSON object with trimmed, lowercase,
+case-insensitive tag names as keys and swatch names as values: `red`, `orange`,
+`yellow`, `green`, `teal`, `blue`, `purple`, `pink`. `get_tag_colors()` returns `{}`
+when absent and drops invalid entries on read. General-settings backup, import,
+sync, and local change tracking include this setting; omitting general settings
+from an import leaves local colors intact.
+
 ## Library sync change tracking
 
 `init_db()` adds idempotent `sync_games_insert`, `sync_games_delete`, and `sync_games_update` SQLite triggers. Updates track only metadata/user-state columns, including ratings, favorites, play status, finished version, thread completion, notes, playtime, and dates. Executable paths, launch modes/configuration, launch targets, and path settings do not mark shared data as changed. Settings insert/update/delete triggers track only `GENERAL_SETTINGS_KEYS`. No-op updates do not advance the time; writes within one millisecond advance monotonically. Triggers write UTC ISO `sync_local_modified_at` and never react to their own state writes. Because `CREATE TRIGGER IF NOT EXISTS` would keep a pre-existing trigger's column list, `init_db()` drops and recreates `sync_games_update` on every start so databases upgraded after new columns (such as `thread_completed`) watch them too.

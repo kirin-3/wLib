@@ -37,6 +37,8 @@ from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
 from core.versions import normalize_version as normalize_version
 
+_tag_color_lock = threading.Lock()
+
 if TYPE_CHECKING:
     from webview import Window
 
@@ -3926,6 +3928,7 @@ class Api:
             get_collections,
             get_custom_play_statuses,
             get_library_filter_presets,
+            get_tag_colors,
             get_setting,
         )
 
@@ -3941,6 +3944,7 @@ class Api:
             "custom_play_statuses": get_custom_play_statuses(),
             "collections": get_collections(),
             "library_filter_presets": get_library_filter_presets(),
+            "tag_colors": get_tag_colors(),
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "update_notifications": get_setting_fn("update_notifications") != "off",
@@ -3970,6 +3974,87 @@ class Api:
             )
             == "true",
         }
+
+    def get_diagnostics(self) -> dict[str, object]:
+        from core.diagnostics import build_report, collect_basic
+
+        try:
+            basic = collect_basic(
+                APP_VERSION,
+                self._read_manifest_version(
+                    os.path.join(self._get_bundled_extension_dir(), "manifest.json")
+                ),
+            )
+            return {
+                "success": True,
+                "basic": basic,
+                "report_basic": build_report(basic),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def get_diagnostics_tools(self) -> dict[str, object]:
+        from core.diagnostics import collect_tools
+
+        try:
+            return {
+                "success": True,
+                "tools": collect_tools(
+                    self.get_available_runners, self.get_extension_service_status
+                ),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def get_diagnostics_report(self) -> dict[str, object]:
+        from core.diagnostics import build_report, collect_basic, collect_tools
+
+        try:
+            basic = collect_basic(
+                APP_VERSION,
+                self._read_manifest_version(
+                    os.path.join(self._get_bundled_extension_dir(), "manifest.json")
+                ),
+            )
+            tools = collect_tools(
+                self.get_available_runners, self.get_extension_service_status
+            )
+            return {"success": True, "report": build_report(basic, tools)}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def open_log_folder(self) -> dict[str, object]:
+        from core.host_platform import get_data_dir
+
+        path = os.path.join(get_data_dir(), "logs")
+        try:
+            os.makedirs(path, exist_ok=True)
+            result = self._open_path_with_system_handler(path)
+            if not result["success"]:
+                return {
+                    "success": False,
+                    "error": f"Could not open {path}: {result.get('error', 'Unknown error')}",
+                }
+            return {"success": True}
+        except OSError as exc:
+            return {"success": False, "error": f"Could not open {path}: {exc}"}
+
+    def set_tag_color(self, tag: object, swatch: object = None) -> dict[str, object]:
+        from core.database import TAG_COLOR_SWATCHES, get_tag_colors, update_setting
+
+        if not isinstance(tag, str) or not tag.strip():
+            return {"success": False, "error": "Tag must be a nonempty name"}
+        if swatch is not None and swatch != "" and swatch not in TAG_COLOR_SWATCHES:
+            return {"success": False, "error": "Unknown tag color"}
+        with _tag_color_lock:
+            colors = get_tag_colors()
+            name = tag.strip().lower()
+            if swatch is None or swatch == "":
+                _ = colors.pop(name, None)
+            else:
+                colors[name] = str(swatch)
+            update_setting("tag_colors", json.dumps(colors))
+        return {"success": True, "tag_colors": colors}
 
     def save_settings(self, settings: object = None) -> dict[str, object]:
         import sqlite3

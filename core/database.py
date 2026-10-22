@@ -29,6 +29,17 @@ GENERAL_SETTINGS_KEYS = (
     "custom_play_statuses",
     "collections",
     "library_filter_presets",
+    "tag_colors",
+)
+TAG_COLOR_SWATCHES = (
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "teal",
+    "blue",
+    "purple",
+    "pink",
 )
 SYNC_GAME_COLUMNS = (
     "title",
@@ -748,6 +759,12 @@ def reorder_game_launch_targets(
     return list_game_launch_targets(game_id)
 
 
+def get_game_count() -> int:
+    with closing(get_connection()) as conn:
+        row = cast(tuple[int], conn.execute("SELECT COUNT(*) FROM games").fetchone())
+        return row[0]
+
+
 def get_all_games() -> list[dict[str, object]]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -1355,6 +1372,23 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
         "filterTags": string_list(source.get("filterTags")),
         "sortBy": str(source.get("sortBy") or ""),
         "sortDir": sort_dir if sort_dir in FILTER_PRESET_SORT_DIRECTIONS else "",
+    }
+
+
+def get_tag_colors() -> dict[str, str]:
+    try:
+        stored = cast(object, json.loads(get_setting("tag_colors") or "{}"))
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    return {
+        name.strip().lower(): swatch
+        for name, swatch in cast(dict[object, object], stored).items()
+        if isinstance(name, str)
+        and name.strip()
+        and isinstance(swatch, str)
+        and swatch in TAG_COLOR_SWATCHES
     }
 
 

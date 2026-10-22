@@ -16,6 +16,8 @@ import time
 from typing import IO, TYPE_CHECKING, Callable, Protocol, cast, override
 
 from core.api import APP_VERSION, Api
+from core.app_log import setup_app_log
+from core.diagnostics import record_renderer_stage
 from core.f95zone import extract_thread_id, normalize_thread_url
 from core.host_platform import (
     get_cache_root,
@@ -386,6 +388,7 @@ def _trim_renderer_log_file(path: str) -> None:
 
 
 def log_renderer_diagnostics(stage: str, details: dict[str, object]) -> None:
+    record_renderer_stage(stage, details)
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     header = f"[wLib] Renderer diagnostics ({stage})"
     lines = [header]
@@ -1188,7 +1191,7 @@ def run_packaged_smoke_test() -> int:
 
 
 def main() -> None:
-    _ = configure_ssl_certificates()
+    ssl_summary = configure_ssl_certificates()
 
     global window_ref, api_ref, DEV_MODE
 
@@ -1198,6 +1201,8 @@ def main() -> None:
         print("[wLib] wLib is already running; showing its window instead.")
         return
 
+    _ = setup_app_log(APP_DATA_DIR)
+    print(f"[wLib] SSL certificates: {ssl_summary or 'system defaults'}")
     _ = configure_qt_runtime_environment()
     ensure_packaged_webview_cache_fresh()
     webview_module = load_webview_module()

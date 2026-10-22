@@ -270,11 +270,11 @@ def http_error(code, payload=None):
     )
 
 
-def test_dropbox_refresh_revision_download_and_upload(monkeypatch):
+def test_dropbox_refresh_revision_download_and_upload(monkeypatch, capsys):
     calls = []
     replies = iter(
         [
-            response({"access_token": "access", "expires_in": 300}),
+            response({"access_token": "sentinel-dropbox-access", "expires_in": 300}),
             http_error(409, {"error_summary": "path/not_found/test"}),
             response({"rev": "one"}),
             response(b"file", {"Dropbox-API-Result": '{"rev":"one"}'}),
@@ -291,7 +291,7 @@ def test_dropbox_refresh_revision_download_and_upload(monkeypatch):
         return result
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
-    location = DropboxLocation("refresh")
+    location = DropboxLocation("sentinel-dropbox-refresh")
     assert location.revision() is None
     assert location.revision() == "one"
     assert location.read() == (b"file", "one")
@@ -307,6 +307,8 @@ def test_dropbox_refresh_revision_download_and_upload(monkeypatch):
         == "/wlib-library.json"
     )
     assert b"client_secret" not in calls[0].data
+    output = capsys.readouterr()
+    assert "sentinel-dropbox" not in output.out + output.err
 
 
 def test_dropbox_401_conflict_network(monkeypatch):
@@ -399,7 +401,7 @@ def test_gdrive_secret_module_is_gitignored():
         assert "core/_gdrive_secret.py" in ignore.read().splitlines()
 
 
-def test_gdrive_refresh_lookup_download_and_upload(monkeypatch):
+def test_gdrive_refresh_lookup_download_and_upload(monkeypatch, capsys):
     monkeypatch.setenv("WLIB_GDRIVE_CLIENT_SECRET", "test-secret")
     calls = gdrive_urlopen(
         monkeypatch,
@@ -443,6 +445,9 @@ def test_gdrive_refresh_lookup_download_and_upload(monkeypatch):
     assert update.data == b"updated"
     assert "fields=md5Checksum" in update.full_url
     assert "fields=md5Checksum" in create.full_url
+    output = capsys.readouterr()
+    for secret in ("test-secret", "refresh", "access"):
+        assert secret not in output.out + output.err
 
 
 def test_gdrive_conflicts_401_and_errors(monkeypatch):
@@ -666,6 +671,7 @@ def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeyp
     database.set_game_collections(beta, ["Backlog", "Best of"])
     preset = {"name": "Unity", "filterEngines": ["Unity"], "sortBy": "rating", "sortDir": "desc"}
     assert Api().save_library_filter_presets([preset])["success"]
+    assert Api().set_tag_color(" Sandbox ", "green")["success"]
     a = SyncManager()
     a.set_folder(str(folder))
     a.run()
@@ -679,6 +685,7 @@ def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeyp
     assert database.get_collections() == ["Backlog", "Best of"]
     assert members == {"Alpha": ["Backlog"], "Beta": ["Backlog", "Best of"]}
     assert [p["name"] for p in database.get_library_filter_presets()] == ["Unity"]
+    assert database.get_tag_colors() == {"sandbox": "green"}
 
     # Rename and change membership on B; A picks up both on its next sync.
     database.rename_collection("Backlog", "To play")

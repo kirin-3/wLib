@@ -1,5 +1,39 @@
 # Frontend (Vue 3 + TypeScript)
 
+## Tag colors and diagnostics
+
+`utils/tagColors.ts` owns the shared reactive color map, trimmed lowercase lookup,
+one-time loading, optimistic per-tag saves with rollback, and reloads on
+`wlib-refresh-library`. `LibraryView.vue` and `components/modals/GameDetailModal.vue`
+use `components/TagColorPicker.vue`. Right-click or Shift+F10 opens the picker;
+the detail modal also offers a labeled tag-name button. Arrow keys move between
+swatches, Enter/Space selects, and Escape returns focus to the pill. Each current
+option exposes `aria-checked`; selected library filters keep `aria-pressed`, their
+color, a check icon, and a stronger border.
+
+`style.css` defines `--tag-<swatch>-bg`, `-text`, and `-border` in both themes for
+red, orange, yellow, green, teal, blue, purple, and pink. Shared `data-tag-color`
+rules apply them to pills and picker buttons; neutral tags retain their styling.
+The contrast test reads the actual tokens and checks 4.5:1 text contrast and 3:1
+border contrast. Colors are independent of the app accent.
+
+`views/DiagnosticsView.vue` is routed at `/diagnostics`, reached from the Settings
+footer with a return link, and leaves main navigation unchanged. App, Renderer,
+Storage and library, Extension, and Tools sections use definition lists. Basic
+and tool calls start in parallel; missing values, checking states, and retryable
+errors are explicit. Refresh reruns both requests. Open log folder reports errors
+through the existing toast system. Copy report uses backend-redacted text and
+`utils/copyText.ts`: Clipboard API (with a 1.5-second timeout for webviews that
+leave permission requests pending), legacy `execCommand`, then a selected read-only
+textarea for manual copying. Browser previews identify unavailable desktop data.
+
+Design follows wLib's existing typography, theme tokens, and compact utility
+layout (ENERGY 1 / RHYTHM 1 / MOTION 1). Definition lists group facts for bug
+reports; spacing separates their subjects. The accent singles out Copy report.
+Tag hues encode user assignments; checks and borders distinguish filter selection
+without relying on hue. Only the anchored picker uses elevation, to separate its
+controls from library content. No new artwork or decorative motion is needed.
+
 ## Library sync and backup encryption
 
 `SyncView.vue` (the `/sync` route, its own left-navigation entry) hosts `LibrarySyncPanel.vue`. It offers None/Folder/Dropbox/Google Drive locations, the directory picker or browser sign-in (Connect Dropbox or Connect Google Drive, disabled with the backend's reason when `dropbox_available` or `gdrive_available` is false), disconnect, Sync now, last sync/device/error status, and the external privacy-policy link. Browser previews explicitly label mock data; `wlib-mock-sync` holds the mock status and can select `off`, `idle`, `syncing`, `needs_choice`, `needs_passphrase`, or `error` for UI checks.

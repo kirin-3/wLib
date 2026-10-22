@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
+import TagColorPicker from "../TagColorPicker.vue";
+import { colorForTag, loadTagColors } from "../../utils/tagColors";
 import {
   IconBookFilled,
   IconCheck,
@@ -21,7 +23,7 @@ import {
   IconX,
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
-import { api } from "../../services/api";
+import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -711,6 +713,7 @@ const handleOutsideClick = (event: MouseEvent) => {
 };
 
 onMounted(() => {
+  onWebviewReady(() => { void loadTagColors().catch(console.error); });
   document.addEventListener("mousedown", handleOutsideClick);
   window.addEventListener("wlib-playtime-tick", handleJournalTick);
 });
@@ -747,6 +750,12 @@ const requestClose = () => {
 };
 
 const modalRef = ref<HTMLElement | null>(null);
+const tagColorPicker = ref<{ tag: string; anchor: HTMLElement } | null>(null);
+function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
+  event.preventDefault();
+  const target = event.currentTarget as HTMLElement;
+  tagColorPicker.value = { tag, anchor: target.querySelector<HTMLButtonElement>(".tag-name-button") || target };
+}
 const selectTab = (tab: (typeof detailTabs)[number]) => {
   activeTab.value = tab;
   engineMenuOpen.value = false;
@@ -1969,19 +1978,17 @@ const removeAttachment = async (name: string) => {
                 <span
                   v-for="tag in tags"
                   :key="tag"
-                  class="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
-                  style="
-                    background: var(--bg-raised);
-                    border: 1px solid var(--border);
-                    color: var(--text-secondary);
-                  "
+                  class="tag-pill text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
+                  @contextmenu="openTagColorPicker($event, tag)"
+                  :data-tag-color="colorForTag(tag)"
+                  :style="colorForTag(tag) ? undefined : { background: 'var(--bg-raised)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }"
                 >
-                  {{ tag }}
+                  <button type="button" :aria-label="`Set color for ${tag}`" @click="openTagColorPicker($event, tag)" @keydown.shift.f10.prevent="openTagColorPicker($event, tag)" class="tag-name-button">{{ tag }}</button>
                   <button
                     @click="removeTag(tag)"
                     :aria-label="`Remove tag ${tag}`"
                     class="hover:text-red-400 transition-colors ml-0.5"
-                    style="color: var(--text-muted)"
+                    style="color: inherit"
                   >
                     &times;
                   </button>
@@ -2809,6 +2816,7 @@ const removeAttachment = async (name: string) => {
       :start-index="lightboxIndex"
       @close="closeLightbox"
     />
+    <TagColorPicker v-if="tagColorPicker" :key="tagColorPicker.tag" :tag="tagColorPicker.tag" :anchor="tagColorPicker.anchor" @close="tagColorPicker = null" />
   </div>
 </template>
 

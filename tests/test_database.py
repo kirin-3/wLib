@@ -6,6 +6,7 @@ import pytest
 import os
 from typing import cast
 from core.database import (
+    get_tag_colors,
     DEFAULT_PLAY_STATUS,
     DEFAULT_LAUNCH_MODE,
     RPGMAKER_LINUX_RUNNER_SETTING,
@@ -42,6 +43,20 @@ from core.database import (
     set_game_collections,
     _coerce_sort_order,
 )
+
+
+def test_tag_colors_validation_and_sync_tracking():
+    assert get_tag_colors() == {}
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_setting(
+        "tag_colors",
+        json.dumps({" Sandbox ": "green", "": "red", "x": "magenta", "y": 1}),
+    )
+    assert get_tag_colors() == {"sandbox": "green"}
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    for invalid in ("not json", "[]", "null"):
+        update_setting("tag_colors", invalid)
+        assert get_tag_colors() == {}
 
 
 def test_sync_change_tracking():

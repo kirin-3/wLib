@@ -1514,6 +1514,10 @@ const browseUrm = async () => {
       </section>
     </div>
 
+    <footer class="mt-6">
+      <RouterLink to="/diagnostics" class="inline-flex min-h-11 items-center underline underline-offset-4" style="color: var(--text-primary)">Diagnostics</RouterLink>
+    </footer>
+
     <!-- Stays at the bottom of the window while there are unsaved changes. -->
     <div v-if="hasUnsavedChanges" class="sticky bottom-4 z-20 mt-6">
       <div

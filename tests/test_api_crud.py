@@ -19,6 +19,50 @@ def test_add_game_rejects_invalid_title(title):
     assert result["error_code"] == "invalid_title"
 
 
+def test_tag_color_set_change_clear():
+    api = Api()
+    assert api.set_tag_color(" Sandbox ", "green")["tag_colors"] == {"sandbox": "green"}
+    assert api.set_tag_color("SANDBOX", "blue")["tag_colors"] == {"sandbox": "blue"}
+    assert api.set_tag_color("other", "pink")["success"]
+    assert not api.set_tag_color("Sandbox", "magenta")["success"]
+    assert api.get_settings()["tag_colors"] == {"sandbox": "blue", "other": "pink"}
+    assert api.set_tag_color("sandbox", None)["tag_colors"] == {"other": "pink"}
+    assert api.set_tag_color("OTHER", "")["tag_colors"] == {}
+    assert not api.set_tag_color(" ", "blue")["success"]
+
+
+def test_diagnostics_payloads_and_log_folder_error(tmp_path, monkeypatch):
+    import json
+    from core import diagnostics
+
+    api = Api()
+    monkeypatch.setattr(diagnostics, "host_which", lambda name: None)
+    monkeypatch.setattr(api, "get_available_runners", lambda: {"runners": []})
+    monkeypatch.setattr(
+        api,
+        "get_extension_service_status",
+        lambda: {"success": True, "reachable": False},
+    )
+    for method in (
+        api.get_diagnostics,
+        api.get_diagnostics_tools,
+        api.get_diagnostics_report,
+    ):
+        result = method()
+        assert result["success"], result
+        json.dumps(result)
+    monkeypatch.setattr("core.host_platform.get_data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        api,
+        "_open_path_with_system_handler",
+        lambda path: {"success": False, "error": "No file manager"},
+    )
+    result = api.open_log_folder()
+    assert not result["success"]
+    assert str(tmp_path / "logs") in result["error"]
+    assert (tmp_path / "logs").is_dir()
+
+
 def test_add_game_strips_title_and_reports_duplicate_url():
     api = Api()
     api._fetch_added_game_metadata = lambda *args: None

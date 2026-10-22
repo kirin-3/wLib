@@ -7,8 +7,10 @@ import ExtensionView from "../views/ExtensionView.vue";
 import UpdatesView from "../views/UpdatesView.vue";
 import LibraryBackupView from "../views/LibraryBackupView.vue";
 import SyncView from "../views/SyncView.vue";
+import DiagnosticsView from "../views/DiagnosticsView.vue";
 
 const routes: RouteRecordRaw[] = [
+  { path: "/diagnostics", name: "diagnostics", component: DiagnosticsView },
   {
     path: "/",
     name: "library",

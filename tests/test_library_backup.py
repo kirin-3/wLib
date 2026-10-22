@@ -77,7 +77,7 @@ def test_future_envelope_rejected():
     assert error.value.error_code == "unsupported_format_version"
 
 
-def test_encrypted_backup_api(tmp_path):
+def test_encrypted_backup_api(tmp_path, capsys):
     add_game(
         "Secret", "/local/game.exe", f95_url="https://f95zone.to/threads/secret.123/"
     )
@@ -92,6 +92,8 @@ def test_encrypted_backup_api(tmp_path):
     )
     assert api.inspect_library_backup(path, "phrase")["counts"]["total_games"] == 1
     assert api.import_library_backup(path, passphrase="phrase")["success"]
+    output = capsys.readouterr()
+    assert "phrase" not in output.out + output.err
 
 
 def test_sync_payload_excludes_machine_paths_and_secrets(tmp_path):
@@ -252,6 +254,32 @@ def test_missing_targets_preserved_and_empty_targets_clear(tmp_path, include_tar
     path = write_backup(tmp_path / "targets.json", base_backup([game]))
     assert Api().import_library_backup(str(path))["success"] is True
     assert len(list_game_launch_targets(game_id)) == (0 if include_targets else 1)
+
+
+def test_tag_colors_backup_selection_and_validation(tmp_path):
+    from core.database import get_tag_colors
+
+    add_game("Backup fixture", "/tmp/game.exe")
+    api = Api()
+    api.set_tag_color("Sandbox", "green")
+    destination = tmp_path / "colors.json"
+    assert api.export_library_backup(
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_METADATA]}, str(destination)
+    )["success"]
+    backup = json.loads(destination.read_text())
+    assert json.loads(backup["settings"]["general"]["tag_colors"]) == {
+        "sandbox": "green"
+    }
+    backup["settings"]["general"]["tag_colors"] = {"Sandbox": "blue", "bad": "magenta"}
+    destination.write_text(json.dumps(backup))
+    assert api.import_library_backup(
+        str(destination), {"sections": [SECTION_METADATA]}
+    )["success"]
+    assert get_tag_colors() == {"sandbox": "green"}
+    assert api.import_library_backup(
+        str(destination), {"sections": [SECTION_SETTINGS_GENERAL]}
+    )["success"]
+    assert get_tag_colors() == {"sandbox": "blue"}
 
 
 def test_library_filter_presets_round_trip_through_backup(tmp_path):

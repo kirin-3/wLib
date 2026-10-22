@@ -1,5 +1,40 @@
 # Backend Systems (Python)
 
+## Tag colors
+
+`Api.set_tag_color(tag, swatch)` updates one trimmed, lowercase, case-insensitive
+tag key and returns `{success, tag_colors}`. Swatches are `red`, `orange`, `yellow`,
+`green`, `teal`, `blue`, `purple`, `pink`; unknown swatches return an error. `None`
+or an empty string clears a color. `get_settings()` includes the validated map.
+
+## App log and diagnostics
+
+`core/app_log.py` installs the app log in `main()` after the single-instance check.
+`<data dir>/logs/wlib.log` captures stdout, stderr, Python logging, and uncaught
+main and worker exceptions while preserving terminal output. The file rotates at
+2 MiB (`MAX_BYTES`) with three backups (`BACKUP_COUNT`), `wlib.log.1` through
+`wlib.log.3`. Logging is always on and separate from `enable_logging`, which
+controls per-game launch output. Logs are local and never exported or synced.
+Setup failure prints one warning and leaves the original streams and hooks intact.
+Backend and packaged smoke tests do not install logging.
+
+`core/diagnostics.py` keeps copies of renderer stages under a lock and collects
+environment facts, paths, database size including WAL, and a game count. Tool
+discovery reuses Flatpak-aware host lookups and runner discovery; Windows omits
+Wine and Proton. The API passes its existing version and tool helpers into the
+collectors, so collecting diagnostics does not construct another API or load games.
+
+- `get_diagnostics()` returns `{success, basic, report_basic}`.
+- `get_diagnostics_tools()` returns `{success, tools}`.
+- `get_diagnostics_report()` returns `{success, report}` with the full plain-text
+  report, replacing the home prefix with `~` and login-name path segments with
+  `<user>` (segment replacement skips names shorter than three characters).
+- `open_log_folder()` creates the log folder and opens it in the system file
+  manager. Errors include the folder path.
+
+Reports contain no game titles, tags, URLs, or notes. The page requests basic
+details and slower tool checks in parallel.
+
 ## Library sync and encrypted backups
 
 `core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. Newest wins for the whole library; simultaneous use from several machines is unsupported.

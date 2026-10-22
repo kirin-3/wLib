@@ -1077,6 +1077,8 @@ def test_second_instance_cannot_share_the_extension_port():
 
 def test_main_focuses_running_instance_instead_of_starting(monkeypatch):
     load_webview = MagicMock()
+    setup_log = MagicMock()
+    monkeypatch.setattr(main, "setup_app_log", setup_log)
     monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
     monkeypatch.setattr(main, "bind_extension_server", lambda: None)
     monkeypatch.setattr(main, "focus_running_instance", lambda: True)
@@ -1086,6 +1088,31 @@ def test_main_focuses_running_instance_instead_of_starting(monkeypatch):
     main.main()
 
     load_webview.assert_not_called()
+    setup_log.assert_not_called()
+
+
+def test_packaged_smoke_does_not_create_logs(tmp_path, monkeypatch):
+    from core import database
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
+    monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "get_bundle_root", lambda: str(tmp_path))
+    for relative in ("ui/dist/index.html", "extension/manifest.json", "wlib.png"):
+        asset = tmp_path / relative
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text("fixture")
+    assert main.run_packaged_smoke_test() == 0
+    assert not (tmp_path / "logs").exists()
+
+
+def test_renderer_stage_is_recorded(tmp_path, monkeypatch):
+    from core.diagnostics import get_renderer_stages
+
+    monkeypatch.setattr(
+        main, "_renderer_log_targets", lambda: [str(tmp_path / "renderer.log")]
+    )
+    main.log_renderer_diagnostics("startup", {"gpu_vendor": "test GPU"})
+    assert get_renderer_stages()["startup"] == {"gpu_vendor": "test GPU"}
 
 
 def test_start_vite_dev_server_uses_platform_npm_command(monkeypatch):

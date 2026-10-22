@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
+import TagColorPicker from "../components/TagColorPicker.vue";
+import { colorForTag, loadTagColors } from "../utils/tagColors";
 import { useRoute, useRouter } from "vue-router";
 import {
   IconArchive,
@@ -195,6 +197,11 @@ const filterEngines = ref<string[]>([
   ...DEFAULT_LIBRARY_VIEW_STATE.filterEngines,
 ]);
 const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
+const tagColorPicker = ref<{ tag: string; anchor: HTMLElement } | null>(null);
+function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
+  event.preventDefault();
+  tagColorPicker.value = { tag, anchor: event.currentTarget as HTMLElement };
+}
 const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
@@ -1385,6 +1392,7 @@ onMounted(() => {
   document.addEventListener("scroll", handleLibraryScroll, true);
   window.addEventListener("resize", handleDocumentClick);
   onWebviewReady(() => {
+    void loadTagColors().catch(console.error);
     void loadGames();
     void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
     void api.getSettings().then((settings) => {
@@ -1648,14 +1656,18 @@ onUnmounted(() => {
                 v-for="tag in visibleTags"
                 :key="tag"
                 @click="toggleFilter(filterTags, tag)"
+                @contextmenu="openTagColorPicker($event, tag)"
+                @keydown.shift.f10.prevent="openTagColorPicker($event, tag)"
+                :data-tag-color="colorForTag(tag)"
                 :aria-pressed="filterTags.includes(tag)"
-                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
+                class="tag-pill filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
                 :style="
-                  filterTags.includes(tag)
+                  colorForTag(tag) ? undefined : filterTags.includes(tag)
                     ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
                     : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
                 "
               >
+                <IconCheck v-if="colorForTag(tag) && filterTags.includes(tag)" class="inline w-3 h-3 mr-1" aria-hidden="true" />
                 {{ tag }}
                 <span class="ml-1 opacity-70">{{ tagCounts.get(tag) }}</span>
               </button>
@@ -2637,6 +2649,7 @@ onUnmounted(() => {
         @targets-changed="handleLaunchTargetsChanged"
       />
     </div>
+    <TagColorPicker v-if="tagColorPicker" :key="tagColorPicker.tag" :tag="tagColorPicker.tag" :anchor="tagColorPicker.anchor" @close="tagColorPicker = null" />
   </div>
 </template>
 

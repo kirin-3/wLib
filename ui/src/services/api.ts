@@ -582,6 +582,7 @@ export interface UrmStatusResponse extends ApiBasicResponse {
 }
 
 export interface SettingsResponse {
+  tag_colors: Record<string, string>;
   update_notifications?: boolean;
   custom_play_statuses: string[];
   collections: string[];
@@ -603,6 +604,47 @@ export interface CollectionsResponse extends ApiBasicResponse {
   collections?: string[];
 }
 
+export interface DiagnosticsBasic {
+  app_version: string;
+  extension_version: string;
+  packaging: string;
+  os: string;
+  platform: string;
+  python: string;
+  qt: string | null;
+  webengine: string | null;
+  renderer_stages: Record<string, Record<string, unknown>>;
+  data_path: string;
+  database_path: string;
+  log_path: string;
+  database_bytes: number;
+  game_count: number;
+}
+
+export interface DiagnosticsTools {
+  "7zz": string | null;
+  "7z": string | null;
+  "7za": string | null;
+  bsdtar: string | null;
+  unrar: string | null;
+  wine?: string | null;
+  runners?: RunnerInfo[];
+  extension: { success: boolean; reachable: boolean; error?: string };
+}
+
+const MOCK_DIAGNOSTICS: DiagnosticsBasic = {
+  app_version: "Browser preview", extension_version: "Not available",
+  packaging: "Browser preview", os: "Browser preview", platform: "browser",
+  python: "Not available", qt: null, webengine: null, renderer_stages: {},
+  data_path: "Not available", database_path: "Not available", log_path: "Not available",
+  database_bytes: 0, game_count: 0,
+};
+const MOCK_DIAGNOSTICS_TOOLS: DiagnosticsTools = {
+  "7zz": null, "7z": null, "7za": null, bsdtar: null, unrar: null,
+  extension: { success: true, reachable: false },
+};
+const MOCK_DIAGNOSTICS_REPORT = "wLib diagnostics\nBrowser preview: desktop environment details are not available.";
+
 export type PathCheckKind = "file" | "dir" | "parent" | "runner";
 
 export interface PathCheckResponse extends ApiBasicResponse {
@@ -614,6 +656,7 @@ const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const MOCK_ATTACHMENTS_STORAGE_KEY = "wlib-mock-attachments";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
+  tag_colors: {},
   custom_play_statuses: [],
   collections: [],
   library_filter_presets: [],
@@ -827,6 +870,8 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
 
   return {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
+    tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
+      ? Object.fromEntries(Object.entries(source.tag_colors).filter(([name, swatch]) => name.trim() && typeof swatch === "string" && ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"].includes(swatch)).map(([name, swatch]) => [name.trim().toLowerCase(), swatch])) : {},
     collections: Array.isArray(source.collections) ? source.collections.filter((name): name is string => typeof name === "string") : [],
     library_filter_presets: normalizeMockFilterPresets(source.library_filter_presets),
     urm_rpa_path: typeof source.urm_rpa_path === "string" ? source.urm_rpa_path : "",
@@ -1249,6 +1294,26 @@ class ApiService {
     return this.invoke<SettingsResponse>("get_settings");
   }
 
+  async setTagColor(tag: string, swatch: string | null): Promise<ApiBasicResponse & { tag_colors?: Record<string, string> }> {
+    return this.invoke("set_tag_color", tag, swatch);
+  }
+
+  async getDiagnostics(): Promise<ApiBasicResponse & { basic?: DiagnosticsBasic; report_basic?: string }> {
+    return this.invoke("get_diagnostics");
+  }
+
+  async getDiagnosticsTools(): Promise<ApiBasicResponse & { tools?: DiagnosticsTools }> {
+    return this.invoke("get_diagnostics_tools");
+  }
+
+  async getDiagnosticsReport(): Promise<ApiBasicResponse & { report?: string }> {
+    return this.invoke("get_diagnostics_report");
+  }
+
+  async openLogFolder(): Promise<ApiBasicResponse> {
+    return this.invoke("open_log_folder");
+  }
+
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return this.invoke<PlatformCapabilities>("get_platform_capabilities");
   }
@@ -1580,6 +1645,26 @@ class ApiService {
       }
       case "get_settings":
         return readMockSettings();
+      case "set_tag_color": {
+        const tag = String(args[0] || "").trim().toLowerCase();
+        const swatch = args[1];
+        if (!tag || (swatch != null && swatch !== "" && !["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"].includes(String(swatch)))) {
+          return { success: false, error: "Invalid tag color" };
+        }
+        const settings = readMockSettings();
+        if (swatch == null || swatch === "") delete settings.tag_colors[tag];
+        else settings.tag_colors[tag] = String(swatch);
+        writeMockSettings(settings);
+        return { success: true, tag_colors: settings.tag_colors };
+      }
+      case "get_diagnostics":
+        return { success: true, basic: MOCK_DIAGNOSTICS, report_basic: MOCK_DIAGNOSTICS_REPORT };
+      case "get_diagnostics_tools":
+        return { success: true, tools: MOCK_DIAGNOSTICS_TOOLS };
+      case "get_diagnostics_report":
+        return { success: true, report: MOCK_DIAGNOSTICS_REPORT };
+      case "open_log_folder":
+        return { success: false, error: "The log folder is available in the desktop app." };
       case "set_window_focused":
         return { success: true, mock: true };
       case "get_game_play_sessions": {
