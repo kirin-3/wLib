@@ -6,6 +6,8 @@ import {
   gameFolder,
   gameTags,
   hasAvailableUpdate,
+  hasUnplayedUpdate,
+  isUpdateSkipped,
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
@@ -237,4 +239,23 @@ test("table sort breaks ties stably by ID and sinks missing titles", () => {
   // Non-string version number does not crash
   const gNumericVersion: GameRecord = { id: 4, title: "NumVer", exe_path: "", version: 1 as unknown as string };
   assert.doesNotThrow(() => compareLibraryGames(gNumericVersion, g1, "version", "asc"));
+});
+
+test("unplayed updates require an installed game and two different known versions", () => {
+  const base = { exe_path: "/game", version: "0.8", last_played_version: "0.7" };
+  assert.equal(hasUnplayedUpdate(base), true);
+  assert.equal(hasUnplayedUpdate({ ...base, last_played_version: " V 0.8 " }), false);
+  assert.equal(hasUnplayedUpdate({ ...base, last_played_version: "" }), false);
+  assert.equal(hasUnplayedUpdate({ ...base, version: "" }), false);
+  assert.equal(hasUnplayedUpdate({ ...base, exe_path: "  " }), false);
+});
+
+test("skipping hides exactly one normalized release", () => {
+  const game = { exe_path: "/game", version: "0.7", latest_version: "0.8", skipped_version: " V 0.8 " };
+  assert.equal(isUpdateSkipped(game), true);
+  assert.equal(hasAvailableUpdate(game), false);
+  assert.equal(hasAvailableUpdate({ ...game, latest_version: "0.9" }), true);
+  assert.equal(isUpdateSkipped({ ...game, latest_version: "0.9" }), false);
+  assert.equal(isUpdateSkipped({ ...game, skipped_version: "" }), false);
+  assert.equal(isUpdateSkipped({ ...game, exe_path: "" }), false);
 });

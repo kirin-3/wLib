@@ -1066,3 +1066,29 @@ def test_gdrive_404_outside_file_request_is_request_failed(monkeypatch):
     with pytest.raises(SyncError) as exc:
         _ = GoogleDriveLocation("refresh").revision()
     assert exc.value.error_code == "gdrive_request_failed"
+
+
+def test_journal_push_pull_replaces_matched_sessions_and_skip_marks_local_change():
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Journal", "/game", version="0.7")
+    first = database.start_play_session(game_id, "0.7")
+    database.record_play_tick(game_id, first, 300, True)
+    assert sync.run()["state"] == "idle"
+    pushed = json.loads(location.data)
+    state = pushed["games"][0]["user_state"]
+    assert state["last_played_version"] == "0.7"
+    assert len(state["play_sessions"]) == 1
+    database.update_game(game_id, {"skipped_version": "0.8"})
+    assert sync.local_changed()
+    sync.run()
+    pushed = json.loads(location.data)
+    assert pushed["games"][0]["user_state"]["skipped_version"] == "0.8"
+    state = pushed["games"][0]["user_state"]
+    state["play_sessions"] *= 2
+    state["last_played_version"] = "0.6"
+    pushed["sync"]["modified_at"] = "2099-01-01T00:00:00Z"
+    location.change(pushed)
+    assert sync.run()["state"] == "idle"
+    assert len(database.get_play_sessions(game_id)) == 2
+    assert database.get_all_games()[0]["last_played_version"] == "0.6"

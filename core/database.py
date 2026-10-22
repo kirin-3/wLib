@@ -11,6 +11,7 @@ from typing import TypedDict, cast
 
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import get_data_dir
+from core.versions import normalize_version
 
 DATA_DIR = get_data_dir()
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -24,6 +25,7 @@ DEFAULT_LIBRARY_FOLDER_PATTERN = "{creator}/{title}/{version}"
 GENERAL_SETTINGS_KEYS = (
     "enable_logging",
     "auto_update_check",
+    "update_notifications",
     "custom_play_statuses",
     "collections",
     "library_filter_presets",
@@ -40,6 +42,8 @@ SYNC_GAME_COLUMNS = (
     "cover_image_path",
     "play_status",
     "finished_version",
+    "last_played_version",
+    "skipped_version",
     "is_favorite",
     "rating",
     "rating_graphics",
@@ -360,6 +364,19 @@ def init_db() -> None:
         _ = cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
         )
+        _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS play_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                version TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                duration_seconds INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        _ = cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_play_sessions_game_started ON play_sessions(game_id, started_at)"
+        )
 
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('proton_path', '')"
@@ -372,6 +389,9 @@ def init_db() -> None:
         )
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_update_check', 'weekly')"
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('update_notifications', 'on')"
         )
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
@@ -433,6 +453,8 @@ def init_db() -> None:
             ("thread_completed", "BOOLEAN DEFAULT 0"),
             ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
             ("finished_version", "TEXT DEFAULT ''"),
+            ("last_played_version", "TEXT DEFAULT ''"),
+            ("skipped_version", "TEXT DEFAULT ''"),
             ("collections", "TEXT DEFAULT '[]'"),
             ("screenshots", "TEXT DEFAULT '[]'"),
         ]
@@ -484,12 +506,16 @@ def init_db() -> None:
         )
         keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
         for action in ("INSERT", "UPDATE", "DELETE"):
+            _ = cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS sync_play_sessions_{action.lower()} AFTER {action} ON play_sessions BEGIN {bump_sync_time} END"
+            )
             row = "OLD" if action == "DELETE" else "NEW"
             condition = f"{row}.key IN ({keys})"
             if action == "UPDATE":
                 condition += " AND OLD.value IS NOT NEW.value"
+            _ = cursor.execute(f"DROP TRIGGER IF EXISTS sync_settings_{action.lower()}")
             _ = cursor.execute(
-                f"CREATE TRIGGER IF NOT EXISTS sync_settings_{action.lower()} AFTER {action} ON settings WHEN {condition} BEGIN {bump_sync_time} END"
+                f"CREATE TRIGGER sync_settings_{action.lower()} AFTER {action} ON settings WHEN {condition} BEGIN {bump_sync_time} END"
             )
 
         conn.commit()
@@ -790,6 +816,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "launch_mode",
         "play_status",
         "finished_version",
+        "skipped_version",
         "is_favorite",
         "thread_completed",
     }
@@ -837,6 +864,14 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         ):
             raise sqlite3.IntegrityError("duplicate f95_url")
 
+        if "version" in safe_fields:
+            _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))
+            stored_version = cast(sqlite3.Row | None, cursor.fetchone())
+            if stored_version is not None and normalize_version(
+                safe_fields["version"]
+            ) != normalize_version(cast(object, stored_version[0])):
+                safe_fields["skipped_version"] = ""
+
         if (
             safe_fields.get("play_status") == "Completed"
             and "finished_version" not in safe_fields
@@ -869,6 +904,104 @@ def update_playtime(game_id: int, delta_seconds: int) -> None:
             (clamped_delta, now_iso, game_id),
         )
         conn.commit()
+
+
+def start_play_session(game_id: int, version: str) -> int:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "INSERT INTO play_sessions (game_id, version, started_at) VALUES (?, ?, ?)",
+            (game_id, version, datetime.now().isoformat()),
+        )
+        session_id = int(str(cursor.lastrowid))
+        conn.commit()
+        return session_id
+
+
+def record_play_tick(game_id: int, session_id: int, delta: int, is_final: bool) -> str:
+    clamped_delta = max(0, int(delta))
+    with closing(get_connection()) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        # Lock before reading so concurrent ticks cannot race the final tick.
+        _ = conn.execute("BEGIN IMMEDIATE")
+        session = cast(
+            sqlite3.Row | None,
+            conn.execute(
+                "SELECT version, ended_at FROM play_sessions WHERE id = ? AND game_id = ?",
+                (session_id, game_id),
+            ).fetchone(),
+        )
+        if session is None:
+            # A sync pull or backup import replaced the journal mid-play; keep
+            # counting playtime so the rest of the run is not lost.
+            _ = conn.execute(
+                "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
+                (clamped_delta, datetime.now().isoformat(), game_id),
+            )
+        elif session["ended_at"] is None:
+            now = datetime.now().isoformat()
+            _ = conn.execute(
+                "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
+                (clamped_delta, now, game_id),
+            )
+            _ = conn.execute(
+                "UPDATE play_sessions SET duration_seconds = duration_seconds + ?, ended_at = ? WHERE id = ?",
+                (clamped_delta, now if is_final else None, session_id),
+            )
+            version = normalize_version(cast(object, session["version"]))
+            if version:
+                rows = cast(
+                    list[sqlite3.Row],
+                    conn.execute(
+                        "SELECT version, duration_seconds FROM play_sessions WHERE game_id = ?",
+                        (game_id,),
+                    ).fetchall(),
+                )
+                duration = sum(
+                    int(str(cast(object, row["duration_seconds"])))
+                    for row in rows
+                    if normalize_version(cast(object, row["version"])) == version
+                )
+                if duration >= 300:
+                    _ = conn.execute(
+                        "UPDATE games SET last_played_version = ? WHERE id = ?",
+                        (session["version"], game_id),
+                    )
+        row = cast(
+            sqlite3.Row | None,
+            conn.execute(
+                "SELECT last_played_version FROM games WHERE id = ?", (game_id,)
+            ).fetchone(),
+        )
+        return str(row[0] or "") if row else ""
+
+
+def get_play_sessions(game_id: int) -> list[dict[str, object]]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT * FROM play_sessions WHERE game_id = ? ORDER BY started_at DESC, id DESC",
+                (game_id,),
+            ).fetchall(),
+        )
+        return [dict(row) for row in rows]
+
+
+def get_all_play_sessions() -> dict[int, list[dict[str, object]]]:
+    """Every game's sessions in one query, newest first, keyed by game id."""
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT * FROM play_sessions ORDER BY game_id, started_at DESC, id DESC"
+            ).fetchall(),
+        )
+    sessions: dict[int, list[dict[str, object]]] = {}
+    for row in rows:
+        sessions.setdefault(int(str(cast(object, row["game_id"]))), []).append(dict(row))
+    return sessions
 
 
 # Settings Operations

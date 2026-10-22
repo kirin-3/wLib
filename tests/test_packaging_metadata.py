@@ -121,6 +121,7 @@ def test_flatpak_manifest_requires_host_access_finish_args():
     text = _read_flatpak_manifest_text()
 
     assert "--talk-name=org.freedesktop.Flatpak" in text
+    assert "--talk-name=org.freedesktop.Notifications" in text
     assert "--filesystem=host" in text
     assert "--device=dri" in text
     assert "QTWEBENGINE_DISABLE_SANDBOX=1" in text

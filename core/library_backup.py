@@ -30,6 +30,7 @@ from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     get_all_games,
     get_connection,
+    get_all_play_sessions,
     find_matching_game_row,
     normalize_launch_mode,
     normalize_play_status,
@@ -87,6 +88,8 @@ METADATA_FIELDS = (
 USER_STATE_FIELDS = (
     "play_status",
     "finished_version",
+    "last_played_version",
+    "skipped_version",
     "is_favorite",
     "rating",
     "rating_graphics",
@@ -110,6 +113,7 @@ LAUNCH_CONFIG_FIELDS = (
 )
 EXECUTABLE_PATH_FIELDS = ("exe_path",)
 LAUNCH_TARGET_FIELDS = ("label", "exe_path", "sort_order", "created_at", "updated_at")
+PLAY_SESSION_FIELDS = ("version", "started_at", "ended_at", "duration_seconds")
 PATH_SETTINGS_KEYS = (
     "proton_path",
     "wine_prefix_path",
@@ -394,12 +398,20 @@ def build_library_backup(
     sections = _select_sections(options, default_sections=DEFAULT_EXPORT_SECTIONS)
     games: list[dict[str, object]] = []
 
+    sessions_by_game = (
+        get_all_play_sessions() if SECTION_USER_STATE in sections else {}
+    )
     for game in get_all_games():
         exported_game: dict[str, object] = {
             "metadata": _pick_fields(game, METADATA_FIELDS),
         }
         if SECTION_USER_STATE in sections:
-            exported_game[SECTION_USER_STATE] = _pick_fields(game, USER_STATE_FIELDS)
+            user_state = _pick_fields(game, USER_STATE_FIELDS)
+            user_state["play_sessions"] = [
+                _pick_fields(session, PLAY_SESSION_FIELDS)
+                for session in sessions_by_game.get(int(str(game["id"])), [])
+            ]
+            exported_game[SECTION_USER_STATE] = user_state
         if SECTION_LAUNCH_CONFIG in sections:
             exported_game[SECTION_LAUNCH_CONFIG] = _pick_fields(
                 game, LAUNCH_CONFIG_FIELDS
@@ -1144,6 +1156,39 @@ def _replace_launch_targets(
         )
 
 
+def _replace_play_sessions(
+    cursor: sqlite3.Cursor, game_id: int, imported_game: Mapping[str, object]
+) -> None:
+    state = _game_section(imported_game, SECTION_USER_STATE)
+    if "play_sessions" not in state:
+        return
+    raw_sessions = state["play_sessions"]
+    if not isinstance(raw_sessions, list):
+        raise BackupValidationError("Invalid play sessions.")
+    sessions: list[tuple[object, ...]] = []
+    for raw in cast(list[object], raw_sessions):
+        session = _coerce_mapping(raw)
+        started_at = session.get("started_at")
+        ended_at = session.get("ended_at")
+        duration = session.get("duration_seconds")
+        if (
+            not isinstance(session.get("version"), str)
+            or not isinstance(started_at, str)
+            or not started_at.strip()
+            or (ended_at is not None and not isinstance(ended_at, str))
+            or not isinstance(duration, int)
+            or isinstance(duration, bool)
+            or duration < 0
+        ):
+            raise BackupValidationError("Invalid play session.")
+        sessions.append((game_id, session["version"], started_at, ended_at, duration))
+    _ = cursor.execute("DELETE FROM play_sessions WHERE game_id = ?", (game_id,))
+    _ = cursor.executemany(
+        "INSERT INTO play_sessions (game_id, version, started_at, ended_at, duration_seconds) VALUES (?, ?, ?, ?, ?)",
+        sessions,
+    )
+
+
 def _coerce_setting_value(key: str, raw: object) -> str:
     """Serialize a backup setting value without mangling foreign types.
 
@@ -1421,6 +1466,17 @@ def apply_library_backup(
                     game_id = _insert_game(cursor, fields)
                     created += 1
                     created_ids.append(game_id)
+
+                if SECTION_USER_STATE in sections:
+                    keep_local_sessions = False
+                    if merge_mode == "fill_missing" and local_id is not None:
+                        _ = cursor.execute(
+                            "SELECT 1 FROM play_sessions WHERE game_id = ? LIMIT 1",
+                            (game_id,),
+                        )
+                        keep_local_sessions = cursor.fetchone() is not None
+                    if not keep_local_sessions:
+                        _replace_play_sessions(cursor, game_id, imported_game)
 
                 if SECTION_LAUNCH_TARGETS in sections:
                     if merge_mode == "fill_missing" and local_id is not None:

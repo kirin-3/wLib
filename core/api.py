@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-import re
 import ssl
 import sys
 import threading
@@ -35,15 +35,10 @@ from core.host_platform import (
 )
 from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
+from core.versions import normalize_version as normalize_version
 
 if TYPE_CHECKING:
     from webview import Window
-
-
-def normalize_version(version: object) -> str:
-    """Treat v0.8, 0.8 and "V 0.8 " as equal; mirrors normalizeVersion() in the UI."""
-    value = "".join(str(version or "").split()).lower()
-    return re.sub(r"^v(?=\d)", "", value)
 
 
 class ProgressStatus(TypedDict):
@@ -123,6 +118,7 @@ class GameRecord(TypedDict):
     f95_url: str
     exe_path: NotRequired[str]
     latest_version: NotRequired[str]
+    skipped_version: NotRequired[str]
     thread_completed: NotRequired[bool]
     launch_mode: NotRequired[str]
     launch_targets: NotRequired[list[LaunchTargetRecord]]
@@ -302,6 +298,7 @@ class Api:
         self._update_results: list[dict[str, object]] = []
         self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
         self._update_lock: threading.Lock = threading.Lock()
+        self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
         self._app_release: dict[str, object] | None = None
         self._app_release_lock: threading.Lock = threading.Lock()
@@ -2180,11 +2177,20 @@ class Api:
     # ==========================
     # Scraper API
     # ==========================
-    def _has_update(self, current_version: object, remote_version: object) -> bool:
+    def _has_update(
+        self,
+        current_version: object,
+        remote_version: object,
+        skipped_version: object = "",
+    ) -> bool:
         # Same rule as hasAvailableUpdate() in ui/src/utils/libraryGames.ts: an
         # unknown installed version counts as an update.
         remote = normalize_version(remote_version)
-        return bool(remote) and normalize_version(current_version) != remote
+        return (
+            bool(remote)
+            and normalize_version(current_version) != remote
+            and normalize_version(skipped_version) != remote
+        )
 
     def _is_actionable_remote_version(self, version: object | None) -> bool:
         if version is None:
@@ -2486,23 +2492,26 @@ class Api:
                 )
                 # Check if it differs from current version
                 _ = cursor.execute(
-                    "SELECT id, version, exe_path FROM games WHERE f95_url = ?", (url,)
+                    "SELECT id, version, exe_path, skipped_version FROM games WHERE f95_url = ?",
+                    (url,),
                 )
                 row = cast(object, cursor.fetchone())
                 current_version = ""
                 wishlisted = False
                 newly_finished = False
+                skipped_version = ""
                 if isinstance(row, Sequence) and len(row) >= 3:
                     current_version = str(row[1] or "").strip()
                     wishlisted = not str(row[2] or "").strip()
                     newly_finished = wishlisted and row[0] in newly_finished_ids
+                    skipped_version = str(row[3] or "") if len(row) > 3 else ""
                 conn.commit()
             finally:
                 if conn is not None:
                     conn.close()
 
             has_update = not wishlisted and self._has_update(
-                current_version, remote_version
+                current_version, remote_version, skipped_version
             )
             metadata_updated = self._backfill_missing_metadata_for_url(
                 url, version_info
@@ -2511,6 +2520,9 @@ class Api:
                 "success": True,
                 "version": str(remote_version).strip(),
                 "has_update": has_update,
+                "skipped": bool(normalize_version(skipped_version))
+                and normalize_version(skipped_version)
+                == normalize_version(remote_version),
                 "newly_finished": newly_finished,
                 "metadata_updated": metadata_updated,
             }
@@ -2538,7 +2550,7 @@ class Api:
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
     def check_all_updates(
-        self, game_ids: Sequence[int] | None = None
+        self, game_ids: Sequence[int] | None = None, *, automatic: bool = False
     ) -> dict[str, object]:
         """Start a background thread to check all games for updates."""
         from core.database import get_all_games
@@ -2578,6 +2590,7 @@ class Api:
                     "f95_url": url.strip(),
                     "exe_path": str(game.get("exe_path") or ""),
                     "latest_version": str(game.get("latest_version") or ""),
+                    "skipped_version": str(game.get("skipped_version") or ""),
                     "thread_completed": bool(game.get("thread_completed")),
                 }
             )
@@ -2604,6 +2617,7 @@ class Api:
             for g, nxt in zip(games_with_url, games_with_url[1:])
         }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
+        previous_latest_versions = {g["id"]: g.get("latest_version", "") for g in games_with_url}
 
         def run_checks() -> None:
             outcome = "failed"
@@ -2625,6 +2639,7 @@ class Api:
                         result_dict = {}
 
                     has_update = False
+                    skipped = False
                     newly_finished = False
                     wishlisted = not str(game.get("exe_path") or "").strip()
                     callback_error = str(result_dict.get("error") or "")
@@ -2660,10 +2675,26 @@ class Api:
                                 "UPDATE games SET latest_version = ? WHERE f95_url = ?",
                                 (remote_version, url),
                             )
+                            row = cast(
+                                tuple[object, ...] | None,
+                                cursor.execute(
+                                    "SELECT version, skipped_version, exe_path FROM games WHERE id = ?",
+                                    (game["id"],),
+                                ).fetchone(),
+                            )
                             current_version = current_versions_by_url.get(url, "")
+                            skipped_version = game.get("skipped_version", "")
+                            if row is not None:
+                                current_version = str(row[0] or "")
+                                skipped_version = str(row[1] or "")
+                                wishlisted = not str(row[2] or "").strip()
                             conn.commit()
+                            skipped = bool(normalize_version(skipped_version)) and (
+                                normalize_version(skipped_version)
+                                == normalize_version(remote_version)
+                            )
                             has_update = not wishlisted and self._has_update(
-                                current_version, remote_version
+                                current_version, remote_version, skipped_version
                             )
                         except Exception as e:
                             callback_error = f"Failed to save update data: {e}"
@@ -2706,6 +2737,7 @@ class Api:
                             "current_version": game["version"],
                             "latest_version": str(result_dict.get("version") or ""),
                             "has_update": has_update,
+                            "skipped": skipped,
                             "newly_finished": newly_finished,
                             "error": callback_error,
                             "error_code": callback_error_code,
@@ -2794,6 +2826,37 @@ class Api:
                     )
                 elif any(result["error"] for result in self._update_results):
                     error = "Some games could not be checked; see results for details"
+                if ran_through:
+                    from core.database import get_setting
+                    from core.desktop_notify import (
+                        build_update_summary,
+                        send_notification,
+                    )
+
+                    updated_titles = [
+                        str(result["title"])
+                        for result in self._update_results
+                        if result.get("has_update")
+                        and not result.get("error")
+                        and normalize_version(result.get("latest_version"))
+                        != normalize_version(previous_latest_versions.get(int(str(result["id"])), ""))
+                    ]
+                    completed_titles = [
+                        str(result["title"])
+                        for result in self._update_results
+                        if result.get("newly_finished") and not result.get("error")
+                    ]
+                    summary = build_update_summary(updated_titles, completed_titles)
+                    with self._update_lock:
+                        notify = not self._update_cancelled and (
+                            automatic or not self._window_focused
+                        )
+                    if (
+                        notify
+                        and summary
+                        and get_setting("update_notifications") != "off"
+                    ):
+                        send_notification(*summary)
             except Exception as e:
                 error = f"Update check failed: {e}"
             finally:
@@ -2953,7 +3016,7 @@ class Api:
                 should_check = True
 
         if should_check:
-            result = self.check_all_updates()
+            result = self.check_all_updates(automatic=True)
             return {"triggered": True, "result": result}
 
         return {"triggered": False, "reason": f"Last checked: {last_check_str}"}
@@ -3085,24 +3148,65 @@ class Api:
             f"Launching {target_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
         )
 
+        from core.database import (
+            get_all_games,
+            record_play_tick,
+            start_play_session,
+            update_playtime,
+        )
+
+        launch_version = (
+            next(
+                (
+                    str(game.get("version") or "")
+                    for game in get_all_games()
+                    if game.get("id") == game_id
+                ),
+                "",
+            )
+            if game_id is not None
+            else ""
+        )
+        session_id: int | None = None
+        session_failed = False
+        session_lock = threading.Lock()
+        pending_ticks: list[tuple[int, bool]] = []
+
+        def save_tick(delta: int, is_final: bool) -> None:
+            if game_id is None:
+                return
+            last_played_version: str | None = None
+            if session_id is None:
+                # No journal row could be created; still count the playtime.
+                update_playtime(game_id, delta)
+            else:
+                last_played_version = record_play_tick(
+                    game_id, session_id, delta, is_final
+                )
+            # evaluate_js can block forever once the window is gone at exit.
+            if self.window and not self.launcher.shutting_down:
+                detail = json.dumps(
+                    {
+                        "gameId": game_id,
+                        "delta": max(int(delta), 0),
+                        "isFinal": bool(is_final),
+                        "lastPlayedVersion": last_played_version,
+                        "sessionId": session_id,
+                    }
+                )
+                self.window.evaluate_js(
+                    f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {detail} }}))"
+                )
+
         def on_exit(delta: int, is_final: bool = True) -> None:
             if game_id is None:
                 return
             try:
-                from core.database import update_playtime
-
-                update_playtime_fn = cast(
-                    Callable[[int, int], None], cast(object, update_playtime)
-                )
-
-                update_playtime_fn(game_id, delta)
-                # evaluate_js can block forever once the window is gone at exit.
-                if self.window and not self.launcher.shutting_down:
-                    safe_game_id = int(game_id)
-                    safe_delta = max(int(delta), 0)
-                    self.window.evaluate_js(
-                        f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {{ gameId: {safe_game_id}, delta: {safe_delta}, isFinal: {str(bool(is_final)).lower()} }} }}))"
-                    )
+                with session_lock:
+                    if session_id is None and not session_failed:
+                        pending_ticks.append((delta, is_final))
+                    else:
+                        save_tick(delta, is_final)
             except Exception as e:
                 print(f"Failed to update playtime for game {game_id}: {e}")
 
@@ -3118,7 +3222,32 @@ class Api:
             on_exit_callback=on_exit,
             game_id=game_id,
         )
+        if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
+            with session_lock:
+                try:
+                    session_id = start_play_session(game_id, launch_version)
+                except Exception as exc:
+                    session_failed = True
+                    print(f"Failed to start play session for game {game_id}: {exc}")
+                for delta, is_final in pending_ticks:
+                    try:
+                        save_tick(delta, is_final)
+                    except Exception as exc:
+                        print(f"Failed to update playtime for game {game_id}: {exc}")
+                pending_ticks.clear()
         return result
+
+    def get_game_play_sessions(self, game_id: int) -> dict[str, object]:
+        from core.database import get_play_sessions
+
+        try:
+            return {"success": True, "sessions": get_play_sessions(game_id)}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def set_window_focused(self, focused: bool) -> dict[str, bool]:
+        self._window_focused = bool(focused)
+        return {"success": True}
 
     def stop_game(self, game_id: int) -> dict[str, object]:
         return self.launcher.stop(game_id)
@@ -3814,6 +3943,7 @@ class Api:
             "library_filter_presets": get_library_filter_presets(),
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
+            "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
                 rpgmaker_linux_runner_path
@@ -3932,6 +4062,11 @@ class Api:
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
             update_setting_fn("enable_logging", enable_logging)
+            if "update_notifications" in settings_map:
+                update_setting_fn(
+                    "update_notifications",
+                    "off" if settings_map["update_notifications"] is False else "on",
+                )
             update_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING, rpgmaker_linux_runner_path)
             update_setting_fn(
                 "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()

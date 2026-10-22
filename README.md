@@ -27,6 +27,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 ### Your library
 
 - Add games with cover art, tags, ratings, notes and a play status. wLib tracks how long you've played each one.
+- Open a game's **Journal** to see sessions and playtime by version, including a **Before journal** row for older playtime. The **Unplayed update** collection and **Unplayed** badge flag installed versions you have not played for five minutes yet, once a last played version is known.
 - Sort games into your own collections, which show up as tabs above the library. Save a filter and sort you use often, and get it back with one click.
 - Keep a wishlist of games you haven't installed yet. wLib lets you know when one of them is marked Completed on F95Zone.
 - When you finish a game, wLib remembers which version you finished. The **New since finished** collection shows finished games that have had updates since.
@@ -35,6 +36,8 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 ### Updates and installing
 
 - Check your whole library for updates in one go. wLib compares your versions with F95Zone and fills in missing details from the thread page.
+- Choose **Skip version <version>** from a game's menu or detail window to hide that release, and **Stop skipping <version>** to undo it. Checks continue; a different release shows up again. Changing the installed version clears the skip.
+- On Linux, new releases and newly completed wishlist games can trigger one desktop notification after an automatic check, or a manual check that finishes while you are away. Turn **Desktop notifications** off under **Updates > Automatic Checking**.
 - Install a new game or an update straight from a downloaded `.zip`, `.7z` or `.rar`. wLib puts it in your library folder, moves your saves over and removes the old version. It also notices matching archives in your Downloads folder. For `.7z` and `.rar` you need 7-Zip on Windows, or `7z`, `bsdtar` or `unrar` on Linux.
 - wLib can check GitHub for a newer version of itself from the Updates page.
 
@@ -43,6 +46,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 - Bring your library over from F95Checker, Atlas, XLibrary or f69.
 - Back up everything to one JSON file and restore it on another machine, including Linux to Windows and back. You can protect the file with a passphrase.
 - Keep your library in sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what gets synced.
+- Journal sessions, last played versions, and skipped versions travel with user state in backups and sync. Sync replaces the journal with the newer library's sessions; it does not combine sessions played offline on two computers.
 
 ### Launching
 

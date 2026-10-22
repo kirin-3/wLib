@@ -51,6 +51,7 @@ test("new collections and sortable table columns survive persistence", () => {
   for (const filterCollection of [
     "Updates available",
     "New since finished",
+    "Unplayed update",
     "Recently played",
   ]) {
     for (const sortBy of ["version", "play_status", "engine"]) {

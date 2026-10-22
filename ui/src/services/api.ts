@@ -11,7 +11,7 @@ import type { LibraryFilterPreset } from "../utils/libraryViewState";
 import { VALID_SORT_FIELDS } from "../utils/libraryViewState";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
-import { hasAvailableUpdate } from "../utils/libraryGames";
+import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../utils/libraryGames";
 export type { LaunchMode } from "../utils/launchMode";
 export { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 
@@ -50,6 +50,7 @@ export interface AddGameResponse extends ApiBasicResponse {
 // moving the game to Completed.
 export interface UpdateGameResponse extends ApiBasicResponse {
   finished_version?: string;
+  skipped_version?: string;
 }
 
 // Title, version and engine guessed from a game's install folder.
@@ -99,6 +100,7 @@ export interface LaunchGameResponse extends ApiBasicResponse {
 }
 
 export interface UpdateCheckResponse extends ApiBasicResponse {
+  skipped?: boolean;
   success: boolean;
   version?: string;
   has_update?: boolean;
@@ -119,6 +121,7 @@ export interface BulkUpdateResultItem {
   current_version: string;
   latest_version: string;
   has_update: boolean;
+  skipped?: boolean;
   newly_finished?: boolean;
   error: string;
   error_code: string;
@@ -482,6 +485,8 @@ export interface GameRecord {
   status?: string;
   play_status?: string;
   finished_version?: string;
+  last_played_version?: string;
+  skipped_version?: string;
   playtime_seconds?: number;
   // Timestamps are nullable columns: a game that was never played reports
   // null for last_played, and older rows carry no date_added.
@@ -513,6 +518,23 @@ export interface GameRecord {
   metadata_pending?: boolean;
 }
 
+export interface PlaySession {
+  id: number;
+  game_id: number;
+  version: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_seconds: number;
+}
+
+export interface PlaytimeTickDetail {
+  gameId: number;
+  delta: number;
+  isFinal: boolean;
+  lastPlayedVersion: string;
+  sessionId: number;
+}
+
 export interface RpgmakerLinuxRunnerStatus {
   available: boolean;
   path: string;
@@ -538,6 +560,7 @@ export interface PlatformCapabilities {
 }
 
 export interface SettingsPayload {
+  update_notifications?: boolean;
   custom_play_statuses?: string[];
   collections?: string[];
   library_filter_presets?: LibraryFilterPreset[];
@@ -559,6 +582,7 @@ export interface UrmStatusResponse extends ApiBasicResponse {
 }
 
 export interface SettingsResponse {
+  update_notifications?: boolean;
   custom_play_statuses: string[];
   collections: string[];
   library_filter_presets: LibraryFilterPreset[];
@@ -732,7 +756,7 @@ const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[] => {
       name,
       filterCollection:
         typeof source.filterCollection === "string" &&
-        ["All", "Favorites", "Updates available", "New since finished", "Recently played"].includes(source.filterCollection)
+        ["All", "Favorites", "Updates available", "New since finished", "Unplayed update", "Recently played"].includes(source.filterCollection)
           ? (source.filterCollection as LibraryFilterPreset["filterCollection"])
           : "All",
       filterStatuses: Array.isArray(source.filterStatuses)
@@ -815,6 +839,7 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.enable_logging === "boolean"
         ? source.enable_logging
         : DEFAULT_MOCK_SETTINGS.enable_logging,
+    update_notifications: source.update_notifications !== false,
     rpgmaker_linux_runner_path: rpgmakerRunnerPath,
     rpgmaker_linux_runner_status: rpgmakerRunnerStatus,
     library_folder:
@@ -1070,7 +1095,7 @@ class ApiService {
   }
 
   async markGameUpdated(game: GameRecord): Promise<ApiBasicResponse> {
-    if (!hasAvailableUpdate(game)) return { success: false, error: "No newer version is available." };
+    if (!hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })) return { success: false, error: "No newer version is available." };
     return this.updateGame(game.id, { version: String(game.latest_version).trim() });
   }
 
@@ -1108,6 +1133,14 @@ class ApiService {
 
   async getAutoCheckSetting(): Promise<AutoCheckSettingResponse> {
     return this.invoke<AutoCheckSettingResponse>("get_auto_check_setting");
+  }
+
+  async getGamePlaySessions(gameId: number): Promise<ApiBasicResponse & { sessions?: PlaySession[] }> {
+    return this.invoke("get_game_play_sessions", gameId);
+  }
+
+  async setWindowFocused(focused: boolean): Promise<ApiBasicResponse> {
+    return this.invoke("set_window_focused", focused);
   }
 
   async setAutoCheckSetting(frequency: string): Promise<ApiBasicResponse> {
@@ -1482,6 +1515,9 @@ class ApiService {
         const nextGames = games.map((game) => {
           if (game.id !== Number(args[0])) return game;
           const merged: Record<string, unknown> = { ...game, ...fields };
+          if (fields.version != null && normalizeVersion(String(fields.version)) !== normalizeVersion(game.version)) {
+            merged.skipped_version = "";
+          }
           if (typeof merged.finished_version === "string") {
             merged.finished_version = merged.finished_version.trim();
           }
@@ -1544,6 +1580,14 @@ class ApiService {
       }
       case "get_settings":
         return readMockSettings();
+      case "set_window_focused":
+        return { success: true, mock: true };
+      case "get_game_play_sessions": {
+        const sessions: PlaySession[] = JSON.parse(localStorage.getItem("wlib-mock-play-sessions") || "[]");
+        return { success: true, mock: true, sessions: sessions
+          .filter((session) => session.game_id === Number(args[0]))
+          .sort((a, b) => b.started_at.localeCompare(a.started_at) || b.id - a.id) };
+      }
       case "get_collections":
         return readMockSettings().collections;
       case "create_collection": {
@@ -2133,7 +2177,8 @@ class ApiService {
           success: true,
           mock: true,
           version: game.latest_version || game.version || "",
-          has_update: !!game.exe_path.trim() && !!game.latest_version && game.latest_version !== game.version,
+          has_update: hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }),
+          skipped: isUpdateSkipped(game),
           newly_finished: newlyFinished,
           metadata_updated: 0,
         };

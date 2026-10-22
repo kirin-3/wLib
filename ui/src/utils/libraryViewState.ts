@@ -18,6 +18,7 @@ export type FilterCollection =
   | "Favorites"
   | "Updates available"
   | "New since finished"
+  | "Unplayed update"
   | "Recently played";
 export type FilterInstallState = "" | "installed" | "wishlist";
 
@@ -133,6 +134,7 @@ const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>([
   "Favorites",
   "Updates available",
   "New since finished",
+  "Unplayed update",
   "Recently played",
 ]);
 

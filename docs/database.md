@@ -63,6 +63,8 @@ Stores the library records and their associated configuration flags.
 | `f95_url` | `TEXT` | F95Zone thread URL. Unique index protects against exact duplicates; the app also rejects equivalent F95 thread URL variants by thread identity. |
 | `version` | `TEXT` | The local downloaded version string. |
 | `latest_version` | `TEXT` | The remote version identified by the scraper. |
+| `last_played_version` | `TEXT DEFAULT ''` | Launch-time version whose normalized session durations reached 300 seconds. Empty for existing games until played. Written by play ticks and user-state import. |
+| `skipped_version` | `TEXT DEFAULT ''` | Latest release the user chose to skip. `update_game` accepts it and clears it when the installed version changes after normalization. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |
 | `cover_image_path` | `TEXT` | Path to local cover image. |
 | `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
@@ -104,6 +106,21 @@ Stores additional executable targets for games that ship with multiple playable 
 | `created_at` | `TIMESTAMP` | ISO timestamp when the target was created. |
 | `updated_at` | `TIMESTAMP` | ISO timestamp when the target was last changed. |
 
+### Table: `play_sessions`
+
+Each tracked launch adds one row. `(game_id, started_at)` is indexed; deleting a game cascades to its sessions.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `INTEGER` | Local primary key; excluded from JSON backups. |
+| `game_id` | `INTEGER NOT NULL` | Foreign key to `games(id) ON DELETE CASCADE`. |
+| `version` | `TEXT NOT NULL DEFAULT ''` | Raw installed version captured before launch. |
+| `started_at` | `TEXT NOT NULL` | ISO start timestamp. |
+| `ended_at` | `TEXT` | ISO exit timestamp, null until the final tick. A crash leaves it null. |
+| `duration_seconds` | `INTEGER NOT NULL DEFAULT 0` | Time counted toward the game's playtime. |
+
+INSERT, UPDATE, and DELETE triggers on this table bump `sync_local_modified_at` using the same monotonic timestamp statement as game changes. Both new game version columns belong to `SYNC_GAME_COLUMNS`. Settings triggers are recreated on startup so upgrades also track the new `update_notifications` general setting (`on` by default, `off` to disable).
+
 ### Table: `settings`
 A simple generic key-value store for application-wide persistence.
 
@@ -130,5 +147,6 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 - **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous; records with no developer or executable match a unique same-title local game that has no F95 URL or developer. A record whose thread URL is not in the library merges into a unique URL-less local game with the same title/developer.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
 - **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
+- **Journal user state**: `last_played_version`, `skipped_version`, and `play_sessions` travel with user state. Sessions include only version, start/end time, and duration. Imports replace sessions only when that key is present, and fill-missing imports keep a game's existing sessions; missing scalar fields also preserve local values. The additive fields keep format version 1. Sync uses the same replacement rule; it does not merge sessions from two machines.
 - **Game attachments**: attached PDFs live under `<data dir>/attachments/<game id>/` and are local-only; exports and sync never include PDF data or attachment names. Deleting a game removes its folder; mirror imports and sync deletions prune orphan numeric folders after the commit, and startup prunes folders for IDs not in the library. A reset or replaced database therefore removes orphan PDFs (IDs are `AUTOINCREMENT` and never reused).
 - **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Wine prefix imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.

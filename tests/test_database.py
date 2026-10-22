@@ -32,6 +32,9 @@ from core.database import (
     reorder_game_launch_targets,
     update_custom_play_statuses,
     update_playtime,
+    start_play_session,
+    record_play_tick,
+    get_play_sessions,
     create_collection,
     rename_collection,
     delete_collection,
@@ -70,6 +73,83 @@ def test_sync_change_tracking():
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     delete_game(game_id)
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_journal_migrates_old_schema_and_cascades():
+    game_id = add_game("Older game", "/game")
+    conn = get_connection()
+    conn.execute("DROP TRIGGER sync_games_update")
+    conn.execute("ALTER TABLE games DROP COLUMN last_played_version")
+    conn.execute("ALTER TABLE games DROP COLUMN skipped_version")
+    conn.execute("DROP TABLE play_sessions")
+    conn.commit()
+    conn.close()
+    init_db()
+    game = get_all_games()[0]
+    assert game["last_played_version"] == game["skipped_version"] == ""
+    assert get_play_sessions(game_id) == []
+    start_play_session(game_id, "0.7")
+    delete_game(game_id)
+    assert get_play_sessions(game_id) == []
+
+
+def test_session_ticks_sum_normalized_versions_and_finalize():
+    game_id = add_game("Journal", "/game", version="0.8")
+    first = start_play_session(game_id, "v0.8")
+    assert record_play_tick(game_id, first, 180, True) == ""
+    second = start_play_session(game_id, " V 0.8 ")
+    assert record_play_tick(game_id, second, 119, False) == ""
+    assert record_play_tick(game_id, second, 1, False) == " V 0.8 "
+    assert record_play_tick(game_id, second, 0, True) == " V 0.8 "
+    sessions = get_play_sessions(game_id)
+    assert sessions[0]["duration_seconds"] == 120
+    assert all(session["ended_at"] for session in sessions)
+    assert get_all_games()[0]["playtime_seconds"] == 300
+    record_play_tick(game_id, second, 60, True)
+    assert get_all_games()[0]["playtime_seconds"] == 300
+    unknown = start_play_session(game_id, "")
+    assert record_play_tick(game_id, unknown, 600, True) == " V 0.8 "
+    assert get_all_games()[0]["playtime_seconds"] == 900
+
+
+def test_tick_for_replaced_session_still_counts_playtime():
+    game_id = add_game("Journal", "/game", version="0.8")
+    session = start_play_session(game_id, "0.8")
+    conn = get_connection()
+    _ = conn.execute("DELETE FROM play_sessions WHERE id = ?", (session,))
+    conn.commit()
+    conn.close()
+    assert record_play_tick(game_id, session, 90, False) == ""
+    assert get_all_games()[0]["playtime_seconds"] == 90
+    assert get_play_sessions(game_id) == []
+
+
+def test_sessions_and_skip_bump_sync_timestamp():
+    game_id = add_game("Journal", "/game")
+    before = get_setting("sync_local_modified_at")
+    session = start_play_session(game_id, "0.8")
+    inserted = get_setting("sync_local_modified_at")
+    assert inserted > before
+    record_play_tick(game_id, session, 0, True)
+    updated = get_setting("sync_local_modified_at")
+    assert updated > inserted
+    update_game(game_id, {"skipped_version": "0.9"})
+    skipped = get_setting("sync_local_modified_at")
+    assert skipped > updated
+    conn = get_connection()
+    conn.execute("DELETE FROM play_sessions WHERE id = ?", (session,))
+    conn.commit()
+    conn.close()
+    assert get_setting("sync_local_modified_at") > skipped
+
+
+def test_version_change_clears_skip_but_normalized_spelling_preserves_it():
+    game_id = add_game("Journal", "/game", version="0.7")
+    update_game(game_id, {"skipped_version": "0.8"})
+    update_game(game_id, {"version": " V 0.7 "})
+    assert get_all_games()[0]["skipped_version"] == "0.8"
+    assert update_game(game_id, {"version": "0.8"})["skipped_version"] == ""
+    assert get_all_games()[0]["skipped_version"] == ""
 
 
 def test_screenshot_only_update_does_not_bump_sync_time():

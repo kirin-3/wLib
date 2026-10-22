@@ -443,6 +443,8 @@ def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatc
     game_id = db.add_game("Game", str(old_exe), version="1.0")
     assert game_id is not None
 
+    db.update_game(game_id, {"skipped_version": "2.0"})
+
     archive = tmp_path / "Game-2.0.zip"
     _write_game_zip(archive, {"Game.exe": b"new"})
     result = install_archive(
@@ -457,6 +459,7 @@ def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatc
     assert result["success"] is True
     assert not old_dir.exists()
     assert db.get_all_games()[0]["version"] == "2.0"
+    assert db.get_all_games()[0]["skipped_version"] == ""
 
     # Keep-old path.
     old_dir2 = lib / "Game" / "2.0"

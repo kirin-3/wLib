@@ -5,7 +5,7 @@ async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const previousUrl = page.url();
   const previousViewport = page.viewportSize();
-  const keys = ["wlib-mock-games", "wlib-mock-platform", "wlib-mock-launch-targets", "wlib-mock-attachments", "wlib-library-view-state", "wlib-theme"];
+  const keys = ["wlib-mock-games", "wlib-mock-platform", "wlib-mock-launch-targets", "wlib-mock-attachments", "wlib-mock-play-sessions", "wlib-library-view-state", "wlib-theme"];
   const previous = await page.evaluate(keys => keys.map(key => [key, localStorage.getItem(key)]), keys);
   try {
     await page.evaluate(() => {
@@ -34,6 +34,11 @@ async (page) => {
         { id: 4, title: "No Cover", exe_path: "/games/other/game.exe", latest_version: "3.0" },
       ]));
       localStorage.setItem("wlib-mock-platform", "linux");
+      localStorage.setItem("wlib-mock-play-sessions", JSON.stringify([
+        { id: 1, game_id: 1, version: "v1.0", started_at: "2026-10-20T10:00:00", ended_at: "2026-10-20T10:05:00", duration_seconds: 300 },
+        { id: 2, game_id: 1, version: " V 1.0 ", started_at: "2026-10-21T11:00:00", ended_at: "2026-10-21T11:05:00", duration_seconds: 300 },
+        { id: 3, game_id: 1, version: "", started_at: "2026-10-19T09:00:00", ended_at: null, duration_seconds: 120 },
+      ]));
       localStorage.setItem("wlib-mock-launch-targets", JSON.stringify(targets));
       localStorage.removeItem("wlib-mock-attachments");
       localStorage.setItem("wlib-theme", "dark");
@@ -101,6 +106,14 @@ async (page) => {
 
     await tab("Overview").focus();
     await page.keyboard.press("ArrowRight");
+    check(await tab("Journal").getAttribute("aria-selected") === "true", "ArrowRight must select Journal");
+    const journal = dialog.getByRole("tabpanel", { name: "Journal", exact: true });
+    await journal.getByText("Unknown version", { exact: true }).waitFor();
+    check(await journal.getByRole("heading").count() === 2, "Normalized versions must share one group");
+    check(await journal.getByText("Before journal", { exact: true }).isVisible(), "Older playtime must be accounted for");
+    check((await journal.textContent()).includes("10m 0s · 2 sessions"), "Groups must total the normalized sessions");
+    check(!await journal.getByText("In progress", { exact: true }).count(), "An interrupted session must not appear in progress");
+    await page.keyboard.press("ArrowRight");
     check(await tab("Launch").getAttribute("aria-selected") === "true", "ArrowRight must select Launch");
     check(await tab("Launch").evaluate(el => el === document.activeElement), "Keyboard tab changes must move focus");
     await page.keyboard.press("End");
@@ -110,7 +123,7 @@ async (page) => {
     await page.keyboard.press("ArrowLeft");
     check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowLeft must wrap to the last tab");
     const tabOrder = await dialog.getByRole("tab").allTextContents();
-    check(JSON.stringify(tabOrder) === JSON.stringify(["Overview", "Launch", "Info", "Notes"]), "Tabs must read Overview, Launch, Info, Notes");
+    check(JSON.stringify(tabOrder) === JSON.stringify(["Overview", "Journal", "Launch", "Info", "Notes"]), "Tabs must include Journal after Overview");
     await tab("Info").focus();
     await page.keyboard.press("ArrowRight");
     check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowRight from Info must select Notes");
@@ -202,13 +215,13 @@ async (page) => {
     check(await dialog.getByText("Update: 3.0").isVisible(), "Updates must be shown when the installed version is unknown");
     await page.setViewportSize({ width: 375, height: 812 });
     await page.evaluate(() => document.documentElement.classList.add("light"));
-    for (const name of ["Overview", "Launch", "Info", "Notes"]) {
+    for (const name of ["Overview", "Journal", "Launch", "Info", "Notes"]) {
       await tab(name).click();
       const fits = await dialog.getByRole("tabpanel", { name }).evaluate(panel => [...panel.querySelectorAll("div")].every(el => el.scrollWidth <= el.clientWidth + 2));
       check(fits, `${name} must fit a narrow window`);
     }
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    return "PASS: header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving, screenshots lightbox, notes tab and narrow layouts";
+    return "PASS: Journal grouping and historical time, header and update badges, keyboard tabs, autosave failure recovery, edit tracking, target ordering, Play/Stop, saving, screenshots lightbox, notes tab and narrow layouts";
   } finally {
     await page.evaluate(previous => {
       delete window.pywebview;

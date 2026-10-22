@@ -144,7 +144,16 @@ const scanDownloadOffers = async () => {
 };
 
 const handleWindowFocus = () => {
+  void reportWindowFocus();
   void scanDownloadOffers();
+};
+
+const reportWindowFocus = async () => {
+  try {
+    await api.setWindowFocused(document.visibilityState === "visible" && document.hasFocus());
+  } catch (error) {
+    console.error("Failed to report window focus", error);
+  }
 };
 
 const refreshUpdateCount = async () => {
@@ -152,7 +161,7 @@ const refreshUpdateCount = async () => {
   try {
     const games = await api.getGames();
     if (request !== updateCountRequest) return;
-    availableUpdateCount.value = games.filter(hasAvailableUpdate).length;
+    availableUpdateCount.value = games.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length;
   } catch (error) {
     console.error("Failed to refresh update count", error);
   }
@@ -254,6 +263,9 @@ onMounted(() => {
     // Listen only once the backend is injected: a focus event at startup would
     // otherwise scan the mocks and the 60 s throttle would skip this real scan.
     window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("blur", reportWindowFocus);
+    document.addEventListener("visibilitychange", reportWindowFocus);
+    void reportWindowFocus();
     updatePollInterval = setInterval(pollLibraryUpdates, 5000);
     try {
       const extensionSync = await api.getStartupExtensionSyncStatus();
@@ -299,6 +311,8 @@ onUnmounted(() => {
   window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
   window.removeEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
   window.removeEventListener("focus", handleWindowFocus);
+  window.removeEventListener("blur", reportWindowFocus);
+  document.removeEventListener("visibilitychange", reportWindowFocus);
   if (updatePollInterval) clearInterval(updatePollInterval);
 });
 </script>

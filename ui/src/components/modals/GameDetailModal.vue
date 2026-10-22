@@ -29,12 +29,14 @@ import { getSafeNotesLinkUrl } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
-import { hasAvailableUpdate, isWishlisted } from "../../utils/libraryGames";
+import { hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import type {
   GameAttachment,
   GameRecord,
   LaunchTarget,
   PlatformCapabilities,
+  PlaySession,
+  PlaytimeTickDetail,
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   SaveLocation,
@@ -135,8 +137,10 @@ const tags = ref<string[]>([]);
 const engine = ref<EngineOption>("Others");
 const newTag = ref("");
 const latestVersion = ref("");
+const skippedVersion = ref("");
+const savingSkip = ref(false);
 const engineMenuOpen = ref(false);
-const detailTabs = ["Overview", "Launch", "Info", "Notes"] as const;
+const detailTabs = ["Overview", "Journal", "Launch", "Info", "Notes"] as const;
 const activeTab = ref<(typeof detailTabs)[number]>("Overview");
 const notes = ref("");
 const notesEditing = ref(false);
@@ -276,10 +280,95 @@ const hasUpdate = computed(() => hasAvailableUpdate({
   exe_path: exePath.value.trim(),
   version: version.value,
   latest_version: latestVersion.value,
+  skipped_version: skippedVersion.value,
 }));
+const updateSkipped = computed(() => isUpdateSkipped({
+  exe_path: exePath.value,
+  latest_version: latestVersion.value,
+  skipped_version: skippedVersion.value,
+}));
+const toggleSkippedVersion = async () => {
+  const gameId = props.game?.id;
+  if (gameId == null || savingSkip.value) return;
+  const next = updateSkipped.value ? "" : latestVersion.value;
+  savingSkip.value = true;
+  try {
+    const result = await api.updateGame(gameId, { skipped_version: next });
+    if (!result.success) throw new Error(result.error || "Could not change skipped version");
+    if (props.game?.id === gameId) skippedVersion.value = next;
+    notify(next ? `Skipping version ${next}.` : "Stopped skipping this version.", "success");
+  } catch (error) {
+    notifyError(String(error));
+  } finally {
+    savingSkip.value = false;
+  }
+};
+
+const sessions = ref<PlaySession[]>([]);
+const loadingJournal = ref(false);
+const journalError = ref("");
+let journalRequestId = 0;
+const loadJournal = async () => {
+  const gameId = props.game?.id;
+  if (gameId == null) return;
+  const requestId = ++journalRequestId;
+  loadingJournal.value = true;
+  journalError.value = "";
+  try {
+    const result = await api.getGamePlaySessions(gameId);
+    if (requestId !== journalRequestId || props.game?.id !== gameId) return;
+    if (!result.success) throw new Error(result.error || "Could not load play sessions");
+    sessions.value = result.sessions || [];
+  } catch (error) {
+    if (requestId === journalRequestId) journalError.value = String(error);
+  } finally {
+    if (requestId === journalRequestId) loadingJournal.value = false;
+  }
+};
+const journalGroups = computed(() => {
+  const groups = new Map<string, { version: string; sessions: PlaySession[]; duration: number; lastPlayed: string }>();
+  const newest = [...sessions.value].sort((a, b) => b.started_at.localeCompare(a.started_at) || b.id - a.id);
+  for (const session of newest) {
+    const key = normalizeVersion(session.version);
+    let group = groups.get(key);
+    if (!group) {
+      group = { version: session.version, sessions: [], duration: 0, lastPlayed: session.started_at };
+      groups.set(key, group);
+    }
+    group.sessions.push(session);
+    group.duration += session.duration_seconds;
+  }
+  return [...groups.entries()];
+});
+const beforeJournal = computed(() => Math.max(0,
+  (props.game?.playtime_seconds || 0) - sessions.value.reduce((sum, session) => sum + session.duration_seconds, 0),
+));
+const newestSessionId = computed(() => [...sessions.value]
+  .sort((a, b) => b.started_at.localeCompare(a.started_at) || b.id - a.id)[0]?.id);
+const journalDuration = (seconds: number) => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return hours ? `${hours}h ${minutes}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+};
+const handleJournalTick = (event: Event) => {
+  const detail = (event as CustomEvent<PlaytimeTickDetail>).detail;
+  if (detail?.gameId === props.game?.id && props.modelValue && activeTab.value === "Journal") {
+    void loadJournal();
+  }
+};
+
+watch(() => [props.modelValue, props.game?.id, activeTab.value, props.isRunning] as const, ([open, , tab], previous) => {
+  if (!open || props.game?.id !== previous?.[1]) {
+    journalRequestId++;
+    sessions.value = [];
+    journalError.value = "";
+  }
+  if (open && tab === "Journal") void loadJournal();
+});
 
 const syncReadonlyMetadata = (game: GameRecord | null) => {
   latestVersion.value = game?.latest_version || "";
+  skippedVersion.value = game?.skipped_version || "";
   f95Rating.value = game?.rating || "";
 };
 
@@ -559,7 +648,7 @@ watch(
 );
 
 watch(
-  () => [props.game?.id, props.game?.latest_version, props.game?.rating] as const,
+  () => [props.game?.id, props.game?.latest_version, props.game?.rating, props.game?.skipped_version] as const,
   ([gameId]) => {
     if (props.game && typeof gameId === "number" && gameId === lastSyncedId.value) {
       syncReadonlyMetadata(props.game);
@@ -623,10 +712,13 @@ const handleOutsideClick = (event: MouseEvent) => {
 
 onMounted(() => {
   document.addEventListener("mousedown", handleOutsideClick);
+  window.addEventListener("wlib-playtime-tick", handleJournalTick);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", handleOutsideClick);
+  window.removeEventListener("wlib-playtime-tick", handleJournalTick);
+  journalRequestId++;
 });
 
 const close = () => {
@@ -1629,11 +1721,17 @@ const removeAttachment = async (name: string) => {
               <span class="identity-badge" :style="selectedEngineStyle">{{ engine }}</span>
               <span v-if="version" class="identity-badge version-badge">{{ version }}</span>
               <span v-if="hasUpdate" class="identity-badge update-badge">Update: {{ latestVersion }}</span>
+              <span v-else-if="updateSkipped" class="text-sm" style="color: var(--text-secondary)">Version {{ skippedVersion }} skipped</span>
             </div>
           </div>
         </div>
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
+            <button v-if="hasUpdate || updateSkipped" @click="toggleSkippedVersion"
+              :disabled="savingSkip" class="modal-toolbar-action ui-action-btn min-h-11"
+              style="color: var(--text-primary)">
+              {{ updateSkipped ? `Stop skipping ${skippedVersion}` : `Skip version ${latestVersion}` }}
+            </button>
             <button
               v-if="f95Url.trim()"
               @click="openInBrowser"
@@ -2335,6 +2433,33 @@ const removeAttachment = async (name: string) => {
           </div>
         </section>
 
+        <section v-show="activeTab === 'Journal'" id="game-detail-panel-Journal" role="tabpanel" aria-labelledby="game-detail-tab-Journal" tabindex="0" class="journal-panel space-y-6">
+          <p v-if="loadingJournal && !sessions.length" role="status">Loading play sessions...</p>
+          <div v-else-if="journalError" role="alert">
+            <p>Could not load play sessions: {{ journalError }}</p>
+            <button class="modal-btn mt-3 min-h-11" @click="loadJournal">Retry</button>
+          </div>
+          <template v-else>
+            <p v-if="!sessions.length" style="color: var(--text-secondary)">No sessions have been recorded yet. Launch this game from wLib to start its journal.</p>
+            <div v-if="beforeJournal > 0" class="journal-before">
+              <span>Before journal</span><span>{{ journalDuration(beforeJournal) }}</span>
+            </div>
+            <div v-for="[key, group] in journalGroups" :key="key" class="journal-version">
+              <h3 class="font-semibold break-words">{{ key ? group.version : 'Unknown version' }}</h3>
+              <p class="text-sm mt-1 mb-3" style="color: var(--text-secondary)">
+                {{ journalDuration(group.duration) }} · {{ group.sessions.length }} {{ group.sessions.length === 1 ? 'session' : 'sessions' }} · Last played {{ formatLastPlayed(group.lastPlayed) }}
+              </p>
+              <ul class="journal-sessions">
+                <li v-for="session in group.sessions" :key="session.id" class="journal-session">
+                  <time :datetime="session.started_at">{{ formatTimestamp(session.started_at) }}</time>
+                  <span v-if="isRunning && !session.ended_at && session.id === newestSessionId" class="text-sm">In progress</span>
+                  <span class="journal-duration">{{ journalDuration(session.duration_seconds) }}</span>
+                </li>
+              </ul>
+            </div>
+          </template>
+        </section>
+
         <section v-show="activeTab === 'Info'" id="game-detail-panel-Info" role="tabpanel" aria-labelledby="game-detail-tab-Info" tabindex="0" class="space-y-6">
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">
@@ -2688,6 +2813,30 @@ const removeAttachment = async (name: string) => {
 </template>
 
 <style scoped>
+.journal-panel {
+  color: var(--text-primary);
+}
+.journal-before,
+.journal-session {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.journal-before {
+  justify-content: space-between;
+}
+.journal-duration {
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.journal-sessions {
+  list-style: none;
+  padding: 0;
+}
 .detail-header,
 .detail-tabs {
   flex-shrink: 0;
@@ -2757,9 +2906,12 @@ const removeAttachment = async (name: string) => {
 .detail-tabs {
   display: flex;
   gap: 1.5rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .detail-tab {
+  flex-shrink: 0;
   padding: 0.875rem 0.25rem;
   border-bottom: 2px solid transparent;
   font-size: 0.875rem;

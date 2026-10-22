@@ -952,7 +952,7 @@ class Launcher:
                 opened, error = open_windows_system_target(abs_path)
                 if opened:
                     print(f"Opening HTML game in default browser: {abs_path}")
-                    return {"success": True}
+                    return {"success": True, "tracks_playtime": False}
                 return {
                     "success": False,
                     "error": f"Failed to open HTML game: {error}",
@@ -976,7 +976,7 @@ class Launcher:
                 )
 
                 threading.Thread(target=proc.wait, daemon=True).start()
-                return {"success": True}
+                return {"success": True, "tracks_playtime": False}
             except Exception as e:
                 print(f"Error launching HTML game: {e}")
                 return {"success": False, "error": str(e)}

@@ -64,6 +64,8 @@ import {
   gameFolder,
   gameTags,
   hasAvailableUpdate,
+  hasUnplayedUpdate,
+  isUpdateSkipped,
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
@@ -96,6 +98,8 @@ interface PlaytimeTickDetail {
   gameId?: number;
   delta?: number;
   isFinal?: boolean;
+  lastPlayedVersion?: string;
+  sessionId?: number;
 }
 
 interface EffectiveLaunchTarget {
@@ -164,7 +168,7 @@ const tableColumns: Array<{ key: SortField; label: string; class?: string }> = [
 ];
 
 const updateCount = computed(
-  () => games.value.filter(hasAvailableUpdate).length,
+  () => games.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length,
 );
 const collections: Array<{
   value: FilterCollection;
@@ -175,6 +179,7 @@ const collections: Array<{
   { value: "Favorites", label: "Favorites", icon: IconStarFilled },
   { value: "Updates available", label: "Updates available", icon: IconArrowUp },
   { value: "New since finished", label: "New since finished", icon: IconSparkles },
+  { value: "Unplayed update", label: "Unplayed update", icon: IconClock },
   { value: "Recently played", label: "Recently played", icon: IconClock },
 ];
 
@@ -408,7 +413,9 @@ const filteredGames = computed(() => {
     result = result.filter((g) => g.is_favorite);
   }
   if (filterCollection.value === "Updates available")
-    result = result.filter(hasAvailableUpdate);
+    result = result.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
+  if (filterCollection.value === "Unplayed update")
+    result = result.filter(hasUnplayedUpdate);
   if (filterCollection.value === "New since finished")
     result = result.filter(hasNewSinceFinished);
   if (filterCollection.value === "Recently played") {
@@ -1077,6 +1084,16 @@ const markAsUpdated = async (game: GameRecord) => {
   }
 };
 
+const toggleSkippedVersion = async (game: GameRecord) => {
+  const skipped = isUpdateSkipped(game);
+  const result = await api.updateGame(game.id, {
+    skipped_version: skipped ? "" : game.latest_version || "",
+  });
+  if (!result.success) throw new Error(result.error || "Could not change skipped version");
+  notify(skipped ? `${game.title}: stopped skipping ${game.skipped_version}.`
+    : `${game.title}: skipping version ${game.latest_version}.`, "success");
+};
+
 const closeContextMenu = (restoreFocus = true) => {
   if (!contextMenu.value) return;
   contextMenu.value = null;
@@ -1152,6 +1169,7 @@ const runContextAction = async (
     | "thread"
     | "check"
     | "mark-updated"
+    | "skip-version"
     | "favorite"
     | "remove"
     | "status",
@@ -1164,6 +1182,7 @@ const runContextAction = async (
     if (action === "play") return await toggleGame(game);
     if (action === "check") return await checkUpdate(game);
     if (action === "mark-updated") return await markAsUpdated(game);
+    if (action === "skip-version") return await toggleSkippedVersion(game);
     if (
       action === "remove" &&
       !confirm(`Remove "${game.title}" from your library?`)
@@ -1253,19 +1272,21 @@ const handlePlaytimeTick = (event: Event) => {
   const gameId = Number(detail.gameId);
   const delta = Number(detail.delta);
   if (detail.isFinal && Number.isInteger(gameId)) runningGameIds.value.delete(gameId);
-  if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta <= 0) return;
+  if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta < 0) return;
 
   const game = games.value.find((g) => g.id === gameId);
   if (!game) return;
 
   game.playtime_seconds = (Number(game.playtime_seconds) || 0) + delta;
   game.last_played = new Date().toISOString();
+  if (typeof detail.lastPlayedVersion === "string") game.last_played_version = detail.lastPlayedVersion;
 
   if (selectedGame.value && selectedGame.value.id === gameId) {
     selectedGame.value = {
       ...selectedGame.value,
       playtime_seconds: game.playtime_seconds,
       last_played: game.last_played,
+      last_played_version: game.last_played_version || "",
     };
   }
 };
@@ -1489,7 +1510,7 @@ onUnmounted(() => {
               :key="collection.value"
               @click="selectCollection(collection.value)"
               :aria-pressed="filterCollection === collection.value"
-              class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
+              class="w-full min-h-11 flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
               :style="
                 filterCollection === collection.value
                   ? 'background: var(--bg-raised); color: var(--text-primary)'
@@ -2087,7 +2108,7 @@ onUnmounted(() => {
                     game.version || "Unknown"
                   }}</span>
                   <span
-                    v-if="hasAvailableUpdate(game)"
+                    v-if="hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
                     class="update-pill"
                     :title="`Update available: ${game.latest_version}`"
                   >
@@ -2095,6 +2116,7 @@ onUnmounted(() => {
                     <span class="sr-only">Update available: </span
                     >{{ game.latest_version }}
                   </span>
+                  <span v-if="hasUnplayedUpdate(game)" class="unplayed-label">Unplayed</span>
                 </div>
               </td>
               <td class="library-table-clip" :title="getGamePlayStatusMeta(game).label">
@@ -2234,7 +2256,7 @@ onUnmounted(() => {
                 ><IconStarFilled class="w-3 h-3 text-yellow-400"
               /></span>
               <span
-                v-if="layoutMode === 'compact' && hasAvailableUpdate(game)"
+                v-if="layoutMode === 'compact' && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
                 class="update-pill update-pill-on-art"
                 :title="`Update available: ${game.latest_version}`"
               >
@@ -2242,6 +2264,7 @@ onUnmounted(() => {
                 <span class="sr-only">Update available: </span
                 >{{ game.latest_version }}
               </span>
+              <span v-if="layoutMode === 'compact' && hasUnplayedUpdate(game)" class="unplayed-label unplayed-on-art">Unplayed</span>
             </div>
             <button
               v-if="layoutMode !== 'compact' && game.f95_url"
@@ -2336,7 +2359,7 @@ onUnmounted(() => {
               <span v-if="isWishlisted(game)" class="wishlist-pill">Wishlist</span>
               <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill">Finished</span>
               <span
-                v-if="hasAvailableUpdate(game)"
+                v-if="hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
                 class="update-pill"
                 :title="`Update available: ${game.latest_version}`"
               >
@@ -2344,6 +2367,7 @@ onUnmounted(() => {
                 <span class="sr-only">Update available: </span
                 >{{ game.latest_version }}
               </span>
+              <span v-if="hasUnplayedUpdate(game)" class="unplayed-label">Unplayed</span>
               <span
                 v-if="game.playtime_seconds"
                 style="color: var(--text-secondary)"
@@ -2445,12 +2469,17 @@ onUnmounted(() => {
               Check update
             </button>
             <button
-              v-if="hasAvailableUpdate(contextMenu.game)"
+              v-if="hasAvailableUpdate({ ...contextMenu.game, skipped_version: contextMenu.game.skipped_version })"
               @click="runContextAction('mark-updated')"
               :disabled="markingUpdatedIds.has(contextMenu.game.id)"
             >
               Mark as updated to {{ contextMenu.game.latest_version }}
             </button>
+            <button
+              v-if="isUpdateSkipped(contextMenu.game) || hasAvailableUpdate({ ...contextMenu.game, skipped_version: contextMenu.game.skipped_version })"
+              class="min-h-11"
+              @click="runContextAction('skip-version')"
+            >{{ isUpdateSkipped(contextMenu.game) ? `Stop skipping ${contextMenu.game.skipped_version}` : `Skip version ${contextMenu.game.latest_version}` }}</button>
             <label
               class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
               >Set status
@@ -2985,6 +3014,20 @@ onUnmounted(() => {
 
 .library-sort-btn {
   transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.unplayed-label {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.unplayed-on-art {
+  background: var(--bg-surface);
 }
 
 .filter-tag-btn {

@@ -5,6 +5,7 @@ runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
 command: wlib
 finish-args:
+  - --talk-name=org.freedesktop.Notifications
   - --share=network
   - --share=ipc
   - --socket=wayland

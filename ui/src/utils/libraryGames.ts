@@ -18,12 +18,29 @@ export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
 
 export const hasAvailableUpdate = (
   game: Pick<GameRecord, "version" | "latest_version"> &
+    { skipped_version: GameRecord["skipped_version"] } &
     Partial<Pick<GameRecord, "exe_path">>,
 ): boolean => {
   if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">))
     return false;
   const remote = normalizeVersion(game.latest_version);
-  return !!remote && remote !== normalizeVersion(game.version);
+  return !!remote && remote !== normalizeVersion(game.version) && !isUpdateSkipped(game);
+};
+
+export const isUpdateSkipped = (
+  game: Pick<GameRecord, "latest_version"> & { skipped_version?: string | undefined } & Partial<Pick<GameRecord, "exe_path">>,
+): boolean => {
+  if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">)) return false;
+  const skipped = normalizeVersion(game.skipped_version);
+  return !!skipped && skipped === normalizeVersion(game.latest_version);
+};
+
+export const hasUnplayedUpdate = (
+  game: Pick<GameRecord, "exe_path" | "version" | "last_played_version">,
+): boolean => {
+  const installed = normalizeVersion(game.version);
+  const played = normalizeVersion(game.last_played_version);
+  return !isWishlisted(game) && !!installed && !!played && installed !== played;
 };
 
 // The installed version differs from the version the user finished. "Differs",

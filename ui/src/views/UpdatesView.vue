@@ -17,6 +17,7 @@ import { notify, notifyError } from "../utils/toast";
 import { openInstallArchive } from "../utils/installArchive";
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { isNewerVersion } from "../utils/appVersion";
+import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -105,6 +106,35 @@ const status = ref<UpdateStatusResponse>({
 });
 const lastCheckTime = ref("");
 const autoCheckFreq = ref("weekly");
+const desktopNotifications = ref(true);
+const notificationsAvailable = ref(false);
+const savingNotifications = ref(false);
+const notificationSettingLoaded = ref(false);
+const notificationSettingError = ref("");
+const loadNotificationSetting = async () => {
+  notificationSettingError.value = "";
+  try {
+    const settings = await api.getSettings();
+    desktopNotifications.value = settings.update_notifications !== false;
+    notificationSettingLoaded.value = true;
+  } catch (error) {
+    notificationSettingError.value = `Could not load desktop notifications: ${String(error)}`;
+  }
+};
+const setDesktopNotifications = async (event: Event) => {
+  const enabled = (event.target as HTMLInputElement).checked;
+  savingNotifications.value = true;
+  try {
+    const result = await api.saveSettings({ update_notifications: enabled });
+    if (!result.success) throw new Error(result.error || "Could not save desktop notifications");
+    desktopNotifications.value = enabled;
+  } catch (error) {
+    (event.target as HTMLInputElement).checked = desktopNotifications.value;
+    notifyError(String(error));
+  } finally {
+    savingNotifications.value = false;
+  }
+};
 const lastAutoCheck = ref("");
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -286,7 +316,7 @@ const gamesWithErrors = computed(() => {
 });
 
 const persistedUpdates = computed(() => {
-  return games.value.filter(hasAvailableUpdate);
+  return games.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
 });
 
 const formatLastCheck = computed(() => {
@@ -336,6 +366,9 @@ const handleLibraryRefresh = async () => {
 onMounted(() => {
   window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   onWebviewReady(async () => {
+    const capabilities = await loadPlatformCapabilities();
+    notificationsAvailable.value = capabilities.platform === "linux";
+    if (notificationsAvailable.value) void loadNotificationSetting();
     void loadAppUpdate();
     await loadGames();
     await loadAutoCheckSetting();
@@ -501,6 +534,22 @@ onUnmounted(() => {
         <p class="text-xs" style="color: var(--text-muted)">
           Last checked: {{ formatLastCheck }}
         </p>
+        <div v-if="notificationsAvailable" class="mt-4 text-sm" style="color: var(--text-primary)">
+          <label class="flex min-h-11 items-center gap-3 w-fit cursor-pointer">
+            <input type="checkbox" :checked="desktopNotifications"
+              :disabled="savingNotifications || !notificationSettingLoaded"
+              @change="setDesktopNotifications" />
+            Desktop notifications
+          </label>
+          <p v-if="notificationSettingError" role="alert">
+            {{ notificationSettingError }}
+            <button class="underline min-h-11" @click="loadNotificationSetting">Retry</button>
+          </p>
+          <p v-else-if="!notificationSettingLoaded" role="status">Loading notification setting...</p>
+          <p v-else class="text-xs" style="color: var(--text-secondary)">
+            Notify after automatic checks, or manual checks that finish while you are away from wLib.
+          </p>
+        </div>
       </section>
 
       <!-- Check All Button / Progress -->

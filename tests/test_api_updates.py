@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import ssl
 import tarfile
 import zipfile
@@ -3293,3 +3294,175 @@ def test_screenshot_only_update_does_not_bump_sync_time():
     )
     assert get_all_games()[0]["screenshots"] == ["https://example.com/sync.png"]
     assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+
+
+def test_launch_counts_playtime_when_session_cannot_start(monkeypatch):
+    api = Api()
+    game_id = add_game("Journal", "/game", version="0.7")
+    callback = None
+
+    def launch(*args, on_exit_callback=None, **kwargs):
+        nonlocal callback
+        callback = on_exit_callback
+        callback(60, False)
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    monkeypatch.setattr(
+        "core.database.start_play_session",
+        MagicMock(side_effect=sqlite3.OperationalError("locked")),
+    )
+    api.window = MagicMock()
+    assert api.launch_game(game_id, "/game")["success"]
+    callback(120, True)
+    assert get_all_games()[0]["playtime_seconds"] == 180
+
+
+def test_launch_journal_keeps_launch_version_and_buffers_early_exit(monkeypatch):
+    from core.database import get_play_sessions
+
+    api = Api()
+    game_id = add_game("Journal", "/game", version="0.7")
+    callback = None
+
+    def launch(*args, on_exit_callback=None, **kwargs):
+        nonlocal callback
+        callback = on_exit_callback
+        callback(60, False)
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    api.window = MagicMock()
+    assert api.launch_game(game_id, "/game")["success"]
+    update_game(game_id, {"version": "0.8"})
+    callback(240, True)
+    sessions = get_play_sessions(game_id)
+    assert len(sessions) == 1
+    assert sessions[0]["version"] == "0.7"
+    assert sessions[0]["duration_seconds"] == 300
+    assert sessions[0]["ended_at"]
+    assert get_all_games()[0]["last_played_version"] == "0.7"
+    event = api.window.evaluate_js.call_args.args[0]
+    assert '"lastPlayedVersion": "0.7"' in event
+    assert f'"sessionId": {sessions[0]["id"]}' in event
+    assert api.get_game_play_sessions(game_id)["sessions"] == sessions
+    monkeypatch.setattr(
+        "core.database.get_play_sessions",
+        MagicMock(side_effect=ValueError("unavailable")),
+    )
+    assert api.get_game_play_sessions(game_id) == {
+        "success": False,
+        "error": "unavailable",
+    }
+
+
+@pytest.mark.parametrize("remote, expected", [("v0.8", True), ("0.9", False)])
+def test_single_check_preserves_skip_and_scrapes_metadata(
+    monkeypatch, remote, expected
+):
+    api = Api()
+    game_id = add_game(
+        "Skip", "/game", f95_url="https://f95zone.to/threads/123/", version="0.7"
+    )
+    update_game(game_id, {"skipped_version": "0.8"})
+    scrape = MagicMock(
+        return_value={"success": True, "version": remote, "engine": "Unity"}
+    )
+    monkeypatch.setattr(api.scraper, "get_thread_version", scrape)
+    result = api.check_for_updates("https://f95zone.to/threads/123/")
+    assert result["skipped"] is expected
+    assert result["has_update"] is not expected
+    assert get_all_games()[0]["latest_version"] == remote
+    assert get_all_games()[0]["engine"] == "Unity"
+    scrape.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "automatic,focused,known,skipped,off,cancelled,expected",
+    [
+        (True, True, False, False, False, False, True),
+        (False, True, False, False, False, False, False),
+        (False, False, False, False, False, False, True),
+        (True, True, True, False, False, False, False),
+        (True, True, False, True, False, False, False),
+        (True, True, False, False, True, False, False),
+        (True, True, False, False, False, True, False),
+    ],
+)
+def test_bulk_notification_rules(
+    monkeypatch, automatic, focused, known, skipped, off, cancelled, expected
+):
+    api = Api()
+    assert api._window_focused is True
+    assert api.set_window_focused(focused) == {"success": True}
+    game_id = add_game(
+        "Alpha", "/game", f95_url="https://f95zone.to/threads/123/", version="0.7"
+    )
+    update_game(
+        game_id,
+        {
+            "latest_version": "0.8" if known else "0.7",
+            "skipped_version": "0.8" if skipped else "",
+        },
+    )
+    update_setting("update_notifications", "off" if off else "on")
+    sender = MagicMock()
+    monkeypatch.setattr("core.desktop_notify.send_notification", sender)
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    def check(urls, callback):
+        callback(urls[0], {"success": True, "version": "0.8"})
+        if cancelled:
+            api.cancel_update_check()
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", check)
+    assert api.check_all_updates(automatic=automatic)["success"]
+    status = api.get_update_status()
+    assert status["results"][0]["skipped"] is skipped
+    assert get_all_games()[0]["latest_version"] == "0.8"
+    if expected:
+        sender.assert_called_once_with("1 game update", "Alpha")
+    else:
+        sender.assert_not_called()
+
+
+@pytest.mark.parametrize("result", [{"success": False}, {"success": True, "tracks_playtime": False}])
+def test_untracked_or_failed_launch_has_no_session(monkeypatch, result):
+    from core.database import get_play_sessions
+
+    api = Api()
+    game_id = add_game("Untracked", "/game.html", version="0.8")
+    monkeypatch.setattr(api.launcher, "launch", lambda *args, **kwargs: result)
+    assert api.launch_game(game_id, "/game.html") == result
+    assert get_play_sessions(game_id) == []
+
+
+def test_newly_completed_wishlist_notification_and_auto_check_flag(monkeypatch):
+    api = Api()
+    game_id = add_game("Wishlist", "", f95_url="https://f95zone.to/threads/123/")
+    update_game(game_id, {"latest_version": "0.7"})
+    sender = MagicMock()
+    monkeypatch.setattr("core.desktop_notify.send_notification", sender)
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    def check(urls, callback):
+        callback(urls[0], {"success": True, "version": "0.8", "thread_completed": True})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", check)
+    assert api.maybe_auto_check()["triggered"]
+    sender.assert_called_once_with("1 wishlist game completed", "Wishlist")
+    sender.reset_mock()
+    assert api.check_all_updates(automatic=True)["success"]
+    sender.assert_not_called()
+
+
+def test_notification_setting_default_and_save():
+    api = Api()
+    assert api.get_settings()["update_notifications"] is True
+    assert api.save_settings({"update_notifications": False})["success"]
+    assert get_setting("update_notifications") == "off"
+    assert api.get_settings()["update_notifications"] is False
+    assert api.save_settings({"update_notifications": True})["success"]
+    assert get_setting("update_notifications") == "on"

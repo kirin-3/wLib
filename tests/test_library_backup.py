@@ -1437,6 +1437,42 @@ def test_apply_merge_mode_fill_missing_fills_blanks_and_keeps_values():
     ]
 
 
+def test_apply_merge_mode_fill_missing_keeps_local_play_sessions():
+    from core import database
+
+    url = "https://f95zone.to/threads/journal-fill.997/"
+    kept_id = add_game("Played", "/local/played.sh", f95_url=url)
+    empty_url = "https://f95zone.to/threads/journal-empty.996/"
+    empty_id = add_game("Unplayed", "/local/unplayed.sh", f95_url=empty_url)
+    assert kept_id is not None and empty_id is not None
+    database.record_play_tick(
+        kept_id, database.start_play_session(kept_id, "0.7"), 120, True
+    )
+    session = {
+        "version": "0.6",
+        "started_at": "2026-01-01T00:00:00",
+        "ended_at": "2026-01-01T01:00:00",
+        "duration_seconds": 3600,
+    }
+    payload = base_backup(
+        [
+            {
+                "metadata": {"title": "Played", "f95_url": url},
+                SECTION_USER_STATE: {"play_sessions": [session]},
+            },
+            {
+                "metadata": {"title": "Unplayed", "f95_url": empty_url},
+                SECTION_USER_STATE: {"play_sessions": [session]},
+            },
+        ]
+    )
+    _ = apply_library_backup(
+        payload, {"sections": [SECTION_USER_STATE]}, merge_mode="fill_missing"
+    )
+    assert [s["version"] for s in database.get_play_sessions(kept_id)] == ["0.7"]
+    assert [s["version"] for s in database.get_play_sessions(empty_id)] == ["0.6"]
+
+
 def test_apply_merge_mode_fill_missing_fills_empty_collection_membership():
     url = "https://f95zone.to/threads/fill-collections.996/"
     game_id = add_game("Local", "", f95_url=url)
@@ -2123,3 +2159,95 @@ def test_export_carries_notes_but_not_attachments(tmp_path, monkeypatch):
     assert "walkthrough.pdf" not in exported_text
     assert "walkthrough contents" not in exported_text
     assert "%PDF" not in exported_text
+
+
+def test_journal_export_import_and_older_reader(tmp_path, monkeypatch):
+    from core import database, library_backup
+
+    game_id = add_game("Journal", "/game", version="0.7")
+    session_id = database.start_play_session(game_id, "0.7")
+    database.record_play_tick(game_id, session_id, 300, True)
+    update_game(game_id, {"skipped_version": "0.8"})
+    backup = build_library_backup()
+    state = backup["games"][0]["user_state"]
+    assert state["last_played_version"] == "0.7"
+    assert state["skipped_version"] == "0.8"
+    assert len(state["play_sessions"]) == 1
+    assert set(state["play_sessions"][0]) == {
+        "version",
+        "started_at",
+        "ended_at",
+        "duration_seconds",
+    }
+    assert "user_state" not in build_library_backup({"sections": []})["games"][0]
+    path = write_backup(tmp_path / "journal.json", backup)
+    database.record_play_tick(
+        game_id, database.start_play_session(game_id, "0.7"), 60, True
+    )
+    assert Api().import_library_backup(str(path))["success"]
+    assert len(database.get_play_sessions(game_id)) == 1
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "fresh.db"))
+    init_db()
+    assert Api().import_library_backup(str(path))["success"]
+    imported = get_all_games()[0]
+    assert imported["last_played_version"] == "0.7"
+    assert database.get_play_sessions(imported["id"])[0]["duration_seconds"] == 300
+
+    # The previous reader only picks its known scalar fields from user_state.
+    monkeypatch.setattr(
+        library_backup,
+        "USER_STATE_FIELDS",
+        tuple(
+            field
+            for field in library_backup.USER_STATE_FIELDS
+            if field not in ("last_played_version", "skipped_version")
+        ),
+    )
+    fields = library_backup._import_fields_for_game(
+        backup["games"][0], {SECTION_USER_STATE}, include_metadata=False
+    )
+    assert not {"play_sessions", "last_played_version", "skipped_version"}.intersection(
+        fields
+    )
+    assert fields["playtime_seconds"] == 300
+
+
+@pytest.mark.parametrize("older,select_user_state", [(True, True), (False, False)])
+def test_journal_missing_fields_or_unselected_state_preserve_local(
+    tmp_path, older, select_user_state
+):
+    from core import database
+
+    game_id = add_game("Journal", "/game", version="0.7")
+    session = database.start_play_session(game_id, "0.7")
+    database.record_play_tick(game_id, session, 300, True)
+    update_game(game_id, {"skipped_version": "0.8"})
+    original = database.get_play_sessions(game_id)
+    backup = build_library_backup()
+    state = backup["games"][0]["user_state"]
+    if older:
+        for field in ("play_sessions", "last_played_version", "skipped_version"):
+            del state[field]
+    else:
+        state.update(play_sessions=[], last_played_version="", skipped_version="")
+    path = write_backup(tmp_path / "old.json", backup)
+    options = {
+        "sections": [SECTION_USER_STATE] if select_user_state else [SECTION_METADATA]
+    }
+    assert Api().import_library_backup(str(path), options)["success"]
+    game = get_all_games()[0]
+    assert game["last_played_version"] == "0.7"
+    assert game["skipped_version"] == "0.8"
+    assert database.get_play_sessions(game_id) == original
+
+
+def test_invalid_journal_rolls_back_import(tmp_path):
+    game_id = add_game("Journal", "/game")
+    backup = build_library_backup()
+    backup["games"][0]["metadata"]["title"] = "Changed"
+    backup["games"][0]["user_state"]["play_sessions"] = [{"duration_seconds": -1}]
+    path = write_backup(tmp_path / "invalid-journal.json", backup)
+    assert not Api().import_library_backup(str(path))["success"]
+    assert get_all_games()[0]["id"] == game_id
+    assert get_all_games()[0]["title"] == "Journal"
