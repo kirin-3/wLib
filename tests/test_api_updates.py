@@ -1565,7 +1565,7 @@ def test_qt_browse_filters_pass_pywebview_validation(monkeypatch):
     monkeypatch.setattr(api, "_browse_qt_dialog", fake_browse_qt_dialog)
 
     api.browse_urm_file()
-    for source in ("f95checker", "atlas", "xlibrary"):
+    for source in ("f95checker", "atlas", "xlibrary", "f69"):
         api.browse_external_library_file(source)
     api.browse_file()
     api.browse_runner_file()

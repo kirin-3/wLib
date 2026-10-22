@@ -415,7 +415,7 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   updated_ids?: number[];
 }
 
-export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary";
+export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary" | "f69";
 export type ExternalLibraryMergeMode = "overwrite" | "fill_missing";
 
 export interface ExternalLibraryDetectResponse extends ApiBasicResponse {

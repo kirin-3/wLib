@@ -98,6 +98,7 @@ const externalSources: { id: ExternalLibrarySource; label: string }[] = [
   { id: "f95checker", label: "F95Checker" },
   { id: "atlas", label: "Atlas" },
   { id: "xlibrary", label: "XLibrary" },
+  { id: "f69", label: "f69" },
 ];
 const externalImportSectionIds: LibraryBackupSection[] = [
   "user_state",

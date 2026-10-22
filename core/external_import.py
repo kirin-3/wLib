@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Read-only readers for external game-tracking apps (F95Checker, Atlas, XLibrary).
+"""Read-only readers for external game-tracking apps (F95Checker, Atlas, XLibrary, f69).
 
 Each reader translates a source library into the backup game shape used by
 ``core.library_backup`` (``metadata``, ``user_state``, ``executable_paths``
@@ -35,6 +35,7 @@ from core.backup_format import (
     BackupValidationError,
 )
 from core.f95zone import F95_HOSTS, extract_thread_id, normalize_thread_url
+from core.game_scan import find_launcher
 from core.host_platform import is_windows
 
 
@@ -45,12 +46,13 @@ def _validation_error(
     return BackupValidationError(message, error_code)
 
 
-EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary")
+EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary", "f69")
 
 SOURCE_LABELS = {
     "f95checker": "F95Checker",
     "atlas": "Atlas",
     "xlibrary": "XLibrary",
+    "f69": "f69",
 }
 
 # pywebview rejects a filter whose patterns are not all "*.ext" (see
@@ -68,6 +70,10 @@ EXTERNAL_IMPORT_FILE_FILTERS = {
     ),
     "xlibrary": (
         "XLibrary Libraries (*.json)",
+        "All files (*.*)",
+    ),
+    "f69": (
+        "f69 Databases (*.db)",
         "All files (*.*)",
     ),
 }
@@ -91,12 +97,43 @@ ATLAS_PLAYSTATE_MAP = {
     "planned": "Plan to Play",
 }
 
+F69_COMPLETION_MAP = {
+    "in_queue": "Plan to Play",
+    "in_progress": "Playing",
+    "replaying": "Playing",
+    "completed": "Completed",
+    "waiting_for_update": "Waiting For Update",
+    "abandoned": "Abandoned",
+}
+
+# f69 engine enum names mapped to the F95 thread prefix labels wLib stores.
+F69_ENGINE_MAP = {
+    "renpy": "Ren'Py",
+    "rpgm_mv": "RPGM",
+    "rpgm_mz": "RPGM",
+    "rpgm_vx": "RPGM",
+    "unity": "Unity",
+    "unreal": "Unreal Engine",
+    "html": "HTML",
+    "flash": "Flash",
+    "java": "Java",
+    "wolf_rpg": "Wolf RPG",
+    "qsp": "QSP",
+    "tyranobuilder": "Tyrano",
+    "twine": "Twine",
+    "adrift": "ADRIFT",
+    "rags": "RAGS",
+    "tads": "Tads",
+    "webgl": "WebGL",
+    "other": "Others",
+}
+
 
 def normalize_source(source: object) -> str:
     key = str(source or "").strip().lower()
     if key not in EXTERNAL_SOURCES:
         raise _validation_error(
-            f"Unknown library source: {source}. Choose F95Checker, Atlas, or XLibrary.",
+            f"Unknown library source: {source}. Choose F95Checker, Atlas, XLibrary, or f69.",
             "unknown_source",
         )
     return key
@@ -1017,6 +1054,220 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
 
 
 # ---------------------------------------------------------------------------
+# f69 reader
+# ---------------------------------------------------------------------------
+
+
+def _f69_install_exe(install: Mapping[str, object]) -> str:
+    """Resolve an f69 install to a launch file.
+
+    f69 leaves ``executable`` empty to auto-pick the game binary inside
+    ``install_path``; wLib needs a file, so the folder is scanned the same way
+    wLib's own library scan does. A custom launch command ("wine game.exe")
+    only maps when it resolves to an existing file.
+    """
+    install_path = _as_str(install.get("install_path"))
+    executable = _as_str(install.get("executable"))
+    if executable:
+        resolved = apply_path_rule(resolve_relative_path(executable, install_path))
+        if resolved and (os.path.isfile(resolved) or not os.path.isdir(install_path)):
+            return resolved
+        return ""
+    if not install_path or not os.path.isdir(install_path):
+        return ""
+    return apply_path_rule(find_launcher(install_path))
+
+
+def _translate_f69_game(
+    record: Mapping[str, object],
+    installs: list[dict[str, object]],
+    labels: list[str],
+) -> tuple[dict[str, object] | None, int]:
+    dropped = 0
+    title = _as_str(record.get("name"))
+    developer = _as_str(record.get("developer"))
+    # Custom games carry a synthetic id with the high bit set, which SQLite
+    # stores as a negative integer; only positive ids are real F95 threads.
+    f95_url = build_thread_url_from_id(record.get("f95_thread_id"))
+
+    default_id = _as_str(record.get("default_install_id"))
+    ordered = sorted(
+        installs,
+        key=lambda item: (
+            _as_str(item.get("id")) != default_id,
+            -_safe_int(item.get("installed_at")),
+        ),
+    )
+    selected = ordered[0] if ordered else None
+
+    metadata = _title_metadata(title, f95_url)
+    # Omitted when empty so an overwrite never clears a local thread URL.
+    if f95_url:
+        metadata["f95_url"] = f95_url
+    if developer:
+        metadata["developer"] = developer
+    engine = F69_ENGINE_MAP.get(_as_str(record.get("engine")).lower(), "")
+    if engine:
+        metadata["engine"] = engine
+    if selected is not None:
+        installed_version = _as_str(selected.get("version"))
+        if installed_version:
+            metadata["version"] = installed_version
+    latest = _as_str(record.get("latest_version"))
+    if latest:
+        metadata["latest_version"] = latest
+    if _as_str(record.get("dev_status")).lower() == "completed":
+        metadata["thread_completed"] = 1
+
+    user_state: dict[str, object] = {}
+    play_status = F69_COMPLETION_MAP.get(
+        _as_str(record.get("completion_status")).lower(), ""
+    )
+    if play_status:
+        user_state["play_status"] = play_status
+    playtime_seconds = _coerce_playtime_seconds(record.get("total_playtime_s"))
+    if playtime_seconds is not None:
+        user_state["playtime_seconds"] = playtime_seconds
+    last_played = parse_timestamp(record.get("last_played_at"))
+    if last_played:
+        user_state["last_played"] = last_played
+    date_added = parse_timestamp(record.get("created_at"))
+    if date_added:
+        user_state["date_added"] = date_added
+    if labels:
+        user_state["collections"] = labels
+
+    exe_path = ""
+    targets: list[dict[str, object]] = []
+    for install in ordered:
+        exe = _f69_install_exe(install)
+        if not exe:
+            if _as_str(install.get("install_path")) or _as_str(
+                install.get("executable")
+            ):
+                dropped += 1
+            continue
+        if not exe_path:
+            exe_path = exe
+            continue
+        label = _as_str(install.get("name"))
+        if not label:
+            version_text = _as_str(install.get("version"))
+            label = f"v{version_text}" if version_text else _target_label(exe)
+        targets.append({"label": label, "exe_path": exe})
+
+    if not f95_url and not exe_path:
+        return None, dropped
+    game: dict[str, object] = {"metadata": metadata}
+    if user_state:
+        game["user_state"] = user_state
+    if exe_path:
+        game["executable_paths"] = {"exe_path": exe_path}
+    if targets:
+        game["launch_targets"] = targets
+    return game, dropped
+
+
+def _f69_labels(conn: sqlite3.Connection) -> dict[int, list[str]]:
+    if not (table_exists(conn, "game_labels") and table_exists(conn, "user_labels")):
+        return {}
+    try:
+        rows = _fetch_rows(
+            conn,
+            """
+            SELECT gl.game_thread_id AS game_thread_id, ul.name AS name
+            FROM game_labels gl JOIN user_labels ul ON ul.id = gl.label_id
+            ORDER BY ul.name COLLATE NOCASE
+            """,
+        )
+    except sqlite3.Error:
+        return {}
+    labels: dict[int, list[str]] = {}
+    for row in rows:
+        record = _row_dict(row)
+        name = _as_str(record.get("name"))
+        if name:
+            labels.setdefault(_safe_int(record.get("game_thread_id")), []).append(name)
+    return labels
+
+
+def _f69_schema_version(conn: sqlite3.Connection) -> str:
+    if not table_exists(conn, "_schema_version"):
+        return ""
+    try:
+        fetched = cast(
+            object, conn.execute("SELECT MAX(id) FROM _schema_version").fetchone()
+        )
+    except sqlite3.Error:
+        return ""
+    if not isinstance(fetched, sqlite3.Row):
+        return ""
+    return _as_str(cast(object, fetched[0]))
+
+
+def read_f69_library(path: str) -> tuple[dict[str, object], dict[str, object]]:
+    if not os.path.isfile(path):
+        raise _validation_error("f69 database was not found.", "file_not_found")
+    try:
+        with open_snapshot(path) as conn:
+            if not table_exists(conn, "games") or not {
+                "f95_thread_id",
+                "name",
+            } <= table_columns(conn, "games"):
+                raise _validation_error(
+                    "The file is not an f69 library.", "invalid_source"
+                )
+            try:
+                game_rows = _fetch_rows(conn, "SELECT * FROM games")
+            except sqlite3.Error as exc:
+                raise _validation_error(
+                    "The file is not an f69 library.", "invalid_source"
+                ) from exc
+            installs_by_game: dict[int, list[dict[str, object]]] = {}
+            if table_exists(conn, "installs"):
+                try:
+                    for install_row in _fetch_rows(conn, "SELECT * FROM installs"):
+                        install = _row_dict(install_row)
+                        installs_by_game.setdefault(
+                            _safe_int(install.get("game_thread_id")), []
+                        ).append(install)
+                except sqlite3.Error:
+                    installs_by_game = {}
+            labels_by_game = _f69_labels(conn)
+            schema_version = _f69_schema_version(conn)
+            games: list[dict[str, object]] = []
+            skipped = 0
+            dropped = 0
+            for game_row in game_rows:
+                record = _row_dict(game_row)
+                thread_id = _safe_int(record.get("f95_thread_id"))
+                game, game_dropped = _translate_f69_game(
+                    record,
+                    installs_by_game.get(thread_id, []),
+                    labels_by_game.get(thread_id, []),
+                )
+                dropped += game_dropped
+                if game is None:
+                    skipped += 1
+                    continue
+                games.append(game)
+    except sqlite3.Error as exc:
+        raise _validation_error(
+            "The file is not an f69 library.", "invalid_source"
+        ) from exc
+    except OSError as exc:
+        raise _validation_error(
+            f"Could not read f69 database: {exc}", "read_failed"
+        ) from exc
+    backup = _external_backup("f69", games)
+    return backup, {
+        "skipped_no_identity": skipped,
+        "dropped_paths": dropped,
+        "schema_version": schema_version,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Dispatch and detection
 # ---------------------------------------------------------------------------
 
@@ -1050,6 +1301,8 @@ def read_external_library(
         return read_f95checker_library(library_path)
     if key == "atlas":
         return read_atlas_library(library_path)
+    if key == "f69":
+        return read_f69_library(library_path)
     return read_xlibrary_library(library_path)
 
 
@@ -1065,6 +1318,13 @@ def _config_base() -> str:
     if override:
         return os.path.abspath(override)
     return os.path.join(_home_dir(), ".config")
+
+
+def _data_base() -> str:
+    override = os.environ.get("XDG_DATA_HOME", "").strip()
+    if override:
+        return os.path.abspath(override)
+    return os.path.join(_home_dir(), ".local", "share")
 
 
 def locate_external_library(source: object) -> dict[str, object]:
@@ -1102,6 +1362,10 @@ def locate_external_library(source: object) -> dict[str, object]:
         elif key == "atlas":
             checked.append(os.path.join(config_base, "atlas", "data", "data.db"))
             checked.append(os.path.join(config_base, "Atlas", "data", "data.db"))
+        elif key == "f69":
+            # System installs keep data under XDG_DATA_HOME; portable bundles
+            # keep it beside the binary, which the user picks by hand.
+            checked.append(os.path.join(_data_base(), "f69", "f69.db"))
     found = ""
     for candidate in checked:
         if candidate and os.path.isfile(candidate):

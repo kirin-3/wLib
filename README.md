@@ -40,7 +40,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Moving and syncing your library
 
-- Bring your library over from F95Checker, Atlas or XLibrary.
+- Bring your library over from F95Checker, Atlas, XLibrary or f69.
 - Back up everything to one JSON file and restore it on another machine, including Linux to Windows and back. You can protect the file with a passphrase.
 - Keep your library in sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what gets synced.
 

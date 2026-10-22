@@ -1538,6 +1538,26 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
     }
 
 
+def _register_imported_collections(backup: Mapping[str, object]) -> None:
+    """Add collection names the source assigned to games but wLib lacks, since
+    membership only shows for collections in the registry."""
+    from core.database import create_collection, get_collections
+
+    known = {name.casefold() for name in get_collections()}
+    for raw_game in _coerce_sequence(_coerce_mapping(backup).get("games")):
+        user_state = _game_section(_coerce_mapping(raw_game), SECTION_USER_STATE)
+        names_json = _collections_json_text(user_state.get("collections"))
+        for name in cast(list[str], json.loads(names_json)):
+            if name.casefold() in known:
+                continue
+            try:
+                _ = create_collection(name)
+            except ValueError as exc:
+                print(f"[wLib] Skipped imported collection {name!r}: {exc}")
+                continue
+            known.add(name.casefold())
+
+
 def import_external_library(
     source: object, path: object, options: Mapping[str, object] | None = None
 ) -> dict[str, object]:
@@ -1545,6 +1565,8 @@ def import_external_library(
 
     backup, stats = read_external_library(source, path)
     result = apply_library_backup(backup, _external_import_options(options))
+    if SECTION_USER_STATE in _coerce_sequence(result.get("selected_sections")):
+        _register_imported_collections(backup)
     skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))
     result["skipped"] = int(str(result.get("skipped", 0))) + skipped_no_identity
     result["skipped_no_identity"] = skipped_no_identity

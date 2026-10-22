@@ -1,6 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tests for importing libraries from F95Checker, Atlas, and XLibrary."""
+"""Tests for importing libraries from F95Checker, Atlas, XLibrary, and f69."""
 
 import json
 import os
@@ -530,6 +530,156 @@ def test_atlas_reader_mapping(tmp_path):
     assert "f95_url" not in loose["metadata"]
     assert loose["user_state"]["play_status"] == "Plan to Play"
     assert loose["executable_paths"]["exe_path"] == "/games/loose/Play.sh"
+
+
+# ---------------------------------------------------------------------------
+# f69 reader
+# ---------------------------------------------------------------------------
+
+
+def _write_f69_db(path, install_root) -> None:
+    conn = sqlite3.connect(str(path))
+    conn.executescript(
+        """
+        CREATE TABLE _schema_version (id INTEGER PRIMARY KEY, hash TEXT NOT NULL,
+          applied_at INTEGER NOT NULL);
+        CREATE TABLE games (f95_thread_id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+          developer TEXT, completion_status TEXT NOT NULL DEFAULT 'not_started',
+          engine TEXT NOT NULL DEFAULT 'unknown', latest_version TEXT,
+          default_install_id TEXT, last_played_at INTEGER,
+          total_playtime_s INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+          dev_status TEXT NOT NULL DEFAULT 'unknown');
+        CREATE TABLE installs (id TEXT PRIMARY KEY, game_thread_id INTEGER NOT NULL,
+          version TEXT NOT NULL, install_path TEXT NOT NULL UNIQUE, executable TEXT,
+          launch_args TEXT, recipe_id TEXT NOT NULL, installed_at INTEGER NOT NULL,
+          name TEXT, source TEXT NOT NULL DEFAULT 'recipe', archive_sha256 TEXT);
+        CREATE TABLE user_labels (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+          color TEXT);
+        CREATE TABLE game_labels (game_thread_id INTEGER NOT NULL,
+          label_id INTEGER NOT NULL, PRIMARY KEY (game_thread_id, label_id));
+        INSERT INTO _schema_version VALUES (1, 'a', 0), (23, 'b', 0);
+        INSERT INTO user_labels VALUES (1, 'Favorites', NULL), (2, 'Backlog', NULL);
+        """
+    )
+    v1 = install_root / "Game-0.1"
+    v2 = install_root / "Game-0.2"
+    custom = install_root / "Custom"
+    for folder in (v1, v2, custom):
+        folder.mkdir(parents=True)
+    (v1 / "Game.sh").write_text("#!/bin/sh\n")
+    (v2 / "Game.sh").write_text("#!/bin/sh\n")
+    (custom / "Start.exe").write_bytes(b"MZ")
+    conn.execute(
+        "INSERT INTO games VALUES (900, 'f69 Game', 'Dev', 'replaying', 'renpy', "
+        "'0.3', 'inst-v2', 1700000000, 3600, 1690000000, 'completed')"
+    )
+    conn.execute(
+        "INSERT INTO installs VALUES ('inst-v1', 900, '0.1', ?, NULL, NULL, 'r', "
+        "1690000000, NULL, 'manual', NULL)",
+        (str(v1),),
+    )
+    conn.execute(
+        "INSERT INTO installs VALUES ('inst-v2', 900, '0.2', ?, NULL, NULL, 'r', "
+        "1680000000, 'Modded', 'manual', NULL)",
+        (str(v2),),
+    )
+    conn.execute("INSERT INTO game_labels VALUES (900, 1), (900, 2)")
+    # Custom game: high-bit synthetic thread id stored as a negative integer.
+    conn.execute(
+        "INSERT INTO games VALUES (-42, 'My Custom', NULL, 'not_started', 'other', "
+        "NULL, NULL, NULL, 0, 1690000000, 'unknown')"
+    )
+    conn.execute(
+        "INSERT INTO installs VALUES ('inst-c', -42, '1.0', ?, 'Start.exe', NULL, "
+        "'r', 1690000000, NULL, 'manual', NULL)",
+        (str(custom),),
+    )
+    # Custom game with nothing launchable has no identity and is skipped.
+    conn.execute(
+        "INSERT INTO games VALUES (-7, 'Orphan', NULL, 'not_started', 'unknown', "
+        "NULL, NULL, NULL, 0, 1690000000, 'unknown')"
+    )
+    conn.execute(
+        "INSERT INTO installs VALUES ('inst-o', -7, '1.0', ?, 'missing.exe', NULL, "
+        "'r', 1690000000, NULL, 'manual', NULL)",
+        (str(install_root),),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_f69_reader_mapping(tmp_path):
+    source = tmp_path / "f69.db"
+    games_root = tmp_path / "games"
+    _write_f69_db(source, games_root)
+    backup, stats = read_external_library("f69", str(source))
+    assert stats["skipped_no_identity"] == 1
+    assert stats["dropped_paths"] == 1
+    assert stats["schema_version"] == "23"
+    assert backup["app"] == {"name": "f69"}
+    by_title = {game["metadata"]["title"]: game for game in backup["games"]}
+    assert set(by_title) == {"f69 Game", "My Custom"}
+
+    game = by_title["f69 Game"]
+    assert game["metadata"] == {
+        "title": "f69 Game",
+        "f95_url": "https://f95zone.to/threads/900/",
+        "developer": "Dev",
+        "engine": "Ren'Py",
+        "version": "0.2",
+        "latest_version": "0.3",
+        "thread_completed": 1,
+    }
+    assert game["user_state"]["play_status"] == "Playing"
+    assert game["user_state"]["playtime_seconds"] == 3600
+    assert game["user_state"]["collections"] == ["Backlog", "Favorites"]
+    assert game["user_state"]["last_played"].startswith("2023-11-14")
+    assert game["executable_paths"]["exe_path"] == str(
+        games_root / "Game-0.2" / "Game.sh"
+    )
+    assert game["launch_targets"] == [
+        {"label": "v0.1", "exe_path": str(games_root / "Game-0.1" / "Game.sh")}
+    ]
+
+    custom = by_title["My Custom"]
+    assert "f95_url" not in custom["metadata"]
+    assert custom["metadata"]["engine"] == "Others"
+    assert "play_status" not in custom.get("user_state", {})
+    assert custom["executable_paths"]["exe_path"] == str(
+        games_root / "Custom" / "Start.exe"
+    )
+
+
+def test_f69_reader_rejects_wrong_file(tmp_path):
+    source = tmp_path / "other.db"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, title TEXT)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="not an f69 library"):
+        read_external_library("f69", str(source))
+
+
+def test_f69_import_creates_games_with_collections(tmp_path):
+    source = tmp_path / "f69.db"
+    _write_f69_db(source, tmp_path / "games")
+    result = import_external_library("f69", str(source))
+    assert result["created"] == 2
+    assert result["skipped_no_identity"] == 1
+    games = {game["title"]: game for game in get_all_games()}
+    assert set(games) == {"f69 Game", "My Custom"}
+    imported = games["f69 Game"]
+    assert imported["play_status"] == "Playing"
+    assert imported["collections"] == ["Backlog", "Favorites"]
+
+
+def test_locate_f69_library_uses_xdg_data_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    staged = tmp_path / "data" / "f69" / "f69.db"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"fake")
+    found = locate_external_library("f69")
+    assert found["path"] == str(staged)
 
 
 # ---------------------------------------------------------------------------
