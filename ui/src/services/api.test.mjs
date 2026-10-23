@@ -218,3 +218,62 @@ test("browser mock persists notes progress and attachment round-trip", async () 
     delete globalThis.localStorage;
   }
 });
+
+test("browser mock game saves keep the desktop payload shape", async () => {
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    open: () => {},
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const missing = await api.getGameSaves(4242);
+    assert.equal(missing.success, false);
+    assert.equal(missing.error_code, "game_not_found");
+
+    const gameId = (await api.addGame("Saved", "/tmp/saved.exe")).id;
+    const saves = await api.getGameSaves(gameId);
+    assert.equal(saves.success, true);
+    assert.deepEqual(Object.keys(saves).filter((key) => key !== "mock").sort(), [
+      "backups", "detected", "effective", "effective_exists", "keep", "override", "override_exists", "success",
+    ]);
+    assert.equal(saves.override, "");
+    assert.equal(saves.keep, "all");
+    assert.ok(saves.detected.every((entry) => typeof entry.eligible === "boolean"));
+    assert.ok(saves.detected.some((entry) => entry.eligible === false));
+    assert.equal(saves.effective, saves.detected.find((entry) => entry.eligible).path);
+
+    const set = await api.setGameSaveFolder(gameId, "/home/me/saves");
+    assert.deepEqual([set.success, set.override], [true, "/home/me/saves"]);
+    assert.equal((await api.setGameSaveFolder(gameId, "relative")).success, false);
+    const withOverride = await api.getGameSaves(gameId);
+    assert.deepEqual([withOverride.effective, withOverride.detected], ["/home/me/saves", []]);
+
+    const backup = await api.backupGameSaves(gameId);
+    assert.equal(backup.success, true);
+    assert.deepEqual(backup.backups.map((entry) => entry.name), [backup.backup]);
+    assert.equal((await api.restoreGameSavesBackup(gameId, "2000-01-01_00-00-00")).success, false);
+    assert.equal((await api.restoreGameSavesBackup(gameId, backup.backup)).success, true);
+    assert.equal((await api.getGameSaves(gameId)).backups.length, 2);
+    assert.equal((await api.openGameSaveBackup(gameId, backup.backup)).success, true);
+
+    assert.equal((await api.getSettings()).save_backup_keep, "all");
+    assert.equal((await api.saveSettings({ save_backup_keep: 100 })).success, false);
+    assert.equal((await api.saveSettings({ save_backup_keep: 5 })).success, true);
+    assert.equal((await api.getGameSaves(gameId)).keep, 5);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

@@ -42,6 +42,7 @@ import type {
   ProtonDownloadStatus,
   PlatformCapabilities,
   RpgmakerLinuxRunnerStatus,
+  SaveBackupKeep,
   SettingsResponse,
   SystemDepsCommandResponse,
   RunnerInfo,
@@ -74,6 +75,11 @@ const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
 const downloadDetectionEnabled = ref(true);
 const enableLogging = ref(false);
+// Save backups to keep per game: a preset, or "custom" with its own number.
+const KEEP_PRESETS = [1, 3, 5, 10, 20];
+const keepChoice = ref("all");
+const keepCustom = ref(10);
+const savingKeep = ref(false);
 const savingLogging = ref(false);
 const protonDownload = ref<ProtonDownloadStatus | null>(null);
 let protonDownloadTimer: ReturnType<typeof setInterval> | null = null;
@@ -145,6 +151,48 @@ const rpgmakerLinuxRunnerStatusText = computed(() => {
   return rpgmakerLinuxRunnerStatus.value.error || "Not detected";
 });
 
+const applyKeepSetting = (keep: SaveBackupKeep | undefined) => {
+  if (typeof keep !== "number") {
+    keepChoice.value = "all";
+  } else if (KEEP_PRESETS.includes(keep)) {
+    keepChoice.value = String(keep);
+  } else {
+    keepChoice.value = "custom";
+    keepCustom.value = keep;
+  }
+};
+
+const persistKeep = async (value: SaveBackupKeep, previous: { choice: string; custom: number }) => {
+  savingKeep.value = true;
+  try {
+    const res = await api.saveSettings({ save_backup_keep: value });
+    if (!res || res.success === false) throw new Error(res?.error || "Unknown error");
+  } catch (e) {
+    keepChoice.value = previous.choice;
+    keepCustom.value = previous.custom;
+    notifyError("Failed to save backup limit: " + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    savingKeep.value = false;
+  }
+};
+
+const onKeepChoice = (event: Event) => {
+  const previous = { choice: keepChoice.value, custom: keepCustom.value };
+  const choice = (event.target as HTMLSelectElement).value;
+  keepChoice.value = choice;
+  void persistKeep(choice === "all" ? "all" : choice === "custom" ? keepCustom.value : Number(choice), previous);
+};
+
+const onKeepCustom = (event: Event) => {
+  const previous = { choice: keepChoice.value, custom: keepCustom.value };
+  const input = event.target as HTMLInputElement;
+  const parsed = Math.trunc(Number(input.value));
+  const next = Number.isFinite(parsed) ? Math.min(99, Math.max(1, parsed)) : previous.custom;
+  keepCustom.value = next;
+  input.value = String(next);
+  if (next !== previous.custom) void persistKeep(next, previous);
+};
+
 const applySettings = (data: SettingsResponse) => {
   customStatuses.value = [...(data.custom_play_statuses || [])];
   collectionList.value = [...(data.collections || [])];
@@ -159,6 +207,7 @@ const applySettings = (data: SettingsResponse) => {
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
   enableLogging.value = !!data.enable_logging;
+  applyKeepSetting(data.save_backup_keep);
   savedValues.value = formValues();
 };
 
@@ -827,6 +876,44 @@ const browseUrm = async () => {
             />
             <div class="ui-toggle"></div>
           </label>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <label for="save-backup-keep" class="text-sm font-medium" style="color: var(--text-primary)">
+              Save backups to keep per game
+            </label>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Older backups are deleted after a new one is made. Changes apply right away.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <select
+              id="save-backup-keep"
+              :value="keepChoice"
+              :disabled="savingKeep"
+              @change="onKeepChoice"
+              class="settings-input"
+            >
+              <option value="all">Keep all</option>
+              <option v-for="count in KEEP_PRESETS" :key="count" :value="String(count)">
+                Newest {{ count }}
+              </option>
+              <option value="custom">Custom…</option>
+            </select>
+            <input
+              v-if="keepChoice === 'custom'"
+              type="number"
+              min="1"
+              max="99"
+              step="1"
+              :value="keepCustom"
+              :disabled="savingKeep"
+              @change="onKeepCustom"
+              class="settings-input w-20"
+              aria-label="Number of save backups to keep"
+            />
+          </div>
         </div>
 
         <div class="space-y-3">

@@ -1095,3 +1095,164 @@ def test_apply_execute_bits_skips_fifo(tmp_path):
         future = pool.submit(apply_execute_bits, str(tmp_path))
         changed = future.result(timeout=5)
     assert isinstance(changed, int)
+
+
+def _override_game(tmp_path, monkeypatch, override_rel=None, override_abs=None):
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    old_dir = lib / "Game" / "1.0"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    game_id = db.add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+    override = override_abs or (str(old_dir / override_rel) if override_rel else "")
+    if override:
+        db.update_game(int(game_id), {"save_path_override": override})
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    return db, lib, old_dir, int(game_id), archive
+
+
+def _update(archive, lib, game_id, **kwargs):
+    from core.archive_install import install_archive
+
+    return install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=game_id,
+        remove_old=False,
+        **kwargs,
+    )
+
+
+def test_install_carries_override_inside_old_root_and_repoints(tmp_path, monkeypatch):
+    db, lib, old_dir, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_rel="MySaves"
+    )
+    (old_dir / "MySaves" / "sub").mkdir(parents=True)
+    (old_dir / "MySaves" / "a.save").write_text("user")
+    (old_dir / "MySaves" / "sub" / "b.save").write_text("deep")
+
+    result = _update(archive, lib, game_id)
+
+    new_dir = lib / "Game" / "2.0"
+    assert result["success"] is True
+    assert (new_dir / "MySaves" / "a.save").read_text() == "user"
+    assert (new_dir / "MySaves" / "sub" / "b.save").read_text() == "deep"
+    assert db.get_all_games()[0]["save_path_override"] == str(new_dir / "MySaves")
+
+
+def test_install_user_override_files_win_over_shipped_ones(tmp_path, monkeypatch):
+    db, lib, old_dir, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_rel="saves-x"
+    )
+    (old_dir / "saves-x").mkdir()
+    (old_dir / "saves-x" / "a.save").write_text("user")
+    _write_game_zip(archive, {"Game.exe": b"new", "saves-x/a.save": b"shipped"})
+
+    assert _update(archive, lib, game_id)["success"] is True
+
+    assert (lib / "Game" / "2.0" / "saves-x" / "a.save").read_text() == "user"
+
+
+def test_install_leaves_override_outside_old_root_alone(tmp_path, monkeypatch):
+    outside = tmp_path / "elsewhere" / "saves"
+    outside.mkdir(parents=True)
+    (outside / "a.save").write_text("keep")
+    db, lib, _old, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_abs=str(outside)
+    )
+
+    assert _update(archive, lib, game_id)["success"] is True
+
+    assert db.get_all_games()[0]["save_path_override"] == str(outside)
+    assert (outside / "a.save").read_text() == "keep"
+    assert not (lib / "Game" / "2.0" / "saves").exists()
+
+
+def test_install_override_missing_on_disk_is_still_repointed(tmp_path, monkeypatch):
+    db, lib, _old, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_rel="NotCreatedYet"
+    )
+
+    assert _update(archive, lib, game_id)["success"] is True
+
+    assert db.get_all_games()[0]["save_path_override"] == str(
+        lib / "Game" / "2.0" / "NotCreatedYet"
+    )
+
+
+def test_install_override_copy_failure_leaves_game_on_old_version(
+    tmp_path, monkeypatch
+):
+    db, lib, old_dir, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_rel="MySaves"
+    )
+    (old_dir / "MySaves").mkdir()
+    (old_dir / "MySaves" / "a.save").write_text("user")
+    import core.archive_install as ai
+    import core.game_saves as gs
+
+    def _boom(_src, _dst, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(gs.shutil, "copy2", _boom)
+    with pytest.raises(ai.ArchiveInstallError, match="carry saves"):
+        _update(archive, lib, game_id)
+
+    row = db.get_all_games()[0]
+    assert row["version"] == "1.0"
+    assert row["save_path_override"] == str(old_dir / "MySaves")
+    assert (old_dir / "MySaves" / "a.save").read_text() == "user"
+    assert not (lib / "Game" / "2.0").exists()
+
+
+def test_install_same_folder_swap_keeps_override(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    old_exe = dest / "Game.exe"
+    old_exe.write_text("old")
+    (dest / "MySaves").mkdir()
+    (dest / "MySaves" / "a.save").write_text("user")
+    game_id = db.add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+    db.update_game(int(game_id), {"save_path_override": str(dest / "MySaves")})
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="2.0",
+        game_id=int(game_id),
+    )
+
+    assert result["success"] is True
+    assert db.get_all_games()[0]["save_path_override"] == str(dest / "MySaves")
+    assert (dest / "MySaves" / "a.save").read_text() == "user"
+
+
+def test_install_override_equal_to_old_root_is_repointed_not_copied(
+    tmp_path, monkeypatch
+):
+    db, lib, old_dir, game_id, archive = _override_game(
+        tmp_path, monkeypatch, override_abs=""
+    )
+    db.update_game(game_id, {"save_path_override": str(old_dir)})
+    (old_dir / "slot.sav").write_text("loose")
+
+    assert _update(archive, lib, game_id)["success"] is True
+
+    new_dir = lib / "Game" / "2.0"
+    assert db.get_all_games()[0]["save_path_override"] == str(new_dir)
+    assert (new_dir / "Game.exe").read_bytes() == b"new"  # not clobbered by the old copy

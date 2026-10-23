@@ -26,6 +26,7 @@ from core.database import (
     get_collections,
     get_custom_play_statuses,
     get_library_filter_presets,
+    get_save_backup_keep,
     get_setting,
     update_setting,
     normalize_launch_mode,
@@ -1332,3 +1333,48 @@ def test_screenshots_migration_and_decoding():
     assert "screenshots" not in applied
     assert get_all_games()[0]["screenshots"] == []
     assert "screenshots" not in SYNC_GAME_COLUMNS
+
+
+def test_save_path_override_migration_and_update():
+    game_id = add_game("Saves Game", "/tmp/saves.exe")
+    assert game_id is not None
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN save_path_override")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    assert get_all_games()[0]["save_path_override"] == ""
+    applied = update_game(game_id, {"save_path_override": "/home/u/saves"})
+    assert applied == {"save_path_override": "/home/u/saves"}
+    assert get_all_games()[0]["save_path_override"] == "/home/u/saves"
+    assert "save_path_override" not in SYNC_GAME_COLUMNS
+
+
+def test_save_backup_keep_validation():
+    assert get_save_backup_keep() is None
+    for raw, expected in (
+        ("all", None),
+        ("1", 1),
+        ("99", 99),
+        (" 5 ", 5),
+        ("0", None),
+        ("100", None),
+        ("-3", None),
+        ("2.5", None),
+        ("abc", None),
+        ("", None),
+        ("\u0663", None),
+    ):
+        update_setting("save_backup_keep", raw)
+        assert get_save_backup_keep() == expected, raw
+
+
+def test_save_backup_keep_bumps_sync_timestamp():
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_setting("save_backup_keep", "3")
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"

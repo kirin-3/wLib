@@ -12,7 +12,6 @@ import {
   IconExternalLinkFilled,
   IconFlameFilled,
   IconFolderOpenFilled,
-  IconLoader2,
   IconPaletteFilled,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
@@ -41,7 +40,6 @@ import type {
   PlaytimeTickDetail,
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
-  SaveLocation,
   UpdateGameResponse,
   UrmStatusResponse,
 } from "../../services/api";
@@ -63,6 +61,7 @@ import {
   type PlayStatus,
 } from "../../utils/playStatus";
 import PathStatus from "../PathStatus.vue";
+import GameSavesSection from "../GameSavesSection.vue";
 
 type UpdateCheckState = {
   running: boolean;
@@ -534,9 +533,6 @@ watch(
         collectionMembership.value = [...(g.collections || [])];
         newCollectionName.value = "";
         collectionError.value = "";
-        showSavePanel.value = false;
-        saveResults.value = [];
-        searchingSaves.value = false;
         resetLaunchTargetForms();
         if (typeof g.tags === "string" && g.tags) {
           tags.value = g.tags
@@ -614,9 +610,6 @@ watch(
     } else {
       executableModifiedRequestId.value++;
       engineMenuOpen.value = false;
-      showSavePanel.value = false;
-      saveResults.value = [];
-      searchingSaves.value = false;
       newTag.value = "";
       activeTab.value = "Overview";
       notesEditing.value = false;
@@ -726,9 +719,6 @@ onBeforeUnmount(() => {
 
 const close = () => {
   engineMenuOpen.value = false;
-  showSavePanel.value = false;
-  saveResults.value = [];
-  searchingSaves.value = false;
   newTag.value = "";
   activeTab.value = "Overview";
   notesEditing.value = false;
@@ -1375,48 +1365,6 @@ const launchTarget = (target: LaunchTarget) => {
 const requestUpdateCheck = () => {
   if (props.game?.f95_url) {
     emit("check-updates", props.game.id);
-  }
-};
-
-const saveResults = ref<SaveLocation[]>([]);
-const searchingSaves = ref(false);
-const showSavePanel = ref(false);
-
-const findSaves = async () => {
-  if (!props.game || typeof props.game.id !== "number") return;
-  const gameId = props.game.id;
-  searchingSaves.value = true;
-  showSavePanel.value = true;
-  try {
-    const results = await api.findSaveFiles(
-      props.game.exe_path,
-      title.value,
-      engine.value,
-      !isNativeLaunchMode.value && useCustomPrefix.value ? customPrefix.value : "",
-      !isNativeLaunchMode.value ? protonVersion.value : ""
-    );
-    if (isCurrentGame(gameId)) {
-      saveResults.value = results || [];
-    }
-  } catch (e) {
-    console.error("Failed to find saves", e);
-    if (isCurrentGame(gameId)) {
-      saveResults.value = [];
-    }
-  } finally {
-    searchingSaves.value = false;
-  }
-};
-
-const openSaveFolder = async (path: string) => {
-  try {
-    const res = await api.openFolder(path);
-    if (res && res.success === false) {
-      notifyError("Failed to open folder: " + (res.error || "Unknown error"));
-    }
-  } catch (e) {
-    console.error("Failed to open folder", e);
-    notifyError("Error opening folder: " + String(e));
   }
 };
 
@@ -2438,6 +2386,12 @@ const removeAttachment = async (name: string) => {
             <p v-if="!urmStatus.source_configured" class="text-xs" style="color: var(--text-muted)">Configure a URM .rpa source file in Settings to enable this control.</p>
             <p v-if="urmError" role="alert" class="text-xs text-red-400">{{ urmError }}</p>
           </div>
+
+          <GameSavesSection
+            v-if="game && typeof game.id === 'number'"
+            :game-id="game.id"
+            :active="modelValue && activeTab === 'Launch'"
+          />
         </section>
 
         <section v-show="activeTab === 'Journal'" id="game-detail-panel-Journal" role="tabpanel" aria-labelledby="game-detail-tab-Journal" tabindex="0" class="journal-panel space-y-6">
@@ -2670,88 +2624,6 @@ const removeAttachment = async (name: string) => {
       </div>
 
       <div
-        v-if="showSavePanel"
-        class="px-6 py-3"
-        style="border-top: 1px solid var(--border); background: var(--bg-inset)"
-      >
-        <div class="flex items-center justify-between mb-2">
-          <h4
-            class="ui-section-heading text-xs font-semibold uppercase tracking-wider"
-            style="color: var(--text-secondary)"
-          >
-            <IconFolderOpenFilled class="ui-section-icon" />
-            Save File Locations
-          </h4>
-          <button
-            @click="showSavePanel = false"
-            class="text-xs hover:text-[var(--text-primary)] transition-colors"
-            style="color: var(--text-muted)"
-          >
-            ✕ Close
-          </button>
-        </div>
-        <div
-          v-if="searchingSaves"
-          class="text-xs py-2 flex items-center gap-2"
-          style="color: var(--text-secondary)"
-        >
-          <IconLoader2 class="ui-action-icon animate-spin" />
-          Searching...
-        </div>
-        <div
-          v-else-if="saveResults.length === 0"
-          class="text-xs py-2"
-          style="color: var(--text-muted)"
-        >
-          No save files found. The game may store saves in an unexpected
-          location.
-        </div>
-        <div v-else class="space-y-1.5 max-h-32 overflow-y-auto">
-          <button
-            v-for="(result, i) in saveResults"
-            :key="i"
-            @click="openSaveFolder(result.path)"
-            class="w-full flex items-center gap-3 p-2 rounded-lg transition-all text-left group"
-            style="
-              background: var(--bg-surface);
-              border: 1px solid var(--border);
-            "
-            onmouseover="this.style.borderColor = 'var(--border-hover)'"
-            onmouseout="this.style.borderColor = 'var(--border)'"
-          >
-            <span class="text-lg">📂</span>
-            <div class="flex-1 min-w-0">
-              <p
-                class="text-xs font-medium truncate"
-                style="color: var(--text-primary)"
-              >
-                {{ result.description }}
-              </p>
-              <p
-                class="text-[0.625rem] truncate font-mono"
-                style="color: var(--text-muted)"
-              >
-                {{ result.path }}
-              </p>
-            </div>
-            <span
-              class="text-[0.625rem] px-1.5 py-0.5 rounded shrink-0"
-              style="
-                background: var(--bg-raised);
-                color: var(--text-muted);
-                border: 1px solid var(--border);
-              "
-              >{{ result.type }}</span
-            >
-          </button>
-        </div>
-        <p class="text-[0.625rem] mt-2 italic" style="color: var(--text-muted)">
-          ⚠ Auto-detection is best-effort. Some games store saves in
-          non-standard locations.
-        </p>
-      </div>
-
-      <div
         class="px-6 py-4"
         style="border-top: 1px solid var(--border); background: var(--bg-inset)"
       >
@@ -2775,15 +2647,6 @@ const removeAttachment = async (name: string) => {
             >
               <IconTrashX class="ui-action-icon" />
               {{ deleting ? "Removing..." : "Remove" }}
-            </button>
-            <button
-              @click="findSaves"
-              :disabled="searchingSaves"
-              class="footer-action ui-action-btn"
-              style="color: var(--text-primary)"
-            >
-              <IconFolderOpenFilled class="ui-action-icon" />
-              {{ searchingSaves ? "Searching..." : "Find Saves" }}
             </button>
           </div>
           <div class="ml-auto flex flex-wrap items-center justify-end gap-3">

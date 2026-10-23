@@ -30,7 +30,9 @@ GENERAL_SETTINGS_KEYS = (
     "collections",
     "library_filter_presets",
     "tag_colors",
+    "save_backup_keep",
 )
+SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
     "red",
     "orange",
@@ -468,6 +470,7 @@ def init_db() -> None:
             ("skipped_version", "TEXT DEFAULT ''"),
             ("collections", "TEXT DEFAULT '[]'"),
             ("screenshots", "TEXT DEFAULT '[]'"),
+            ("save_path_override", "TEXT DEFAULT ''"),
         ]
 
         for col_name, col_type in new_columns:
@@ -793,6 +796,19 @@ def get_all_games() -> list[dict[str, object]]:
     return result
 
 
+def get_game(game_id: int) -> dict[str, object] | None:
+    """The raw games row for one id, or None."""
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        row = cast(
+            sqlite3.Row | None,
+            conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone(),
+        )
+    if row is None:
+        return None
+    return {str(key): cast(object, row[key]) for key in row.keys()}
+
+
 def delete_game(game_id: int) -> None:
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
@@ -830,6 +846,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "auto_inject_ce",
         "custom_prefix",
         "proton_version",
+        "save_path_override",
         "launch_mode",
         "play_status",
         "finished_version",
@@ -1044,6 +1061,15 @@ def update_settings(values: Mapping[str, str]) -> None:
             list(values.items()),
         )
         conn.commit()
+
+
+def get_save_backup_keep() -> int | None:
+    """How many save backups to keep per game; None keeps all of them."""
+    raw = str(get_setting("save_backup_keep") or "").strip()
+    if not raw.isascii() or not raw.isdigit():
+        return None
+    keep = int(raw)
+    return keep if 1 <= keep <= SAVE_BACKUP_KEEP_MAX else None
 
 
 def get_custom_play_statuses() -> list[str]:

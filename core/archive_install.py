@@ -16,6 +16,12 @@ from collections.abc import Callable
 from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
+from core.game_saves import (
+    INFOLDER_SAVE_DIRS as INFOLDER_SAVE_DIRS,
+    LOOSE_SAVE_PATTERNS as LOOSE_SAVE_PATTERNS,
+    copy_folder_contents,
+    is_within,
+)
 from core.host_platform import host_command, host_which
 
 _WINDOWS_RESERVED_NAMES = {
@@ -671,19 +677,6 @@ def uncompressed_size(archive_path: str) -> int | None:
     return None
 
 
-INFOLDER_SAVE_DIRS = (
-    os.path.join("game", "saves"),
-    os.path.join("www", "save"),
-    "save",
-    "saves",
-    "Save",
-    "Saves",
-    "SaveData",
-    "savedata",
-)
-LOOSE_SAVE_PATTERNS = ("*.sav", "*.rpgsave", "*.rmmzsave", "*.save")
-
-
 def infolder_save_relpaths(root: str) -> list[str]:
     """Relative in-folder save paths under root (dirs + loose save files)."""
     import glob
@@ -728,6 +721,35 @@ def copy_infolder_saves(old_root: str, new_root: str) -> list[str]:
                 f"Could not carry saves into the new version: {exc}"
             ) from exc
     return copied
+
+
+def override_relpath(override: str, old_root: str) -> str | None:
+    """Path of a saves-folder override relative to the old install folder.
+
+    None when there is no override or it lies outside `old_root`; "." when it
+    is the install folder itself.
+    """
+    if not override.strip() or not old_root:
+        return None
+    if not is_within(override, old_root):
+        return None
+    return os.path.relpath(os.path.realpath(override), os.path.realpath(old_root))
+
+
+def copy_override_saves(old_override: str, rel: str, staging: str) -> int:
+    """Copy a saves-folder override from the old install into staging.
+
+    The install folder itself ("."): nothing to copy, the caller repoints it.
+    Raises ArchiveInstallError on failure so the caller can roll back.
+    """
+    if rel == "." or not os.path.isdir(old_override):
+        return 0
+    try:
+        return copy_folder_contents(old_override, os.path.join(staging, rel))
+    except OSError as exc:
+        raise ArchiveInstallError(
+            f"Could not carry saves into the new version: {exc}"
+        ) from exc
 
 
 def _real(path: str) -> str:
@@ -973,12 +995,14 @@ def install_archive(
 
     old_exe = ""
     old_root = ""
+    old_override = ""
     game_found = game_id is None
     if game_id is not None:
         for game in get_all_games():
             try:
                 if int(str(game.get("id"))) == int(game_id):
                     old_exe = str(game.get("exe_path") or "")
+                    old_override = str(game.get("save_path_override") or "").strip()
                     game_found = True
                     break
             except (TypeError, ValueError):
@@ -1041,9 +1065,13 @@ def install_archive(
         # something different at staging/link). Re-check after the move.
         check_symlinks_inside_staging(staging)
 
+        override_rel: str | None = None
         if old_root and os.path.isdir(old_root):
             _progress("carrying saves")
             _ = copy_infolder_saves(old_root, staging)
+            override_rel = override_relpath(old_override, old_root)
+            if override_rel is not None:
+                _ = copy_override_saves(old_override, override_rel, staging)
             check_symlinks_inside_staging(staging)
 
         _progress("moving into place")
@@ -1132,6 +1160,10 @@ def install_archive(
                             break
                     except (TypeError, ValueError):
                         continue
+            if override_rel is not None:
+                new_override = os.path.normpath(os.path.join(destination, override_rel))
+                if new_override != os.path.normpath(old_override):
+                    fields["save_path_override"] = new_override
             _ = _db.update_game(int(game_id), fields)
             if old_root_for_targets and os.path.isdir(destination):
                 try:

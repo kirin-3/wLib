@@ -2279,3 +2279,89 @@ def test_invalid_journal_rolls_back_import(tmp_path):
     assert not Api().import_library_backup(str(path))["success"]
     assert get_all_games()[0]["id"] == game_id
     assert get_all_games()[0]["title"] == "Journal"
+
+
+def test_save_path_override_exports_only_with_launch_config(tmp_path):
+    game_id = add_game("Saver", "/game.exe")
+    assert game_id is not None
+    update_game(game_id, {"save_path_override": "/home/me/saves"})
+
+    with_config = build_library_backup(
+        {"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG]}
+    )
+    without_config = build_library_backup({"sections": [SECTION_METADATA]})
+
+    assert (
+        with_config["games"][0][SECTION_LAUNCH_CONFIG]["save_path_override"]
+        == "/home/me/saves"
+    )
+    assert "/home/me/saves" not in json.dumps(without_config)
+
+
+def test_missing_save_path_override_warns_and_is_still_imported(tmp_path):
+    api = Api()
+    missing = str(tmp_path / "does" / "not" / "exist")
+    existing = tmp_path / "exists"
+    existing.mkdir()
+    path = write_backup(
+        tmp_path / "saves.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "Missing saves"},
+                    SECTION_LAUNCH_CONFIG: {"save_path_override": missing},
+                },
+                {
+                    "metadata": {"title": "Present saves"},
+                    SECTION_LAUNCH_CONFIG: {"save_path_override": str(existing)},
+                },
+            ]
+        ),
+    )
+
+    inspect = api.inspect_library_backup(str(path))
+    result = api.import_library_backup(
+        str(path), {"sections": [SECTION_LAUNCH_CONFIG]}
+    )
+
+    assert result["success"] is True
+    warnings = [
+        w
+        for w in cast(list[dict[str, object]], inspect["warnings"])
+        if w["field"] == "save_path_override"
+    ]
+    assert [(w["type"], w["title"], w["path"]) for w in warnings] == [
+        ("missing_path", "Missing saves", missing)
+    ]
+    overrides = {
+        g["title"]: g["save_path_override"] for g in get_all_games()
+    }
+    assert overrides == {"Missing saves": missing, "Present saves": str(existing)}
+
+
+def test_importing_launch_config_without_override_keeps_local_value(tmp_path):
+    game_id = add_game("Local", "/game.exe", f95_url="https://f95zone.to/threads/x.1/")
+    assert game_id is not None
+    update_game(game_id, {"save_path_override": "/local/saves"})
+    path = write_backup(
+        tmp_path / "old.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Local",
+                        "f95_url": "https://f95zone.to/threads/x.1/",
+                    },
+                    SECTION_LAUNCH_CONFIG: {"command_line_args": "-x"},
+                }
+            ]
+        ),
+    )
+
+    result = Api().import_library_backup(
+        str(path), {"sections": [SECTION_LAUNCH_CONFIG]}
+    )
+
+    assert result["success"] is True
+    assert get_all_games()[0]["save_path_override"] == "/local/saves"
+    assert get_all_games()[0]["command_line_args"] == "-x"

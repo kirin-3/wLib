@@ -467,6 +467,35 @@ export interface SaveLocation {
   path: string;
   type: string;
   description: string;
+  // false for the game's own folder: a lead only, never an automatic target
+  eligible: boolean;
+}
+
+export type SaveBackupKeep = number | "all";
+
+export interface GameSaveBackup {
+  name: string;
+}
+
+export interface GameSavesResponse extends ApiBasicResponse {
+  override: string;
+  override_exists: boolean;
+  detected: SaveLocation[];
+  effective: string;
+  effective_exists: boolean;
+  backups: GameSaveBackup[];
+  keep: SaveBackupKeep;
+}
+
+export interface GameSaveFolderResponse extends ApiBasicResponse {
+  override?: string;
+  override_exists?: boolean;
+}
+
+export interface GameSaveActionResponse extends ApiBasicResponse {
+  message?: string;
+  backup?: string;
+  backups?: GameSaveBackup[];
 }
 
 export interface GameRecord {
@@ -498,6 +527,7 @@ export interface GameRecord {
   auto_inject_ce?: boolean;
   custom_prefix?: string;
   proton_version?: string;
+  save_path_override?: string;
   launch_mode?: LaunchMode;
   is_favorite?: boolean;
   rating_graphics?: number;
@@ -573,6 +603,7 @@ export interface SettingsPayload {
   library_folder_pattern?: string;
   downloads_folder?: string;
   download_detection_enabled?: boolean;
+  save_backup_keep?: SaveBackupKeep;
 }
 
 export interface UrmStatusResponse extends ApiBasicResponse {
@@ -598,6 +629,7 @@ export interface SettingsResponse {
   downloads_folder: string;
   downloads_folder_exists: boolean;
   download_detection_enabled: boolean;
+  save_backup_keep: SaveBackupKeep;
 }
 
 export interface CollectionsResponse extends ApiBasicResponse {
@@ -677,6 +709,7 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   downloads_folder: "",
   downloads_folder_exists: true,
   download_detection_enabled: true,
+  save_backup_keep: "all",
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -781,6 +814,108 @@ const writeMockAttachments = (attachments: Record<string, GameAttachment[]>): vo
   }
 };
 
+const MOCK_GAME_SAVES_STORAGE_KEY = "wlib-mock-game-saves";
+const MOCK_SAVE_DETECTED: SaveLocation[] = [
+  { path: "/mock/game", type: "Game Folder", description: "Found 2 *.sav file(s) in game directory", eligible: false },
+  { path: "~/.renpy/MockGame-1234567890", type: "Ren'Py", description: "Ren'Py native save folder", eligible: true },
+];
+
+interface MockGameSavesState {
+  override: string;
+  backups: string[];
+}
+
+const readMockGameSaves = (): Record<string, MockGameSavesState> => {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(MOCK_GAME_SAVES_STORAGE_KEY) || "{}");
+    return isRecord(raw) ? (raw as Record<string, MockGameSavesState>) : {};
+  } catch {
+    return {};
+  }
+};
+
+const mockBackupName = (existing: string[]): string => {
+  const now = new Date();
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  let name = stamp;
+  for (let counter = 1; existing.includes(name); counter += 1) name = `${stamp}-${counter}`;
+  return name;
+};
+
+const mockGameSaves = (method: string, args: unknown[]): unknown => {
+  const gameId = Number(args[0]);
+  if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+    return { success: false, mock: true, error: "Game was not found", error_code: "game_not_found" };
+  }
+  const all = readMockGameSaves();
+  const state: MockGameSavesState = { override: "", backups: [], ...all[String(gameId)] };
+  const save = (): void => {
+    try {
+      localStorage.setItem(MOCK_GAME_SAVES_STORAGE_KEY, JSON.stringify({ ...all, [String(gameId)]: state }));
+    } catch {
+      // storage may be unavailable in a private window
+    }
+  };
+  const backups = (): GameSaveBackup[] => [...state.backups].sort().reverse().map((name) => ({ name }));
+  const eligible = MOCK_SAVE_DETECTED.filter((entry) => entry.eligible);
+  const effective = state.override || (eligible.length === 1 ? (eligible[0]?.path ?? "") : "");
+  const takeBackup = (): string => {
+    const name = mockBackupName(state.backups);
+    state.backups.push(name);
+    save();
+    return name;
+  };
+
+  switch (method) {
+    case "get_game_saves":
+      return {
+        success: true,
+        mock: true,
+        override: state.override,
+        override_exists: !!state.override,
+        detected: state.override ? [] : MOCK_SAVE_DETECTED,
+        effective,
+        effective_exists: !!effective,
+        backups: backups(),
+        keep: readMockSettings().save_backup_keep,
+      } satisfies GameSavesResponse;
+    case "set_game_save_folder": {
+      const path = String(args[1] ?? "").trim();
+      if (path && !path.startsWith("/") && !path.startsWith("~")) {
+        return { success: false, mock: true, error: "The saves folder must be an absolute path" };
+      }
+      state.override = path;
+      save();
+      return { success: true, mock: true, override: path, override_exists: !!path };
+    }
+    case "backup_game_saves": {
+      if (!effective) return { success: false, mock: true, error: "Choose a saves folder first" };
+      const name = takeBackup();
+      return { success: true, mock: true, message: "Backed up 2 file(s) (1.0 KB)", backup: name, backups: backups() };
+    }
+    case "import_game_saves":
+    case "restore_game_saves_backup": {
+      if (!effective) return { success: false, mock: true, error: "Choose a saves folder first" };
+      if (method === "restore_game_saves_backup" && !state.backups.includes(String(args[1]))) {
+        return { success: false, mock: true, error: "That backup no longer exists" };
+      }
+      const name = takeBackup();
+      return {
+        success: true,
+        mock: true,
+        message: `Imported 2 file(s) (1.0 KB). Previous saves backed up as ${name}`,
+        backup: name,
+        backups: backups(),
+      };
+    }
+    default:
+      return state.backups.includes(String(args[1]))
+        ? { success: true, mock: true }
+        : { success: false, mock: true, error: "That backup no longer exists" };
+  }
+};
+
 const mockAttachmentList = (gameId: number): GameAttachment[] => {
   return readMockAttachments()[String(gameId)] || [];
 };
@@ -857,6 +992,9 @@ const writeMockCollections = (collections: string[]): void => {
   writeMockSettings({ ...readMockSettings(), collections });
 };
 
+const isSaveBackupKeep = (value: unknown): value is SaveBackupKeep =>
+  value === "all" || (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 99);
+
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rpgmakerRunnerPath =
@@ -907,6 +1045,7 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.download_detection_enabled === "boolean"
         ? source.download_detection_enabled
         : DEFAULT_MOCK_SETTINGS.download_detection_enabled,
+    save_backup_keep: isSaveBackupKeep(source.save_backup_keep) ? source.save_backup_keep : "all",
   };
 };
 
@@ -1538,6 +1677,30 @@ class ApiService {
     return this.invoke<ApiBasicResponse>("open_folder", path);
   }
 
+  async getGameSaves(gameId: number): Promise<GameSavesResponse | ApiErrorResult> {
+    return this.invoke<GameSavesResponse | ApiErrorResult>("get_game_saves", gameId);
+  }
+
+  async setGameSaveFolder(gameId: number, path: string): Promise<GameSaveFolderResponse> {
+    return this.invoke<GameSaveFolderResponse>("set_game_save_folder", gameId, path);
+  }
+
+  async backupGameSaves(gameId: number): Promise<GameSaveActionResponse> {
+    return this.invoke<GameSaveActionResponse>("backup_game_saves", gameId);
+  }
+
+  async importGameSaves(gameId: number, source: string): Promise<GameSaveActionResponse> {
+    return this.invoke<GameSaveActionResponse>("import_game_saves", gameId, source);
+  }
+
+  async restoreGameSavesBackup(gameId: number, backupName: string): Promise<GameSaveActionResponse> {
+    return this.invoke<GameSaveActionResponse>("restore_game_saves_backup", gameId, backupName);
+  }
+
+  async openGameSaveBackup(gameId: number, backupName: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("open_game_save_backup", gameId, backupName);
+  }
+
   async getSystemDepsCommand(): Promise<SystemDepsCommandResponse> {
     return this.invoke<SystemDepsCommandResponse>("get_system_deps_command");
   }
@@ -1818,6 +1981,9 @@ class ApiService {
           if (error) return { success: false, error };
           const removed = readMockSettings().custom_play_statuses.filter((name) => !(payload.custom_play_statuses as string[]).includes(name));
           localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().map((game) => removed.some((name) => name.toLowerCase() === game.play_status?.toLowerCase()) ? { ...game, play_status: "Not Started" } : game)));
+        }
+        if (Object.prototype.hasOwnProperty.call(payload, "save_backup_keep") && !isSaveBackupKeep(payload.save_backup_keep)) {
+          return { success: false, error: "Save backups to keep must be 'all' or 1–99" };
         }
         const mergedSettings: Record<string, unknown> = {
           ...readMockSettings(),
@@ -2484,6 +2650,13 @@ class ApiService {
       }
       case "find_save_files":
         return [];
+      case "get_game_saves":
+      case "set_game_save_folder":
+      case "backup_game_saves":
+      case "import_game_saves":
+      case "restore_game_saves_backup":
+      case "open_game_save_backup":
+        return mockGameSaves(method, args);
       case "list_game_attachments": {
         const gameId = Number(args[0]);
         if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {

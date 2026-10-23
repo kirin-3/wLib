@@ -238,3 +238,17 @@ def test_malformed_f95_url_does_not_raise(api, tmp_path):
     res = api.add_game(title="T", exe_path=str(exe), f95_url="http://[invalid")
     assert res["success"] is True
     assert api.update_game(res["id"], {"f95_url": "http://[invalid"})["success"] is True
+
+
+def test_save_backup_keep_setting_roundtrip_and_validation(api):
+    assert api.get_settings()["save_backup_keep"] == "all"
+    assert api.save_settings({"save_backup_keep": 5})["success"] is True
+    assert api.get_settings()["save_backup_keep"] == 5
+    assert api.save_settings({"save_backup_keep": "12"})["success"] is True
+    assert api.get_settings()["save_backup_keep"] == 12
+    assert api.save_settings({"save_backup_keep": "all"})["success"] is True
+    assert api.get_settings()["save_backup_keep"] == "all"
+    api.save_settings({"save_backup_keep": 3})
+    for bad in (0, 100, -1, 2.5, "x", "", None, True, [1], {"a": 1}, "\u0663"):
+        assert api.save_settings({"save_backup_keep": bad})["success"] is False, bad
+    assert api.get_settings()["save_backup_keep"] == 3

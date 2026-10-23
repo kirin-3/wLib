@@ -88,6 +88,7 @@ Stores the library records and their associated configuration flags.
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
 | `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
+| `save_path_override` | `TEXT DEFAULT ''` | Absolute saves folder chosen for the game; empty means use detection. Machine-specific: exported with launch configuration, never synced. Added additively; `update_game` accepts it, the UI sets it through `set_game_save_folder`. |
 | `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, `rpgmaker_linux`, or `custom`. Defaults and invalid values normalize to `auto`; Windows launches support only `auto`. |
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |
@@ -145,6 +146,8 @@ Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_log
 `collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, `reorder_collections`, and `set_game_collections` each rewrite the setting and the affected games' `collections` column in one transaction. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. Both `collections` and `library_filter_presets` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
 
 `library_filter_presets` stores a JSON list of `{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}` objects (default `[]`). `get_library_filter_presets()` drops entries without a 1–40 character name and case-insensitive duplicate names; the frontend further normalises each preset through `normalizeFilterPreset` so unknown engines/tags are dropped on apply.
+
+`save_backup_keep` stores how many save backups to keep per game: `all` or `1`–`99` (default missing, meaning keep all). `get_save_backup_keep()` returns `None` for `all`, missing or invalid values and an int otherwise. It is in `GENERAL_SETTINGS_KEYS`, so backups and sync carry it and the settings triggers watch it.
 
 ## JSON Migration Backups
 

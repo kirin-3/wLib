@@ -7,8 +7,8 @@ import os
 import ssl
 import sys
 import threading
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing, suppress
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import closing, contextmanager, suppress
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
 from core.database import (
@@ -33,6 +33,7 @@ from core.host_platform import (
     open_windows_system_target,
     unsupported_on_host,
 )
+from core.game_saves import SaveLocation
 from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
 from core.versions import normalize_version as normalize_version
@@ -132,12 +133,6 @@ class ExecutableModifiedTimeResponse(TypedDict):
     success: bool
     modified_at: str | None
     error: NotRequired[str]
-
-
-class SaveLocation(TypedDict):
-    path: str
-    type: str
-    description: str
 
 
 class RuntimeInstallTarget(TypedDict):
@@ -314,6 +309,9 @@ class Api:
         # Games whose F95 metadata is still being fetched after add_game returned.
         self._metadata_pending: set[int] = set()
         self._metadata_lock: threading.Lock = threading.Lock()
+        # Games with a save backup/import/restore in flight (one at a time per game).
+        self._saves_busy: set[int] = set()
+        self._saves_busy_lock: threading.Lock = threading.Lock()
         self._deps_install_status: ProgressStatus = {
             "running": False,
             "done": 0,
@@ -1973,6 +1971,19 @@ class Api:
             updated_fields["launch_mode"] = normalize_launch_mode(
                 updated_fields["launch_mode"]
             )
+        if updated_fields.get("save_path_override") is not None:
+            # Same rules as set_game_save_folder, so this path can't bypass them.
+            from core.game_saves import GameSavesError, validate_save_override
+
+            raw_override = updated_fields["save_path_override"]
+            if not isinstance(raw_override, str):
+                return {"success": False, "error": "The saves folder must be a path"}
+            try:
+                updated_fields["save_path_override"] = validate_save_override(
+                    raw_override, self._save_backups_root()
+                )
+            except GameSavesError as exc:
+                return {"success": False, "error": str(exc)}
 
         try:
             applied_fields = update_game_fn(coerced_id, updated_fields)
@@ -3928,6 +3939,7 @@ class Api:
             get_collections,
             get_custom_play_statuses,
             get_library_filter_presets,
+            get_save_backup_keep,
             get_tag_colors,
             get_setting,
         )
@@ -3945,6 +3957,7 @@ class Api:
             "collections": get_collections(),
             "library_filter_presets": get_library_filter_presets(),
             "tag_colors": get_tag_colors(),
+            "save_backup_keep": get_save_backup_keep() or "all",
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "update_notifications": get_setting_fn("update_notifications") != "off",
@@ -4062,6 +4075,7 @@ class Api:
         from core.database import (
             CANONICAL_PLAY_STATUSES,
             DEFAULT_LIBRARY_FOLDER_PATTERN,
+            SAVE_BACKUP_KEEP_MAX,
             get_setting,
             normalize_play_status,
             update_custom_play_statuses,
@@ -4101,6 +4115,25 @@ class Api:
                     }
                 seen.add(name.casefold())
                 custom_statuses.append(name)
+
+        save_backup_keep: str | None = None
+        if "save_backup_keep" in settings_map:
+            raw_keep = settings_map["save_backup_keep"]
+            if isinstance(raw_keep, bool):
+                raw_keep = None
+            if isinstance(raw_keep, (int, str)):
+                candidate = str(raw_keep).strip()
+                if candidate == "all" or (
+                    candidate.isascii()
+                    and candidate.isdigit()
+                    and 1 <= int(candidate) <= SAVE_BACKUP_KEEP_MAX
+                ):
+                    save_backup_keep = candidate
+            if save_backup_keep is None:
+                return {
+                    "success": False,
+                    "error": f"Save backups to keep must be 'all' or 1–{SAVE_BACKUP_KEEP_MAX}",
+                }
 
         for key in (
             "proton_path",
@@ -4183,6 +4216,8 @@ class Api:
                     or str(raw_detection).strip().lower() == "true"
                     else "false",
                 )
+            if save_backup_keep is not None:
+                update_setting_fn("save_backup_keep", save_backup_keep)
             if "custom_play_statuses" in settings_map:
                 update_custom_play_statuses(custom_statuses)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
@@ -4769,6 +4804,240 @@ class Api:
             return {"success": False, "error": str(exc)}
         return {"success": True}
 
+    # ── Game saves folder ──
+
+    @staticmethod
+    def _save_backups_root() -> str:
+        from core.host_platform import get_data_subdir
+
+        return get_data_subdir("save-backups")
+
+    @contextmanager
+    def _save_operation(self, game_id: int) -> Generator[None]:
+        """Allow one backup/import/restore per game at a time."""
+        from core.game_saves import GameSavesError
+
+        with self._saves_busy_lock:
+            if game_id in self._saves_busy:
+                raise GameSavesError(
+                    "A save operation is already running for this game"
+                )
+            self._saves_busy.add(game_id)
+        try:
+            yield
+        finally:
+            with self._saves_busy_lock:
+                self._saves_busy.discard(game_id)
+
+    def _saves_game_state(
+        self, game_id: object
+    ) -> tuple[int, dict[str, object], str, list[dict[str, object]]] | None:
+        """(id, row, effective folder, detected) from the stored row, or None."""
+        from core.database import get_game
+        from core.game_saves import detect_save_locations, resolve_effective_folder
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return None
+        row = get_game(coerced_id)
+        if row is None:
+            return None
+        override = str(row.get("save_path_override") or "").strip()
+        detected: list[dict[str, object]] = []
+        if not override:
+            native = normalize_launch_mode(row.get("launch_mode")) == "native"
+            locations = detect_save_locations(
+                str(row.get("exe_path") or ""),
+                str(row.get("title") or ""),
+                "" if native else str(row.get("custom_prefix") or ""),
+                "" if native else str(row.get("proton_version") or ""),
+                windows=is_windows(),
+            )
+            detected = [dict(location) for location in locations]
+            effective = resolve_effective_folder("", locations)
+        else:
+            effective = override
+        return coerced_id, row, effective, detected
+
+    @staticmethod
+    def _game_saves_not_found() -> dict[str, object]:
+        return {
+            "success": False,
+            "error": "Game was not found",
+            "error_code": "game_not_found",
+        }
+
+    @staticmethod
+    def _format_bytes(size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
+
+    def _saves_summary(self, game_id: int) -> list[dict[str, object]]:
+        from core.game_saves import game_backup_dir, list_backups
+
+        backup_dir = game_backup_dir(self._save_backups_root(), game_id)
+        return [{"name": name} for name in list_backups(backup_dir)]
+
+    def get_game_saves(self, game_id: object = None) -> dict[str, object]:
+        """Override, detected folders, effective folder and backups for a game."""
+        from core.database import get_save_backup_keep
+
+        state = self._saves_game_state(game_id)
+        if state is None:
+            return self._game_saves_not_found()
+        coerced_id, row, effective, detected = state
+        override = str(row.get("save_path_override") or "").strip()
+        return {
+            "success": True,
+            "override": override,
+            "override_exists": bool(override) and os.path.isdir(override),
+            "detected": detected,
+            "effective": effective,
+            "effective_exists": bool(effective) and os.path.isdir(effective),
+            "backups": self._saves_summary(coerced_id),
+            "keep": get_save_backup_keep() or "all",
+        }
+
+    def set_game_save_folder(
+        self, game_id: object = None, path: object = ""
+    ) -> dict[str, object]:
+        """Set or (with an empty path) clear a game's saves-folder override."""
+        import sqlite3
+
+        from core.database import get_game, update_game
+        from core.game_saves import GameSavesError, validate_save_override
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or get_game(coerced_id) is None:
+            return self._game_saves_not_found()
+        if path is not None and not isinstance(path, str):
+            return {"success": False, "error": "The saves folder must be a path"}
+        try:
+            override = validate_save_override(path or "", self._save_backups_root())
+            _ = update_game(coerced_id, {"save_path_override": override})
+        except GameSavesError as exc:
+            return {"success": False, "error": str(exc)}
+        except (sqlite3.Error, OSError) as exc:
+            return {"success": False, "error": str(exc) or "Could not save the folder"}
+        return {
+            "success": True,
+            "override": override,
+            "override_exists": bool(override) and os.path.isdir(override),
+        }
+
+    def backup_game_saves(self, game_id: object = None) -> dict[str, object]:
+        from core.database import get_save_backup_keep
+        from core.game_saves import GameSavesError, backup_saves
+
+        state = self._saves_game_state(game_id)
+        if state is None:
+            return self._game_saves_not_found()
+        coerced_id, _row, effective, _detected = state
+        if not effective:
+            return {"success": False, "error": "Choose a saves folder first"}
+        try:
+            with self._save_operation(coerced_id):
+                info = backup_saves(
+                    effective,
+                    self._save_backups_root(),
+                    coerced_id,
+                    get_save_backup_keep(),
+                )
+        except GameSavesError as exc:
+            return {"success": False, "error": str(exc)}
+        message = f"Backed up {info.files} file(s) ({self._format_bytes(info.bytes)})"
+        if info.skipped_links:
+            message += f"; skipped {info.skipped_links} link(s)"
+        return {
+            "success": True,
+            "message": message,
+            "backup": info.name,
+            "backups": self._saves_summary(coerced_id),
+        }
+
+    def _merge_into_game_saves(
+        self, game_id: object, source: str, verb: str = "Imported"
+    ) -> dict[str, object]:
+        """Shared import/restore body."""
+        from core.database import get_save_backup_keep
+        from core.game_saves import GameSavesError, import_saves
+
+        state = self._saves_game_state(game_id)
+        if state is None:
+            return self._game_saves_not_found()
+        coerced_id, _row, effective, _detected = state
+        if not effective:
+            return {"success": False, "error": "Choose a saves folder first"}
+        try:
+            with self._save_operation(coerced_id):
+                info = import_saves(
+                    source,
+                    effective,
+                    self._save_backups_root(),
+                    coerced_id,
+                    get_save_backup_keep(),
+                )
+        except GameSavesError as exc:
+            return {"success": False, "error": str(exc)}
+        message = f"{verb} {info.files} file(s) ({self._format_bytes(info.bytes)})"
+        if info.skipped_links:
+            message += f"; skipped {info.skipped_links} link(s)"
+        if info.backup is not None:
+            message += f". Previous saves backed up as {info.backup.name}"
+        return {
+            "success": True,
+            "message": message,
+            "backup": info.backup.name if info.backup else "",
+            "backups": self._saves_summary(coerced_id),
+        }
+
+    def import_game_saves(
+        self, game_id: object = None, source: object = ""
+    ) -> dict[str, object]:
+        """Merge a chosen folder into the game's saves folder."""
+        if not isinstance(source, str) or not source.strip():
+            return {"success": False, "error": "Choose a folder to import"}
+        return self._merge_into_game_saves(
+            game_id, self._normalize_selected_path(source)
+        )
+
+    def restore_game_saves_backup(
+        self, game_id: object = None, backup_name: object = ""
+    ) -> dict[str, object]:
+        """Import one of the game's backups, like Import with that source."""
+        from core.game_saves import GameSavesError, resolve_backup
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return self._game_saves_not_found()
+        try:
+            source = resolve_backup(
+                self._save_backups_root(), coerced_id, str(backup_name or "")
+            )
+        except GameSavesError as exc:
+            return {"success": False, "error": str(exc)}
+        return self._merge_into_game_saves(coerced_id, source, "Restored")
+
+    def open_game_save_backup(
+        self, game_id: object = None, backup_name: object = ""
+    ) -> dict[str, object]:
+        from core.game_saves import GameSavesError, resolve_backup
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return self._game_saves_not_found()
+        try:
+            path = resolve_backup(
+                self._save_backups_root(), coerced_id, str(backup_name or "")
+            )
+        except GameSavesError as exc:
+            return {"success": False, "error": str(exc)}
+        return dict(self._open_path_with_system_handler(path))
+
     def find_save_files(
         self,
         exe_path: str,
@@ -4779,234 +5048,18 @@ class Api:
     ) -> list[SaveLocation]:
         """
         Searches common save file locations for a game.
-        Returns a list of {path, type, description} for each found location.
+        Returns a list of {path, type, description, eligible} for each found location.
         """
-        import glob
-        import os
-
-        from core.database import get_setting
-
-        get_setting_fn = cast(Callable[[str], object | None], get_setting)
+        from core.game_saves import detect_save_locations
 
         _ = engine
-
-        results: list[SaveLocation] = []
-        game_dir = os.path.dirname(exe_path) if exe_path else ""
-        game_name = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ""
-        title_clean = title.strip() if title else game_name
-
-        # ── 1. Check game directory for common save folders/files ──
-        if game_dir and os.path.isdir(game_dir):
-            from core.archive_install import INFOLDER_SAVE_DIRS, LOOSE_SAVE_PATTERNS
-
-            for pattern in INFOLDER_SAVE_DIRS:
-                candidate = os.path.join(game_dir, pattern)
-                if os.path.isdir(candidate):
-                    label = (
-                        "RPGMaker MV/MZ"
-                        if pattern == os.path.join("www", "save")
-                        else "Game Folder"
-                    )
-                    description = (
-                        "RPGMaker MV/MZ web save folder"
-                        if pattern == os.path.join("www", "save")
-                        else f'Found "{pattern}/" folder next to executable'
-                    )
-                    results.append(
-                        {
-                            "path": candidate,
-                            "type": label,
-                            "description": description,
-                        }
-                    )
-
-            # Check for loose save files (.dat excluded: too many games ship data as .dat)
-            for ext in LOOSE_SAVE_PATTERNS:
-                found = glob.glob(os.path.join(game_dir, ext))
-                if found:
-                    results.append(
-                        {
-                            "path": game_dir,
-                            "type": "Game Folder",
-                            "description": f"Found {len(found)} {ext} file(s) in game directory",
-                        }
-                    )
-                    break  # Don't duplicate the game_dir
-
-        # ── 2. Check Ren'Py native save path (~/.renpy/) ──
-        if is_windows():
-            roaming_app_data = str(os.environ.get("APPDATA") or "").strip()
-            renpy_base = (
-                os.path.join(roaming_app_data, "RenPy") if roaming_app_data else ""
-            )
-        else:
-            renpy_base = os.path.expanduser("~/.renpy")
-        if os.path.isdir(renpy_base):
-            # Try to match by game name or title
-            try:
-                renpy_entries = os.listdir(renpy_base)
-            except OSError:
-                renpy_entries = []
-            for entry in renpy_entries:
-                entry_lower = entry.lower()
-                if (
-                    title_clean
-                    and title_clean.lower().replace(" ", "").replace("'", "")
-                    in entry_lower.replace("-", "").replace("_", "")
-                ) or (game_name and game_name.lower() in entry_lower):
-                    candidate = os.path.join(renpy_base, entry)
-                    if os.path.isdir(candidate):
-                        results.append(
-                            {
-                                "path": candidate,
-                                "type": "Ren'Py",
-                                "description": f"Ren'Py native save folder: {candidate}",
-                            }
-                        )
-
-        if is_windows():
-            user_home = os.path.expanduser("~")
-            native_roots = [
-                (str(os.environ.get("APPDATA") or ""), "AppData Roaming"),
-                (str(os.environ.get("LOCALAPPDATA") or ""), "AppData Local"),
-                (
-                    os.path.join(user_home, "AppData", "LocalLow"),
-                    "AppData LocalLow",
-                ),
-                (os.path.join(user_home, "Documents"), "Documents"),
-                (os.path.join(user_home, "Saved Games"), "Saved Games"),
-            ]
-            for root, label in native_roots:
-                if not root or not os.path.isdir(root):
-                    continue
-                try:
-                    for entry in os.listdir(root):
-                        entry_lower = entry.lower()
-                        title_words = title_clean.lower().split() if title_clean else []
-                        significant_words = [
-                            word for word in title_words if len(word) >= 4
-                        ]
-                        matched = bool(
-                            (game_name and game_name.lower() in entry_lower)
-                            or any(word in entry_lower for word in significant_words)
-                        )
-                        candidate = os.path.join(root, entry)
-                        if matched and os.path.isdir(candidate):
-                            results.append(
-                                {
-                                    "path": candidate,
-                                    "type": f"Windows ({label})",
-                                    "description": f"{label}/{entry}",
-                                }
-                            )
-                except PermissionError:
-                    continue
-
-            seen_windows: set[str] = set()
-            unique_windows: list[SaveLocation] = []
-            for result in results:
-                if result["path"] not in seen_windows:
-                    seen_windows.add(result["path"])
-                    unique_windows.append(result)
-            return unique_windows
-
-        # ── 3. Check Wine prefix AppData folders ──
-        wine_prefix = (
-            custom_prefix
-            if custom_prefix
-            else str(get_setting_fn("wine_prefix_path") or "")
+        return detect_save_locations(
+            exe_path,
+            title,
+            custom_prefix,
+            proton_version,
+            windows=is_windows(),
         )
-        if not wine_prefix:
-            wine_prefix = get_default_wine_prefix()
-
-        proton_path = (
-            proton_version
-            if proton_version
-            else str(get_setting_fn("proton_path") or "")
-        )
-        is_proton = bool(
-            proton_path and "proton" in os.path.basename(proton_path).lower()
-        )
-
-        # Mirror the launcher's prefix resolution (core/launcher.py) so saves are
-        # searched where the game actually ran.
-        wine_prefix = os.path.expanduser(wine_prefix.strip())
-        if is_proton:
-            actual_prefix = os.path.join(proton_compat_data_path(wine_prefix), "pfx")
-        elif os.path.isdir(os.path.join(wine_prefix, "pfx")):
-            actual_prefix = os.path.join(wine_prefix, "pfx")
-        else:
-            actual_prefix = wine_prefix
-
-        # Search through all user folders in the prefix
-        users_dir = os.path.join(actual_prefix, "drive_c", "users")
-        if os.path.isdir(users_dir):
-            appdata_variants = [
-                ("AppData/Roaming", "AppData Roaming"),
-                ("AppData/Local", "AppData Local"),
-                ("AppData/LocalLow", "AppData LocalLow"),
-                ("My Documents", "My Documents"),
-                ("Documents", "Documents"),
-                ("Saved Games", "Saved Games"),
-            ]
-            try:
-                user_folders = os.listdir(users_dir)
-            except OSError:
-                user_folders = []
-            for user_folder in user_folders:
-                user_path = os.path.join(users_dir, user_folder)
-                if not os.path.isdir(user_path) or user_folder in ("Public",):
-                    continue
-
-                for sub_path, label in appdata_variants:
-                    appdata_dir = os.path.join(user_path, sub_path)
-                    if not os.path.isdir(appdata_dir):
-                        continue
-
-                    # Search for folders that fuzzy-match the game title or exe name
-                    try:
-                        for entry in os.listdir(appdata_dir):
-                            entry_lower = entry.lower()
-                            title_words = (
-                                title_clean.lower().split() if title_clean else []
-                            )
-                            game_name_lower = game_name.lower() if game_name else ""
-
-                            # Match if any significant title word (4+ chars) appears in folder name
-                            matched = False
-                            if game_name_lower and game_name_lower in entry_lower:
-                                matched = True
-                            elif title_words:
-                                significant_words = [
-                                    w for w in title_words if len(w) >= 4
-                                ]
-                                if significant_words and any(
-                                    w in entry_lower for w in significant_words
-                                ):
-                                    matched = True
-
-                            if matched:
-                                candidate = os.path.join(appdata_dir, entry)
-                                if os.path.isdir(candidate):
-                                    results.append(
-                                        {
-                                            "path": candidate,
-                                            "type": f"Wine Prefix ({label})",
-                                            "description": f"{label}/{entry}",
-                                        }
-                                    )
-                    except PermissionError:
-                        continue
-
-        # Deduplicate by path
-        seen: set[str] = set()
-        unique_results: list[SaveLocation] = []
-        for r in results:
-            if r["path"] not in seen:
-                seen.add(r["path"])
-                unique_results.append(r)
-
-        return unique_results
 
     def open_folder(self, path: str) -> OpenPathResult:
         """Opens a folder in the system file manager."""

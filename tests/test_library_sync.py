@@ -1099,3 +1099,33 @@ def test_journal_push_pull_replaces_matched_sessions_and_skip_marks_local_change
     assert sync.run()["state"] == "idle"
     assert len(database.get_play_sessions(game_id)) == 2
     assert database.get_all_games()[0]["last_played_version"] == "0.6"
+
+
+def test_save_path_override_never_syncs_and_survives_a_pull(tmp_path, monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    url = "https://f95zone.to/threads/saver.500/"
+    game_id = database.add_game("Saver", "/saver.exe", f95_url=url)
+    database.update_game(game_id, {"save_path_override": "/secret/saves"})
+    assert "save_path_override" not in database.SYNC_GAME_COLUMNS
+    assert sync.run()["state"] == "idle"
+    assert "/secret/saves" not in location.data.decode()
+    assert "save_path_override" not in location.data.decode()
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-library.db"))
+    database.init_db()
+    other = manager(location)
+    assert other.run()["state"] == "idle"
+    pulled = database.get_all_games()[0]
+    assert pulled["title"] == "Saver" and pulled["save_path_override"] == ""
+    database.update_game(pulled["id"], {"save_path_override": "/other/saves"})
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "library.db"))
+    database.update_game(game_id, {"rating": "9"})
+    assert sync.run()["state"] == "idle"
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-library.db"))
+    assert other.run()["state"] == "idle"
+    after = database.get_all_games()[0]
+    assert after["rating"] == "9"
+    assert after["save_path_override"] == "/other/saves"

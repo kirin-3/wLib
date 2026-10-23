@@ -110,6 +110,7 @@ LAUNCH_CONFIG_FIELDS = (
     "auto_inject_ce",
     "custom_prefix",
     "proton_version",
+    "save_path_override",
 )
 EXECUTABLE_PATH_FIELDS = ("exe_path",)
 LAUNCH_TARGET_FIELDS = ("label", "exe_path", "sort_order", "created_at", "updated_at")
@@ -855,7 +856,7 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
         )
 
         launch_config = _game_section(game, SECTION_LAUNCH_CONFIG)
-        for field in ("custom_prefix", "proton_version"):
+        for field in ("custom_prefix", "proton_version", "save_path_override"):
             _path_warning(
                 warnings,
                 scope="game",
