@@ -156,7 +156,7 @@ def detect_save_locations(
         roaming_app_data = str(os.environ.get("APPDATA") or "").strip()
         renpy_base = os.path.join(roaming_app_data, "RenPy") if roaming_app_data else ""
     else:
-        renpy_base = os.path.expanduser("~/.renpy")
+        renpy_base = os.path.expanduser(os.path.join("~", ".renpy"))
     if os.path.isdir(renpy_base):
         try:
             renpy_entries = os.listdir(renpy_base)
