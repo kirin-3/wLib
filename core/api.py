@@ -34,6 +34,7 @@ from core.host_platform import (
     unsupported_on_host,
 )
 from core.game_saves import SaveLocation
+from core.game_tools import CancelFn, ProgressFn, game_tool_folder
 from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
 from core.versions import normalize_version as normalize_version
@@ -309,6 +310,9 @@ class Api:
         # Games whose F95 metadata is still being fetched after add_game returned.
         self._metadata_pending: set[int] = set()
         self._metadata_lock: threading.Lock = threading.Lock()
+        # Per-game mod tool run (extract/decrypt/switch), polled by the Tools tab.
+        self._tool_status: dict[int, dict[str, object]] = {}
+        self._tool_lock: threading.Lock = threading.Lock()
         # Games with a save backup/import/restore in flight (one at a time per game).
         self._saves_busy: set[int] = set()
         self._saves_busy_lock: threading.Lock = threading.Lock()
@@ -3274,10 +3278,7 @@ class Api:
         game = next((game for game in get_all_games() if game["id"] == game_id), None)
         if game is None:
             raise ValueError("Game not found")
-        exe_path = str(game.get("exe_path") or "").strip()
-        if not exe_path:
-            raise ValueError("Game has no executable path")
-        return os.path.dirname(os.path.abspath(exe_path))
+        return game_tool_folder(game)
 
     def get_urm_status(self, game_id: int) -> dict[str, object]:
         import sqlite3
@@ -3342,6 +3343,274 @@ class Api:
                     os.remove(temporary)
                 except OSError as exc:
                     print(f"Could not remove temporary URM file: {exc}")
+
+    # ── Game mod tools (Ren'Py / RPG Maker MV/MZ) ──
+
+    @contextmanager
+    def _tool_run(self, game_id: int, action: str) -> Generator[None]:
+        """Allow one tool action per game, and none while wLib runs the game."""
+        from core.game_tools import GameToolError
+
+        with self._tool_lock:
+            if game_id in self._tool_status:
+                raise GameToolError("A tool is already running for this game")
+            if game_id in self.get_running_games():
+                raise GameToolError("Close the game before using its tools")
+            self._tool_status[game_id] = {
+                "running": True,
+                "action": action,
+                "done": 0,
+                "total": 0,
+                "current": "",
+                "cancel": False,
+            }
+        try:
+            yield
+        finally:
+            with self._tool_lock:
+                _ = self._tool_status.pop(game_id, None)
+
+    def _tool_progress(self, game_id: int) -> ProgressFn:
+        def report(done: int, total: int, current: str) -> None:
+            with self._tool_lock:
+                status = self._tool_status.get(game_id)
+                if status is not None:
+                    status.update(done=done, total=total, current=current)
+
+        return report
+
+    def _tool_cancelled(self, game_id: int) -> CancelFn:
+        def check() -> bool:
+            with self._tool_lock:
+                status = self._tool_status.get(game_id)
+                return bool(status and status.get("cancel"))
+
+        return check
+
+    def get_game_tool_status(self, game_id: object = None) -> dict[str, object]:
+        coerced_id = self._coerce_db_id(game_id)
+        with self._tool_lock:
+            status = self._tool_status.get(coerced_id) if coerced_id else None
+            if status is None:
+                return {
+                    "success": True,
+                    "running": False,
+                    "action": "",
+                    "done": 0,
+                    "total": 0,
+                    "current": "",
+                    "cancel": False,
+                }
+            return {"success": True, **status}
+
+    def cancel_game_tool(self, game_id: object = None) -> dict[str, object]:
+        coerced_id = self._coerce_db_id(game_id)
+        with self._tool_lock:
+            status = self._tool_status.get(coerced_id) if coerced_id else None
+            if status is None:
+                return {"success": False, "error": "No tool is running for this game"}
+            status["cancel"] = True
+        return {"success": True}
+
+    def _tool_game(self, game_id: object) -> tuple[int, str] | None:
+        """(id, executable folder) from the stored row, or None for an unknown id."""
+        from core.database import get_game
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return None
+        row = get_game(coerced_id)
+        if row is None:
+            return None
+        try:
+            return coerced_id, game_tool_folder(row)
+        except ValueError:
+            return coerced_id, ""
+
+    def get_game_tool_support(self, game_id: object = None) -> dict[str, object]:
+        from core.game_tools import detect_engine
+
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found", "engine": ""}
+        return {"success": True, "engine": detect_engine(game[1])}
+
+    def _renpy_tools_state(self, game_id: int, folder: str) -> dict[str, object]:
+        from core.renpy_tools import console_state, list_archives
+
+        urm = self.get_urm_status(game_id)
+        return {
+            "console": console_state(folder),
+            "archives": [
+                {key: value for key, value in archive.items() if key != "path"}
+                for archive in list_archives(folder)
+            ],
+            "urm": urm,
+        }
+
+    @staticmethod
+    def _rpgm_tools_state(root: str) -> dict[str, object]:
+        from core import rpgm_tools
+
+        assets = rpgm_tools.scan_assets(root)
+        _key, source = rpgm_tools.resolve_key(root, assets)
+        images = sum(1 for asset in assets if asset.image)
+        return {
+            "encrypted": len(assets),
+            "images": images,
+            "audio": len(assets) - images,
+            "missing": len(rpgm_tools.missing_copies(assets)),
+            "key_source": source,
+            "use_decrypted": rpgm_tools.read_use_decrypted(root),
+            "backup": rpgm_tools.has_backup(root),
+        }
+
+    def get_game_tools(self, game_id: object = None) -> dict[str, object]:
+        from core.game_tools import (
+            ENGINE_RENPY,
+            ENGINE_RPGM,
+            detect_engine,
+            rpgm_data_root,
+        )
+
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        coerced_id, folder = game
+        engine = detect_engine(folder)
+        try:
+            if engine == ENGINE_RENPY:
+                return {
+                    "success": True,
+                    "engine": engine,
+                    "renpy": self._renpy_tools_state(coerced_id, folder),
+                }
+            root = rpgm_data_root(folder) if engine == ENGINE_RPGM else None
+            if root is not None:
+                return {
+                    "success": True,
+                    "engine": engine,
+                    "rpgm": self._rpgm_tools_state(root),
+                }
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "engine": ""}
+
+    def _run_game_tool(
+        self,
+        game_id: object,
+        engine: str,
+        action: str,
+        body: Callable[[str, ProgressFn, CancelFn], dict[str, object]],
+    ) -> dict[str, object]:
+        """Shared guard for every tool action: resolve, check engine, run once."""
+        import sqlite3
+
+        from core.game_tools import GameToolError, detect_engine
+
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        coerced_id, folder = game
+        if detect_engine(folder) != engine:
+            label = "Ren'Py" if engine == "renpy" else "RPG Maker MV/MZ"
+            return {"success": False, "error": f"This game is not a {label} game"}
+        try:
+            with self._tool_run(coerced_id, action):
+                result = body(
+                    folder,
+                    self._tool_progress(coerced_id),
+                    self._tool_cancelled(coerced_id),
+                )
+        except (GameToolError, ValueError, OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, **result}
+
+    def set_renpy_console(
+        self, game_id: object = None, enabled: object = None, developer: object = False
+    ) -> dict[str, object]:
+        from core import renpy_tools
+
+        if not isinstance(enabled, bool) or not isinstance(developer, bool):
+            return {"success": False, "error": "Enabled and developer must be booleans"}
+
+        def body(folder: str, _p: ProgressFn, _c: CancelFn) -> dict[str, object]:
+            return {"state": renpy_tools.set_console(folder, enabled, developer)}
+
+        return self._run_game_tool(game_id, "renpy", "console", body)
+
+    def extract_renpy_archives(
+        self, game_id: object = None, options: object = None
+    ) -> dict[str, object]:
+        from core import renpy_tools
+        from core.game_tools import format_bytes
+
+        opts = cast(dict[str, object], options) if isinstance(options, dict) else {}
+        mode = str(opts.get("mode") or "folder")
+        output = str(opts.get("output") or "")
+
+        def body(
+            folder: str, progress: ProgressFn, cancelled: CancelFn
+        ) -> dict[str, object]:
+            result = renpy_tools.extract_archives(
+                folder, mode, output, progress, cancelled
+            )
+            parts = [
+                f"Extracted {result['files']} file(s) "
+                + f"({format_bytes(int(str(result['bytes'])))})"
+            ]
+            if result["skipped"]:
+                parts.append(f"skipped {result['skipped']}")
+            unsupported = cast(list[str], result["unsupported"])
+            if unsupported:
+                parts.append("unsupported: " + ", ".join(unsupported))
+            if result["cancelled"]:
+                parts.append("cancelled")
+            return {**result, "message": "; ".join(parts)}
+
+        return self._run_game_tool(game_id, "renpy", "extract", body)
+
+    def decrypt_rpgm_assets(self, game_id: object = None) -> dict[str, object]:
+        from core import rpgm_tools
+        from core.game_tools import GameToolError, rpgm_data_root
+
+        def body(
+            folder: str, progress: ProgressFn, cancelled: CancelFn
+        ) -> dict[str, object]:
+            root = rpgm_data_root(folder)
+            if root is None:
+                raise GameToolError("System.json was not found")
+            result = rpgm_tools.decrypt_assets(root, progress, cancelled)
+            message = f"Decrypted {result['decrypted']} file(s)"
+            if result["already"]:
+                message += f"; {result['already']} already decrypted"
+            if result["skipped"]:
+                message += f"; skipped {result['skipped']}"
+            if result["key_source"] == rpgm_tools.KEY_SOURCE_RECOVERED:
+                message += "; key recovered from an image"
+            if result["cancelled"]:
+                message += "; cancelled"
+            return {**result, "message": message}
+
+        return self._run_game_tool(game_id, "rpgm", "decrypt", body)
+
+    def set_rpgm_use_decrypted(
+        self, game_id: object = None, enabled: object = None
+    ) -> dict[str, object]:
+        from core import rpgm_tools
+        from core.game_tools import GameToolError, rpgm_data_root
+
+        if not isinstance(enabled, bool):
+            return {"success": False, "error": "Enabled must be a boolean"}
+
+        def body(folder: str, _p: ProgressFn, _c: CancelFn) -> dict[str, object]:
+            root = rpgm_data_root(folder)
+            if root is None:
+                raise GameToolError("System.json was not found")
+            rpgm_tools.set_use_decrypted(root, enabled)
+            return {"use_decrypted": rpgm_tools.read_use_decrypted(root)}
+
+        return self._run_game_tool(game_id, "rpgm", "switch", body)
 
     def install_rpgmaker_dependencies(
         self, prefix_path: str | None = None, proton_path: str | None = None

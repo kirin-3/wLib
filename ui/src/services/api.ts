@@ -612,6 +612,86 @@ export interface UrmStatusResponse extends ApiBasicResponse {
   source_configured?: boolean;
 }
 
+export type GameToolEngine = "renpy" | "rpgm" | "";
+export type RenpyConsoleState = "off" | "on" | "developer";
+export type RenpyExtractMode = "folder" | "in_place";
+export type RpgmKeySource = "system" | "recovered" | "";
+
+export interface GameToolSupportResponse extends ApiBasicResponse {
+  engine?: GameToolEngine;
+}
+
+export interface RenpyArchive {
+  name: string;
+  size: number;
+  // "RPA-3.0" etc., or "" when the header is not one wLib can read
+  format: string;
+}
+
+export interface RenpyToolsState {
+  console: RenpyConsoleState;
+  archives: RenpyArchive[];
+  urm: UrmStatusResponse;
+}
+
+export interface RpgmToolsState {
+  encrypted: number;
+  images: number;
+  audio: number;
+  // encrypted assets without a decrypted copy yet
+  missing: number;
+  key_source: RpgmKeySource;
+  use_decrypted: boolean;
+  backup: boolean;
+}
+
+export interface GameToolsResponse extends ApiBasicResponse {
+  engine?: GameToolEngine;
+  renpy?: RenpyToolsState;
+  rpgm?: RpgmToolsState;
+}
+
+export interface GameToolStatus extends ApiBasicResponse {
+  running: boolean;
+  action: string;
+  done: number;
+  total: number;
+  current: string;
+  cancel: boolean;
+}
+
+export interface RenpyExtractOptions {
+  mode: RenpyExtractMode;
+  output?: string;
+}
+
+export interface GameToolResult extends ApiBasicResponse {
+  message?: string;
+  cancelled?: boolean;
+  // console switch
+  state?: RenpyConsoleState;
+  // extraction
+  files?: number;
+  bytes?: number;
+  skipped?: number;
+  skipped_scripts?: number;
+  skipped_existing?: number;
+  unsupported?: string[];
+  // decryption
+  decrypted?: number;
+  already?: number;
+  key_source?: RpgmKeySource;
+  use_decrypted?: boolean;
+}
+
+interface MockToolRun {
+  action: string;
+  done: number;
+  total: number;
+  current: string;
+  cancel: boolean;
+}
+
 export interface SettingsResponse {
   tag_colors: Record<string, string>;
   update_notifications?: boolean;
@@ -1125,7 +1205,152 @@ class ApiService {
   _mockRunningGames = new Set<number>();
   _mockPendingMetadata = new Set<number>();
   _mockUrmInstalled = new Set<number>();
+  _mockToolRuns = new Map<number, MockToolRun>();
+  // Slow enough for the 500 ms status poll to see progress in the browser preview.
+  _mockToolStepMs = 350;
+  _mockRenpyConsole = new Map<number, RenpyConsoleState>();
+  _mockRpgmDecrypted = new Set<number>();
+  _mockRpgmUseDecrypted = new Set<number>();
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
+
+  _mockToolEngine(gameId: number): GameToolEngine {
+    const engine = readMockGames().find((game) => game.id === gameId)?.engine ?? "";
+    if (/ren.?py/i.test(engine)) return "renpy";
+    if (/rpg/i.test(engine)) return "rpgm";
+    return "";
+  }
+
+  // Mirrors the desktop rules: a known game of the right engine, not running, one run at a time.
+  _mockToolGuard(gameId: number, engine: GameToolEngine): string {
+    if (!readMockGames().some((game) => game.id === gameId)) return "Game not found";
+    if (this._mockToolEngine(gameId) !== engine) {
+      return `This game is not a ${engine === "renpy" ? "Ren'Py" : "RPG Maker MV/MZ"} game`;
+    }
+    if (this._mockRunningGames.has(gameId)) return "Close the game before using its tools";
+    if (this._mockToolRuns.has(gameId)) return "A tool is already running for this game";
+    return "";
+  }
+
+  // Advances one file per tick so polling sees `done` grow, like the desktop run.
+  async _runMockTool(gameId: number, action: string, total: number): Promise<{ done: number; cancelled: boolean }> {
+    const run: MockToolRun = { action, done: 0, total, current: "", cancel: false };
+    this._mockToolRuns.set(gameId, run);
+    try {
+      while (run.done < run.total && !run.cancel) {
+        run.current = `file_${run.done + 1}.png`;
+        await new Promise((resolve) => setTimeout(resolve, this._mockToolStepMs));
+        if (run.cancel) break;
+        run.done += 1;
+      }
+      return { done: run.done, cancelled: run.cancel };
+    } finally {
+      this._mockToolRuns.delete(gameId);
+    }
+  }
+
+  _mockGameTools(gameId: number): GameToolsResponse {
+    const engine = this._mockToolEngine(gameId);
+    if (engine === "renpy") {
+      return {
+        success: true,
+        mock: true,
+        engine,
+        renpy: {
+          console: this._mockRenpyConsole.get(gameId) ?? "off",
+          archives: [
+            { name: "images.rpa", size: 52428800, format: "RPA-3.0" },
+            { name: "scripts.rpa", size: 1048576, format: "RPA-3.0" },
+          ],
+          urm: {
+            success: true,
+            renpy: true,
+            installed: this._mockUrmInstalled.has(gameId),
+            source_configured: /\.rpa$/i.test(readMockSettings().urm_rpa_path),
+          },
+        },
+      };
+    }
+    if (engine === "rpgm") {
+      const decrypted = this._mockRpgmDecrypted.has(gameId);
+      return {
+        success: true,
+        mock: true,
+        engine,
+        rpgm: {
+          encrypted: 12,
+          images: 8,
+          audio: 4,
+          missing: decrypted ? 0 : 12,
+          key_source: "system",
+          use_decrypted: this._mockRpgmUseDecrypted.has(gameId),
+          backup: this._mockRpgmUseDecrypted.has(gameId),
+        },
+      };
+    }
+    return { success: true, mock: true, engine: "" };
+  }
+
+  async _mockGameToolAction(method: string, args: unknown[]): Promise<unknown> {
+    const gameId = Number(args[0]);
+    const fail = (error: string) => ({ success: false, mock: true, error });
+    switch (method) {
+      case "set_renpy_console": {
+        const error = this._mockToolGuard(gameId, "renpy");
+        if (error) return fail(error);
+        const state: RenpyConsoleState = args[1] ? (args[2] ? "developer" : "on") : "off";
+        this._mockRenpyConsole.set(gameId, state);
+        return { success: true, mock: true, state };
+      }
+      case "extract_renpy_archives": {
+        const error = this._mockToolGuard(gameId, "renpy");
+        if (error) return fail(error);
+        const options = (args[1] ?? {}) as Partial<RenpyExtractOptions>;
+        if (options.mode !== "in_place" && !(options.output && options.output.startsWith("/"))) {
+          return fail("Choose an output folder");
+        }
+        const run = await this._runMockTool(gameId, "extract", 8);
+        return {
+          success: true,
+          mock: true,
+          files: run.done,
+          bytes: run.done * 1048576,
+          skipped: 0,
+          skipped_scripts: 0,
+          skipped_existing: 0,
+          unsupported: [],
+          cancelled: run.cancelled,
+          message: `Extracted ${run.done} file(s)${run.cancelled ? "; cancelled" : ""}`,
+        };
+      }
+      case "decrypt_rpgm_assets": {
+        const error = this._mockToolGuard(gameId, "rpgm");
+        if (error) return fail(error);
+        const run = await this._runMockTool(gameId, "decrypt", 12);
+        if (run.done === 12) this._mockRpgmDecrypted.add(gameId);
+        return {
+          success: true,
+          mock: true,
+          decrypted: run.done,
+          already: 0,
+          skipped: 0,
+          key_source: "system",
+          cancelled: run.cancelled,
+          message: `Decrypted ${run.done} file(s)${run.cancelled ? "; cancelled" : ""}`,
+        };
+      }
+      default: {
+        const error = this._mockToolGuard(gameId, "rpgm");
+        if (error) return fail(error);
+        const enabled = args[1] === true;
+        if (enabled && !this._mockRpgmDecrypted.has(gameId)) {
+          return fail("12 encrypted asset(s) still need decrypting first");
+        }
+        if (enabled) this._mockRpgmUseDecrypted.add(gameId);
+        else this._mockRpgmUseDecrypted.delete(gameId);
+        return { success: true, mock: true, use_decrypted: enabled };
+      }
+    }
+  }
 
   async invoke<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
     const invoker = window.pywebview?.api?.[method];
@@ -1382,6 +1607,38 @@ class ApiService {
 
   async browseUrmFile(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_urm_file", startPath);
+  }
+
+  async getGameToolSupport(gameId: number): Promise<GameToolSupportResponse> {
+    return this.invoke<GameToolSupportResponse>("get_game_tool_support", gameId);
+  }
+
+  async getGameTools(gameId: number): Promise<GameToolsResponse> {
+    return this.invoke<GameToolsResponse>("get_game_tools", gameId);
+  }
+
+  async setRenpyConsole(gameId: number, enabled: boolean, developer: boolean): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("set_renpy_console", gameId, enabled, developer);
+  }
+
+  async extractRenpyArchives(gameId: number, options: RenpyExtractOptions): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("extract_renpy_archives", gameId, options);
+  }
+
+  async decryptRpgmAssets(gameId: number): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("decrypt_rpgm_assets", gameId);
+  }
+
+  async setRpgmUseDecrypted(gameId: number, enabled: boolean): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("set_rpgm_use_decrypted", gameId, enabled);
+  }
+
+  async getGameToolStatus(gameId: number): Promise<GameToolStatus> {
+    return this.invoke<GameToolStatus>("get_game_tool_status", gameId);
+  }
+
+  async cancelGameTool(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("cancel_game_tool", gameId);
   }
 
   async getExecutableModifiedTime(exe_path: string): Promise<ExecutableModifiedTimeResponse> {
@@ -1805,6 +2062,44 @@ class ApiService {
           else this._mockUrmInstalled.delete(gameId);
         }
         return { success: true, renpy, installed: this._mockUrmInstalled.has(gameId), source_configured: sourceConfigured };
+      }
+      case "get_game_tool_support": {
+        const gameId = Number(args[0]);
+        if (!readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found", engine: "" };
+        }
+        return { success: true, mock: true, engine: this._mockToolEngine(gameId) };
+      }
+      case "get_game_tools": {
+        const gameId = Number(args[0]);
+        if (!readMockGames().some((game) => game.id === gameId)) {
+          return { success: false, mock: true, error: "Game not found" };
+        }
+        return this._mockGameTools(gameId);
+      }
+      case "set_renpy_console":
+      case "extract_renpy_archives":
+      case "decrypt_rpgm_assets":
+      case "set_rpgm_use_decrypted":
+        return this._mockGameToolAction(method, args);
+      case "get_game_tool_status": {
+        const run = this._mockToolRuns.get(Number(args[0]));
+        return {
+          success: true,
+          mock: true,
+          running: !!run,
+          action: run?.action ?? "",
+          done: run?.done ?? 0,
+          total: run?.total ?? 0,
+          current: run?.current ?? "",
+          cancel: run?.cancel ?? false,
+        };
+      }
+      case "cancel_game_tool": {
+        const run = this._mockToolRuns.get(Number(args[0]));
+        if (!run) return { success: false, mock: true, error: "No tool is running for this game" };
+        run.cancel = true;
+        return { success: true, mock: true };
       }
       case "get_settings":
         return readMockSettings();

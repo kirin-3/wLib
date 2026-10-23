@@ -41,7 +41,7 @@ import type {
   RpgmakerLinuxRunnerStatus,
   RunnerInfo,
   UpdateGameResponse,
-  UrmStatusResponse,
+  GameToolEngine,
 } from "../../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
@@ -62,6 +62,7 @@ import {
 } from "../../utils/playStatus";
 import PathStatus from "../PathStatus.vue";
 import GameSavesSection from "../GameSavesSection.vue";
+import GameToolsTab from "../GameToolsTab.vue";
 
 type UpdateCheckState = {
   running: boolean;
@@ -141,8 +142,12 @@ const latestVersion = ref("");
 const skippedVersion = ref("");
 const savingSkip = ref(false);
 const engineMenuOpen = ref(false);
-const detailTabs = ["Overview", "Journal", "Launch", "Info", "Notes"] as const;
-const activeTab = ref<(typeof detailTabs)[number]>("Overview");
+const baseTabs = ["Overview", "Journal", "Launch", "Info", "Notes"] as const;
+type DetailTab = (typeof baseTabs)[number] | "Tools";
+// "Tools" exists only for games whose folder is a supported engine.
+const toolEngine = ref<GameToolEngine>("");
+const detailTabs = computed<DetailTab[]>(() => (toolEngine.value ? [...baseTabs, "Tools"] : [...baseTabs]));
+const activeTab = ref<DetailTab>("Overview");
 const notes = ref("");
 const notesEditing = ref(false);
 const attachments = ref<GameAttachment[]>([]);
@@ -226,9 +231,6 @@ const engineDropdownRef = ref<HTMLElement | null>(null);
 
 const customStatuses = ref<string[]>([]);
 const statuses = computed(() => getPlayStatusOptions([...customStatuses.value, playStatus.value]));
-const urmStatus = ref<UrmStatusResponse>({});
-const urmBusy = ref(false);
-const urmError = ref("");
 const runnerOptions = computed(() => protonVersion.value && !availableRunners.value.some((runner) => runner.path === protonVersion.value)
   ? [...availableRunners.value, { path: protonVersion.value, name: `${protonVersion.value} (custom)` }]
   : availableRunners.value);
@@ -581,8 +583,7 @@ watch(
       loadingRunners.value = false;
       rpgmakerLinuxRunnerLoaded.value = false;
       rpgmakerLinuxRunnerError.value = "";
-      urmStatus.value = {};
-      urmError.value = "";
+      toolEngine.value = "";
       void api
         .getCollections()
         .then((collections) => {
@@ -746,7 +747,12 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   const target = event.currentTarget as HTMLElement;
   tagColorPicker.value = { tag, anchor: target.querySelector<HTMLButtonElement>(".tag-name-button") || target };
 }
-const selectTab = (tab: (typeof detailTabs)[number]) => {
+// A game without tools (or no game) has no Tools tab: show Overview instead of an empty panel.
+watch(toolEngine, (engine) => {
+  if (!engine && activeTab.value === "Tools") activeTab.value = "Overview";
+});
+
+const selectTab = (tab: DetailTab) => {
   activeTab.value = tab;
   engineMenuOpen.value = false;
   modalRef.value?.querySelector(".modal-scroll-body")?.scrollTo(0, 0);
@@ -754,13 +760,13 @@ const selectTab = (tab: (typeof detailTabs)[number]) => {
 
 const onTabKeydown = (event: KeyboardEvent, index: number) => {
   let nextIndex: number;
-  if (event.key === "ArrowRight") nextIndex = (index + 1) % detailTabs.length;
-  else if (event.key === "ArrowLeft") nextIndex = (index + detailTabs.length - 1) % detailTabs.length;
+  if (event.key === "ArrowRight") nextIndex = (index + 1) % detailTabs.value.length;
+  else if (event.key === "ArrowLeft") nextIndex = (index + detailTabs.value.length - 1) % detailTabs.value.length;
   else if (event.key === "Home") nextIndex = 0;
-  else if (event.key === "End") nextIndex = detailTabs.length - 1;
+  else if (event.key === "End") nextIndex = detailTabs.value.length - 1;
   else return;
   event.preventDefault();
-  selectTab(detailTabs[nextIndex]!);
+  selectTab(detailTabs.value[nextIndex]!);
   (event.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
 };
 useModalKeyboard(
@@ -870,39 +876,14 @@ const loadRpgmakerLinuxRunnerStatus = async () => {
 const loadGameExtras = async () => {
   if (!props.game) return;
   const gameId = props.game.id;
-  try {
-    const [settings, status] = await Promise.all([api.getSettings(), api.getUrmStatus(gameId)]);
-    if (isCurrentGame(gameId)) {
-      customStatuses.value = settings.custom_play_statuses || [];
-      urmStatus.value = status;
-    }
-  } catch (error) {
-    console.error("Failed to load game settings", error);
-  }
+  // Settled separately so a failed tool check never drops the custom statuses.
+  const [settings, support] = await Promise.allSettled([api.getSettings(), api.getGameToolSupport(gameId)]);
+  if (!isCurrentGame(gameId)) return;
+  if (settings.status === "fulfilled") customStatuses.value = settings.value.custom_play_statuses || [];
+  else console.error("Failed to load game settings", settings.reason);
+  if (support.status === "fulfilled") toolEngine.value = support.value.engine ?? "";
+  else console.error("Failed to check game tools", support.reason);
 };
-
-const toggleUrm = async () => {
-  if (!props.game || urmBusy.value) return;
-  const gameId = props.game.id;
-  urmBusy.value = true;
-  urmError.value = "";
-  try {
-    const result = await api.setUrmInstalled(gameId, !urmStatus.value.installed);
-    if (!isCurrentGame(gameId)) return;
-    if (result.success === false) urmError.value = result.error || "Could not update URM";
-    else urmStatus.value = result;
-  } catch (error) {
-    if (isCurrentGame(gameId)) urmError.value = String(error);
-  } finally {
-    urmBusy.value = false;
-  }
-};
-
-// v-model re-syncs the checkbox from urmStatus on re-render, so a failed toggle snaps back.
-const urmInstalled = computed({
-  get: () => !!urmStatus.value.installed,
-  set: () => void toggleUrm(),
-});
 
 const loadLaunchTargets = async () => {
   if (!props.game || typeof props.game.id !== "number") return;
@@ -2366,27 +2347,6 @@ const removeAttachment = async (name: string) => {
             </div>
           </div>
 
-          <div v-if="urmStatus.renpy" class="rounded-lg p-4 space-y-2" style="background: var(--bg-raised); border: 1px solid var(--border)">
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm font-medium" style="color: var(--text-primary)">Universal Ren'Py Mod (URM)</span>
-              <label
-                class="relative inline-flex items-center"
-                :class="urmStatus.source_configured && !urmBusy ? 'cursor-pointer' : 'cursor-not-allowed'"
-              >
-                <input
-                  type="checkbox"
-                  v-model="urmInstalled"
-                  :disabled="urmBusy || !urmStatus.source_configured"
-                  class="sr-only peer"
-                  aria-label="Universal Ren'Py Mod (URM)"
-                />
-                <div class="ui-toggle"></div>
-              </label>
-            </div>
-            <p v-if="!urmStatus.source_configured" class="text-xs" style="color: var(--text-muted)">Configure a URM .rpa source file in Settings to enable this control.</p>
-            <p v-if="urmError" role="alert" class="text-xs text-red-400">{{ urmError }}</p>
-          </div>
-
           <GameSavesSection
             v-if="game && typeof game.id === 'number'"
             :game-id="game.id"
@@ -2620,6 +2580,18 @@ const removeAttachment = async (name: string) => {
               </li>
             </ul>
           </div>
+        </section>
+
+        <section
+          v-if="toolEngine && game && typeof game.id === 'number'"
+          v-show="activeTab === 'Tools'"
+          id="game-detail-panel-Tools"
+          role="tabpanel"
+          aria-labelledby="game-detail-tab-Tools"
+          tabindex="0"
+          class="space-y-6"
+        >
+          <GameToolsTab :game-id="game.id" :engine="toolEngine" :active="modelValue && activeTab === 'Tools'" />
         </section>
       </div>
 

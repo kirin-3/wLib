@@ -277,3 +277,67 @@ test("browser mock game saves keep the desktop payload shape", async () => {
     delete globalThis.localStorage;
   }
 });
+
+test("browser mock game tools report support and advance progress across polls", async () => {
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    api._mockToolStepMs = 40;
+    const game = (id, engine) => ({ id, title: `G${id}`, engine, exe_path: `/g/${id}/run.sh` });
+    localStorage.setItem(
+      "wlib-mock-games",
+      JSON.stringify([game(1, "Ren'Py"), game(2, "RPGM"), game(3, "Unity")]),
+    );
+
+    assert.equal((await api.getGameToolSupport(1)).engine, "renpy");
+    assert.equal((await api.getGameToolSupport(2)).engine, "rpgm");
+    assert.equal((await api.getGameToolSupport(3)).engine, "");
+    assert.equal((await api.getGameToolSupport(99)).success, false);
+    assert.equal((await api.getGameTools(1)).renpy.archives.length, 2);
+    assert.equal((await api.getGameTools(2)).rpgm.missing, 12);
+    assert.equal((await api.getGameTools(3)).engine, "");
+
+    assert.equal((await api.setRenpyConsole(1, true, true)).state, "developer");
+    assert.equal((await api.getGameTools(1)).renpy.console, "developer");
+    assert.equal((await api.setRenpyConsole(2, true, false)).success, false);
+    assert.equal((await api.extractRenpyArchives(1, { mode: "folder" })).success, false);
+
+    assert.equal((await api.setRpgmUseDecrypted(2, true)).success, false);
+    const run = api.decryptRpgmAssets(2);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const early = await api.getGameToolStatus(2);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const later = await api.getGameToolStatus(2);
+    assert.equal(early.running, true);
+    assert.equal(early.total, 12);
+    assert.ok(later.done > early.done);
+    assert.equal((await api.decryptRpgmAssets(2)).success, false);
+    assert.equal((await api.cancelGameTool(2)).success, true);
+    const cancelled = await run;
+    assert.equal(cancelled.cancelled, true);
+    assert.equal((await api.getGameToolStatus(2)).running, false);
+    assert.equal((await api.cancelGameTool(2)).success, false);
+
+    const done = await api.decryptRpgmAssets(2);
+    assert.equal(done.decrypted, 12);
+    assert.equal((await api.setRpgmUseDecrypted(2, true)).use_decrypted, true);
+    assert.equal((await api.getGameTools(2)).rpgm.use_decrypted, true);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

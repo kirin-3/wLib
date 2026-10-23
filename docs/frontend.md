@@ -77,7 +77,7 @@ The UI runs inside PyWebView and calls backend methods via `window.pywebview.api
 - **Running Games**: `getRunningGames()` seeds Library's running IDs on mount and reconciles successful launches. Cards in every layout and Game Detail replace Play with Stop; target choices are hidden while running. `stopGame()` requests termination, and the final playtime tick clears state even with zero seconds. HTML launches remain untracked.
 - **Runner Selection**: Game Detail shows Runner (Wine / Proton) independently of the custom prefix toggle, preserving undiscovered stored paths as custom options. The Settings global runner field uses a native datalist while accepting free text.
 - **Custom Statuses**: Settings adds/removes `custom_play_statuses`, validates names inline, and confirms the number of affected games before removal. Filters combine canonical choices, Settings names, then values found on games. Detail chips and badges use `IconTag` plus `ui-status-tone-custom`; compact cards still omit status metadata. Custom filters persist across navigation.
-- **URM**: Settings selects `urm_rpa_path` through `browseUrmFile()`. Detail uses `getUrmStatus()` and `setUrmInstalled()` for the Ren'Py-only toggle, with a Settings hint if no valid source exists.
+- **URM**: Settings selects `urm_rpa_path` through `browseUrmFile()`. The Tools tab uses `getUrmStatus()` (through `getGameTools()`) and `setUrmInstalled()` for the Ren'Py-only toggle, with a Settings hint if no valid source exists.
 - **Browser Testing**: Mocks persist games under `wlib-mock-games` and settings under `wlib-mock-settings`. Set `wlib-mock-platform` to `linux` and reload to exercise Linux controls and sample runner suggestions; the default remains conservative. Running/URM mock state lasts for the browser session. Mock Ren'Py detection uses engine metadata because no filesystem is available.
 
 Windows capabilities offer Auto Detect and native Windows targets. The shared launch-mode UI retains an imported Linux mode with an **Unavailable on this platform** label so users can switch it to Auto Detect; saving other fields preserves hidden per-game runtime values. Extension paths come from the backend and use Windows separators when appropriate.
@@ -114,6 +114,18 @@ The **Saves** section sits at the end of the Launch tab in `GameDetailModal.vue`
 - **Styling**: the section defines its own scoped `.saves-btn` and `.saves-label` because the modal's button styles are scoped to the modal; it uses theme tokens only.
 - **Settings**: the General section has "Save backups to keep per game" (`Keep all`, newest 1, 3, 5, 10, 20, or a custom 1–99). It saves through `saveSettings({ save_backup_keep })` as soon as it changes and reverts with an error toast if the save fails.
 - **Browser mocks**: `services/api.ts` keeps a per-game override and backup list in localStorage (`wlib-mock-game-saves`), so the section works in a plain browser.
+
+## Game tools
+
+`GameDetailModal.vue` shows a **Tools** tab (`components/GameToolsTab.vue`, props `gameId`, `engine`, `active`) only for Ren'Py and RPG Maker MV/MZ games. The tab list is a computed list: `loadGameExtras` calls `api.getGameToolSupport(id)` and Tools is added when it reports an engine; if the engine disappears while Tools is active the modal falls back to Overview. The URM toggle, state and handlers moved here from the Launch tab.
+
+- **Loading**: `api.getGameTools(id)` runs the first time the tab is shown for a game; the tab drops its state and polling when the game changes, ignores stale responses, and reloads after every change.
+- **Ren'Py**: Developer console switch plus an "Also enable developer mode" checkbox (changing it rewrites the script only while the console is on), the archive list (name, format, size) with a "Where to extract" radio (folder via `api.browseDirectory`, or into the game folder) and Extract, and the URM switch.
+- **RPG Maker**: Decrypt (encrypted counts, key source, missing copies) and the "Use decrypted files in-game" switch, which shows why it is disabled.
+- **Runs**: extraction and decryption block their API call; the tab polls `getGameToolStatus()` every 500 ms and shows a progress bar (placed first in the tab, above the fold) with Cancel (`cancelGameTool()`). Every control is disabled while any tool call runs.
+- **Helpers**: `utils/gameTools.ts` holds `formatToolProgress`, `toolProgressPercent`, `getExtractState`, `getDecryptState`, `getUseDecryptedState` (availability plus the reason), `consoleHint`, `keySourceLabel` and `formatToolBytes`, tested in `gameTools.test.ts`.
+- **Styling**: scoped `.tools-card`, `.tools-btn` and progress-bar styles with theme tokens only; it shares the modal's fixed size and scrolls inside the tab area.
+- **Browser mocks**: `services/api.ts` infers the engine from the mock game's `engine` label and keeps console, decrypted and switch state for the session. Extract and Decrypt run one file per `_mockToolStepMs` so polling sees `done` advance, and Cancel works.
 
 ## Game notes and attachments
 
