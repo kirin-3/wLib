@@ -109,7 +109,9 @@ def test_check_path_rejects_folders_for_file_kinds(tmp_path):
 
 @pytest.fixture
 def saves_api(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # expanduser("~") reads USERPROFILE on Windows and HOME elsewhere.
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(tmp_path / "home"))
     root = tmp_path / "save-backups"
     api = Api()
     monkeypatch.setattr(Api, "_save_backups_root", staticmethod(lambda: str(root)))

@@ -50,7 +50,9 @@ def _linux_host(monkeypatch, tmp_path, tmp_path_factory):
     from core.database import init_db
 
     init_db()
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # expanduser("~") reads USERPROFILE on Windows and HOME elsewhere.
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(tmp_path / "home"))
 
 
 # ── 2.1 Detection ────────────────────────────────────────────────────────
