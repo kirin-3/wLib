@@ -544,6 +544,32 @@ class Scraper:
             "thread_main_post_checked_at": datetime.now().isoformat(),
         }
 
+    def _starter_hides_attachments(self, html: str) -> bool:
+        """True when the starter post hides attachments from guests."""
+        starter = next(
+            _blocks(html, "article", "message-threadStarterPost"), ("", "")
+        )[1]
+        return "messageHide--attach" in starter
+
+    def _reload_signed_in(self, url: str, guest_html: str) -> str:
+        """Re-fetch a guest page through the extension to reveal attachments.
+
+        Plain HTTP is always a guest session, so screenshots posted as
+        attachments are replaced by a login prompt. The extension runs with
+        the browser's F95 login. Any failure keeps the guest page.
+        """
+        try:
+            if not extension_bridge.is_available():
+                return guest_html
+            ext_status, ext_body = _f95_get_via_extension(url)
+        except Exception:
+            return guest_html
+        if ext_status != 200 or self._classify_page_issue(
+            ext_status, self._page_title(ext_body), ext_body
+        ):
+            return guest_html
+        return ext_body
+
     def _get_page(self, thread_id: str) -> ScraperResult:
         try:
             status, html, fallback = self._fetch_with_fallback(
@@ -557,6 +583,10 @@ class Scraper:
             if status != 200:
                 return self._error(
                     "scraper_error", f"F95Zone returned HTTP {status}"
+                )
+            if fallback is None and self._starter_hides_attachments(html):
+                html = self._reload_signed_in(
+                    f"https://f95zone.to/threads/{thread_id}/", html
                 )
             return self._extract_page(html)
         except _F95RequestError as exc:

@@ -918,3 +918,44 @@ def test_check_versions_page_fallback_carries_screenshots(
         "https://example.com/external-shot.png",
     ]
     assert get.call_count == 2
+
+
+_GUEST_HIDDEN_PAGE = (
+    "<title>Game [v1.0]</title>"
+    '<h1 class="p-title-value">Game [v1.0]</h1>'
+    '<article class="message-threadStarterPost">'
+    '<div class="bbWrapper"><div class="messageHide messageHide--attach">'
+    "Log in or register to see attachments</div></div></article>"
+)
+_SIGNED_IN_PAGE = _GUEST_HIDDEN_PAGE.replace(
+    '<div class="messageHide messageHide--attach">'
+    "Log in or register to see attachments</div>",
+    '<img class="bbImage" src="https://example.com/cover.png">'
+    '<img class="bbImage" src="https://example.com/shot.png">',
+)
+
+
+def test_hidden_attachments_reload_through_extension(monkeypatch):
+    _reset_scraper_globals()
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE))
+    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
+    via_ext = MagicMock(return_value=(200, _SIGNED_IN_PAGE))
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_ext)
+    result = Scraper()._get_page("1")
+    assert result["screenshots"] == ["https://example.com/shot.png"]
+    assert via_ext.call_count == 1
+    _reset_scraper_globals()
+
+
+def test_hidden_attachments_keep_guest_page_without_extension(monkeypatch):
+    _reset_scraper_globals()
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE))
+    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: False)
+    result = Scraper()._get_page("1")
+    assert result["success"]
+    assert result["screenshots"] == []
+    _reset_scraper_globals()
