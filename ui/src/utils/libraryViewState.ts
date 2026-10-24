@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { PLAY_STATUSES } from "./playStatus.ts";
 
-export type LayoutMode = "grid" | "list" | "compact";
+export type LayoutMode = "grid" | "list" | "compact" | "banner";
 export type SortDir = "asc" | "desc";
 export type SortField =
   | "title"
@@ -116,7 +116,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   activeCollection: "",
 };
 
-const VALID_LAYOUT_MODES = new Set<LayoutMode>(["grid", "list", "compact"]);
+const VALID_LAYOUT_MODES = new Set<LayoutMode>(["grid", "list", "compact", "banner"]);
 export const VALID_SORT_FIELDS = new Set<SortField>([
   "title",
   "version",

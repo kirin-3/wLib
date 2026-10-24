@@ -64,6 +64,20 @@ test("new collections and sortable table columns survive persistence", () => {
   }
 });
 
+test("banner layout survives persistence", () => {
+  const storage = new MemoryStorage();
+  saveLibraryViewState(storage, normalizeLibraryViewState({ layoutMode: "banner" }));
+  assert.equal(readLibraryViewState(storage).state.layoutMode, "banner");
+});
+
+test("banner layout is accepted from the legacy layout key", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(LEGACY_LAYOUT_MODE_STORAGE_KEY, "banner");
+  const restored = readLibraryViewState(storage);
+  assert.equal(restored.source, "legacy");
+  assert.equal(restored.state.layoutMode, "banner");
+});
+
 test("install state filter survives persistence", () => {
   const storage = new MemoryStorage();
   saveLibraryViewState(storage, normalizeLibraryViewState({ filterInstallState: "wishlist" }));

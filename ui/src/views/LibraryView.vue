@@ -17,6 +17,7 @@ import {
   IconFilterFilled,
   IconLibraryPlus,
   IconLayoutGridFilled,
+  IconPanoramaHorizontalFilled,
   IconLayoutListFilled,
   IconFolderPlus,
   IconLoader2,
@@ -204,6 +205,10 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
 }
 const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
+// Compact and banner both draw image-only tiles (cover, overlay, bottom row).
+const isImageTileLayout = computed(
+  () => layoutMode.value === "compact" || layoutMode.value === "banner",
+);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
 const sortDir = ref<SortDir>(DEFAULT_LIBRARY_VIEW_STATE.sortDir);
 
@@ -2000,6 +2005,18 @@ onUnmounted(() => {
               >
                 <IconLayoutGridFilled class="ui-action-icon opacity-90" />
               </button>
+              <button
+                @click="layoutMode = 'banner'"
+                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+                :style="
+                  layoutMode === 'banner'
+                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                    : 'color: var(--text-muted)'
+                "
+                title="Banner View"
+              >
+                <IconPanoramaHorizontalFilled class="ui-action-icon" />
+              </button>
             </div>
           </div>
         </div>
@@ -2197,7 +2214,9 @@ onUnmounted(() => {
         :class="
           layoutMode === 'compact'
             ? 'library-cards--compact'
-            : 'library-cards--grid'
+            : layoutMode === 'banner'
+              ? 'library-cards--banner'
+              : 'library-cards--grid'
         "
       >
         <div
@@ -2213,14 +2232,21 @@ onUnmounted(() => {
           :aria-label="`${game.title}. Press Enter for details.`"
           class="game-card group rounded-xl cursor-pointer relative"
           :class="[
-            layoutMode === 'compact' ? 'aspect-[16/9]' : 'flex flex-col',
-            { 'is-running': runningGameIds.has(game.id) },
+            layoutMode === 'banner'
+              ? 'aspect-[2/1]'
+              : isImageTileLayout
+                ? 'aspect-[16/9]'
+                : 'flex flex-col',
+            {
+              'is-running': runningGameIds.has(game.id),
+              'is-menu-open': openLaunchTargetMenuId === game.id,
+            },
           ]"
         >
           <div
             class="flex items-center justify-center relative shadow-inner shrink-0 rounded-t-xl"
             :class="
-              layoutMode === 'compact'
+              isImageTileLayout
                 ? 'w-full h-full rounded-b-xl'
                 : 'w-full aspect-[16/9]'
             "
@@ -2236,8 +2262,11 @@ onUnmounted(() => {
               v-if="game.cover_image_path"
               :src="game.cover_image_path"
               :alt="game.title"
-              class="absolute inset-0 w-full h-full object-cover object-top rounded-t-xl"
-              :class="{ 'rounded-b-xl': layoutMode === 'compact' }"
+              class="absolute inset-0 w-full h-full object-cover rounded-t-xl"
+              :class="[
+                layoutMode === 'banner' ? 'object-center' : 'object-top',
+                { 'rounded-b-xl': isImageTileLayout },
+              ]"
             />
             <IconPhotoFilled
               v-else
@@ -2247,7 +2276,7 @@ onUnmounted(() => {
             <div
               v-if="game.metadata_pending"
               class="metadata-pending absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-xs font-medium"
-              :class="layoutMode === 'compact' ? 'rounded-xl' : 'rounded-t-xl'"
+              :class="isImageTileLayout ? 'rounded-xl' : 'rounded-t-xl'"
               role="status"
             >
               <IconLoader2 class="w-6 h-6 animate-spin" />
@@ -2268,7 +2297,7 @@ onUnmounted(() => {
                 ><IconStarFilled class="w-3 h-3 text-yellow-400"
               /></span>
               <span
-                v-if="layoutMode === 'compact' && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
+                v-if="isImageTileLayout && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
                 class="update-pill update-pill-on-art"
                 :title="`Update available: ${game.latest_version}`"
               >
@@ -2276,10 +2305,10 @@ onUnmounted(() => {
                 <span class="sr-only">Update available: </span
                 >{{ game.latest_version }}
               </span>
-              <span v-if="layoutMode === 'compact' && hasUnplayedUpdate(game)" class="unplayed-label unplayed-on-art">Unplayed</span>
+              <span v-if="isImageTileLayout && hasUnplayedUpdate(game)" class="unplayed-label unplayed-on-art">Unplayed</span>
             </div>
             <button
-              v-if="layoutMode !== 'compact' && game.f95_url"
+              v-if="!isImageTileLayout && game.f95_url"
               @click.stop="checkUpdate(game)"
               :disabled="updatingId !== null"
               :title="`Check updates for ${game.title}`"
@@ -2291,25 +2320,34 @@ onUnmounted(() => {
               /><IconLoader2 v-else class="ui-action-icon animate-spin" />
             </button>
             <span
-              v-if="layoutMode !== 'compact' && game.rating"
+              v-if="!isImageTileLayout && game.rating"
               class="rating-badge absolute bottom-2 left-2 text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1"
               ><IconStarFilled class="w-3 h-3" />{{ game.rating }}</span
             >
             <div
-              v-if="layoutMode === 'compact'"
-              class="compact-image-overlay absolute inset-0 rounded-xl"
+              v-if="isImageTileLayout"
+              class="compact-image-overlay banner-reveal absolute inset-0 rounded-xl"
             ></div>
             <div
-              v-if="layoutMode === 'compact'"
-              class="absolute inset-x-0 bottom-0 z-10 p-2 flex items-end justify-between gap-2"
+              v-if="isImageTileLayout"
+              class="banner-reveal absolute inset-x-0 bottom-0 z-10 p-2 flex items-end gap-2"
+              :class="layoutMode === 'banner' ? 'justify-start' : 'justify-between'"
             >
               <h3
                 class="compact-title text-sm font-bold leading-tight"
+                :class="
+                  layoutMode === 'banner'
+                    ? 'banner-title min-w-0 flex-1'
+                    : ''
+                "
                 :title="game.title"
               >
                 {{ game.title }}
               </h3>
-              <div class="relative flex shrink-0">
+              <div
+                class="relative flex shrink-0"
+                :class="{ 'order-first': layoutMode === 'banner' }"
+              >
                 <button
                   @click.stop="toggleGame(game)"
                   class="compact-play-btn ui-play-btn rounded-md p-2"
@@ -2347,7 +2385,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div
-            v-if="layoutMode !== 'compact'"
+            v-if="!isImageTileLayout"
             class="p-3 flex flex-col flex-1 min-w-0"
           >
             <h3
@@ -2659,6 +2697,39 @@ onUnmounted(() => {
 }
 .library-cards--compact {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+}
+.library-cards--banner {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+.banner-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+/* Hidden only visually: opacity keeps Play clickable and focusable, so a click
+   that arrives before :hover applies still hits the button, not the card. */
+.library-cards--banner .banner-reveal {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.library-cards--banner .game-card:hover .banner-reveal,
+.library-cards--banner .game-card:focus-within .banner-reveal,
+.library-cards--banner .game-card.is-running .banner-reveal,
+.library-cards--banner .game-card.is-menu-open .banner-reveal {
+  opacity: 1;
+}
+@media (hover: none) {
+  .library-cards--banner .banner-reveal {
+    opacity: 1;
+  }
+}
+/* Play sits bottom-left here, so the chooser opens rightward from it. */
+.library-cards--banner .launch-target-menu {
+  right: auto;
+  left: 0;
 }
 .game-card:focus-visible,
 .library-table button:focus-visible,
