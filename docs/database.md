@@ -67,7 +67,7 @@ Stores the library records and their associated configuration flags.
 | `id` | `INTEGER` | Primary Key. |
 | `title` | `TEXT` | Game name. |
 | `developer` | `TEXT` | Extracted developer name. |
-| `engine` | `TEXT` | Game engine (Ren'Py, RPGM, Unity). |
+| `engine` | `TEXT` | Detected engine label (for example Ren'Py, RPGM, Unity, Unreal Engine, Godot, Wolf RPG, HTML). |
 | `tags` | `TEXT` | Comma-separated list of tags. |
 | `f95_url` | `TEXT` | F95Zone thread URL. Unique index protects against exact duplicates; the app also rejects equivalent F95 thread URL variants by thread identity. |
 | `version` | `TEXT` | The local downloaded version string. |
@@ -139,11 +139,13 @@ A simple generic key-value store for application-wide persistence.
 | `key` | `TEXT` | Primary Key string matching a setting name (e.g. `proton_path`). |
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
 
-Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging`, and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging` (per-game launch output, default `false`), and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+
+Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder`, `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), and `urm_rpa_path` (empty by default).
 
 `custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
 
-`collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, `reorder_collections`, and `set_game_collections` each rewrite the setting and the affected games' `collections` column in one transaction. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. Both `collections` and `library_filter_presets` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
+`collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, `reorder_collections`, and `set_game_collections` each rewrite the setting and the affected games' `collections` column in one transaction. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. `collections`, `library_filter_presets`, `tag_colors`, and `save_backup_keep` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
 
 `library_filter_presets` stores a JSON list of `{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}` objects (default `[]`). `get_library_filter_presets()` drops entries without a 1–40 character name and case-insensitive duplicate names; the frontend further normalises each preset through `normalizeFilterPreset` so unknown engines/tags are dropped on apply.
 
@@ -154,11 +156,11 @@ Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_log
 wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db` directly. This avoids WAL sidecar issues, schema drift, and local primary-key coupling when moving a library between machines.
 
 - **Format metadata**: Exports include `format`, `format_version`, `exported_at`, app metadata, and the selected optional sections.
-- **Always-included game metadata**: Every exported game includes title, developer, engine, tags, F95 URL, local/latest version fields, and cover reference.
+- **Always-included game metadata**: Every exported game includes title, developer, engine, tags, F95 URL, local/latest version fields, thread completion flag, screenshot URLs, and a cover reference.
 - **Optional sections**: Users can include user state (play status, ratings, notes, favorites, playtime, timestamps), launch configuration, executable paths, additional launch targets, general settings, and machine-specific path settings.
 - **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous; records with no developer or executable match a unique same-title local game that has no F95 URL or developer. A record whose thread URL is not in the library merges into a unique URL-less local game with the same title/developer.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
-- **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, and embedded cover image files are not part of JSON backups.
+- **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, save backups, attached PDFs, and embedded cover image files are not part of JSON backups.
 - **Journal user state**: `last_played_version`, `skipped_version`, and `play_sessions` travel with user state. Sessions include only version, start/end time, and duration. Imports replace sessions only when that key is present, and fill-missing imports keep a game's existing sessions; missing scalar fields also preserve local values. The additive fields keep format version 1. Sync uses the same replacement rule; it does not merge sessions from two machines.
 - **Game attachments**: attached PDFs live under `<data dir>/attachments/<game id>/` and are local-only; exports and sync never include PDF data or attachment names. Deleting a game removes its folder; mirror imports and sync deletions prune orphan numeric folders after the commit, and startup prunes folders for IDs not in the library. A reset or replaced database therefore removes orphan PDFs (IDs are `AUTOINCREMENT` and never reused).
 - **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Wine prefix imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.

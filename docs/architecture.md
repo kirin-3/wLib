@@ -67,13 +67,27 @@ flowchart TD
     RENDERER -.->|WebGL Probe| UI
 ```
 
+## Backend Module Map
+
+| Area | Modules |
+|------|---------|
+| App shell and bridge | `main.py`, `core/api.py`, `core/database.py`, `core/host_platform.py` |
+| Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/backup_format.py` |
+| Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py` |
+| Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py` |
+| Launching and updates | `core/launcher.py`, `core/desktop_notify.py` |
+| Scraping and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
+| Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
+
+`core/versions.py` holds the normalized version comparison shared with the UI. See [Backend Systems](backend.md) for runtime behavior and [Database & Schema](database.md) for persistence.
+
 ## Tech Stack Overview
 
-- **Backend Environment**: Python 3
+- **Backend Environment**: Python 3.12
 - **Desktop Window Manager**: PyWebView with Qt WebEngine on Linux and Windows (Windows releases bundle PyQt6)
 - **Frontend Framework**: Vue 3 (Composition API) + TypeScript + Vite + TailwindCSS
 - **Database**: SQLite3 (Local file-based database)
-- **F95 Requests**: Python urllib with TLS verification, batch version checks, and HTML metadata parsing
+- **F95 Requests**: Python urllib with TLS verification, batch version checks, HTML metadata parsing, and an optional browser-extension fallback for challenged or login-gated pages
 - **Packaging**: PyInstaller and release scripts for Linux AppImage/tar.gz/DEB/RPM/AUR plus Windows x64 portable ZIP and per-user MSI
 
 ## Platform Paths
@@ -88,6 +102,10 @@ flowchart TD
 | PyWebView storage | `~/.local/share/wLib/webview/` | `%LOCALAPPDATA%\wLib\webview` |
 | Cache root | `~/.cache` | `%LOCALAPPDATA%\wLib\cache` |
 | Renderer diagnostics | `~/.local/share/wLib/renderer-diagnostics.log` | `%LOCALAPPDATA%\wLib\renderer-diagnostics.log` |
+| App log | `~/.local/share/wLib/logs/wlib.log` | `%LOCALAPPDATA%\wLib\logs\wlib.log` |
+| Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
+| PDF attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
+| Sync snapshot | `~/.local/share/wLib/sync/last-local.json` | `%LOCALAPPDATA%\wLib\sync\last-local.json` |
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
 
@@ -101,6 +119,8 @@ Upgrade cleanup removes legacy `browser_session/` and `playwright/` directories 
 
 The frontend hides unavailable actions, while backend guards reject unsupported runtime operations. Imported per-game Linux launch options remain stored on Windows; users select Auto Detect before launching. JSON import skips global path settings written for the other OS and reports them in the inspection warnings.
 
+On Flatpak, `core/host_platform.py` keeps game processes and external tools on the host through `flatpak-spawn --host`, with process supervision for tracked launches. Sandbox-only environment variables such as `LD_LIBRARY_PATH` are not forwarded. The same lookup and command helpers cover runner discovery, archive tools, runtime installers, and notifications.
+
 ## Process Isolation & Communication
 
 wLib operates across two distinct contexts that never directly share memory:
@@ -108,9 +128,11 @@ wLib operates across two distinct contexts that never directly share memory:
 1. **Python Backend Process (`main.py`)**:
    - Manages the entire lifecycle of the application.
    - Configures SSL certificates and Qt runtime environment.
+   - Installs the rotating app log under the data directory.
    - Bootstraps the local SQLite database.
    - Removes app-owned legacy browser data in a background thread.
    - Starts the `http.server` daemon thread for the browser extension.
+   - Starts the library sync watcher and allows a final sync push on exit.
    - Instantiates the `pywebview` window and maps a Python class object (`Api`) to the JavaScript runtime.
    - Logs Qt and browser renderer diagnostics on both platforms; Linux release launchers handle GPU detection and the crash guard.
 
@@ -123,16 +145,16 @@ wLib operates across two distinct contexts that never directly share memory:
 
 When executing in development mode (`DEV_MODE=1`), the Python backend skips loading the static built Vue files `ui/dist/`. Instead, it forcefully navigates the Webview frame to `http://localhost:5173`, allowing Vite's Hot Module Replacement (HMR) to work perfectly alongside the native Python app.
 
-PowerShell sets this with `$env:DEV_MODE = "1"`. The current desktop bootstrap invokes `npm` directly, which can fail on Windows installations that expose only `npm.cmd`; see [Running the App Locally](../CONTRIBUTING.md#running-the-app-locally) for the browser-only development and desktop build/run paths.
+PowerShell sets this with `$env:DEV_MODE = "1"`. `main.py` starts `npm` on Linux and `npm.cmd` on Windows; see [Running the App Locally](../CONTRIBUTING.md#running-the-app-locally) for the browser-only development and desktop build/run paths.
 
 ## Renderer Diagnostics System
 
 wLib logs Qt backend selection and WebGL renderer details on both platforms. Windows uses Qt's native platform selection and writes to `%LOCALAPPDATA%\wLib\renderer-diagnostics.log`. Linux release launchers add the following GPU compatibility behavior:
 
 - **GPU Detection**: Probes GPU capabilities using `glxinfo`, `/sys/class/drm/`, and environment variables to determine hardware acceleration availability
-- **Crash Guard**: Maintains `~/.local/share/wLib/.gpu_crash_guard` to automatically fall back to software rendering after a GPU crash
-- **Diagnostic Logging**: Logs Qt backend selection, GPU detection reason, renderer details, and WebGL probe results to `~/.local/share/wLib/renderer-diagnostics.log`
+- **Crash Guard**: Maintains `<data dir>/.gpu_crash_guard` to automatically fall back to software rendering after a GPU crash
+- **Diagnostic Logging**: Logs Qt backend selection, GPU detection reason, renderer details, and WebGL probe results to `<data dir>/renderer-diagnostics.log`
 - **Browser Renderer Probe**: Executes WebGL detector scripts in the PyWebView to capture the browser's GPU renderer information
-- **AppImage Integration**: The AppRun script performs parallel GPU detection and logs launch context to `~/.local/share/wLib/appimage-launch.log`
+- **AppImage Integration**: The AppRun script performs parallel GPU detection and logs launch context to `<data dir>/appimage-launch.log`
 
 This system ensures wLib works reliably across diverse Linux configurations with varying GPU drivers and display servers.

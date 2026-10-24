@@ -10,4 +10,4 @@ Welcome to the wLib developer documentation! These guides cover the shared Linux
 5. [Browser Extension API](extension_api.md) - Details on how the companion browser extension communicates with wLib.
 6. [Build & Packaging](build.md) - Linux release formats, Windows portable ZIP/MSI builds, signing, and platform CI verification.
 
-For source setup, platform-specific development commands, and running tests, see [CONTRIBUTING.md](../CONTRIBUTING.md). The [build guide](build.md#release-automation) also covers release automation across Linux and Windows.
+For source setup, platform-specific development commands, and running tests, see [CONTRIBUTING.md](../CONTRIBUTING.md). The [build guide](build.md#release-automation) also covers release automation across Linux and Windows. User-facing installs, the browser extension, and troubleshooting are in [README.md](../README.md); what wLib stores and syncs is in [PRIVACY.md](../PRIVACY.md).

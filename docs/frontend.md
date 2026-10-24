@@ -63,6 +63,7 @@ The UI runs inside PyWebView and calls backend methods via `window.pywebview.api
 - **Launch mode typing**: `LaunchMode` is shared through `ui/src/utils/launchMode.ts` and the API bridge, including `rpgmaker_linux` and Linux-only `custom`. Custom Command relabels the arguments field as Command, explains `%command%`, and hides Wine/Proton controls.
 - **Auto-mode Wine controls**: on Linux, Game Detail hides the custom prefix, runner, RTP installer, and Cheat Engine controls in Auto Detect when the default executable and every launch target pass `isClearlyNativeTarget()` (`.sh`, `.jar`, `.html`, `.htm`, mirroring `launcher.execute_host_native`). The `hideWineControlsForAuto` computed only affects visibility; `isNativeLaunchMode` and the save paths are untouched, so stored prefix and runner values survive. Ambiguous targets (no extension, `.x86_64`) keep the controls visible.
 - **Launch target typing**: `LaunchTarget` is part of `GameRecord`; `ApiService` mirrors backend methods for listing, creating, updating, deleting, and reordering additional game launch targets.
+- **Timestamp displays**: Game Detail's Overview footer shows **Exe modified** from `getExecutableModifiedTime(path)` and **Thread updated** from the stored thread edit/check timestamps. Loading, never-checked, and unavailable states are explicit; a missing executable path is not queried.
 - **Library migration typing**: `LibraryBackupSection`, export options, inspect responses, warnings, and import result interfaces mirror the backend JSON migration API.
 - **Mock fallback**: when `window.pywebview` is unavailable (for browser-only UI work at `http://localhost:5173`), API calls return structured mock responses to keep the app functional. Every bridge method the views call has a mock: actions that need no host report success, runtime/download actions report why they need the desktop app, and status payloads carry the same fields the desktop backend returns (`cancelling`, `created_ids`, `deleted`, `connecting`, …). `open_in_browser` opens http(s) URLs with `window.open`, and the mocked auto-check frequency persists in `localStorage`.
 - **Startup extension status**: `App.vue` reads startup sync status so the UI can notify users when extension files were refreshed.
@@ -90,10 +91,11 @@ wLib uses `vue-router` for top-level views:
 
 - **Library View**: game browsing, filtering, sorting, quick launch, add/edit modals, per-game launch mode selection, and conditional launch-target selection for multi-part games.
 - **Updates View**: single and bulk update checks plus app release checks.
-- **Settings View**: platform-aware launcher/runtime settings and scraper controls. Windows hides Wine/Proton, prefix, Wayland, RPGMaker Linux runner, and Cheat Engine actions while preserving imported values; Linux retains the full runtime UI.
+- **Settings View**: general behavior (debug logging, save-backup retention, custom statuses, collections, keyboard shortcuts), library and download paths, appearance, platform-aware Wine/Proton or Windows environment controls, the RPGMaker Linux runner, and URM. Windows hides Wine/Proton, prefix, Wayland, RPGMaker Linux runner, and Cheat Engine actions while preserving imported values; Linux retains the full runtime UI. Automatic update frequency and desktop notifications live in the Updates view.
 - **Import / Export View**: top-level left-navigation route for JSON library/settings migration. `ui/src/views/LibraryBackupView.vue` adds a "From another app" tab that imports from F95Checker, Atlas, XLibrary, or f69 through `detectExternalLibrary`, `inspectExternalLibrary`, `importExternalLibrary`, and `browseExternalLibraryFile` (typed in `services/api.ts` with browser mocks): source picker, detected path or checked locations, preview counts with an Only-fill-missing/Overwrite toggle and section checkboxes, and a result summary linking to `/updates` while the follow-up metadata check runs.
 - **Sync View**: top-level left-navigation route for library sync settings and status.
 - **Extension View**: extension service status and folder shortcuts.
+- **Diagnostics View**: secondary route from the Settings footer for copying a redacted report and opening the log folder.
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
 
@@ -129,12 +131,18 @@ The **Saves** section sits at the end of the Launch tab in `GameDetailModal.vue`
 
 ## Game notes and attachments
 
-The game detail modal has a **Notes** tab after Overview, Launch, and Info (`detailTabs` in `GameDetailModal.vue`; arrow-key navigation wraps, so no new keyboard code). It holds one markdown document per game plus that game's PDF attachments.
+The game detail modal has a **Notes** tab after Overview, Journal, Launch, and Info (`detailTabs` in `GameDetailModal.vue`; arrow-key navigation wraps, so no new keyboard code). It holds one markdown document per game plus that game's PDF attachments.
 
 - **Save model**: `GameRecord.progress?: string` is the Notes markdown. The modal loads `notes` from `g.progress` when the game ID changes, includes `progress` in `formSnapshot()` and the `save()` payload, and tracks it with the same Unsaved changes indicator and discard prompt as the other fields. Attaching or removing PDFs takes effect immediately without Save Changes. `notesEditing` (rendered vs editor) resets wherever `activeTab` resets to Overview.
 - **Rendering**: `notesHtml` runs `marked.parse(..., { async: false })` followed by `DOMPurify.sanitize`, the same as UpdatesView, inside a scoped `.notes-markdown` block that uses the existing theme variables. An Edit/Preview toggle switches between the rendered view and a monospace textarea; empty notes show a hint with a Start writing action. Reopening the modal always shows the rendered view.
 - **Links**: a single delegated click handler on the rendered container calls `preventDefault()` on any `<a>` click. `getSafeNotesLinkUrl()` in `ui/src/utils/notesLinks.ts` returns the href only for absolute `http:`/`https:` URLs; safe links open through `api.openInBrowser` with `notifyError` on failure, every other link does nothing, and the wLib window never navigates.
 - **Attachments**: `GameAttachment` (`{name, size}`) with `listGameAttachments`, `addGameAttachment`, `openGameAttachment`, `removeGameAttachment`, and `browsePdfFile` wrappers in `services/api.ts`. The tab shows an Attach PDF button (busy while pending), names with human-readable sizes, open-on-click, and Remove with `confirm()`. Errors go through `notifyError`; an `attachment_missing` error refreshes the list. The list loads when the Notes tab is selected or the game changes. Browser mocks keep an in-memory list per game under `wlib-mock-attachments`, return `/mock/guide.pdf` for the picker, and report success for open.
+
+## Import Folder
+
+`LibraryView.vue` opens `components/modals/ImportFolderModal.vue` from the **Import Folder** action beside **Add Game** and **Install from archive**. The modal scans a folder with `api.scanGamesFolder(path)`, lists games already in the library separately and disables their checkboxes, and selects every new game by default. The folder input uses `PathStatus` (`dir`) and Enter starts a scan.
+
+`api.importGames(games)` calls `add_game` once per selected row and dispatches `wlib-refresh-library` after any success, so the library refreshes once instead of per game. Titles, versions, and engines are guesses from `core/game_scan.py`; the modal explains that users should check them after importing. Browser mocks use a small fixed scan result.
 
 ## Backend-to-Frontend Events
 
@@ -183,6 +191,11 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 - Settings Appearance offers Small (14 px), Default (16 px), Large (18 px), and Extra large (20 px) via `utils/textSizePreference.ts` (localStorage key `wlib-text-size`), applied to `document.documentElement.style.fontSize` before mount by `main.ts`. Unknown values fall back to Default.
 - Because layout uses `rem` units, the choice scales text and spacing together. The former `text-[10px]` / `text-[11px]` badges and counts are `text-[0.625rem]` / `text-[0.6875rem]` so small labels scale too.
 - The choice is per-device and is not included in backup or sync.
+
+### Motion
+
+- Settings Appearance offers **Animations** on or off via `utils/motionPreference.ts` (localStorage key `wlib-ui-motion`). `main.ts` applies the saved choice before mount by toggling `.motion-off` on the root element.
+- Turning motion off removes non-essential transitions and hover effects. Loading indicators stay visible. The choice is per-device and is not included in backup or sync.
 
 ### Library collections
 

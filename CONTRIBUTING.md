@@ -33,7 +33,7 @@ wLib uses PyWebView with Qt WebEngine on Linux and Windows. Linux release launch
 
 - **GPU Detection**: The AppImage probes your GPU on startup using `glxinfo` and `/sys/class/drm/`
 - **Crash Guard**: If the app crashes during accelerated startup, the next launch automatically uses software rendering via `QT_QUICK_BACKEND=software`
-- **Renderer Diagnostics**: GPU detection results are logged to `~/.local/share/wLib/renderer-diagnostics.log`
+- **Renderer Diagnostics**: GPU detection results are logged to `<data dir>/renderer-diagnostics.log`
 - **Manual Override**: Set `WLIB_QPA_PLATFORM=xcb` or `QT_QUICK_BACKEND=software` to override automatic detection
 
 On Windows, Qt selects its native platform and renderer. Diagnostics are written to `%LOCALAPPDATA%\wLib\renderer-diagnostics.log`; Linux `xcb`/Wayland overrides and the shell launcher's crash guard do not apply.
@@ -66,7 +66,7 @@ If PowerShell blocks `Activate.ps1`, call `.\.venv\Scripts\python.exe` and the o
 Install the Node dependencies for the UI:
 ```bash
 cd ui
-npm install
+npm ci
 ```
 
 ### Running the App Locally
@@ -91,20 +91,20 @@ Without `DEV_MODE`, `python main.py` loads `ui/dist/`; rebuild it with `npm run 
 For frontend-only work, run `npm run dev` in `ui/` and open it in a normal browser. `ui/src/services/api.ts` returns mock responses when PyWebView isn't present.
 
 **Backend Initialization:** On startup, `main.py`:
-1. Configures the Qt runtime environment (Linux release launchers handle GPU detection)
-2. Sets up SSL certificates for secure scraping
-3. Initializes the SQLite database with WAL mode
-4. Syncs browser extension files to the platform data directory: `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows
-5. Cleans up app-owned legacy browser data in the background
-6. Starts the extension HTTP server on `127.0.0.1:8183`
-7. Launches the PyWebView window
+1. Configures SSL certificates for secure scraping
+2. Binds the extension HTTP server on `127.0.0.1:8183`; this doubles as the single-instance check
+3. Installs the rotating app log at `<data dir>/logs/wlib.log`
+4. Configures the Qt runtime environment and refreshes the packaged WebView cache when needed
+5. Creates the `Api` bridge, which initializes the SQLite database with WAL mode
+6. Syncs browser extension files to the platform data directory: `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows
+7. Opens the PyWebView window, cleans up app-owned legacy browser data in the background, and starts the extension server and sync watcher
 
 ## 🧪 Testing and Linting
 
 We maintain a suite of automated tests and use strict formatting rules. **Please run these before submitting a PR.**
 
 ### Python Code
-We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` / `black` for formatting. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
+We use `pytest` for testing, `basedpyright` for backend type checking, and `ruff` for formatting and linting. `black` is available for local formatting but is not enforced in CI. The backend currently keeps project-wide checking at `recommended` and opts the main runtime files into `strict`, so new backend changes should keep both the strict subset and the empty baseline green. `ruff` is configured repo-wide for tracked Python files, including helper scripts and tests.
 ```bash
 # Run all tests
 pytest
@@ -154,11 +154,12 @@ For a source or packaged asset check, build the frontend first and run `python m
 ### Frontend Code
 ```bash
 cd ui
-npx prettier --write "src/**/*.{ts,vue,css}"
-npm run test:unit # Run launch-mode, library-state, and platform-policy tests
+npm run test:unit # Run frontend unit tests (API bridge, launch modes, saves, tools, library state)
 npm run typecheck # Run vue-tsc type checks
 npm run build # Ensure the production build succeeds
 ```
+
+There is no enforced frontend formatter; match the surrounding style and let `vue-tsc` catch contract mistakes.
 
 ## 📚 Architecture & Documentation
 
@@ -219,11 +220,14 @@ When reporting a bug, please include:
 
 wLib stores its data under `~/.local/share/wLib` on Linux or `%LOCALAPPDATA%\wLib` on Windows by default. See [platform paths](docs/architecture.md#platform-paths) for overrides. Files relative to that directory include:
 
+- **App Log**: `logs/wlib.log` - console output, Python logging, and uncaught exceptions; rotates at 2 MiB with three backups
 - **Renderer Diagnostics**: `renderer-diagnostics.log` - Qt backend selection and WebGL renderer details on both platforms, plus Linux GPU probe results
 - **Linux Launcher Logs**: `wlib-launch.log` or `appimage-launch.log` - Linux release-launch context
 - **Extension Files**: `extension/` - Installed browser extension copies
+- **Save Backups**: `save-backups/<game id>/` - Local save backups, never exported or synced
+- **PDF Attachments**: `attachments/<game id>/` - Local PDF attachments, never exported or synced
 
-Enable debug logging in **Settings → Debug Logging** for verbose application logs.
+Use the **Diagnostics** link in the Settings footer to copy a redacted report or open the log folder. **Enable Debug Logging** in Settings is separate: it saves Wine/Proton or native launch output next to the game executable.
 
 ## 💡 Where to Help?
 Check our issues page! We are always looking for help with:

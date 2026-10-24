@@ -21,9 +21,11 @@ Backend changes are validated separately from release packaging through `.github
 
 ## Release Automation
 
-`.github/workflows/release.yml` first validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums.
+`.github/workflows/release.yml` first validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Tagged signing uses the `JWT_USER` and `JWT_SECRET` repository secrets for the add-on developer account. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums.
 
-Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
+Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. The publish job also adds the signed Firefox XPI as `wlib-firefox-<extension version>.xpi` and an `updates.json` manifest pointing at it, so installed Firefox add-ons update themselves. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
+
+A separate `aur` job pushes the generated `wlib-bin` `PKGBUILD` and `.SRCINFO` to the AUR for stable tags when the `AUR_SSH_PRIVATE_KEY` secret is configured. Pre-release tags such as `v1.2.3-rc1` skip the job. Set the `WLIB_MAINTAINER` repository variable before a release; native package metadata and the AUR commit use it.
 
 ### Google Drive client secret
 
@@ -135,7 +137,7 @@ This script acts as a safety layer for cross-distro GPU compatibility:
 The shared launcher executes a multi-stage GPU detection pipeline:
 
 1. **Environment Variable Checks**: Respects `LIBGL_ALWAYS_SOFTWARE=1` and `GALLIUM_DRIVER=llvmpipe|softpipe` for forced software rendering
-2. **Crash Guard Check**: If `~/.local/share/wLib/.gpu_crash_guard` exists from a previous crash, automatically falls back to software rendering
+2. **Crash Guard Check**: If `<data dir>/.gpu_crash_guard` exists from a previous crash, automatically falls back to software rendering
 3. **glxinfo Probe**: Uses `glxinfo -B` to detect the OpenGL renderer string and direct rendering status
 4. **DRM Render Nodes**: Checks for `/dev/dri/renderD*` devices as a fallback detection method
 5. **GPU Vendor Detection**: Reads `/sys/class/drm/card*/device/vendor` to identify AMD (0x1002), Intel (0x8086), or NVIDIA (0x10de) GPUs
@@ -145,18 +147,18 @@ The shared launcher executes a multi-stage GPU detection pipeline:
 
 - **Software Rendering**: Sets `QT_QUICK_BACKEND=software` when GPU is unavailable, crash guard is active, or software renderer is detected
 - **Hardware Acceleration**: Leaves Qt to auto-select the renderer when a capable GPU is detected with direct rendering enabled
-- **Crash Guard Persistence**: On successful GPU detection, creates `~/.local/share/wLib/.gpu_crash_guard` before launch; removes it on clean shutdown
+- **Crash Guard Persistence**: On successful GPU detection, creates `<data dir>/.gpu_crash_guard` before launch; removes it on clean shutdown
 
 ### Renderer Diagnostics Logging
 
-The shared launcher logs comprehensive launch context to `~/.local/share/wLib/wlib-launch.log` by default. AppImage launches continue to log to `~/.local/share/wLib/appimage-launch.log`:
+The shared launcher logs comprehensive launch context to `<data dir>/wlib-launch.log` by default. AppImage launches continue to log to `<data dir>/appimage-launch.log`:
 
 - Session type (X11/Wayland) and display server variables
 - Qt platform selection source and renderer backend choice
 - GPU detection reason, detected renderer, and direct rendering status
 - SSL certificate paths and library path restoration
 
-The Python backend mirrors this information to `~/.local/share/wLib/renderer-diagnostics.log` with additional Qt webview introspection and WebGL renderer probing from the browser context.
+The Python backend mirrors this information to `<data dir>/renderer-diagnostics.log` with additional Qt webview introspection and WebGL renderer probing from the browser context.
 
 ### Environment Restoration
 
@@ -221,7 +223,7 @@ The script expects the matching release tarball in `dist/`, computes its SHA-256
 - `dist/aur/PKGBUILD`
 - `dist/aur/.SRCINFO`
 
-It does not publish to the AUR automatically.
+The script itself does not publish to the AUR. The release workflow's `aur` job pushes these files to `wlib-bin` on stable tags when `AUR_SSH_PRIVATE_KEY` is configured.
 
 ## Manual Build Example
 

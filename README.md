@@ -26,9 +26,12 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Your library
 
-- Add games with cover art, tags, ratings, notes and a play status. wLib tracks how long you've played each one.
+- Add games with cover art, tags, ratings, Markdown notes, PDF attachments and a play status. wLib tracks how long you've played each one.
+- Point wLib at a folder of game installs and import several at once. It guesses titles, versions and engines from what it finds, so you can correct them after importing.
+- See a game's screenshots from its F95Zone thread in the detail window, and color-code tags so they are easy to spot.
 - Open a game's **Journal** to see sessions and playtime by version, including a **Before journal** row for older playtime. The **Unplayed update** collection and **Unplayed** badge flag installed versions you have not played for five minutes yet, once a last played version is known.
 - Sort games into your own collections, which show up as tabs above the library. Save a filter and sort you use often, and get it back with one click.
+- Add your own play statuses when the built-in choices don't fit, and filter by them like any other status.
 - Keep a wishlist of games you haven't installed yet. wLib lets you know when one of them is marked Completed on F95Zone.
 - When you finish a game, wLib remembers which version you finished. The **New since finished** collection shows finished games that have had updates since.
 - Give a game more than one executable if it comes in several parts. One of them stays the default for the Play button.
@@ -41,6 +44,12 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 - Install a new game or an update straight from a downloaded `.zip`, `.7z` or `.rar`. wLib puts it in your library folder, moves your saves over and removes the old version. It also notices matching archives in your Downloads folder. For `.7z` and `.rar` you need 7-Zip on Windows, or `7z`, `bsdtar` or `unrar` on Linux.
 - wLib can check GitHub for a newer version of itself from the Updates page.
 
+### Saves and tools
+
+- Choose the saves folder for a game, make backups, and merge or restore a backup after an update. You can keep all backups or only the newest few for each game.
+- Ren'Py games get a developer-console switch and `.rpa` archive extraction, either into a separate folder or in place.
+- RPG Maker MV/MZ games can have their encrypted assets decrypted, with a switch that makes the game load the decrypted copies.
+
 ### Moving and syncing your library
 
 - Bring your library over from F95Checker, Atlas, XLibrary or f69.
@@ -52,7 +61,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 - Works with Ren'Py, Unity, Unreal, Godot, RPG Maker (XP, VX, MV, MZ), Wolf RPG and native Linux games. wLib works out the engine from the thread or the game folder.
 - On Windows, `.exe`, `.bat` and `.cmd` files run directly, `.jar` games run through Java, and HTML games open in your browser. Playtime isn't tracked for HTML games.
-- On Linux you can pick native, Wine, Proton or an RPG Maker Linux runner for each game. wLib also has:
+- On Linux you can pick native, Wine, Proton, an RPG Maker Linux runner or your own command for each game. wLib also has:
   - automatic fixes for common black screens in RPG Maker and NW.js games
   - a Japanese locale option for games that need it
   - a Wayland toggle
@@ -67,7 +76,7 @@ The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open i
 
 ### Everything else
 
-Light and dark themes, an adjustable text size, and the whole thing is open source: app, interface and extension.
+Light and dark themes, an accent color, an adjustable text size, a motion toggle, and the whole thing is open source: app, interface and extension. The **Diagnostics** page copies a report for bug reports and opens the app log folder.
 
 ## Screenshots
 
@@ -148,7 +157,7 @@ Light and dark themes, an adjustable text size, and the whole thing is open sour
 
 ## Installing
 
-Download wLib from the [Releases](https://github.com/kirin-3/wLib/releases) page. Every release lists SHA-256 hashes next to the downloads if you want to check a file.
+Download wLib from the [Releases](https://github.com/kirin-3/wLib/releases) page. The Windows downloads include SHA-256 checksums if you want to check a file.
 
 ### Windows
 
@@ -228,6 +237,8 @@ For example, on Ubuntu or Debian: `sudo apt install wine winetricks`.
 
 The extension adds wLib buttons to F95Zone threads. It only talks to wLib on your own computer (port `8183`), so wLib has to be running for the buttons to work.
 
+If F95Zone challenges wLib's own requests, the extension can retry them using your browser's sign-in, so threads that are only visible when logged in still load.
+
 wLib keeps the extension files in its data folder. Click **Open Extension Folder** in wLib to find them.
 
 ### Chrome, Brave, Edge and other Chromium browsers
@@ -257,7 +268,7 @@ If the extension says your wLib app is out of date, update wLib. The buttons kee
 
 **A Windows game shows a black screen on Linux.** Try Proton instead of Wine in the game's settings, and make sure its runtimes are installed with the one-click installers.
 
-**More detail for a bug report.** Turn on **Enable Debug Logging** in Settings, then reproduce the problem.
+**More detail for a bug report.** Open **Diagnostics** from the Settings footer to copy a report or open the app log folder. The app log is always on at `~/.local/share/wLib/logs/wlib.log` (`%LOCALAPPDATA%\wLib\logs\wlib.log` on Windows). Turn on **Enable Debug Logging** in Settings to save a game's launch output next to its executable.
 
 ## Reporting bugs
 
@@ -278,7 +289,7 @@ You'll need Python 3.12, Node.js 22.12 or newer, and Git.
 ```bash
 git clone https://github.com/kirin-3/wLib.git
 cd wLib
-cd ui && npm install && npm run build && cd ..
+cd ui && npm ci && npm run build && cd ..
 ./wlib.sh
 ```
 
@@ -304,7 +315,7 @@ To build release packages, see [Build & Packaging](docs/build.md).
 
 Help is welcome, whether it's an RPG Maker quirk you tracked down or a cleanup in the interface code. Read the [contributing guide](CONTRIBUTING.md) before opening a pull request. It covers setup, tests and checks.
 
-To work on the interface with live reload, run this from the repository root after `npm install` in `ui/`:
+To work on the interface with live reload, run this from the repository root after `npm ci` in `ui/`:
 
 ```bash
 DEV_MODE=1 python main.py

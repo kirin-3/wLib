@@ -55,6 +55,7 @@ Requests that the OS brings the wLib window to the foreground and opens the moda
     "success": true
   }
   ```
+  If the app window is not ready, the response is `{"success": false, "error": "Application window is not ready"}`.
 
 ### 3. Queue a New Game
 **`POST /api/add`**
@@ -122,7 +123,18 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB. Only the newest eligible connection receives a request.
 - **Security notes:** the bridge accepts only extension-scheme origins on the local host, but a local process can forge an `Origin` and pose as the bridge. It only receives F95 thread/batch URLs and can return forged page content; that content is treated as untrusted input at the same level as F95 HTML itself, and local attackers already have stronger options, so this is accepted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`.
 
+## OAuth Callback Pages
+
+The same server also serves the desktop sync sign-in redirects:
+
+- **`GET /dropbox/callback`** forwards `code` and `state` to `complete_dropbox_callback`.
+- **`GET /gdrive/callback`** forwards them to `complete_gdrive_callback`.
+
+Each returns a small static HTML completion page with `Cache-Control: no-store` and `Content-Security-Policy: default-src 'none'`; success is HTTP 200 and a failed or expired sign-in is HTTP 400. These are top-level browser redirects for the OAuth flow, not extension API calls: they do not add CORS headers, and the normal single-`Host` check still applies. Configure the exact redirect URLs `http://127.0.0.1:8183/dropbox/callback` and `http://127.0.0.1:8183/gdrive/callback` in the provider consoles.
+
 ## Installed Extension Files
+
+The bundled manifest is currently `1.1.1`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -139,7 +151,7 @@ The packaged extension files used by browsers live under `~/.local/share/wLib/ex
 
 wLib updates that directory automatically on startup when the bundled manifest version changes, the bundled signed Firefox archive changes, or the installed files are missing. The Chromium folder is replaced with a staged swap instead of deleting the whole extension directory: new files are copied into `chrome.new` (with its manifest patched there), then `chrome` is renamed to `chrome.old` and `chrome.new` to `chrome` before `chrome.old` is removed, so the live path never holds a partially copied folder. Leftover `chrome.new`/`chrome.old` folders from an interrupted sync are removed at the start of the next sync. The Firefox XPI is written through a temporary file and moved into place. Release builds copy the signed Firefox XPI bundled with the app; local development builds generate an unsigned fallback XPI when no signed artifact is bundled. The app also exposes the same sync path through **Open Extension Folder**, and the frontend shows a startup toast when extension files were refreshed naming the new version: Chromium browsers pick it up on the next F95Zone page and Firefox updates automatically.
 
-Firefox users install release XPIs through **Add-ons and themes** using **Install Add-on From File**. The `about:debugging` temporary add-on flow is only relevant to local development and is not the normal release installation path.
+Firefox users install release XPIs through **Add-ons and themes** using **Install Add-on From File**. The manifest requires Firefox 140 or newer (142 on Android). The `about:debugging` temporary add-on flow is only relevant to local development and is not the normal release installation path.
 
 On Windows, Chromium-based browsers load `%LOCALAPPDATA%\wLib\extension\chrome` as an unpacked extension, and Firefox installs `%LOCALAPPDATA%\wLib\extension\firefox\wLib.xpi`. MSI and portable ZIP builds synchronize to the same user-data folder. Keep wLib running for the extension to reach `127.0.0.1:8183`; the endpoint and security checks are identical on Linux and Windows.
 
