@@ -151,6 +151,7 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
   const state: LibraryViewState = {
     version: 1,
     layoutMode: "list",
+    cardSize: 2,
     sortBy: "rating",
     sortDir: "desc",
     filterCollection: "Favorites",
@@ -342,4 +343,24 @@ test("normalizeActiveCollection and filterAllowedValues handle non-string and no
       validTags: null as unknown as Iterable<string>,
     });
   });
+});
+
+
+test("card size round trips without entering filter presets", () => {
+  const storage = new MemoryStorage();
+  const state = normalizeLibraryViewState({ cardSize: 4, layoutMode: "banner", sortBy: "rating" });
+  saveLibraryViewState(storage, state);
+  assert.equal(readLibraryViewState(storage).state.cardSize, 4);
+  assert.equal("cardSize" in normalizeFilterAndSort(state), false);
+  assert.equal("cardSize" in normalizeFilterPreset({ ...state, name: "Favorites" })!, false);
+});
+
+test("missing or invalid card sizes retain the other preferences", () => {
+  for (const cardSize of [undefined, -1, 5, 2.5, "3"]) {
+    const state = normalizeLibraryViewState({ cardSize, layoutMode: "compact", sortBy: "rating", activeCollection: "Backlog" });
+    assert.equal(state.cardSize, 2);
+    assert.equal(state.layoutMode, "compact");
+    assert.equal(state.sortBy, "rating");
+    assert.equal(state.activeCollection, "Backlog");
+  }
 });

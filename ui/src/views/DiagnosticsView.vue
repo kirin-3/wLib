@@ -154,7 +154,7 @@ onBeforeUnmount(() => { request++; });
 </template>
 
 <style scoped>
-.diagnostics-page { width: 100%; max-width: 64rem; min-width: 0; padding: 1rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.diagnostics-page { margin-inline: auto; width: 100%; max-width: 64rem; min-width: 0; padding: 1rem; color: var(--text-primary); overflow-wrap: anywhere; }
 header { margin-bottom: 2rem; }
 .back-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }
 h1 { font-size: clamp(1.5rem, 3vw, 1.875rem); font-weight: 700; margin: 0.5rem 0; }

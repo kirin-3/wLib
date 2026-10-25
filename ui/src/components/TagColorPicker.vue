@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { TAG_COLOR_SWATCHES, colorForTag, setTagColor, type TagSwatch } from "../utils/tagColors";
+import { toCssPx } from "../utils/interfaceScalePreference";
 import { notifyError } from "../utils/toast";
 
 const props = defineProps<{ tag: string; anchor: HTMLElement }>();
@@ -50,7 +51,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", outside, true)
 
 <template>
   <Teleport to="body">
-    <div ref="panel" class="tag-color-picker" :style="{ left: `${left}px`, top: `${top}px` }"
+    <div ref="panel" class="tag-color-picker" :style="{ left: `${toCssPx(left)}px`, top: `${toCssPx(top)}px` }"
       role="menu" :aria-label="`Color for ${tag}`" @keydown="keydown">
       <p class="picker-label">Color for {{ tag }}</p>
       <div class="swatch-grid">
@@ -67,7 +68,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", outside, true)
 </template>
 
 <style scoped>
-.tag-color-picker { position: fixed; z-index: 10000; width: min(22rem, calc(100vw - 16px)); padding: 0.75rem; border: 1px solid var(--text-secondary); border-radius: 0.5rem; background: var(--bg-surface); color: var(--text-primary); box-shadow: var(--shadow-modal); }
+.tag-color-picker { position: fixed; z-index: 10000; width: min(22rem, calc(var(--app-vw) - 16px)); padding: 0.75rem; border: 1px solid var(--text-secondary); border-radius: 0.5rem; background: var(--bg-surface); color: var(--text-primary); box-shadow: var(--shadow-modal); }
 .picker-label { font-size: 0.875rem; font-weight: 600; margin-bottom: 0.75rem; overflow-wrap: anywhere; }
 .swatch-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
 .tag-swatch { min-height: 44px; border-radius: 0.375rem; font-size: 0.75rem; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; }

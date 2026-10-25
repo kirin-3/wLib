@@ -31,6 +31,7 @@ import {
   themePreference,
   type ThemePreference,
 } from "../utils/themePreference";
+import { INTERFACE_SCALE_OPTIONS, interfaceScale, setInterfaceScale } from "../utils/interfaceScalePreference";
 import {
   TEXT_SIZE_OPTIONS,
   setTextSizePreference,
@@ -826,7 +827,7 @@ const browseUrm = async () => {
 </script>
 
 <template>
-  <div class="allow-text-selection p-8 max-w-4xl pb-12">
+  <div class="allow-text-selection mx-auto w-full p-8 max-w-4xl pb-12">
     <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
@@ -1220,6 +1221,24 @@ const browseUrm = async () => {
             >
               {{ option.label }}
             </button>
+          </div>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <label for="interface-scale" class="text-sm font-medium" style="color: var(--text-primary)">Interface scale</label>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Scales the whole interface evenly. Kept on this device.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <select id="interface-scale" class="rounded-lg border px-3 py-1.5 text-sm"
+              style="background: var(--bg-surface); color: var(--text-primary); border-color: var(--border)"
+              :value="interfaceScale" @change="setInterfaceScale(($event.target as HTMLSelectElement).value)">
+              <option v-for="option in INTERFACE_SCALE_OPTIONS" :key="option" :value="option">{{ option }}%</option>
+            </select>
+            <button v-if="interfaceScale !== 100" type="button" class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              @click="setInterfaceScale(100)">Reset</button>
           </div>
         </div>
 

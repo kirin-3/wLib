@@ -318,7 +318,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-shell flex h-screen w-screen overflow-hidden">
+  <div class="app-shell flex h-[var(--app-vh)] w-[var(--app-vw)] overflow-hidden">
     <!-- Sidebar -->
     <aside
       :class="[

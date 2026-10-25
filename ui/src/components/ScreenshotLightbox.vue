@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { toCssPx } from "../utils/interfaceScalePreference";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const props = defineProps<{
@@ -87,17 +88,17 @@ onBeforeUnmount(() => {
 
 const fittedStyle = computed(() => {
   if (!naturalWidth.value || !naturalHeight.value) {
-    return { maxWidth: "90vw", maxHeight: "90vh" };
+    return { maxWidth: "calc(var(--app-vw)*0.9)", maxHeight: "calc(var(--app-vh)*0.9)" };
   }
   const scale = Math.min(
-    (0.9 * windowWidth.value) / naturalWidth.value,
-    (0.9 * windowHeight.value) / naturalHeight.value,
+    (0.9 * toCssPx(windowWidth.value)) / naturalWidth.value,
+    (0.9 * toCssPx(windowHeight.value)) / naturalHeight.value,
   );
   return {
     width: `${Math.round(naturalWidth.value * scale)}px`,
     height: `${Math.round(naturalHeight.value * scale)}px`,
-    maxWidth: "90vw",
-    maxHeight: "90vh",
+    maxWidth: "calc(var(--app-vw)*0.9)",
+    maxHeight: "calc(var(--app-vh)*0.9)",
   };
 });
 </script>

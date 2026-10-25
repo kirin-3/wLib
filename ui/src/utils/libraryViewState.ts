@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { PLAY_STATUSES } from "./playStatus.ts";
 
+export type CardSize = 0 | 1 | 2 | 3 | 4;
 export type LayoutMode = "grid" | "list" | "compact" | "banner";
 export type SortDir = "asc" | "desc";
 export type SortField =
@@ -33,6 +34,7 @@ export interface FilterSections {
 export interface LibraryViewState {
   version: number;
   layoutMode: LayoutMode;
+  cardSize: CardSize;
   sortBy: SortField;
   sortDir: SortDir;
   filterCollection: FilterCollection;
@@ -104,6 +106,7 @@ export const DEFAULT_FILTER_SECTIONS: FilterSections = {
 export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   version: LIBRARY_VIEW_STATE_VERSION,
   layoutMode: "grid",
+  cardSize: 2,
   sortBy: "title",
   sortDir: "asc",
   filterCollection: "All",
@@ -341,6 +344,8 @@ export const normalizeLibraryViewState = (
   return {
     version: LIBRARY_VIEW_STATE_VERSION,
     layoutMode,
+    cardSize: typeof source.cardSize === "number" && Number.isInteger(source.cardSize) && source.cardSize >= 0 && source.cardSize <= 4
+      ? source.cardSize as CardSize : DEFAULT_LIBRARY_VIEW_STATE.cardSize,
     ...normalizeFilterAndSort(source, options),
     isFiltersCollapsed:
       typeof source.isFiltersCollapsed === "boolean"

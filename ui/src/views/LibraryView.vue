@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
+import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../utils/tagColors";
 import { useRoute, useRouter } from "vue-router";
@@ -55,6 +56,7 @@ import {
   type FilterInstallState,
   type FilterSections,
   type LayoutMode,
+  type CardSize,
   type LibraryFilterPreset,
   type LibraryViewState,
   type SortDir,
@@ -182,7 +184,7 @@ const loadContextTools = async (gameId: number) => {
     contextTools.value = result.success ? result.tools || [] : [];
     await nextTick();
     if (request === contextToolsRequest && contextMenu.value && contextMenuElement.value) {
-      contextMenu.value.y = Math.max(8, Math.min(contextMenu.value.y, window.innerHeight - contextMenuElement.value.offsetHeight - 8));
+      contextMenu.value.y = Math.max(8, Math.min(contextMenu.value.y, window.innerHeight - contextMenuElement.value.getBoundingClientRect().height - 8));
     }
   } catch (cause) { console.error("Could not load custom tools", cause); }
 };
@@ -236,6 +238,8 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   tagColorPicker.value = { tag, anchor: event.currentTarget as HTMLElement };
 }
 const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
+const cardSize = ref<CardSize>(DEFAULT_LIBRARY_VIEW_STATE.cardSize);
+const cardScales = [0.75, 0.875, 1, 1.25, 1.5] as const;
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
 // Compact and banner both draw image-only tiles (cover, overlay, bottom row).
 const isImageTileLayout = computed(
@@ -390,6 +394,7 @@ const clearFilters = () => {
 
 const applyLibraryViewState = (state: LibraryViewState) => {
   layoutMode.value = state.layoutMode;
+  cardSize.value = state.cardSize;
   sortBy.value = state.sortBy;
   sortDir.value = state.sortDir;
   filterCollection.value = state.filterCollection;
@@ -405,6 +410,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
 const buildLibraryViewState = (): LibraryViewState =>
   normalizeLibraryViewState({
     layoutMode: layoutMode.value,
+    cardSize: cardSize.value,
     sortBy: sortBy.value,
     sortDir: sortDir.value,
     filterCollection: filterCollection.value,
@@ -562,11 +568,11 @@ const openCollectionTabMenu = async (name: string, event: MouseEvent | KeyboardE
       ...collectionTabMenu.value,
       x: Math.max(
         8,
-        Math.min(collectionTabMenu.value.x, window.innerWidth - menu.offsetWidth - 8),
+        Math.min(collectionTabMenu.value.x, window.innerWidth - menu.getBoundingClientRect().width - 8),
       ),
       y: Math.max(
         8,
-        Math.min(collectionTabMenu.value.y, window.innerHeight - menu.offsetHeight - 8),
+        Math.min(collectionTabMenu.value.y, window.innerHeight - menu.getBoundingClientRect().height - 8),
       ),
     };
   }
@@ -1178,11 +1184,11 @@ const openContextMenu = async (
   const menu = contextMenuElement.value;
   contextMenu.value.x = Math.max(
     8,
-    Math.min(contextMenu.value.x, window.innerWidth - menu.offsetWidth - 8),
+    Math.min(contextMenu.value.x, window.innerWidth - menu.getBoundingClientRect().width - 8),
   );
   contextMenu.value.y = Math.max(
     8,
-    Math.min(contextMenu.value.y, window.innerHeight - menu.offsetHeight - 8),
+    Math.min(contextMenu.value.y, window.innerHeight - menu.getBoundingClientRect().height - 8),
   );
   menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
 };
@@ -1343,6 +1349,7 @@ const handlePlaytimeTick = (event: Event) => {
 watch(
   [
     layoutMode,
+    cardSize,
     sortBy,
     sortDir,
     filterCollection,
@@ -1998,6 +2005,13 @@ onUnmounted(() => {
               }}</span
             >
 
+            <div v-if="layoutMode !== 'list'" class="flex items-center gap-2" style="color: var(--text-muted)">
+              <IconPhotoFilled class="size-3" aria-hidden="true" />
+              <input v-model.number="cardSize" type="range" min="0" max="4" step="1" aria-label="Card size"
+                class="card-size-control w-20 cursor-pointer" />
+              <IconPhotoFilled class="size-5" aria-hidden="true" />
+            </div>
+
             <!-- Layout Toggle -->
             <div
               class="flex items-center rounded-lg p-1"
@@ -2248,6 +2262,7 @@ onUnmounted(() => {
       <div
         v-else
         class="library-cards grid gap-4 pb-12"
+        :style="{ '--card-scale': cardScales[cardSize] }"
         :class="
           layoutMode === 'compact'
             ? 'library-cards--compact'
@@ -2522,7 +2537,7 @@ onUnmounted(() => {
           role="dialog"
           :aria-label="`Actions for ${contextMenu.game.title}`"
           class="game-context-menu"
-          :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+          :style="{ left: `${toCssPx(contextMenu.x)}px`, top: `${toCssPx(contextMenu.y)}px` }"
           @click.stop
           @contextmenu.prevent
           @keydown="handleContextMenuKeyboard"
@@ -2688,8 +2703,8 @@ onUnmounted(() => {
           :aria-label="`Actions for collection ${collectionTabMenu.name}`"
           class="game-context-menu"
           :style="{
-            left: `${collectionTabMenu.x}px`,
-            top: `${collectionTabMenu.y}px`,
+            left: `${toCssPx(collectionTabMenu.x)}px`,
+            top: `${toCssPx(collectionTabMenu.y)}px`,
           }"
           @click.stop
           @contextmenu.prevent
@@ -2734,14 +2749,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.card-size-control { accent-color: var(--brand); }
+.card-size-control:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+
 .library-cards--grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(220px * var(--card-scale, 1))), 1fr));
 }
 .library-cards--compact {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(180px * var(--card-scale, 1))), 1fr));
 }
 .library-cards--banner {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(420px * var(--card-scale, 1))), 1fr));
 }
 .banner-title {
   display: -webkit-box;
@@ -2927,8 +2945,8 @@ onUnmounted(() => {
   position: fixed;
   z-index: 100;
   width: 15rem;
-  max-width: calc(100vw - 16px);
-  max-height: calc(100vh - 16px);
+  max-width: calc(var(--app-vw) - 16px);
+  max-height: calc(var(--app-vh) - 16px);
   overflow-y: auto;
   padding: 0.4rem;
   border: 1px solid var(--border-hover);

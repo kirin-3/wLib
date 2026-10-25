@@ -229,7 +229,7 @@ dd { margin: .25rem 0 0; font-size: .875rem; }
 .sync-error { color: var(--danger-text); font-size: .875rem; }
 .sync-encryption { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 44px; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-raised); }
 .sync-overlay { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 100; display: grid; place-items: center; padding: 1rem; }
-.sync-dialog { width: min(100%, 32rem); max-height: calc(100dvh - 2rem); overflow-y: auto; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: .75rem; padding: 1.5rem; box-shadow: var(--shadow-modal); }
+.sync-dialog { width: min(100%, 32rem); max-height: calc(var(--app-vh) - 2rem); overflow-y: auto; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: .75rem; padding: 1.5rem; box-shadow: var(--shadow-modal); }
 .sync-dialog h3 { font-size: 1.125rem; font-weight: 700; margin: 0 0 .5rem; }
 .sync-dialog p { margin: .5rem 0 1rem; }
 .sync-dialog button { display: block; width: 100%; text-align: left; margin-top: .75rem; }

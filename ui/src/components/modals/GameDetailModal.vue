@@ -1641,7 +1641,7 @@ const removeAttachment = async (name: string) => {
       aria-modal="true"
       aria-labelledby="game-detail-title"
       tabindex="-1"
-      class="modal-content relative flex h-[min(90vh,52rem)] w-full max-w-[56rem] flex-col overflow-hidden rounded-xl"
+      class="modal-content relative flex h-[min(calc(var(--app-vh)*0.9),52rem)] w-full max-w-[56rem] flex-col overflow-hidden rounded-xl"
     >
       <div class="absolute right-4 top-4 z-10">
         <button

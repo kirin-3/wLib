@@ -125,7 +125,7 @@ const importSelected = async () => {
       aria-modal="true"
       aria-labelledby="import-folder-title"
       tabindex="-1"
-      class="modal-content w-full max-w-2xl rounded-2xl relative overflow-hidden flex flex-col max-h-[90vh] outline-none"
+      class="modal-content w-full max-w-2xl rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none"
     >
       <div
         class="px-6 py-5 flex items-center justify-between"

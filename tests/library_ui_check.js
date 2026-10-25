@@ -4,6 +4,7 @@
 async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const previousUrl = page.url();
+  const previousViewport = page.viewportSize();
   const previous = await page.evaluate(() => ({
     games: localStorage.getItem("wlib-mock-games"),
     state: localStorage.getItem("wlib-library-view-state"),
@@ -24,15 +25,30 @@ async (page) => {
     const libraryUrl = new URL(previousUrl);
     libraryUrl.hash = "/";
     await page.goto(libraryUrl.toString());
+    await page.reload();
     await page.getByRole("button", { name: "Alpha", exact: true }).waitFor();
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("wlib-library-view-state")));
     check(saved.sortBy === "engine" && saved.sortDir === "asc", "Restoring Recently played must preserve the chosen sort");
 
+    check(await page.getByRole("slider", { name: "Card size" }).count() === 0, "Card size must be hidden in list view");
     await page.getByRole("button", { name: "All Games", exact: true }).click();
     await page.getByRole("button", { name: "Recently played", exact: true }).click();
     check(await page.getByRole("button", { name: "Last played", exact: true }).locator("..").getAttribute("aria-sort") === "descending", "Selecting Recently played should default to newest first");
     await page.getByRole("button", { name: "All Games", exact: true }).click();
     await page.getByRole("button", { name: "Grid View", exact: true }).click();
+    check(await page.getByRole("slider", { name: "Card size" }).count() === 1, "Card size must appear in grid view");
+    await page.setViewportSize({ width: 2560, height: 1000 });
+    const columns = [];
+    for (const cardSize of [0, 4]) {
+      await page.evaluate(cardSize => {
+        const state = JSON.parse(localStorage.getItem("wlib-library-view-state"));
+        localStorage.setItem("wlib-library-view-state", JSON.stringify({ ...state, cardSize }));
+      }, cardSize);
+      await page.reload();
+      await page.getByRole("slider", { name: "Card size" }).waitFor();
+      columns.push(await page.locator(".library-cards").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length));
+    }
+    check(columns[0] > columns[1], "Largest saved card size must yield fewer grid columns than smallest");
     const card = page.getByRole("group", { name: "Alpha. Press Enter for details.", exact: true });
     const targets = card.getByRole("button", { name: "Choose launch target for Alpha", exact: true });
     await targets.click();
@@ -58,16 +74,17 @@ async (page) => {
       await new Promise(requestAnimationFrame);
     });
     await deferRefresh();
-    await card.getByRole("button", { name: "Mark Alpha as updated to 2.0", exact: true }).click();
+    await card.click({ button: "right" });
+    await page.getByRole("button", { name: "Mark as updated to 2.0", exact: true }).click();
     await page.getByRole("link", { name: "Updates, 1 available", exact: true }).waitFor();
     await releaseRefresh();
-    check(await card.getByRole("button", { name: "Mark Alpha as updated to 2.0", exact: true }).count() === 0, "An old response must not restore the library update badge");
+    check(await card.locator(".update-pill").count() === 0, "An old response must not restore the library update badge");
     check(await page.getByRole("link", { name: "Updates, 1 available", exact: true }).count() === 1, "An old response must not restore the navigation count");
 
     await page.getByRole("link", { name: "Updates, 1 available", exact: true }).click();
-    await page.getByRole("button", { name: "Mark as updated", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Mark updated", exact: true }).waitFor();
     await deferRefresh();
-    await page.getByRole("button", { name: "Mark as updated", exact: true }).click();
+    await page.getByRole("button", { name: "Mark updated", exact: true }).click();
     await page.getByRole("link", { name: "Updates, 0 available", exact: true }).waitFor();
     await releaseRefresh();
     check(await page.getByRole("heading", { name: /^Updates Available/ }).count() === 0, "An old response must not restore the Updates list");
@@ -82,6 +99,7 @@ async (page) => {
         else localStorage.setItem(key, value);
       }
     }, previous);
+    if (previousViewport) await page.setViewportSize(previousViewport);
     await page.goto(previousUrl);
   }
 }

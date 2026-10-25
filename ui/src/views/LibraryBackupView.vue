@@ -452,7 +452,7 @@ const runImport = async () => {
 </script>
 
 <template>
-  <div class="allow-text-selection backup-page p-8 max-w-5xl pb-12">
+  <div class="allow-text-selection backup-page mx-auto w-full p-8 max-w-5xl pb-12">
     <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"

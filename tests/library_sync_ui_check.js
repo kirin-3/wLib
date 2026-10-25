@@ -31,7 +31,8 @@ async (page) => {
     await page.getByRole("heading", { name: "Library sync", exact: true }).waitFor();
   };
   for (const theme of ["light", "dark"]) {
-    await page.evaluate(theme => localStorage.setItem("wlib-theme", theme), theme);
+    // Motion off: the width checks below must not measure the nav mid-collapse.
+    await page.evaluate(theme => { localStorage.setItem("wlib-theme", theme); localStorage.setItem("wlib-ui-motion", "off"); }, theme);
     await setState("off");
     await page.evaluate(theme => document.documentElement.classList.toggle("light", theme === "light"), theme);
     await page.getByLabel("Sync location").selectOption("dropbox");
@@ -139,6 +140,7 @@ async (page) => {
     }
     await page.setViewportSize({ width: 1280, height: 900 });
     if (await page.getByRole("button", { name: "Expand navigation", exact: true }).count()) await page.getByRole("button", { name: "Expand navigation", exact: true }).click();
+    await page.getByRole("link", { name: "Import / Export", exact: true }).click();
     await page.getByRole("button", { name: "Export", exact: true }).click();
     await page.getByPlaceholder("Choose a folder or enter /path/to/wlib-export.json").fill("/browser/mock/export.json");
     await page.getByRole("checkbox", { name: "Encrypt with passphrase", exact: true }).check();

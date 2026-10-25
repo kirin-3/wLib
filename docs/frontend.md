@@ -193,10 +193,20 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 - Because layout uses `rem` units, the choice scales text and spacing together. The former `text-[10px]` / `text-[11px]` badges and counts are `text-[0.625rem]` / `text-[0.6875rem]` so small labels scale too.
 - The choice is per-device and is not included in backup or sync.
 
+### Interface scale
+
+- Settings Appearance offers 80%–150% in 10% steps through `utils/interfaceScalePreference.ts` (localStorage key `wlib-interface-scale`), defaulting to 100%. `main.ts` loads it before mount; root CSS `zoom: var(--ui-scale, 1)` scales text, spacing, and fixed pixel sizes together.
+- Text size remains independent: Interface scale multiplies the chosen root font size. Reset returns Interface scale to 100% without changing Text size. Both choices stay on this device and are excluded from backup, export, and sync.
+- New window-sized surfaces must use `--app-vw` / `--app-vh` instead of raw viewport units, because root zoom also scales those units. Measure and clamp popups with viewport coordinates (`getBoundingClientRect()`, `innerWidth/Height`), then use `toCssPx()` once when writing CSS positions or dimensions.
+
 ### Motion
 
 - Settings Appearance offers **Animations** on or off via `utils/motionPreference.ts` (localStorage key `wlib-ui-motion`). `main.ts` applies the saved choice before mount by toggling `.motion-off` on the root element.
 - Turning motion off removes non-essential transitions and hover effects. Loading indicators stay visible. The choice is per-device and is not included in backup or sync.
+
+### Library view preferences
+
+- Card size is saved as `cardSize` (0–4, default 2) in `wlib-library-view-state`, shared by grid, compact, and banner layouts. The toolbar slider is hidden in list view. Invalid or missing values use the default while preserving other preferences. Card size is excluded from filter presets, backup, export, and sync.
 
 ### Library collections
 
