@@ -3,7 +3,7 @@
 import pytest
 
 from core.api import Api
-from core.database import add_game, init_db
+from core.database import add_game, get_all_games, init_db, update_setting
 
 
 @pytest.fixture(autouse=True)
@@ -17,6 +17,54 @@ def test_add_game_rejects_invalid_title(title):
     result = Api().add_game(title=title, exe_path="game.exe")
     assert result["success"] is False
     assert result["error_code"] == "invalid_title"
+
+
+@pytest.mark.parametrize("default", ["false", "true"])
+def test_manual_add_uses_sandbox_default(default):
+    update_setting("sandbox_new_games", default)
+    assert Api().add_game("Manual game", "/game")["success"]
+    assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
+
+
+def test_sandbox_status_endpoints(monkeypatch):
+    calls = []
+    status = {
+        "status": "ready",
+        "tool": "bwrap",
+        "path": "/usr/bin/bwrap",
+        "version": "0.13",
+        "reason": "",
+    }
+
+    def fake_status(**kwargs):
+        calls.append(kwargs)
+        return status
+
+    monkeypatch.setattr("core.game_sandbox.get_sandbox_status", fake_status)
+    api = Api()
+    assert api.get_sandbox_status() == status
+    assert api.recheck_sandbox_status() == status
+    assert calls == [{}, {"recheck": True}]
+    assert api.get_platform_capabilities()["sandbox"] in ("bwrap", "sandboxie")
+
+
+@pytest.mark.parametrize("default", ["false", "true"])
+def test_extension_add_uses_sandbox_default(default, monkeypatch):
+    update_setting("sandbox_new_games", default)
+    api = Api()
+    monkeypatch.setattr(api, "_fetch_added_game_metadata", lambda *_: None)
+    # The extension opens the add form, which sends its metadata through Api.add_game.
+    result = api.add_game(
+        "Extension game",
+        "",
+        "https://f95zone.to/threads/game.123/",
+        version="1.0",
+        tags="RPG",
+        developer="Developer",
+        engine="RPGM",
+    )
+    assert result["success"]
+    assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
 
 
 def test_tag_color_set_change_clear():
@@ -265,3 +313,68 @@ def test_saves_api_busy_guard_released_after_exception(saves_api, tmp_path):
             assert 7 in api._saves_busy
             raise RuntimeError("boom")
     assert 7 not in api._saves_busy
+
+
+def test_launch_uses_stored_sandbox_flag_for_extra_target(monkeypatch):
+    game_id = add_game("Sandbox game", "/game.exe", sandbox_enabled=True)
+    api = Api()
+    captured = {}
+
+    def launch(*args, **kwargs):
+        captured.update(kwargs)
+        return {"success": True, "tracks_playtime": False}
+
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    assert api.launch_game(game_id, exe_path="/extra.exe")["success"]
+    assert captured["sandbox_enabled"] is True
+    assert captured["game_title"] == "Sandbox game"
+
+
+def test_sandbox_bulk_api_and_custom_path_validation():
+    api = Api()
+    add_game("One", "/one")
+    assert api.set_sandbox_for_all_games(True) == {"success": True, "changed": 1}
+    assert api.set_sandbox_for_all_games(True)["changed"] == 0
+    assert not api.set_sandbox_for_all_games("yes")["success"]
+    assert api.save_settings({"sandboxie_custom_path": r"C:\Sandboxie\Start.exe"})[
+        "success"
+    ]
+    assert not api.save_settings(
+        {"sandboxie_custom_path": r"C:\Sandboxie\SandMan.exe"}
+    )["success"]
+    assert api.get_settings()["sandboxie_custom_path"] == r"C:\Sandboxie\Start.exe"
+    assert api.save_settings({"sandbox_new_games": True})["success"]
+    assert api.get_settings()["sandbox_new_games"] is True
+
+
+def test_sandbox_install_failure_is_reported_and_rechecked(monkeypatch):
+    from core import game_sandbox
+
+    api = Api()
+    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    calls = []
+
+    def status(**kwargs):
+        calls.append(kwargs)
+        return {"status": "missing", "reason": "Bubblewrap is not installed."}
+
+    def failed(*args):
+        raise RuntimeError("Authentication cancelled")
+
+    monkeypatch.setattr(game_sandbox, "get_sandbox_status", status)
+    monkeypatch.setattr(game_sandbox, "install_sandbox_tool", failed)
+
+    class InlineThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr("core.api.threading.Thread", InlineThread)
+    assert api.install_sandbox_tool("bwrap")["success"]
+    progress = api.get_sandbox_install_status()
+    assert not progress["running"] and "cancelled" in progress["error"]
+    assert calls == [{"recheck": True}]
+    assert api.install_sandbox_tool("sandboxie")["code"] == "unsupported_platform"

@@ -14,6 +14,7 @@ HostName = Literal["linux", "windows", "unsupported"]
 
 class PlatformCapabilities(TypedDict):
     platform: HostName
+    sandbox: str | None
     native_windows_launch: bool
     wine_proton: bool
     runtime_installers: bool
@@ -142,6 +143,7 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
     windows = host == "windows"
     return {
         "platform": host,
+        "sandbox": "bwrap" if linux else "sandboxie" if windows else None,
         "native_windows_launch": windows,
         "wine_proton": linux,
         "runtime_installers": linux,

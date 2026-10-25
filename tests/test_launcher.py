@@ -2037,3 +2037,386 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
         any("lunarengine-x86_64.exe" in part for part in cmd) for cmd in popen_calls
     )
     assert waited, "Cheat Engine helper was never waited on (zombie risk)"
+
+
+@pytest.mark.parametrize(
+    "mode,exe",
+    [
+        ("native", "/games/game.sh"),
+        ("auto", "/games/game.jar"),
+        ("wine_proton", "/games/game.exe"),
+        ("custom", "/games/game.exe"),
+        ("rpgmaker_linux", "/games/game.exe"),
+    ],
+)
+def test_sandbox_wraps_every_linux_mode(monkeypatch, tmp_path, mode, exe):
+    from core import game_sandbox
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    launcher = Launcher()
+    monkeypatch.setattr(
+        launcher,
+        "get_rpgmaker_linux_runner_status",
+        lambda: {"available": True, "path": "/runner/start.sh"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.access", return_value=True),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = launcher.launch(
+            exe,
+            command_line_args="sh %command%" if mode == "custom" else "",
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode=mode,
+        )
+    assert result["success"], result
+    assert popen.call_args.args[0][0] == "/usr/bin/bwrap"
+    assert launcher._running[12].sandboxed
+    assert launcher._running[12].kill_info is None
+
+
+def test_sandbox_refuses_game_folder_that_is_home(monkeypatch, tmp_path):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    launcher = Launcher()
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = launcher.launch(
+            str(home / "game.sh"), game_id=12, sandbox_enabled=True, launch_mode="native"
+        )
+    assert not result["success"]
+    assert "whole home folder" in str(result["error"])
+    popen.assert_not_called()
+    assert 12 not in launcher._running
+
+
+@pytest.mark.parametrize(
+    "status,code", [("missing", "sandbox_missing"), ("unusable", "sandbox_unusable")]
+)
+def test_sandbox_unavailable_never_launches(monkeypatch, status, code):
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": status, "reason": "Unavailable"},
+    )
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
+        result = Launcher().launch("/game.exe", game_id=12, sandbox_enabled=True)
+    assert result["code"] == code
+    popen.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "existing_sandboxed,new_sandboxed", [(True, False), (False, True), (True, True)]
+)
+def test_sandbox_prefix_exclusivity(monkeypatch, existing_sandboxed, new_sandboxed):
+    from core.game_sandbox import normalize_prefix
+
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(
+        MagicMock(pid=123),
+        None,
+        prefix=normalize_prefix("/prefix/pfx"),
+        sandboxed=existing_sandboxed,
+        title="Already playing",
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = launcher.launch(
+            "/games/game.exe",
+            custom_prefix="/prefix",
+            game_id=2,
+            sandbox_enabled=new_sandboxed,
+            launch_mode="wine_proton",
+        )
+    assert result["code"] == "prefix_in_use"
+    assert "Already playing" in result["error"]
+    popen.assert_not_called()
+
+
+def test_sandbox_stop_skips_host_wineserver(monkeypatch, tmp_path):
+    import signal
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    launcher = Launcher()
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+        patch("subprocess.run") as run,
+    ):
+        popen.return_value.pid = 123
+        assert launcher.launch(
+            "/games/game.exe", game_id=12, sandbox_enabled=True, launch_mode="wine_proton"
+        )["success"]
+        assert launcher.stop(12)["success"]
+        run.assert_not_called()
+        killpg.assert_called_with(123, signal.SIGTERM)
+
+
+def test_sandboxie_launch_tracks_box_after_start_exits(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args: "wLib_12"
+    )
+    launcher = Launcher()
+    calls = []
+
+    def pids(*args):
+        calls.append(args)
+        assert launcher.get_running_games() == [12]
+        return [42] if len(calls) == 1 else []
+
+    monkeypatch.setattr("core.launcher.game_sandbox.list_box_pids", pids)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread") as thread,
+        patch("time.sleep"),
+    ):
+        popen.return_value.poll.return_value = 0
+        assert launcher.launch(r"C:\Games\Game.exe", game_id=12, sandbox_enabled=True)[
+            "success"
+        ]
+        assert popen.call_args.args[0] == [
+            r"C:\Sandboxie\Start.exe",
+            "/box:wLib_12",
+            r"C:\Games\Game.exe",
+        ]
+        assert popen.call_args.kwargs["cwd"] == r"C:\Games"
+        assert launcher.get_running_games() == [12]
+        thread.call_args.kwargs["target"]()
+    assert launcher.get_running_games() == []
+    assert len(calls) == 2
+
+
+def test_stop_sandboxie_uses_box_termination(monkeypatch):
+    launcher = Launcher()
+    launcher._running[12] = RunningGame(
+        MagicMock(pid=123),
+        None,
+        sandbox_box="wLib_12",
+        sandbox_tool=r"C:\Sandboxie\Start.exe",
+    )
+    with patch("subprocess.run") as run:
+        run.return_value.returncode = 0
+        run.return_value.stdout = ""
+        assert launcher.stop(12)["success"]
+    assert run.call_args.args[0] == [
+        r"C:\Sandboxie\Start.exe",
+        "/box:wLib_12",
+        "/terminate",
+    ]
+
+
+def test_sandbox_configuration_failure_never_starts_game(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "Start.exe"},
+    )
+
+    def fail(*args):
+        raise RuntimeError("Box configuration failed")
+
+    monkeypatch.setattr("core.launcher.game_sandbox.configure_sandboxie_box", fail)
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
+        launcher = Launcher()
+        assert not launcher.launch(r"C:\Game.exe", game_id=12, sandbox_enabled=True)[
+            "success"
+        ]
+        assert launcher.get_running_games() == []
+        popen.assert_not_called()
+
+
+def test_sandboxed_html_is_exempt(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+        patch("core.launcher.game_sandbox.get_sandbox_status") as status,
+    ):
+        result = Launcher().launch(
+            "/games/index.html", game_id=12, sandbox_enabled=True
+        )
+    assert result["success"] and not result["tracks_playtime"]
+    assert popen.call_args.args[0][0] == "xdg-open"
+    status.assert_not_called()
+
+
+def test_sandbox_different_prefixes_allowed(monkeypatch):
+    from core.game_sandbox import normalize_prefix
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(
+        MagicMock(pid=123),
+        None,
+        prefix=normalize_prefix("/one"),
+        sandboxed=True,
+        title="First",
+    )
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen"),
+        patch("threading.Thread"),
+    ):
+        assert launcher.launch(
+            "/games/game.exe", custom_prefix="/two", game_id=2, launch_mode="wine_proton"
+        )["success"]
+
+
+def test_sandbox_ce_stays_inside_the_namespace(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("builtins.open", mock_open()),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread") as thread,
+    ):
+        result = Launcher().launch(
+            "/games/Game.exe",
+            game_id=12,
+            sandbox_enabled=True,
+            auto_inject_ce=True,
+            launch_mode="wine_proton",
+        )
+    assert result["success"], result
+    command = popen.call_args.args[0]
+    assert command[0] == "bwrap"
+    assert any(
+        "sleep 5" in arg
+        and "lunarengine-x86_64.exe" in arg
+        and "/games/Game.exe" in arg
+        for arg in command
+    )
+    popen.assert_called_once()
+    assert (
+        thread.call_count == 1
+    )  # Only tracking runs on the host; injection is inside bwrap.
+
+
+def test_sandbox_proton_runtime_survives_command_wrapper(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/games/Game.exe",
+            command_line_args="env %command%",
+            proton_version="/runtimes/proton/proton",
+            custom_prefix="/prefix",
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode="wine_proton",
+        )
+    assert result["success"], result
+    command = popen.call_args.args[0]
+    assert ["--ro-bind", "/runtimes/proton", "/runtimes/proton"] in [
+        command[i : i + 3] for i in range(len(command) - 2)
+    ]
+    assert "env" in command
+
+
+def test_sandbox_custom_wine_environment_mounts_and_reserves_prefix(monkeypatch,tmp_path):
+    monkeypatch.setenv('WLIB_DATA_DIR',str(tmp_path))
+    monkeypatch.setattr('core.launcher.is_windows',lambda:False)
+    monkeypatch.setattr('core.launcher.game_sandbox.prepare_sandbox_home',lambda _:str(tmp_path/'home'))
+    monkeypatch.setattr('core.launcher.game_sandbox.get_sandbox_status',lambda:{'status':'ready','path':'bwrap'})
+    with patch('os.path.exists',return_value=True),patch('os.path.isdir',return_value=False),patch('os.makedirs'),patch('core.launcher.get_setting',return_value=''),patch('subprocess.Popen') as popen,patch('threading.Thread'):
+        launcher=Launcher()
+        result=launcher.launch('/games/Game.exe',command_line_args='WINEPREFIX=/prefix wine %command%',game_id=12,sandbox_enabled=True,launch_mode='custom')
+    assert result['success'],result
+    command=popen.call_args.args[0]
+    assert ['--bind','/prefix','/prefix'] in [command[i:i+3] for i in range(len(command)-2)]
+    from core.game_sandbox import normalize_prefix
+    assert launcher._running[12].prefix==normalize_prefix('/prefix')

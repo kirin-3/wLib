@@ -219,3 +219,63 @@ This module handles native host launching and Linux compatibility runtimes.
 4. **AppImage Configuration**: The AppRun script performs parallel certificate setup for the AppImage runtime context
 
 Windows releases bundle certifi and use the same certificate-selection flow. The `/etc/ssl/...` fallbacks and AppImage setup apply to Linux; HTTPS verification remains enabled on both platforms.
+
+## Game sandboxing
+
+`core/game_sandbox.py` owns cached host detection, argv construction, Sandboxie
+configuration, process-list parsing and tool installation. Linux detection uses
+host `bwrap --version` and `unshare -Ur true`; Flatpak runs both through
+`host_command`. `ready`, `missing` and `unusable` include a path, version and
+reason. Recheck invalidates the cache. Platform capabilities expose `sandbox`
+(`bwrap`, `sandboxie`, or null).
+
+The launcher wraps the final mode-specific argv before `host_command`. bwrap
+uses private user/PID/IPC/UTS namespaces, a private `/tmp` and `/run`, read-only
+system and runtime mounts, selected display/audio sockets, a writable game
+folder and Wine prefix, and `<data dir>/sandbox/<id>/home` at the real HOME
+path. It does not expose the session D-Bus. An in-namespace shell supervises
+launcher stubs until their detached descendants exit. Stop terminates the outer
+bwrap process group and skips the host wineserver. Automatic Cheat Engine
+injection, when enabled, runs inside that same sandbox after its usual delay.
+
+Windows configures `wLib_<id>` with `SbieIni.exe set` and `/reload`, preserving
+sandbox storage and replacing the game-folder pass-through path each launch.
+Tracking parses the count followed by PIDs from `Start.exe /box:<box> /listpids`;
+Stop calls `/terminate` in the game's Windows session. HTML games continue to
+open in the browser without sandboxing or playtime tracking. A missing or
+unusable tool refuses a sandboxed launch; it never falls back to a plain launch.
+A writable mount (game folder, Wine prefix, or Sandboxie pass-through path) that
+is `/`, HOME, or an ancestor of HOME is refused, because it would expose the whole
+home folder. A runtime under `~/.local/bin` mounts only that `bin` folder.
+
+Each running Wine/Proton game records its resolved prefix and sandbox mode.
+Under the registry lock, a launch is refused with `prefix_in_use` when the same
+prefix is already in use and either launch is sandboxed. Prefix comparisons
+resolve symlinks and normalize Proton's `pfx` subdirectory. The error names the
+running game. The API reads sandbox preferences from the stored parent game,
+including launches through extra targets.
+
+Frontend-callable sandbox methods:
+
+| Method | Result / behavior |
+| --- | --- |
+| `get_sandbox_status()` | Cached tool status, path, version and reason. |
+| `recheck_sandbox_status()` | Re-runs host detection. |
+| `get_sandbox_install_info()` | Host command, package manager, pkexec availability, install availability and official URL. |
+| `install_sandbox_tool(tool)` | Starts a background install; mismatched host/tool returns `unsupported_platform`. |
+| `get_sandbox_install_status()` | Thread-safe running/done/current/error progress. |
+| `set_sandbox_for_all_games(enabled)` | Updates every game's next-launch preference and returns `changed`. |
+| `open_game_sandbox_folder(game_id)` | Opens persistent per-game storage, creating the folder if necessary. |
+
+Linux installs use the distro's bubblewrap package via host `pkexec`; no portable
+bwrap is downloaded. Windows installs prefer winget. The direct-download
+fallback selects the official architecture-specific GitHub release, checks
+Authenticode trust and the expected publisher before elevation, and deletes the
+staged installer on every exit. Signature failure never runs the installer.
+
+Save detection searches both the real profile and the sandbox profile when the
+stored flag is enabled: Linux `.renpy`, `.config` and `.local/share`, and Windows
+box `user/current`/profile roots with AppData, Documents and Saved Games. Overrides
+continue to work when sandboxing is switched off. Removing a game or switching
+sandboxing off does not delete its sandbox storage. JSON backups carry the
+preference and selected settings, while sandbox files remain local.

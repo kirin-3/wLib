@@ -410,3 +410,35 @@ def test_resolve_backup_rejects_traversal_and_missing(tmp_path):
     for bad in ("../2/2026-10-23_12-00-00", "..", "", "x", "2026-10-23_12-00-01"):
         with pytest.raises(GameSavesError):
             _ = resolve_backup(str(root), 1, bad)
+
+
+def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    sandbox = tmp_path / "data/sandbox/12/home/.renpy/Story-123"
+    real = tmp_path / "home/.renpy/Story-123"
+    _write(sandbox / "save.dat")
+    _write(real / "save.dat")
+    locations = detect_save_locations(
+        "/games/Story.sh", "Story", windows=False, game_id=12, sandbox_enabled=True
+    )
+    paths = {item["path"] for item in locations}
+    assert str(sandbox) in paths and str(real) in paths
+    locations = detect_save_locations(
+        "/games/Story.sh", "Story", windows=False, game_id=12, sandbox_enabled=False
+    )
+    assert str(sandbox) not in {item["path"] for item in locations}
+    shutil.rmtree(real)
+    locations = detect_save_locations(
+        "/games/Story.sh", "Story", windows=False, game_id=12, sandbox_enabled=True
+    )
+    assert resolve_effective_folder("", locations) == str(sandbox)
+
+
+def test_sandbox_windows_profile_detection(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    saved = tmp_path / "data/sandbox/12/user/current/AppData/Roaming/RenPy/Story-123"
+    _write(saved / "save.dat")
+    locations = detect_save_locations(
+        "/games/Story.exe", "Story", windows=True, game_id=12, sandbox_enabled=True
+    )
+    assert str(saved) in {item["path"] for item in locations}

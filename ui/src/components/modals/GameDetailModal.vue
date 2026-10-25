@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
+import { useRouter } from "vue-router";
+import { sandboxSwitchState } from "../../utils/sandbox";
+import type { SandboxStatus } from "../../services/api";
 import TagColorPicker from "../TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../../utils/tagColors";
 import {
@@ -124,6 +127,10 @@ const emit = defineEmits<{
   "targets-changed": [];
   stop: [gameId: number];
 }>();
+
+const sandboxRouter = useRouter();
+const sandboxEnabled = ref(false);
+const sandboxStatus = ref<SandboxStatus | null>(null);
 
 // Editable fields
 const title = ref("");
@@ -467,6 +474,7 @@ const ratingCategories = [
 // be patched without wiping the dirty state of the others.
 const formSnapshot = (): string =>
   JSON.stringify({
+    sandbox_enabled: sandboxEnabled.value,
     title: title.value,
     exe_path: exePath.value,
     f95_url: f95Url.value,
@@ -524,6 +532,8 @@ watch(
         runJapaneseLocale.value = g.run_japanese_locale ? true : false;
         runWayland.value = g.run_wayland ? true : false;
         autoInjectCe.value = g.auto_inject_ce ? true : false;
+        sandboxEnabled.value = !!g.sandbox_enabled;
+        void api.getSandboxStatus().then(status => { sandboxStatus.value = status; }).catch(console.error);
         customPrefix.value = g.custom_prefix || "";
         protonVersion.value = g.proton_version || "";
         launchMode.value = normalizeLaunchMode(g.launch_mode);
@@ -717,6 +727,12 @@ onBeforeUnmount(() => {
   window.removeEventListener("wlib-playtime-tick", handleJournalTick);
   journalRequestId++;
 });
+
+const openSandboxFolder = async () => {
+  if (!props.game) return;
+  const result = await api.openGameSandboxFolder(props.game.id);
+  if (!result.success) notifyError(result.error || "Could not open sandbox folder.");
+};
 
 const close = () => {
   engineMenuOpen.value = false;
@@ -1210,6 +1226,7 @@ const save = async () => {
       ...quickFields(),
       progress: notes.value,
       engine: normalizeEngine(engine.value),
+      sandbox_enabled: sandboxEnabled.value,
       run_japanese_locale: platformCapabilities.value.wine_proton
         ? runJapaneseLocale.value
         : !!props.game.run_japanese_locale,
@@ -1943,6 +1960,17 @@ const removeAttachment = async (name: string) => {
         </section>
 
         <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="space-y-6">
+          <div class="space-y-2">
+            <label class="flex items-center justify-between text-sm">
+              <span>Run in sandbox</span>
+              <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(exePath, sandboxStatus).disabled" />
+            </label>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }}</p>
+            <div class="flex flex-wrap gap-2">
+              <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="emit('update:modelValue', false); sandboxRouter.push('/settings#sandbox')">Open Sandbox settings</button>
+              <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
+            </div>
+          </div>
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">
               <label for="detail-exe" class="modal-label">Executable Path</label>

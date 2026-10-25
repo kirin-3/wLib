@@ -86,6 +86,7 @@ Stores the library records and their associated configuration flags.
 | `run_japanese_locale` | `BOOLEAN` | Overrides `LC_ALL` to Japanese on Linux; preserved but ignored on Windows. |
 | `run_wayland` | `BOOLEAN` | Applies Linux Wayland compatibility settings; preserved but ignored on Windows. |
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
+| `sandbox_enabled` | `BOOLEAN DEFAULT 0` | Per-game sandbox preference, shared by all launch targets. Added additively with sandboxing off for existing games. New games follow `sandbox_new_games` unless explicitly set. Machine-specific launch configuration: exported when selected, never synced. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
 | `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
 | `save_path_override` | `TEXT DEFAULT ''` | Absolute saves folder chosen for the game; empty means use detection. Machine-specific: exported with launch configuration, never synced. Added additively; `update_game` accepts it, the UI sets it through `set_game_save_folder`. |
@@ -140,6 +141,22 @@ A simple generic key-value store for application-wide persistence.
 | `value` | `TEXT` | Setting string value. Rehydrated in Python/Vue depending on type. |
 
 Notable launcher settings include `proton_path`, `wine_prefix_path`, `enable_logging` (per-game launch output, default `false`), and `rpgmaker_linux_runner_path`. The RPGMaker Linux runner path is optional; when empty, wLib detects common external install locations at runtime instead of storing a derived path.
+
+`sandbox_new_games` defaults to `false` and belongs to `GENERAL_SETTINGS_KEYS`, so
+general-settings backups and sync carry it and changes advance the local sync
+timestamp. Manual add, folder import, extension add, and external-library import
+apply it only when creating a game without an explicit sandbox value. Changing
+the default leaves existing games unchanged. `sandboxie_custom_path` defaults to
+an empty string and belongs to the machine-specific `PATH_SETTINGS_KEYS`; path
+backups include it when selected, while foreign-host paths are reported and
+skipped on import.
+
+`set_sandbox_for_all_games(enabled)` updates the preference in one `UPDATE` and
+returns the number of games whose value changed. Like other launch configuration,
+this preference does not advance the shared metadata sync timestamp. Sandbox
+storage under `<data dir>/sandbox/<game id>/` is excluded from JSON backups and
+sync. Missing sandbox fields in older backups preserve a matched game's local
+value.
 
 Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder`, `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), and `urm_rpa_path` (empty by default).
 

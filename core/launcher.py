@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import IO, Protocol, TypedDict, cast, final
 
 from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
+from . import game_sandbox
 from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
@@ -257,6 +258,11 @@ class RunningGame:
     on_exit_callback: ExitCallback | None = None
     last_saved_time: float = 0.0
     log_file: IO[str] | None = None
+    prefix: str = ""
+    sandboxed: bool = False
+    sandbox_box: str = ""
+    sandbox_tool: str = ""
+    title: str = ""
 
 
 class Launcher:
@@ -324,7 +330,9 @@ class Launcher:
             }
         pid = proc.pid
         try:
-            if is_windows():
+            if running.sandbox_box:
+                game_sandbox.terminate_box(running.sandbox_tool, running.sandbox_box)
+            elif is_windows():
                 result = subprocess.run(
                     ["taskkill", "/T", "/F", "/PID", str(pid)],
                     capture_output=True,
@@ -500,6 +508,8 @@ class Launcher:
         launch_mode: str = "auto",
         on_exit_callback: ExitCallback | None = None,
         game_id: int | None = None,
+        sandbox_enabled: bool = False,
+        game_title: str = "",
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -571,6 +581,26 @@ class Launcher:
         ext = path_module.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
         game_dir = path_module.dirname(exe_path)
+        sandboxed = bool(sandbox_enabled and ext not in (".html", ".htm"))
+        sandbox_status: game_sandbox.SandboxStatus | None = None
+        if sandboxed:
+            if game_id is None or game_id <= 0:
+                return {
+                    "success": False,
+                    "error": "Sandboxed games need a library game ID.",
+                }
+            sandbox_status = game_sandbox.get_sandbox_status()
+            if sandbox_status["status"] != "ready":
+                code = (
+                    "sandbox_missing"
+                    if sandbox_status["status"] == "missing"
+                    else "sandbox_unusable"
+                )
+                return {
+                    "success": False,
+                    "code": code,
+                    "error": sandbox_status["reason"],
+                }
 
         # Helper to apply Steam-style %command% substitution
         def build_command(base_cmd: list[str], user_args: list[str]) -> list[str]:
@@ -593,9 +623,50 @@ class Launcher:
             game_exe: str = "",
             kill_info: tuple[str, dict[str, str]] | None = None,
             cwd_override: str | None = None,
+            runtime_paths: tuple[str, ...] = (),
         ) -> dict[str, object]:
+            def prepare_ce_command() -> list[str]:
+                ce_dir = get_cheat_engine_dir()
+                ce_exe = path_module.join(
+                    ce_dir, "Lunar Engine", "lunarengine-x86_64.exe"
+                )
+                if not os.path.exists(ce_exe):
+                    ce_exe = path_module.join(ce_dir, "lunarengine-x86_64.exe")
+                if not os.path.exists(ce_exe):
+                    print(
+                        f"Cheat Engine executable not found for auto-injection at {ce_exe}"
+                    )
+                    return []
+                autorun_dir = path_module.join(path_module.dirname(ce_exe), "autorun")
+                os.makedirs(autorun_dir, exist_ok=True)
+                safe_name = (
+                    (game_exe or "")
+                    .replace("\n", "")
+                    .replace("\r", "")
+                    .replace("\\", "\\\\")
+                    .replace('"', '\\"')
+                )
+                with open(
+                    path_module.join(autorun_dir, "wlib_autoattach.lua"), "w"
+                ) as script:
+                    _ = script.write(f'OpenProcess("{safe_name}")\n')
+                command = [proton_path] if proton_path else ["wine"]
+                if is_proton:
+                    command.append("run")
+                return [*command, ce_exe]
+
             log_file = None
             effective_cwd = cwd_override or game_dir
+            prefix = ""
+            mount_prefix = ""
+            if is_wine_executable or user_env.get("WINEPREFIX") or user_env.get("STEAM_COMPAT_DATA_PATH"):
+                raw_prefix = env_vars.get("WINEPREFIX") or env_vars.get(
+                    "STEAM_COMPAT_DATA_PATH", ""
+                )
+                prefix = game_sandbox.normalize_prefix(raw_prefix)
+                mount_prefix = os.path.abspath(os.path.expanduser(raw_prefix))
+                if os.path.basename(mount_prefix).lower() == "pfx":
+                    mount_prefix = os.path.dirname(mount_prefix)
             # Reserve the slot under the lock, but start the process outside it so a
             # UAC prompt doesn't block stop/get_running_games or other games' exits.
             entry = RunningGame(
@@ -604,6 +675,9 @@ class Launcher:
                 on_exit_callback=on_exit_callback,
                 last_saved_time=0.0,
                 log_file=None,
+                prefix=prefix,
+                sandboxed=sandboxed,
+                title=game_title or (f"Game {game_id}"),
             )
             with self._running_lock:
                 if game_id in self._running:
@@ -612,9 +686,66 @@ class Launcher:
                         "code": "already_running",
                         "error": "Game is already running",
                     }
+                for other in self._running.values():
+                    if (
+                        prefix
+                        and prefix == other.prefix
+                        and (sandboxed or other.sandboxed)
+                    ):
+                        return {
+                            "success": False,
+                            "code": "prefix_in_use",
+                            "error": f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games.",
+                        }
                 if game_id is not None:
                     self._running[game_id] = entry
             try:
+                if sandboxed and sandbox_status is not None and is_windows():
+                    assert game_id is not None
+                    # The game folder is a write-through path, so it must not be the profile.
+                    game_sandbox.check_writable_mounts(
+                        (game_dir,), os.path.expanduser("~")
+                    )
+                    entry.sandbox_box = game_sandbox.configure_sandboxie_box(
+                        sandbox_status["path"], game_id, game_dir
+                    )
+                    entry.sandbox_tool = sandbox_status["path"]
+                    cmd = [entry.sandbox_tool, f"/box:{entry.sandbox_box}", *cmd]
+                if sandboxed and sandbox_status is not None and not is_windows():
+                    assert game_id is not None
+                    if mount_prefix:
+                        os.makedirs(mount_prefix, exist_ok=True)
+                    readonly = runtime_paths
+                    if is_wine_executable and run_ce:
+                        ce_command = prepare_ce_command()
+                        if ce_command:
+                            readonly += (get_cheat_engine_dir(),)
+                            cmd = [
+                                "sh",
+                                "-c",
+                                f"(sleep 5; {shlex.join(ce_command)}) & {shlex.join(cmd)}",
+                            ]
+                        run_ce = False
+                    sandbox_game_dir = game_sandbox.resolve_game_folder(
+                        exe_path, launch_mode
+                    )
+                    user_home = os.path.expanduser("~")
+                    game_sandbox.check_writable_mounts(
+                        (sandbox_game_dir, mount_prefix), user_home
+                    )
+                    cmd = game_sandbox.build_bwrap_argv(
+                        cmd,
+                        game_dir=sandbox_game_dir,
+                        home=user_home,
+                        sandbox_home=game_sandbox.prepare_sandbox_home(game_id),
+                        cwd=effective_cwd,
+                        prefix=mount_prefix,
+                        readonly_paths=readonly,
+                        environment=env_vars,
+                        nixos=os.path.isdir("/nix/store"),
+                        bwrap=sandbox_status["path"],
+                    )
+                    entry.kill_info = None
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     try:
@@ -669,59 +800,21 @@ class Launcher:
                         )
                         time.sleep(5)
 
-                        ce_dir = get_cheat_engine_dir()
-                        ce_exe = path_module.join(
-                            ce_dir, "Lunar Engine", "lunarengine-x86_64.exe"
-                        )
-                        if not os.path.exists(ce_exe):
-                            ce_exe = path_module.join(ce_dir, "lunarengine-x86_64.exe")
-
-                        if os.path.exists(ce_exe):
-                            # Write autorun lua script to auto-attach
-                            autorun_dir = path_module.join(
-                                path_module.dirname(ce_exe), "autorun"
-                            )
-                            os.makedirs(autorun_dir, exist_ok=True)
-                            lua_script = path_module.join(
-                                autorun_dir, "wlib_autoattach.lua"
-                            )
-                            with open(lua_script, "w") as f:
-                                # OpenProcess automatically attaches CE to the process name
-                                safe_game_exe = (
-                                    (game_exe or "")
-                                    .replace("\n", "")
-                                    .replace("\r", "")
-                                    .replace("\\", "\\\\")
-                                    .replace('"', '\\"')
-                                )
-                                _ = f.write(f'OpenProcess("{safe_game_exe}")\n')
-
-                            print(
-                                f"Launching Cheat Engine: {ce_exe} in WINEPREFIX {env_vars.get('WINEPREFIX', 'default')}"
-                            )
-                            # Launch CE using the SAME wine/proton command prefix
-                            ce_cmd = [proton_path] if proton_path else ["wine"]
-                            if is_proton:
-                                ce_cmd.append("run")
-                            ce_cmd.append(ce_exe)
-
+                        ce_cmd = prepare_ce_command()
+                        if ce_cmd:
                             ce_proc = subprocess.Popen(
                                 host_command(ce_cmd, env=env_vars),
                                 env=env_vars,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
                             )
-                            # Reap the helper so it cannot linger as a zombie.
                             threading.Thread(target=ce_proc.wait, daemon=True).start()
-                        else:
-                            print(
-                                f"Cheat Engine executable not found for auto-injection at {ce_exe}"
-                            )
 
                     threading.Thread(target=inject_ce, daemon=True).start()
 
                 def track_playtime_thread():
                     last_saved_time = start_time
+                    box_started = False
                     killpg = getattr(os, "killpg", None)
                     pid = getattr(game_proc, "pid", None)
 
@@ -739,7 +832,25 @@ class Launcher:
 
                     try:
                         while True:
-                            if game_proc.poll() is None:
+                            if entry.sandbox_box:
+                                try:
+                                    pids = game_sandbox.list_box_pids(
+                                        entry.sandbox_tool, entry.sandbox_box
+                                    )
+                                except (
+                                    OSError,
+                                    RuntimeError,
+                                    subprocess.TimeoutExpired,
+                                ) as exc:
+                                    print(f"Could not read sandbox process list: {exc}")
+                                    time.sleep(1)
+                                    continue
+                                if pids:
+                                    box_started = True
+                                elif box_started or time.monotonic() - start_time >= 5:
+                                    break
+                                time.sleep(1)
+                            elif game_proc.poll() is None:
                                 try:
                                     _ = game_proc.wait(timeout=60)
                                 except subprocess.TimeoutExpired:
@@ -942,7 +1053,10 @@ class Launcher:
             command = build_command(base_cmd, args)
             print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
             return execute_process(
-                command, build_host_tool_env(env), cwd_override=runner_game_dir
+                command,
+                build_host_tool_env(env),
+                cwd_override=runner_game_dir,
+                runtime_paths=(game_sandbox.runtime_folder(runner_status["path"]),),
             )
 
         def execute_html_game() -> dict[str, object]:
@@ -1220,4 +1334,7 @@ class Launcher:
             run_ce=auto_inject_ce,
             game_exe=game_exe_name,
             kill_info=(wineserver, kill_env) if wineserver else None,
+            runtime_paths=(game_sandbox.runtime_folder(proton_path),)
+            if proton_path and path_module.isabs(proton_path)
+            else (),
         )

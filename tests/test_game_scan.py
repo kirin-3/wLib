@@ -2,7 +2,7 @@
 import pytest
 
 from core.api import Api
-from core.database import add_game, init_db
+from core.database import add_game, get_all_games, init_db, update_setting
 from core.game_scan import guess_title_and_version, scan_games_folder
 
 
@@ -16,6 +16,24 @@ def test_guess_title_and_version_from_folder_names():
     assert guess_title_and_version("SummertimeSaga-0.20.16-pc") == ("Summertime Saga", "0.20.16")
     assert guess_title_and_version("Being_A_DIK_v0.9.1") == ("Being A DIK", "0.9.1")
     assert guess_title_and_version("Game 2") == ("Game 2", "")
+
+
+@pytest.mark.parametrize("default", ["false", "true"])
+def test_scanned_game_add_uses_sandbox_default(tmp_path, default):
+    update_setting("sandbox_new_games", default)
+    folder = tmp_path / "Scanned Game"
+    folder.mkdir()
+    (folder / "Game.exe").touch()
+    api = Api()
+    scanned = api.scan_games_folder(str(tmp_path))["games"]
+    assert len(scanned) == 1
+    game = scanned[0]
+    # api.importGames sends each scan result to this same backend entry point.
+    result = api.add_game(
+        game["title"], game["exe_path"], version=game["version"], engine=game["engine"]
+    )
+    assert result["success"]
+    assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
 
 
 @pytest.mark.parametrize("filename, content", [

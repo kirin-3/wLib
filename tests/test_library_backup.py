@@ -43,6 +43,99 @@ from core.library_backup import (
 )
 
 
+def test_sandbox_backup_exports_preferences_without_storage(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path))
+    add_game("Sandboxed", "/games/game", sandbox_enabled=True)
+    update_setting("sandbox_new_games", "true")
+    update_setting("sandboxie_custom_path", r"C:\Tools\Sandboxie\Start.exe")
+    sandbox = tmp_path / "sandbox" / "1" / "home"
+    sandbox.mkdir(parents=True)
+    (sandbox / "private-save").write_text("PRIVATE_SANDBOX_CONTENT")
+    backup = build_library_backup(
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_SETTINGS_GENERAL,
+                SECTION_SETTINGS_PATHS,
+            ]
+        }
+    )
+    assert backup["games"][0]["launch_config"]["sandbox_enabled"] == 1
+    assert backup["settings"]["general"]["sandbox_new_games"] == "true"
+    assert (
+        backup["settings"]["paths"]["sandboxie_custom_path"]
+        == r"C:\Tools\Sandboxie\Start.exe"
+    )
+    serialized = json.dumps(backup)
+    assert str(sandbox) not in serialized
+    assert "private-save" not in serialized
+    assert "PRIVATE_SANDBOX_CONTENT" not in serialized
+    sync = build_sync_backup("2026-10-25T00:00:00Z", "test-device")
+    assert sync["settings"]["general"]["sandbox_new_games"] == "true"
+    assert "sandboxie_custom_path" not in json.dumps(sync)
+    assert "sandbox_enabled" not in json.dumps(sync)
+
+
+@pytest.mark.parametrize("stored", [False, True])
+def test_old_backup_preserves_local_sandbox_preference(stored):
+    add_game("Existing", "/game", sandbox_enabled=stored)
+    backup = base_backup(
+        [
+            {
+                "metadata": {"title": "Existing"},
+                "launch_config": {"launch_mode": "native"},
+            }
+        ]
+    )
+    result = apply_library_backup(backup)
+    assert result["updated"] == 1
+    assert get_all_games()[0]["sandbox_enabled"] == int(stored)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_backup_sandbox_value_overrides_local_default(enabled):
+    update_setting("sandbox_new_games", "true" if not enabled else "false")
+    backup = base_backup(
+        [
+            {
+                "metadata": {"title": "Imported"},
+                "launch_config": {"sandbox_enabled": enabled},
+            }
+        ]
+    )
+    assert apply_library_backup(backup)["created"] == 1
+    assert get_all_games()[0]["sandbox_enabled"] == int(enabled)
+    backup["games"][0]["launch_config"]["sandbox_enabled"] = not enabled
+    assert apply_library_backup(backup)["updated"] == 1
+    assert get_all_games()[0]["sandbox_enabled"] == int(not enabled)
+
+
+def test_sandboxie_path_import_on_linux_is_reported_and_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: False)
+    update_setting("sandboxie_custom_path", "local-value")
+    path = write_backup(
+        tmp_path / "sandbox.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "general": {"sandbox_new_games": "true"},
+                "paths": {"sandboxie_custom_path": r"C:\Sandboxie\Start.exe"},
+            },
+        },
+    )
+    api = Api()
+    inspection = api.inspect_library_backup(str(path))
+    assert any(
+        warning["type"] == "foreign_path"
+        and warning["field"] == "sandboxie_custom_path"
+        for warning in inspection["warnings"]
+    )
+    assert api.import_library_backup(str(path))["success"]
+    assert get_setting("sandboxie_custom_path") == "local-value"
+    assert get_setting("sandbox_new_games") == "true"
+
+
 def test_encryption_round_trip_and_fresh_nonce():
     payload = base_backup([{"metadata": {"title": "Private game"}}])
     first = encrypt_library_backup(payload, "test passphrase")

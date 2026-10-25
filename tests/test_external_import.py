@@ -11,7 +11,7 @@ import pytest
 
 from core import host_platform
 from core.api import Api
-from core.database import add_game, get_all_games, init_db
+from core.database import add_game, get_all_games, init_db, update_setting
 from core.external_import import (
     apply_path_rule,
     locate_external_library,
@@ -665,6 +665,16 @@ def test_f69_reader_rejects_wrong_file(tmp_path):
     conn.close()
     with pytest.raises(Exception, match="not an f69 library"):
         read_external_library("f69", str(source))
+
+
+@pytest.mark.parametrize("default", ["false", "true"])
+def test_external_import_uses_sandbox_default(tmp_path, default):
+    update_setting("sandbox_new_games", default)
+    source = tmp_path / "f95checker.db"
+    _write_f95checker_db(source, [{"id": 123, "name": "Imported game"}])
+    result = import_external_library("f95checker", str(source))
+    assert result["created"] == 1
+    assert get_all_games()[0]["sandbox_enabled"] == int(default == "true")
 
 
 def test_f69_import_creates_games_with_collections(tmp_path, _host_paths):

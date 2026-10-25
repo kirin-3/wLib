@@ -3,6 +3,7 @@ import type { PlatformCapabilities } from "../services/api";
 
 export const CONSERVATIVE_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   platform: "unsupported",
+  sandbox: null,
   native_windows_launch: false,
   wine_proton: false,
   runtime_installers: false,

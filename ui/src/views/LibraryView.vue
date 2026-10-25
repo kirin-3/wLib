@@ -61,6 +61,7 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { notify, notifyError } from "../utils/toast";
+import { sandboxLaunchError } from "../utils/sandbox";
 import { openInstallArchive } from "../utils/installArchive";
 import {
   compareLibraryGames,
@@ -955,7 +956,9 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       game.launch_mode || "auto",
     );
     if (result && !result.success) {
-      notifyError(`Failed to launch game:\n\n${result.error}`);
+      const sandboxError = sandboxLaunchError(result.code || result.error_code, result.error);
+      if (sandboxError) notify(sandboxError.message, "error", "Could not launch game", sandboxError.openSettings ? { label: "Open Sandbox settings", run: () => { void router.push('/settings#sandbox'); } } : undefined);
+      else notifyError(`Failed to launch game:\n\n${result.error}`);
     } else if (result?.success) {
       // Reconcile with the registry: HTML is untracked and short commands may already have exited.
       runningGameIds.value = new Set(await api.getRunningGames());

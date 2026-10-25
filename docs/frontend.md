@@ -226,3 +226,29 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 | Settings Wine prefix, per-game custom prefix | dir |
 | Settings Proton / Wine path | runner |
 | Settings RPGMaker runner | file |
+
+## Sandbox controls
+
+Settings includes `SandboxSettings.vue` at `/settings#sandbox`. It shows tool
+readiness, Recheck, the distro install command with Copy, a host-specific Install
+action with polled progress, and the official download page. Unusable tools show
+the failure reason without an Install button. Windows also offers a validated
+custom `Start.exe` picker and Clear. "Sandbox new games" saves immediately;
+"Enable for all games" and "Disable for all games" ask for confirmation and
+report the changed count. Running games keep their current mode.
+
+Game Detail's Launch tab saves "Run in sandbox" with the other launch settings.
+HTML targets disable the switch with an explanation. A missing tool leaves the
+stored preference visible and editable, with a link to Settings → Sandbox.
+"Open sandbox folder" opens the game's persistent storage. Launch failures
+`sandbox_missing` and `sandbox_unusable` offer a Settings action in the error
+toast; `prefix_in_use` preserves the backend explanation naming the running game.
+`utils/sandbox.ts` centralizes status, switch-state and error-code presentation.
+All controls use the existing theme variables and work in light and dark themes.
+
+`services/api.ts` mirrors `get_sandbox_status`, `recheck_sandbox_status`,
+`get_sandbox_install_info`, `install_sandbox_tool`, `get_sandbox_install_status`,
+`set_sandbox_for_all_games` and `open_game_sandbox_folder`, with typed responses
+and browser mocks. Mock new games follow the persisted default and bulk actions
+report actual changes; host installation and folder opening remain unavailable
+in a normal browser.

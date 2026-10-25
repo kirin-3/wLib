@@ -31,6 +31,7 @@ GENERAL_SETTINGS_KEYS = (
     "library_filter_presets",
     "tag_colors",
     "save_backup_keep",
+    "sandbox_new_games",
 )
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
@@ -401,6 +402,12 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('enable_logging', 'false')"
         )
         _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
+        )
+        _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
+        )
+        _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_update_check', 'weekly')"
         )
         _ = cursor.execute(
@@ -454,6 +461,7 @@ def init_db() -> None:
             ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
             ("run_wayland", "BOOLEAN DEFAULT 0"),
             ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
+            ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
             ("custom_prefix", "TEXT DEFAULT ''"),
             ("proton_version", "TEXT DEFAULT ''"),
             ("playtime_seconds", "INTEGER DEFAULT 0"),
@@ -555,12 +563,15 @@ def add_game(
     proton_version: str = "",
     launch_mode: str = DEFAULT_LAUNCH_MODE,
     command_line_args: str = "",
+    sandbox_enabled: bool | None = None,
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
         tags = ", ".join(str(tag) for tag in tags)
 
     normalized_url = normalize_thread_url(f95_url)
+    if sandbox_enabled is None:
+        sandbox_enabled = bool(_coerce_bool_int(get_setting("sandbox_new_games")))
 
     now_iso = datetime.now().isoformat()
 
@@ -574,7 +585,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -594,6 +605,7 @@ def add_game(
                 now_iso,
                 DEFAULT_PLAY_STATUS,
                 command_line_args,
+                _coerce_bool_int(sandbox_enabled),
             ),
         )
         game_id = cursor.lastrowid
@@ -816,6 +828,18 @@ def delete_game(game_id: int) -> None:
         conn.commit()
 
 
+def set_sandbox_for_all_games(enabled: bool) -> int:
+    """Set the next-launch sandbox preference and count only changed games."""
+    value = _coerce_bool_int(enabled)
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "UPDATE games SET sandbox_enabled = ? WHERE sandbox_enabled IS NOT ?",
+            (value, value),
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
 def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]:
     """Update arbitrary fields on a game row. `fields` is a dict of column->value.
 
@@ -844,6 +868,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "run_japanese_locale",
         "run_wayland",
         "auto_inject_ce",
+        "sandbox_enabled",
         "custom_prefix",
         "proton_version",
         "save_path_override",
@@ -873,6 +898,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "run_japanese_locale",
         "run_wayland",
         "auto_inject_ce",
+        "sandbox_enabled",
     ):
         if bool_column in safe_fields:
             safe_fields[bool_column] = _coerce_bool_int(safe_fields[bool_column])

@@ -6,7 +6,7 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
-    "test:unit": "node --experimental-strip-types --test src/services/api.test.mjs src/utils/tagColors.test.ts src/utils/copyText.test.ts src/utils/modalKeyboard.test.ts src/utils/launchMode.test.ts src/utils/installArchive.test.ts src/utils/playStatus.test.ts src/utils/libraryViewState.test.ts src/utils/libraryGames.test.ts src/utils/platformPolicy.test.ts src/utils/appVersion.test.ts src/utils/accentPreference.test.ts src/utils/textSizePreference.test.ts src/utils/motionPreference.test.ts src/utils/themePreference.test.ts src/utils/toast.test.ts src/utils/notesLinks.test.ts src/utils/gameSaves.test.ts src/utils/gameTools.test.ts src/utils/platformCapabilities.test.mjs ../tests/extension_version.test.cjs",
+    "test:unit": "node --experimental-strip-types --test src/services/api.test.mjs src/utils/tagColors.test.ts src/utils/copyText.test.ts src/utils/modalKeyboard.test.ts src/utils/launchMode.test.ts src/utils/installArchive.test.ts src/utils/playStatus.test.ts src/utils/libraryViewState.test.ts src/utils/libraryGames.test.ts src/utils/platformPolicy.test.ts src/utils/appVersion.test.ts src/utils/accentPreference.test.ts src/utils/textSizePreference.test.ts src/utils/motionPreference.test.ts src/utils/themePreference.test.ts src/utils/toast.test.ts src/utils/notesLinks.test.ts src/utils/gameSaves.test.ts src/utils/sandbox.test.ts src/utils/gameTools.test.ts src/utils/platformCapabilities.test.mjs ../tests/extension_version.test.cjs",
     "typecheck": "vue-tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview"

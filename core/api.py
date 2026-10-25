@@ -330,6 +330,13 @@ class Api:
             "current": "",
             "error": "",
         }
+        self._sandbox_install_status: dict[str, object] = {
+            "running": False,
+            "done": 0,
+            "total": 1,
+            "current": "",
+            "error": "",
+        }
         # Polled by the install-from-archive dialog while install_archive runs.
         self._archive_install_status: dict[str, object] = {
             "running": False,
@@ -395,6 +402,98 @@ class Api:
 
     def get_platform_capabilities(self) -> PlatformCapabilities:
         return resolve_platform_capabilities()
+
+    def get_sandbox_status(self) -> dict[str, object]:
+        from core.game_sandbox import get_sandbox_status
+
+        return dict(get_sandbox_status())
+
+    def recheck_sandbox_status(self) -> dict[str, object]:
+        from core.game_sandbox import get_sandbox_status
+
+        return dict(get_sandbox_status(recheck=True))
+
+    def get_sandbox_install_info(self) -> dict[str, object]:
+        from core.game_sandbox import get_sandbox_install_info
+
+        return get_sandbox_install_info()
+
+    def get_sandbox_install_status(self) -> dict[str, object]:
+        with self._status_lock:
+            return dict(self._sandbox_install_status)
+
+    def install_sandbox_tool(self, tool: str = "") -> dict[str, object]:
+        from core import game_sandbox
+
+        expected = "bwrap" if is_linux() else "sandboxie" if is_windows() else ""
+        if not expected or (tool and tool != expected):
+            return {
+                "success": False,
+                "code": "unsupported_platform",
+                "error": "This sandbox installer is unavailable on this host.",
+            }
+        with self._status_lock:
+            if self._sandbox_install_status["running"]:
+                return {
+                    "success": False,
+                    "error": "Sandbox installation is already running.",
+                }
+            self._sandbox_install_status = {
+                "running": True,
+                "done": 0,
+                "total": 1,
+                "current": "Installing sandbox tool",
+                "error": "",
+            }
+
+        def install() -> None:
+            error = ""
+            try:
+                game_sandbox.install_sandbox_tool(expected)
+            except Exception as exc:
+                error = str(exc)
+            try:
+                status = game_sandbox.get_sandbox_status(recheck=True)
+                if not error and status["status"] != "ready":
+                    error = status["reason"]
+            except Exception as exc:
+                error = error or str(exc)
+            with self._status_lock:
+                self._sandbox_install_status = {
+                    "running": False,
+                    "done": 0 if error else 1,
+                    "total": 1,
+                    "current": "",
+                    "error": error,
+                }
+
+        threading.Thread(target=install, daemon=True).start()
+        return {"success": True}
+
+    def set_sandbox_for_all_games(self, enabled: object) -> dict[str, object]:
+        from core.database import set_sandbox_for_all_games
+
+        if not isinstance(enabled, bool):
+            return {"success": False, "error": "Sandbox preference must be a boolean."}
+        return {"success": True, "changed": set_sandbox_for_all_games(enabled)}
+
+    def open_game_sandbox_folder(self, game_id: int) -> dict[str, object]:
+        from core.database import get_game
+        from core.game_sandbox import sandbox_folder
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or get_game(coerced_id) is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        folder = sandbox_folder(coerced_id)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            return dict(self._open_path_with_system_handler(folder))
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
 
     def _resolve_runtime_install_target(
         self, prefix_path: str | None = None, proton_path: str | None = None
@@ -3172,18 +3271,13 @@ class Api:
             update_playtime,
         )
 
-        launch_version = (
-            next(
-                (
-                    str(game.get("version") or "")
-                    for game in get_all_games()
-                    if game.get("id") == game_id
-                ),
-                "",
-            )
+        empty_game: dict[str, object] = {}
+        stored_game = (
+            next((game for game in get_all_games() if game.get("id") == game_id), empty_game)
             if game_id is not None
-            else ""
+            else empty_game
         )
+        launch_version = str(stored_game.get("version") or "")
         session_id: int | None = None
         session_failed = False
         session_lock = threading.Lock()
@@ -3238,6 +3332,8 @@ class Api:
             normalize_launch_mode(launch_mode),
             on_exit_callback=on_exit,
             game_id=game_id,
+            sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
+            game_title=str(stored_game.get("title") or ""),
         )
         if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
             with session_lock:
@@ -4229,6 +4325,8 @@ class Api:
             "save_backup_keep": get_save_backup_keep() or "all",
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
+            "sandbox_new_games": get_setting_fn("sandbox_new_games") == "true",
+            "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
@@ -4412,6 +4510,7 @@ class Api:
             "library_folder_pattern",
             "downloads_folder",
             RPGMAKER_LINUX_RUNNER_SETTING,
+            "sandboxie_custom_path",
         ):
             if key in settings_map:
                 value = settings_map[key]
@@ -4420,6 +4519,16 @@ class Api:
                         "success": False,
                         "error": f"Setting '{key}' must be a string",
                     }
+
+        if "sandboxie_custom_path" in settings_map:
+            import ntpath
+
+            custom = str(settings_map.get("sandboxie_custom_path") or "").strip()
+            if custom and ntpath.basename(custom).casefold() != "start.exe":
+                return {
+                    "success": False,
+                    "error": "Choose the Sandboxie Start.exe executable.",
+                }
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         update_setting_fn = cast(Callable[[str, str], None], update_setting)
@@ -4449,6 +4558,16 @@ class Api:
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
             update_setting_fn("enable_logging", enable_logging)
+            if "sandbox_new_games" in settings_map:
+                update_setting_fn(
+                    "sandbox_new_games",
+                    "true" if settings_map["sandbox_new_games"] is True else "false",
+                )
+            if "sandboxie_custom_path" in settings_map:
+                update_setting_fn(
+                    "sandboxie_custom_path",
+                    str(settings_map["sandboxie_custom_path"] or "").strip(),
+                )
             if "update_notifications" in settings_map:
                 update_setting_fn(
                     "update_notifications",
@@ -5121,6 +5240,8 @@ class Api:
                 "" if native else str(row.get("custom_prefix") or ""),
                 "" if native else str(row.get("proton_version") or ""),
                 windows=is_windows(),
+                game_id=coerced_id,
+                sandbox_enabled=bool(row.get("sandbox_enabled")),
             )
             detected = [dict(location) for location in locations]
             effective = resolve_effective_folder("", locations)

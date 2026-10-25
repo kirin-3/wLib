@@ -499,6 +499,7 @@ export interface GameSaveActionResponse extends ApiBasicResponse {
 }
 
 export interface GameRecord {
+  sandbox_enabled?: boolean;
   id: number;
   title: string;
   exe_path: string;
@@ -575,8 +576,27 @@ export interface RpgmakerLinuxRunnerStatus {
 
 export type HostPlatform = "linux" | "windows" | "unsupported";
 
+export interface SandboxStatus {
+  status: "ready" | "missing" | "unusable";
+  tool: string;
+  path: string;
+  version: string;
+  reason: string;
+}
+
+export interface SandboxInstallInfo {
+  platform: HostPlatform;
+  tool: string;
+  command: string;
+  can_install: boolean;
+  pkexec_available: boolean;
+  download_url: string;
+  package_manager: string;
+}
+
 export interface PlatformCapabilities {
   platform: HostPlatform;
+  sandbox: "bwrap" | "sandboxie" | null;
   native_windows_launch: boolean;
   wine_proton: boolean;
   runtime_installers: boolean;
@@ -590,6 +610,8 @@ export interface PlatformCapabilities {
 }
 
 export interface SettingsPayload {
+  sandbox_new_games?: boolean;
+  sandboxie_custom_path?: string;
   update_notifications?: boolean;
   custom_play_statuses?: string[];
   collections?: string[];
@@ -693,6 +715,8 @@ interface MockToolRun {
 }
 
 export interface SettingsResponse {
+  sandbox_new_games: boolean;
+  sandboxie_custom_path: string;
   tag_colors: Record<string, string>;
   update_notifications?: boolean;
   custom_play_statuses: string[];
@@ -768,6 +792,8 @@ const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const MOCK_ATTACHMENTS_STORAGE_KEY = "wlib-mock-attachments";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
+  sandbox_new_games: false,
+  sandboxie_custom_path: "",
   tag_colors: {},
   custom_play_statuses: [],
   collections: [],
@@ -1088,6 +1114,8 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
 
   return {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
+    sandbox_new_games: source.sandbox_new_games === true,
+    sandboxie_custom_path: typeof source.sandboxie_custom_path === "string" ? source.sandboxie_custom_path : "",
     tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
       ? Object.fromEntries(Object.entries(source.tag_colors).filter(([name, swatch]) => name.trim() && typeof swatch === "string" && ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"].includes(swatch)).map(([name, swatch]) => [name.trim().toLowerCase(), swatch])) : {},
     collections: Array.isArray(source.collections) ? source.collections.filter((name): name is string => typeof name === "string") : [],
@@ -1710,6 +1738,34 @@ class ApiService {
     return this.invoke("open_log_folder");
   }
 
+  async getSandboxStatus(): Promise<SandboxStatus> {
+    return this.invoke<SandboxStatus>("get_sandbox_status");
+  }
+
+  async recheckSandboxStatus(): Promise<SandboxStatus> {
+    return this.invoke<SandboxStatus>("recheck_sandbox_status");
+  }
+
+  async getSandboxInstallInfo(): Promise<SandboxInstallInfo> {
+    return this.invoke<SandboxInstallInfo>("get_sandbox_install_info");
+  }
+
+  async installSandboxTool(tool: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("install_sandbox_tool", tool);
+  }
+
+  async getSandboxInstallStatus(): Promise<InstallProgressStatus> {
+    return this.invoke<InstallProgressStatus>("get_sandbox_install_status");
+  }
+
+  async setSandboxForAllGames(enabled: boolean): Promise<ApiBasicResponse & {changed?: number}> {
+    return this.invokeLibraryChange("set_sandbox_for_all_games", enabled);
+  }
+
+  async openGameSandboxFolder(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("open_game_sandbox_folder", gameId);
+  }
+
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return this.invoke<PlatformCapabilities>("get_platform_capabilities");
   }
@@ -1979,7 +2035,7 @@ class ApiService {
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
           f95_url: String(args[2] || ""), version: String(args[3] || ""),
           engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
-          command_line_args: String(args[15] || ""), play_status: "Not Started", thread_completed: false };
+          command_line_args: String(args[15] || ""), sandbox_enabled: readMockSettings().sandbox_new_games, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -2757,9 +2813,29 @@ class ApiService {
           dlls_installed: false,
           rtps_installed: false,
         };
+      case "get_sandbox_status":
+      case "recheck_sandbox_status":
+        return { status: "missing", tool: "bwrap", path: "", version: "", reason: "Sandbox tools require the desktop app." };
+      case "get_sandbox_install_info":
+        return { platform: "linux", tool: "bwrap", command: "sudo pacman -S bubblewrap", can_install: false, pkexec_available: false, download_url: "https://github.com/containers/bubblewrap", package_manager: "pacman" };
+      case "get_sandbox_install_status":
+        return { running: false, done: 0, total: 1, current: "", error: "" };
+      case "install_sandbox_tool":
+        return { success: false, error: "Sandbox installation requires the desktop app." };
+      case "open_game_sandbox_folder":
+        return { success: false, error: "Opening sandbox folders requires the desktop app." };
+      case "set_sandbox_for_all_games": {
+        let changed = 0;
+        const games = readMockGames().map((game) => {
+          if (!!game.sandbox_enabled !== !!args[0]) changed++;
+          return { ...game, sandbox_enabled: !!args[0] };
+        });
+        localStorage.setItem("wlib-mock-games", JSON.stringify(games));
+        return { success: true, changed };
+      }
       case "get_platform_capabilities":
         if (localStorage.getItem("wlib-mock-platform") === "linux") return {
-          ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", wine_proton: true,
+          ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", sandbox: "bwrap", wine_proton: true,
           runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true,
           launch_modes: LAUNCH_MODE_OPTIONS.map((option) => option.value),
         };

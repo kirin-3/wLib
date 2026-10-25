@@ -32,6 +32,7 @@ from core.database import (
     get_connection,
     get_all_play_sessions,
     find_matching_game_row,
+    get_setting,
     normalize_launch_mode,
     normalize_play_status,
 )
@@ -108,6 +109,7 @@ LAUNCH_CONFIG_FIELDS = (
     "run_japanese_locale",
     "run_wayland",
     "auto_inject_ce",
+    "sandbox_enabled",
     "custom_prefix",
     "proton_version",
     "save_path_override",
@@ -124,6 +126,7 @@ PATH_SETTINGS_KEYS = (
     "library_folder_pattern",
     "downloads_folder",
     "download_detection_enabled",
+    "sandboxie_custom_path",
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
@@ -133,6 +136,7 @@ BOOLEAN_GAME_FIELDS = (
     "run_japanese_locale",
     "run_wayland",
     "auto_inject_ce",
+    "sandbox_enabled",
     "is_favorite",
 )
 INTEGER_GAME_FIELDS = ("playtime_seconds",)
@@ -1081,6 +1085,9 @@ def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:
     _ = insert_fields.setdefault("f95_url", "")
     _ = insert_fields.setdefault("play_status", DEFAULT_PLAY_STATUS)
     _ = insert_fields.setdefault("date_added", datetime.now().isoformat())
+    _ = insert_fields.setdefault(
+        "sandbox_enabled", _coerce_bool(get_setting("sandbox_new_games"))
+    )
 
     columns = [field for field in IMPORTABLE_GAME_FIELDS if field in insert_fields]
     placeholders = ", ".join("?" for _ in columns)

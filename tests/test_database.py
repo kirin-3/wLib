@@ -42,6 +42,7 @@ from core.database import (
     delete_collection,
     reorder_collections,
     set_game_collections,
+    set_sandbox_for_all_games,
     _coerce_sort_order,
 )
 
@@ -231,6 +232,62 @@ def test_existing_database_gains_thread_completed_with_false_default():
     ).fetchone()
     conn.close()
     assert row is not None and row[0] == 0
+
+
+def test_sandbox_migration_preserves_existing_games_and_wal():
+    game_id = add_game("Older game", "/game")
+    conn = get_connection()
+    try:
+        conn.execute("ALTER TABLE games DROP COLUMN sandbox_enabled")
+        conn.commit()
+    finally:
+        conn.close()
+    update_setting("sandbox_new_games", "true")
+    init_db()
+    init_db()
+    game = get_all_games()[0]
+    assert game["id"] == game_id
+    assert game["sandbox_enabled"] == 0
+    update_game(game_id, {"sandbox_enabled": "true"})
+    assert get_all_games()[0]["sandbox_enabled"] == 1
+    update_game(game_id, {"sandbox_enabled": False})
+    assert get_all_games()[0]["sandbox_enabled"] == 0
+    conn = get_connection()
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("default", ["false", "true"])
+def test_new_games_follow_sandbox_default_with_explicit_override(default):
+    assert get_setting("sandbox_new_games") == "false"
+    assert get_setting("sandboxie_custom_path") == ""
+    update_setting("sandbox_new_games", default)
+    add_game("Default", "/default")
+    add_game("Explicit on", "/on", sandbox_enabled=True)
+    add_game("Explicit off", "/off", sandbox_enabled=False)
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["Default"]["sandbox_enabled"] == int(default == "true")
+    assert games["Explicit on"]["sandbox_enabled"] == 1
+    assert games["Explicit off"]["sandbox_enabled"] == 0
+    update_setting("sandbox_new_games", "false" if default == "true" else "true")
+    assert get_all_games() == list(games.values())
+
+
+def test_bulk_sandbox_updates_only_changed_games():
+    assert set_sandbox_for_all_games(True) == 0
+    for index in range(40):
+        add_game(f"Game {index}", "/game", sandbox_enabled=index < 5)
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    assert set_sandbox_for_all_games(True) == 35
+    assert all(game["sandbox_enabled"] == 1 for game in get_all_games())
+    assert set_sandbox_for_all_games(True) == 0
+    assert set_sandbox_for_all_games(False) == 40
+    assert all(game["sandbox_enabled"] == 0 for game in get_all_games())
+    assert set_sandbox_for_all_games(False) == 0
+    # Launch configuration stays local and does not mark shared metadata changed.
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
 
 
 def test_database_initialization():

@@ -570,3 +570,30 @@ body {
   font-size: 0.875rem;
   color: var(--text-muted);
 }
+
+/* Shared sandbox switches in Settings and Game Detail. */
+.sandbox-switch {
+  appearance: none;
+  flex-shrink: 0;
+  width: 42px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  position: relative;
+  cursor: pointer;
+}
+.sandbox-switch::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+.sandbox-switch:checked { background: var(--brand); }
+.sandbox-switch:checked::before { transform: translateX(18px); background: #fff; }
+.sandbox-switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.sandbox-switch:disabled { opacity: .45; cursor: default; }

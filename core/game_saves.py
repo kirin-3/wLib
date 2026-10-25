@@ -101,6 +101,9 @@ def detect_save_locations(
     proton_version: str = "",
     *,
     windows: bool | None = None,
+    game_id: int | None = None,
+    sandbox_enabled: bool = False,
+    _profile_home: str | None = None,
 ) -> list[SaveLocation]:
     """Searches common save locations for a game.
 
@@ -111,6 +114,27 @@ def detect_save_locations(
         windows = is_windows()
 
     results: list[SaveLocation] = []
+    profile_home = _profile_home or os.path.expanduser("~")
+    if sandbox_enabled and game_id is not None:
+        from core.game_sandbox import sandbox_folder
+
+        root = sandbox_folder(game_id)
+        profiles = [os.path.join(root, "home")]
+        if windows:
+            profiles = glob.glob(os.path.join(root, "user", "*"))
+            profiles += glob.glob(os.path.join(root, "drive", "c", "users", "*"))
+        for profile in profiles:
+            if os.path.isdir(profile):
+                results.extend(
+                    detect_save_locations(
+                        exe_path,
+                        title,
+                        custom_prefix,
+                        proton_version,
+                        windows=windows,
+                        _profile_home=profile,
+                    )
+                )
     game_dir = os.path.dirname(exe_path) if exe_path else ""
     game_name = os.path.splitext(os.path.basename(exe_path))[0] if exe_path else ""
     title_clean = title.strip() if title else game_name
@@ -153,10 +177,14 @@ def detect_save_locations(
 
     # ── 2. Check Ren'Py native save path (~/.renpy/) ──
     if windows:
-        roaming_app_data = str(os.environ.get("APPDATA") or "").strip()
+        roaming_app_data = (
+            os.path.join(profile_home, "AppData", "Roaming")
+            if _profile_home
+            else str(os.environ.get("APPDATA") or "").strip()
+        )
         renpy_base = os.path.join(roaming_app_data, "RenPy") if roaming_app_data else ""
     else:
-        renpy_base = os.path.expanduser(os.path.join("~", ".renpy"))
+        renpy_base = os.path.join(profile_home, ".renpy")
     if os.path.isdir(renpy_base):
         try:
             renpy_entries = os.listdir(renpy_base)
@@ -178,10 +206,20 @@ def detect_save_locations(
                     )
 
     if windows:
-        user_home = os.path.expanduser("~")
+        user_home = profile_home
         native_roots = [
-            (str(os.environ.get("APPDATA") or ""), "AppData Roaming"),
-            (str(os.environ.get("LOCALAPPDATA") or ""), "AppData Local"),
+            (
+                os.path.join(user_home, "AppData", "Roaming")
+                if _profile_home
+                else str(os.environ.get("APPDATA") or ""),
+                "AppData Roaming",
+            ),
+            (
+                os.path.join(user_home, "AppData", "Local")
+                if _profile_home
+                else str(os.environ.get("LOCALAPPDATA") or ""),
+                "AppData Local",
+            ),
             (os.path.join(user_home, "AppData", "LocalLow"), "AppData LocalLow"),
             (os.path.join(user_home, "Documents"), "Documents"),
             (os.path.join(user_home, "Saved Games"), "Saved Games"),
@@ -204,6 +242,30 @@ def detect_save_locations(
             except PermissionError:
                 continue
         return _dedupe(results)
+
+    for base in (
+        os.path.join(profile_home, ".config"),
+        os.path.join(profile_home, ".local", "share"),
+    ):
+        if not os.path.isdir(base):
+            continue
+        try:
+            for entry in os.listdir(base):
+                words = [
+                    word for word in title_clean.casefold().split() if len(word) >= 4
+                ]
+                if (game_name and game_name.casefold() in entry.casefold()) or any(
+                    word in entry.casefold() for word in words
+                ):
+                    candidate = os.path.join(base, entry)
+                    if os.path.isdir(candidate):
+                        add(
+                            candidate,
+                            "Linux Profile",
+                            f"Linux save/config folder: {candidate}",
+                        )
+        except OSError:
+            continue
 
     # ── 3. Check Wine prefix AppData folders ──
     wine_prefix = (
