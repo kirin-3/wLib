@@ -2575,6 +2575,7 @@ def test_companion_rejections_and_supported_tools():
     assert launcher.list_launchable_tools(2, [native]) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 def test_companion_natural_exit_only_closes_own_wine_tools():
     import signal
     from core.launcher import ToolProcess
@@ -2617,6 +2618,7 @@ def test_companion_natural_exit_only_closes_own_wine_tools():
     assert callback.call_args.args[1] is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 @pytest.mark.parametrize("pid", [MagicMock(), None, True, False, -1, 0, 1])
 def test_companion_cleanup_rejects_unsafe_process_groups(pid):
     from core.launcher import ToolProcess
@@ -2630,6 +2632,7 @@ def test_companion_cleanup_rejects_unsafe_process_groups(pid):
         thread.assert_not_called()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 def test_companion_cleanup_rejects_own_process_group():
     import os
     from core.launcher import ToolProcess
@@ -2641,6 +2644,7 @@ def test_companion_cleanup_rejects_own_process_group():
         killpg.assert_not_called()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 def test_companion_shutdown_does_not_signal_processes():
     from core.launcher import ToolProcess
 
@@ -2652,6 +2656,7 @@ def test_companion_shutdown_does_not_signal_processes():
     assert launcher._tools == {}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 def test_companion_stop_closes_only_own_wine_groups():
     import signal
     from core.launcher import ToolProcess

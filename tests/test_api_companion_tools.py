@@ -18,6 +18,7 @@ def tools_api(tmp_path, monkeypatch):
 
 def test_companion_api_roundtrip(tools_api, monkeypatch):
     api = tools_api
+    monkeypatch.setattr("core.api.is_linux", lambda: True)
     game = db.add_game("Game", "/game.exe")
     assert api.save_companion_tool({"name": "Helper", "kind": "command", "arguments": "helper"})["success"]
     tool = api.list_companion_tools()["tools"][0]

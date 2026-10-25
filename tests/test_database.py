@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+from contextlib import closing
 
 import pytest
 import os
@@ -1447,7 +1448,7 @@ def test_companion_migration_and_overrides(tmp_path):
     conn.close()
     init_db()
     assert db.list_companion_tools() == []
-    with db.get_connection() as conn:
+    with closing(db.get_connection()) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM game_companion_tools").fetchone()[0] == 0
         )
@@ -1482,7 +1483,7 @@ def test_companion_migration_and_overrides(tmp_path):
     db.delete_companion_tool(opt_in["id"])
     db.set_game_companion_tool_override(game, tool["id"], True)
     db.delete_game(game)
-    with db.get_connection() as conn:
+    with closing(db.get_connection()) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM game_companion_tools").fetchone()[0] == 0
         )
