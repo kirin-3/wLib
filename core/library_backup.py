@@ -24,6 +24,7 @@ from core.backup_format import (
     SQLITE_INTEGER_MAX,
     BackupValidationError,
 )
+from core import database
 from core.database import (
     DEFAULT_PLAY_STATUS,
     GENERAL_SETTINGS_KEYS,
@@ -418,9 +419,13 @@ def build_library_backup(
             ]
             exported_game[SECTION_USER_STATE] = user_state
         if SECTION_LAUNCH_CONFIG in sections:
-            exported_game[SECTION_LAUNCH_CONFIG] = _pick_fields(
-                game, LAUNCH_CONFIG_FIELDS
-            )
+            launch_config = _pick_fields(game, LAUNCH_CONFIG_FIELDS)
+            launch_config["companion_tools"] = {
+                tool["name"]: tool["visible"]
+                for tool in database.get_game_companion_tools(int(str(game["id"])))
+                if tool["overridden"]
+            }
+            exported_game[SECTION_LAUNCH_CONFIG] = launch_config
         if SECTION_EXECUTABLE_PATHS in sections:
             exported_game[SECTION_EXECUTABLE_PATHS] = _pick_fields(
                 game, EXECUTABLE_PATH_FIELDS
@@ -446,7 +451,12 @@ def build_library_backup(
     if SECTION_SETTINGS_GENERAL in sections:
         settings["general"] = _get_settings_payload(GENERAL_SETTINGS_KEYS)
     if SECTION_SETTINGS_PATHS in sections:
-        settings["paths"] = _get_settings_payload(PATH_SETTINGS_KEYS)
+        paths: dict[str, object] = dict(_get_settings_payload(PATH_SETTINGS_KEYS))
+        paths["companion_tools"] = [
+            {key: value for key, value in tool.items() if key != "id"}
+            for tool in database.list_companion_tools()
+        ]
+        settings["paths"] = paths
     if settings:
         backup["settings"] = settings
 
@@ -905,6 +915,38 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
             path=path_text,
         )
 
+    for raw in _coerce_sequence(path_settings.get("companion_tools")):
+        tool = _backup_companion_tool(raw)
+        if tool is None:
+            warnings.append(
+                {
+                    "type": "invalid_companion_tool",
+                    "scope": "settings",
+                    "message": "Malformed custom tool will be skipped.",
+                }
+            )
+            continue
+        args, _ = database.split_companion_arguments(str(tool["arguments"]))
+        tool_path = args[0] if tool["kind"] == "command" else str(tool["path"])
+        if is_windows():
+            continue  # Kept as-is on Windows; custom tools only run on Linux.
+        if not _is_host_path_setting(tool_path):
+            warnings.append(
+                {
+                    "type": "non_host_companion_tool",
+                    "scope": "settings",
+                    "message": f"{tool['name']}: tool path is for another host and will be skipped.",
+                }
+            )
+        elif tool["kind"] != "command":
+            _path_warning(
+                warnings,
+                scope="companion_tool",
+                field="path",
+                path=tool_path,
+                title=str(tool["name"]),
+            )
+
     if has_cover_reference:
         warnings.append(
             {
@@ -944,6 +986,14 @@ def inspect_library_backup(
         },
         "available_sections": _available_backup_sections(backup),
         "counts": {
+            "companion_tools": sum(
+                _backup_companion_tool(raw) is not None
+                for raw in _coerce_sequence(
+                    _coerce_mapping(
+                        _coerce_mapping(backup.get("settings")).get("paths")
+                    ).get("companion_tools")
+                )
+            ),
             "total_games": len(plan),
             "matched_games": sum(1 for item in plan if item.get("status") == "matched"),
             "new_games": sum(1 for item in plan if item.get("status") == "new"),
@@ -1217,6 +1267,85 @@ def _coerce_setting_value(key: str, raw: object) -> str:
     return _coerce_text(raw)
 
 
+def _backup_companion_tool(raw: object) -> dict[str, object] | None:
+    try:
+        return database.normalize_companion_tool(
+            _coerce_mapping(raw), validate_paths=False
+        )
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _import_companion_tools(
+    cursor: sqlite3.Cursor, backup: Mapping[str, object], merge_mode: str
+) -> tuple[int, int]:
+    paths = _coerce_mapping(_coerce_mapping(backup.get("settings")).get("paths"))
+    updated = skipped = 0
+    for raw in _coerce_sequence(paths.get("companion_tools")):
+        tool = _backup_companion_tool(raw)
+        if tool is None:
+            skipped += 1
+            continue
+        command, _ = database.split_companion_arguments(str(tool["arguments"]))
+        path = command[0] if tool["kind"] == "command" else str(tool["path"])
+        # Windows keeps Linux tool data unchanged; tools only run on Linux.
+        if not is_windows() and not _is_host_path_setting(path):
+            skipped += 1
+            continue
+        row = cast(
+            sqlite3.Row | None,
+            cursor.execute(
+                "SELECT id FROM companion_tools WHERE name=? COLLATE NOCASE",
+                (tool["name"],),
+            ).fetchone(),
+        )
+        if row is not None and merge_mode == "fill_missing":
+            continue
+        now = datetime.now().isoformat()
+        if row is None:
+            _ = cursor.execute(
+                "INSERT INTO companion_tools (name, kind, path, arguments, show_on_all_games, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (*tool.values(), now, now),
+            )
+        else:
+            _ = cursor.execute(
+                "UPDATE companion_tools SET name=?, kind=?, path=?, arguments=?, show_on_all_games=?, sort_order=?, updated_at=? WHERE id=?",
+                (*tool.values(), now, row["id"]),
+            )
+        updated += 1
+    return updated, skipped
+
+
+def _import_companion_overrides(
+    cursor: sqlite3.Cursor, game_id: int, game: Mapping[str, object], merge_mode: str
+) -> None:
+    config = _game_section(game, SECTION_LAUNCH_CONFIG)
+    if "companion_tools" not in config or not isinstance(
+        config["companion_tools"], Mapping
+    ):
+        return
+    if merge_mode == "overwrite":
+        _ = cursor.execute(
+            "DELETE FROM game_companion_tools WHERE game_id=?", (game_id,)
+        )
+    for name, visible in _coerce_mapping(
+        cast(object, config["companion_tools"])
+    ).items():
+        if not isinstance(visible, bool):
+            continue
+        row = cast(
+            sqlite3.Row | None,
+            cursor.execute(
+                "SELECT id FROM companion_tools WHERE name=? COLLATE NOCASE", (name,)
+            ).fetchone(),
+        )
+        if row is not None:
+            _ = cursor.execute(
+                "INSERT OR IGNORE INTO game_companion_tools (game_id, tool_id, visible) VALUES (?, ?, ?)",
+                (game_id, row["id"], visible),
+            )
+
+
 def _import_setting_groups(
     cursor: sqlite3.Cursor,
     backup: Mapping[str, object],
@@ -1381,6 +1510,7 @@ def apply_library_backup(
     ambiguous = 0
     settings_updated = 0
     deleted = 0
+    tools_updated = tools_skipped = 0
     created_ids: list[int] = []
     updated_ids: list[int] = []
 
@@ -1419,6 +1549,11 @@ def apply_library_backup(
                 _ = write_library_backup(
                     os.path.join(snapshot_dir, "last-local.json"),
                     {"sections": SUPPORTED_SECTIONS},
+                )
+
+            if SECTION_SETTINGS_PATHS in sections:
+                tools_updated, tools_skipped = _import_companion_tools(
+                    cursor, backup, merge_mode
                 )
 
             for item in plan:
@@ -1474,6 +1609,11 @@ def apply_library_backup(
                     game_id = _insert_game(cursor, fields)
                     created += 1
                     created_ids.append(game_id)
+
+                if SECTION_LAUNCH_CONFIG in sections:
+                    _import_companion_overrides(
+                        cursor, game_id, imported_game, merge_mode
+                    )
 
                 if SECTION_USER_STATE in sections:
                     keep_local_sessions = False
@@ -1534,6 +1674,8 @@ def apply_library_backup(
         "warnings": len(warnings),
         "warning_records": warnings,
         "settings_updated": settings_updated,
+        "companion_tools_updated": tools_updated,
+        "companion_tools_skipped": tools_skipped,
         "selected_sections": sorted(sections),
         "created_ids": created_ids,
         "updated_ids": updated_ids,

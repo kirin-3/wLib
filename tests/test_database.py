@@ -1435,3 +1435,91 @@ def test_save_backup_keep_bumps_sync_timestamp():
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     update_setting("save_backup_keep", "3")
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_companion_migration_and_overrides(tmp_path):
+    from core import database as db
+
+    conn = get_connection()
+    conn.execute("DROP TABLE game_companion_tools")
+    conn.execute("DROP TABLE companion_tools")
+    conn.commit()
+    conn.close()
+    init_db()
+    assert db.list_companion_tools() == []
+    with db.get_connection() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM game_companion_tools").fetchone()[0] == 0
+        )
+    game = add_game("Tools", "/game")
+    other = add_game("Other", "/other")
+    tool = db.save_companion_tool(dict(name="Luna", kind="command", arguments="luna"))
+    opt_in = db.save_companion_tool(
+        dict(
+            name="OCR",
+            kind="command",
+            arguments="ocr",
+            show_on_all_games=False,
+            sort_order=1,
+        )
+    )
+    assert [t["name"] for t in db.list_companion_tools()] == ["Luna", "OCR"]
+    assert db.get_game_companion_tools(game)[0]["visible"]
+    db.set_game_companion_tool_override(game, tool["id"], False)
+    db.set_game_companion_tool_override(game, opt_in["id"], True)
+    assert [t["visible"] for t in db.get_game_companion_tools(game)] == [False, True]
+    assert [t["visible"] for t in db.get_game_companion_tools(other)] == [True, False]
+    for default in (False, True):
+        db.save_companion_tool({**tool, "show_on_all_games": default})
+        assert not db.get_game_companion_tools(game)[0]["visible"]
+    db.set_game_companion_tool_override(game, tool["id"], None)
+    assert not db.get_game_companion_tools(game)[0]["overridden"]
+    assert db.get_game_companion_tools(game)[0]["visible"]
+    with pytest.raises(ValueError, match="Name is already used"):
+        db.save_companion_tool(dict(name="luna", kind="command", arguments="other"))
+    with pytest.raises(ValueError, match="Name is already used"):
+        db.save_companion_tool({**opt_in, "name": "LUNA"})
+    db.delete_companion_tool(opt_in["id"])
+    db.set_game_companion_tool_override(game, tool["id"], True)
+    db.delete_game(game)
+    with db.get_connection() as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM game_companion_tools").fetchone()[0] == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "fields, message",
+    [
+        ({"name": " "}, "Name"),
+        ({"kind": "invalid"}, "Kind"),
+        ({"kind": "wine", "path": "/bin/true"}, ".exe or .bat"),
+        ({"kind": "wine", "path": "/missing.exe"}, "existing file"),
+        ({"kind": "native", "path": "/missing"}, "existing file"),
+        ({"arguments": ""}, "must contain a command"),
+        ({"arguments": "ONLY=env"}, "must contain a command"),
+        ({"arguments": 'upscaler "--target'}, "cannot be parsed"),
+    ],
+)
+def test_companion_validation(fields, message):
+    from core.database import save_companion_tool
+
+    with pytest.raises(ValueError, match=message):
+        save_companion_tool(
+            {"name": "Tool", "kind": "command", "arguments": "tool", **fields}
+        )
+
+
+def test_companion_file_kinds(tmp_path):
+    from core.database import save_companion_tool
+
+    for name, kind in (
+        ("tool.EXE", "wine"),
+        ("tool.bat", "wine"),
+        ("script", "native"),
+    ):
+        path = tmp_path / name
+        path.touch()
+        assert save_companion_tool(dict(name=name, kind=kind, path=str(path)))[
+            "path"
+        ] == str(path)

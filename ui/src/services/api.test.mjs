@@ -341,3 +341,61 @@ test("browser mock game tools report support and advance progress across polls",
     delete globalThis.localStorage;
   }
 });
+
+test("companion tools persist definitions, overrides, run support and duplicate guards", async () => {
+  const storage = new Map([
+    ["wlib-mock-platform", "linux"],
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "Wine", exe_path: "/game.exe" },
+      { id: 2, title: "Native", exe_path: "/game.sh" },
+      { id: 3, title: "Sandbox", exe_path: "/game.exe", sandbox_enabled: true },
+    ])],
+  ]);
+  const mockStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = { localStorage: mockStorage, dispatchEvent() {}, addEventListener() {} };
+  const previousCustomEvent = globalThis.CustomEvent;
+  globalThis.CustomEvent ??= class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail; } };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    assert.equal((await api.getPlatformCapabilities()).companion_tools, true);
+    const wine = (await api.saveCompanionTool({ name: "Textractor", kind: "wine", path: "/tool.exe", arguments: "", sort_order: 0, show_on_all_games: true })).tool;
+    const native = (await api.saveCompanionTool({ name: "OCR", kind: "native", path: "/ocr", arguments: "", sort_order: 1, show_on_all_games: false })).tool;
+    assert.equal((await api.saveCompanionTool({ ...native, name: "textractor" })).success, false);
+    assert.equal((await api.listCompanionTools()).tools.length, 2);
+    assert.equal((await api.getGameCompanionTools(1)).tools[0].overridden, false);
+    await api.setGameCompanionToolOverride(1, wine.id, false);
+    assert.equal((await api.getGameCompanionTools(1)).tools[0].visible, false);
+    await api.setGameCompanionToolOverride(1, wine.id, null);
+    await api.setGameCompanionToolOverride(1, native.id, true);
+    assert.deepEqual((await api.listLaunchableCompanionTools(1)).tools, []);
+    assert.equal((await api.launchCompanionTool(1, wine.id)).success, false);
+    await api.launchGame(1, "/game.exe");
+    assert.deepEqual((await api.listLaunchableCompanionTools(1)).tools.map(tool => tool.name), ["Textractor", "OCR"]);
+    assert.equal((await api.launchCompanionTool(1, wine.id)).success, true);
+    assert.equal((await api.launchCompanionTool(1, wine.id)).code, "tool_running");
+    await api.setGameCompanionToolOverride(2, native.id, true);
+    await api.launchGame(2, "/game.sh");
+    assert.deepEqual((await api.listLaunchableCompanionTools(2)).tools.map(tool => tool.name), ["OCR"]);
+    await api.launchGame(3, "/game.exe");
+    assert.deepEqual((await api.listLaunchableCompanionTools(3)).tools, []);
+    await api.stopGame(1);
+    assert.deepEqual((await api.listLaunchableCompanionTools(1)).tools, []);
+    await api.launchGame(1, "/game.exe");
+    assert.equal((await api.launchCompanionTool(1, wine.id)).success, true);
+    await api.deleteCompanionTool(native.id);
+    assert.equal((await api.getGameCompanionTools(1)).tools.length, 1);
+    await api.deleteGame(1);
+    assert.equal(JSON.parse(storage.get("wlib-mock-companions")).overrides["1"], undefined);
+    storage.set("wlib-mock-platform", "windows");
+    assert.equal((await api.getPlatformCapabilities()).companion_tools, false);
+    assert.equal((await api.listLaunchableCompanionTools(2)).success, false);
+    assert.equal((await api.listCompanionTools()).tools.length, 1);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+    globalThis.CustomEvent = previousCustomEvent;
+  }
+});

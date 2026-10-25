@@ -438,7 +438,7 @@ const runImport = async () => {
       importError.value = result?.error || "Import failed.";
       return;
     }
-    importMessage.value = `Imported backup. Created ${result.created ?? 0}, updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}.`;
+    importMessage.value = `Imported backup. Created ${result.created ?? 0}, updated ${result.updated ?? 0}, skipped ${result.skipped ?? 0}. Custom tools: ${result.companion_tools_updated ?? 0} imported, ${result.companion_tools_skipped ?? 0} skipped.`;
     window.dispatchEvent(new Event("wlib-refresh-library"));
     importPassphrase.value = "";
     importNeedsPassphrase.value = false;
@@ -613,6 +613,7 @@ const runImport = async () => {
             <span>Matched: {{ importCounts?.matched_games ?? 0 }}</span>
             <span>New: {{ importCounts?.new_games ?? 0 }}</span>
             <span>Ambiguous: {{ importCounts?.ambiguous_games ?? 0 }}</span>
+            <span v-if="importCounts?.companion_tools">Custom tools: {{ importCounts.companion_tools }}</span>
           </div>
 
           <div class="backup-note">

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import sqlite3
+import shlex
+import re
 import os
 import json
 from collections.abc import Callable, Mapping, Sequence
@@ -378,6 +380,30 @@ def init_db() -> None:
         _ = cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
         )
+        _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS companion_tools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT '',
+                arguments TEXT NOT NULL DEFAULT '',
+                show_on_all_games INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP
+            )
+        """)
+        _ = cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_tools_name ON companion_tools(name COLLATE NOCASE)"
+        )
+        _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_companion_tools (
+                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                tool_id INTEGER NOT NULL REFERENCES companion_tools(id) ON DELETE CASCADE,
+                visible INTEGER NOT NULL,
+                PRIMARY KEY(game_id, tool_id)
+            )
+        """)
         _ = cursor.execute("""
             CREATE TABLE IF NOT EXISTS play_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1465,3 +1491,184 @@ def get_library_filter_presets() -> list[dict[str, object]]:
         seen.add(key)
         result.append(preset)
     return result
+
+
+class CompanionTool(TypedDict):
+    id: int
+    name: str
+    kind: str
+    path: str
+    arguments: str
+    show_on_all_games: bool
+    sort_order: int
+
+
+class GameCompanionTool(CompanionTool):
+    visible: bool
+    overridden: bool
+
+
+def split_companion_arguments(
+    arguments: str, game_exe: str = ""
+) -> tuple[list[str], dict[str, str]]:
+    """Split before expansion so paths containing spaces stay a single token."""
+    tokens = shlex.split(arguments, posix=True)
+
+    def expand(token: str) -> str:
+        return token.replace("%game_dir%", os.path.dirname(game_exe)).replace(
+            "%game_exe%", game_exe
+        )
+
+    env: dict[str, str] = {}
+    while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+        key, value = tokens.pop(0).split("=", 1)
+        env[key] = expand(value)
+    return [expand(token) for token in tokens], env
+
+
+def normalize_companion_tool(
+    fields: Mapping[str, object], *, validate_paths: bool = True
+) -> dict[str, object]:
+    name = fields.get("name", "")
+    kind = fields.get("kind", "")
+    path = fields.get("path", "")
+    arguments = fields.get("arguments", "")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Name must not be empty")
+    if kind not in ("wine", "native", "command"):
+        raise ValueError("Kind must be Wine, Native or Command")
+    if not isinstance(path, str) or not isinstance(arguments, str):
+        raise ValueError("Path and arguments must be text")
+    path = path.strip()
+    try:
+        tokens, _ = split_companion_arguments(arguments)
+    except ValueError as exc:
+        raise ValueError(
+            "Command line / arguments cannot be parsed: " + str(exc)
+        ) from exc
+    if kind == "command":
+        path = ""
+        if not tokens or not tokens[0]:
+            raise ValueError("Command line must contain a command")
+    else:
+        if kind == "wine" and os.path.splitext(path)[1].lower() not in (".exe", ".bat"):
+            raise ValueError("Path: Wine tools need a .exe or .bat file")
+        if not path or (
+            validate_paths and not os.path.isfile(os.path.expanduser(path))
+        ):
+            raise ValueError("Path must point to an existing file")
+        if validate_paths:
+            path = os.path.abspath(os.path.expanduser(path))
+    return dict(
+        name=name.strip(),
+        kind=kind,
+        path=path,
+        arguments=arguments,
+        show_on_all_games=bool(fields.get("show_on_all_games", True)),
+        sort_order=_coerce_sort_order(fields.get("sort_order", 0)),
+    )
+
+
+def _companion_row(row: sqlite3.Row) -> CompanionTool:
+    return CompanionTool(
+        id=int(str(cast(object, row["id"]))),
+        name=str(cast(object, row["name"])),
+        kind=str(cast(object, row["kind"])),
+        path=str(cast(object, row["path"])),
+        arguments=str(cast(object, row["arguments"])),
+        show_on_all_games=bool(cast(object, row["show_on_all_games"])),
+        sort_order=int(str(cast(object, row["sort_order"]))),
+    )
+
+
+def list_companion_tools() -> list[CompanionTool]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT * FROM companion_tools ORDER BY sort_order, id"
+            ).fetchall(),
+        )
+    return [_companion_row(row) for row in rows]
+
+
+def get_companion_tool(tool_id: int) -> CompanionTool | None:
+    return next(
+        (tool for tool in list_companion_tools() if tool["id"] == tool_id), None
+    )
+
+
+def save_companion_tool(fields: Mapping[str, object]) -> CompanionTool:
+    tool = normalize_companion_tool(fields)
+    tool_id = fields.get("id")
+    now = datetime.now().isoformat()
+    with closing(get_connection()) as conn:
+        try:
+            if tool_id is None:
+                cursor = conn.execute(
+                    "INSERT INTO companion_tools (name, kind, path, arguments, show_on_all_games, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (*tool.values(), now, now),
+                )
+                tool_id = cursor.lastrowid
+            else:
+                cursor = conn.execute(
+                    "UPDATE companion_tools SET name=?, kind=?, path=?, arguments=?, show_on_all_games=?, sort_order=?, updated_at=? WHERE id=?",
+                    (*tool.values(), now, tool_id),
+                )
+                if cursor.rowcount == 0:
+                    raise ValueError("Tool was not found")
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Name is already used by another tool") from exc
+    saved = get_companion_tool(int(str(tool_id)))
+    assert saved is not None
+    return saved
+
+
+def delete_companion_tool(tool_id: int) -> bool:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute("DELETE FROM companion_tools WHERE id=?", (tool_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_game_companion_tools(game_id: int) -> list[GameCompanionTool]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT t.*, o.visible FROM companion_tools t LEFT JOIN game_companion_tools o ON o.tool_id=t.id AND o.game_id=? ORDER BY t.sort_order, t.id",
+                (game_id,),
+            ).fetchall(),
+        )
+    return [
+        GameCompanionTool(
+            **_companion_row(row),
+            visible=bool(cast(object, row["visible"]))
+            if row["visible"] is not None
+            else bool(cast(object, row["show_on_all_games"])),
+            overridden=row["visible"] is not None,
+        )
+        for row in rows
+    ]
+
+
+def set_game_companion_tool_override(
+    game_id: int, tool_id: int, visible: object
+) -> None:
+    if visible is not None and not isinstance(visible, bool):
+        raise ValueError("Visible must be true, false or null")
+    with closing(get_connection()) as conn:
+        if visible is None:
+            _ = conn.execute(
+                "DELETE FROM game_companion_tools WHERE game_id=? AND tool_id=?",
+                (game_id, tool_id),
+            )
+        else:
+            _ = conn.execute(
+                "INSERT INTO game_companion_tools (game_id, tool_id, visible) VALUES (?, ?, ?) ON CONFLICT(game_id, tool_id) DO UPDATE SET visible=excluded.visible",
+                (game_id, tool_id, visible),
+            )
+        conn.commit()

@@ -347,6 +347,7 @@ export interface LibraryBackupWarning {
 }
 
 export interface LibraryBackupCounts {
+  companion_tools?: number;
   total_games: number;
   matched_games: number;
   new_games: number;
@@ -413,6 +414,8 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   warnings?: number;
   warning_records?: LibraryBackupWarning[];
   settings_updated?: number;
+  companion_tools_updated?: number;
+  companion_tools_skipped?: number;
   selected_sections?: LibraryBackupSection[];
   created_ids?: number[];
   updated_ids?: number[];
@@ -594,6 +597,21 @@ export interface SandboxInstallInfo {
   package_manager: string;
 }
 
+export interface CompanionTool {
+  id: number;
+  name: string;
+  kind: "wine" | "native" | "command";
+  path: string;
+  arguments: string;
+  show_on_all_games: boolean;
+  sort_order: number;
+}
+
+export type CompanionToolInput = Omit<CompanionTool, "id"> & { id?: number };
+export interface GameCompanionTool extends CompanionTool { visible: boolean; overridden: boolean }
+export interface CompanionToolsResponse<T = CompanionTool> extends ApiBasicResponse { tools?: T[] }
+export interface CompanionToolResponse extends ApiBasicResponse { tool?: CompanionTool }
+
 export interface PlatformCapabilities {
   platform: HostPlatform;
   sandbox: "bwrap" | "sandboxie" | null;
@@ -602,6 +620,7 @@ export interface PlatformCapabilities {
   runtime_installers: boolean;
   wayland: boolean;
   rpgmaker_linux: boolean;
+  companion_tools: boolean;
   cheat_engine_injection: boolean;
   launch_modes: LaunchMode[];
   data_dir: string;
@@ -920,6 +939,13 @@ const writeMockAttachments = (attachments: Record<string, GameAttachment[]>): vo
   }
 };
 
+interface MockCompanions { tools: CompanionTool[]; overrides: Record<string, Record<string, boolean>> }
+const readMockCompanions = (): MockCompanions => {
+  try { return JSON.parse(localStorage.getItem("wlib-mock-companions") || '{"tools":[],"overrides":{}}') as MockCompanions; }
+  catch { return { tools: [], overrides: {} }; }
+};
+const writeMockCompanions = (store: MockCompanions) => localStorage.setItem("wlib-mock-companions", JSON.stringify(store));
+
 const MOCK_GAME_SAVES_STORAGE_KEY = "wlib-mock-game-saves";
 const MOCK_SAVE_DETECTED: SaveLocation[] = [
   { path: "/mock/game", type: "Game Folder", description: "Found 2 *.sav file(s) in game directory", eligible: false },
@@ -1231,6 +1257,8 @@ class ApiService {
   isWebview: boolean;
   _mockWarnings: Set<string>;
   _mockRunningGames = new Set<number>();
+  _mockCompanionRuns = new Set<string>();
+  _mockCompanionWine = new Set<number>();
   _mockPendingMetadata = new Set<number>();
   _mockUrmInstalled = new Set<number>();
   _mockToolRuns = new Map<number, MockToolRun>();
@@ -1673,6 +1701,28 @@ class ApiService {
     return this.invoke<ExecutableModifiedTimeResponse>("get_executable_modified_time", exe_path);
   }
 
+  async listCompanionTools(): Promise<CompanionToolsResponse> {
+    return this.invoke("list_companion_tools");
+  }
+  async saveCompanionTool(tool: CompanionToolInput): Promise<CompanionToolResponse> {
+    return this.invoke("save_companion_tool", tool);
+  }
+  async deleteCompanionTool(toolId: number): Promise<ApiBasicResponse> {
+    return this.invoke("delete_companion_tool", toolId);
+  }
+  async getGameCompanionTools(gameId: number): Promise<CompanionToolsResponse<GameCompanionTool>> {
+    return this.invoke("get_game_companion_tools", gameId);
+  }
+  async setGameCompanionToolOverride(gameId: number, toolId: number, visible: boolean | null): Promise<ApiBasicResponse> {
+    return this.invoke("set_game_companion_tool_override", gameId, toolId, visible);
+  }
+  async listLaunchableCompanionTools(gameId: number): Promise<CompanionToolsResponse> {
+    return this.invoke("list_launchable_companion_tools", gameId);
+  }
+  async launchCompanionTool(gameId: number, toolId: number): Promise<ApiBasicResponse> {
+    return this.invoke("launch_companion_tool", gameId, toolId);
+  }
+
   async getLaunchTargets(game_id: number): Promise<LaunchTarget[]> {
     return this.invoke<LaunchTarget[]>("get_launch_targets", game_id);
   }
@@ -2027,6 +2077,65 @@ class ApiService {
     };
 
     switch (method) {
+      case "list_companion_tools":
+        return { success: true, tools: readMockCompanions().tools };
+      case "save_companion_tool": {
+        const store = readMockCompanions();
+        const input = args[0] as CompanionToolInput;
+        const name = input.name.trim();
+        if (!name) return { success: false, error: "Name must not be empty" };
+        if (store.tools.some(tool => tool.id !== input.id && tool.name.toLowerCase() === name.toLowerCase())) return { success: false, error: "Name is already used by another tool" };
+        if (!["wine", "native", "command"].includes(input.kind)) return { success: false, error: "Kind must be Wine, Native or Command" };
+        if (input.kind === "command" && !input.arguments.trim()) return { success: false, error: "Command line must not be empty" };
+        if (input.kind !== "command" && !input.path.trim()) return { success: false, error: "Path must point to an existing file" };
+        if (input.kind === "wine" && !/\.(exe|bat)$/i.test(input.path)) return { success: false, error: "Path: Wine tools need a .exe or .bat file" };
+        const tool: CompanionTool = { ...input, id: input.id ?? Math.max(0, ...store.tools.map(tool => tool.id)) + 1, name, path: input.kind === "command" ? "" : input.path };
+        if (input.id && !store.tools.some(tool => tool.id === input.id)) return { success: false, error: "Tool was not found" };
+        store.tools = [...store.tools.filter(entry => entry.id !== tool.id), tool].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+        writeMockCompanions(store);
+        return { success: true, tool };
+      }
+      case "delete_companion_tool": {
+        const store = readMockCompanions();
+        const toolId = Number(args[0]);
+        if (!store.tools.some(tool => tool.id === toolId)) return { success: false, error: "Tool was not found" };
+        store.tools = store.tools.filter(tool => tool.id !== toolId);
+        Object.values(store.overrides).forEach(overrides => { delete overrides[String(toolId)]; });
+        writeMockCompanions(store);
+        return { success: true };
+      }
+      case "get_game_companion_tools":
+      case "set_game_companion_tool_override":
+      case "list_launchable_companion_tools":
+      case "launch_companion_tool": {
+        const gameId = Number(args[0]);
+        const store = readMockCompanions();
+        const game = readMockGames().find(game => game.id === gameId);
+        if (!game) return { success: false, error: "Game was not found" };
+        const overrides = store.overrides[String(gameId)] || {};
+        const toolId = Number(args[1]);
+        const tool = store.tools.find(tool => tool.id === toolId);
+        if (method === "set_game_companion_tool_override") {
+          if (!tool) return { success: false, error: "Tool was not found" };
+          if (args[2] === null) delete overrides[String(toolId)];
+          else overrides[String(toolId)] = !!args[2];
+          store.overrides[String(gameId)] = overrides;
+          writeMockCompanions(store);
+          return { success: true };
+        }
+        const tools = store.tools.map(tool => ({ ...tool, visible: overrides[String(tool.id)] ?? tool.show_on_all_games, overridden: Object.prototype.hasOwnProperty.call(overrides, String(tool.id)) }));
+        if (method === "get_game_companion_tools") return { success: true, tools };
+        if (localStorage.getItem("wlib-mock-platform") !== "linux") return { success: false, error: "Custom tools are only available on Linux" };
+        const supported = tools.filter(tool => tool.visible && this._mockRunningGames.has(gameId) && (tool.kind !== "wine" || this._mockCompanionWine.has(gameId)));
+        if (method === "list_launchable_companion_tools") return { success: true, tools: supported };
+        const name = tool?.name || `Tool ${toolId}`;
+        if (!supported.some(tool => tool.id === toolId)) return { success: false, error: `${name}: tool is unavailable for this game run` };
+        const key = `${gameId}:${toolId}`;
+        if (this._mockCompanionRuns.has(key)) return { success: false, code: "tool_running", error: `${name} is already open for this game` };
+        this._mockCompanionRuns.add(key);
+        return { success: true };
+      }
+
       case "get_games":
         return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
       case "add_game": {
@@ -2085,6 +2194,9 @@ class ApiService {
         const gameId = Number(args[0]);
         localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().filter((game) => game.id !== gameId)));
         writeMockLaunchTargets(readMockLaunchTargets().filter((target) => target.game_id !== gameId));
+        const companions = readMockCompanions();
+        delete companions.overrides[String(gameId)];
+        writeMockCompanions(companions);
         const attachments = readMockAttachments();
         delete attachments[String(gameId)];
         writeMockAttachments(attachments);
@@ -2093,6 +2205,10 @@ class ApiService {
       case "launch_game": {
         const gameId = Number(args[0]);
         if (this._mockRunningGames.has(gameId)) return { success: false, code: "already_running", error: "Game is already running" };
+        const game = readMockGames().find(game => game.id === gameId);
+        const mode = args[8] || "auto";
+        if (!game?.sandbox_enabled && (mode === "wine_proton" || (mode === "auto" && /\.(exe|bat)$/i.test(String(args[1]))))) this._mockCompanionWine.add(gameId);
+        else this._mockCompanionWine.delete(gameId);
         if (!/\.html?$/i.test(String(args[1])) || args[8] === "custom") this._mockRunningGames.add(gameId);
         return { success: true, mock: true };
       }
@@ -2101,6 +2217,8 @@ class ApiService {
       case "stop_game": {
         const gameId = Number(args[0]);
         if (!this._mockRunningGames.delete(gameId)) return { success: false, code: "not_running", error: "Game is not running" };
+        this._mockCompanionWine.delete(gameId);
+        for (const key of this._mockCompanionRuns) if (key.startsWith(`${gameId}:`)) this._mockCompanionRuns.delete(key);
         window.dispatchEvent(new CustomEvent("wlib-playtime-tick", { detail: { gameId, delta: 0, isFinal: true } }));
         return { success: true, mock: true };
       }
@@ -2836,7 +2954,7 @@ class ApiService {
       case "get_platform_capabilities":
         if (localStorage.getItem("wlib-mock-platform") === "linux") return {
           ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", sandbox: "bwrap", wine_proton: true,
-          runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true,
+          runtime_installers: true, wayland: true, rpgmaker_linux: true, cheat_engine_injection: true, companion_tools: true,
           launch_modes: LAUNCH_MODE_OPTIONS.map((option) => option.value),
         };
         return { ...CONSERVATIVE_PLATFORM_CAPABILITIES };

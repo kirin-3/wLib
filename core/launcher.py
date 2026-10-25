@@ -17,7 +17,13 @@ from _thread import LockType
 from dataclasses import dataclass
 from typing import IO, Protocol, TypedDict, cast, final
 
-from .database import RPGMAKER_LINUX_RUNNER_SETTING, get_setting, normalize_launch_mode
+from .database import (
+    RPGMAKER_LINUX_RUNNER_SETTING,
+    get_setting,
+    normalize_launch_mode,
+    CompanionTool,
+    split_companion_arguments,
+)
 from . import game_sandbox
 from .host_platform import (
     get_cheat_engine_dir,
@@ -250,6 +256,127 @@ class _ElevatedProcess:
             return None
 
 
+def without_wine_proton_env(env_vars: dict[str, str]) -> dict[str, str]:
+    clean_env = env_vars.copy()
+    for var in (
+        "WINEPREFIX",
+        "WINEDLLOVERRIDES",
+        "WINEDEBUG",
+        "PROTON_LOG",
+        "PROTON_LOG_DIR",
+        "STEAM_COMPAT_DATA_PATH",
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+        "STEAM_COMPAT_INSTALL_PATH",
+        "UMU_ID",
+    ):
+        _ = clean_env.pop(var, None)
+    return clean_env
+
+
+def is_packaged_runtime_library_path(raw_path: str) -> bool:
+    path_module = _host_path_module()
+    path = raw_path.strip()
+    if not path:
+        return True
+
+    expanded_path = path_module.expanduser(path)
+    if "/.mount_" in path or "/.mount_" in expanded_path:
+        return True
+
+    normalized_path = path_module.abspath(expanded_path)
+    runtime_dirs: set[str] = set()
+    meipass = str(getattr(sys, "_MEIPASS", "") or "").strip()
+    if meipass:
+        runtime_dirs.add(path_module.abspath(path_module.expanduser(meipass)))
+
+    executable_dir = path_module.dirname(path_module.abspath(sys.executable))
+    runtime_dirs.add(path_module.join(executable_dir, "_internal"))
+    if normalized_path in runtime_dirs:
+        return True
+
+    if path_module.basename(normalized_path) != "_internal":
+        return False
+
+    try:
+        runtime_files = os.listdir(normalized_path)
+    except OSError:
+        return False
+
+    return "base_library.zip" in runtime_files or any(
+        entry.startswith("libpython") for entry in runtime_files
+    )
+
+
+def without_packaged_runtime_env(env_vars: dict[str, str]) -> dict[str, str]:
+    path_module = _host_path_module()
+    clean_env = env_vars.copy()
+    appimage_context = any(
+        var in clean_env
+        for var in (
+            "APPIMAGE",
+            "APPDIR",
+            "ARGV0",
+            "APPIMAGE_SILENT_INSTALL",
+            "OWD",
+            "APPIMAGE_EXTRACT_AND_RUN",
+            "LD_LIBRARY_PATH_ORIG",
+        )
+    ) or "/.mount_" in clean_env.get("LD_LIBRARY_PATH", "")
+
+    for var in (
+        "APPIMAGE",
+        "APPDIR",
+        "ARGV0",
+        "APPIMAGE_SILENT_INSTALL",
+        "OWD",
+        "APPIMAGE_EXTRACT_AND_RUN",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONEXECUTABLE",
+        "QT_QPA_PLATFORM",
+        "QT_QUICK_BACKEND",
+        "QSG_RHI_BACKEND",
+        "QT_OPENGL",
+        "QTWEBENGINE_CHROMIUM_FLAGS",
+        "QT_PLUGIN_PATH",
+        "QML2_IMPORT_PATH",
+        "WLIB_QPA_PLATFORM",
+        "PYWEBVIEW_GUI",
+    ):
+        _ = clean_env.pop(var, None)
+
+    original_library_path = str(clean_env.pop("LD_LIBRARY_PATH_ORIG", "") or "").strip()
+    if original_library_path:
+        clean_env["LD_LIBRARY_PATH"] = original_library_path
+    else:
+        library_path = str(clean_env.get("LD_LIBRARY_PATH") or "")
+        library_paths = [
+            entry
+            for entry in library_path.split(path_module.pathsep)
+            if entry and not is_packaged_runtime_library_path(entry)
+        ]
+        if library_paths:
+            clean_env["LD_LIBRARY_PATH"] = path_module.pathsep.join(library_paths)
+        elif appimage_context or library_path:
+            _ = clean_env.pop("LD_LIBRARY_PATH", None)
+
+    if appimage_context and not str(clean_env.get("LD_LIBRARY_PATH") or ""):
+        _ = clean_env.pop("LD_LIBRARY_PATH", None)
+    return clean_env
+
+
+@dataclass
+class WineContext:
+    command: list[str]
+    env: dict[str, str]
+
+
+@dataclass
+class ToolProcess:
+    proc: subprocess.Popen[bytes]
+    kind: str
+
+
 @dataclass
 class RunningGame:
     # None while the process is still starting (e.g. waiting on a UAC prompt).
@@ -263,11 +390,15 @@ class RunningGame:
     sandbox_box: str = ""
     sandbox_tool: str = ""
     title: str = ""
+    wine_context: WineContext | None = None
+    game_exe: str = ""
+    host_native: bool = True
 
 
 class Launcher:
     def __init__(self):
         self._running: dict[int, RunningGame] = {}
+        self._tools: dict[int, dict[int, ToolProcess]] = {}
         self._running_lock: LockType = threading.Lock()
         # Set while shutting down so exit callbacks skip the (closed) UI window.
         self.shutting_down: bool = False
@@ -280,6 +411,8 @@ class Launcher:
         with self._running_lock:
             running_entries = list(self._running.items())
             self._running.clear()
+            # Games remain running when wLib closes; their tools do too.
+            self._tools.clear()
         for game_id, entry in running_entries:
             if entry.log_file is not None:
                 try:
@@ -299,6 +432,152 @@ class Launcher:
     def get_running_games(self) -> list[int]:
         with self._running_lock:
             return list(self._running)
+
+    def list_launchable_tools(
+        self, game_id: int, tools: list[CompanionTool]
+    ) -> list[CompanionTool]:
+        with self._running_lock:
+            run = self._running.get(game_id)
+            if run is None or run.proc is None:
+                return []
+            return [
+                tool
+                for tool in tools
+                if tool["kind"] != "wine"
+                or (run.wine_context is not None and not run.sandboxed)
+            ]
+
+    @staticmethod
+    def _tool_process_group(proc: subprocess.Popen[bytes]) -> int | None:
+        pid = proc.pid
+        # killpg(1, sig) maps to kill(-1, sig) on Linux, broadcasting to
+        # processes owned by the user. Never coerce arbitrary PID-like values
+        # (including mocks), or signal our own process group.
+        if type(pid) is not int or pid <= 1 or pid == os.getpgrp():
+            return None
+        return pid
+
+    @staticmethod
+    def _tool_group_alive(proc: subprocess.Popen[bytes]) -> bool:
+        pgid = Launcher._tool_process_group(proc)
+        if pgid is None:
+            return False
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    @staticmethod
+    def _close_tool_processes(tools: list[ToolProcess]) -> None:
+        for tool in tools:
+            if tool.kind != "wine":
+                continue
+            pgid = Launcher._tool_process_group(tool.proc)
+            if pgid is None:
+                continue
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except OSError as exc:
+                print(f"Could not close Wine tool process group {pgid}: {exc}")
+                continue
+
+            def escalate(group: int = pgid) -> None:
+                time.sleep(2)
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError as exc:
+                    print(f"Could not close Wine tool process group {group}: {exc}")
+
+            threading.Thread(target=escalate, daemon=True).start()
+
+    def launch_companion_tool(
+        self, game_id: int, tool: CompanionTool
+    ) -> dict[str, object]:
+        name = tool["name"]
+        try:
+            with self._running_lock:
+                run = self._running.get(game_id)
+                if run is None or run.proc is None:
+                    return {"success": False, "error": f"{name}: game is not running"}
+                if tool["kind"] == "wine" and (
+                    run.wine_context is None or run.sandboxed
+                ):
+                    reason = (
+                        "sandboxed games do not support Wine tools"
+                        if run.sandboxed
+                        else "game is not running through Wine/Proton"
+                    )
+                    return {"success": False, "error": f"{name}: {reason}"}
+                entries = self._tools.setdefault(game_id, {})
+                previous = entries.get(tool["id"])
+                if previous is not None and (
+                    previous.proc.poll() is None
+                    or (
+                        previous.kind == "wine"
+                        and self._tool_group_alive(previous.proc)
+                    )
+                ):
+                    return {
+                        "success": False,
+                        "code": "tool_running",
+                        "error": f"{name} is already open for this game",
+                    }
+                args, extra_env = split_companion_arguments(
+                    tool["arguments"], run.game_exe
+                )
+                if tool["kind"] == "wine":
+                    assert run.wine_context is not None
+                    env = run.wine_context.env.copy()
+                    command = [*run.wine_context.command, tool["path"], *args]
+                else:
+                    env = without_wine_proton_env(
+                        without_packaged_runtime_env(dict(os.environ))
+                    )
+                    command = (
+                        args if tool["kind"] == "command" else [tool["path"], *args]
+                    )
+                env.update(extra_env)
+                if not command:
+                    raise ValueError("Command line must contain a command")
+                if tool["kind"] != "command" and not os.path.isfile(tool["path"]):
+                    raise ValueError("Executable was not found: " + tool["path"])
+                cwd = (
+                    os.path.dirname(run.game_exe)
+                    if tool["kind"] == "command"
+                    else os.path.dirname(tool["path"])
+                )
+                proc = subprocess.Popen(
+                    host_command(command, env=env, cwd=cwd, supervise=True),
+                    env=env,
+                    cwd=cwd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                entry = ToolProcess(proc, tool["kind"])
+                entries[tool["id"]] = entry
+
+            def wait_tool() -> None:
+                _ = proc.wait()
+                while entry.kind == "wine" and self._tool_group_alive(proc):
+                    with self._running_lock:
+                        if self._tools.get(game_id, {}).get(tool["id"]) is not entry:
+                            return
+                    time.sleep(0.2)
+                with self._running_lock:
+                    current = self._tools.get(game_id, {})
+                    if current.get(tool["id"]) is entry:
+                        del current[tool["id"]]
+
+            threading.Thread(target=wait_tool, daemon=True).start()
+            return {"success": True}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": f"{name}: {exc}"}
 
     def stop(self, game_id: int) -> dict[str, object]:
         with self._running_lock:
@@ -328,6 +607,9 @@ class Launcher:
                 "code": "starting",
                 "error": "Game is still starting",
             }
+        with self._running_lock:
+            tools = list(self._tools.pop(game_id, {}).values())
+        self._close_tool_processes(tools)
         pid = proc.pid
         try:
             if running.sandbox_box:
@@ -624,6 +906,7 @@ class Launcher:
             kill_info: tuple[str, dict[str, str]] | None = None,
             cwd_override: str | None = None,
             runtime_paths: tuple[str, ...] = (),
+            wine_context: WineContext | None = None,
         ) -> dict[str, object]:
             def prepare_ce_command() -> list[str]:
                 ce_dir = get_cheat_engine_dir()
@@ -678,6 +961,9 @@ class Launcher:
                 prefix=prefix,
                 sandboxed=sandboxed,
                 title=game_title or (f"Game {game_id}"),
+                wine_context=wine_context if not sandboxed else None,
+                game_exe=path_module.abspath(exe_path),
+                host_native=not is_wine_executable,
             )
             with self._running_lock:
                 if game_id in self._running:
@@ -884,16 +1170,19 @@ class Launcher:
                                 except Exception as exc:
                                     print(f"Failed to record playtime: {exc}")
                     finally:
+                        tools: list[ToolProcess] = []
                         with self._running_lock:
                             if game_id is not None:
                                 current = self._running.get(game_id)
                                 if current is not None and current.proc is game_proc:
                                     del self._running[game_id]
+                                    tools = list(self._tools.pop(game_id, {}).values())
                                     should_report_exit = True
                                 else:
                                     should_report_exit = False
                             else:
                                 should_report_exit = True
+                        self._close_tool_processes(tools)
                         if log_file is not None:
                             try:
                                 log_file.close()
@@ -916,114 +1205,6 @@ class Launcher:
                     log_file.close()
                 print(f"Error launching game: {e}")
                 return {"success": False, "error": str(e)}
-
-        def without_wine_proton_env(env_vars: dict[str, str]) -> dict[str, str]:
-            clean_env = env_vars.copy()
-            for var in (
-                "WINEPREFIX",
-                "WINEDLLOVERRIDES",
-                "WINEDEBUG",
-                "PROTON_LOG",
-                "PROTON_LOG_DIR",
-                "STEAM_COMPAT_DATA_PATH",
-                "STEAM_COMPAT_CLIENT_INSTALL_PATH",
-                "STEAM_COMPAT_INSTALL_PATH",
-                "UMU_ID",
-            ):
-                _ = clean_env.pop(var, None)
-            return clean_env
-
-        def is_packaged_runtime_library_path(raw_path: str) -> bool:
-            path = raw_path.strip()
-            if not path:
-                return True
-
-            expanded_path = path_module.expanduser(path)
-            if "/.mount_" in path or "/.mount_" in expanded_path:
-                return True
-
-            normalized_path = path_module.abspath(expanded_path)
-            runtime_dirs: set[str] = set()
-            meipass = str(getattr(sys, "_MEIPASS", "") or "").strip()
-            if meipass:
-                runtime_dirs.add(path_module.abspath(path_module.expanduser(meipass)))
-
-            executable_dir = path_module.dirname(path_module.abspath(sys.executable))
-            runtime_dirs.add(path_module.join(executable_dir, "_internal"))
-            if normalized_path in runtime_dirs:
-                return True
-
-            if path_module.basename(normalized_path) != "_internal":
-                return False
-
-            try:
-                runtime_files = os.listdir(normalized_path)
-            except OSError:
-                return False
-
-            return "base_library.zip" in runtime_files or any(
-                entry.startswith("libpython") for entry in runtime_files
-            )
-
-        def without_packaged_runtime_env(env_vars: dict[str, str]) -> dict[str, str]:
-            clean_env = env_vars.copy()
-            appimage_context = any(
-                var in clean_env
-                for var in (
-                    "APPIMAGE",
-                    "APPDIR",
-                    "ARGV0",
-                    "APPIMAGE_SILENT_INSTALL",
-                    "OWD",
-                    "APPIMAGE_EXTRACT_AND_RUN",
-                    "LD_LIBRARY_PATH_ORIG",
-                )
-            ) or "/.mount_" in clean_env.get("LD_LIBRARY_PATH", "")
-
-            for var in (
-                "APPIMAGE",
-                "APPDIR",
-                "ARGV0",
-                "APPIMAGE_SILENT_INSTALL",
-                "OWD",
-                "APPIMAGE_EXTRACT_AND_RUN",
-                "PYTHONHOME",
-                "PYTHONPATH",
-                "PYTHONEXECUTABLE",
-                "QT_QPA_PLATFORM",
-                "QT_QUICK_BACKEND",
-                "QSG_RHI_BACKEND",
-                "QT_OPENGL",
-                "QTWEBENGINE_CHROMIUM_FLAGS",
-                "QT_PLUGIN_PATH",
-                "QML2_IMPORT_PATH",
-                "WLIB_QPA_PLATFORM",
-                "PYWEBVIEW_GUI",
-            ):
-                _ = clean_env.pop(var, None)
-
-            original_library_path = str(
-                clean_env.pop("LD_LIBRARY_PATH_ORIG", "") or ""
-            ).strip()
-            if original_library_path:
-                clean_env["LD_LIBRARY_PATH"] = original_library_path
-            else:
-                library_path = str(clean_env.get("LD_LIBRARY_PATH") or "")
-                library_paths = [
-                    entry
-                    for entry in library_path.split(path_module.pathsep)
-                    if entry and not is_packaged_runtime_library_path(entry)
-                ]
-                if library_paths:
-                    clean_env["LD_LIBRARY_PATH"] = path_module.pathsep.join(
-                        library_paths
-                    )
-                elif appimage_context or library_path:
-                    _ = clean_env.pop("LD_LIBRARY_PATH", None)
-
-            if appimage_context and not str(clean_env.get("LD_LIBRARY_PATH") or ""):
-                _ = clean_env.pop("LD_LIBRARY_PATH", None)
-            return clean_env
 
         def build_host_tool_env(
             env_vars: dict[str, str], strip_wine_env: bool = True
@@ -1331,6 +1512,7 @@ class Launcher:
             command,
             env,
             is_wine_executable=True,
+            wine_context=WineContext(base_cmd[:-1], env.copy()),
             run_ce=auto_inject_ce,
             game_exe=game_exe_name,
             kill_info=(wineserver, kill_env) if wineserver else None,

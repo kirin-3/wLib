@@ -32,7 +32,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import type { GameRecord, LaunchMode, LaunchTarget } from "../services/api";
+import type { CompanionTool, GameRecord, LaunchMode, LaunchTarget } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import ImportFolderModal from "../components/modals/ImportFolderModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
@@ -60,6 +60,7 @@ import {
   type SortDir,
   type SortField,
 } from "../utils/libraryViewState";
+import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notify, notifyError } from "../utils/toast";
 import { sandboxLaunchError } from "../utils/sandbox";
 import { openInstallArchive } from "../utils/installArchive";
@@ -155,6 +156,36 @@ const contextMenu = ref<{ game: GameRecord; x: number; y: number } | null>(
   null,
 );
 const contextMenuElement = ref<HTMLElement | null>(null);
+const contextTools = ref<CompanionTool[]>([]);
+let contextToolsRequest = 0;
+const loadingCompanionId = ref<number | null>(null);
+const launchContextTool = async (tool: CompanionTool) => {
+  const game = contextMenu.value?.game;
+  if (!game || loadingCompanionId.value !== null) return;
+  loadingCompanionId.value = tool.id;
+  try {
+    const result = await api.launchCompanionTool(game.id, tool.id);
+    if (!result.success) notifyError(`Failed to launch ${tool.name}:\n\n${result.error || "Unknown error"}`);
+    else closeContextMenu();
+  } catch (cause) { notifyError(`Failed to launch ${tool.name}: ${String(cause)}`); }
+  finally { loadingCompanionId.value = null; }
+};
+const loadContextTools = async (gameId: number) => {
+  const request = ++contextToolsRequest;
+  contextTools.value = [];
+  if (!runningGameIds.value.has(gameId)) return;
+  try {
+    const capabilities = await loadPlatformCapabilities();
+    if (!capabilities.companion_tools || request !== contextToolsRequest) return;
+    const result = await api.listLaunchableCompanionTools(gameId);
+    if (request !== contextToolsRequest || contextMenu.value?.game.id !== gameId || !runningGameIds.value.has(gameId)) return;
+    contextTools.value = result.success ? result.tools || [] : [];
+    await nextTick();
+    if (request === contextToolsRequest && contextMenu.value && contextMenuElement.value) {
+      contextMenu.value.y = Math.max(8, Math.min(contextMenu.value.y, window.innerHeight - contextMenuElement.value.offsetHeight - 8));
+    }
+  } catch (cause) { console.error("Could not load custom tools", cause); }
+};
 // "actions" is the button list; "collections" switches the body to the
 // membership checklist so no second popup needs positioning.
 const contextMenuView = ref<"actions" | "collections">("actions");
@@ -1112,6 +1143,8 @@ const toggleSkippedVersion = async (game: GameRecord) => {
 const closeContextMenu = (restoreFocus = true) => {
   if (!contextMenu.value) return;
   contextMenu.value = null;
+  contextToolsRequest++;
+  contextTools.value = [];
   contextMenuView.value = "actions";
   contextNewCollectionName.value = "";
   contextNewCollectionError.value = "";
@@ -1139,6 +1172,7 @@ const openContextMenu = async (
     x: event instanceof MouseEvent ? event.clientX : rect.left,
     y: event instanceof MouseEvent ? event.clientY : rect.bottom,
   };
+  void loadContextTools(game.id);
   await nextTick();
   if (!contextMenu.value || !contextMenuElement.value) return;
   const menu = contextMenuElement.value;
@@ -2503,6 +2537,11 @@ onUnmounted(() => {
             <button @click="runContextAction('play')">
               {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
             </button>
+            <template v-if="runningGameIds.has(contextMenu.game.id) && contextTools.length">
+              <div role="separator" class="my-1 border-t" style="border-color: var(--border)" />
+              <button v-for="tool in contextTools" :key="tool.id" type="button" class="context-item" :disabled="loadingCompanionId !== null" @click="launchContextTool(tool)">{{ tool.name }}</button>
+              <div role="separator" class="my-1 border-t" style="border-color: var(--border)" />
+            </template>
             <button
               @click="runContextAction('folder')"
               :disabled="!gameFolder(contextMenu.game.exe_path)"

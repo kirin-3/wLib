@@ -9,6 +9,7 @@ export const CONSERVATIVE_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   runtime_installers: false,
   wayland: false,
   rpgmaker_linux: false,
+  companion_tools: false,
   cheat_engine_injection: false,
   launch_modes: ["auto"],
   data_dir: "",

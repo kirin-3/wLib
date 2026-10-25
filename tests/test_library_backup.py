@@ -2458,3 +2458,165 @@ def test_importing_launch_config_without_override_keeps_local_value(tmp_path):
     assert result["success"] is True
     assert get_all_games()[0]["save_path_override"] == "/local/saves"
     assert get_all_games()[0]["command_line_args"] == "-x"
+
+
+def test_companion_export_sections_and_no_ids():
+    from core import database as db
+
+    game = add_game("Companion export", "/game.exe")
+    tool = db.save_companion_tool(
+        dict(name="Cheat Engine", kind="command", arguments="cheat-engine")
+    )
+    db.set_game_companion_tool_override(game, tool["id"], False)
+    backup = build_library_backup(
+        {"sections": ["metadata", "launch_config", "settings_paths"]}
+    )
+    assert backup["settings"]["paths"]["companion_tools"] == [
+        {key: value for key, value in tool.items() if key != "id"}
+    ]
+    assert backup["games"][0]["launch_config"]["companion_tools"] == {
+        "Cheat Engine": False
+    }
+    assert "settings" not in build_library_backup(
+        {"sections": ["metadata", "launch_config"]}
+    )
+    assert (
+        "launch_config"
+        not in build_library_backup({"sections": ["metadata"]})["games"][0]
+    )
+
+
+@pytest.mark.parametrize("mode", ["overwrite", "fill_missing"])
+def test_companion_import_merge_and_resolve_names(mode, tmp_path, monkeypatch):
+    from core import database as db
+    from core.library_backup import apply_library_backup, inspect_library_backup
+
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: False)
+
+    game = add_game(
+        "Companion merge", "/game.exe", f95_url="https://f95zone.to/threads/123/"
+    )
+    old = db.save_companion_tool(
+        dict(name="Textractor", kind="command", arguments="old")
+    )
+    kept = db.save_companion_tool(
+        dict(name="Local only", kind="command", arguments="local")
+    )
+    db.set_game_companion_tool_override(game, old["id"], False)
+    db.set_game_companion_tool_override(game, kept["id"], False)
+    backup = build_library_backup(
+        {"sections": ["metadata", "launch_config", "settings_paths"]}
+    )
+    backup["settings"]["paths"]["companion_tools"] = [
+        dict(
+            name="textractor",
+            kind="native",
+            path="/new/textractor",
+            arguments="",
+            show_on_all_games=False,
+        ),
+        dict(name="New tool", kind="command", arguments="ENABLE=1 new-tool"),
+        dict(name="Wrong host", kind="wine", path="C:\\Tools\\Textractor.exe"),
+        dict(
+            name="Wrong command host",
+            kind="command",
+            arguments='"C:\\Tools\\Helper.exe" --arg',
+        ),
+        {"kind": "native"},
+        "broken",
+        {"name": "bad quotes", "kind": "command", "arguments": 'tool "bad'},
+    ]
+    backup["games"][0]["launch_config"]["companion_tools"] = {
+        "TEXTRACTOR": True,
+        "new TOOL": False,
+        "unknown": True,
+        "Local only": "invalid",
+    }
+    path = write_backup(tmp_path / "companion.json", backup)
+    inspected = inspect_library_backup(path)
+    assert inspected["counts"]["companion_tools"] == 4
+    assert any(
+        warning["type"] == "invalid_companion_tool" for warning in inspected["warnings"]
+    )
+    report = apply_library_backup(backup, merge_mode=mode)
+    assert report["companion_tools_skipped"] == 5
+    local = db.get_companion_tool(old["id"])
+    assert local["path"] == ("/new/textractor" if mode == "overwrite" else "")
+    assert local["arguments"] == ("" if mode == "overwrite" else "old")
+    assert db.get_companion_tool(kept["id"]) == kept
+    rows = {tool["name"].lower(): tool for tool in db.get_game_companion_tools(game)}
+    assert rows["textractor"]["visible"] == (mode == "overwrite")
+    assert rows["textractor"]["overridden"]
+    assert rows["new tool"]["overridden"] and not rows["new tool"]["visible"]
+    assert rows["local only"]["overridden"] == (mode == "fill_missing")
+    assert len(rows) == 3
+
+
+def test_companion_import_on_windows_keeps_linux_tools(monkeypatch):
+    from core import database as db
+    from core.library_backup import apply_library_backup
+
+    monkeypatch.setattr("core.library_backup.is_windows", lambda: True)
+    game = add_game("Windows host", "C:\\Games\\game.exe")
+    backup = build_library_backup(
+        {"sections": ["metadata", "launch_config", "settings_paths"]}
+    )
+    backup["settings"]["paths"]["companion_tools"] = [
+        dict(name="meikapop", kind="native", path="/home/u/bin/meikapop"),
+        dict(name="Upscaler", kind="command", arguments="/usr/bin/upscaler"),
+    ]
+    backup["games"][0]["launch_config"]["companion_tools"] = {"meikapop": False}
+    report = apply_library_backup(backup)
+    assert report["companion_tools_updated"] == 2
+    assert report["companion_tools_skipped"] == 0
+    assert [tool["path"] for tool in db.list_companion_tools()] == [
+        "/home/u/bin/meikapop",
+        "",
+    ]
+    override = db.get_game_companion_tools(game)[0]
+    assert override["overridden"] and not override["visible"]
+
+
+@pytest.mark.parametrize("mode", ["overwrite", "fill_missing"])
+def test_pre_companion_backup_preserves_local_data(mode):
+    from core import database as db
+    from core.library_backup import apply_library_backup
+
+    game = add_game("Legacy companion", "/game.exe")
+    tool = db.save_companion_tool(
+        dict(name="Helper", kind="command", arguments="helper")
+    )
+    db.set_game_companion_tool_override(game, tool["id"], False)
+    backup = build_library_backup(
+        {"sections": ["metadata", "launch_config", "settings_paths"]}
+    )
+    del backup["settings"]["paths"]["companion_tools"]
+    del backup["games"][0]["launch_config"]["companion_tools"]
+    apply_library_backup(backup, merge_mode=mode)
+    assert db.list_companion_tools() == [tool]
+    assert db.get_game_companion_tools(game)[0]["overridden"]
+    assert not db.get_game_companion_tools(game)[0]["visible"]
+
+
+def test_companion_import_empty_overrides_and_unknown_names():
+    from core import database as db
+    from core.library_backup import apply_library_backup
+
+    game = add_game("Reset overrides", "/game.exe")
+    tool = db.save_companion_tool(
+        dict(name="Helper", kind="command", arguments="helper")
+    )
+    db.set_game_companion_tool_override(game, tool["id"], False)
+    backup = build_library_backup({"sections": ["metadata", "launch_config"]})
+    backup["games"][0]["launch_config"]["companion_tools"] = {"Unknown": False}
+    apply_library_backup(backup)
+    assert not db.get_game_companion_tools(game)[0]["overridden"]
+    backup["games"].append(
+        {
+            "metadata": {"title": "New Game"},
+            "launch_config": {"companion_tools": {"helper": False}},
+        }
+    )
+    apply_library_backup(backup)
+    new_game = next(g for g in get_all_games() if g["title"] == "New Game")
+    assert db.get_game_companion_tools(new_game["id"])[0]["overridden"]

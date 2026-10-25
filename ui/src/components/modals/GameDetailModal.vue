@@ -4,6 +4,7 @@ import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState } from "../../utils/sandbox";
 import type { SandboxStatus } from "../../services/api";
+import GameCompanionTools from "../GameCompanionTools.vue";
 import TagColorPicker from "../TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../../utils/tagColors";
 import {
@@ -1960,6 +1961,7 @@ const removeAttachment = async (name: string) => {
         </section>
 
         <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="space-y-6">
+          <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="emit('update:modelValue', false); sandboxRouter.push('/settings#custom-tools')" />
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">
               <span>Run in sandbox</span>

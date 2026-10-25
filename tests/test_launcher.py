@@ -18,6 +18,8 @@ from core.launcher import (
 
 @pytest.fixture(autouse=True)
 def _linux_launcher_by_default(monkeypatch):
+    # Mocked processes must never escape a test through atexit callbacks.
+    monkeypatch.setattr("core.launcher.atexit.register", lambda _callback: None)
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     # Tests that don't patch settings must not read the user's real database.
     monkeypatch.setattr("core.launcher.get_setting", lambda _key: None)
@@ -2424,3 +2426,316 @@ def test_sandbox_custom_wine_environment_mounts_and_reserves_prefix(monkeypatch,
     assert ['--bind','/prefix','/prefix'] in [command[i:i+3] for i in range(len(command)-2)]
     from core.game_sandbox import normalize_prefix
     assert launcher._running[12].prefix==normalize_prefix('/prefix')
+
+
+@pytest.mark.parametrize(
+    "runner, prefix_key, expected",
+    [
+        ("/proton", "STEAM_COMPAT_DATA_PATH", ["/proton", "run"]),
+        ("/wine", "WINEPREFIX", ["/wine"]),
+    ],
+)
+def test_companion_captures_wine_context(runner, prefix_key, expected):
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isfile", return_value=False),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("subprocess.Popen"),
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        result = launcher.launch(
+            "/games/My Game/game.exe",
+            game_id=71,
+            proton_version=runner,
+            custom_prefix="/prefix",
+            launch_mode="wine_proton",
+        )
+    assert result["success"]
+    run = launcher._running[71]
+    assert run.game_exe == "/games/My Game/game.exe"
+    assert run.wine_context.command == expected
+    assert run.wine_context.env[prefix_key] == "/prefix"
+
+
+@pytest.mark.parametrize("mode, args", [("native", ""), ("custom", "runner")])
+def test_companion_host_context_absent(mode, args):
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen"),
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        assert launcher.launch("/games/game.sh", args, game_id=72, launch_mode=mode)[
+            "success"
+        ]
+    assert launcher._running[72].wine_context is None
+
+
+def test_companion_arguments():
+    from core.database import split_companion_arguments
+
+    args, env = split_companion_arguments(
+        'DIR=%game_dir% tool --dir %game_dir% "%game_exe%"', "/games/My Game/game.exe"
+    )
+    assert args == ["tool", "--dir", "/games/My Game", "/games/My Game/game.exe"]
+    assert env == {"DIR": "/games/My Game"}
+    with pytest.raises(ValueError):
+        split_companion_arguments('tool "bad')
+
+
+@pytest.mark.parametrize("kind", ["wine", "native", "command"])
+def test_companion_launch_environment_and_duplicate(monkeypatch, kind):
+    monkeypatch.setattr("core.host_platform.is_flatpak", lambda: False)
+    from core.launcher import WineContext
+    from core.database import CompanionTool
+
+    monkeypatch.setenv("APPIMAGE", "/tmp/app")
+    monkeypatch.setenv("WINEPREFIX", "/wrong")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wlib/lib")
+    launcher = Launcher()
+    context = WineContext(
+        ["/old/proton", "run"],
+        {
+            "WINEPREFIX": "/exact/pfx",
+            "STEAM_COMPAT_DATA_PATH": "/exact",
+            "LC_ALL": "ja_JP.UTF-8",
+            "WINEDLLOVERRIDES": "game=n",
+        },
+    )
+    launcher._running[1] = RunningGame(
+        MagicMock(), None, wine_context=context, game_exe="/games/My Game/game.exe"
+    )
+    tool = CompanionTool(
+        id=2,
+        name="Helper",
+        kind=kind,
+        path="/tools/tool.exe",
+        arguments="MODE=fast tool --dir %game_dir%"
+        if kind == "command"
+        else "MODE=fast --dir %game_dir%",
+        show_on_all_games=True,
+        sort_order=0,
+    )
+    with (
+        patch("subprocess.Popen") as popen,
+        patch("os.path.isfile", return_value=True),
+        patch("threading.Thread"),
+        patch("core.launcher.get_setting", return_value="/new/proton"),
+    ):
+        popen.return_value.poll.return_value = None
+        assert launcher.launch_companion_tool(1, tool)["success"]
+        call = popen.call_args
+        assert call.kwargs["start_new_session"]
+        assert call.kwargs["cwd"] == (
+            "/games/My Game" if kind == "command" else "/tools"
+        )
+        assert call.args[0][-2:] == ["--dir", "/games/My Game"]
+        env = call.kwargs["env"]
+        assert env["MODE"] == "fast"
+        if kind == "wine":
+            assert call.args[0][:2] == ["/old/proton", "run"]
+            assert env["WINEPREFIX"] == "/exact/pfx"
+            assert env["LC_ALL"] == "ja_JP.UTF-8"
+        else:
+            assert "APPIMAGE" not in env
+            assert "WINEPREFIX" not in env
+            assert "LD_LIBRARY_PATH" not in env
+        assert launcher.launch_companion_tool(1, tool)["code"] == "tool_running"
+    assert "MODE" not in context.env
+    assert launcher.get_running_games() == [1]
+
+
+def test_companion_rejections_and_supported_tools():
+    from core.database import CompanionTool
+    from core.launcher import WineContext
+
+    launcher = Launcher()
+    wine = CompanionTool(
+        id=1,
+        name="Wine helper",
+        kind="wine",
+        path="/tool.exe",
+        arguments="",
+        show_on_all_games=True,
+        sort_order=0,
+    )
+    native = CompanionTool(**{**wine, "id": 2, "kind": "native"})
+    assert "not running" in launcher.launch_companion_tool(1, wine)["error"]
+    for sandboxed, context in [(False, None), (True, WineContext(["wine"], {}))]:
+        launcher._running[1] = RunningGame(
+            MagicMock(), None, sandboxed=sandboxed, wine_context=context
+        )
+        assert not launcher.launch_companion_tool(1, wine)["success"]
+        assert launcher.list_launchable_tools(1, [wine, native]) == [native]
+    launcher._running[1].sandboxed = False
+    assert launcher.list_launchable_tools(1, [wine, native]) == [wine, native]
+    assert launcher.list_launchable_tools(2, [native]) == []
+
+
+def test_companion_natural_exit_only_closes_own_wine_tools():
+    import signal
+    from core.launcher import ToolProcess
+
+    launcher = Launcher()
+    callback = MagicMock()
+    wine, native, other = MagicMock(), MagicMock(), MagicMock()
+    wine.pid, native.pid, other.pid = 200001, 200002, 200003
+    launcher._tools[1] = {
+        1: ToolProcess(wine, "wine"),
+        2: ToolProcess(native, "native"),
+    }
+    launcher._tools[2] = {1: ToolProcess(other, "wine")}
+    threads = []
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.access", return_value=True),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread") as thread,
+        patch("os.killpg") as killpg,
+    ):
+        thread.side_effect = lambda **kwargs: (
+            threads.append(kwargs["target"]) or MagicMock()
+        )
+        popen.return_value.poll.return_value = 0
+        launcher.launch("/game.sh", game_id=1, on_exit_callback=callback)
+        killpg.side_effect = lambda pid, sig: (
+            (_ for _ in ()).throw(ProcessLookupError()) if sig == 0 else None
+        )
+        threads[0]()
+        killpg.assert_any_call(wine.pid, signal.SIGTERM)
+        assert all(
+            call.args[0] not in (native.pid, other.pid)
+            for call in killpg.call_args_list
+        )
+    assert 1 not in launcher._running
+    assert 1 not in launcher._tools
+    assert 2 in launcher._tools
+    callback.assert_called_once()
+    assert callback.call_args.args[1] is True
+
+
+@pytest.mark.parametrize("pid", [MagicMock(), None, True, False, -1, 0, 1])
+def test_companion_cleanup_rejects_unsafe_process_groups(pid):
+    from core.launcher import ToolProcess
+
+    proc = MagicMock()
+    proc.pid = pid
+    with patch("os.killpg") as killpg, patch("threading.Thread") as thread:
+        assert not Launcher._tool_group_alive(proc)
+        Launcher._close_tool_processes([ToolProcess(proc, "wine")])
+        killpg.assert_not_called()
+        thread.assert_not_called()
+
+
+def test_companion_cleanup_rejects_own_process_group():
+    import os
+    from core.launcher import ToolProcess
+
+    proc = MagicMock()
+    proc.pid = os.getpgrp()
+    with patch("os.killpg") as killpg:
+        Launcher._close_tool_processes([ToolProcess(proc, "wine")])
+        killpg.assert_not_called()
+
+
+def test_companion_shutdown_does_not_signal_processes():
+    from core.launcher import ToolProcess
+
+    launcher = Launcher()
+    launcher._tools[1] = {1: ToolProcess(MagicMock(), "wine")}
+    with patch("os.killpg") as killpg:
+        launcher.shutdown()
+        killpg.assert_not_called()
+    assert launcher._tools == {}
+
+
+def test_companion_stop_closes_only_own_wine_groups():
+    import signal
+    from core.launcher import ToolProcess
+
+    launcher = Launcher()
+    game_proc = MagicMock(pid=200100)
+    wine = MagicMock(pid=200101)
+    native = MagicMock(pid=200102)
+    command = MagicMock(pid=200103)
+    other = MagicMock(pid=200104)
+    launcher._running[1] = RunningGame(game_proc, None)
+    launcher._tools[1] = {
+        1: ToolProcess(wine, "wine"),
+        2: ToolProcess(native, "native"),
+        3: ToolProcess(command, "command"),
+    }
+    launcher._tools[2] = {1: ToolProcess(other, "wine")}
+    threads = []
+    with (
+        patch("os.killpg") as killpg,
+        patch("threading.Thread") as thread,
+        patch("time.sleep"),
+    ):
+        thread.side_effect = lambda **kwargs: (
+            threads.append(kwargs["target"]) or MagicMock()
+        )
+        assert launcher.stop(1)["success"]
+        killpg.assert_any_call(wine.pid, signal.SIGTERM)
+        threads[0]()
+        killpg.assert_any_call(wine.pid, signal.SIGKILL)
+        assert all(
+            call.args[0] not in (native.pid, command.pid, other.pid)
+            for call in killpg.call_args_list
+        )
+    assert 1 not in launcher._tools
+    assert 2 in launcher._tools
+
+
+def test_companion_missing_executable_preserves_game():
+    from core.database import CompanionTool
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(MagicMock(), None, game_exe="/game.exe")
+    tool = CompanionTool(
+        id=1,
+        name="Missing helper",
+        kind="native",
+        path="/missing",
+        arguments="",
+        show_on_all_games=True,
+        sort_order=0,
+    )
+    with (
+        patch("os.path.isfile", return_value=False),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = launcher.launch_companion_tool(1, tool)
+        assert "Missing helper" in result["error"] and "not found" in result["error"]
+        popen.assert_not_called()
+    assert launcher.get_running_games() == [1]
+
+
+def test_companion_sandbox_launch_has_no_wine_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("subprocess.Popen"),
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        assert launcher.launch(
+            "/games/game.exe",
+            game_id=1,
+            sandbox_enabled=True,
+            launch_mode="wine_proton",
+            custom_prefix="/prefix",
+        )["success"]
+        assert launcher._running[1].wine_context is None

@@ -279,3 +279,22 @@ box `user/current`/profile roots with AppData, Documents and Saved Games. Overri
 continue to work when sandboxing is switched off. Removing a game or switching
 sandboxing off does not delete its sandbox storage. JSON backups carry the
 preference and selected settings, while sandbox files remain local.
+
+
+## Companion tools
+
+The Linux-only `companion_tools` capability controls launching; CRUD remains available on other hosts so saved definitions survive. The bridge exposes:
+
+- `list_companion_tools()`: ordered definitions in `{success, tools}`.
+- `save_companion_tool(tool)`: create or update by optional ID; returns `{success, tool}`. Validates name, kind, executable file and parsed arguments/command.
+- `delete_companion_tool(tool_id)`: removes the definition and cascading overrides.
+- `get_game_companion_tools(game_id)`: definitions with effective `visible` and `overridden` flags.
+- `set_game_companion_tool_override(game_id, tool_id, visible)`: boolean to override, null to reset.
+- `list_launchable_companion_tools(game_id)`: visible tools supported by the current run; empty when not running.
+- `launch_companion_tool(game_id, tool_id)`: rechecks host, existence, visibility and running state; errors name the tool, and duplicates return `tool_running`.
+
+`RunningGame` captures the executable path and a copy of the final Wine/Proton command and environment. Only unsandboxed Wine/Proton runs have `wine_context`; changing settings during play does not change it. Arguments use `shlex.split` followed by per-token `%game_dir%` / `%game_exe%` expansion and leading `VAR=value` extraction. Wine and Native tools use their own folder; Command tools use the game folder. Host tools strip packaged-runtime and inherited Wine/Proton environment variables.
+
+The launcher starts tools through `host_command` in separate sessions, records them in `_tools` under the running lock, and reaps them independently of game playtime. A tool never keeps a game marked running. On game exit or Stop, only that game's Wine tool groups receive SIGTERM followed by SIGKILL after two seconds; Native and Command tools keep running and are forgotten. Cleanup never uses wineserver to terminate tool groups, so another game sharing the prefix is spared. Tool signalling rejects non-integer IDs, IDs <= 1 and the launcher's own group. Shutdown leaves games and tools running; tests disable atexit registration for mocked launchers.
+
+Backup inspection summarizes tool definitions and warns about malformed entries or foreign-host paths. Import counts `companion_tools_updated` and `companion_tools_skipped`, imports definitions before games in the same transaction, and merges by case-insensitive name. Overwrite preserves local IDs and replaces game overrides only when their field is present. Fill-missing retains matching definitions and existing overrides. Missing files generate migration warnings; definitions with host-compatible paths can still be imported and edited on the destination.

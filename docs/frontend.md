@@ -252,3 +252,14 @@ All controls use the existing theme variables and work in light and dark themes.
 and browser mocks. Mock new games follow the persisted default and bulk actions
 report actual changes; host installation and folder opening remain unavailable
 in a normal browser.
+
+
+## Custom tools
+
+The Linux-only `companion_tools` capability gates all three surfaces. Settings includes `CompanionToolsSettings.vue` before Sandbox, at `/settings#custom-tools`. Its list supports add/edit/delete with confirmation, inline errors, Wine/Native executable pickers using the existing runner-file fallback, Command lines, and a Show on all games default. Help explains `%game_dir%`, `%game_exe%`, leading `VAR=value`, quoting and direct command execution. Changes save immediately and use theme variables for light and dark mode.
+
+Game Detail's Launch tab mounts `GameCompanionTools.vue` whenever the modal opens. Each checkbox saves its override immediately, shows a muted default label when inherited, and offers Reset for explicit overrides. An empty list links to Settings > Custom tools and closes the modal. These saves are independent of the modal's other launch settings.
+
+Library context menus fetch launchable tools only for running games. Supported visible tools appear after Play/Stop with dividers, share the menu's keyboard navigation, and close the menu on successful launch. Failure uses the existing launch-error toast and names the tool. Requests are discarded if the menu changes or closes; stopped games render no tool entries.
+
+The typed bridge mirrors all seven companion methods, with persistent browser mock definitions and per-game overrides. Set `wlib-mock-platform` to `linux` in localStorage to expose the Linux controls; mocks capture Wine support when a game starts and enforce duplicate launches per game.

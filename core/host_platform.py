@@ -20,6 +20,7 @@ class PlatformCapabilities(TypedDict):
     runtime_installers: bool
     wayland: bool
     rpgmaker_linux: bool
+    companion_tools: bool
     cheat_engine_injection: bool
     launch_modes: list[str]
     data_dir: str
@@ -149,6 +150,7 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
         "runtime_installers": linux,
         "wayland": linux,
         "rpgmaker_linux": linux,
+        "companion_tools": linux,
         "cheat_engine_injection": linux,
         "launch_modes": ["auto", "native", "wine_proton", "rpgmaker_linux", "custom"]
         if linux

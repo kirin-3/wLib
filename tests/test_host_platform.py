@@ -266,3 +266,10 @@ def test_host_which_inside_flatpak_hit_and_miss(monkeypatch):
 
     with patch("subprocess.run", side_effect=OSError("no spawn")):
         assert host_platform.host_which("wine") is None
+
+
+def test_companion_capability():
+    from core.host_platform import get_platform_capabilities
+
+    assert get_platform_capabilities("linux")["companion_tools"] is True
+    assert get_platform_capabilities("win32")["companion_tools"] is False

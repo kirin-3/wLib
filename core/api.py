@@ -11,6 +11,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager, suppress
 from typing import TYPE_CHECKING, NotRequired, Protocol, TypedDict, cast
 
+from core import database
 from core.database import (
     RPGMAKER_LINUX_RUNNER_SETTING,
     init_db,
@@ -2102,6 +2103,96 @@ class Api:
         ):
             response["finished_version"] = applied_fields["finished_version"]
         return response
+
+    def list_companion_tools(self) -> dict[str, object]:
+        return {"success": True, "tools": database.list_companion_tools()}
+
+    def save_companion_tool(self, tool: object = None) -> dict[str, object]:
+        import sqlite3
+
+        if not isinstance(tool, Mapping):
+            return {"success": False, "error": "Tool definition must be an object"}
+        fields = dict(cast(Mapping[str, object], tool))
+        if "id" in fields:
+            fields["id"] = self._coerce_db_id(fields["id"])
+            if fields["id"] is None:
+                return {"success": False, "error": "Tool ID is invalid"}
+        try:
+            return {"success": True, "tool": database.save_companion_tool(fields)}
+        except (ValueError, TypeError, sqlite3.Error) as exc:
+            return {"success": False, "error": f"{fields.get('name', 'Tool')}: {exc}"}
+
+    def delete_companion_tool(self, tool_id: object = None) -> dict[str, object]:
+        tool_id = self._coerce_db_id(tool_id)
+        if tool_id is None or not database.delete_companion_tool(tool_id):
+            return {"success": False, "error": "Tool was not found"}
+        return {"success": True}
+
+    def get_game_companion_tools(self, game_id: object = None) -> dict[str, object]:
+        game_id = self._coerce_db_id(game_id)
+        if game_id is None or database.get_game(game_id) is None:
+            return {"success": False, "error": "Game was not found"}
+        return {"success": True, "tools": database.get_game_companion_tools(game_id)}
+
+    def set_game_companion_tool_override(
+        self, game_id: object = None, tool_id: object = None, visible: object = None
+    ) -> dict[str, object]:
+        game_id = self._coerce_db_id(game_id)
+        tool_id = self._coerce_db_id(tool_id)
+        tool = database.get_companion_tool(tool_id) if tool_id is not None else None
+        name = tool["name"] if tool else "Tool"
+        if game_id is None or database.get_game(game_id) is None:
+            return {"success": False, "error": f"{name}: game was not found"}
+        if tool is None or tool_id is None:
+            return {"success": False, "error": "Tool was not found"}
+        if visible is not None and not isinstance(visible, bool):
+            return {
+                "success": False,
+                "error": f"{name}: visible must be true, false or null",
+            }
+        database.set_game_companion_tool_override(game_id, tool_id, visible)
+        return {"success": True}
+
+    def list_launchable_companion_tools(
+        self, game_id: object = None
+    ) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("Custom tools")
+        game_id = self._coerce_db_id(game_id)
+        if game_id is None or database.get_game(game_id) is None:
+            return {"success": False, "error": "Game was not found"}
+        tools: list[database.CompanionTool] = [
+            tool
+            for tool in database.get_game_companion_tools(game_id)
+            if tool["visible"]
+        ]
+        return {
+            "success": True,
+            "tools": self.launcher.list_launchable_tools(game_id, tools),
+        }
+
+    def launch_companion_tool(
+        self, game_id: object = None, tool_id: object = None
+    ) -> dict[str, object]:
+        game_id = self._coerce_db_id(game_id)
+        tool_id = self._coerce_db_id(tool_id)
+        tool = database.get_companion_tool(tool_id) if tool_id is not None else None
+        name = tool["name"] if tool else f"Tool {tool_id}"
+        if not is_linux():
+            return unsupported_on_host(name)
+        if tool is None:
+            return {"success": False, "error": f"{name}: tool was not found"}
+        if game_id is None or database.get_game(game_id) is None:
+            return {"success": False, "error": f"{name}: game was not found"}
+        if not any(
+            entry["id"] == tool_id and entry["visible"]
+            for entry in database.get_game_companion_tools(game_id)
+        ):
+            return {
+                "success": False,
+                "error": f"{name}: tool is not shown for this game",
+            }
+        return self.launcher.launch_companion_tool(game_id, tool)
 
     def get_launch_targets(self, game_id: object = None) -> list[dict[str, object]]:
         import sqlite3

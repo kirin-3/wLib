@@ -117,6 +117,32 @@ Stores additional executable targets for games that ship with multiple playable 
 | `created_at` | `TIMESTAMP` | ISO timestamp when the target was created. |
 | `updated_at` | `TIMESTAMP` | ISO timestamp when the target was last changed. |
 
+### Tables: `companion_tools` and `game_companion_tools`
+
+`init_db()` creates both tables additively. Existing libraries start with no tools or overrides. Tool names have a unique index using `COLLATE NOCASE`; definitions are listed by `sort_order, id`.
+
+| `companion_tools` column | Type / default | Meaning |
+|---|---|---|
+| `id` | INTEGER primary key, autoincrement | Local tool identity. |
+| `name` | TEXT NOT NULL | Unique display name, ignoring case. |
+| `kind` | TEXT NOT NULL | `wine`, `native`, or `command`. |
+| `path` | TEXT NOT NULL DEFAULT '' | Executable path; empty for Command tools. |
+| `arguments` | TEXT NOT NULL DEFAULT '' | Arguments, or the full Command line. |
+| `show_on_all_games` | INTEGER NOT NULL DEFAULT 1 | Inherited visibility. |
+| `sort_order` | INTEGER NOT NULL DEFAULT 0 | Display order. |
+| `created_at` | TIMESTAMP | Creation timestamp. |
+| `updated_at` | TIMESTAMP | Last change timestamp. |
+
+| `game_companion_tools` column | Type | Meaning |
+|---|---|---|
+| `game_id` | INTEGER NOT NULL | References `games(id) ON DELETE CASCADE`. |
+| `tool_id` | INTEGER NOT NULL | References `companion_tools(id) ON DELETE CASCADE`. |
+| `visible` | INTEGER NOT NULL | Explicit visibility override. |
+
+`(game_id, tool_id)` is the composite primary key. No row means follow the tool's default; resetting removes the row. Deleting either the game or tool removes its overrides. These machine-specific tables do not mark shared sync data changed.
+
+Semantic backups export definitions without IDs under `settings.paths.companion_tools`, and explicit overrides by tool name under each game's `launch_config.companion_tools`. Imports merge names ignoring case, retain local IDs, skip foreign-host definitions, and resolve overrides after importing tools. Backups without these fields preserve local data.
+
 ### Table: `play_sessions`
 
 Each tracked launch adds one row. `(game_id, started_at)` is indexed; deleting a game cascades to its sessions.

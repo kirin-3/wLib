@@ -51,6 +51,7 @@ import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../services/api";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import PathStatus from "../components/PathStatus.vue";
+import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
 import SandboxSettings from "../components/SandboxSettings.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
@@ -1425,6 +1426,8 @@ const browseUrm = async () => {
           </div>
         </div>
       </section>
+
+      <CompanionToolsSettings v-if="platformCapabilities.companion_tools" />
 
       <SandboxSettings />
 
