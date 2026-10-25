@@ -62,6 +62,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wlib-validated-extension
+          retention-days: 1
           path: ${{ runner.temp }}/wlib-extension/*.xpi
 
   linux:
@@ -159,6 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wLib-${{ steps.version.outputs.version }}-linux
+          retention-days: 1
           include-hidden-files: true
           path: |
             dist/*.tar.gz
@@ -255,6 +257,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wLib-${{ steps.version.outputs.version }}-windows
+          retention-days: 1
           path: |
             dist/windows/*.zip
             dist/windows/*.msi
