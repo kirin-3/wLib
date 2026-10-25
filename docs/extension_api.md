@@ -33,8 +33,8 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "exists": true,
     "playStatus": "Playing",
     "wishlisted": false,
-    "app_version": "0.4.0",
-    "extension_version": "1.1.1"
+    "app_version": "0.4.1",
+    "extension_version": "1.1.2"
   }
   ```
 - **Contract Notes:**
@@ -108,7 +108,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (`protocol: 1`, JSON text messages):**
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.1.1", "can_fetch": true}
+  {"type": "hello", "protocol": 1, "extension_version": "1.1.2", "can_fetch": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -134,7 +134,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.1.1`.
+The bundled manifest is currently `1.1.2`, and its `MIN_APP_VERSION` floor is `0.4.1`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 

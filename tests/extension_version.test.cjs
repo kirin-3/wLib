@@ -241,7 +241,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.1.1');
+  assert.equal(manifest.version, '1.1.2');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -385,7 +385,7 @@ const makeBridgeHarness = ({ canFetch = true } = {}) => {
   const chromeStub = {
     runtime: {
       onMessage: { addListener: () => {} },
-      getManifest: () => ({ version: '1.1.1' }),
+      getManifest: () => ({ version: '1.1.2' }),
       onStartup: { addListener: () => {} },
       onInstalled: { addListener: () => {} },
     },
@@ -439,7 +439,7 @@ test('bridge hello carries protocol and can_fetch', async () => {
   const hello = sent.map((raw) => JSON.parse(raw)).find((msg) => msg.type === 'hello');
   assert.ok(hello);
   assert.equal(hello.protocol, 1);
-  assert.equal(hello.extension_version, '1.1.1');
+  assert.equal(hello.extension_version, '1.1.2');
   assert.equal(hello.can_fetch, true);
 });
 
