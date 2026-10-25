@@ -1310,9 +1310,11 @@ def _bridge_request(server, *, origin=None, host="localhost:8183", upgrade=True)
 
 def test_bridge_upgrades_for_extension_origin(extension_server, monkeypatch):
     served = {}
+    served_event = threading.Event()
 
     def fake_serve(sock, rfile, wfile):
         served["timeout"] = sock.gettimeout()
+        served_event.set()
         # Close immediately so the handler thread exits; the 101 was sent.
         try:
             sock.shutdown(2)
@@ -1325,6 +1327,8 @@ def test_bridge_upgrades_for_extension_origin(extension_server, monkeypatch):
     )
     assert status == 101
     assert accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    # The 101 reaches the client before the handler thread calls the bridge.
+    assert served_event.wait(5)
     assert served.get("timeout") == 60
 
 
