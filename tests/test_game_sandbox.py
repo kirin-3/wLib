@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -143,6 +144,7 @@ def test_writable_mounts_never_expose_home(path, exposed):
         sandbox.check_writable_mounts((path, ""), "/home/u")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 @pytest.mark.parametrize(
     "executable,folder",
     [
@@ -156,6 +158,7 @@ def test_runtime_folder_stays_out_of_home_top_level(executable, folder):
     assert sandbox.runtime_folder(executable, "/home/u") == folder
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 @pytest.mark.parametrize(
     "exe,mode,folder",
     [

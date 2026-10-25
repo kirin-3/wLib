@@ -2091,6 +2091,7 @@ def test_sandbox_wraps_every_linux_mode(monkeypatch, tmp_path, mode, exe):
     assert launcher._running[12].kill_info is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 def test_sandbox_refuses_game_folder_that_is_home(monkeypatch, tmp_path):
     from core import game_sandbox
 
@@ -2172,6 +2173,7 @@ def test_sandbox_prefix_exclusivity(monkeypatch, existing_sandboxed, new_sandbox
     popen.assert_not_called()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 def test_sandbox_stop_skips_host_wineserver(monkeypatch, tmp_path):
     import signal
 
@@ -2371,6 +2373,7 @@ def test_sandbox_ce_stays_inside_the_namespace(monkeypatch, tmp_path):
     )  # Only tracking runs on the host; injection is inside bwrap.
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 def test_sandbox_proton_runtime_survives_command_wrapper(monkeypatch, tmp_path):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
@@ -2407,6 +2410,7 @@ def test_sandbox_proton_runtime_survives_command_wrapper(monkeypatch, tmp_path):
     assert "env" in command
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 def test_sandbox_custom_wine_environment_mounts_and_reserves_prefix(monkeypatch,tmp_path):
     monkeypatch.setenv('WLIB_DATA_DIR',str(tmp_path))
     monkeypatch.setattr('core.launcher.is_windows',lambda:False)
