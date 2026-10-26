@@ -2,11 +2,14 @@
 """Command line: `python -m catalog_server run|status`."""
 
 import argparse
+import fcntl
 import json
 import logging
+import os
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 
 from core.catalog_format import SOURCES
 
@@ -82,6 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@contextmanager
+def _run_lock(folder: str) -> Generator[bool]:
+    """Yield False when another run holds the lock, so runs never overlap."""
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "run.lock"), "w") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
 def _status(folder: str) -> int:
     catalog, state = open_stores(folder)
     try:
@@ -135,21 +151,25 @@ def main(
     for name in until:
         if name not in selected:
             selected.append(name)
-    catalog, state = open_stores(folder)
-    try:
-        pacer = Pacer(state, transport, sleep=sleep, wait_for_budget=until)
-        result = run(
-            catalog,
-            state,
-            pacer,
-            get_sources(),
-            [name for name in SOURCES if name in selected],
-            storage=storage,
-            work_dir=folder,
-        )
-    finally:
-        catalog.close()
-        state.close()
+    with _run_lock(folder) as acquired:
+        if not acquired:
+            log.info("another catalog run is in progress; skipping this one")
+            return 0
+        catalog, state = open_stores(folder)
+        try:
+            pacer = Pacer(state, transport, sleep=sleep, wait_for_budget=until)
+            result = run(
+                catalog,
+                state,
+                pacer,
+                get_sources(),
+                [name for name in SOURCES if name in selected],
+                storage=storage,
+                work_dir=folder,
+            )
+        finally:
+            catalog.close()
+            state.close()
     failed = [name for name, outcome in result.sources.items() if outcome.status == "error"]
     unswept = [
         name

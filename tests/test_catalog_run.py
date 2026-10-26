@@ -142,3 +142,13 @@ def test_failed_publish_still_finishes_the_run(tmp_path):
     latest = ctx.state.recent_runs()[0]
     assert latest["finished_at"] and latest["published"] is None
     assert not list((tmp_path / "snapshots").iterdir())
+
+
+def test_a_second_run_skips_while_one_holds_the_lock(tmp_path):
+    from catalog_server.__main__ import _run_lock
+
+    transport = FakeTransport()
+    with _run_lock(str(tmp_path)) as acquired:
+        assert acquired
+        code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "ryuugames"], transport=transport)
+    assert code == 0 and transport.requests == []
