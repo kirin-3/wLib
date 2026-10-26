@@ -117,44 +117,52 @@ Light and dark themes, an accent color, an adjustable text size, an interface sc
 
 <table>
   <tr>
-    <td align="center"><b>Compact sidebar</b></td>
+    <td align="center"><b>Compact view</b></td>
+    <td align="center"><b>Banner view</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/library-compact.png" alt="Compact view" /></td>
+    <td><img src="docs/screenshots/library-banner.png" alt="Banner view" /></td>
+  </tr>
+  <tr>
     <td align="center"><b>Game info and finished version</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/library-compact.png" alt="Compact sidebar" /></td>
-    <td><img src="docs/screenshots/game-info.png" alt="Game info and finished version" /></td>
-  </tr>
-  <tr>
     <td align="center"><b>Ratings and tags</b></td>
-    <td align="center"><b>Backup and restore</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/game-info.png" alt="Game info and finished version" /></td>
     <td><img src="docs/screenshots/game-tags.png" alt="Ratings and tags" /></td>
-    <td><img src="docs/screenshots/import-export.png" alt="Backup and restore" /></td>
   </tr>
   <tr>
+    <td align="center"><b>Backup and restore</b></td>
     <td align="center"><b>Import from another app</b></td>
-    <td align="center"><b>Sync</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/import-export.png" alt="Backup and restore" /></td>
     <td><img src="docs/screenshots/import-other-apps.png" alt="Import from another app" /></td>
-    <td><img src="docs/screenshots/sync.png" alt="Sync" /></td>
   </tr>
   <tr>
+    <td align="center"><b>Sync</b></td>
     <td align="center"><b>Settings</b></td>
-    <td align="center"><b>Library folder and appearance</b></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/sync.png" alt="Sync" /></td>
     <td><img src="docs/screenshots/settings-general.png" alt="Settings" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Library folder and appearance</b></td>
+    <td align="center"><b>Wine, Proton and custom tools</b></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/settings-library.png" alt="Library folder and appearance" /></td>
+    <td><img src="docs/screenshots/settings-wine.png" alt="Wine, Proton and custom tools" /></td>
   </tr>
   <tr>
-    <td align="center"><b>Wine and Proton</b></td>
-    <td align="center"><b>Tools and Ren'Py</b></td>
+    <td align="center"><b>Sandbox, tools and Ren'Py</b></td>
+    <td></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/settings-wine.png" alt="Wine and Proton" /></td>
-    <td><img src="docs/screenshots/settings-tools.png" alt="Tools and Ren'Py" /></td>
+    <td><img src="docs/screenshots/settings-tools.png" alt="Sandbox, tools and Ren'Py" /></td>
+    <td></td>
   </tr>
 </table>
 
