@@ -48,15 +48,16 @@ def test_waiting_for_budget_sleeps_until_the_window_frees(tmp_path):
         assert len(window) <= 60
 
 
-def test_vndb_budget_is_150_per_five_minutes(tmp_path):
+def test_vndb_waits_out_its_150_per_five_minutes(tmp_path):
     clock = FakeClock()
     state = StateStore(str(tmp_path / "state.sqlite"))
     pacer = Pacer(state, _ok_transport(), clock=clock, sleep=clock.sleep)
-    for _ in range(150):
+    for _ in range(400):
         pacer.request("vndb", "https://api.vndb.org/kana/vn")
-    # 150 requests at 1 s spacing span 149 s, inside the 300 s window.
-    with pytest.raises(BudgetExhausted):
-        pacer.request("vndb", "https://api.vndb.org/kana/vn")
+    times = state.request_times("vndb", 0)
+    assert len(times) == 400
+    for index in range(len(times)):
+        assert len([t for t in times if times[index] - 300 < t <= times[index]]) <= 150
 
 
 def test_429_pauses_only_that_source(tmp_path):

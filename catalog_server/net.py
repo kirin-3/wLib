@@ -129,7 +129,7 @@ class Pacer:
                 times = self._state.request_times(site, now - limits.window)
                 if len(times) < limits.budget:
                     break
-                if site not in self.wait_for_budget:
+                if not limits.wait and site not in self.wait_for_budget:
                     raise BudgetExhausted(site)
                 # The oldest request in the window drops out first.
                 self._sleep(max(1.0, times[0] + limits.window - now + 0.5))

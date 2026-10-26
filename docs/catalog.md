@@ -13,7 +13,7 @@ PyInstaller, the AppImage or other packages.
 | F95Zone | Games in the public `latest_data` feed | 90 per page, at most 60 requests per rolling hour, 3 s apart |
 | DLsite | Adult (`age_category == 3`) games from `/maniax/` (doujin) and `/pro/` (commercial PC) | Listing pages for IDs, circles and genres, then `product/info/ajax` for 100 IDs per request, 3 s apart |
 | Ryuugames | Posts from the WordPress REST API | 100 per page, 3 s apart; only IDs, developer, version and categories are kept |
-| VNDB | Visual novels with an 18+ release, and adult releases that link to DLsite or Steam | Official kana API, at most 150 requests per 5 minutes, 1 s apart; refreshed weekly |
+| VNDB | Visual novels with an 18+ release, and adult releases that link to DLsite or Steam | Official kana API, at most 150 requests per 5 minutes (waited out within a run), 1 s apart; refreshed weekly |
 
 Every request carries the user agent `wLib-catalog-builder/1
 (+https://github.com/kirin-3/wLib)`. The builder never logs in to any site and
@@ -30,8 +30,8 @@ There is no title matching; the `origin` column leaves room for it later.
 VNDB data comes from [The Visual Novel Database](https://vndb.org/) and is
 available under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
 The VNDB-derived tables in the snapshot (`vndb_vns`, `vndb_releases` and links
-whose `origin` is `vndb`) are distributed under the same license. wLib's About
-page names VNDB as a source.
+whose `origin` is `vndb`) are distributed under the same license. wLib's
+Settings → Game catalog block names VNDB and the license.
 
 ### F95 tag and prefix names
 
