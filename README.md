@@ -231,6 +231,14 @@ flatpak run io.github.kirin_3.wLib
 
 The Flatpak reuses your existing library at `~/.local/share/wLib`, so you can switch formats without losing games. Games and runners still run on the host: install Wine/Proton, winetricks and archive extractors on the host as below.
 
+**NixOS and Nix** (builds from source with the repository's flake):
+
+```bash
+nix run github:kirin-3/wLib
+```
+
+To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-linux.default` in `environment.systemPackages` or `home.packages`, or apply `inputs.wlib.overlays.default` and use `pkgs.wlib`. The package brings Wine, winetricks, 7-Zip, bsdtar and bubblewrap with it; Wine and winetricks you install yourself take precedence, and `wlib.override { withWine = false; }` leaves them out. Proton-GE, native Linux games and the RPG Maker runner are prebuilt for regular distros, so on NixOS they need `programs.nix-ld.enable = true;` (or `steam-run`). The Nix build has no signed Firefox add-on, so Firefox users should install `wlib-firefox-<version>.xpi` from the [releases page](https://github.com/kirin-3/wLib/releases).
+
 Your library is stored in `~/.local/share/wLib`.
 
 ### Optional extras

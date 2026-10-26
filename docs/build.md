@@ -209,6 +209,25 @@ WLIB_BUILD_FLATPAK=0 bash scripts/build.sh "1.2.0"
 
 The build prefers Flathub's `org.flatpak.Builder` when it is installed (the release workflow installs it): distro `flatpak-builder` packages as old as 1.2.x invoke the legacy `appstream-compose` binary that current SDKs no longer ship, while the modern builder runs `appstreamcli compose`. Its dependency install is wrapped in `dbus-run-session` when available, since headless runners provide no session bus. A `flatpak-builder` on `PATH` is used as fallback.
 
+## Nix Package
+
+`flake.nix` exposes `packages.x86_64-linux.wlib` (also `default`) and `overlays.default`; the derivation is `nix/package.nix`. Unlike the other Linux formats it builds from source instead of repackaging the PyInstaller folder:
+
+- The Vue frontend builds with `buildNpmPackage` and Node 22. Dependencies come from `ui/package-lock.json` through `importNpmLock`, so there is no npm dependency hash to update when the lockfile changes.
+- The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography). Add any new runtime dependency in `requirements.txt` to that list too.
+- The version is read from `APP_VERSION` in `core/api.py`.
+- `bin/wlib` runs the shared `packaging/wlib-launcher` with `WLIB_APP_DIR` pointing at `share/wlib`. The launcher's `./wlib-bin` is a wrapper that runs `main.py` with the Python environment and the Qt wrapper environment, so GPU detection, crash guard, SSL setup and launch logging work as in the other formats.
+- Runtime tools (glxinfo, xdg-open, gdbus, 7zz, bsdtar, bubblewrap and, unless `withWine = false`, Wine and winetricks) are appended to `PATH`, so user-installed versions win.
+- The install check runs `main.py --smoke-test` against temporary HOME and data directories.
+- No signed Firefox XPI is bundled, so the extension sync writes the unsigned fallback; Firefox users install the signed XPI from the GitHub release.
+- Store files are read-only with a 1970 mtime. The extension sync makes its copies owner-writable and builds the fallback XPI with `strict_timestamps=False`, so keep both when changing it.
+- `flake.lock` pins nixpkgs; run `nix flake update` to move it forward.
+
+```bash
+nix build .#wlib
+./result/bin/wlib
+```
+
 ## AUR Metadata
 
 The AUR package is `wlib-bin` because it repackages a prebuilt upstream binary release.
