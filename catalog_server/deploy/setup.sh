@@ -51,4 +51,8 @@ install -m 0644 "$APP_DIR/catalog_server/deploy/wlib-catalog.timer" /etc/systemd
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/wlib-catalog.service /etc/systemd/system/wlib-catalog.timer
 
-echo "Installed. The timer is off; enable it with: systemctl enable --now wlib-catalog.timer"
+if systemctl is-enabled --quiet wlib-catalog.timer; then
+    echo "Installed. The timer is enabled."
+else
+    echo "Installed. The timer is off; enable it with: systemctl enable --now wlib-catalog.timer"
+fi
