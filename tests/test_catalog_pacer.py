@@ -18,19 +18,19 @@ def test_f95_budget_holds_across_two_runs(tmp_path):
     transport = _ok_transport()
     state = StateStore(str(tmp_path / "state.sqlite"))
     first = Pacer(state, transport, clock=clock, sleep=clock.sleep)
-    for _ in range(40):
+    for _ in range(60):
         first.request("f95", "https://f95zone.to/a")
-    # A second run in the same hour only gets what is left of the 60.
+    # A second run in the same hour only gets what is left of the 90.
     state.close()
     state = StateStore(str(tmp_path / "state.sqlite"))
     second = Pacer(state, transport, clock=clock, sleep=clock.sleep)
-    assert second.remaining("f95") == 20
-    for _ in range(20):
+    assert second.remaining("f95") == 30
+    for _ in range(30):
         second.request("f95", "https://f95zone.to/a")
     with pytest.raises(BudgetExhausted):
         second.request("f95", "https://f95zone.to/a")
-    assert len(transport.requests) == 60
-    # Every 3 s apart, and never more than 60 in any rolling hour.
+    assert len(transport.requests) == 90
+    # Every 3 s apart, and never more than 90 in any rolling hour.
     times = state.request_times("f95", 0)
     assert all(b - a >= 3.0 for a, b in zip(times, times[1:]))
 
@@ -39,13 +39,13 @@ def test_waiting_for_budget_sleeps_until_the_window_frees(tmp_path):
     clock = FakeClock()
     state = StateStore(str(tmp_path / "state.sqlite"))
     pacer = Pacer(state, _ok_transport(), clock=clock, sleep=clock.sleep, wait_for_budget={"f95"})
-    for _ in range(61):
+    for _ in range(91):
         pacer.request("f95", "https://f95zone.to/a")
     times = state.request_times("f95", 0)
     assert times[-1] - times[0] >= 3600
     for index in range(len(times)):
         window = [t for t in times if times[index] - 3600 < t <= times[index]]
-        assert len(window) <= 60
+        assert len(window) <= 90
 
 
 def test_vndb_waits_out_its_150_per_five_minutes(tmp_path):

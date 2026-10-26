@@ -10,7 +10,7 @@ PyInstaller, the AppImage or other packages.
 
 | Source | What is collected | How |
 |---|---|---|
-| F95Zone | Games in the public `latest_data` feed | 90 per page, at most 60 requests per rolling hour, 3 s apart |
+| F95Zone | Games in the public `latest_data` feed | 90 per page, at most 90 requests per rolling hour, 3 s apart |
 | DLsite | Adult (`age_category == 3`) games from `/maniax/` (doujin) and `/pro/` (commercial PC) | Listing pages for IDs, circles and genres, then `product/info/ajax` for 100 IDs per request, 3 s apart |
 | Ryuugames | Posts from the WordPress REST API | 100 per page, 3 s apart; only IDs, developer, version and categories are kept |
 | VNDB | Visual novels with an 18+ release, and adult releases that link to DLsite or Steam | Official kana API, at most 150 requests per 5 minutes (waited out within a run), 1 s apart; refreshed weekly |
@@ -126,7 +126,7 @@ and run history; never published).
 Each run does, for every selected source, its incremental fetch and then
 advances the full-listing sweep with the budget that is left. Interrupted
 sweeps resume from their cursor. `--until-swept` waits out request budgets
-instead of stopping, so the first F95 load (about 311 pages) takes 5–6 hours.
+instead of stopping, so the first F95 load (about 311 pages) takes about 3.5 hours.
 The exit code is 1 when a source failed, 2 when publishing was requested
 without R2 credentials.
 
