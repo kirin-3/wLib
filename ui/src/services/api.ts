@@ -645,6 +645,7 @@ export interface SettingsPayload {
   downloads_folder?: string;
   download_detection_enabled?: boolean;
   save_backup_keep?: SaveBackupKeep;
+  catalog_enabled?: boolean;
 }
 
 export interface UrmStatusResponse extends ApiBasicResponse {
@@ -753,6 +754,23 @@ export interface SettingsResponse {
   downloads_folder_exists: boolean;
   download_detection_enabled: boolean;
   save_backup_keep: SaveBackupKeep;
+  catalog_enabled: boolean;
+}
+
+export interface CatalogSourceStatus {
+  count: number | null;
+  updated_at: string | null;
+}
+
+export interface CatalogStatusResponse extends ApiBasicResponse {
+  enabled?: boolean;
+  installed?: boolean;
+  built_at?: string | null;
+  sources?: Record<string, CatalogSourceStatus>;
+  last_check?: string | null;
+  last_error?: string | null;
+  checking?: boolean;
+  started?: boolean;
 }
 
 export interface CollectionsResponse extends ApiBasicResponse {
@@ -835,6 +853,14 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   downloads_folder_exists: true,
   download_detection_enabled: true,
   save_backup_keep: "all",
+  catalog_enabled: true,
+};
+
+const MOCK_CATALOG_SOURCES: Record<string, CatalogSourceStatus> = {
+  f95: { count: 27990, updated_at: "2026-10-27T05:04:11Z" },
+  dlsite: { count: 41203, updated_at: "2026-10-27T05:41:52Z" },
+  ryuugames: { count: 18240, updated_at: "2026-10-27T05:58:03Z" },
+  vndb: { count: 31902, updated_at: "2026-10-22T06:20:37Z" },
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -1180,6 +1206,7 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
         ? source.download_detection_enabled
         : DEFAULT_MOCK_SETTINGS.download_detection_enabled,
     save_backup_keep: isSaveBackupKeep(source.save_backup_keep) ? source.save_backup_keep : "all",
+    catalog_enabled: source.catalog_enabled !== false,
   };
 };
 
@@ -1824,6 +1851,14 @@ class ApiService {
     return this.invoke<ApiBasicResponse>("save_settings", settings);
   }
 
+  async getCatalogStatus(): Promise<CatalogStatusResponse> {
+    return this.invoke<CatalogStatusResponse>("get_catalog_status");
+  }
+
+  async checkCatalogNow(): Promise<CatalogStatusResponse> {
+    return this.invoke<CatalogStatusResponse>("check_catalog_now");
+  }
+
   async exportLibraryBackup(
     options: LibraryBackupOptions,
     destinationPath: string,
@@ -2288,6 +2323,29 @@ class ApiService {
         else settings.tag_colors[tag] = String(swatch);
         writeMockSettings(settings);
         return { success: true, tag_colors: settings.tag_colors };
+      }
+      case "get_catalog_status":
+      case "check_catalog_now": {
+        const enabled = readMockSettings().catalog_enabled;
+        if (method === "check_catalog_now" && !enabled) {
+          return { success: false, error: "The game catalog is turned off" };
+        }
+        if (method === "check_catalog_now") {
+          localStorage.setItem("wlib-mock-catalog-checked", new Date().toISOString().replace(/\.\d+Z$/, "Z"));
+        }
+        const installed = enabled;
+        return {
+          success: true,
+          mock: true,
+          enabled,
+          installed,
+          built_at: installed ? "2026-10-27T05:58:40Z" : null,
+          sources: installed ? MOCK_CATALOG_SOURCES : {},
+          last_check: installed ? localStorage.getItem("wlib-mock-catalog-checked") || "2026-10-27T08:12:00Z" : null,
+          last_error: null,
+          checking: false,
+          ...(method === "check_catalog_now" ? { started: true } : {}),
+        };
       }
       case "get_diagnostics":
         return { success: true, basic: MOCK_DIAGNOSTICS, report_basic: MOCK_DIAGNOSTICS_REPORT };

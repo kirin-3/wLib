@@ -1,7 +1,8 @@
 {
   "include": [
     "main.py",
-    "core"
+    "core",
+    "catalog_server"
   ],
   "exclude": [
     "tests",

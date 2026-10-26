@@ -2620,3 +2620,31 @@ def test_companion_import_empty_overrides_and_unknown_names():
     apply_library_backup(backup)
     new_game = next(g for g in get_all_games() if g["title"] == "New Game")
     assert db.get_game_companion_tools(new_game["id"])[0]["overridden"]
+
+
+def test_installed_catalog_stays_out_of_library_export(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"))
+    init_db()
+    add_game("Exported", "/games/exported")
+    update_setting("catalog_enabled", "1")
+    (tmp_path / "catalog.db").write_bytes(b"CATALOG_DB_CONTENT")
+    (tmp_path / "catalog.json").write_text(json.dumps({"last_error": "CATALOG_STATUS"}))
+    backup = build_library_backup(
+        {
+            "sections": [
+                SECTION_METADATA,
+                SECTION_USER_STATE,
+                SECTION_LAUNCH_CONFIG,
+                SECTION_EXECUTABLE_PATHS,
+                SECTION_LAUNCH_TARGETS,
+                SECTION_SETTINGS_GENERAL,
+                SECTION_SETTINGS_PATHS,
+            ]
+        }
+    )
+    text = json.dumps(backup)
+    assert "catalog" not in text.lower()
+    for marker in ("CATALOG_DB_CONTENT", "CATALOG_STATUS", "f95_threads", "vndb"):
+        assert marker not in text
+    assert "Exported" in text

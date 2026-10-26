@@ -1,0 +1,183 @@
+{
+ "count": 31902,
+ "more": true,
+ "results": [
+  {
+   "alttitle": "みんなでニャンニャン",
+   "developers": [
+    {
+     "id": "p1",
+     "name": "Yamikumo-Communications"
+    }
+   ],
+   "id": "v1",
+   "image": {
+    "sexual": 1,
+    "url": "https://t.vndb.org/cv/59/77859.jpg"
+   },
+   "olang": "ja",
+   "released": "2003-10-17",
+   "tags": [
+    {
+     "id": "g32",
+     "name": "ADV",
+     "rating": 2.53846144676208,
+     "spoiler": 0
+    },
+    {
+     "id": "g104",
+     "name": "Comedy",
+     "rating": 2.53846144676208,
+     "spoiler": 0
+    },
+    {
+     "id": "g112",
+     "name": "Maid Heroine",
+     "rating": 2,
+     "spoiler": 0
+    },
+    {
+     "id": "g113",
+     "name": "Protagonist's Senpai as a Heroine",
+     "rating": 2,
+     "spoiler": 0
+    },
+    {
+     "id": "g115",
+     "name": "Miko Heroine",
+     "rating": 1.69230771064758,
+     "spoiler": 1
+    },
+    {
+     "id": "g126",
+     "name": "Robot Heroine",
+     "rating": 2.6875,
+     "spoiler": 0
+    }
+   ],
+   "title": "Minna de Nyan Nyan"
+  },
+  {
+   "alttitle": "加奈～いもうと～",
+   "developers": [
+    {
+     "id": "p19",
+     "name": "D.O."
+    },
+    {
+     "id": "p829",
+     "name": "Takayashiki Kaihatsu"
+    }
+   ],
+   "id": "v2",
+   "image": {
+    "sexual": 0,
+    "url": "https://t.vndb.org/cv/03/88403.jpg"
+   },
+   "olang": "ja",
+   "released": "1999-06-25",
+   "tags": [
+    {
+     "id": "g8",
+     "name": "Fear of Death",
+     "rating": 2,
+     "spoiler": 0
+    },
+    {
+     "id": "g23",
+     "name": "Sexual Content",
+     "rating": 0.5,
+     "spoiler": 0
+    },
+    {
+     "id": "g43",
+     "name": "NVL",
+     "rating": 2.79999995231628,
+     "spoiler": 0
+    },
+    {
+     "id": "g48",
+     "name": "High School",
+     "rating": 1.30030953884125,
+     "spoiler": 0
+    },
+    {
+     "id": "g60",
+     "name": "Modern Day Earth",
+     "rating": 1.60952377319336,
+     "spoiler": 0
+    },
+    {
+     "id": "g92",
+     "name": "Blood-related Brother/Sister Incest",
+     "rating": 2.75,
+     "spoiler": 0
+    }
+   ],
+   "title": "Kana ~Imouto~"
+  },
+  {
+   "alttitle": "うたわれるもの",
+   "developers": [
+    {
+     "id": "p21",
+     "name": "Leaf"
+    },
+    {
+     "id": "p87",
+     "name": "AQUAPLUS"
+    },
+    {
+     "id": "p4153",
+     "name": "STING CO., LTD."
+    }
+   ],
+   "id": "v3",
+   "image": {
+    "sexual": 0,
+    "url": "https://t.vndb.org/cv/27/89127.jpg"
+   },
+   "olang": "ja",
+   "released": "2002-04-26",
+   "tags": [
+    {
+     "id": "g4",
+     "name": "Magic",
+     "rating": 2.59375,
+     "spoiler": 0
+    },
+    {
+     "id": "g6",
+     "name": "Superpowers",
+     "rating": 1.47692310810089,
+     "spoiler": 0
+    },
+    {
+     "id": "g19",
+     "name": "Mystery",
+     "rating": 2.16666674613953,
+     "spoiler": 0
+    },
+    {
+     "id": "g23",
+     "name": "Sexual Content",
+     "rating": 2.08957529067993,
+     "spoiler": 0
+    },
+    {
+     "id": "g32",
+     "name": "ADV",
+     "rating": 2.89743590354919,
+     "spoiler": 0
+    },
+    {
+     "id": "g41",
+     "name": "Turn-Based Strategy",
+     "rating": 1.87436676025391,
+     "spoiler": 0
+    }
+   ],
+   "title": "Utawarerumono"
+  }
+ ]
+}

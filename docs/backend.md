@@ -35,6 +35,36 @@ collectors, so collecting diagnostics does not construct another API or load gam
 Reports contain no game titles, tags, URLs, or notes. The page requests basic
 details and slower tool checks in parallel.
 
+## Game catalog client
+
+`core/catalog.py` keeps a read-only copy of the published catalog (see
+`docs/catalog.md`) as `<data dir>/catalog.db`, with a `catalog.json` sidecar
+holding the installed manifest, `last_check` and `last_error`. `Api.__init__`
+creates `self.catalog` and starts a daemon-thread check unless the
+`catalog_enabled` setting is `"0"` (default on). A check skips when the last one
+was under 12 hours ago unless forced, fetches the manifest
+(`https://wlib-db.thekirin.net/v1/manifest.json`, overridable with
+`WLIB_CATALOG_MANIFEST_URL`), and downloads the snapshot only when its SHA-256
+differs from the installed one and its `schema_version` is in
+`core.catalog_format.SUPPORTED_SCHEMA_VERSIONS`. The download streams into a temp
+file in the data folder, stopping past the manifest size (hard cap 200 MB); then
+the hash is checked, `lzma` decompresses into a temp `.db`, which is opened with
+`mode=ro` for `PRAGMA quick_check` and `meta.schema_version`, and `os.replace`
+installs it. Failures keep the old catalog and are only recorded in the
+sidecar. Requests are plain GETs with a `wLib/<version>` user agent and no query,
+cookies or library data. The app keeps no connection to `catalog.db` open and
+never writes the library database here; library export and sync do not include
+the catalog.
+
+- `get_catalog_status()` returns `{success, enabled, installed, built_at,
+  sources: {name: {count, updated_at}}, last_check, last_error, checking}`.
+- `check_catalog_now()` starts a forced background check and returns the status
+  plus `started`; it fails with an error when the catalog is turned off.
+- `get_settings()` includes `catalog_enabled`; `save_settings({catalog_enabled})`
+  stores `"1"`/`"0"`. Turning it off deletes `catalog.db` and `catalog.json`;
+  turning it on starts a check. The setting is local and not part of sync or
+  JSON export.
+
 ## Library sync and encrypted backups
 
 `core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. Newest wins for the whole library; simultaneous use from several machines is unsupported.

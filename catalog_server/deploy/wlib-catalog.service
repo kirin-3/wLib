@@ -1,0 +1,31 @@
+[Unit]
+Description=Build and publish the wLib game catalog
+Documentation=https://github.com/kirin-3/wLib/blob/master/docs/catalog.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=wlibcat
+Group=wlibcat
+WorkingDirectory=/opt/wlib-catalog
+Environment=WLIB_CATALOG_DATA_DIR=/var/lib/wlib-catalog
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/wlib-catalog/r2.env
+ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
+TimeoutStartSec=3h
+MemoryMax=400M
+Nice=10
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wlib-catalog
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

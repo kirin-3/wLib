@@ -264,6 +264,18 @@ report actual changes; host installation and folder opening remain unavailable
 in a normal browser.
 
 
+## Game catalog
+
+Settings includes `CatalogSettings.vue` after Sandbox, at `/settings#catalog`.
+It reads `api.getCatalogStatus()` and shows the on/off toggle (saved right away
+with `saveSettings({catalog_enabled})`; turning it off asks for confirmation
+because the local copy is deleted), the build time, last check, last error, and
+a per-source table of entry counts and update times from
+`utils/catalog.ts`. "Check now" calls `api.checkCatalogNow()` and the block polls
+status every 1.5 s while `checking` is true. It also carries the VNDB / ODbL
+attribution. In a normal browser both calls return mock data, and the mock
+follows the stored `catalog_enabled` setting.
+
 ## Custom tools
 
 The Linux-only `companion_tools` capability gates all three surfaces. Settings includes `CompanionToolsSettings.vue` before Sandbox, at `/settings#custom-tools`. Its list supports add/edit/delete with confirmation, inline errors, Wine/Native executable pickers using the existing runner-file fallback, Command lines, and a Show on all games default. Help explains `%game_dir%`, `%game_exe%`, leading `VAR=value`, quoting and direct command execution. Changes save immediately and use theme variables for light and dark mode.

@@ -54,6 +54,7 @@ import { validateCustomPlayStatuses } from "../utils/playStatus";
 import PathStatus from "../components/PathStatus.vue";
 import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
 import SandboxSettings from "../components/SandboxSettings.vue";
+import CatalogSettings from "../components/CatalogSettings.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
@@ -1449,6 +1450,8 @@ const browseUrm = async () => {
       <CompanionToolsSettings v-if="platformCapabilities.companion_tools" />
 
       <SandboxSettings />
+
+      <CatalogSettings />
 
       <!-- Tools -->
       <section v-if="supportsLinuxRuntimes" class="settings-card rounded-xl p-6 space-y-4">

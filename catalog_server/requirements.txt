@@ -1,0 +1,2 @@
+# Server-only dependencies for the catalog builder. The app never installs these.
+boto3>=1.34

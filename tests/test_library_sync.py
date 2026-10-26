@@ -1129,3 +1129,16 @@ def test_save_path_override_never_syncs_and_survives_a_pull(tmp_path, monkeypatc
     after = database.get_all_games()[0]
     assert after["rating"] == "9"
     assert after["save_path_override"] == "/other/saves"
+
+
+def test_installed_catalog_stays_out_of_sync(tmp_path):
+    database.add_game("Synced", "/synced.exe")
+    database.update_setting("catalog_enabled", "1")
+    (tmp_path / "catalog.db").write_bytes(b"CATALOG_DB_CONTENT")
+    (tmp_path / "catalog.json").write_text(json.dumps({"last_error": "CATALOG_STATUS"}))
+    location = MemoryLocation()
+    manager(location).run()
+    text = location.data.decode()
+    assert "Synced" in text
+    assert "catalog" not in text.lower()
+    assert "CATALOG_DB_CONTENT" not in text and "CATALOG_STATUS" not in text

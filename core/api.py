@@ -345,6 +345,16 @@ class Api:
             "done": 0,
             "total": 0,
         }
+        from core.catalog import CatalogClient
+        from core.host_platform import get_data_dir
+
+        # Read-only game catalog next to the library database; the startup
+        # check runs on its own thread and never blocks or raises.
+        self.catalog: CatalogClient = CatalogClient(
+            get_data_dir(), app_version=APP_VERSION, enabled=self._catalog_enabled
+        )
+        if self._catalog_enabled():
+            _ = self.catalog.start_background()
 
     def _load_webview_module(self) -> WebviewModule | None:
         import importlib
@@ -4407,6 +4417,32 @@ class Api:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _catalog_enabled(self) -> bool:
+        import sqlite3
+
+        from core.database import get_setting
+
+        try:
+            return get_setting("catalog_enabled") != "0"
+        except sqlite3.Error:
+            return True
+
+    def get_catalog_status(self) -> dict[str, object]:
+        try:
+            return {
+                "success": True,
+                "enabled": self._catalog_enabled(),
+                **self.catalog.status(),
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not read the catalog"}
+
+    def check_catalog_now(self) -> dict[str, object]:
+        if not self._catalog_enabled():
+            return {"success": False, "error": "The game catalog is turned off"}
+        started = self.catalog.start_background(force=True)
+        return {**self.get_catalog_status(), "started": started}
+
     def get_settings(self) -> dict[str, object]:
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -4462,6 +4498,7 @@ class Api:
                 get_setting_fn("download_detection_enabled") or "true"
             )
             == "true",
+            "catalog_enabled": get_setting_fn("catalog_enabled") != "0",
         }
 
     def get_diagnostics(self) -> dict[str, object]:
@@ -4713,6 +4750,14 @@ class Api:
                     or str(raw_detection).strip().lower() == "true"
                     else "false",
                 )
+            if "catalog_enabled" in settings_map:
+                was_enabled = get_setting_fn("catalog_enabled") != "0"
+                catalog_enabled = settings_map["catalog_enabled"] is not False
+                update_setting_fn("catalog_enabled", "1" if catalog_enabled else "0")
+                if not catalog_enabled:
+                    self.catalog.remove()
+                elif not was_enabled:
+                    _ = self.catalog.start_background(force=True)
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
             if "custom_play_statuses" in settings_map:

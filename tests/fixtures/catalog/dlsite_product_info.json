@@ -1,0 +1,44 @@
+{
+ "VJ01006811": {
+  "site_id": "pro",
+  "maker_id": "VG01022",
+  "age_category": 3,
+  "dl_count": null,
+  "rate_average_2dp": null,
+  "work_name": "【DLsite限定版】きつ×みこ ～お狐さまと巫女お姉さんと過ごす、ちょっと不思議でとっても甘い夏休み～",
+  "work_image": "//img.dlsite.jp/modpub/images2/work/professional/VJ01007000/VJ01006811_img_main.jpg",
+  "regist_date": "2026-12-25 00:00:00",
+  "work_type": "ADV",
+  "title_name": null,
+  "options": "MV2#MS2#SND#JPN",
+  "price": 7029
+ },
+ "VJ01006817": {
+  "site_id": "pro",
+  "maker_id": "VG02350",
+  "age_category": 3,
+  "dl_count": null,
+  "rate_average_2dp": null,
+  "work_name": "姫巫女 幸運の電子網 <<ハッピースマイルワールド>>",
+  "work_image": "//img.dlsite.jp/modpub/images2/work/professional/VJ01007000/VJ01006817_img_main.jpg",
+  "regist_date": "2026-11-27 00:00:00",
+  "work_type": "ADV",
+  "title_name": null,
+  "options": "MS2#SND#JPN",
+  "price": 2970
+ },
+ "VJ01006709": {
+  "site_id": "soft",
+  "maker_id": "VG02715",
+  "age_category": 1,
+  "dl_count": null,
+  "rate_average_2dp": null,
+  "work_name": "【通常版】FORTUNE×WORLD ～僕らがゲームを作る理由～",
+  "work_image": "//img.dlsite.jp/modpub/images2/work/professional/VJ01007000/VJ01006709_img_main.jpg",
+  "regist_date": "2026-10-30 00:00:00",
+  "work_type": "ADV",
+  "title_name": null,
+  "options": "MS2#SND#TRI#JPN",
+  "price": 5980
+ }
+}

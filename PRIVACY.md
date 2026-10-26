@@ -1,6 +1,6 @@
 # wLib Privacy Policy
 
-wLib is a desktop app that runs on your computer. The wLib project does not run servers and does not collect, receive, or store any of your data.
+wLib is a desktop app that runs on your computer. The wLib project does not collect, receive, or store any of your data. Its only server builds a public game catalog, described below, and receives nothing from the app.
 
 **What wLib stores on your computer.** Your game library, settings, and app data stay in wLib's data folder on your machine (`~/.local/share/wLib` on Linux, `%LOCALAPPDATA%\wLib` on Windows). That folder also holds local-only save backups, attached PDFs, diagnostics logs, and the app log. Those files stay on your computer and are never included in JSON exports or sync.
 
@@ -17,6 +17,8 @@ The sync file contains your game list (titles, developers, tags, F95Zone thread 
 **Credentials.** The Dropbox or Google refresh token and the encryption key are stored only in wLib's local database on your computer. A token is never sent anywhere except to Dropbox or Google, to sign in and to keep the connection alive. Signing in to Google also shows wLib your Google account email address, which it displays in the sync settings and does not send anywhere.
 
 **Disconnecting.** Use "Disconnect" in wLib's sync settings, or remove wLib under Dropbox > Settings > Connected apps, or under Google Account > Security > Third-party apps & services. Disconnecting removes the token from your computer and asks Dropbox or Google to revoke it. The sync file stays where it is until you delete it.
+
+**Game catalog (on by default).** The wLib project builds a catalog of games from public pages and APIs of F95Zone, DLsite, Ryuugames and VNDB on its own server, and publishes it as a file on Cloudflare R2 at `wlib-db.thekirin.net`. At startup, and at most every 12 hours or when you choose "Check now", wLib downloads a small manifest from that address and, when it changed, the catalog file. These are plain downloads: they carry no query parameters, cookies, account data or library data, only a user agent with wLib's version. Cloudflare sees your IP address, as with any download, under [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/). The app never contacts the project's server. The catalog is stored as `catalog.db` in wLib's data folder and is never exported, synced or backed up. You can turn it off in Settings → Game catalog, which also deletes the local copy. VNDB data is available under the Open Database License.
 
 **Other network requests.** wLib contacts F95Zone to check game versions and thread details. When you ask it to, it also downloads runtimes such as Proton, RPG Maker RTP, or Cheat Engine from their publishers. These requests send no library data.
 
