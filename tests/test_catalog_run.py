@@ -71,7 +71,7 @@ def test_failing_source_is_recorded_and_others_still_update(tmp_path):
     assert healthy.calls[0] == "incremental" and "sweep" in healthy.calls
 
 
-def test_completed_sweeps_mark_missing_entries_removed_and_clear_returning_ones(tmp_path):
+def test_entries_missing_from_two_sweeps_are_marked_removed_and_cleared_on_return(tmp_path):
     ctx, clock = make_context(tmp_path, FakeTransport())
     source = FakeSource("ryuugames", "ryuu_posts", "post_id")
     sources = {"ryuugames": source}
@@ -84,8 +84,10 @@ def test_completed_sweeps_mark_missing_entries_removed_and_clear_returning_ones(
     source.listed = [_ryuu_row(1), _ryuu_row(2)]
     assert sweep() == {1: None, 2: None}
     source.listed = [_ryuu_row(1)]
-    second = sweep()
-    assert second[1] is None and second[2] is not None
+    # One missed sweep can be a page shift on a live feed, not a removal.
+    assert sweep() == {1: None, 2: None}
+    third = sweep()
+    assert third[1] is None and third[2] is not None
     source.listed = [_ryuu_row(1), _ryuu_row(2)]
     assert sweep() == {1: None, 2: None}
 

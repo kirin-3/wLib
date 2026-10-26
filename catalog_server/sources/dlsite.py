@@ -19,7 +19,7 @@ LISTINGS: tuple[tuple[str, str], ...] = (
     ("pro", ""),
 )
 LISTING_URL = (
-    "https://www.dlsite.com/{site}/fsr/ajax/=/language/jp/{filter}"
+    "https://www.dlsite.com/{site}/fsr/ajax/=/{filter}"
     + "order%5B0%5D/{order}/work_type_category%5B0%5D/game/"
     + "per_page/100/page/{page}/show_type/1"
 )

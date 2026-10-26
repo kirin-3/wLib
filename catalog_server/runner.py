@@ -50,9 +50,15 @@ def _run_sweep(source: Source, ctx: SourceContext) -> bool:
     except (BudgetExhausted, RateLimited):
         pass
     now = ctx.now()
-    removed = ctx.catalog.mark_removed(source.name, started, now)
-    if removed:
-        log.info("%s: marked %d entries removed", source.name, removed)
+    # An entry deleted on an earlier page shifts the rest back a place, so a
+    # sweep can miss one that still exists. Only entries missing from two
+    # completed sweeps in a row are marked removed.
+    previous = ctx.state.get(source.name, "previous_sweep_started_at")
+    if isinstance(previous, str):
+        removed = ctx.catalog.mark_removed(source.name, previous, now)
+        if removed:
+            log.info("%s: marked %d entries removed", source.name, removed)
+    ctx.state.put(source.name, "previous_sweep_started_at", started)
     source.reset_sweep(ctx)
     ctx.state.put(source.name, "sweep_started_at", None)
     ctx.state.mark_sweep_completed(source.name, now)

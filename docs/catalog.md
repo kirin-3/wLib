@@ -93,8 +93,10 @@ entries not marked removed; `updated_at` is the source's last successful run.
 | `meta` | `key` | `schema_version`, `built_at` |
 
 Every source row has `first_seen`, `last_seen` and `removed_at`. When a full
-sweep of a source completes, rows it did not see get `removed_at`; a row that
-appears again has it cleared. Rows are never deleted.
+sweep of a source completes, rows missing from it and from the sweep before it
+get `removed_at`. One missed sweep is not enough, because a deletion on an
+earlier page of a live feed can shift a row past the sweep. A row that appears
+again has `removed_at` cleared. Rows are never deleted.
 
 ### Schema versions
 
