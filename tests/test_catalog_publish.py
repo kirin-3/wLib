@@ -88,7 +88,7 @@ def test_logs_name_keys_and_sizes_but_no_credentials(tmp_path, caplog, monkeypat
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKIDSECRETVALUE")
     monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "SUPERSECRETKEY")
     config = r2_config_from_env()
-    assert isinstance(config, R2Config) and config.bucket == "wlib-catalog"
+    assert isinstance(config, R2Config) and config.bucket == "wlib-db"
     with caplog.at_level(logging.DEBUG):
         publish(MemoryStorage(), _snapshot(tmp_path), SOURCES)
     text = caplog.text

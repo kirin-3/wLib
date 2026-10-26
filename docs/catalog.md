@@ -131,7 +131,7 @@ The exit code is 1 when a source failed, 2 when publishing was requested
 without R2 credentials.
 
 Publishing needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
-and optionally `R2_BUCKET` (default `wlib-catalog`). The token must only be
+and optionally `R2_BUCKET` (default `wlib-db`). The token must only be
 able to edit objects in that bucket. Logs name object keys and sizes, never
 credentials. The builder's only extra dependency is `boto3`, in
 `catalog_server/requirements.txt`.
@@ -154,7 +154,7 @@ mode 0600):
 R2_ACCOUNT_ID=…
 R2_ACCESS_KEY_ID=…
 R2_SECRET_ACCESS_KEY=…
-R2_BUCKET=wlib-catalog
+R2_BUCKET=wlib-db
 ```
 
 Manual runs as the service user:

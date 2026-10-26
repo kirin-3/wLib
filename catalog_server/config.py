@@ -35,7 +35,7 @@ class R2Config:
     # Kept out of repr so a logged config never shows the token.
     access_key_id: str = field(repr=False)
     secret_access_key: str = field(repr=False)
-    bucket: str = "wlib-catalog"
+    bucket: str = "wlib-db"
 
     @property
     def endpoint(self) -> str:
@@ -58,5 +58,5 @@ def r2_config_from_env() -> R2Config | None:
         account_id=values["R2_ACCOUNT_ID"],
         access_key_id=values["R2_ACCESS_KEY_ID"],
         secret_access_key=values["R2_SECRET_ACCESS_KEY"],
-        bucket=os.environ.get("R2_BUCKET", "").strip() or "wlib-catalog",
+        bucket=os.environ.get("R2_BUCKET", "").strip() or "wlib-db",
     )
