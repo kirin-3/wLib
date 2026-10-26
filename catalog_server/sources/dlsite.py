@@ -6,12 +6,15 @@ the rest for up to 100 IDs per request, including `age_category`.
 """
 
 import re
+from datetime import timedelta
 from html import unescape
 from typing import cast
 
-from .base import SourceContext
+from .base import SourceContext, periodic_sweep_due
 
 PER_PAGE = 100
+# A full re-crawl is about 1,400 requests; incremental runs cover new works.
+SWEEP_INTERVAL = timedelta(days=7)
 ADULT_AGE_CATEGORY = 3
 # (site, listing filter). /pro/ lists all-ages works too; age_category drops them.
 LISTINGS: tuple[tuple[str, str], ...] = (
@@ -145,8 +148,7 @@ class DlsiteSource:
                     break
 
     def sweep_due(self, ctx: SourceContext) -> bool:
-        del ctx
-        return True
+        return periodic_sweep_due(ctx, self.name, SWEEP_INTERVAL)
 
     def sweep_step(self, ctx: SourceContext) -> bool:
         cursor = ctx.state.get(self.name, "sweep_cursor", [0, 1])

@@ -6,12 +6,16 @@ itself, and with it every download link, is never stored.
 """
 
 import re
+from datetime import timedelta
 from html import unescape
 from typing import cast
 from urllib.parse import quote
 
 from ..net import Response
-from .base import SourceContext
+from .base import SourceContext, periodic_sweep_due
+
+# A full re-crawl reads every post body; `modified_after` covers the rest.
+SWEEP_INTERVAL = timedelta(days=7)
 
 POSTS_URL = (
     "https://www.ryuugames.com/wp-json/wp/v2/posts?per_page=100&page={page}"
@@ -139,8 +143,7 @@ class RyuugamesSource:
         ctx.state.put(self.name, "modified_since", started)
 
     def sweep_due(self, ctx: SourceContext) -> bool:
-        del ctx
-        return True
+        return periodic_sweep_due(ctx, self.name, SWEEP_INTERVAL)
 
     def sweep_step(self, ctx: SourceContext) -> bool:
         page = ctx.state.get(self.name, "sweep_page", 1)

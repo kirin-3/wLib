@@ -5,10 +5,10 @@ that link to DLsite or Steam. VNDB data is under the Open Database License.
 There is no incremental mode; the whole set is refreshed once a week.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import cast
 
-from .base import SourceContext
+from .base import SourceContext, periodic_sweep_due
 
 API_URL = "https://api.vndb.org/kana/{endpoint}"
 REFRESH_INTERVAL = timedelta(days=7)
@@ -91,13 +91,7 @@ class VndbSource:
         del ctx
 
     def sweep_due(self, ctx: SourceContext) -> bool:
-        if ctx.state.get(self.name, "sweep_cursor") is not None:
-            return True
-        completed = ctx.state.source_status(self.name)["sweep_completed_at"]
-        if completed is None:
-            return True
-        now = datetime.fromisoformat(ctx.now().replace("Z", "+00:00"))
-        return now - datetime.fromisoformat(completed.replace("Z", "+00:00")) >= REFRESH_INTERVAL
+        return periodic_sweep_due(ctx, self.name, REFRESH_INTERVAL)
 
     def sweep_step(self, ctx: SourceContext) -> bool:
         cursor = ctx.state.get(self.name, "sweep_cursor")

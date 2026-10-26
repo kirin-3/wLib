@@ -3,11 +3,16 @@
 
 import json
 
+import pytest
+
 from catalog_fakes import FakeClock, FakeTransport, fixture_bytes, make_context, rows
 from catalog_server.__main__ import main
 from catalog_server.net import Response
 from catalog_server.runner import run
 from catalog_server.sources.base import SourceContext
+from catalog_server.sources.dlsite import DlsiteSource
+from catalog_server.sources.ryuugames import RyuugamesSource
+from catalog_server.sources.vndb import VndbSource
 
 
 class FakeSource:
@@ -90,6 +95,26 @@ def test_entries_missing_from_two_sweeps_are_marked_removed_and_cleared_on_retur
     assert third[1] is None and third[2] is not None
     source.listed = [_ryuu_row(1), _ryuu_row(2)]
     assert sweep() == {1: None, 2: None}
+
+
+@pytest.mark.parametrize("source_cls", [DlsiteSource, RyuugamesSource, VndbSource])
+def test_full_resweeps_of_unbudgeted_sources_wait_a_week(tmp_path, source_cls):
+    ctx, clock = make_context(tmp_path, FakeTransport())
+    source = source_cls()
+    assert source.sweep_due(ctx)  # first full load
+    ctx.state.mark_sweep_completed(source.name, clock.iso())
+    clock.now += 6 * 86400
+    assert not source.sweep_due(ctx)
+    clock.now += 86400
+    assert source.sweep_due(ctx)
+
+
+def test_interrupted_periodic_sweep_resumes_before_the_week_is_up(tmp_path):
+    ctx, clock = make_context(tmp_path, FakeTransport())
+    source = DlsiteSource()
+    ctx.state.mark_sweep_completed(source.name, clock.iso())
+    ctx.state.put(source.name, "sweep_started_at", clock.iso())
+    assert source.sweep_due(ctx)
 
 
 def test_cli_run_no_publish_ryuugames(tmp_path, capsys):

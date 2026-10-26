@@ -3,6 +3,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from ..net import Pacer
@@ -19,6 +20,21 @@ class SourceContext:
 
     def upsert(self, table: str, key: str, rows: Sequence[Mapping[str, object]]) -> None:
         self.rows += self.catalog.upsert(table, key, rows, self.now())
+
+
+def _parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def periodic_sweep_due(ctx: SourceContext, source: str, interval: timedelta) -> bool:
+    """Due while a sweep is in progress, before the first one completes, and
+    once `interval` has passed since the last completed sweep."""
+    if isinstance(ctx.state.get(source, "sweep_started_at"), str):
+        return True
+    completed = ctx.state.source_status(source)["sweep_completed_at"]
+    if completed is None:
+        return True
+    return _parse_utc(ctx.now()) - _parse_utc(completed) >= interval
 
 
 class Source(Protocol):

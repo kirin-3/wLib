@@ -126,8 +126,10 @@ gets published) and `state.sqlite` (cursors, high-water marks, the request log
 and run history; never published).
 
 Each run does, for every selected source, its incremental fetch and then
-advances the full-listing sweep with the budget that is left. Interrupted
-sweeps resume from their cursor. `--until-swept` waits out request budgets
+advances the full-listing sweep. F95 sweeps with whatever is left of its
+hourly budget, so it re-crawls continuously. DLsite, Ryuugames and VNDB have
+no budget, so they start a new full sweep only once a week after the last one
+completed. Interrupted sweeps resume from their cursor. `--until-swept` waits out request budgets
 instead of stopping, so the first F95 load (about 311 pages) takes about 3.5 hours.
 The exit code is 1 when a source failed, 2 when publishing was requested
 without R2 credentials.
