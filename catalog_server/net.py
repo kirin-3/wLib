@@ -48,6 +48,11 @@ class Response:
 Transport = Callable[[Request], Response]
 
 
+# Timeouts and 5xx answers are retried; each retry is paced and budgeted.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 30.0
+
+
 class RateLimited(Exception):
     def __init__(self, site: str, reason: str) -> None:
         super().__init__(f"{site}: {reason}")
@@ -151,19 +156,30 @@ class Pacer:
     ) -> Response:
         if site in self.paused:
             raise RateLimited(site, self.paused[site])
-        self._wait_turn(site)
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json, */*"}
         body = None
         if json_body is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(json_body).encode()
-        status: int | None = None
-        try:
-            response = self._transport(Request(method, url, headers, body))
-            status = response.status
-        finally:
-            self._state.log_request(site, self._clock(), status)
-            self.sent[site] = self.sent.get(site, 0) + 1
+        attempt = 0
+        while True:
+            attempt += 1
+            self._wait_turn(site)
+            status: int | None = None
+            try:
+                response = self._transport(Request(method, url, headers, body))
+                status = response.status
+            except ConnectionError:
+                if attempt >= RETRY_ATTEMPTS:
+                    raise
+                self._sleep(RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            finally:
+                self._state.log_request(site, self._clock(), status)
+                self.sent[site] = self.sent.get(site, 0) + 1
+            if response.status < 500 or attempt >= RETRY_ATTEMPTS:
+                break
+            self._sleep(RETRY_BACKOFF_SECONDS * attempt)
         if response.status == 429 or (
             is_rate_limited is not None and is_rate_limited(response)
         ):

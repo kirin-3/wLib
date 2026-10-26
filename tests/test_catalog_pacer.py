@@ -96,3 +96,32 @@ def test_user_agent_is_on_every_request(tmp_path):
     for request in transport.requests:
         assert request.headers["User-Agent"] == USER_AGENT
     assert "wLib" in USER_AGENT and "github.com/kirin-3/wLib" in USER_AGENT
+
+
+def test_timeouts_and_5xx_are_retried_within_the_budget(tmp_path):
+    clock = FakeClock()
+    answers = [ConnectionError("timed out"), json_response({}, status=502), json_response({"ok": True})]
+
+    def transport(request):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    pacer = Pacer(state, transport, clock=clock, sleep=clock.sleep)
+    assert pacer.request("f95", "https://f95zone.to/a").status == 200
+    assert pacer.sent["f95"] == 3
+    assert len(state.request_times("f95", 0)) == 3
+
+
+def test_retries_give_up_after_three_attempts(tmp_path):
+    clock = FakeClock()
+
+    def transport(request):
+        raise ConnectionError("down")
+
+    pacer = Pacer(StateStore(str(tmp_path / "state.sqlite")), transport, clock=clock, sleep=clock.sleep)
+    with pytest.raises(ConnectionError):
+        pacer.request("dlsite", "https://www.dlsite.com/x")
+    assert pacer.sent["dlsite"] == 3
