@@ -406,7 +406,8 @@ class StateStore:
             else:
                 # A rate-limited run still collected data up to the limit.
                 _ = self.conn.execute(
-                    "UPDATE source_status SET last_success_at = ? WHERE source = ?",
+                    "UPDATE source_status SET last_success_at = ?, last_error = NULL, "
+                    + "last_error_at = NULL WHERE source = ?",
                     (now, source),
                 )
 

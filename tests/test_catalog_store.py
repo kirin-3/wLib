@@ -68,3 +68,13 @@ def test_format_module_imports_nothing_from_the_app():
         "and m != 'core.catalog_format')]; print(bad); raise SystemExit(1 if bad else 0)"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_a_later_success_clears_the_last_error(tmp_path):
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    run_id = state.start_run("2026-01-01T00:00:00Z")
+    state.record_source(run_id, "f95", "error", 0, 1, "timed out", "2026-01-01T00:01:00Z")
+    assert state.source_status("f95")["last_error"] == "timed out"
+    state.record_source(run_id + 1, "f95", "ok", 5, 2, None, "2026-01-01T12:00:00Z")
+    status = state.source_status("f95")
+    assert status["last_error"] is None and status["last_success_at"] == "2026-01-01T12:00:00Z"
