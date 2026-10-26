@@ -129,3 +129,16 @@ def test_cli_sources_none_only_publishes(tmp_path):
     )
     assert code == 0 and transport.requests == []
     assert "v1/manifest.json" in storage.objects
+
+
+def test_failed_publish_still_finishes_the_run(tmp_path):
+    import pytest
+
+    from test_catalog_publish import MemoryStorage
+
+    ctx, clock = make_context(tmp_path, FakeTransport())
+    with pytest.raises(ConnectionError):
+        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=MemoryStorage(fail_on="v1/"), work_dir=str(tmp_path), now=clock.iso)
+    latest = ctx.state.recent_runs()[0]
+    assert latest["finished_at"] and latest["published"] is None
+    assert not list((tmp_path / "snapshots").iterdir())

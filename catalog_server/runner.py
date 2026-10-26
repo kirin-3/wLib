@@ -131,12 +131,15 @@ def run(
     links = rebuild_links(catalog)
     log.info("links: %d", links)
     published: str | None = None
-    if storage is not None:
-        snapshot = build_snapshot(catalog, os.path.join(work_dir, "snapshots"), now())
-        try:
-            result.manifest = publish(storage, snapshot, manifest_sources(catalog, state))
-            published = snapshot.name
-        finally:
-            os.remove(snapshot.path)
-    state.finish_run(result.run_id, now(), published)
+    try:
+        if storage is not None:
+            snapshot = build_snapshot(catalog, os.path.join(work_dir, "snapshots"), now())
+            try:
+                result.manifest = publish(storage, snapshot, manifest_sources(catalog, state))
+                published = snapshot.name
+            finally:
+                os.remove(snapshot.path)
+    finally:
+        # A failed publish still closes the run, with nothing marked published.
+        state.finish_run(result.run_id, now(), published)
     return result
