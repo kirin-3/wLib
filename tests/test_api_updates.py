@@ -2094,6 +2094,48 @@ def test_sync_extension_files_cleans_leftover_staging_folders(monkeypatch, tmp_p
     )
 
 
+def test_sync_extension_files_from_read_only_bundle(monkeypatch, tmp_path):
+    import shutil
+    import stat
+
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    # Mimic the Nix store: every bundled file 0444, every folder 0555.
+    bundled_dir = tmp_path / "bundled"
+    _ = shutil.copytree(api._get_bundled_extension_dir(), bundled_dir)
+    for root, _dirs, files in os.walk(bundled_dir, topdown=False):
+        for name in files:
+            os.utime(os.path.join(root, name), (0, 0))
+            os.chmod(os.path.join(root, name), 0o444)
+        os.chmod(root, 0o555)
+    monkeypatch.setattr(api, "_get_bundled_extension_dir", lambda: str(bundled_dir))
+
+    # A staging folder that an earlier read-only copy left behind.
+    stale_new = persistent_dir / "chrome.new"
+    stale_new.mkdir(parents=True)
+    (stale_new / "manifest.json").write_text("{}")
+    os.chmod(stale_new / "manifest.json", 0o444)
+    os.chmod(stale_new, 0o555)
+
+    try:
+        result = api.sync_extension_files()
+
+        assert result["success"] is True
+        assert result.get("updated") is True
+        assert not stale_new.exists()
+        assert os.stat(chrome_dir).st_mode & stat.S_IWUSR
+        assert os.stat(chrome_dir / "manifest.json").st_mode & stat.S_IWUSR
+        chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
+        assert "scripts" not in chrome_manifest["background"]
+        assert (persistent_dir / "firefox" / "wLib.xpi").is_file()
+    finally:
+        for root, _dirs, _files in os.walk(bundled_dir):
+            os.chmod(root, 0o755)
+
+
 def test_sync_extension_files_copy_failure_keeps_old_chrome(monkeypatch, tmp_path):
     import shutil
 

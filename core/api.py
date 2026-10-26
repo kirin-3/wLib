@@ -801,13 +801,28 @@ class Api:
     def _write_unsigned_firefox_xpi(self, source_dir: str, target_path: str) -> None:
         import zipfile
 
-        with zipfile.ZipFile(target_path, "w", zipfile.ZIP_DEFLATED) as xpi:
+        # strict_timestamps=False clamps the 1970 mtimes of Nix store files to 1980.
+        with zipfile.ZipFile(
+            target_path, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False
+        ) as xpi:
             for root, dirs, files in os.walk(source_dir):
                 dirs[:] = sorted(d for d in dirs if d != "firefox")
                 for filename in sorted(files):
                     file_path = os.path.join(root, filename)
                     archive_name = os.path.relpath(file_path, source_dir)
                     xpi.write(file_path, archive_name)
+
+    @staticmethod
+    def _make_tree_owner_writable(path: str) -> None:
+        # Copies from a read-only install (the Nix store) keep its 0444/0555
+        # modes, which would stop later syncs from editing or removing them.
+        import stat
+
+        for root, _dirs, files in os.walk(path):
+            for entry in (root, *(os.path.join(root, name) for name in files)):
+                mode = os.lstat(entry).st_mode
+                if not stat.S_ISLNK(mode):
+                    os.chmod(entry, stat.S_IMODE(mode) | stat.S_IWUSR)
 
     def sync_extension_files(self) -> ExtensionSyncStatus:
         import shutil
@@ -857,6 +872,7 @@ class Api:
                 # Drop staging folders left behind by an interrupted earlier sync.
                 for stale_dir in (chrome_new_dir, chrome_old_dir):
                     if os.path.isdir(stale_dir):
+                        self._make_tree_owner_writable(stale_dir)
                         shutil.rmtree(stale_dir)
                     elif os.path.lexists(stale_dir):
                         os.remove(stale_dir)
@@ -866,6 +882,7 @@ class Api:
                     chrome_new_dir,
                     ignore=shutil.ignore_patterns("firefox"),
                 )
+                self._make_tree_owner_writable(chrome_new_dir)
 
                 chrome_manifest_path = os.path.join(chrome_new_dir, "manifest.json")
                 import json
@@ -892,6 +909,7 @@ class Api:
                     os.rename(chrome_dir, chrome_old_dir)
                 os.rename(chrome_new_dir, chrome_dir)
                 if os.path.isdir(chrome_old_dir):
+                    self._make_tree_owner_writable(chrome_old_dir)
                     shutil.rmtree(chrome_old_dir)
                 elif os.path.lexists(chrome_old_dir):
                     os.remove(chrome_old_dir)
