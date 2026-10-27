@@ -77,6 +77,7 @@ def test_off_missing_catalog_and_no_title_matching(catalog, tmp_path):
     assert [link["id"] for link in resolve_page("https://vndb.org/v1")["ids"]] == ["v1"]
     assert resolve_page("https://vndb.org/v1")["catalog_entry"] == {}
     database.update_setting("catalog_enabled", "1")
+    catalog.close()  # Windows cannot delete a file that is still open.
     (tmp_path / "catalog.db").unlink()
     assert resolve_page("https://vndb.org/v1")["matches"] == []
     assert not (tmp_path / "catalog.db").exists()

@@ -771,7 +771,12 @@ def test_extension_check_omits_extension_version_when_sync_failed(monkeypatch, s
 
 
 @pytest.fixture
-def extension_server():
+def extension_server(tmp_path, monkeypatch):
+    from core import database
+
+    # Requests resolve links against the library, so never touch the real one.
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "extension.db"))
+    database.init_db()
     server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.ExtensionRequestHandler)
     thread = threading.Thread(
         target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
