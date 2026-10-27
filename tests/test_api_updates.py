@@ -2955,6 +2955,24 @@ def _write_archive(path, files):
             archive.writestr(name, data)
 
 
+def test_inspect_archive_checks_library_folder_for_tool(monkeypatch, tmp_path):
+    archive = tmp_path / "game.7z"
+    archive.touch()
+    library = str(tmp_path / "library")
+    update_setting("library_folder", library)
+    checked_folders = []
+
+    def detect(path, *, library_folder):
+        checked_folders.append(library_folder)
+        return None, "Install a host extractor."
+
+    monkeypatch.setattr("core.archive_install.detect_archive_tool", detect)
+    inspected = Api().inspect_archive(str(archive))
+    assert inspected["success"] is True
+    assert inspected["tool_error"] == "Install a host extractor."
+    assert checked_folders == [library]
+
+
 def test_api_install_archive_new_game(tmp_path):
     api = Api()
     library = tmp_path / "lib"

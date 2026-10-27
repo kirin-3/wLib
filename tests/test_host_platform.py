@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
 import shutil
+import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -259,6 +260,16 @@ def test_host_which_inside_flatpak_hit_and_miss(monkeypatch):
     with patch("subprocess.run", return_value=hit) as run:
         assert host_platform.host_which("wine") == "/usr/bin/wine"
         assert run.call_args.args[0][:3] == ["flatpak-spawn", "--host", "sh"]
+        argv = run.call_args.args[0]
+        assert argv[3] == "-lc"
+        for folder in (
+            "$HOME/.local/bin", "$HOME/.nix-profile/bin",
+            "/nix/var/nix/profiles/default/bin", "/home/linuxbrew/.linuxbrew/bin",
+            "/run/current-system/sw/bin",
+        ):
+            assert folder in argv[4]
+        assert argv[-2:] == ["sh", "wine"]
+        assert run.call_args.kwargs["timeout"] == 10
 
     miss = MagicMock(returncode=1, stdout="")
     with patch("subprocess.run", return_value=miss):
@@ -267,9 +278,26 @@ def test_host_which_inside_flatpak_hit_and_miss(monkeypatch):
     with patch("subprocess.run", side_effect=OSError("no spawn")):
         assert host_platform.host_which("wine") is None
 
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("lookup", 10)):
+        assert host_platform.host_which("wine") is None
+
 
 def test_companion_capability():
     from core.host_platform import get_platform_capabilities
 
     assert get_platform_capabilities("linux")["companion_tools"] is True
     assert get_platform_capabilities("win32")["companion_tools"] is False
+
+
+def test_host_which_inside_flatpak_ignores_login_profile_output(monkeypatch):
+    import core.host_platform as host_platform
+
+    _simulate_flatpak(monkeypatch, enabled=True)
+
+    noisy = MagicMock(returncode=0, stdout="Welcome back!\n/usr/bin/unrar\n")
+    with patch("subprocess.run", return_value=noisy):
+        assert host_platform.host_which("unrar") == "/usr/bin/unrar"
+
+    no_path = MagicMock(returncode=0, stdout="Welcome back!\n")
+    with patch("subprocess.run", return_value=no_path):
+        assert host_platform.host_which("unrar") is None

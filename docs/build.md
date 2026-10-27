@@ -192,7 +192,11 @@ nFPM reads `packaging/nfpm.yaml` and receives these environment variables from t
 
 ## Flatpak Bundle
 
-The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and `flatpak-builder` on the build host, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 24.08 runtime.
+The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and `flatpak-builder` on the build host, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 26.08 runtime. The matching runtime is fetched on first install if needed.
+
+The manifest also builds 7-Zip 26.05 from pinned upstream sources verified by SHA-256. It installs `/app/bin/7zz` with RAR decoding support and `/app/share/licenses/7zip/License.txt`, so `.7z` and `.rar` installs need no host extractor. This module is exclusive to Flatpak; other release formats keep using system archive tools.
+
+The source archive has no enclosing directory, so extraction uses `strip-components: 0`. The SDK's GCC emits an array-bounds diagnostic in upstream COM progress code; the build keeps that diagnostic as a warning while retaining errors for other warnings.
 
 ```bash
 # Build AppImage/tar.gz and, if flatpak-builder is installed, the Flatpak bundle

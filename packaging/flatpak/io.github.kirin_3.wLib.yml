@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 app-id: io.github.kirin_3.wLib
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: wlib
 finish-args:
@@ -16,6 +16,19 @@ finish-args:
   - --talk-name=org.freedesktop.Flatpak
   - --env=QTWEBENGINE_DISABLE_SANDBOX=1
 modules:
+  - name: 7zip
+    buildsystem: simple
+    build-commands:
+      # The SDK's GCC emits an array-bounds warning in upstream COM progress code.
+      # Keep it visible without failing the build; other warnings remain errors.
+      - make -C CPP/7zip/Bundles/Alone2 -f ../../cmpl_gcc.mak -j${FLATPAK_BUILDER_N_JOBS} CFLAGS_WARN_WALL="-Werror -Wall -Wextra -Wno-error=array-bounds"
+      - install -Dm755 CPP/7zip/Bundles/Alone2/b/g/7zz /app/bin/7zz
+      - install -Dm644 DOC/License.txt /app/share/licenses/7zip/License.txt
+    sources:
+      - type: archive
+        url: https://github.com/ip7z/7zip/releases/download/26.05/7z2605-src.tar.xz
+        sha256: 0b6080b8c3e7a579161d2d495224c0e51c467576cb4c7048b0ab485ef44cc22e
+        strip-components: 0
   - name: wlib
     buildsystem: simple
     build-commands:

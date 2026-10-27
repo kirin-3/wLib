@@ -352,3 +352,7 @@ How the code fits together is explained in the [developer documentation](docs/RE
 ## License
 
 wLib is licensed under the [GNU General Public License v3.0 or later](LICENSE). The [privacy policy](PRIVACY.md) explains what wLib stores and what it sends.
+
+### Third-party software
+
+The Flatpak bundle includes [7-Zip](https://www.7-zip.org/) for `.7z` and `.rar` extraction. Its code is covered by the [GNU LGPL, BSD 3-clause license and unRAR restriction](https://www.7-zip.org/license.txt). The bundle ships its license at `/app/share/licenses/7zip/License.txt`.

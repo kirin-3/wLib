@@ -205,7 +205,7 @@ def host_which(name: str) -> str | None:
     """Find `name` on the host PATH (design D4).
 
     Outside Flatpak this is `shutil.which`. Inside, the sandbox PATH is
-    invisible, so resolve via `flatpak-spawn --host`.
+    invisible, so resolve via a host login shell plus common per-user folders.
     """
     cleaned = (name or "").strip()
     if not cleaned:
@@ -214,20 +214,33 @@ def host_which(name: str) -> str | None:
         return shutil.which(cleaned)
     try:
         completed = subprocess.run(
-            ["flatpak-spawn", "--host", "sh", "-c", 'command -v "$1"', "sh", cleaned],
+            [
+                "flatpak-spawn",
+                "--host",
+                "sh",
+                "-lc",
+                'PATH="$PATH:$HOME/.local/bin:$HOME/.nix-profile/bin:'
+                + '/nix/var/nix/profiles/default/bin:/home/linuxbrew/.linuxbrew/bin:'
+                + '/run/current-system/sw/bin"; command -v "$1"',
+                "sh",
+                cleaned,
+            ],
             capture_output=True,
             text=True,
             check=False,
             stdin=subprocess.DEVNULL,
+            timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if completed.returncode != 0:
         return None
-    path = (completed.stdout or "").strip().splitlines()
-    if not path or not path[0].strip():
+    # A login profile may print text first; `command -v` writes the last line.
+    lines = [line.strip() for line in (completed.stdout or "").splitlines()]
+    path = next((line for line in reversed(lines) if line), "")
+    if not path.startswith("/"):
         return None
-    return path[0].strip()
+    return path
 
 
 def host_command(

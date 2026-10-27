@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
@@ -22,7 +22,7 @@ from core.game_saves import (
     copy_folder_contents,
     is_within,
 )
-from core.host_platform import host_command, host_which
+from core.host_platform import host_command, host_which, is_flatpak
 
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -37,6 +37,7 @@ _INVALID_SEGMENT_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar")
 STAGING_PREFIX = ".wlib-staging-"
+BUNDLED_7ZZ = "/app/bin/7zz"
 
 
 class ArchiveInstallError(Exception):
@@ -115,12 +116,27 @@ def _is_windows(platform: str | None = None) -> bool:
     return sys.platform.startswith("win")
 
 
+def _writable_in_sandbox(folder: str) -> bool:
+    """True when `folder`, or its nearest existing parent, is writable here.
+
+    The library folder may not exist yet; installs create it.
+    """
+    current = os.path.abspath(os.path.expanduser(folder))
+    while not os.path.exists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+    return os.access(current, os.W_OK)
+
+
 def detect_archive_tool(
-    archive_path: str, *, platform: str | None = None
+    archive_path: str, *, platform: str | None = None, library_folder: str = ""
 ) -> tuple[str | None, str | None]:
     """Return (tool, error) for an archive.
 
-    `.zip` needs no tool → (None, None). For `.7z`/`.rar`, search
+    `.zip` needs no tool → (None, None). Flatpak prefers its bundled 7zz
+    when the archive and destination are accessible in the sandbox. Otherwise search
     `7zz`/`7z`/`7za`, then `bsdtar`, then `unrar` (rar only), plus the
     Windows `Program Files\\7-Zip` paths. Uses `host_which` and
     `os.path.isfile` so tests can monkeypatch them.
@@ -130,6 +146,14 @@ def detect_archive_tool(
         return None, None
     if fmt not in ("7z", "rar"):
         return None, f"Unsupported archive format: {archive_path or '(none)'}"
+
+    if (
+        is_flatpak()
+        and os.path.isfile(BUNDLED_7ZZ)
+        and os.path.isfile(archive_path)
+        and (not library_folder or _writable_in_sandbox(library_folder))
+    ):
+        return BUNDLED_7ZZ, None
 
     for candidate in ("7zz", "7z", "7za"):
         found = host_which(candidate)
@@ -312,13 +336,21 @@ def _tool_basename(tool: str) -> str:
     return os.path.basename(tool).lower()
 
 
+def _tool_argv(
+    tool: str, args: Sequence[str], *, env: dict[str, str] | None = None
+) -> list[str]:
+    """Run the bundled extractor in the sandbox and other tools on the host."""
+    cmd = [tool, *args]
+    return cmd if tool == BUNDLED_7ZZ else host_command(cmd, env=env)
+
+
 def list_tool_entries(tool: str, archive_path: str) -> list[str]:
     """List archive entries via the external tool (for the path pre-check)."""
     base = _tool_basename(tool)
-    env = build_host_open_env()
+    env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
         completed = subprocess.run(
-            host_command([tool, "lb", archive_path], env=env),
+            _tool_argv(tool, ["lb", archive_path], env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -334,7 +366,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         ]
     if "bsdtar" in base or base == "tar":
         completed = subprocess.run(
-            host_command([tool, "-tf", archive_path], env=env),
+            _tool_argv(tool, ["-tf", archive_path], env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -353,7 +385,7 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         return entries
     # 7z/7zz/7za (also a raw 7z.exe path on Windows).
     completed = subprocess.run(
-        host_command([tool, "l", "-slt", "-p", archive_path], env=env),
+        _tool_argv(tool, ["l", "-slt", "-p", archive_path], env=env),
         capture_output=True,
         text=True,
         check=False,
@@ -468,16 +500,16 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
         meaningful.append(entry)
     check_archive_entries_no_collisions(meaningful)
     base = _tool_basename(tool)
-    env = build_host_open_env()
+    env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
-        cmd = [tool, "x", "-o+", archive_path, staging_dir + os.sep]
+        args = ["x", "-o+", archive_path, staging_dir + os.sep]
     elif "bsdtar" in base or base == "tar":
-        cmd = [tool, "-xf", archive_path, "-C", staging_dir]
+        args = ["-xf", archive_path, "-C", staging_dir]
     else:
-        cmd = [tool, "x", archive_path, f"-o{staging_dir}", "-y", "-p"]
+        args = ["x", archive_path, f"-o{staging_dir}", "-y", "-p"]
     try:
         completed = subprocess.run(
-            host_command(cmd, env=env),
+            _tool_argv(tool, args, env=env),
             capture_output=True,
             text=True,
             check=False,
@@ -640,7 +672,7 @@ def ensure_free_space(library_folder: str, required_bytes: int | None) -> None:
         )
 
 
-def uncompressed_size(archive_path: str) -> int | None:
+def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | None:
     """Best-effort uncompressed size in bytes (None when unknown)."""
 
     fmt = archive_format(archive_path)
@@ -651,12 +683,12 @@ def uncompressed_size(archive_path: str) -> int | None:
         except OSError:
             return None
     if fmt in ("7z", "rar"):
-        tool, _err = detect_archive_tool(archive_path)
+        tool, _err = detect_archive_tool(archive_path, library_folder=library_folder)
         if tool and "7z" in _tool_basename(tool):
             try:
-                env = build_host_open_env()
+                env = None if tool == BUNDLED_7ZZ else build_host_open_env()
                 completed = subprocess.run(
-                    host_command([tool, "l", "-slt", "-p", archive_path], env=env),
+                    _tool_argv(tool, ["l", "-slt", "-p", archive_path], env=env),
                     capture_output=True,
                     text=True,
                     check=False,
@@ -1052,10 +1084,12 @@ def install_archive(
 
     _progress("preparing")
     _ = cleanup_stale_staging(library_folder)
-    tool, tool_error = detect_archive_tool(archive_path)
+    tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
     if tool_error:
         raise ArchiveInstallError(tool_error)
-    ensure_free_space(library_folder, uncompressed_size(archive_path))
+    ensure_free_space(
+        library_folder, uncompressed_size(archive_path, library_folder=library_folder)
+    )
     staging = create_staging_dir(library_folder)
     try:
         _progress("extracting")

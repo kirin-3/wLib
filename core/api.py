@@ -5151,12 +5151,13 @@ class Api:
                 "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
             }
 
-        _tool, tool_error = detect_archive_tool(archive_path)
-
         stem = os.path.splitext(os.path.basename(archive_path))[0]
         guessed_title, guessed_version = guess_title_and_version(stem)
 
         library_folder = str(get_setting_fn("library_folder") or "")
+        _tool, tool_error = detect_archive_tool(
+            archive_path, library_folder=os.path.expanduser(library_folder)
+        )
         pattern = str(
             get_setting_fn("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
         )

@@ -112,6 +112,50 @@ def test_tool_detection_nothing_available(monkeypatch, tmp_path):
     assert error and "7-Zip" in error or "bsdtar" in error
 
 
+@pytest.mark.parametrize("extension", ["7z", "rar"])
+@pytest.mark.parametrize(
+    "flatpak,bundled,archive_visible,library_writable",
+    [
+        (True, True, True, True),
+        (True, False, True, True),
+        (False, True, True, True),
+        (True, True, False, True),
+        (True, True, True, False),
+    ],
+)
+def test_tool_detection_bundled_and_host_fallback(
+    monkeypatch, tmp_path, extension, flatpak, bundled, archive_visible, library_writable
+):
+    import core.archive_install as ai
+
+    _simulate_flatpak_archive(monkeypatch, enabled=flatpak)
+    bundled_tool = tmp_path / "7zz"
+    monkeypatch.setattr(ai, "BUNDLED_7ZZ", str(bundled_tool))
+    if bundled:
+        bundled_tool.touch()
+    archive = tmp_path / f"game.{extension}"
+    if archive_visible:
+        archive.touch()
+    library = tmp_path / "library"
+    library.mkdir()
+    monkeypatch.setattr(ai.os, "access", lambda path, mode: library_writable)
+    searched = []
+
+    def host_which(name):
+        searched.append(name)
+        return "/usr/bin/bsdtar" if name == "bsdtar" else None
+
+    monkeypatch.setattr(ai, "host_which", host_which)
+    tool, error = ai.detect_archive_tool(str(archive), library_folder=str(library))
+    if flatpak and bundled and archive_visible and library_writable:
+        assert tool == str(bundled_tool)
+        assert searched == []
+    else:
+        assert tool == "/usr/bin/bsdtar"
+        assert searched == ["7zz", "7z", "7za", "bsdtar"]
+    assert error is None
+
+
 def _make_zip(path, entries):
     with zipfile.ZipFile(path, "w") as zf:
         for name, data in entries.items():
@@ -792,7 +836,9 @@ def test_uncompressed_size_7z_with_tool(monkeypatch, tmp_path):
     archive = str(tmp_path / "game.7z")
     (tmp_path / "game.7z").touch()
 
-    monkeypatch.setattr(ai, "detect_archive_tool", lambda _p: ("/usr/bin/7z", None))
+    monkeypatch.setattr(
+        ai, "detect_archive_tool", lambda _p, **_kw: ("/usr/bin/7z", None)
+    )
 
     class _Listing:
         returncode = 0
@@ -911,6 +957,81 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     assert inner[0] == "/usr/bin/7z"
     assert inner[1] == "x"
     assert inner[2] == archive
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+def test_flatpak_tool_execution_for_listing_extraction_and_size(
+    monkeypatch, tmp_path, bundled
+):
+    import core.archive_install as ai
+
+    _simulate_flatpak_archive(monkeypatch)
+    tool = ai.BUNDLED_7ZZ if bundled else "/usr/bin/7zz"
+    monkeypatch.setattr(ai, "detect_archive_tool", lambda _p, **_kw: (tool, None))
+    if bundled:
+        def unexpected_host_env():
+            raise AssertionError("Bundled tool must inherit the sandbox environment")
+        monkeypatch.setattr(ai, "build_host_open_env", unexpected_host_env)
+    else:
+        monkeypatch.setattr(ai, "build_host_open_env", lambda: {"WLIB_TEST": "host"})
+    archive = str(tmp_path / "game.7z")
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return ai.subprocess.CompletedProcess(
+            cmd, 0, stdout=f"Path = {archive}\nPath = Game.exe\nSize = 42\n", stderr=""
+        )
+
+    monkeypatch.setattr(ai.subprocess, "run", run)
+    assert ai.list_tool_entries(tool, archive) == ["Game.exe"]
+    assert ai.extract_with_tool(tool, archive, str(tmp_path / "staging")) == 1
+    assert ai.uncompressed_size(archive) == 42
+    assert len(calls) == 4  # listing, extraction pre-check, extraction, size listing
+    for argv, kwargs in calls:
+        if bundled:
+            assert argv[0] == tool
+            assert "flatpak-spawn" not in argv
+            assert kwargs["env"] is None
+        else:
+            assert argv[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+            assert argv[argv.index("--") + 1] == tool
+            assert "--env=WLIB_TEST=host" in argv
+            assert kwargs["env"] == {"WLIB_TEST": "host"}
+
+
+def test_install_checks_destination_when_selecting_tool(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    _isolated_db(tmp_path, monkeypatch)
+    library = tmp_path / "library"
+    archive = tmp_path / "game.7z"
+    archive.touch()
+    checked_folders = []
+
+    def detect(path, *, library_folder):
+        checked_folders.append(library_folder)
+        return "/usr/bin/7z", None
+
+    def extract(tool, path, staging):
+        from pathlib import Path
+
+        (Path(staging) / "Game.exe").write_bytes(b"game")
+        return 1
+
+    monkeypatch.setattr(ai, "detect_archive_tool", detect)
+    monkeypatch.setattr(ai, "extract_with_tool", extract)
+    monkeypatch.setattr(
+        ai.subprocess, "run",
+        lambda *a, **kw: ai.subprocess.CompletedProcess(a[0], 0, stdout="Size = 4\n"),
+    )
+    result = ai.install_archive(
+        str(archive), library_folder=str(library), pattern="{title}", title="Game"
+    )
+    assert result["success"] is True
+    assert checked_folders == [str(library), str(library)]
+
+
 def test_dot_entries_rejected(tmp_path):
     for evil in (".", "./", "/"):
         with pytest.raises(ArchiveSafetyError):
@@ -1363,3 +1484,20 @@ def test_update_without_engine_keeps_stored_engine(tmp_path, monkeypatch):
     )
     assert result["destination"] == str(tmp_path / "lib/RPGM/Game/2")
     assert db.get_all_games()[0]["engine"] == "RPGM"
+
+
+def test_bundled_tool_used_when_library_folder_not_created_yet(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    bundled = tmp_path / "7zz"
+    bundled.write_bytes(b"")
+    archive = tmp_path / "Game.7z"
+    archive.write_bytes(b"")
+    monkeypatch.setattr(ai, "BUNDLED_7ZZ", str(bundled))
+    monkeypatch.setattr(ai, "is_flatpak", lambda: True)
+    monkeypatch.setattr(ai, "host_which", lambda _name: None)
+
+    tool, error = ai.detect_archive_tool(
+        str(archive), library_folder=str(tmp_path / "missing" / "library")
+    )
+    assert (tool, error) == (str(bundled), None)

@@ -113,7 +113,7 @@ def test_flatpak_manifest_declares_app_id_and_runtime():
 
     assert "app-id: io.github.kirin_3.wLib" in text
     assert "runtime: org.freedesktop.Platform" in text
-    assert "24.08" in text
+    assert "runtime-version: '26.08'" in text
     assert "buildsystem: simple" in text
 
 
