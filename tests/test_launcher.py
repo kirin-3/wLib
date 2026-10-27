@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import subprocess
 import sys
+import threading
 import time
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -14,6 +15,25 @@ from core.launcher import (
     _ElevatedProcess,
     _split_windows_command_line,
 )
+
+
+class _ThreadScopedClock:
+    """Fake monotonic clock for the creating thread only.
+
+    Tracker threads leaked by earlier tests also call the patched
+    `time.monotonic`; they get the real clock so they cannot consume values.
+    `owner_calls` counts only the creating thread's calls.
+    """
+
+    def __init__(self, values: list[float]) -> None:
+        self._owner = threading.get_ident()
+        self._real_monotonic = time.monotonic
+        self.owner_calls = MagicMock(side_effect=values)
+
+    def __call__(self) -> float:
+        if threading.get_ident() != self._owner:
+            return self._real_monotonic()
+        return self.owner_calls()
 
 
 @pytest.fixture(autouse=True)
@@ -761,14 +781,14 @@ def test_windows_launch_reports_periodic_and_final_playtime(
         return MagicMock()
 
     monkeypatch.setattr("threading.Thread", run_thread_immediately)
-    clock = MagicMock(side_effect=[100.0, 161.0, 165.0])
+    clock = _ThreadScopedClock([100.0, 161.0, 165.0])
     monkeypatch.setattr("time.monotonic", clock)
     monkeypatch.setattr(
         "time.time", MagicMock(side_effect=AssertionError("Wall clock used"))
     )
 
     def elevated_process(*_args):
-        clock.assert_not_called()  # Start timing after the elevation prompt returns.
+        clock.owner_calls.assert_not_called()  # Start timing after the elevation prompt returns.
         return process
 
     with (
@@ -1721,7 +1741,7 @@ def test_track_playtime_monitors_process_group_for_launcher_stubs(monkeypatch):
         return MagicMock()
 
     monkeypatch.setattr("threading.Thread", run_thread_immediately)
-    clock = MagicMock(side_effect=[100.0, 170.0, 180.0])
+    clock = _ThreadScopedClock([100.0, 170.0, 180.0])
     monkeypatch.setattr("time.monotonic", clock)
 
     with (
