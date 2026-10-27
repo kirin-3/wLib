@@ -534,6 +534,7 @@ watch(
         runWayland.value = g.run_wayland ? true : false;
         autoInjectCe.value = g.auto_inject_ce ? true : false;
         sandboxEnabled.value = !!g.sandbox_enabled;
+        sandboxStatus.value = null;
         void api.getSandboxStatus().then(status => { sandboxStatus.value = status; }).catch(console.error);
         customPrefix.value = g.custom_prefix || "";
         protonVersion.value = g.proton_version || "";

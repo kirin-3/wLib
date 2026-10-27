@@ -6,12 +6,22 @@ from __future__ import annotations
 import ntpath
 import os
 import subprocess
-from functools import lru_cache
+from threading import Lock
 from typing import Literal, TypedDict, cast
 from http.client import HTTPResponse
 
 from core.database import get_setting
 from core.host_platform import get_host_name, host_command, host_which
+
+
+BWRAP_NAMESPACE_OPTIONS = (
+    "--unshare-user",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--die-with-parent",
+)
 
 
 class SandboxStatus(TypedDict):
@@ -22,23 +32,39 @@ class SandboxStatus(TypedDict):
     reason: str
 
 
+_probe_cache: dict[tuple[str, str], SandboxStatus] = {}
+_probe_lock = Lock()
+
+
 def get_sandbox_status(
     custom_path: str | None = None,
     *,
     platform: str | None = None,
     recheck: bool = False,
 ) -> SandboxStatus:
-    if recheck:
-        _probe.cache_clear()
     custom = (
         str(get_setting("sandboxie_custom_path") or "")
         if custom_path is None
         else custom_path
     )
-    return _probe(get_host_name(platform), custom.strip()).copy()
+    key = (get_host_name(platform), custom.strip())
+    with _probe_lock:
+        if recheck:
+            _probe_cache.clear()
+        result = _probe_cache.get(key)
+        if result is None:
+            result = _probe(*key)
+            print(
+                f"[wLib] Sandbox check: status={result['status']} tool={result['tool']} "
+                + f"path={result['path']!r} version={result['version']!r} reason={result['reason']!r}"
+            )
+            if result["status"] == "ready":
+                if len(_probe_cache) >= 8:
+                    del _probe_cache[next(iter(_probe_cache))]
+                _probe_cache[key] = result
+        return result.copy()
 
 
-@lru_cache(maxsize=8)
 def _probe(host: str, custom: str) -> SandboxStatus:
     result: SandboxStatus = {
         "status": "missing",
@@ -98,17 +124,47 @@ def _probe(host: str, custom: str) -> SandboxStatus:
             return result
         result["version"] = version.stdout.strip()
         probe = subprocess.run(
-            host_command(["unshare", "-Ur", "true"]),
+            host_command(
+                [
+                    path,
+                    *BWRAP_NAMESPACE_OPTIONS,
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--proc",
+                    "/proc",
+                    "--dev",
+                    "/dev",
+                    "true",
+                ]
+            ),
             capture_output=True,
             text=True,
             timeout=10,
             check=False,
         )
         if probe.returncode:
+            error = probe.stderr.strip()
+            lowered = error.lower()
+            namespace_denied = any(
+                text in lowered
+                for text in (
+                    "operation not permitted",
+                    "no permissions to create new namespace",
+                    "setting up uid map",
+                )
+            ) or (
+                "permission denied" in lowered
+                and any(text in lowered for text in ("namespace", "uid map", "gid map"))
+            )
             result.update(
                 status="unusable",
-                reason="The system blocks unprivileged user namespaces. Installing bubblewrap does not fix this. "
-                + probe.stderr.strip(),
+                reason=(
+                    "The system blocks unprivileged user namespaces. Installing bubblewrap does not fix this. "
+                    + error
+                    if namespace_denied
+                    else "Bubblewrap could not start a sandbox: " + error
+                ),
             )
             return result
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -142,15 +198,7 @@ def build_bwrap_argv(
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
-    argv = [
-        bwrap,
-        "--unshare-user",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--unshare-cgroup-try",
-        "--die-with-parent",
-    ]
+    argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
     system = ["/usr", "/bin", "/sbin", "/opt"]
     system += ["/nix"] if nixos else ["/lib", "/lib64", "/lib32"]
     system += [

@@ -12,9 +12,10 @@ export const sandboxSwitchState = (target: string, status: SandboxStatus | null)
   const html = /\.html?$/i.test(target.trim());
   return {
     disabled: html,
-    needsSettings: !html && status?.status !== 'ready',
+    needsSettings: !html && status !== null && status.status !== 'ready',
     note: html ? 'Browser games open in your system browser and cannot be sandboxed.'
-      : status?.status !== 'ready' ? 'The sandbox tool is unavailable. Check Settings → Sandbox before launching.'
+      : status === null ? 'Checking sandbox tool…'
+      : status.status !== 'ready' ? 'The sandbox tool is unavailable. Check Settings → Sandbox before launching.'
       : 'Each game has separate sandbox storage. Its game folder stays writable.',
   };
 };

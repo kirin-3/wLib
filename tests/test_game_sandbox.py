@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import sys
+import subprocess
 from unittest.mock import Mock
 
 import pytest
@@ -9,15 +10,67 @@ from core import game_sandbox as sandbox
 
 @pytest.fixture(autouse=True)
 def clean_probe(monkeypatch):
-    sandbox._probe.cache_clear()
+    sandbox._probe_cache.clear()
     monkeypatch.setattr(sandbox, "get_setting", lambda _: "")
     yield
-    sandbox._probe.cache_clear()
+    sandbox._probe_cache.clear()
 
 
 def test_linux_missing(monkeypatch):
-    monkeypatch.setattr(sandbox, "host_which", lambda _: None)
+    which = Mock(return_value=None)
+    monkeypatch.setattr(sandbox, "host_which", which)
     assert sandbox.get_sandbox_status(platform="linux")["status"] == "missing"
+    assert sandbox.get_sandbox_status(platform="linux")["status"] == "missing"
+    assert which.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "stderr,namespace_denied",
+    [
+        ("bwrap: Creating new namespace failed: Operation not permitted", True),
+        ("bwrap: No permissions to create new namespace", True),
+        ("bwrap: error setting up uid map", True),
+        ("bwrap: Creating new namespace: Permission denied", True),
+        ("bwrap: Can't bind mount /: Permission denied", False),
+        ("bwrap: Can't mount proc: Invalid argument", False),
+    ],
+)
+def test_linux_bwrap_probe_failure(monkeypatch, stderr, namespace_denied):
+    monkeypatch.setattr(sandbox, "host_which", lambda _: "/usr/bin/bwrap")
+    run = Mock(
+        side_effect=[
+            Mock(returncode=0, stdout="bubblewrap 0.13.1", stderr=""),
+            Mock(returncode=1, stdout="", stderr=stderr + "\n"),
+        ]
+    )
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+    result = sandbox.get_sandbox_status(platform="linux")
+    assert result["status"] == "unusable"
+    assert result["path"] == "/usr/bin/bwrap"
+    assert result["version"] == "bubblewrap 0.13.1"
+    assert stderr in result["reason"]
+    if namespace_denied:
+        assert "The system blocks unprivileged user namespaces." in result["reason"]
+        assert "Installing bubblewrap does not fix this." in result["reason"]
+    else:
+        assert result["reason"] == "Bubblewrap could not start a sandbox: " + stderr
+
+
+def test_linux_bwrap_probe_timeout(monkeypatch):
+    monkeypatch.setattr(sandbox, "host_which", lambda _: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        sandbox.subprocess,
+        "run",
+        Mock(
+            side_effect=[
+                Mock(returncode=0, stdout="bubblewrap 0.13.1", stderr=""),
+                subprocess.TimeoutExpired("bwrap", 10),
+            ]
+        ),
+    )
+    result = sandbox.get_sandbox_status(platform="linux")
+    assert result["status"] == "unusable"
+    assert "timed out" in result["reason"]
 
 
 @pytest.mark.parametrize(
@@ -43,10 +96,63 @@ def test_linux_probe_cache_and_flatpak(
     assert result["status"] == status
     count = run.call_count
     assert sandbox.get_sandbox_status(platform="linux") == result
-    assert run.call_count == count
+    assert run.call_count == count * (1 if status == "ready" else 2)
     sandbox.get_sandbox_status(platform="linux", recheck=True)
-    assert run.call_count == count * 2
+    assert run.call_count == count * (2 if status == "ready" else 3)
     assert run.call_args.args[0][:2] == ["flatpak-spawn", "--host"]
+    if version_code == 0:
+        assert run.call_args.args[0][2:] == [
+            "/usr/bin/bwrap",
+            *sandbox.BWRAP_NAMESPACE_OPTIONS,
+            "--ro-bind",
+            "/",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "true",
+        ]
+    assert run.call_args.kwargs["timeout"] == 10
+
+
+def test_ready_cache_returns_copies_and_serializes_probes(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(sandbox, "host_which", lambda _: "/usr/bin/bwrap")
+    run = Mock(return_value=Mock(returncode=0, stdout="bubblewrap 0.13.1", stderr=""))
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(
+            pool.map(lambda _: sandbox.get_sandbox_status(platform="linux"), range(8))
+        )
+    assert all(result["status"] == "ready" for result in results)
+    assert run.call_count == 2
+    results[0]["status"] = "missing"
+    assert sandbox.get_sandbox_status(platform="linux")["status"] == "ready"
+
+
+@pytest.mark.parametrize("status", ["missing", "unusable", "ready"])
+def test_only_real_probes_are_logged(monkeypatch, capsys, status):
+    reason = "" if status == "ready" else "Probe failed\nwith details"
+    result = dict(
+        status=status,
+        tool="bwrap",
+        path="/usr/bin/bwrap",
+        version="0.13",
+        reason=reason,
+    )
+    monkeypatch.setattr(sandbox, "_probe", Mock(return_value=result))
+    sandbox.get_sandbox_status(platform="linux")
+    line = capsys.readouterr().out
+    assert line == (
+        f"[wLib] Sandbox check: status={status} tool=bwrap "
+        f"path='/usr/bin/bwrap' version='0.13' reason={reason!r}\n"
+    )
+    sandbox.get_sandbox_status(platform="linux")
+    assert capsys.readouterr().out == ("" if status == "ready" else line)
+    sandbox.get_sandbox_status(platform="linux", recheck=True)
+    assert capsys.readouterr().out == line
 
 
 @pytest.mark.parametrize(

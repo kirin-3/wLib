@@ -2136,6 +2136,49 @@ def test_sandbox_unavailable_never_launches(monkeypatch, status, code):
     popen.assert_not_called()
 
 
+def test_sandbox_launch_detects_bwrap_installed_after_missing(monkeypatch, tmp_path):
+    from core import game_sandbox
+
+    game_sandbox._probe_cache.clear()
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(game_sandbox, "get_host_name", lambda _: "linux")
+    monkeypatch.setattr(game_sandbox, "get_setting", lambda _: "")
+    which = MagicMock(return_value=None)
+    monkeypatch.setattr(game_sandbox, "host_which", which)
+    monkeypatch.setattr(game_sandbox, "host_command", lambda cmd: cmd)
+    monkeypatch.setattr(
+        game_sandbox.subprocess,
+        "run",
+        MagicMock(
+            return_value=MagicMock(returncode=0, stdout="bubblewrap 0.13.1", stderr="")
+        ),
+    )
+    launcher = Launcher()
+    try:
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("os.access", return_value=True),
+            patch("os.makedirs"),
+            patch("subprocess.Popen") as popen,
+            patch("threading.Thread"),
+        ):
+            first = launcher.launch(
+                "/games/game.sh", game_id=12, sandbox_enabled=True, launch_mode="native"
+            )
+            assert first["code"] == "sandbox_missing"
+            popen.assert_not_called()
+            which.return_value = "/usr/bin/bwrap"
+            second = launcher.launch(
+                "/games/game.sh", game_id=12, sandbox_enabled=True, launch_mode="native"
+            )
+        assert second["success"], second
+        assert which.call_count == 2
+        assert popen.call_args.args[0][0] == "/usr/bin/bwrap"
+        assert launcher._running[12].sandboxed
+    finally:
+        game_sandbox._probe_cache.clear()
+
+
 @pytest.mark.parametrize(
     "existing_sandboxed,new_sandboxed", [(True, False), (False, True), (True, True)]
 )
