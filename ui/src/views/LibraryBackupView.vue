@@ -83,7 +83,10 @@ const metadataSectionOption: SectionOption = {
     "Updates title, developer, engine, tags, F95 URL, versions, and cover reference.",
   icon: IconDatabaseExport,
 };
-const importSectionOptions: SectionOption[] = [metadataSectionOption, ...sectionOptions];
+const coversSectionOption: SectionOption = {
+  id: "covers", label: "Covers", description: "Copies local cover images onto this device.", icon: IconFolder,
+};
+const importSectionOptions: SectionOption[] = [metadataSectionOption, ...sectionOptions, coversSectionOption];
 
 const defaultExportSections: LibraryBackupSection[] = [
   "user_state",
@@ -99,8 +102,10 @@ const externalSources: { id: ExternalLibrarySource; label: string }[] = [
   { id: "atlas", label: "Atlas" },
   { id: "xlibrary", label: "XLibrary" },
   { id: "f69", label: "f69" },
+  { id: "playnite", label: "Playnite" },
 ];
 const externalImportSectionIds: LibraryBackupSection[] = [
+  "covers",
   "user_state",
   "executable_paths",
   "launch_targets",
@@ -358,7 +363,9 @@ const inspectExternal = async () => {
       externalPath.value,
     );
     if (!result || result.success === false) {
-      externalError.value = result?.error || "Could not inspect library.";
+      externalError.value = result?.error_code === "source_locked"
+        ? "Close Playnite and try again."
+        : result?.error || "Could not inspect library.";
       return;
     }
     externalPreview.value = result;
@@ -731,6 +738,7 @@ const runImport = async () => {
             <span>Ambiguous: {{ externalCounts?.ambiguous_games ?? 0 }}</span>
             <span>Skipped: {{ externalCounts?.skipped_no_identity ?? 0 }}</span>
             <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
+            <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCounts?.covers_to_copy ?? 0 }}</span>
           </div>
 
           <div class="backup-field">

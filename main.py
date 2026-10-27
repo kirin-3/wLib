@@ -893,6 +893,27 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         from urllib.parse import urlparse as _urlparse
 
+        if _urlparse(self.path).path.startswith("/covers/"):
+            from core.game_covers import COVER_TYPES, cover_path
+
+            name = _urlparse(self.path).path.removeprefix("/covers/")
+            path = cover_path(name)
+            try:
+                if path is None:
+                    raise FileNotFoundError
+                data = path.read_bytes()
+            except OSError:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", COVER_TYPES[path.suffix[1:]])
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+            self.end_headers()
+            _ = self.wfile.write(data)
+            return
+
         if _urlparse(self.path).path == "/api/bridge":
             self._handle_bridge_upgrade()
             return

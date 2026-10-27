@@ -495,6 +495,7 @@ def init_db() -> None:
         }
 
         new_columns = [
+            ("cover_local", "TEXT"),
             ("tags", "TEXT DEFAULT ''"),
             ("rating", "TEXT DEFAULT ''"),
             ("command_line_args", "TEXT DEFAULT ''"),
@@ -978,6 +979,34 @@ def delete_game(game_id: int) -> None:
         cursor = conn.cursor()
         _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
         conn.commit()
+
+
+def set_game_local_cover(
+    game_id: int, name: str | None, *, connection: sqlite3.Connection | None = None
+) -> str:
+    """Set device-only cover state, without touching any sync columns."""
+    if connection is None:
+        with closing(get_connection()) as conn:
+            old = set_game_local_cover(game_id, name, connection=conn)
+            conn.commit()
+            return old
+    row = cast(
+        sqlite3.Row | tuple[object, ...] | None,
+        connection.execute(
+            "SELECT cover_local FROM games WHERE id = ?", (game_id,)
+        ).fetchone(),
+    )
+    if row is None:
+        raise ValueError("Game was not found")
+    old = str(cast(object, row[0]) or "")
+    _ = connection.execute(
+        "UPDATE games SET cover_local = ? WHERE id = ?", (name, game_id)
+    )
+    return old
+
+
+def clear_game_local_cover(game_id: int) -> str:
+    return set_game_local_cover(game_id, None)
 
 
 def set_sandbox_for_all_games(enabled: bool) -> int:

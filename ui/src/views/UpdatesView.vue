@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import {
@@ -674,8 +675,9 @@ onUnmounted(() => {
               :title="`Open ${game.title}`"
             >
               <img
-                v-if="game.cover_image_path"
-                :src="game.cover_image_path"
+                v-if="gameCoverSrc(game)"
+                :src="gameCoverSrc(game)"
+                @error="gameCoverError($event, game)"
                 class="w-10 h-10 rounded-lg object-cover shrink-0"
               />
               <div

@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState } from "../../utils/sandbox";
@@ -142,6 +143,40 @@ const version = ref("");
 const finishedVersion = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
+const localCoverUrl = ref("");
+const localCoverName = ref("");
+const coverBusy = ref(false);
+const coverError = ref("");
+const coverGame = computed(() => ({ cover_local_url: localCoverUrl.value, cover_image_path: coverImage.value }));
+const displayedCover = computed(() => gameCoverSrc(coverGame.value));
+const changeLocalCover = async (remove = false) => {
+  if (!props.game || coverBusy.value) return;
+  const gameId = props.game.id;
+  coverBusy.value = true;
+  coverError.value = "";
+  try {
+    const result = remove ? await api.clearGameCover(gameId) : await api.chooseGameCover(gameId);
+    if (props.game?.id !== gameId) return;
+    if (!result.success) {
+      coverError.value = result.error || "Could not update local cover.";
+      return;
+    }
+    if ("cancelled" in result && result.cancelled) return;
+    if (result.game) {
+      localCoverUrl.value = result.game.cover_local_url || "";
+      localCoverName.value = result.game.cover_local || "";
+      coverImageFailed.value = false;
+    }
+    // The API dispatches wlib-refresh-library; keep this modal and unsaved edits open.
+  } catch (error) {
+    coverError.value = String(error);
+  } finally {
+    coverBusy.value = false;
+  }
+};
+const onCoverError = (event: Event) => {
+  coverImageFailed.value = !gameCoverError(event, coverGame.value);
+};
 const playStatus = ref<PlayStatus>(DEFAULT_PLAY_STATUS);
 const isFavorite = ref(false);
 const tags = ref<string[]>([]);
@@ -168,9 +203,9 @@ const coverImageFailed = ref(false);
 const lightboxIndex = ref<number | null>(null);
 const failedScreenshots = ref<Set<string>>(new Set());
 const gameScreenshots = computed(() => props.game?.screenshots ?? []);
-const hasCoverImage = computed(() => !!coverImage.value && !coverImageFailed.value);
+const hasCoverImage = computed(() => !!displayedCover.value && !coverImageFailed.value);
 const galleryImages = computed(() => [
-  ...(hasCoverImage.value ? [coverImage.value] : []),
+  ...(hasCoverImage.value ? [displayedCover.value] : []),
   ...gameScreenshots.value,
 ]);
 const hasGallery = computed(() => galleryImages.value.length > 0);
@@ -511,7 +546,7 @@ const hasUnsavedChanges = computed(() =>
   JSON.stringify(quickFields()) !== JSON.stringify(savedQuickFields.value),
 );
 
-watch(coverImage, () => { coverImageFailed.value = false; });
+watch(displayedCover, () => { coverImageFailed.value = false; });
 
 const lastSyncedId = ref<number | null>(null);
 
@@ -519,8 +554,12 @@ watch(
   () => [props.modelValue, props.game] as const,
   ([isOpen, g]) => {
     if (isOpen && g && typeof g.id === "number") {
+      localCoverUrl.value = g.cover_local_url || "";
+      localCoverName.value = g.cover_local || "";
       if (g.id !== lastSyncedId.value) {
         lastSyncedId.value = g.id;
+        coverError.value = "";
+        coverImageFailed.value = false;
         title.value = g.title || "";
         exePath.value = g.exe_path || "";
         f95Url.value = g.f95_url || "";
@@ -1666,10 +1705,10 @@ const removeAttachment = async (name: string) => {
             aria-label="View cover and screenshots"
             @click="openLightboxAt(0)"
           >
-            <img :src="coverImage" :alt="`${title || game.title} cover`" @error="coverImageFailed = true" />
+            <img :src="displayedCover" :alt="`${title || game.title} cover`" @error="onCoverError" />
           </button>
           <div v-else class="game-cover">
-            <img v-if="coverImage && !coverImageFailed" :src="coverImage" :alt="`${title || game.title} cover`" @error="coverImageFailed = true" />
+            <img v-if="hasCoverImage" :src="displayedCover" :alt="`${title || game.title} cover`" @error="onCoverError" />
             <IconDeviceGamepad2Filled v-else class="h-10 w-10" role="img" aria-label="No cover image" />
           </div>
           <div class="min-w-0">
@@ -2510,6 +2549,11 @@ const removeAttachment = async (name: string) => {
                 placeholder="https://..."
                 class="modal-input w-full"
               />
+              <div class="flex flex-wrap gap-2 mt-2">
+                <button type="button" class="modal-btn" :disabled="coverBusy" @click="changeLocalCover()">Choose image file…</button>
+                <button v-if="localCoverName" type="button" class="modal-btn" :disabled="coverBusy" @click="changeLocalCover(true)">Remove local cover</button>
+              </div>
+              <p v-if="coverError" role="alert" class="text-sm mt-2" style="color: var(--danger-text)">{{ coverError }}</p>
             </div>
           </div>
         </section>
@@ -2688,6 +2732,7 @@ const removeAttachment = async (name: string) => {
     </div>
     <ScreenshotLightbox
       :images="galleryImages"
+      :cover-game="coverGame"
       :start-index="lightboxIndex"
       @close="closeLightbox"
     />

@@ -331,3 +331,36 @@ The Linux-only `companion_tools` capability controls launching; CRUD remains ava
 The launcher starts tools through `host_command` in separate sessions, records them in `_tools` under the running lock, and reaps them independently of game playtime. A tool never keeps a game marked running. On game exit or Stop, only that game's Wine tool groups receive SIGTERM followed by SIGKILL after two seconds; Native and Command tools keep running and are forgotten. Cleanup never uses wineserver to terminate tool groups, so another game sharing the prefix is spared. Tool signalling rejects non-integer IDs, IDs <= 1 and the launcher's own group. Shutdown leaves games and tools running; tests disable atexit registration for mocked launchers.
 
 Backup inspection summarizes tool definitions and warns about malformed entries or foreign-host paths. Import counts `companion_tools_updated` and `companion_tools_skipped`, imports definitions before games in the same transaction, and merges by case-insensitive name. Overwrite preserves local IDs and replaces game overrides only when their field is present. Fill-missing retains matching definitions and existing overrides. Missing files generate migration warnings; definitions with host-compatible paths can still be imported and edited on the destination.
+
+## Playnite imports and local covers
+
+`core/external_import.py` accepts `playnite`, using the dependency-free LiteDB 4
+reader in `core/litedb.py`. Pick `games.db` with its sibling database files,
+`database.json` and `files/` directory. On Windows, detection reads Playnite's
+`config.json` DatabasePath, then the default AppData library. Linux requires a
+picked or copied library. Database format 4 is supported. Close Playnite first:
+journal files and sharing failures return `source_locked`. Only the seven
+library collections are snapshotted, and add-on settings are never read.
+
+Playnite links, F95 plugin versions and prefixes, completion status, notes,
+collections, seconds of playtime, dates and user scores are translated into the
+existing import pipeline. File play actions support install variables and extra
+launch targets; foreign-OS paths are dropped. An F95 thread, adult store/catalog
+link (DLsite, Fanza, VNDB, Ryuugames), or host executable qualifies a game for
+import. Steam or itch.io alone does not.
+
+`core/game_covers.py` validates JPEG, PNG, WebP and GIF magic bytes and enforces
+20 MiB before and during copying. Atomic copies use UUID filenames under
+`<data dir>/covers/`. `choose_game_cover(game_id)` opens the image picker;
+`set_game_cover_file(game_id, path)` copies a chosen image, and
+`clear_game_cover(game_id)` removes it. Successful set/clear responses include
+`game`; cancelling the picker returns `cancelled: true`. Game payloads include
+`cover_local_url` only when the file exists and the extension server is bound.
+Replacement, removal and game deletion clean up the old file.
+
+External previews expose `covers` only when source games carry `cover_file`,
+and report `covers_to_copy`. Invalid images become per-game warnings. Covers
+copy inside the database import transaction, roll back on failure and remove
+replaced files only after commit. Fill-missing keeps existing local covers.
+Remote cover URLs remain metadata; local covers and their references never
+export or sync, and F95 metadata refreshes leave them alone.

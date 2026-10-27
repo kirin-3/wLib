@@ -22,6 +22,16 @@ Because of that restriction, the extension does not call `GET /api/check` direct
 
 ## REST API Endpoints
 
+### Local cover images
+**`GET /covers/<name>`** serves a file from `<data dir>/covers/`. Names must match
+`^[0-9a-f]{32}\.(jpg|png|webp|gif)$`; invalid names, missing files, traversal
+attempts and `/covers/` receive 404. The Host check still applies. This read-only
+route precedes the Origin gate to allow image loading in both packaged and dev
+views; it adds no CORS headers. Responses include the image Content-Type,
+`X-Content-Type-Options: nosniff` and
+`Cache-Control: private, max-age=31536000, immutable`. Replacement uses a fresh
+random name. No listing endpoint exists.
+
 ### 1. Check if Game Exists 
 **`GET /api/check?url={page_url}&id={source:id}`**
 Allows the extension to decorate an F95Zone page based on ownership.

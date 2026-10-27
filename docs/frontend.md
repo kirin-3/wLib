@@ -303,3 +303,19 @@ context action use the F95 URL when available, otherwise the first store
 link; the action is hidden when neither exists. Both themes use the shared
 modal and action styles. Browser mocks store links and apply the same exact-ID
 duplicate/attachment rules as the backend.
+
+## Local covers and Playnite import
+
+`utils/gameCover.ts` provides `gameCoverSrc` and `gameCoverError`. The library
+(grid, banner and list), Updates, game detail and the screenshot lightbox prefer
+`cover_local_url`, falling back once to `cover_image_path` after a load error.
+The backend supplies the local URL. The game detail cover field offers
+“Choose image file…” and “Remove local cover”, which apply immediately, refresh
+the library and show inline errors without saving other form edits.
+`services/api.ts` mirrors `chooseGameCover`, `setGameCoverFile` and
+`clearGameCover`, with browser mocks.
+
+`LibraryBackupView.vue` lists Playnite under “From another app”. Its preview
+shows a checked Covers option only when offered by the source, plus the number
+of covers to copy. Locked libraries ask the user to close Playnite. The
+Playnite browser mock provides the committed fixture's preview counts.

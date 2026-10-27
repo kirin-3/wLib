@@ -1401,9 +1401,83 @@ class Api:
         with self._metadata_lock:
             pending = set(self._metadata_pending)
         for game in games:
+            self._add_local_cover_url(game)
             if game.get("id") in pending:
                 game["metadata_pending"] = True
         return games
+
+    def _add_local_cover_url(self, game: dict[str, object]) -> None:
+        from core.game_covers import cover_path
+
+        path = cover_path(game.get("cover_local"))
+        if self.library_sync.server_available and path is not None and path.is_file():
+            game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
+
+    def set_game_cover_file(
+        self, game_id: object = None, path: object = ""
+    ) -> dict[str, object]:
+        from core.game_covers import set_cover
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or database.get_game(coerced_id) is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        if not isinstance(path, str) or not path.strip():
+            return {"success": False, "error": "Choose an image file."}
+        try:
+            _ = set_cover(coerced_id, os.path.expanduser(path))
+            game = database.get_game(coerced_id)
+            if game is not None:
+                self._add_local_cover_url(game)
+            return {"success": True, "game": game}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def choose_game_cover(self, game_id: object = None) -> dict[str, object]:
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or database.get_game(coerced_id) is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            picker = (
+                self._browse_linux_dialog
+                if sys.platform.startswith("linux")
+                else self._browse_qt_dialog
+            )
+            selected = picker(
+                "file",
+                file_types=(
+                    "Images (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                    "All files (*.*)",
+                ),
+            )
+            if not selected:
+                return {"success": True, "cancelled": True}
+            return self.set_game_cover_file(coerced_id, selected)
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def clear_game_cover(self, game_id: object = None) -> dict[str, object]:
+        from core.game_covers import clear_cover
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or database.get_game(coerced_id) is None:
+            return {
+                "success": False,
+                "error": "Game was not found",
+                "error_code": "game_not_found",
+            }
+        try:
+            clear_cover(coerced_id)
+            return {"success": True, "game": database.get_game(coerced_id)}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
     # ==========================
     # Collections
@@ -2045,7 +2119,7 @@ class Api:
     def delete_game(self, game_id: object = None) -> dict[str, object]:
         import sqlite3
 
-        from core.database import delete_game, get_connection
+        from core.database import delete_game, get_connection, get_game
 
         coerced_id = self._coerce_db_id(game_id)
         if coerced_id is None:
@@ -2056,6 +2130,7 @@ class Api:
             }
 
         try:
+            previous_game = get_game(coerced_id)
             with closing(get_connection()) as conn:
                 exists = cast(
                     object,
@@ -2079,6 +2154,13 @@ class Api:
             remove_game_attachments(coerced_id)
         except Exception as exc:
             print(f"[wLib] Failed to remove attachments for game {coerced_id}: {exc}")
+        try:
+            from core.game_covers import delete_cover_file
+
+            if previous_game:
+                delete_cover_file(previous_game.get("cover_local"))
+        except Exception as exc:
+            print(f"[wLib] Failed to remove cover for game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         return {"success": True}

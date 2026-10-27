@@ -75,7 +75,8 @@ Stores the library records and their associated configuration flags.
 | `last_played_version` | `TEXT DEFAULT ''` | Launch-time version whose normalized session durations reached 300 seconds. Empty for existing games until played. Written by play ticks and user-state import. |
 | `skipped_version` | `TEXT DEFAULT ''` | Latest release the user chose to skip. `update_game` accepts it and clears it when the installed version changes after normalization. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |
-| `cover_image_path` | `TEXT` | Path to local cover image. |
+| `cover_image_path` | `TEXT` | Remote cover image URL. |
+| `cover_local` | `TEXT` | Device-only random filename under `<data dir>/covers/`; NULL when unset. |
 | `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
 | `rating` | `TEXT` | Overall user rating. |
 | `rating_graphics` | `REAL` | Graphics rating (0-5). |
@@ -236,3 +237,12 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 - **Journal user state**: `last_played_version`, `skipped_version`, and `play_sessions` travel with user state. Sessions include only version, start/end time, and duration. Imports replace sessions only when that key is present, and fill-missing imports keep a game's existing sessions; missing scalar fields also preserve local values. The additive fields keep format version 1. Sync uses the same replacement rule; it does not merge sessions from two machines.
 - **Game attachments**: attached PDFs live under `<data dir>/attachments/<game id>/` and are local-only; exports and sync never include PDF data or attachment names. Deleting a game removes its folder; mirror imports and sync deletions prune orphan numeric folders after the commit, and startup prunes folders for IDs not in the library. A reset or replaced database therefore removes orphan PDFs (IDs are `AUTOINCREMENT` and never reused).
 - **Linux/Windows migration**: Per-game paths and runtime options can be imported without automatic path conversion. Update missing executable/launch-target paths on the destination and select Auto Detect for Windows launches. Foreign global path settings (for example, a Linux Wine prefix imported on Windows) are reported as `foreign_path` during inspection and skipped during import, preserving the destination setting.
+
+### Device-local covers
+
+`init_db()` adds `cover_local` without rebuilding existing tables. Only
+`set_game_local_cover` and `clear_game_local_cover` write it; the generic
+`update_game` allowlist, `SYNC_GAME_COLUMNS`, and backup/import field lists omit
+it. Changes to this column do not advance `sync_local_modified_at`. The
+`covers/` folder is created on first use. Files and references are excluded
+from exports and sync; applying backups or sync preserves existing covers.

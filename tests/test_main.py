@@ -56,6 +56,43 @@ def _make_extension_handler(path, matching_game=None, headers=None):
     return handler
 
 
+def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch):
+    from core import database
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    folder = tmp_path / "covers"
+    folder.mkdir()
+    name = "a" * 32 + ".png"
+    (folder / name).write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    handler = _make_extension_handler(
+        "/covers/" + name, headers={"Origin": "https://untrusted.example"}
+    )
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    headers = dict(call.args for call in handler.send_header.call_args_list)
+    assert headers["Content-Type"] == "image/png"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert "immutable" in headers["Cache-Control"]
+    assert "Access-Control-Allow-Origin" not in headers
+    assert handler.wfile.getvalue() == (folder / name).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/covers/../wlib.db",
+        "/covers/",
+        "/covers/" + "b" * 32 + ".jpg",
+        "/covers/%2e%2e/wlib.db",
+    ],
+)
+def test_cover_route_rejects_invalid_names(path):
+    handler = _make_extension_handler(path)
+    handler.send_error = MagicMock()
+    handler.do_GET()
+    handler.send_error.assert_called_once_with(404)
+
+
 def test_dropbox_callback_without_origin(monkeypatch):
     handler = _make_extension_handler("/dropbox/callback?code=one&state=two")
     handler.server = MagicMock()

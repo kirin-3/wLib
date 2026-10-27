@@ -52,6 +52,7 @@ __all__ = [
 SCRYPT_N = 131072
 SYNC_SECTIONS = ("metadata", "user_state", "settings_general")
 
+SECTION_COVERS = "covers"
 SECTION_METADATA = "metadata"
 SECTION_USER_STATE = "user_state"
 SECTION_LAUNCH_CONFIG = "launch_config"
@@ -75,7 +76,7 @@ DEFAULT_EXPORT_SECTIONS = (
     SECTION_LAUNCH_TARGETS,
     SECTION_SETTINGS_GENERAL,
 )
-SUPPORTED_IMPORT_SECTIONS = (SECTION_METADATA, *SUPPORTED_SECTIONS)
+SUPPORTED_IMPORT_SECTIONS = (SECTION_METADATA, *SUPPORTED_SECTIONS, SECTION_COVERS)
 
 METADATA_FIELDS = (
     "title",
@@ -643,7 +644,9 @@ def _backup_game_carries_section(game: Mapping[str, object], section: str) -> bo
     return bool(_coerce_mapping(game[section]))
 
 
-def _available_backup_sections(backup: Mapping[str, object]) -> list[str]:
+def _available_backup_sections(
+    backup: Mapping[str, object], *, source_covers: bool = False
+) -> list[str]:
     selected = set(
         str(section) for section in _coerce_sequence(backup.get("selected_sections"))
     )
@@ -666,6 +669,8 @@ def _available_backup_sections(backup: Mapping[str, object]) -> list[str]:
     if "paths" in settings and SECTION_SETTINGS_PATHS not in available:
         available.append(SECTION_SETTINGS_PATHS)
 
+    if source_covers and any(game.get("cover_file") for game in games):
+        available.append(SECTION_COVERS)
     return available
 
 
@@ -873,6 +878,45 @@ def _build_import_plan(
         _match_imported_game(_coerce_mapping(game), local_games, sync=sync)
         for game in _coerce_sequence(backup.get("games"))
     ]
+
+
+def _plan_cover_files(
+    plan: list[dict[str, object]],
+    sections: set[str],
+    merge_mode: str,
+    warnings: list[dict[str, object]],
+) -> dict[int, str]:
+    from core.game_covers import validate_cover_file
+
+    covers: dict[int, str] = {}
+    if SECTION_COVERS not in sections:
+        return covers
+    for item in plan:
+        if item.get("status") == "ambiguous":
+            continue
+        game = _coerce_mapping(item.get("game"))
+        path = _coerce_text(game.get("cover_file"))
+        if not path:
+            continue
+        if merge_mode == "fill_missing" and item.get("status") == "matched":
+            local = database.get_game(int(str(item["local_id"])))
+            if local and local.get("cover_local"):
+                continue
+        try:
+            _ = validate_cover_file(path)
+        except (OSError, ValueError) as exc:
+            title = _coerce_text(_game_section(game, SECTION_METADATA).get("title"))
+            warnings.append(
+                {
+                    "type": "invalid_cover",
+                    "scope": "game",
+                    "title": title,
+                    "message": f"{title or 'Game'}: cover skipped: {exc}",
+                }
+            )
+        else:
+            covers[id(item)] = path
+    return covers
 
 
 def _path_warning(
@@ -1551,10 +1595,11 @@ def apply_library_backup(
     sync_settings: Mapping[str, str] | None = None,
     expected_local_modified_at: str | None = None,
     merge_mode: str = "overwrite",
+    source_covers: bool = False,
 ) -> dict[str, object]:
     backup = validate_library_backup(backup)
     merge_mode = _resolve_merge_mode(options, merge_mode)
-    available_sections = _available_backup_sections(backup)
+    available_sections = _available_backup_sections(backup, source_covers=source_covers)
     sections = _select_sections(
         options,
         default_sections=available_sections,
@@ -1573,6 +1618,8 @@ def apply_library_backup(
     tools_updated = tools_skipped = 0
     created_ids: list[int] = []
     updated_ids: list[int] = []
+    copied_covers: list[str] = []
+    replaced_covers: list[str] = []
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -1590,6 +1637,7 @@ def apply_library_backup(
                         "sync_conflict",
                     )
             plan = _build_import_plan(backup, sync=sync)
+            cover_files = _plan_cover_files(plan, sections, merge_mode, warnings)
             keep_ids = {
                 int(str(item["local_id"]))
                 for item in plan
@@ -1602,8 +1650,6 @@ def apply_library_backup(
                 )
             original_ids = {int(str(game["id"])) for game in _local_games()}
             if mirror:
-                from core import database
-
                 snapshot_dir = os.path.join(os.path.dirname(database.DB_PATH), "sync")
                 os.makedirs(snapshot_dir, exist_ok=True)
                 _ = write_library_backup(
@@ -1670,6 +1716,28 @@ def apply_library_backup(
                     created += 1
                     created_ids.append(game_id)
 
+                if id(item) in cover_files:
+                    from core.game_covers import copy_cover_file
+
+                    row = cast(
+                        sqlite3.Row | None,
+                        cursor.execute(
+                            "SELECT cover_local FROM games WHERE id = ?", (game_id,)
+                        ).fetchone(),
+                    )
+                    if not (
+                        merge_mode == "fill_missing"
+                        and row is not None
+                        and row["cover_local"]
+                    ):
+                        name = copy_cover_file(cover_files[id(item)])
+                        copied_covers.append(name)
+                        replaced_covers.append(
+                            database.set_game_local_cover(
+                                game_id, name, connection=conn
+                            )
+                        )
+
                 metadata = _game_section(imported_game, SECTION_METADATA)
                 if "links" in metadata and (
                     local_id is None or SECTION_METADATA in sections
@@ -1724,6 +1792,14 @@ def apply_library_backup(
             )
             if mirror:
                 for game_id in original_ids - keep_ids:
+                    row = cast(
+                        sqlite3.Row | None,
+                        cursor.execute(
+                            "SELECT cover_local FROM games WHERE id = ?", (game_id,)
+                        ).fetchone(),
+                    )
+                    if row is not None:
+                        replaced_covers.append(str(cast(object, row["cover_local"]) or ""))
                     _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
                     deleted += 1
             for key, value in (sync_settings or {}).items():
@@ -1735,8 +1811,16 @@ def apply_library_backup(
             conn.commit()
         except Exception:
             conn.rollback()
+            from core.game_covers import delete_cover_file
+
+            for name in copied_covers:
+                delete_cover_file(name)
             raise
 
+    from core.game_covers import delete_cover_file
+
+    for name in replaced_covers:
+        delete_cover_file(name)
     if deleted > 0:
         try:
             from core.game_attachments import prune_orphan_attachments
@@ -1747,6 +1831,7 @@ def apply_library_backup(
             print(f"[wLib] Failed to prune orphan attachments: {exc}")
 
     return {
+        "covers_copied": len(copied_covers),
         "created": created,
         "deleted": deleted,
         "updated": updated,
@@ -1764,6 +1849,7 @@ def apply_library_backup(
 
 
 EXTERNAL_IMPORT_SECTIONS = (
+    SECTION_COVERS,
     SECTION_METADATA,
     SECTION_USER_STATE,
     SECTION_EXECUTABLE_PATHS,
@@ -1798,17 +1884,19 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
     backup, stats = read_external_library(source, path)
     plan = _build_import_plan(backup)
     warnings = _build_backup_warnings(backup)
+    cover_files = _plan_cover_files(plan, {SECTION_COVERS}, "overwrite", warnings)
     ambiguous_games = [item for item in plan if item.get("status") == "ambiguous"]
 
     return {
         "source": str(source or "").strip().lower(),
         "schema_version": stats.get("schema_version", ""),
-        "available_sections": _available_backup_sections(backup),
+        "available_sections": _available_backup_sections(backup, source_covers=True),
         "counts": {
             "total_games": len(plan) + int(str(stats.get("skipped_no_identity", 0))),
             "matched_games": sum(1 for item in plan if item.get("status") == "matched"),
             "new_games": sum(1 for item in plan if item.get("status") == "new"),
             "ambiguous_games": len(ambiguous_games),
+            "covers_to_copy": len(cover_files),
             "skipped_no_identity": int(str(stats.get("skipped_no_identity", 0))),
             "dropped_paths": int(str(stats.get("dropped_paths", 0))),
             "warnings": len(warnings),
@@ -1851,7 +1939,7 @@ def import_external_library(
     from core.external_import import read_external_library
 
     backup, stats = read_external_library(source, path)
-    result = apply_library_backup(backup, _external_import_options(options))
+    result = apply_library_backup(backup, _external_import_options(options), source_covers=True)
     if SECTION_USER_STATE in _coerce_sequence(result.get("selected_sections")):
         _register_imported_collections(backup)
     skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))

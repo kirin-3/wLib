@@ -355,6 +355,7 @@ export interface RemoveGameAttachmentResponse extends ApiBasicResponse {
 
 export type LibraryBackupSection =
   | "metadata"
+  | "covers"
   | "user_state"
   | "launch_config"
   | "executable_paths"
@@ -450,7 +451,7 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   updated_ids?: number[];
 }
 
-export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary" | "f69";
+export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary" | "f69" | "playnite";
 export type ExternalLibraryMergeMode = "overwrite" | "fill_missing";
 
 export interface ExternalLibraryDetectResponse extends ApiBasicResponse {
@@ -461,6 +462,7 @@ export interface ExternalLibraryDetectResponse extends ApiBasicResponse {
 }
 
 export interface ExternalLibraryCounts {
+  covers_to_copy?: number;
   total_games: number;
   matched_games: number;
   new_games: number;
@@ -546,6 +548,8 @@ export interface GameRecord {
   version?: string;
   latest_version?: string;
   cover_image_path?: string;
+  cover_local?: string | null;
+  cover_local_url?: string;
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
@@ -1490,6 +1494,18 @@ class ApiService {
     return this.invoke<GameRecord[]>("get_games");
   }
 
+  async chooseGameCover(gameId: number): Promise<ApiBasicResponse & { cancelled?: boolean; game?: GameRecord }> {
+    return this.invokeLibraryChange("choose_game_cover", gameId);
+  }
+
+  async setGameCoverFile(gameId: number, path: string): Promise<ApiBasicResponse & { game?: GameRecord }> {
+    return this.invokeLibraryChange("set_game_cover_file", gameId, path);
+  }
+
+  async clearGameCover(gameId: number): Promise<ApiBasicResponse & { game?: GameRecord }> {
+    return this.invokeLibraryChange("clear_game_cover", gameId);
+  }
+
   async getCollections(): Promise<string[]> {
     return this.invoke<string[]>("get_collections");
   }
@@ -2217,6 +2233,24 @@ class ApiService {
         return { success: true };
       }
 
+      case "choose_game_cover":
+      case "set_game_cover_file":
+      case "clear_game_cover": {
+        const games = readMockGames();
+        const game = games.find((entry) => entry.id === Number(args[0]));
+        if (!game) return { success: false, error: "Game was not found", error_code: "game_not_found" };
+        if (method === "choose_game_cover") return { success: true, mock: true, cancelled: true };
+        if (method === "set_game_cover_file") {
+          if (!String(args[1] || "").trim()) return { success: false, error: "Choose an image file." };
+          game.cover_local = "mock-local-cover.png";
+          game.cover_local_url = String(args[1]);
+        } else {
+          game.cover_local = null;
+          delete game.cover_local_url;
+        }
+        localStorage.setItem("wlib-mock-games", JSON.stringify(games));
+        return { success: true, mock: true, game };
+      }
       case "get_games":
         return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
       case "add_game": {
@@ -2808,14 +2842,15 @@ class ApiService {
           mock: true,
           source,
           schema_version: "",
-          available_sections: ["metadata", "user_state", "executable_paths", "launch_targets"],
+          available_sections: ["metadata", "user_state", "executable_paths", "launch_targets", ...(source === "playnite" ? ["covers"] : [])],
           counts: {
-            total_games: 0,
+            ...(source === "playnite" ? { covers_to_copy: 2 } : {}),
+            total_games: source === "playnite" ? 147 : 0,
             matched_games: 0,
-            new_games: 0,
+            new_games: source === "playnite" ? 146 : 0,
             ambiguous_games: 0,
-            skipped_no_identity: 0,
-            dropped_paths: 0,
+            skipped_no_identity: source === "playnite" ? 1 : 0,
+            dropped_paths: source === "playnite" ? 1 : 0,
             warnings: 1,
           },
           warnings: [

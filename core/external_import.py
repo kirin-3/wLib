@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Read-only readers for external game-tracking apps (F95Checker, Atlas, XLibrary, f69).
+"""Read-only readers for external game-tracking apps, including Playnite.
 
 Each reader translates a source library into the backup game shape used by
 ``core.library_backup`` (``metadata``, ``user_state``, ``executable_paths``
@@ -25,6 +25,7 @@ import tempfile
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
@@ -34,7 +35,15 @@ from core.backup_format import (
     SQLITE_INTEGER_MAX,
     BackupValidationError,
 )
-from core.f95zone import F95_HOSTS, extract_thread_id, normalize_thread_url
+from core.f95zone import (
+    F95_HOSTS,
+    extract_thread_id,
+    normalize_thread_url,
+    normalize_prefix_label,
+)
+from core.database import CANONICAL_PLAY_STATUSES
+from core.litedb import LiteDBReader
+from core.store_links import StoreLink, coerce_store_links, link_from_id
 from core.game_scan import find_launcher
 from core.host_platform import is_windows
 
@@ -46,13 +55,14 @@ def _validation_error(
     return BackupValidationError(message, error_code)
 
 
-EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary", "f69")
+EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary", "f69", "playnite")
 
 SOURCE_LABELS = {
     "f95checker": "F95Checker",
     "atlas": "Atlas",
     "xlibrary": "XLibrary",
     "f69": "f69",
+    "playnite": "Playnite",
 }
 
 # pywebview rejects a filter whose patterns are not all "*.ext" (see
@@ -60,6 +70,7 @@ SOURCE_LABELS = {
 # raise on the Qt dialog path. The wildcard patterns still match the default
 # file names, and the Linux backends parse the same strings.
 EXTERNAL_IMPORT_FILE_FILTERS = {
+    "playnite": ("Playnite Library (*.db)", "All files (*.*)"),
     "f95checker": (
         "F95Checker Databases (*.sqlite3;*.db)",
         "All files (*.*)",
@@ -133,7 +144,7 @@ def normalize_source(source: object) -> str:
     key = str(source or "").strip().lower()
     if key not in EXTERNAL_SOURCES:
         raise _validation_error(
-            f"Unknown library source: {source}. Choose F95Checker, Atlas, XLibrary, or f69.",
+            f"Unknown library source: {source}. Choose F95Checker, Atlas, XLibrary, f69, or Playnite.",
             "unknown_source",
         )
     return key
@@ -142,6 +153,16 @@ def normalize_source(source: object) -> str:
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+LINK_ONLY_SOURCES = frozenset({"dlsite", "fanza", "vndb", "ryuugames"})
+
+
+def _has_import_identity(f95_url: str, links: list[StoreLink], exe_path: str) -> bool:
+    return bool(
+        f95_url
+        or exe_path
+        or any(link["source"] in LINK_ONLY_SOURCES for link in links)
+    )
 
 
 def _as_dict(value: object) -> dict[str, object]:
@@ -546,7 +567,11 @@ def _translate_f95checker_game(
     for extra in kept[1:]:
         launch_targets.append({"label": _target_label(extra), "exe_path": extra})
 
-    if not f95_url and not executable_paths:
+    if not _has_import_identity(
+        f95_url,
+        coerce_store_links(metadata.get("links")),
+        _as_str(executable_paths.get("exe_path")),
+    ):
         return None, dropped
 
     game: dict[str, object] = {"metadata": metadata}
@@ -726,7 +751,9 @@ def _translate_xlibrary_game(
 
     exe_path, targets, dropped = _xlibrary_executables(data)
 
-    if not f95_url and not exe_path:
+    if not _has_import_identity(
+        f95_url, coerce_store_links(metadata.get("links")), exe_path
+    ):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
     if user_state:
@@ -938,7 +965,9 @@ def _translate_atlas_game(
             continue
         targets.append({"label": f"v{version_text}", "exe_path": kept})
 
-    if not f95_url and not exe_path:
+    if not _has_import_identity(
+        f95_url, coerce_store_links(metadata.get("links")), exe_path
+    ):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
     if user_state:
@@ -1156,7 +1185,9 @@ def _translate_f69_game(
             label = f"v{version_text}" if version_text else _target_label(exe)
         targets.append({"label": label, "exe_path": exe})
 
-    if not f95_url and not exe_path:
+    if not _has_import_identity(
+        f95_url, coerce_store_links(metadata.get("links")), exe_path
+    ):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
     if user_state:
@@ -1271,6 +1302,274 @@ def read_f69_library(path: str) -> tuple[dict[str, object], dict[str, object]]:
 # Dispatch and detection
 # ---------------------------------------------------------------------------
 
+PLAYNITE_COLLECTIONS = {
+    "games": "Game",
+    "completionstatuses": "CompletionStatus",
+    "companies": "Company",
+    "categories": "Category",
+    "tags": "Tag",
+    "features": "GameFeature",
+    "genres": "Genre",
+}
+
+
+def _translate_playnite_game(
+    record: Mapping[str, object],
+    related: Mapping[str, dict[str, str]],
+    library_dir: str,
+) -> tuple[dict[str, object] | None, int]:
+    title = _as_str(record.get("Name"))
+    raw_links = [_as_dict(link) for link in _as_list(record.get("Links"))]
+    f95_url = next(
+        (url for link in raw_links if (url := coerce_thread_url(link.get("Url")))), ""
+    )
+    name_url = coerce_thread_url(title)
+    placeholder = re.fullmatch(r"F95-(\d+)", title, re.I)
+    f95_url = (
+        f95_url
+        or name_url
+        or (build_thread_url_from_id(placeholder[1]) if placeholder else "")
+    )
+    links = coerce_store_links([{"url": link.get("Url")} for link in raw_links])
+    game_id = _as_str(record.get("GameId"))
+    if re.fullmatch(r"(?:RJ|VJ|BJ)\d+", game_id, re.I):
+        dlsite = link_from_id("dlsite", game_id)
+        if dlsite:
+            links = coerce_store_links([*links, dlsite])
+    metadata: dict[str, object] = _title_metadata(
+        "" if name_url or placeholder else title, f95_url
+    )
+    if f95_url:
+        metadata["f95_url"] = f95_url
+    if links:
+        metadata["links"] = links
+
+    def names(collection: str, field: str) -> list[str]:
+        lookup = related.get(collection, {})
+        return [
+            name
+            for raw_id in _as_list(record.get(field))
+            if (name := lookup.get(_as_str(raw_id), ""))
+        ]
+
+    developers = names("companies", "DeveloperIds")
+    if developers:
+        metadata["developer"] = developers[0]
+    version = _as_str(record.get("Version"))
+    if version:
+        metadata["version"] = version
+    engines = {
+        normalize_prefix_label(label): label for label in F69_ENGINE_MAP.values()
+    }
+    prefixes = (
+        names("tags", "TagIds")
+        + names("features", "FeatureIds")
+        + names("genres", "GenreIds")
+    )
+    for prefix in prefixes:
+        normalized = normalize_prefix_label(prefix)
+        if normalized == "completed":
+            metadata["thread_completed"] = 1
+        if normalized in engines and "engine" not in metadata:
+            metadata["engine"] = engines[normalized]
+    state: dict[str, object] = {}
+    status_name = (
+        related.get("completionstatuses", {})
+        .get(_as_str(record.get("CompletionStatusId")), "")
+        .casefold()
+    )
+    statuses = {
+        status.casefold(): status
+        for status in CANONICAL_PLAY_STATUSES
+        if status != "Not Started"
+    }
+    statuses["beaten"] = "Completed"
+    if status_name in statuses:
+        state["play_status"] = statuses[status_name]
+    seconds = _coerce_playtime_seconds(record.get("Playtime"))
+    if seconds is not None:
+        state["playtime_seconds"] = seconds
+    for source, target in (("LastActivity", "last_played"), ("Added", "date_added")):
+        timestamp = parse_timestamp(record.get(source))
+        if timestamp:
+            state[target] = timestamp
+    if isinstance(record.get("Favorite"), bool):
+        state["is_favorite"] = record["Favorite"]
+    categories = names("categories", "CategoryIds")
+    if categories:
+        state["collections"] = categories
+    notes = _as_str(record.get("Notes"))
+    if notes:
+        state["progress"] = notes
+    score = _safe_int(record.get("UserScore"))
+    if 1 <= score <= 100:
+        for rating in ("story", "graphics", "gameplay", "fappability"):
+            state[f"rating_{rating}"] = round(score / 20, 1)
+
+    install = _as_str(record.get("InstallDirectory"))
+    playnite_dir = os.path.dirname(library_dir)
+
+    def expand(value: object) -> str:
+        return (
+            _as_str(value)
+            .replace("{InstallDir}", install)
+            .replace("{InstallDirName}", ntpath.basename(install.rstrip("/\\")))
+            .replace("{PlayniteDir}", playnite_dir)
+        )
+
+    executables: list[tuple[str, str]] = []
+    dropped = 0
+    for raw in _as_list(record.get("GameActions")):
+        action = _as_dict(raw)
+        if action.get("Type") != 0 or action.get("IsPlayAction") is not True:
+            continue
+        raw_path = expand(action.get("Path"))
+        working = resolve_relative_path(expand(action.get("WorkingDir")), install)
+        path = (
+            apply_path_rule(resolve_relative_path(raw_path, working or install))
+            if raw_path
+            else ""
+        )
+        if path:
+            executables.append(
+                (_as_str(action.get("Name")) or _target_label(path), path)
+            )
+        elif raw_path:
+            dropped += 1
+    if (
+        not executables
+        and (folder := apply_path_rule(install))
+        and os.path.isdir(folder)
+    ):
+        launcher = find_launcher(folder)
+        if launcher:
+            executables.append((_target_label(launcher), launcher))
+    exe = executables[0][1] if executables else ""
+    if not _has_import_identity(f95_url, links, exe):
+        return None, dropped
+    game: dict[str, object] = {"metadata": metadata}
+    if state:
+        game["user_state"] = state
+    if exe:
+        game["executable_paths"] = {"exe_path": exe}
+    if len(executables) > 1:
+        game["launch_targets"] = [
+            {"label": label, "exe_path": path} for label, path in executables[1:]
+        ]
+    cover = _as_str(record.get("CoverImage"))
+    if cover.startswith(("https://", "http://")):
+        metadata["cover_image_path"] = cover
+    elif cover:
+        files_dir = Path(library_dir, "files").resolve()
+        candidate = (
+            Path(cover)
+            if os.path.isabs(cover)
+            else files_dir / cover.replace("\\", "/")
+        )
+        candidate = candidate.resolve()
+        if (
+            candidate.is_relative_to(files_dir)
+            and _playnite_data_path_allowed(candidate)
+            and candidate.is_file()
+        ):
+            game["cover_file"] = str(candidate)
+    return game, dropped
+
+
+def read_playnite_library(path: str) -> tuple[dict[str, object], dict[str, object]]:
+    source = Path(path)
+    if not _playnite_data_path_allowed(source):
+        raise _validation_error("Choose games.db from Playnite's library folder.")
+    if not source.is_file():
+        raise _validation_error("Playnite library was not found.", "file_not_found")
+    if source.name.casefold() != "games.db":
+        raise _validation_error("Choose games.db from a Playnite library.")
+    folder = source.parent
+
+    def check_journals() -> None:
+        if any(
+            (folder / f"{name}-journal.db").exists() for name in PLAYNITE_COLLECTIONS
+        ):
+            raise _validation_error("Close Playnite and try again.", "source_locked")
+
+    try:
+        check_journals()
+        with tempfile.TemporaryDirectory(prefix="wlib-playnite-") as temp:
+            for name in (
+                "database.json",
+                *(f"{col}.db" for col in PLAYNITE_COLLECTIONS),
+            ):
+                file = folder / name
+                if file.is_file():
+                    if not _playnite_data_path_allowed(file):
+                        raise _validation_error("The file is not a Playnite library.")
+                    _ = shutil.copy2(file, Path(temp, name))
+            check_journals()
+            version_file = Path(temp, "database.json")
+            version = 4
+            if version_file.exists():
+                version = _safe_int(
+                    _as_dict(
+                        cast(
+                            object,
+                            json.loads(version_file.read_text(encoding="utf-8-sig")),
+                        )
+                    ).get("Version")
+                )
+            if version > 4:
+                raise _validation_error(
+                    "Playnite's library format is newer than wLib supports.",
+                    "unsupported_format_version",
+                )
+            if version < 4:
+                raise _validation_error(
+                    "Update Playnite before importing this library.",
+                    "unsupported_format_version",
+                )
+            related: dict[str, dict[str, str]] = {}
+            for collection, model in PLAYNITE_COLLECTIONS.items():
+                if collection == "games":
+                    continue
+                file = Path(temp, f"{collection}.db")
+                if file.is_file():
+                    related[collection] = {
+                        _as_str(row.get("_id")): _as_str(row.get("Name"))
+                        for row in LiteDBReader(file).read_collection(model)
+                    }
+            records = LiteDBReader(Path(temp, "games.db")).read_collection("Game")
+            games: list[dict[str, object]] = []
+            skipped = dropped = 0
+            for record in records:
+                game, count = _translate_playnite_game(
+                    record, related, str(folder.resolve())
+                )
+                dropped += count
+                if game is None:
+                    skipped += 1
+                else:
+                    games.append(game)
+    except PermissionError as exc:
+        raise _validation_error(
+            "Close Playnite and try again.", "source_locked"
+        ) from exc
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, BackupValidationError):
+            raise
+        raise _validation_error("The file is not a Playnite library.") from exc
+    return _external_backup("playnite", games), {
+        "skipped_no_identity": skipped,
+        "dropped_paths": dropped,
+        "schema_version": str(version),
+    }
+
+
+def _playnite_data_path_allowed(path: Path) -> bool:
+    """Never follow a picked path or a symlink into private add-on data."""
+    return not any(
+        part.casefold() in {"extensions", "extensionsdata"}
+        for part in (*path.parts, *path.resolve().parts)
+    )
+
 
 def _external_backup(source: str, games: list[dict[str, object]]) -> dict[str, object]:
     from datetime import datetime as _datetime
@@ -1303,6 +1602,8 @@ def read_external_library(
         return read_atlas_library(library_path)
     if key == "f69":
         return read_f69_library(library_path)
+    if key == "playnite":
+        return read_playnite_library(library_path)
     return read_xlibrary_library(library_path)
 
 
@@ -1344,6 +1645,23 @@ def locate_external_library(source: object) -> dict[str, object]:
                 checked.append(
                     os.path.join(appdata, "xlibrary", "canonical", "library.games.json")
                 )
+        elif key == "playnite":
+            if appdata:
+                playnite_dir = os.path.join(appdata, "Playnite")
+                config_path = os.path.join(playnite_dir, "config.json")
+                try:
+                    if not _playnite_data_path_allowed(Path(config_path)):
+                        raise ValueError("Private add-on settings are not library configuration")
+                    with open(config_path, encoding="utf-8-sig") as handle:
+                        config = _as_dict(cast(object, json.load(handle)))
+                    custom = _as_str(config.get("DatabasePath"))
+                    custom = re.sub(r"%appdata%", lambda _: appdata, custom, flags=re.I)
+                    custom = custom.replace("{PlayniteDir}", playnite_dir)
+                    if custom:
+                        checked.append(os.path.join(custom, "games.db"))
+                except (OSError, ValueError):
+                    pass
+                checked.append(os.path.join(playnite_dir, "library", "games.db"))
         elif key == "atlas":
             if program_files:
                 checked.append(os.path.join(program_files, "Atlas", "data", "data.db"))

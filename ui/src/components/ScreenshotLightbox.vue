@@ -1,11 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const props = defineProps<{
   images: string[];
+  coverGame?: { cover_local_url?: string; cover_image_path?: string };
   startIndex: number | null;
 }>();
 
@@ -41,14 +43,14 @@ watch(
   { immediate: true },
 );
 
-watch(currentIndex, () => {
+const currentImage = computed(() => props.images[currentIndex.value] ?? "");
+
+watch(currentImage, () => {
   failed.value = false;
   loaded.value = false;
   naturalWidth.value = 0;
   naturalHeight.value = 0;
 });
-
-const currentImage = computed(() => props.images[currentIndex.value] ?? "");
 
 const goTo = (index: number) => {
   const total = props.images.length;
@@ -68,7 +70,8 @@ const onImageLoad = (event: Event) => {
   loaded.value = true;
 };
 
-const onImageError = () => {
+const onImageError = (event: Event) => {
+  if (props.coverGame && currentImage.value === gameCoverSrc(props.coverGame) && gameCoverError(event, props.coverGame)) return;
   failed.value = true;
   loaded.value = true;
 };

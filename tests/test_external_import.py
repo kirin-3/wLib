@@ -5,6 +5,9 @@
 import json
 import os
 import sqlite3
+import hashlib
+import shutil
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -39,6 +42,256 @@ def _force_linux_paths(monkeypatch):
     # Executable fixtures use Linux-absolute paths so results are identical
     # on Windows hosts and in the Linux container unless a test overrides this.
     monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+
+
+PLAYNITE_FIXTURE = Path(__file__).parent / "fixtures/playnite/library"
+
+
+def _fingerprints(folder):
+    return {
+        str(p.relative_to(folder)): (
+            p.stat().st_mtime_ns,
+            hashlib.sha256(p.read_bytes()).hexdigest(),
+        )
+        for p in folder.rglob("*")
+        if p.is_file()
+    }
+
+
+def test_playnite_fixture_mapping_and_unchanged():
+    before = _fingerprints(PLAYNITE_FIXTURE)
+    backup, stats = read_external_library(
+        "playnite", str(PLAYNITE_FIXTURE / "games.db")
+    )
+    assert _fingerprints(PLAYNITE_FIXTURE) == before
+    assert stats == {
+        "skipped_no_identity": 1,
+        "dropped_paths": 1,
+        "schema_version": "4",
+    }
+    games = backup["games"]
+    assert len(games) == 146
+    novel = games[0]
+    assert novel["metadata"] == {
+        "title": "Fixture novel",
+        "f95_url": "https://f95zone.to/threads/12345/",
+        "links": [{"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}],
+        "developer": "Fixture studio",
+        "version": "0.9",
+        "engine": "Ren'Py",
+        "thread_completed": 1,
+    }
+    state = novel["user_state"]
+    assert state["play_status"] == "Completed"
+    assert state["playtime_seconds"] == 7200
+    assert state["collections"] == ["Favorites VN", "Backlog"]
+    assert state["progress"] == "Route A done"
+    assert state["is_favorite"] is True
+    assert state["last_played"].startswith("2025-01-02T03:04:05")
+    assert state["date_added"].startswith("2024-01-02")
+    assert all(
+        state[f"rating_{key}"] == 4
+        for key in ("story", "graphics", "gameplay", "fappability")
+    )
+    assert novel["executable_paths"]["exe_path"] == "/opt/games/novel/game.sh"
+    assert novel["launch_targets"] == [
+        {"label": "Play (32-bit)", "exe_path": "/opt/games/novel/game32.sh"}
+    ]
+    assert Path(novel["cover_file"]).is_file()
+    assert "play_status" not in games[1]["user_state"]
+    assert games[1]["metadata"]["f95_url"] == "https://f95zone.to/threads/23456/"
+    assert games[2]["metadata"]["links"][0]["source"] == "dlsite"
+    assert games[3]["metadata"]["cover_image_path"] == "https://example.com/cover.jpg"
+    assert "executable_paths" not in games[3]
+    assert "user_state" not in games[3]  # CommunityScore is never a personal rating.
+
+
+@pytest.mark.parametrize(
+    "version,message", [(3, "Update Playnite"), (5, "newer than wLib")]
+)
+def test_playnite_unsupported_version(tmp_path, version, message):
+    shutil.copy2(PLAYNITE_FIXTURE / "games.db", tmp_path / "games.db")
+    (tmp_path / "database.json").write_text(json.dumps({"Version": version}))
+    with pytest.raises(ValueError, match=message):
+        read_external_library("playnite", str(tmp_path / "games.db"))
+
+
+def test_playnite_locked_wrong_file_and_permissions(tmp_path, monkeypatch):
+    shutil.copy2(PLAYNITE_FIXTURE / "games.db", tmp_path / "games.db")
+    journal = tmp_path / "games-journal.db"
+    journal.touch()
+    from core.backup_format import BackupValidationError
+
+    with pytest.raises(BackupValidationError) as exc:
+        read_external_library("playnite", str(tmp_path / "games.db"))
+    assert exc.value.error_code == "source_locked"
+    journal.unlink()
+    monkeypatch.setattr(
+        "core.external_import.shutil.copy2",
+        lambda *a, **k: (_ for _ in ()).throw(PermissionError()),
+    )
+    with pytest.raises(BackupValidationError) as exc:
+        read_external_library("playnite", str(tmp_path / "games.db"))
+    assert exc.value.error_code == "source_locked"
+    wrong = tmp_path / "wrong.db"
+    wrong.write_text("not a library")
+    with pytest.raises(BackupValidationError):
+        read_external_library("playnite", str(wrong))
+
+
+def test_playnite_detection_and_no_linux_detection(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.external_import.is_windows", lambda: True)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "Playnite"
+    folder.mkdir()
+    custom = folder / "custom"
+    custom.mkdir()
+    (custom / "games.db").touch()
+    for path in ("%AppData%/Playnite/custom", "{PlayniteDir}/custom"):
+        (folder / "config.json").write_text(json.dumps({"DatabasePath": path}))
+        assert locate_external_library("playnite")["path"] == str(custom / "games.db")
+    monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+    assert locate_external_library("playnite") == {
+        "source": "playnite",
+        "path": "",
+        "checked": [],
+    }
+
+
+def test_playnite_never_reads_extension_settings(tmp_path, monkeypatch):
+    import builtins
+
+    folder = tmp_path / "Playnite"
+    library = folder / "library"
+    shutil.copytree(PLAYNITE_FIXTURE, library)
+    for name in ("ExtensionsData", "Extensions"):
+        (folder / name).mkdir()
+        (folder / name / "config.json").write_text('{"cookies":"secret"}')
+    original_open = builtins.open
+    original_copy = shutil.copy2
+
+    def guarded_open(file, *a, **k):
+        assert "Extensions" not in str(file)
+        return original_open(file, *a, **k)
+
+    def guarded_copy(file, *a, **k):
+        assert "Extensions" not in str(file)
+        return original_copy(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(shutil, "copy2", guarded_copy)
+    read_external_library("playnite", str(library / "games.db"))
+
+
+def test_playnite_import_covers_sections_merge_rollback(tmp_path, monkeypatch):
+    from core import database, game_covers
+    from core.library_backup import build_library_backup, _available_backup_sections
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    preview = inspect_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert preview["counts"]["covers_to_copy"] == 2
+    assert "covers" in preview["available_sections"]
+    assert "covers" not in _available_backup_sections(build_library_backup())
+    result = import_external_library(
+        "playnite", str(PLAYNITE_FIXTURE / "games.db"), {"sections": []}
+    )
+    assert result["created"] == 146
+    assert not game_covers.covers_dir().exists()
+    result = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert result["covers_copied"] == 2
+    names = {p.name for p in game_covers.covers_dir().iterdir()}
+    result = import_external_library(
+        "playnite", str(PLAYNITE_FIXTURE / "games.db"), {"merge_mode": "fill_missing"}
+    )
+    assert result["covers_copied"] == 0
+    assert {p.name for p in game_covers.covers_dir().iterdir()} == names
+    original = database.set_game_local_cover
+
+    def fail_after_write(*a, **k):
+        original(*a, **k)
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(database, "set_game_local_cover", fail_after_write)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert {p.name for p in game_covers.covers_dir().iterdir()} == names
+    assert {g["cover_local"] for g in get_all_games() if g["cover_local"]} == names
+
+
+def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch):
+    from core.external_import import _translate_playnite_game
+
+    base = {
+        "Name": "F95-12345",
+        "InstallDirectory": str(tmp_path),
+        "GameActions": [
+            {
+                "Name": "Play",
+                "Type": 0,
+                "IsPlayAction": True,
+                "Path": "run.sh",
+                "WorkingDir": "bin",
+            }
+        ],
+    }
+    game, dropped = _translate_playnite_game(base, {}, str(tmp_path))
+    assert game["executable_paths"]["exe_path"] == str(tmp_path / "bin/run.sh")
+    assert dropped == 0
+    monkeypatch.setattr("core.external_import.is_windows", lambda: True)
+    base["InstallDirectory"] = "D:\\Games\\Sakura"
+    base["GameActions"][0]["Path"] = "{InstallDir}\\Game.exe"
+    game, _ = _translate_playnite_game(base, {}, str(tmp_path))
+    assert game["executable_paths"]["exe_path"] == "D:\\Games\\Sakura\\Game.exe"
+    monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+    base["InstallDirectory"] = str(tmp_path)
+    base["GameActions"] = []
+    monkeypatch.setattr(
+        "core.external_import.find_launcher", lambda path: str(tmp_path / "run.sh")
+    )
+    game, _ = _translate_playnite_game(base, {}, str(tmp_path))
+    assert game["executable_paths"]["exe_path"] == str(tmp_path / "run.sh")
+
+
+def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatch):
+    from core import database, game_covers
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    original = database.set_game_local_cover
+
+    def write_then_fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(database, "set_game_local_cover", write_then_fail)
+    with pytest.raises(RuntimeError, match="write failed"):
+        import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert get_all_games() == []
+    assert list(game_covers.covers_dir().iterdir()) == []
+
+
+@pytest.mark.parametrize("status,expected", [("Beaten", "Completed"), ("playing", "Playing"), ("Waiting For Update", "Waiting For Update"), ("Not Started", None), ("Played", None), ("Not Played", None), ("custom", None)])
+def test_playnite_status_mapping(status, expected, tmp_path):
+    from core.external_import import _translate_playnite_game
+
+    game, _ = _translate_playnite_game(
+        {"Name": "F95-12345", "CompletionStatusId": "test"},
+        {"completionstatuses": {"test": status}}, str(tmp_path),
+    )
+    assert game.get("user_state", {}).get("play_status") == expected
+
+
+def test_playnite_rejects_private_addon_paths_and_symlinks(tmp_path):
+    private = tmp_path / "ExtensionsData"
+    private.mkdir()
+    source = private / "games.db"
+    source.write_text('{"cookies":"secret"}')
+    with pytest.raises(ValueError, match="library folder"):
+        read_external_library("playnite", str(source))
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "games.db").symlink_to(source)
+    with pytest.raises(ValueError, match="library folder"):
+        read_external_library("playnite", str(library / "games.db"))
 
 
 class _InlineThread:

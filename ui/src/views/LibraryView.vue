@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
@@ -2146,8 +2147,9 @@ onUnmounted(() => {
               <td class="library-table-title">
                 <div class="flex items-center gap-2 min-w-0">
                   <img
-                    v-if="game.cover_image_path"
-                    :src="game.cover_image_path"
+                    v-if="gameCoverSrc(game)"
+                    :src="gameCoverSrc(game)"
+                    @error="gameCoverError($event, game)"
                     alt=""
                     class="w-8 h-8 rounded object-cover shrink-0"
                   />
@@ -2316,8 +2318,9 @@ onUnmounted(() => {
             "
           >
             <img
-              v-if="game.cover_image_path"
-              :src="game.cover_image_path"
+              v-if="gameCoverSrc(game)"
+              :src="gameCoverSrc(game)"
+              @error="gameCoverError($event, game)"
               :alt="game.title"
               class="absolute inset-0 w-full h-full object-cover rounded-t-xl"
               :class="[

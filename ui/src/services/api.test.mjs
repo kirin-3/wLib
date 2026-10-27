@@ -111,6 +111,21 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     assert.equal(external.source, "f95checker");
     assert.equal(external.deleted, 0);
 
+    const playnite = await api.inspectExternalLibrary("playnite", "/tmp/games.db");
+    assert.ok(playnite.available_sections.includes("covers"));
+    assert.equal(playnite.counts.covers_to_copy, 2);
+    assert.equal(playnite.counts.total_games, 147);
+    const addedCoverGame = await api.addGame("Cover fixture", "/tmp/cover-game.sh");
+    const coverGameId = addedCoverGame.id;
+    const chosen = await api.chooseGameCover(coverGameId);
+    assert.equal(chosen.cancelled, true);
+    const cover = await api.setGameCoverFile(coverGameId, "data:image/png;base64,fixture");
+    assert.equal(cover.game.cover_local_url, "data:image/png;base64,fixture");
+    assert.equal((await api.getGames()).find(game => game.id === coverGameId).cover_local, "mock-local-cover.png");
+    assert.equal((await api.clearGameCover(coverGameId)).game.cover_local, null);
+    assert.equal((await api.setGameCoverFile(999999, "/tmp/image.png")).success, false);
+    await api.deleteGame(coverGameId);
+
     // Payload shapes the desktop backend always returns.
     const installStatus = await api.getInstallStatus();
     assert.equal(installStatus.success, true);
