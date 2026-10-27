@@ -1044,8 +1044,9 @@ watch(
     const queryUrl = readQueryValue(q.f95url);
     if (action === "import" && queryUrl) {
       await loadGames();
+      // Keep the import query until the dialog closes so its archive hand-off
+      // can identify the extension entry point and retain all seed metadata.
       showAddModal.value = true;
-      void router.replace({ path: "/", query: {} });
     }
     // Ctrl+N from any view (App.vue).
     if (action === "add") {

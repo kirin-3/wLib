@@ -25,6 +25,7 @@ import { hasAvailableUpdate } from "./utils/libraryGames";
 import {
   INSTALL_ARCHIVE_EVENT,
   type InstallArchiveRequest,
+  type InstallArchiveSeed,
 } from "./utils/installArchive";
 import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
 
@@ -67,6 +68,7 @@ const notifiedFinishedIds = new Set<number>();
 const showInstallModal = ref(false);
 const installGame = ref<GameRecord | null>(null);
 const installArchivePath = ref("");
+const installSeed = ref<InstallArchiveSeed | undefined>();
 
 let installRequestId = 0;
 
@@ -87,6 +89,7 @@ const handleInstallArchiveRequest = async (event: Event) => {
   // Set game and archive together so an open dialog re-seeds once per request.
   installGame.value = game;
   installArchivePath.value = detail.archivePath || "";
+  installSeed.value = detail.seed;
   showInstallModal.value = true;
 };
 
@@ -613,6 +616,7 @@ onUnmounted(() => {
         v-model="showInstallModal"
         :game="installGame"
         :preselected-archive="installArchivePath"
+        :seed="installSeed"
       />
     </main>
 

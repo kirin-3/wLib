@@ -11,6 +11,7 @@ import { getLaunchModeOptions } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import { openInstallArchive } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
 interface AddGamePayload {
@@ -164,6 +165,18 @@ const close = () => {
     router.replace({ query: {} });
   }
   emit("update:modelValue", false);
+};
+
+const installFromArchive = async () => {
+  if (props.saving || isSubmitting.value) return;
+  const seed = {
+    title: title.value, version: version.value, creator: developer.value,
+    engine: engine.value, f95Url: f95Url.value, coverImage: coverImage.value,
+    tags: tags.value, rating: rating.value,
+  };
+  emit("update:modelValue", false);
+  await router.replace({ query: {} });
+  openInstallArchive({ seed });
 };
 
 const modalRef = ref<HTMLElement | null>(null);
@@ -372,6 +385,15 @@ const save = () => {
         class="px-6 py-5 flex justify-end gap-3"
         style="border-top: 1px solid var(--border); background: var(--bg-inset)"
       >
+        <button
+          v-if="readQueryValue(route.query.action) === 'import'"
+          @click="installFromArchive"
+          :disabled="saving || isSubmitting"
+          class="px-5 py-2.5 rounded-lg text-sm font-medium mr-auto disabled:opacity-50"
+          style="color: var(--brand)"
+        >
+          Install from archive
+        </button>
         <button
           @click="close"
           class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"

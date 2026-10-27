@@ -5064,6 +5064,69 @@ class Api:
             attachments = []
         return {"success": True, "attachments": attachments}
 
+    def lookup_thread_details(self, url: str) -> dict[str, object]:
+        """Read thread metadata for a new archive install through the paced scraper."""
+        from core.f95zone import extract_thread_id, split_thread_title
+
+        normalized = normalize_thread_url(url)
+        if not extract_thread_id(normalized):
+            return {
+                "success": False,
+                "error": "A valid F95Zone thread URL is required.",
+            }
+        try:
+            metadata = self.scraper.get_thread_metadata(normalized)
+            if not metadata.get("success"):
+                return {
+                    "success": False,
+                    "error": metadata.get("error") or "Could not load thread details.",
+                }
+            title, version, creator = split_thread_title(
+                str(metadata.get("title") or "")
+            )
+            return {
+                "success": True,
+                "title": title,
+                "version": version or metadata.get("version") or "",
+                "creator": creator,
+                "engine": metadata.get("engine") or "",
+                "cover_image": metadata.get("cover_image") or "",
+                "tags": metadata.get("tags") or [],
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not load thread details.",
+            }
+
+    def preview_install_destination(
+        self, options: Mapping[str, object] | None = None
+    ) -> dict[str, object]:
+        """Recompute the install path without touching the filesystem."""
+        from core.archive_install import build_destination
+        from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN, get_setting
+
+        payload = dict(options or {})
+        folder = get_setting("library_folder") or ""
+        pattern = (
+            get_setting("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
+        )
+        engine = str(payload.get("engine") or "").strip()
+        title = str(payload.get("title") or "").strip()
+        return {
+            "destination": build_destination(
+                folder,
+                pattern,
+                str(payload.get("creator") or ""),
+                title,
+                str(payload.get("version") or ""),
+                engine,
+            )
+            if folder.strip() and title
+            else "",
+            "engine_pending": "{engine}" in pattern and not engine,
+        }
+
     def inspect_archive(
         self, path: str, game_id: int | None = None
     ) -> dict[str, object]:
@@ -5101,6 +5164,7 @@ class Api:
         title = guessed_title
         version = guessed_version
         creator = ""
+        engine = ""
         old_folder = ""
         old_exe = ""
         if game_id is not None:
@@ -5119,6 +5183,7 @@ class Api:
                 if latest:
                     version = latest
                 creator = str(game.get("developer") or "")
+                engine = str(game.get("engine") or "")
                 break
             if old_exe:
                 old_folder = os.path.dirname(os.path.abspath(old_exe))
@@ -5126,7 +5191,7 @@ class Api:
         destination = ""
         if library_folder.strip() and title.strip():
             destination = build_destination(
-                library_folder, pattern, creator, title, version, ""
+                library_folder, pattern, creator, title, version, engine
             )
 
         guard: dict[str, object] = {"removable": False, "reason": ""}
@@ -5148,6 +5213,8 @@ class Api:
             "title": title,
             "version": version,
             "creator": creator,
+            "engine": engine,
+            "engine_pending": "{engine}" in pattern and not engine.strip(),
             "destination": destination,
             "tool_error": tool_error or "",
             "old_folder": old_folder,
@@ -5279,6 +5346,9 @@ class Api:
                 version=version,
                 creator=creator,
                 engine=engine,
+                cover_image=str(payload.get("cover_image") or ""),
+                tags=self._normalize_tags_csv(payload.get("tags")),
+                rating=str(payload.get("rating") or ""),
                 game_id=game_id,
                 remove_old=remove_old,
                 delete_archive=delete_archive,

@@ -358,6 +358,7 @@ function extractGameInfo() {
             const h1Clone = h1.cloneNode(true);
             h1Clone.querySelectorAll('a.labelLink, span.label-append').forEach(el => el.remove());
 
+            // Mirrored in core/f95zone.py split_thread_title (h1 title parsing).
             let fullTitleText = h1Clone.textContent.trim();
             fullTitleText = fullTitleText.replace(/^xLibrary\s*-\s*/i, '');
             fullTitleText = fullTitleText.replace(/^wLib\s*-\s*/i, '');

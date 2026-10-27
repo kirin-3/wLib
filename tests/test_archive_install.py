@@ -1256,3 +1256,110 @@ def test_install_override_equal_to_old_root_is_repointed_not_copied(
     new_dir = lib / "Game" / "2.0"
     assert db.get_all_games()[0]["save_path_override"] == str(new_dir)
     assert (new_dir / "Game.exe").read_bytes() == b"new"  # not clobbered by the old copy
+
+
+@pytest.mark.parametrize("known_engine", [True, False])
+def test_install_detects_engine_before_destination(tmp_path, monkeypatch, known_engine):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    archive = tmp_path / "Game.zip"
+    files = {"Wrapper/Game.exe": b"x", "Wrapper/readme.txt": b"hi"}
+    if known_engine:
+        files["Wrapper/renpy/__init__.py"] = b""
+    _write_game_zip(archive, files)
+    result = install_archive(
+        str(archive),
+        library_folder=str(tmp_path / "lib"),
+        pattern="{engine}/{title}/{version}",
+        title="Game",
+        version="1.0",
+    )
+    engine = "Ren'Py" if known_engine else ""
+    expected = tmp_path / "lib"
+    if engine:
+        expected /= engine
+    assert result["destination"] == str(expected / "Game/1.0")
+    assert db.get_all_games()[0]["engine"] == engine
+
+
+def test_detected_destination_collision_cleans_staging(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import ArchiveInstallError, install_archive
+
+    destination = tmp_path / "lib/Ren'Py/Game/1.0"
+    destination.mkdir(parents=True)
+    (destination / "keep.txt").write_text("keep")
+    archive = tmp_path / "Game.zip"
+    _write_game_zip(archive, {"Wrapper/Game.exe": b"x", "Wrapper/renpy/init.py": b""})
+    with pytest.raises(ArchiveInstallError, match="already exists"):
+        install_archive(
+            str(archive),
+            library_folder=str(tmp_path / "lib"),
+            pattern="{engine}/{title}/{version}",
+            title="Game",
+            version="1.0",
+        )
+    assert (destination / "keep.txt").read_text() == "keep"
+    assert not list((tmp_path / "lib").glob(".wlib-staging-*"))
+    assert db.get_all_games() == []
+
+
+def test_install_metadata_only_applied_to_new_games(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    archive = tmp_path / "Game.zip"
+    _write_game_zip(archive, {"Game.exe": b"x"})
+    options = dict(
+        library_folder=str(tmp_path / "lib"), pattern="{title}/{version}", title="Game"
+    )
+    first = install_archive(
+        str(archive),
+        **options,
+        version="1",
+        cover_image="cover.jpg",
+        tags=["3d"],
+        rating="4.5",
+    )
+    install_archive(
+        str(archive),
+        **options,
+        game_id=first["game_id"],
+        version="2",
+        cover_image="other.jpg",
+        tags="other",
+        rating="1",
+    )
+    game = db.get_all_games()[0]
+    assert game["cover_image_path"] == "cover.jpg"
+    assert game["tags"] == "3d"
+    assert game["rating"] == "4.5"
+
+
+def test_update_without_engine_keeps_stored_engine(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    first_archive = tmp_path / "Game-1.zip"
+    _write_game_zip(first_archive, {"Game.exe": b"x"})
+    first = install_archive(
+        str(first_archive),
+        library_folder=str(tmp_path / "lib"),
+        pattern="{engine}/{title}/{version}",
+        title="Game",
+        version="1",
+        engine="RPGM",
+    )
+    update_archive = tmp_path / "Game-2.zip"
+    _write_game_zip(update_archive, {"Game.exe": b"y", "renpy/__init__.py": b""})
+    result = install_archive(
+        str(update_archive),
+        library_folder=str(tmp_path / "lib"),
+        pattern="{engine}/{title}/{version}",
+        title="Game",
+        version="2",
+        game_id=first["game_id"],
+    )
+    assert result["destination"] == str(tmp_path / "lib/RPGM/Game/2")
+    assert db.get_all_games()[0]["engine"] == "RPGM"

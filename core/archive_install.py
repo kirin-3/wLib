@@ -950,6 +950,9 @@ def install_archive(
     version: str = "",
     creator: str = "",
     engine: str = "",
+    cover_image: str = "",
+    tags: str | list[str] = "",
+    rating: str = "",
     game_id: int | None = None,
     remove_old: bool = True,
     delete_archive: bool = False,
@@ -989,10 +992,6 @@ def install_archive(
     if not library_folder.strip():
         raise ArchiveInstallError("Choose a library folder first.")
 
-    destination = build_destination(
-        library_folder, pattern, creator, title, version, engine
-    )
-
     old_exe = ""
     old_root = ""
     old_override = ""
@@ -1003,6 +1002,9 @@ def install_archive(
                 if int(str(game.get("id"))) == int(game_id):
                     old_exe = str(game.get("exe_path") or "")
                     old_override = str(game.get("save_path_override") or "").strip()
+                    # Updates keep the stored engine unless the caller sent one.
+                    if not engine.strip():
+                        engine = str(game.get("engine") or "")
                     game_found = True
                     break
             except (TypeError, ValueError):
@@ -1019,26 +1021,34 @@ def install_archive(
         downloads_folder = str(get_setting("downloads_folder") or "")
     except OSError:
         downloads_folder = ""
-    guard = (
-        can_remove_old_folder(
-            old_root,
-            destination,
-            library_folder,
-            downloads_folder,
-            other_game_paths(game_id),
-            old_exe,
-        )
-        if old_root
-        else {"removable": False, "reason": ""}
-    )
 
-    dest_real = _real(destination)
-    old_real = _real(old_root) if old_root else ""
-    dest_exists = os.path.lexists(destination)
-    if dest_exists and dest_real != old_real:
-        raise ArchiveInstallError(
-            "The destination folder already exists. Change the version or destination."
+    def _resolve_destination(
+        resolved_engine: str,
+    ) -> tuple[str, str, dict[str, object]]:
+        destination = build_destination(
+            library_folder, pattern, creator, title, version, resolved_engine
         )
+        dest_real = _real(destination)
+        if os.path.lexists(destination) and dest_real != old_real:
+            raise ArchiveInstallError(
+                f"The destination folder already exists: {destination}. Change the version or destination."
+            )
+        guard: dict[str, object] = (
+            can_remove_old_folder(
+                old_root,
+                destination,
+                library_folder,
+                downloads_folder,
+                other_game_paths(game_id),
+                old_exe,
+            )
+            if old_root
+            else {"removable": False, "reason": ""}
+        )
+        return destination, dest_real, guard
+
+    old_real = _real(old_root) if old_root else ""
+    destination, dest_real, guard = _resolve_destination(engine)
 
     _progress("preparing")
     _ = cleanup_stale_staging(library_folder)
@@ -1064,6 +1074,15 @@ def install_archive(
         # what relative symlinks resolve to (staging/Game/link -> ../x means
         # something different at staging/link). Re-check after the move.
         check_symlinks_inside_staging(staging)
+
+        if "{engine}" in pattern and not engine.strip():
+            from core.game_scan import detect_engine
+
+            picked_exe = _pick_exe(staging, old_exe, old_root)
+            engine = detect_engine(staging, picked_exe)
+            if not engine and picked_exe:
+                engine = detect_engine(os.path.dirname(picked_exe), picked_exe)
+            destination, dest_real, guard = _resolve_destination(engine)
 
         override_rel: str | None = None
         if old_root and os.path.isdir(old_root):
@@ -1143,6 +1162,9 @@ def install_archive(
                 version=version.strip(),
                 developer=creator.strip(),
                 engine=engine.strip() or detected_engine,
+                cover_image=cover_image,
+                tags=tags,
+                rating=rating,
             )
             game_id = int(str(new_id)) if new_id is not None else None
         else:
@@ -1150,7 +1172,9 @@ def install_archive(
                 "exe_path": exe_path,
                 "version": version.strip(),
             }
-            if not engine.strip() and detected_engine:
+            if engine.strip():
+                fields["engine"] = engine.strip()
+            elif detected_engine:
                 # Only fill engine when the row has none (don't clobber manual edits).
                 for game in get_all_games():
                     try:

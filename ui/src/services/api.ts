@@ -223,12 +223,37 @@ export interface ExecutableModifiedTimeResponse extends ApiBasicResponse {
   modified_at: string | null;
 }
 
+export interface ThreadDetailsResponse extends ApiBasicResponse {
+  success: boolean;
+  title?: string;
+  version?: string;
+  creator?: string;
+  engine?: string;
+  cover_image?: string;
+  tags?: string[] | string;
+}
+
+export interface InstallDestinationOptions {
+  title: string;
+  version: string;
+  creator: string;
+  engine: string;
+  game_id?: number | undefined;
+}
+
+export interface InstallDestinationResponse {
+  destination: string;
+  engine_pending: boolean;
+}
+
 export interface ArchiveInspectResponse extends ApiBasicResponse {
   success: boolean;
   title?: string;
   version?: string;
   creator?: string;
   destination?: string;
+  engine?: string;
+  engine_pending?: boolean;
   tool_error?: string;
   old_folder?: string;
   removable?: boolean;
@@ -243,6 +268,9 @@ export interface ArchiveInstallOptions {
   creator?: string | undefined;
   engine?: string | undefined;
   f95_url?: string | undefined;
+  cover_image?: string | undefined;
+  tags?: string | string[] | undefined;
+  rating?: string | undefined;
   library_folder?: string | undefined;
   pattern?: string | undefined;
   remove_old?: boolean | undefined;
@@ -1981,6 +2009,14 @@ class ApiService {
     return this.invoke<string>("browse_archive_file", startPath);
   }
 
+  async lookupThreadDetails(url: string): Promise<ThreadDetailsResponse> {
+    return this.invoke<ThreadDetailsResponse>("lookup_thread_details", url);
+  }
+
+  async previewInstallDestination(options: InstallDestinationOptions): Promise<InstallDestinationResponse> {
+    return this.invoke<InstallDestinationResponse>("preview_install_destination", options);
+  }
+
   async inspectArchive(archivePath: string, gameId: number | null = null): Promise<ArchiveInspectResponse> {
     return this.invoke<ArchiveInspectResponse>("inspect_archive", archivePath, gameId);
   }
@@ -2802,6 +2838,28 @@ class ApiService {
           schema_version: "",
         };
       }
+      case "lookup_thread_details": {
+        if (!/^https?:\/\/(?:www\.)?f95zone\.to\/threads\/(?:[^/]+\.)?\d+(?:\/|$)/i.test(String(args[0] || ""))) {
+          return { success: false, error: "A valid F95Zone thread URL is required." };
+        }
+        return { success: true, mock: true, title: "Eternum", version: "0.8", creator: "Caribdis", engine: "Ren'Py", cover_image: "", tags: ["3d"] };
+      }
+      case "preview_install_destination": {
+        const options = isRecord(args[0]) ? args[0] : {};
+        const settings = readMockSettings();
+        const pattern = settings.library_folder_pattern || DEFAULT_MOCK_SETTINGS.library_folder_pattern;
+        const segments = pattern.split(/[/\\]+/).map((part) => {
+          for (const key of ["creator", "title", "version", "engine"]) {
+            part = part.split(`{${key}}`).join(String(options[key] || "").trim());
+          }
+          return part.replace(/\{[^{}]*\}/g, "").replace(/[<>:"|?*\x00-\x1f]/g, "_").trim();
+        }).filter(Boolean);
+        return {
+          destination: settings.library_folder && String(options.title || "").trim()
+            ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [String(options.title || "game")]).join("/")}` : "",
+          engine_pending: pattern.includes("{engine}") && !String(options.engine || "").trim(),
+        };
+      }
       case "inspect_archive": {
         const fileName = String(args[0]).split(/[/\\]/).pop() || "";
         const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");
@@ -2817,6 +2875,7 @@ class ApiService {
         const title = guessedTitle || (game?.title ?? "");
         const version = game?.latest_version?.trim() ? game.latest_version : guessedVersion;
         const creator = game?.developer ?? "";
+        const engine = game?.engine ?? "";
         // build_destination substitutes the pattern tokens and drops segments
         // that end up empty, falling back to the title.
         const pattern = settings.library_folder_pattern || DEFAULT_MOCK_SETTINGS.library_folder_pattern;
@@ -2826,7 +2885,7 @@ class ApiService {
             .replace("{creator}", creator)
             .replace("{title}", title)
             .replace("{version}", version)
-            .replace("{engine}", "")
+            .replace("{engine}", engine)
             .replace(/\{[^{}]*\}/g, "")
             .trim())
           .filter(Boolean);
@@ -2845,6 +2904,8 @@ class ApiService {
           title,
           version,
           creator,
+          engine,
+          engine_pending: pattern.includes("{engine}") && !engine.trim(),
           destination,
           tool_error: toolError,
           old_folder: game ? game.exe_path.split(/[/\\]/).slice(0, -1).join("/") : "",

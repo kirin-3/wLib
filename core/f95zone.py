@@ -105,3 +105,53 @@ def thread_urls_match(left: object, right: object) -> bool:
         return left_thread_id == right_thread_id
 
     return left_normalized == right_normalized
+
+
+# Mirrored in extension/content.js extractGameInfo (h1 title parsing).
+_TITLE_VERSION_RE = re.compile(
+    r"^v?(?:er(?:sion)?\.?\s*)?(\d+[\d.]*[a-zA-Z]?(?:\s*(?:beta|alpha|final|fix\d*|hotfix))?)$",
+    re.IGNORECASE,
+)
+_TITLE_CHAPTER_RE = re.compile(
+    r"^(Ch(?:apter|\.)?\s*\d+(?:\.\d+)?(?:\s*v[\d.]+[a-zA-Z]?)?|Ep(?:isode|\.)?\s*\d+(?:\.\d+)?|S\d+\s*E\d+|Part\s*\d+)",
+    re.IGNORECASE,
+)
+
+
+def split_thread_title(h1_text: str) -> tuple[str, str, str]:
+    """Split the thread heading into title, version and developer."""
+    text = re.sub(r"^(?:xLibrary|wLib)\s*-\s*", "", h1_text.strip(), flags=re.I)
+    while match := re.match(r"^\[([^\]]+)\]\s*", text):
+        inner = match[1].strip()
+        if _TITLE_VERSION_RE.match(inner) or _TITLE_CHAPTER_RE.match(inner):
+            break
+        text = text[match.end() :]
+    brackets = list(re.finditer(r"\[([^\]]*)\]", text))
+    version = ""
+    for match in brackets:
+        inner = match[1].strip()
+        if _TITLE_VERSION_RE.match(inner):
+            version = re.sub(r"^v(?:er(?:sion)?\.?\s*)?", "", inner, flags=re.I).strip()
+        elif _TITLE_CHAPTER_RE.match(inner):
+            version = inner
+        if version:
+            text = text.replace(match[0], "", 1)
+            break
+    if not version:
+        match = re.search(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", text, re.I)
+        if match:
+            version = match[1].strip()
+            text = (
+                text[: match.start()]
+                + ("[" if match[0].endswith("[") else " ")
+                + text[match.end() :]
+            )
+    if not version and len(brackets) >= 2:
+        version = brackets[0][1].strip()
+        text = text.replace(brackets[0][0], "", 1)
+    developer = ""
+    match = re.search(r"\[([^\]]+)\]$", text)
+    if match:
+        developer = match[1].strip()
+        text = text[: match.start()]
+    return re.sub(r"\[.*?\]", "", text).strip(), version, developer

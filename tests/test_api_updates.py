@@ -3514,3 +3514,93 @@ def test_notification_setting_default_and_save():
     assert api.get_settings()["update_notifications"] is False
     assert api.save_settings({"update_notifications": True})["success"]
     assert get_setting("update_notifications") == "on"
+
+
+def test_lookup_thread_details(monkeypatch):
+    api = Api()
+    lookup = MagicMock(
+        return_value={
+            "success": True,
+            "title": "[RenPy] Eternum [v0.8] [Caribdis]",
+            "version": "v0.8",
+            "engine": "Ren'Py",
+            "cover_image": "cover.jpg",
+            "tags": ["3d"],
+        }
+    )
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", lookup)
+    assert api.lookup_thread_details("https://f95zone.to/threads/eternum.123/") == {
+        "success": True,
+        "title": "Eternum",
+        "version": "0.8",
+        "creator": "Caribdis",
+        "engine": "Ren'Py",
+        "cover_image": "cover.jpg",
+        "tags": ["3d"],
+    }
+    lookup.reset_mock()
+    assert (
+        api.lookup_thread_details("https://example.com/threads/123/")["success"]
+        is False
+    )
+    lookup.assert_not_called()
+    lookup.return_value = {"success": False, "error": "Offline"}
+    assert api.lookup_thread_details("https://f95zone.to/threads/123/") == {
+        "success": False,
+        "error": "Offline",
+    }
+    lookup.side_effect = OSError("Network failure")
+    assert (
+        api.lookup_thread_details("https://f95zone.to/threads/123/")["success"] is False
+    )
+
+
+def test_archive_engine_preview(tmp_path):
+    lib = tmp_path / "lib"
+    update_setting("library_folder", str(lib))
+    update_setting("library_folder_pattern", "{engine}/{creator}/{title}/{version}")
+    archive = tmp_path / "Game-2.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+    gid = add_game("Game", str(lib / "RPGM/Game/1.0/Game.exe"), engine="RPGM")
+    api = Api()
+    inspected = api.inspect_archive(str(archive), gid)
+    assert inspected["engine"] == "RPGM"
+    assert inspected["engine_pending"] is False
+    assert inspected["destination"] == str(lib / "RPGM/Game/2.0")
+    assert api.preview_install_destination(
+        {"title": "Game", "version": "2.0", "engine": "RPGM", "game_id": gid}
+    ) == {
+        "destination": str(lib / "RPGM/Game/2.0"),
+        "engine_pending": False,
+    }
+    assert api.preview_install_destination({"title": "Game", "engine": ""}) == {
+        "destination": str(lib / "Game"),
+        "engine_pending": True,
+    }
+    assert api.inspect_archive(str(archive))["engine_pending"] is True
+    update_setting("library_folder_pattern", "{creator}/{title}/{version}")
+    assert api.preview_install_destination({"title": "Game"})["engine_pending"] is False
+
+
+def test_api_install_archive_passes_seed_metadata(tmp_path):
+    archive = tmp_path / "Seeded-1.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+    result = Api().install_archive(
+        {
+            "archive_path": str(archive),
+            "library_folder": str(tmp_path / "lib"),
+            "title": "Seeded",
+            "version": "1.0",
+            "engine": "RPGM",
+            "cover_image": "cover.jpg",
+            "tags": ["3d", "romance"],
+            "rating": "4.5",
+        }
+    )
+    assert result["success"] is True
+    game = next(g for g in get_all_games() if g["id"] == result["game_id"])
+    assert game["cover_image_path"] == "cover.jpg"
+    assert game["tags"] == "3d, romance"
+    assert game["rating"] == "4.5"

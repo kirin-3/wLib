@@ -6,15 +6,18 @@ import {
   api,
   type ArchiveInstallResponse,
   type GameRecord,
+  type InstallDestinationOptions,
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
+import { createInstallPreview, mergeArchiveFields, type InstallArchiveSeed } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
   modelValue: boolean;
   game?: GameRecord | null;
   preselectedArchive?: string;
+  seed?: InstallArchiveSeed | undefined;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
 
@@ -25,6 +28,21 @@ const archive = ref("");
 const title = ref("");
 const version = ref("");
 const creator = ref("");
+const engine = ref("");
+const coverImage = ref("");
+const tags = ref<string | string[]>("");
+const rating = ref("");
+const enginePending = ref(false);
+const lookupMessage = ref("");
+const lookupLoading = ref(false);
+const previewError = ref("");
+type DetailField = "title" | "version" | "creator" | "engine";
+const edited = new Set<DetailField>();
+let lookupRequestId = 0;
+let lastLookupUrl = "";
+const requestSeed = ref<InstallArchiveSeed | undefined>();
+const engineOptions = ["ADRIFT", "Flash", "Godot", "HTML", "Java", "Others", "QSP", "RAGS", "Ren'Py", "RPGM", "Tads", "Unity", "Unreal Engine", "WebGL", "Wolf RPG"];
+
 const f95Url = ref("");
 const destination = ref("");
 const toolError = ref("");
@@ -55,7 +73,8 @@ const canInstall = computed(
     title.value.trim() !== "" &&
     !toolError.value &&
     !libraryFolderMissing.value &&
-    !inspecting.value,
+    !inspecting.value &&
+    !lookupLoading.value,
 );
 
 const close = () => {
@@ -67,9 +86,24 @@ const modalRef = ref<HTMLElement | null>(null);
 useModalKeyboard(modalRef, () => props.modelValue, close);
 
 let inspectRequestId = 0;
+// Title and version guessed from the current archive's file name.
+let archiveGuess = { title: "", version: "" };
 
 const reset = () => {
   inspectRequestId++;
+  archiveGuess = { title: "", version: "" };
+  lookupRequestId++;
+  lastLookupUrl = "";
+  preview.cancel();
+  edited.clear();
+  engine.value = "";
+  coverImage.value = "";
+  tags.value = "";
+  rating.value = "";
+  enginePending.value = false;
+  lookupMessage.value = "";
+  lookupLoading.value = false;
+  previewError.value = "";
   phase.value = "pick";
   archive.value = "";
   title.value = "";
@@ -92,6 +126,69 @@ const reset = () => {
   duplicateGameId.value = null;
   inspecting.value = false;
 };
+
+const preview = createInstallPreview(
+  (options: InstallDestinationOptions) => api.previewInstallDestination(options),
+  (info) => {
+    destination.value = info.destination;
+    enginePending.value = info.engine_pending;
+    previewError.value = "";
+  },
+  () => {
+    destination.value = "";
+    previewError.value = "Could not preview the destination folder.";
+  },
+);
+const updatePreview = () => {
+  if (!props.modelValue || phase.value === "installing" || phase.value === "done") return;
+  preview.schedule({
+    title: title.value, version: version.value, creator: creator.value,
+    engine: engine.value, game_id: target.value?.id,
+  });
+};
+watch([title, version, creator, engine, libraryFolder], updatePreview);
+
+const lookupDetails = async () => {
+  const url = f95Url.value.trim();
+  if (isUpdate.value || requestSeed.value || !url || url === lastLookupUrl || phase.value === "installing") return;
+  lastLookupUrl = url;
+  const requestId = ++lookupRequestId;
+  lookupLoading.value = true;
+  lookupMessage.value = "";
+  try {
+    const info = await api.lookupThreadDetails(url);
+    if (requestId !== lookupRequestId || !props.modelValue || f95Url.value.trim() !== url) return;
+    if (!info.success) throw new Error(info.error || "Thread unavailable");
+    const fields = mergeArchiveFields(
+      { title: title.value, version: version.value, creator: creator.value, engine: engine.value },
+      { title: info.title || "", version: info.version || "", creator: info.creator || "", engine: info.engine || "" },
+      edited,
+    );
+    title.value = fields.title;
+    version.value = fields.version;
+    creator.value = fields.creator;
+    engine.value = fields.engine;
+    coverImage.value = info.cover_image || "";
+    tags.value = info.tags || "";
+  } catch (error) {
+    if (requestId !== lookupRequestId || !props.modelValue || f95Url.value.trim() !== url) return;
+    lookupMessage.value = "Thread details could not be loaded. You can still install using the details above.";
+    console.error("Failed to load thread details", error);
+  } finally {
+    if (requestId === lookupRequestId) lookupLoading.value = false;
+  }
+};
+// Invalidate as soon as the URL is edited, before a new commit starts a lookup.
+watch(f95Url, () => {
+  lookupRequestId++;
+  lookupLoading.value = false;
+  lookupMessage.value = "";
+  lastLookupUrl = "";
+  if (!requestSeed.value && !isUpdate.value) {
+    coverImage.value = "";
+    tags.value = "";
+  }
+}, { flush: "sync" });
 
 const loadLibraryFolder = async () => {
   try {
@@ -127,14 +224,20 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
-    if (!title.value.trim()) title.value = isUpdate.value ? (target.value?.title || info.title || "") : (info.title || "");
-    if (target.value?.latest_version?.trim()) {
+    // A guess from a previously picked archive is replaced; thread, seed and typed values are kept.
+    const replaceable = (field: "title" | "version", value: string) =>
+      !edited.has(field) && (!value.trim() || value === archiveGuess[field]);
+    if (replaceable("title", title.value)) title.value = isUpdate.value ? (target.value?.title || info.title || "") : (info.title || "");
+    if (target.value?.latest_version?.trim() && !edited.has("version")) {
       version.value = target.value.latest_version.trim();
-    } else if (!version.value.trim()) {
+    } else if (replaceable("version", version.value)) {
       version.value = info.version || "";
     }
-    if (!creator.value.trim()) creator.value = isUpdate.value ? (target.value?.developer || info.creator || "") : (info.creator || "");
+    archiveGuess = { title: info.title || "", version: info.version || "" };
+    if (!engine.value.trim() && !edited.has("engine")) engine.value = info.engine || "";
+    if (!creator.value.trim() && !edited.has("creator")) creator.value = isUpdate.value ? (target.value?.developer || info.creator || "") : (info.creator || "");
     destination.value = info.destination || "";
+    enginePending.value = !!info.engine_pending;
     toolError.value = info.tool_error || "";
     oldFolder.value = info.old_folder || "";
     removable.value = !!info.removable;
@@ -142,6 +245,7 @@ const inspect = async () => {
     if (!removable.value) removeOld.value = false;
     else if (isUpdate.value) removeOld.value = true;
     phase.value = "ready";
+    updatePreview();
   } catch (e) {
     if (requestId !== inspectRequestId || !props.modelValue) return;
     inspectError.value = e instanceof Error ? e.message : String(e);
@@ -158,11 +262,6 @@ const browseArchive = async () => {
     const path = await api.browseArchiveFile(archive.value);
     if (path && props.modelValue) {
       archive.value = path;
-      version.value = "";
-      if (!isUpdate.value) {
-        title.value = "";
-        creator.value = "";
-      }
       await inspect();
     }
   } catch (e) {
@@ -221,10 +320,14 @@ const pollStatus = () => {
 
 onBeforeUnmount(() => {
   stopPolling();
+  preview.cancel();
+  lookupRequestId++;
 });
 
 const install = async () => {
   if (!canInstall.value) return;
+  preview.cancel();
+  lookupRequestId++;
   phase.value = "installing";
   installError.value = "";
   installStage.value = "starting";
@@ -237,6 +340,10 @@ const install = async () => {
       title: title.value.trim(),
       version: version.value.trim(),
       creator: creator.value.trim(),
+      engine: engine.value.trim(),
+      cover_image: coverImage.value,
+      tags: tags.value,
+      rating: rating.value,
       f95_url: f95Url.value.trim(),
       library_folder: libraryFolder.value || undefined,
       remove_old: removeOld.value,
@@ -261,19 +368,34 @@ const install = async () => {
   }
 };
 
-const seed = () => {
+const seedForm = () => {
   reset();
   target.value = props.game ?? null;
   seededArchive.value = props.preselectedArchive || "";
+  requestSeed.value = props.seed;
   if (target.value) {
     title.value = target.value.title || "";
     creator.value = target.value.developer || "";
+    engine.value = target.value.engine || "";
     f95Url.value = target.value.f95_url || "";
     // The installed version is never the update's version; let the archive name fill it.
     version.value = target.value.latest_version?.trim() || "";
   }
+  else if (requestSeed.value) {
+    const values = requestSeed.value;
+    title.value = values.title;
+    version.value = values.version;
+    creator.value = values.creator;
+    engine.value = values.engine;
+    f95Url.value = values.f95Url;
+    coverImage.value = values.coverImage;
+    tags.value = values.tags;
+    rating.value = values.rating;
+  }
+  const requestId = inspectRequestId;
   void loadLibraryFolder().then(() => {
-    if (!props.modelValue) return;
+    if (!props.modelValue || requestId !== inspectRequestId) return;
+    void lookupDetails();
     if (seededArchive.value) {
       archive.value = seededArchive.value;
       void inspect();
@@ -283,22 +405,24 @@ const seed = () => {
 
 const hasPendingRequest = () =>
   (props.game?.id ?? null) !== (target.value?.id ?? null) ||
-  (props.preselectedArchive || "") !== seededArchive.value;
+  (props.preselectedArchive || "") !== seededArchive.value ||
+  props.seed !== requestSeed.value;
 
 // Re-seed when the dialog opens or a new request (another game or archive) lands
 // while it is open; a superseded inspection is cheap to cancel. A running install
 // owns the form, so the request waits until the install ends (see below).
 watch(
-  () => [props.modelValue, props.game?.id ?? null, props.preselectedArchive] as const,
+  () => [props.modelValue, props.game?.id ?? null, props.preselectedArchive, props.seed] as const,
   ([open]) => {
     if (!open) {
       stopPolling();
       reset();
       target.value = null;
       seededArchive.value = "";
+      requestSeed.value = undefined;
       return;
     }
-    if (phase.value !== "installing") seed();
+    if (phase.value !== "installing") seedForm();
   },
 );
 
@@ -308,7 +432,7 @@ watch(
 watch(phase, (next, prev) => {
   if (prev !== "installing" || next !== "ready" || !props.modelValue || !hasPendingRequest()) return;
   if (installError.value) notifyError(`Install for ${target.value?.title || "archive"} failed: ${installError.value}`);
-  seed();
+  seedForm();
 });
 </script>
 
@@ -383,22 +507,33 @@ watch(phase, (next, prev) => {
         <div v-if="phase !== 'pick'" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="block">
             <span class="field-label">Title</span>
-            <input v-model="title" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="title" @input="edited.add('title')" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Version</span>
-            <input v-model="version" type="text" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="version" @input="edited.add('version')" type="text" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Creator</span>
-            <input v-model="creator" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="creator" @input="edited.add('creator')" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+          </label>
+          <label class="block">
+            <span class="field-label">Engine</span>
+            <input v-model="engine" @input="edited.add('engine')" list="install-engine-options" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" />
+            <datalist id="install-engine-options">
+              <option v-for="option in engineOptions" :key="option" :value="option" />
+            </datalist>
           </label>
           <label class="block">
             <span class="field-label">F95Zone thread URL</span>
-            <input v-model="f95Url" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="f95Url" @change="lookupDetails" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter.prevent="lookupDetails" />
           </label>
         </div>
 
+        <p v-if="lookupLoading" class="text-xs" style="color: var(--text-muted)">Loading thread details…</p>
+        <p v-if="lookupMessage" class="text-xs" style="color: var(--warning-text)">{{ lookupMessage }}</p>
+        <p v-if="previewError" class="text-xs" style="color: var(--warning-text)">{{ previewError }}</p>
+        <p v-if="enginePending" class="text-xs" style="color: var(--text-muted)">The engine will be detected from the files before choosing the final folder.</p>
         <p v-if="destination" class="text-xs font-mono break-all" style="color: var(--text-muted)">
           Installs to: {{ destination }}
         </p>
