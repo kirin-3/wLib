@@ -29,16 +29,7 @@ import {
 } from "./utils/installArchive";
 import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
 
-interface ExtensionEventDetail {
-  url: string;
-  title?: string;
-  version?: string;
-  coverImage?: string;
-  tags?: string[];
-  rating?: string;
-  developer?: string;
-  engine?: string;
-}
+import { extensionAddQuery, extensionOpenQuery, type ExtensionGameDetail } from "./utils/storeLinks";
 
 const router = useRouter();
 const mainRef = ref<HTMLElement | null>(null);
@@ -220,35 +211,16 @@ const toggleNavCollapse = () => {
 };
 
 const handleExtensionAdd = (event: Event) => {
-  const data = (event as CustomEvent<ExtensionEventDetail>).detail;
-  if (data && data.url) {
-    router.push({
-      path: "/",
-      query: {
-        action: "import",
-        f95url: data.url,
-        title: data.title,
-        version: data.version || "",
-        coverImage: data.coverImage,
-        tags: JSON.stringify(data.tags || []),
-        rating: data.rating,
-        developer: data.developer,
-        engine: data.engine,
-      },
-    }).catch((err) => console.error("Router error:", err));
+  const data = (event as CustomEvent<ExtensionGameDetail>).detail;
+  if (data && (data.url || data.links?.length)) {
+    router.push({ path: "/", query: extensionAddQuery(data) }).catch((err) => console.error("Router error:", err));
   }
 };
 
 const handleExtensionOpen = (event: Event) => {
-  const data = (event as CustomEvent<ExtensionEventDetail>).detail;
-  if (data && data.url) {
-    router.push({
-      path: "/",
-      query: {
-        action: "open",
-        f95url: data.url,
-      },
-    }).catch((err) => console.error("Router error:", err));
+  const data = (event as CustomEvent<ExtensionGameDetail>).detail;
+  if (data && (data.url || data.gameId)) {
+    router.push({ path: "/", query: extensionOpenQuery(data) }).catch((err) => console.error("Router error:", err));
   }
 };
 

@@ -33,7 +33,7 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import type { CompanionTool, GameRecord, LaunchMode, LaunchTarget } from "../services/api";
+import type { CompanionTool, GameRecord, LaunchMode, LaunchTarget, StoreLink } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import ImportFolderModal from "../components/modals/ImportFolderModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
@@ -87,7 +87,10 @@ interface ModalUpdateState extends UpdateNotice {
   running: boolean;
 }
 
+import { extensionGameId, readStoreLinks, gamePageUrl } from "../utils/storeLinks";
+
 interface AddGamePayload {
+  links?: StoreLink[];
   title: string;
   exe_path: string;
   f95_url?: string;
@@ -1042,7 +1045,7 @@ watch(
     if (!q) return;
     const action = readQueryValue(q.action);
     const queryUrl = readQueryValue(q.f95url);
-    if (action === "import" && queryUrl) {
+    if (action === "import" && (queryUrl || readStoreLinks(readQueryValue(q.links)).length)) {
       await loadGames();
       // Keep the import query until the dialog closes so its archive hand-off
       // can identify the extension entry point and retain all seed metadata.
@@ -1053,11 +1056,11 @@ watch(
       showAddModal.value = true;
       void router.replace({ path: "/", query: {} });
     }
-    if (action === "open" && queryUrl) {
+    if (action === "open" && (queryUrl || extensionGameId(q.gameId))) {
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
       try {
         const match = ((await api.getGames()) || []).find((g) =>
-          urlsMatchByThreadIdentity(g.f95_url, queryUrl),
+          extensionGameId(q.gameId) ? g.id === extensionGameId(q.gameId) : urlsMatchByThreadIdentity(g.f95_url, queryUrl),
         );
         if (match) openDetail(match);
       } catch (e) {
@@ -1094,6 +1097,7 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       "", // proton_version
       gameData.launch_mode || "auto",
       gameData.command_line_args || "",
+      gameData.links || [],
     );
     if (result && result.success === false) {
       notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);
@@ -1248,7 +1252,7 @@ const runContextAction = async (
       action === "folder"
         ? await api.openFolder(gameFolder(game.exe_path))
         : action === "thread"
-          ? await api.openInBrowser(game.f95_url || "")
+          ? await api.openInBrowser(gamePageUrl(game))
           : action === "remove"
             ? await api.deleteGame(game.id)
             : await api.updateGame(
@@ -2565,10 +2569,10 @@ onUnmounted(() => {
               Open folder
             </button>
             <button
+              v-if="gamePageUrl(contextMenu.game)"
               @click="runContextAction('thread')"
-              :disabled="!contextMenu.game.f95_url"
             >
-              Open F95 thread
+              {{ contextMenu.game.f95_url ? "Open F95 thread" : "Open store page" }}
             </button>
             <button
               @click="runContextAction('check')"

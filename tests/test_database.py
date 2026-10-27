@@ -45,7 +45,106 @@ from core.database import (
     set_game_collections,
     set_sandbox_for_all_games,
     _coerce_sort_order,
+    find_games_by_links,
+    get_game_links,
+    replace_game_links,
 )
+
+
+def test_game_links_migrate_existing_database_and_cascade():
+    game_id = add_game("Existing game", "")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TABLE game_links")
+        conn.commit()
+    init_db()
+    init_db()
+    assert get_game_links(game_id) == []
+    link = {"url": "https://store.steampowered.com/app/123/"}
+    replace_game_links(game_id, "page", [link])
+    with closing(get_connection()) as conn:
+        assert [row[1] for row in conn.execute("PRAGMA table_info(game_links)")] == [
+            "id",
+            "game_id",
+            "source",
+            "external_id",
+            "url",
+            "origin",
+            "created_at",
+        ]
+        assert [
+            row[2] for row in conn.execute("PRAGMA index_info(idx_game_links_identity)")
+        ] == ["source", "external_id"]
+    delete_game(game_id)
+    assert get_game_links(game_id) == []
+
+
+def test_game_links_replace_only_origin_and_preserve_unchanged_rows():
+    game_id = add_game("Links", "")
+    steam = {"url": "https://store.steampowered.com/app/123/"}
+    dlsite = {"url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"}
+    vndb = {"url": "https://vndb.org/v123"}
+    replace_game_links(game_id, "user", [steam])
+    replace_game_links(game_id, "f95_post", [steam, dlsite, dlsite])
+    assert len(get_game_links(game_id)) == 2
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    with closing(get_connection()) as conn:
+        before = conn.execute("SELECT * FROM game_links ORDER BY id").fetchall()
+    replace_game_links(game_id, "f95_post", [dlsite, steam])
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+    with closing(get_connection()) as conn:
+        assert conn.execute("SELECT * FROM game_links ORDER BY id").fetchall() == before
+    replace_game_links(game_id, "f95_post", [vndb])
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    assert [link["source"] for link in get_game_links(game_id)] == ["steam", "vndb"]
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    replace_game_links(game_id, "f95_post", [])
+    assert [link["source"] for link in get_game_links(game_id)] == ["steam"]
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_game_links_match_exact_work_ids_and_report_ambiguity():
+    first = add_game("First", "")
+    second = add_game("Second", "")
+    links = [{"url": "https://store.steampowered.com/app/123/"}]
+    for game_id in (first, second):
+        replace_game_links(game_id, "page", links)
+    assert find_games_by_links(links) == [first, second]
+    assert (
+        find_games_by_links([{"url": "https://store.steampowered.com/app/12/"}]) == []
+    )
+    creator_links = [
+        {"url": "https://www.patreon.com/developer"},
+        {"url": "https://subscribestar.adult/developer"},
+        {"url": "https://developer.gumroad.com/l/game"},
+        {"url": "https://example.com/developer"},
+    ]
+    replace_game_links(first, "user", creator_links)
+    assert find_games_by_links(creator_links) == []
+
+
+def test_game_links_full_replace_keeps_identical_links_from_any_origin():
+    game_id = add_game("Links", "")
+    steam = {"url": "https://store.steampowered.com/app/123/"}
+    vndb = {"url": "https://vndb.org/v123"}
+    replace_game_links(game_id, "f95_post", [steam])
+    replace_game_links(game_id, "page", [vndb])
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    replace_game_links(game_id, "backup", [steam, vndb], replace_all=True)
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+    replace_game_links(game_id, "backup", [vndb], replace_all=True)
+    assert [link["source"] for link in get_game_links(game_id)] == ["vndb"]
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_game_links_url_changes_mark_sync_and_keep_other_origins():
+    game_id = add_game("Links", "")
+    replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1/"}])
+    assert get_game_links(game_id)[0]["url"] == "https://vndb.org/v1/"
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="origin"):
+        replace_game_links(game_id, "invalid", [])
 
 
 def test_tag_colors_validation_and_sync_tracking():

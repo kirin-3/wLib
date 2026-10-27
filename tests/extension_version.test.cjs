@@ -241,7 +241,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.1.2');
+  assert.equal(manifest.version, '1.2.0');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -297,8 +297,9 @@ test('bridge refuses non-allowlisted URLs without fetching', async () => {
   assert.equal(refused.ok, false);
   assert.equal(refused.error, 'refused');
   assert.equal(fetched, false);
-  // background.js must not touch tabs, windows, offscreen, or cookies APIs.
-  assert.ok(!backgroundSource.includes('chrome.tabs'));
+  // The F95 fetch bridge must not touch tabs; optional-site registration may
+  // inject into already-open pages after an explicit permission grant.
+  assert.ok(!backgroundSource.slice(backgroundSource.indexOf('// ---- Extension fetch fallback'), backgroundSource.indexOf('// Optional sites')).includes('chrome.tabs'));
   assert.ok(!backgroundSource.includes('chrome.windows'));
   assert.ok(!backgroundSource.includes('chrome.offscreen'));
   assert.ok(!backgroundSource.includes('chrome.cookies'));
@@ -385,7 +386,7 @@ const makeBridgeHarness = ({ canFetch = true } = {}) => {
   const chromeStub = {
     runtime: {
       onMessage: { addListener: () => {} },
-      getManifest: () => ({ version: '1.1.2' }),
+      getManifest: () => ({ version: '1.2.0' }),
       onStartup: { addListener: () => {} },
       onInstalled: { addListener: () => {} },
     },
@@ -439,7 +440,7 @@ test('bridge hello carries protocol and can_fetch', async () => {
   const hello = sent.map((raw) => JSON.parse(raw)).find((msg) => msg.type === 'hello');
   assert.ok(hello);
   assert.equal(hello.protocol, 1);
-  assert.equal(hello.extension_version, '1.1.2');
+  assert.equal(hello.extension_version, '1.2.0');
   assert.equal(hello.can_fetch, true);
 });
 

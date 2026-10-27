@@ -104,6 +104,35 @@ Stores the library records and their associated configuration flags.
 | `collections` | `TEXT DEFAULT '[]'` | JSON array of collection names the game belongs to. Read back as a decoded `list[str]`, matched against the collection list case-insensitively; names that no longer exist are hidden. Part of `SYNC_GAME_COLUMNS`, so membership changes bump the sync time. |
 | `screenshots` | `TEXT DEFAULT '[]'` | JSON list of remote screenshot URLs collected from the thread starter post. Refreshed from thread page reads alongside thread edit metadata; an empty page result keeps the stored list. Read back as a decoded `list[str]` of non-empty strings, empty when none are stored. Not user-editable (`update_game` ignores it) and not part of `SYNC_GAME_COLUMNS`, so a refresh alone does not bump the sync time. |
 
+### Table: `game_links`
+
+Store identities are added by `init_db()` without changing `games.f95_url`.
+Existing games start with no links.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `INTEGER PRIMARY KEY` | Local link identity. |
+| `game_id` | `INTEGER NOT NULL` | References `games.id`, with `ON DELETE CASCADE`. |
+| `source` | `TEXT NOT NULL` | `dlsite`, `steam`, `itch`, `fanza`, `patreon`, `subscribestar`, `gumroad`, `vndb`, `ryuugames`, or `other`. |
+| `external_id` | `TEXT NOT NULL` | Stable site identity derived by `core/store_links.py`. |
+| `url` | `TEXT NOT NULL` | HTTP(S) URL, without fragment or tracking query. Product identity queries (`cid` and `p`) are retained. |
+| `origin` | `TEXT NOT NULL` | `f95_post`, `page`, `user`, or `backup`. |
+| `created_at` | `TIMESTAMP` | ISO timestamp when the row was inserted. |
+
+`UNIQUE(game_id, source, external_id)` prevents duplicate identities within a
+game. The non-unique `idx_game_links_identity(source, external_id)` index allows
+lookups to report multiple matching games without choosing one to merge.
+`find_games_by_links` matches exact work IDs only; `patreon`, `subscribestar`,
+`gumroad`, and `other` never match games. F95 URLs are not stored here.
+
+`get_game_links(game_id)` returns `{source, id, url}` records in insertion order.
+`replace_game_links(game_id, origin, links)` normalizes incoming URLs and replaces
+only rows from that origin. An identity already held by another origin stays
+with that origin. Identical rows are not rewritten; changed URLs are deleted
+and inserted. `sync_game_links_insert` and `sync_game_links_delete` advance
+`sync_local_modified_at` using the same monotonic UTC rule as game changes.
+No-op replacements leave the sync timestamp unchanged.
+
 ### Table: `game_launch_targets`
 Stores additional executable targets for games that ship with multiple playable parts. The canonical default executable remains `games.exe_path`; this table only contains extra named targets.
 

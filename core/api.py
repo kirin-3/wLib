@@ -171,7 +171,7 @@ normalize_thread_url: Callable[[str], str] = cast(
     Callable[[str], str], cast(object, _normalize_thread_url)
 )
 
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 # Lunar.Engine.zip from visibou/lunarengine v.7.2 (uploaded 2020-11-29, 29738666 bytes).
 LUNAR_ENGINE_SHA256 = "c208f52ca1873007df3f7ef71b61f3c2870a58ad0ddadff7944785f6bf36de23"
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
@@ -1878,10 +1878,19 @@ class Api:
         proton_version: str = "",
         launch_mode: str = "auto",
         command_line_args: str = "",
+        links: object = None,
     ) -> dict[str, object]:
         import sqlite3
 
-        from core.database import add_game
+        from core.database import (
+            add_game,
+            find_game_by_f95_url,
+            find_games_by_links,
+            get_game,
+            replace_game_links,
+            update_game,
+        )
+        from core.store_links import coerce_store_links
 
         if not isinstance(title, str) or not title.strip():
             return {
@@ -1905,26 +1914,60 @@ class Api:
 
         normalized_url = normalize_thread_url(f95_url)
         normalized_launch_mode = normalize_launch_mode(launch_mode)
+        incoming_links = coerce_store_links(links)
+        linked_ids = find_games_by_links(incoming_links)
+        existing_thread = (
+            find_game_by_f95_url(normalized_url) if normalized_url else None
+        )
+        attach_id: int | None = None
+        attach_fields: dict[str, object] = {"f95_url": normalized_url}
+        if existing_thread or linked_ids:
+            if not existing_thread and len(linked_ids) == 1 and normalized_url:
+                linked_game = get_game(linked_ids[0])
+                if linked_game and not linked_game.get("f95_url"):
+                    attach_id = linked_ids[0]
+                    # Adding with an executable installs a wishlisted match
+                    # instead of dropping the path the user just chose.
+                    if exe_path.strip() and not str(
+                        linked_game.get("exe_path") or ""
+                    ).strip():
+                        attach_fields["exe_path"] = exe_path
+                        if version.strip():
+                            attach_fields["version"] = version
+            if attach_id is None:
+                return {
+                    "success": False,
+                    "error": "A game with this URL is already in your library",
+                    "error_code": "duplicate_url",
+                }
 
         try:
-            game_id = add_game_fn(
-                title,
-                exe_path,
-                normalized_url,
-                version=version,
-                cover_image=cover_image,
-                tags=tags,
-                rating=rating,
-                developer=developer,
-                engine=engine,
-                run_japanese_locale=run_japanese_locale,
-                run_wayland=run_wayland,
-                auto_inject_ce=auto_inject_ce,
-                custom_prefix=custom_prefix,
-                proton_version=proton_version,
-                launch_mode=normalized_launch_mode,
-                command_line_args=command_line_args,
-            )
+            if attach_id is not None:
+                _ = update_game(attach_id, attach_fields)
+                game_id = attach_id
+            else:
+                game_id = add_game_fn(
+                    title,
+                    exe_path,
+                    normalized_url,
+                    version=version,
+                    cover_image=cover_image,
+                    tags=tags,
+                    rating=rating,
+                    developer=developer,
+                    engine=engine,
+                    run_japanese_locale=run_japanese_locale,
+                    run_wayland=run_wayland,
+                    auto_inject_ce=auto_inject_ce,
+                    custom_prefix=custom_prefix,
+                    proton_version=proton_version,
+                    launch_mode=normalized_launch_mode,
+                    command_line_args=command_line_args,
+                )
+            if game_id is not None and incoming_links:
+                replace_game_links(
+                    game_id, "f95_post" if normalized_url else "page", incoming_links
+                )
         except sqlite3.IntegrityError as exc:
             return self._integrity_error_response(exc)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
@@ -1934,7 +1977,8 @@ class Api:
         if metadata_pending:
             assert game_id is not None
             needs_metadata_backfill = (
-                self._is_missing_text(engine)
+                attach_id is not None
+                or self._is_missing_text(engine)
                 or self._is_missing_text(cover_image)
                 or not self._normalize_tags_csv(tags)
             )
@@ -1953,6 +1997,7 @@ class Api:
             "id": game_id,
             "title": title,
             "metadata_pending": metadata_pending,
+            "attached": attach_id is not None,
         }
 
     def _fetch_added_game_metadata(
@@ -2597,7 +2642,12 @@ class Api:
                 if isinstance(item, str) and item.strip():
                     incoming_screenshots.append(item.strip())
         has_screenshots = len(incoming_screenshots) > 0
-        if not has_edit_metadata and not has_completion and not has_screenshots:
+        from core.store_links import coerce_store_links
+
+        incoming_links = coerce_store_links(metadata.get("store_links"))
+        if not (
+            has_edit_metadata or has_completion or has_screenshots or incoming_links
+        ):
             return []
 
         last_edit_raw = str(metadata.get("thread_main_post_last_edit_at") or "").strip()
@@ -2606,9 +2656,10 @@ class Api:
         import json
         import sqlite3
 
-        from core.database import get_connection
+        from core.database import get_connection, replace_game_links
 
         newly_finished_ids: list[int] = []
+        link_game_ids: list[int] = []
         updated_rows = 0
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
@@ -2624,6 +2675,8 @@ class Api:
                 if not isinstance(game_id, int):
                     continue
 
+                if incoming_links:
+                    link_game_ids.append(game_id)
                 current_last_edit = cast(object, game["thread_main_post_last_edit_at"])
                 current_checked_at = cast(object, game["thread_main_post_checked_at"])
                 fields: dict[str, object] = {}
@@ -2666,6 +2719,9 @@ class Api:
 
             if updated_rows:
                 conn.commit()
+
+        for game_id in link_game_ids:
+            replace_game_links(game_id, "f95_post", incoming_links)
 
         return newly_finished_ids
 
@@ -2808,9 +2864,23 @@ class Api:
                 and int(str(game.get("id"))) in wanted_ids
             ]
         games_with_url: list[GameRecord] = []
+        from core.store_links import coerce_store_links
+
+        ryuu_games: list[tuple[dict[str, object], str]] = []
         for game in all_games_raw:
             game_id = game.get("id")
             url = game.get("f95_url")
+            if isinstance(game_id, int) and not url and self._catalog_enabled():
+                ryuu_link = next(
+                    (
+                        link
+                        for link in coerce_store_links(game.get("links"))
+                        if link["source"] == "ryuugames"
+                    ),
+                    None,
+                )
+                if ryuu_link:
+                    ryuu_games.append((game, ryuu_link["url"]))
             if (
                 not isinstance(game_id, int)
                 or not isinstance(url, str)
@@ -2839,7 +2909,7 @@ class Api:
             self._update_cancelled = False
             self._update_outcome = "running"
             self._update_error = ""
-            self._update_total = len(games_with_url)
+            self._update_total = len(games_with_url) + len(ryuu_games)
             self._update_checked = 0
             # The callback fires after a game finishes, so show the game being checked now.
             self._update_current = games_with_url[0]["title"] if games_with_url else ""
@@ -2853,6 +2923,12 @@ class Api:
         }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
         previous_latest_versions = {g["id"]: g.get("latest_version", "") for g in games_with_url}
+        previous_latest_versions.update(
+            {
+                int(str(game["id"])): str(game.get("latest_version") or "")
+                for game, _ in ryuu_games
+            }
+        )
 
         def run_checks() -> None:
             outcome = "failed"
@@ -3026,6 +3102,56 @@ class Api:
                                 }
                             )
 
+                from core.game_lookup import resolve_page
+                from core.database import get_game, update_game
+
+                for catalog_game, page_url in ryuu_games:
+                    with self._update_lock:
+                        if self._update_cancelled:
+                            break
+                        self._update_current = str(catalog_game.get("title") or "")
+                    try:
+                        remote = resolve_page(page_url)["catalog_entry"].get("version")
+                        if self._is_actionable_remote_version(remote):
+                            game_id = int(str(catalog_game["id"]))
+                            current = get_game(game_id)
+                            if current is not None and not current.get("f95_url"):
+                                version = str(remote).strip()
+                                _ = update_game(game_id, {"latest_version": version})
+                                skipped = bool(
+                                    normalize_version(current.get("skipped_version"))
+                                ) and normalize_version(
+                                    current.get("skipped_version")
+                                ) == normalize_version(version)
+                                catalog_result: dict[str, object] = {
+                                    "id": game_id,
+                                    "title": str(current.get("title") or ""),
+                                    "current_version": str(
+                                        current.get("version") or ""
+                                    ),
+                                    "latest_version": version,
+                                    "has_update": bool(
+                                        str(current.get("exe_path") or "").strip()
+                                    )
+                                    and self._has_update(
+                                        current.get("version"),
+                                        version,
+                                        current.get("skipped_version"),
+                                    ),
+                                    "skipped": skipped,
+                                    "newly_finished": False,
+                                    "error": "",
+                                    "error_code": "",
+                                }
+                                with self._update_lock:
+                                    self._update_results.append(catalog_result)
+                    except Exception:
+                        pass  # Catalog problems never fail a library update pass.
+                    finally:
+                        with self._update_lock:
+                            self._update_checked += 1
+                            self._update_current = ""
+
                 # A full pass postpones the next automatic check as long as at least
                 # one game was checked; a deleted thread or one timeout must not make
                 # every launch re-check the library. All-failed passes (offline,
@@ -3034,7 +3160,7 @@ class Api:
                     ran_through = (
                         not self._update_cancelled
                         and not batch_error
-                        and self._update_checked == len(urls)
+                        and self._update_checked == self._update_total
                     )
                     completed = ran_through and all(
                         not result["error"] for result in self._update_results
@@ -5272,6 +5398,20 @@ class Api:
             }
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
+        from core.database import find_games_by_links
+        from core.store_links import coerce_store_links
+
+        incoming_links = coerce_store_links(payload.get("links"))
+        linked_ids = [
+            value for value in find_games_by_links(incoming_links) if value != game_id
+        ]
+        if linked_ids:
+            return {
+                "success": False,
+                "error": "A game with these store links is already in your library.",
+                "error_code": "duplicate_url",
+                "game_id": linked_ids[0],
+            }
         f95_url = normalize_thread_url(
             str(payload.get("f95_url") or payload.get("url") or "")
         )
@@ -5371,6 +5511,12 @@ class Api:
 
         self._set_archive_install_status(running=False, stage="done")
         installed_id = result.get("game_id")
+        if incoming_links and isinstance(installed_id, int):
+            from core.database import replace_game_links
+
+            replace_game_links(
+                installed_id, "f95_post" if f95_url else "page", incoming_links
+            )
 
         # New installs with a thread URL get the same metadata fetch as add_game.
         if game_id is None and f95_url and isinstance(installed_id, int):

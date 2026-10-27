@@ -32,7 +32,7 @@ function readWLibResponse({ response, data }) {
 
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
-const MIN_APP_VERSION = "0.4.1";
+const MIN_APP_VERSION = "0.4.2";
 
 // Compare dot-separated numeric release components, treating missing parts as
 // zero. A leading `v` and any `-suffix` (e.g. `-rc1`) are ignored, so
@@ -61,6 +61,8 @@ function compareVersions(a, b) {
 
 function normalizeCheckPayload(data) {
     const payload = {
+        ...(Number.isSafeInteger(data?.gameId) ? { gameId: data.gameId } : {}),
+        ...(data?.canAttachThread ? { canAttachThread: true } : {}),
         exists: Boolean(data && data.exists),
         reachable: true,
     };
@@ -135,9 +137,21 @@ function maybeReloadForNewExtensionVersion(data) {
     }
 }
 
+function pageQuery(message) {
+    let query = `url=${encodeURIComponent(message.url || '')}`;
+    for (const id of Array.isArray(message.ids) ? message.ids : []) query += `&id=${encodeURIComponent(id)}`;
+    return query;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "saveThreadLinks") {
+        fetchWLibJson("http://localhost:8183/api/thread-links", { method:"POST", headers:{"Content-Type":"application/json", ...WLIB_HEADERS}, body:JSON.stringify(message.payload) })
+            .then(readWLibResponse).then(data => sendResponse({success:true,data}))
+            .catch(error => sendResponse({success:false,error:error.message}));
+        return true;
+    }
     if (message.action === "checkGameInWLib") {
-        fetchWLibJson(`http://localhost:8183/api/check?url=${encodeURIComponent(message.url)}`)
+        fetchWLibJson(`http://localhost:8183/api/check?${pageQuery(message)}`)
             .then(({ response, data }) => {
                 if (!response.ok) {
                     throw new Error(data.error || `Request failed with status ${response.status}`);
@@ -189,14 +203,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             .then(({ response, data }) => {
                 sendResponse(response.ok && data.success
                     ? { success: true, data }
-                    : { success: false, error: data.error, error_code: data.error_code });
+                    : { success: false, error: data.error, error_code: data.error_code, attached: data.attached === true });
             })
             .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
     }
 
     if (message.action === "openWLib") {
-        fetchWLibJson(`http://localhost:8183/api/open?url=${encodeURIComponent(message.url)}`, { headers: WLIB_HEADERS })
+        fetchWLibJson(`http://localhost:8183/api/open?${pageQuery(message)}`, { headers: WLIB_HEADERS })
             .then(readWLibResponse)
             .then(data => sendResponse({ success: true, data }))
             .catch(error => sendResponse({ success: false, error: error.message }));
@@ -531,3 +545,49 @@ try {
         chrome.permissions.onRemoved.addListener(() => bridgeSendStatus());
     }
 } catch (_permissionListenerError) {}
+
+// Optional sites are registered only while their permission is granted.
+const WLIB_OPTIONAL_SITES = {
+    dlsite: 'https://www.dlsite.com/*',
+    vndb: 'https://vndb.org/*',
+    ryuugames: 'https://www.ryuugames.com/*',
+};
+let siteRegistrationQueue = Promise.resolve();
+async function syncSiteScripts() {
+    const siteApi = globalThis.browser || chrome;
+    if (!siteApi.scripting || !siteApi.permissions) return;
+    const registered = await siteApi.scripting.getRegisteredContentScripts();
+    for (const [site, origin] of Object.entries(WLIB_OPTIONAL_SITES)) {
+        const id = `wlib-${site}`;
+        const allowed = await siteApi.permissions.contains({origins:[origin]});
+        const exists = registered.some(script => script.id === id);
+        if (!allowed && exists) await siteApi.scripting.unregisterContentScripts({ids:[id]});
+        if (allowed && !exists) {
+            const files = ['store-links.js','site-widget.js',`sites/${site}.js`];
+            await siteApi.scripting.registerContentScripts([{
+                id, matches:[origin], js:files, css:['content.css'], runAt:'document_idle',
+            }]);
+            // Runtime registration covers future navigations; also handle any
+            // already-open pages immediately after the user's permission grant.
+            if (siteApi.tabs?.query) for (const tab of await siteApi.tabs.query({url:[origin]})) {
+                if (!Number.isInteger(tab.id)) continue;
+                try {
+                    await siteApi.scripting.insertCSS({target:{tabId:tab.id},files:['content.css']});
+                    await siteApi.scripting.executeScript({target:{tabId:tab.id},files});
+                } catch (error) { console.warn('wLib page closed or permission changed:',error); }
+            }
+        }
+    }
+}
+function queueSiteSync() {
+    siteRegistrationQueue = siteRegistrationQueue.then(syncSiteScripts).catch(error => console.warn('wLib site permissions:',error));
+    return siteRegistrationQueue;
+}
+if (chrome.permissions && chrome.scripting) {
+    void queueSiteSync();
+    chrome.permissions.onAdded.addListener(queueSiteSync);
+    chrome.permissions.onRemoved.addListener(queueSiteSync);
+    chrome.runtime.onStartup?.addListener(queueSiteSync);
+    chrome.runtime.onInstalled?.addListener(queueSiteSync);
+}
+chrome.action?.onClicked?.addListener(() => chrome.runtime.openOptionsPage());

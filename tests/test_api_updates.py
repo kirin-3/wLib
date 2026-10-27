@@ -3622,3 +3622,40 @@ def test_api_install_archive_passes_seed_metadata(tmp_path):
     assert game["cover_image_path"] == "cover.jpg"
     assert game["tags"] == "3d, romance"
     assert game["rating"] == "4.5"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_ryuugames_only_catalog_update_pass(monkeypatch, enabled):
+    from threading import Thread
+    from core.database import replace_game_links, get_game
+
+    api = Api()
+    game_id = add_game("Ryuu game", "/game", version="1.0")
+    replace_game_links(game_id, "page", [{"url": "https://www.ryuugames.com/?p=42"}])
+    dlsite = add_game("DLsite only", "/other", version="1.0")
+    replace_game_links(
+        dlsite,
+        "page",
+        [{"url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"}],
+    )
+    monkeypatch.setattr(api, "_catalog_enabled", lambda: enabled)
+    monkeypatch.setattr(
+        "core.game_lookup.resolve_page",
+        lambda _: {"catalog_entry": {"version": "1.1"}, "ids": [], "matches": []},
+    )
+    calls = []
+    monkeypatch.setattr(
+        api.scraper, "check_versions", lambda urls, callback: calls.append(urls) or {}
+    )
+    monkeypatch.setattr(Thread, "start", lambda self: self.run())
+    assert api.check_all_updates()["success"]
+    assert calls == [[]]
+    status = api.get_update_status()
+    assert not status["running"]
+    assert status["outcome"] == "completed"
+    if enabled:
+        assert status["results"][0]["has_update"]
+        assert get_game(game_id)["latest_version"] == "1.1"
+    else:
+        assert status["results"] == []
+    assert not get_game(dlsite)["latest_version"]

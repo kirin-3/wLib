@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from typing import IO, TYPE_CHECKING, Callable, Protocol, cast, override
+from collections.abc import Sequence
 
 from core.api import APP_VERSION, Api
 from core.app_log import setup_app_log
@@ -709,24 +710,75 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if 0 < length <= MAX_EXTENSION_BODY_BYTES:
             _ = self.rfile.read(length)
 
-    def _find_matching_game(self, url: object) -> dict[str, object] | None:
+    def _find_matching_game(
+        self, url: object, ids: Sequence[str] = ()
+    ) -> dict[str, object] | None:
         if not isinstance(url, str) or not url.strip():
             return None
 
-        from core.database import find_game_by_f95_url
+        from core.database import find_game_by_f95_url, get_game
+        from core.game_lookup import resolve_page
 
-        return find_game_by_f95_url(url)
+        thread_game = find_game_by_f95_url(url)
+        if thread_game:
+            return thread_game
+        matches = resolve_page(url, ids)["matches"]
+        return get_game(matches[0]) if matches else None
 
-    def _build_check_payload(self, url: object) -> dict[str, object]:
-        matching_game = self._find_matching_game(url)
+    def _build_check_payload(
+        self, url: object, ids: Sequence[str] = ()
+    ) -> dict[str, object]:
+        matching_game = (
+            self._find_matching_game(url, ids) if ids else self._find_matching_game(url)
+        )
         payload: dict[str, object] = {"exists": matching_game is not None}
 
         if matching_game is not None:
+            if isinstance(matching_game.get("id"), int):
+                payload["gameId"] = matching_game["id"]
+            if (
+                extract_thread_id(url)
+                and not matching_game.get("f95_url")
+                and isinstance(matching_game.get("id"), int)
+            ):
+                from core.game_lookup import resolve_page
+
+                if len(resolve_page(str(url), ids)["matches"]) == 1:
+                    payload["canAttachThread"] = True
             payload["wishlisted"] = not str(matching_game.get("exe_path") or "").strip()
             play_status = matching_game.get("play_status")
             if isinstance(play_status, str) and play_status.strip():
                 payload["playStatus"] = play_status.strip()
 
+        return payload
+
+    def _prepare_game_payload(self, raw: object) -> dict[str, object]:
+        from core.game_lookup import resolve_page
+        from core.store_links import coerce_store_links
+
+        if not isinstance(raw, dict):
+            raise ValueError("Request body must be a JSON object")
+        payload = dict(cast(dict[str, object], raw))
+        page_url = str(payload.get("pageUrl") or payload.get("url") or "")
+        links = coerce_store_links(payload.get("links"))
+        if not extract_thread_id(payload.get("url")) and not links:
+            raise ValueError("An F95 thread URL or store link is required")
+        resolved = resolve_page(
+            page_url, [f"{link['source']}:{link['id']}" for link in links]
+        )
+        links = coerce_store_links([*links, *resolved["ids"]])
+        for key, value in resolved["catalog_entry"].items():
+            if value:
+                payload[key] = value
+        payload["url"] = (
+            normalize_thread_url(payload.get("url"))
+            if extract_thread_id(payload.get("url"))
+            else ""
+        )
+        payload["pageUrl"] = page_url
+        payload["links"] = links
+        if not str(payload.get("title") or "").strip() or not (payload["url"] or links):
+            raise ValueError("A title and an F95 thread URL or store link are required")
         return payload
 
     def _get_allowed_origin(self) -> str | None:
@@ -890,7 +942,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             check_payload: dict[str, object] = {"exists": False}
             if check_url:
                 try:
-                    check_payload = self._build_check_payload(check_url)
+                    check_payload = self._build_check_payload(
+                        check_url, query.get("id", [])
+                    )
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     check_payload = {"exists": False}
@@ -925,6 +979,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             game_url = query.get("url", [""])[0]
             resolved_url = normalize_thread_url(game_url) or game_url
+            resolved_game_id: int | None = None
 
             success = True
             error_message = ""
@@ -932,8 +987,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 try:
                     active_window = cast(ExtensionWindow, window_ref)
                     if game_url:
-                        matching_game = self._find_matching_game(game_url)
+                        matching_game = (
+                            self._find_matching_game(game_url, query.get("id", []))
+                            if query.get("id")
+                            else self._find_matching_game(game_url)
+                        )
                         if matching_game:
+                            candidate_id = matching_game.get("id")
+                            resolved_game_id = (
+                                candidate_id if isinstance(candidate_id, int) else None
+                            )
                             resolved_f95_url = matching_game.get("f95_url")
                             if isinstance(resolved_f95_url, str) and resolved_f95_url:
                                 resolved_url = resolved_f95_url
@@ -948,7 +1011,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         b64_url = base64.b64encode(
                             resolved_url_text.encode("utf-8")
                         ).decode("utf-8")
-                        js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-open', {{ detail: {{ url: decodeURIComponent(escape(atob('{b64_url}'))) }} }}));"
+                        id_field = (
+                            f", gameId: {resolved_game_id}"
+                            if resolved_game_id is not None
+                            else ""
+                        )
+                        js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-open', {{ detail: {{ url: decodeURIComponent(escape(atob('{b64_url}'))){id_field} }} }}));"
                         _ = active_window.evaluate_js(js_code)
                 except Exception as e:
                     print(f"[wLib] Failed to process extension open event: {e}")
@@ -963,6 +1031,8 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             payload: dict[str, object] = {"success": success}
+            if resolved_game_id is not None:
+                payload["gameId"] = resolved_game_id
             if error_message:
                 payload["error"] = error_message
             _ = self.wfile.write(json.dumps(payload).encode())
@@ -986,12 +1056,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 raw_payload = cast(object, json.loads(self.rfile.read(content_length).decode("utf-8")))
                 if not isinstance(raw_payload, dict):
                     raise ValueError("Request body must be a JSON object")
-                payload = cast(dict[str, object], raw_payload)
-                # Without a title and thread there is nothing to show or to check for updates.
-                if not str(payload.get("title") or "").strip() or not extract_thread_id(
-                    payload.get("url")
-                ):
-                    raise ValueError("A title and an F95 thread URL are required")
+                payload = self._prepare_game_payload(
+                    cast(dict[str, object], raw_payload)
+                )
                 if api_ref is None:
                     status = 503
                     wishlist_response = {"success": False, "error": "Application is not ready"}
@@ -1002,11 +1069,23 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                         f95_url=str(payload.get("url") or ""),
                         version=str(payload.get("version") or ""),
                         cover_image=str(payload.get("coverImage") or ""),
-                        tags=str(payload.get("tags") or ""),
+                        tags=", ".join(
+                            str(item) for item in cast(list[object], payload["tags"])
+                        )
+                        if isinstance(payload.get("tags"), list)
+                        else str(payload.get("tags") or ""),
                         rating=str(payload.get("rating") or ""),
                         developer=str(payload.get("developer") or ""),
                         engine=str(payload.get("engine") or ""),
+                        links=payload.get("links"),
                     )
+                    if wishlist_response.get("attached") is True:
+                        wishlist_response = {
+                            **wishlist_response,
+                            "success": False,
+                            "error": "Game is already in wLib; F95 thread attached",
+                            "error_code": "duplicate_url",
+                        }
                     if wishlist_response.get("error_code") == "duplicate_url":
                         status = 409
                     elif not wishlist_response.get("success"):
@@ -1040,6 +1119,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
                 # We have the payload. Send it to the Vue frontend via PyWebView javascript evaluation
                 if window_ref:
+                    payload = self._prepare_game_payload(payload)
                     import base64
 
                     active_window = cast(ExtensionWindow, window_ref)
@@ -1056,6 +1136,42 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 status = 400
                 response = {"success": False, "error": str(e)}
 
+            self.send_response(status)
+            self._send_cors_headers(allowed_origin)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(json.dumps(response).encode())
+        elif self.path == "/api/thread-links":
+            status = 200
+            response = {"success": True}
+            try:
+                from core.database import find_game_by_f95_url, replace_game_links
+                from core.store_links import coerce_store_links
+
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 <= length <= MAX_EXTENSION_BODY_BYTES:
+                    raise ValueError("Invalid Content-Length")
+                raw = cast(object, json.loads(self.rfile.read(length).decode("utf-8")))
+                if not isinstance(raw, dict):
+                    raise ValueError("Request body must be a JSON object")
+                body = cast(dict[str, object], raw)
+                if not extract_thread_id(body.get("url")) or not isinstance(
+                    body.get("links"), list
+                ):
+                    raise ValueError("A thread URL and links list are required")
+                game = find_game_by_f95_url(body.get("url"))
+                if game is None:
+                    status = 404
+                    response = {"success": False, "error": "Game not found"}
+                else:
+                    replace_game_links(
+                        int(str(game["id"])),
+                        "f95_post",
+                        coerce_store_links(body["links"]),
+                    )
+            except Exception as exc:
+                status = 400
+                response = {"success": False, "error": str(exc)}
             self.send_response(status)
             self._send_cors_headers(allowed_origin)
             self.send_header("Content-Type", "application/json")

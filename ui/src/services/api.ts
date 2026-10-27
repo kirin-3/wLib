@@ -261,6 +261,7 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
 }
 
 export interface ArchiveInstallOptions {
+  links?: StoreLink[] | undefined;
   archive_path: string;
   game_id?: number | null | undefined;
   title?: string | undefined;
@@ -529,7 +530,14 @@ export interface GameSaveActionResponse extends ApiBasicResponse {
   backups?: GameSaveBackup[];
 }
 
+export interface StoreLink {
+  source: string;
+  id: string;
+  url: string;
+}
+
 export interface GameRecord {
+  links?: StoreLink[];
   sandbox_enabled?: boolean;
   id: number;
   title: string;
@@ -1549,6 +1557,7 @@ class ApiService {
     proton_version = "",
     launch_mode: LaunchMode = "auto",
     command_line_args = "",
+    links: StoreLink[] = [],
   ): Promise<AddGameResponse> {
     return this.invokeLibraryChange(
       "add_game",
@@ -1568,6 +1577,7 @@ class ApiService {
       proton_version,
       launch_mode,
       command_line_args,
+      links,
     );
   }
 
@@ -2211,9 +2221,24 @@ class ApiService {
         return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
       case "add_game": {
         const games = readMockGames();
+        const links = Array.isArray(args[16]) ? args[16] as StoreLink[] : [];
+        const matches = games.filter((game) => (game.f95_url && game.f95_url === args[2]) ||
+          (game.links || []).some((stored) => !["other", "patreon", "subscribestar", "gumroad"].includes(stored.source) &&
+            links.some((link) => link.source === stored.source && link.id === stored.id)));
+        if (matches.length) {
+          const game = matches[0]!;
+          if (matches.length === 1 && args[2] && !game.f95_url) {
+            game.f95_url = String(args[2]);
+            game.links = [...(game.links || []), ...links.filter((link) => !(game.links || []).some((stored) => stored.source === link.source && stored.id === link.id))];
+            localStorage.setItem("wlib-mock-games", JSON.stringify(games));
+            return { success: true, id: game.id, attached: true };
+          }
+          return { success: false, error_code: "duplicate_url", error: "A game with this URL is already in your library" };
+        }
         const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
-          f95_url: String(args[2] || ""), version: String(args[3] || ""),
+          f95_url: String(args[2] || ""), version: String(args[3] || ""), links,
+          cover_image_path: String(args[4] || ""), tags: String(args[5] || ""), developer: String(args[7] || ""),
           engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), sandbox_enabled: readMockSettings().sandbox_new_games, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));

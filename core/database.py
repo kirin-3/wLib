@@ -13,6 +13,12 @@ from typing import TypedDict, cast
 
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import get_data_dir
+from core.store_links import (
+    LINK_ORIGINS,
+    MATCHABLE_SOURCES,
+    StoreLink,
+    normalize_store_links,
+)
 from core.versions import normalize_version
 
 DATA_DIR = get_data_dir()
@@ -381,6 +387,21 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
         )
         _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_links (
+                id INTEGER PRIMARY KEY,
+                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                source TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                created_at TIMESTAMP,
+                UNIQUE(game_id, source, external_id)
+            )
+        """)
+        _ = cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_game_links_identity ON game_links(source, external_id)"
+        )
+        _ = cursor.execute("""
             CREATE TABLE IF NOT EXISTS companion_tools (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -540,6 +561,9 @@ def init_db() -> None:
         """
         for action in ("INSERT", "DELETE"):
             _ = cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS sync_game_links_{action.lower()} AFTER {action} ON game_links BEGIN {bump_sync_time} END"
+            )
+            _ = cursor.execute(
                 f"CREATE TRIGGER IF NOT EXISTS sync_games_{action.lower()} AFTER {action} ON games BEGIN {bump_sync_time} END"
             )
         columns = ", ".join(SYNC_GAME_COLUMNS)
@@ -637,6 +661,96 @@ def add_game(
         game_id = cursor.lastrowid
         conn.commit()
     return game_id
+
+
+def get_game_links(game_id: int) -> list[StoreLink]:
+    """Return portable link metadata in stable insertion order."""
+    with closing(get_connection()) as conn:
+        rows = cast(
+            list[tuple[str, str, str]],
+            conn.execute(
+                "SELECT source, external_id, url FROM game_links WHERE game_id = ? ORDER BY id",
+                (game_id,),
+            ).fetchall(),
+        )
+    return [
+        {"source": source, "id": identity, "url": url} for source, identity, url in rows
+    ]
+
+
+def replace_game_links(
+    game_id: int,
+    origin: str,
+    links: Sequence[Mapping[str, object]],
+    *,
+    connection: sqlite3.Connection | None = None,
+    replace_all: bool = False,
+) -> None:
+    """Replace only this origin's links, leaving identical rows untouched.
+
+    An identity already owned by another origin stays with that origin; the
+    per-game uniqueness constraint prevents duplicate links from two sources.
+    URL changes use delete/insert so both are covered by sync triggers.
+    """
+    if origin not in LINK_ORIGINS:
+        raise ValueError("Invalid store link origin")
+    incoming = {
+        (link["source"], link["id"]): link["url"]
+        for link in normalize_store_links(links)
+    }
+    if connection is None:
+        with closing(get_connection()) as conn:
+            replace_game_links(
+                game_id, origin, links, connection=conn, replace_all=replace_all
+            )
+            conn.commit()
+        return
+    conn = connection
+    rows = cast(
+        list[tuple[int, str, str, str, str]],
+        conn.execute(
+            "SELECT id, source, external_id, url, origin FROM game_links WHERE game_id = ?",
+            (game_id,),
+        ).fetchall(),
+    )
+    keep: set[tuple[str, str]] = set()
+    for row_id, source, identity, url, stored_origin in rows:
+        key = (source, identity)
+        # A full replace keeps identical rows whatever their origin, so applying
+        # unchanged links from a backup or sync file does not bump the sync time.
+        if (not replace_all and stored_origin != origin) or (
+            (replace_all or stored_origin == origin) and incoming.get(key) == url
+        ):
+            keep.add(key)
+        else:
+            _ = conn.execute("DELETE FROM game_links WHERE id = ?", (row_id,))
+    for (source, identity), url in incoming.items():
+        if (source, identity) not in keep:
+            _ = conn.execute(
+                "INSERT INTO game_links (game_id, source, external_id, url, origin, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (game_id, source, identity, url, origin, datetime.now().isoformat()),
+            )
+
+
+def find_games_by_links(links: Sequence[Mapping[str, object]]) -> list[int]:
+    """Return every exact match, including ambiguous matches, never creators."""
+    identities = {
+        (link["source"], link["id"])
+        for link in normalize_store_links(links)
+        if link["source"] in MATCHABLE_SOURCES
+    }
+    matches: set[int] = set()
+    with closing(get_connection()) as conn:
+        for source, identity in identities:
+            rows = cast(
+                list[tuple[int]],
+                conn.execute(
+                    "SELECT game_id FROM game_links WHERE source = ? AND external_id = ?",
+                    (source, identity),
+                ).fetchall(),
+            )
+            matches.update(row[0] for row in rows)
+    return sorted(matches)
 
 
 def get_game_launch_target(target_id: int) -> LaunchTarget | None:
@@ -812,6 +926,17 @@ def get_all_games() -> list[dict[str, object]]:
         cursor = conn.cursor()
         _ = cursor.execute("SELECT * FROM games ORDER BY title ASC")
         games = cast(list[sqlite3.Row], cursor.fetchall())
+        link_rows = cast(
+            list[tuple[int, str, str, str]],
+            conn.execute(
+                "SELECT game_id, source, external_id, url FROM game_links ORDER BY id"
+            ).fetchall(),
+        )
+    links_by_game: dict[int, list[StoreLink]] = {}
+    for game_id, source, identity, url in link_rows:
+        links_by_game.setdefault(game_id, []).append(
+            {"source": source, "id": identity, "url": url}
+        )
     targets_by_game = list_launch_targets_for_games(
         [int(str(cast(object, game["id"]))) for game in games]
     )
@@ -830,6 +955,7 @@ def get_all_games() -> list[dict[str, object]]:
         game_dict["screenshots"] = _decode_game_screenshots(game_dict.get("screenshots"))
         game_id = int(str(game_dict["id"]))
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
+        game_dict["links"] = links_by_game.get(game_id, [])
         result.append(game_dict)
     return result
 

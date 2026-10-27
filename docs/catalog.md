@@ -185,3 +185,24 @@ Rollback:
 - Withdraw a bad snapshot: upload the previous `manifest.json` again. Its
   snapshot is still in the bucket because retention keeps four.
 - In the app, turning the catalog off deletes the local copy.
+
+## Client page lookup
+
+`core/game_lookup.resolve_page(url, ids)` resolves a page's exact IDs, catalog
+metadata, and matching local game IDs. The catalog connection uses `mode=ro`
+and closes after each call; a missing, disabled, or unreadable catalog falls
+back to the page's own IDs. No request is made to the sites during lookup.
+
+The resolver reads `dlsite_works.product_id`, `title`, `circle`, `genres`,
+`cover_url`; `vndb_vns.vn_id`, `title`, `developers`, `tags`, `cover_url`; and
+`ryuu_posts.post_id`, `url`, `title`, `developer`, `version`, `cover_url`,
+`rj_codes`, `steam_ids`, `vndb_ids`. JSON lists are decoded into metadata or
+identities. Source rows with `removed_at` set are ignored. WordPress permalinks
+can resolve to a numeric post ID through `ryuu_posts.url`; without a catalog,
+the extension supplies the ID from the live page.
+
+`links(src_a, id_a, src_b, id_b, origin)` is searched in both directions for
+one hop from the page's own identity. Newly found IDs are never expanded
+again. F95 thread identity wins when present; otherwise exact matchable store
+IDs are used, without title matching. Multiple matching game IDs are returned
+without merging or changing any game.

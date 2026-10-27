@@ -127,6 +127,7 @@ function normalizeCheckResult(data) {
 
     return {
         exists,
+        canAttachThread: exists && Boolean(data?.canAttachThread),
         playStatus,
         wishlisted: exists && Boolean(data.wishlisted),
         appOutdated: Boolean(data && typeof data === 'object' && data.appOutdated),
@@ -147,11 +148,12 @@ function wlibConnectionStatusMessage() {
         : 'Error: Make sure wLib is open.';
 }
 
-function checkGameInWLib(url) {
+function checkGameInWLib(url, links = []) {
     return new Promise((resolve) => {
         chrome.runtime.sendMessage({
             action: 'checkGameInWLib',
             url,
+            ids: links.map(link => `${link.source}:${link.id}`),
         }, (response) => {
             if (chrome.runtime.lastError) {
                 console.warn('wLib extension: Could not connect to background wLib service.', chrome.runtime.lastError);
@@ -186,11 +188,18 @@ async function initThreadPageExtension() {
     const gameInfo = extractGameInfo();
     if (!gameInfo.title) return;
 
-    const checkResult = await checkGameInWLib(gameInfo.url);
+    const wrapper = document.querySelector('.message-threadStarterPost .bbWrapper');
+    const links = globalThis.WLibStoreLinks?.collectF95Links(wrapper);
+    gameInfo.links = links || [];
+    const checkResult = await checkGameInWLib(gameInfo.url, gameInfo.links);
+    if (checkResult.exists && links !== null && links !== undefined) {
+        chrome.runtime.sendMessage({action:"saveThreadLinks", payload:{url:gameInfo.url, links}}, () => { void chrome.runtime.lastError; });
+    }
     gameInfo.existsInWLib = checkResult.exists;
     gameInfo.playStatus = checkResult.playStatus;
     gameInfo.wishlisted = checkResult.wishlisted;
     gameInfo.appOutdated = checkResult.appOutdated;
+    gameInfo.canAttachThread = checkResult.canAttachThread;
     injectUI(gameInfo);
 }
 
@@ -611,6 +620,7 @@ function injectUI(gameInfo) {
             setActionButtonContent(btn, 'Opening...', 'externalLink', 'open');
             chrome.runtime.sendMessage({
                 action: 'openWLib',
+                ids: (gameInfo.links || []).map(link => `${link.source}:${link.id}`),
                 url: gameInfo.url
             }, (response) => {
                 if (chrome.runtime.lastError || !response?.success) {
@@ -697,6 +707,29 @@ function injectUI(gameInfo) {
             });
         });
         actionRow.appendChild(wishlistBtn);
+    }
+
+    if (gameInfo.canAttachThread) {
+        const attachBtn = document.createElement('button');
+        attachBtn.type = 'button';
+        attachBtn.className = 'wlib-add-btn wlib-wishlist-btn';
+        attachBtn.textContent = 'Attach F95 thread';
+        attachBtn.addEventListener('click', () => {
+            attachBtn.disabled = true;
+            attachBtn.textContent = 'Attaching…';
+            chrome.runtime.sendMessage({action:'wishlistGameInWLib', payload:gameInfo}, response => {
+                const error = chrome.runtime.lastError;
+                if (!error && response?.attached) {
+                    attachBtn.textContent = 'Thread attached';
+                    statusEl.textContent = 'F95 thread attached to the existing game.';
+                } else {
+                    attachBtn.disabled = false;
+                    attachBtn.textContent = 'Attach F95 thread';
+                    statusEl.textContent = response?.error || wlibConnectionStatusMessage();
+                }
+            });
+        });
+        actionRow.appendChild(attachBtn);
     }
 
     container.appendChild(headerRow);

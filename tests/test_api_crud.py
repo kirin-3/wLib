@@ -6,6 +6,45 @@ from core.api import Api
 from core.database import add_game, get_all_games, init_db, update_setting
 
 
+def test_added_game_metadata_saves_first_post_links(monkeypatch):
+    from threading import Thread
+
+    from core.database import get_game_links
+
+    api = Api()
+    links = [
+        {
+            "source": "dlsite",
+            "id": "RJ123",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html",
+        }
+    ]
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda _: {"success": True, "store_links": links},
+    )
+    # Execute this add's worker synchronously so the test observes persistence,
+    # without polling a daemon thread or sleeping.
+    monkeypatch.setattr(Thread, "start", lambda self: self.run())
+    result = api.add_game("Store game", "", "https://f95zone.to/threads/123/")
+    assert result["success"]
+    assert get_game_links(result["id"]) == links
+    assert api._metadata_pending == set()
+
+
+@pytest.mark.parametrize("metadata", [{}, {"store_links": []}, {"store_links": None}])
+def test_metadata_without_visible_links_preserves_stored_links(metadata):
+    from core.database import get_game_links, replace_game_links
+
+    url = "https://f95zone.to/threads/123/"
+    game_id = add_game("Store game", "", url)
+    replace_game_links(game_id, "f95_post", [{"url": "https://vndb.org/v123"}])
+    before = get_game_links(game_id)
+    assert Api()._update_thread_edit_metadata_for_url(url, metadata) == []
+    assert get_game_links(game_id) == before
+
+
 @pytest.fixture(autouse=True)
 def setup_test_db(tmp_path, monkeypatch):
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"))
@@ -378,3 +417,69 @@ def test_sandbox_install_failure_is_reported_and_rechecked(monkeypatch):
     assert not progress["running"] and "cancelled" in progress["error"]
     assert calls == [{"recheck": True}]
     assert api.install_sandbox_tool("sandboxie")["code"] == "unsupported_platform"
+
+
+def test_add_links_duplicate_attach_and_conflicting_thread(monkeypatch):
+    from core.database import get_game_links, get_game
+
+    api = Api()
+    calls = []
+    monkeypatch.setattr(
+        api, "_fetch_added_game_metadata", lambda *args: calls.append(args)
+    )
+    links = [{"url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"}]
+    first = api.add_game("Work", "", links=links)
+    assert first["success"]
+    assert get_game_links(first["id"])[0]["id"] == "RJ123"
+    assert api.add_game("Duplicate", "", links=links)["error_code"] == "duplicate_url"
+    attached = api.add_game(
+        "Thread", "", "https://f95zone.to/threads/123/", links=links
+    )
+    assert attached["success"] and attached["attached"]
+    assert attached["id"] == first["id"]
+    assert get_game(first["id"])["f95_url"] == "https://f95zone.to/threads/123/"
+    assert (
+        api.add_game(
+            "Other thread", "", "https://f95zone.to/threads/456/", links=links
+        )["error_code"]
+        == "duplicate_url"
+    )
+    assert len(get_all_games()) == 1
+
+
+def test_attaching_with_an_executable_installs_the_wishlisted_match(monkeypatch):
+    from core.database import get_game
+
+    api = Api()
+    monkeypatch.setattr(api, "_fetch_added_game_metadata", lambda *args: None)
+    links = [{"url": "https://vndb.org/v123"}]
+    wishlisted = api.add_game("Work", "", links=links)
+    attached = api.add_game(
+        "Thread",
+        "/games/work/game.exe",
+        "https://f95zone.to/threads/123/",
+        version="1.0",
+        links=links,
+    )
+    assert attached["attached"] and attached["id"] == wishlisted["id"]
+    game = get_game(wishlisted["id"])
+    assert game["exe_path"] == "/games/work/game.exe"
+    assert game["version"] == "1.0"
+    assert len(get_all_games()) == 1
+
+
+def test_ambiguous_add_does_not_attach_or_change_links(monkeypatch):
+    from core.database import replace_game_links
+
+    api = Api()
+    links = [{"url": "https://vndb.org/v123"}]
+    for name in ("One", "Two"):
+        replace_game_links(add_game(name, ""), "page", links)
+    before = get_all_games()
+    assert (
+        api.add_game("Thread", "", "https://f95zone.to/threads/123/", links=links)[
+            "error_code"
+        ]
+        == "duplicate_url"
+    )
+    assert get_all_games() == before

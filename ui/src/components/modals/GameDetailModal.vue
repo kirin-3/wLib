@@ -26,6 +26,7 @@ import {
   IconX,
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
+import { storeLabel } from "../../utils/storeLinks";
 import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
@@ -1470,7 +1471,7 @@ const threadMainPostEditedDisplay = computed(() => {
 });
 
 const openInBrowser = async () => {
-  const url = f95Url.value.trim();
+  const url = f95Url.value.trim() || props.game?.links?.[0]?.url || "";
   if (url) {
     try {
       const res = await api.openInBrowser(url);
@@ -1690,7 +1691,7 @@ const removeAttachment = async (name: string) => {
               {{ updateSkipped ? `Stop skipping ${skippedVersion}` : `Skip version ${latestVersion}` }}
             </button>
             <button
-              v-if="f95Url.trim()"
+              v-if="f95Url.trim() || game.links?.length"
               @click="openInBrowser"
               class="modal-toolbar-action ui-action-btn"
               style="color: var(--text-primary)"
@@ -1771,6 +1772,14 @@ const removeAttachment = async (name: string) => {
             </div>
           </div>
 
+          <div v-if="game.links?.length" class="space-y-2">
+            <h3 class="modal-label">Store links</h3>
+            <div class="flex flex-wrap gap-2">
+              <button v-for="link in game.links" :key="`${link.source}:${link.id}`" type="button" class="modal-toolbar-action ui-action-btn" @click="api.openInBrowser(link.url)">
+                <IconExternalLinkFilled class="ui-action-icon" />{{ storeLabel(link.source) }} · {{ link.id }}
+              </button>
+            </div>
+          </div>
           <div v-if="game.f95_url">
             <h3 class="modal-label mb-3">Screenshots</h3>
             <div v-if="gameScreenshots.length" class="screenshot-strip" role="group" aria-label="Game screenshots">

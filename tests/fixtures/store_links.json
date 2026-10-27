@@ -1,0 +1,182 @@
+[
+  {
+    "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ01234567.html",
+    "source": "dlsite",
+    "id": "RJ01234567"
+  },
+  {
+    "url": "https://www.dlsite.com/maniax/work/=/product_id/rj01234567.html/?locale=en_US#reviews",
+    "source": "dlsite",
+    "id": "RJ01234567"
+  },
+  {
+    "url": "https://www.dlsite.com/pro/announce/=/product_id/VJ123.html",
+    "source": "dlsite",
+    "id": "VJ123"
+  },
+  {
+    "url": "https://www.dlsite.com/books/work/=/product_id/BJ123.html",
+    "source": "dlsite",
+    "id": "BJ123"
+  },
+  {
+    "url": "https://www.dlsite.com/maniax/circle/profile/=/maker_id/RG12345.html",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.dlsite.com/maniax/fsr/=/keyword/game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://store.steampowered.com/app/1234560/Some_Game/?l=english",
+    "source": "steam",
+    "id": "1234560"
+  },
+  {
+    "url": "https://store.steampowered.com/search/?term=game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://store.steampowered.com/developer/example",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://creator.itch.io/my-game?download#buy",
+    "source": "itch",
+    "id": "creator/my-game"
+  },
+  {
+    "url": "https://creator.itch.io/",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=d_123456/?i3_ref=search",
+    "source": "fanza",
+    "id": "d_123456"
+  },
+  {
+    "url": "https://dlsoft.dmm.co.jp/detail/abc_123/",
+    "source": "fanza",
+    "id": "abc_123"
+  },
+  {
+    "url": "https://www.dmm.co.jp/detail/?cid=abc_123&utm_source=example",
+    "source": "fanza",
+    "id": "abc_123"
+  },
+  {
+    "url": "https://www.dmm.co.jp/search/?q=game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.patreon.com/c/Creator/posts",
+    "source": "patreon",
+    "id": "creator"
+  },
+  {
+    "url": "https://www.patreon.com/Creator",
+    "source": "patreon",
+    "id": "creator"
+  },
+  {
+    "url": "https://subscribestar.adult/creator?foo=1",
+    "source": "subscribestar",
+    "id": "creator"
+  },
+  {
+    "url": "https://subscribestar.com/creator",
+    "source": "subscribestar",
+    "id": "creator"
+  },
+  {
+    "url": "https://creator.gumroad.com/l/game",
+    "source": "gumroad",
+    "id": "creator"
+  },
+  {
+    "url": "https://gumroad.com/creator",
+    "source": "gumroad",
+    "id": "creator"
+  },
+  {
+    "url": "https://vndb.org/v9876#main",
+    "source": "vndb",
+    "id": "v9876"
+  },
+  {
+    "url": "https://vndb.org/r1234",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://vndb.org/v?q=game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.ryuugames.com/?p=169625&utm_source=test",
+    "source": "ryuugames",
+    "id": "169625"
+  },
+  {
+    "url": "https://www.ryuugames.com/category/games/",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.ryuugames.com/game-slug/",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://Example.com/store/game?tracking=1#buy",
+    "source": "other",
+    "id": "https://example.com/store/game"
+  },
+  {
+    "url": "https://dlsite.com.evil.example/product_id/RJ123.html",
+    "source": "other",
+    "id": "https://dlsite.com.evil.example/product_id/RJ123.html"
+  },
+  {
+    "url": "https://f95zone.to/threads/game.123/",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "javascript:alert(1)",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "file:///tmp/game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "//www.dlsite.com/maniax/work/=/product_id/RJ123.html",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://user:pass@example.com/game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://example.com:bad/game",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "not a url",
+    "source": null,
+    "id": null
+  }
+]

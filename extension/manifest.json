@@ -1,9 +1,13 @@
 {
     "manifest_version": 3,
     "name": "wLib",
-    "version": "1.1.2",
-    "description": "Send F95Zone games directly to your native wLib game manager.",
-    "permissions": ["storage", "alarms"],
+    "version": "1.2.0",
+    "description": "Recognise, add and wishlist games in wLib from F95Zone, DLsite, VNDB and Ryuugames.",
+    "permissions": [
+        "storage",
+        "alarms",
+        "scripting"
+    ],
     "host_permissions": [
         "http://localhost:8183/*",
         "https://f95zone.to/*"
@@ -40,6 +44,7 @@
                 "content.css"
             ],
             "js": [
+                "store-links.js",
                 "content.js"
             ]
         }
@@ -64,5 +69,14 @@
     "action": {
         "default_icon": "icon-48.png",
         "default_title": "wLib Integration"
+    },
+    "optional_host_permissions": [
+        "https://www.dlsite.com/*",
+        "https://vndb.org/*",
+        "https://www.ryuugames.com/*"
+    ],
+    "options_ui": {
+        "page": "options.html",
+        "open_in_tab": true
     }
 }

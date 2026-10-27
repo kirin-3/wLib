@@ -1142,3 +1142,26 @@ def test_installed_catalog_stays_out_of_sync(tmp_path):
     assert "Synced" in text
     assert "catalog" not in text.lower()
     assert "CATALOG_DB_CONTENT" not in text and "CATALOG_STATUS" not in text
+
+
+def test_newer_sync_replaces_matched_links_and_link_edits_mark_changed():
+    game_id = database.add_game("Original", "")
+    database.replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
+    remote = remote_backup("Renamed", modified="2099-01-01T00:00:00Z")
+    remote["games"][0]["metadata"]["links"] = [
+        {"source": "vndb", "id": "v1", "url": "https://vndb.org/v1"},
+        {
+            "source": "steam",
+            "id": "123",
+            "url": "https://store.steampowered.com/app/123/",
+        },
+    ]
+    location = MemoryLocation(remote)
+    sync = manager(location)
+    assert sync.run()["state"] == "needs_choice"
+    assert sync.run("use-remote")["state"] == "idle"
+    assert len(database.get_all_games()) == 1
+    assert len(database.get_game_links(game_id)) == 2
+    assert not sync.local_changed()
+    database.replace_game_links(game_id, "f95_post", [{"url": "https://vndb.org/v2"}])
+    assert sync.local_changed()

@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+:root {color-scheme:light dark;font:16px system-ui;}
+body {margin:0;background:light-dark(#f7f5fa,#17131d);color:light-dark(#24172b,#f5edf9);}
+main {max-width:36rem;margin:4rem auto;padding:2rem;}
+h1 {font-size:1.6rem;} p {line-height:1.6;} label {display:flex;align-items:center;gap:1rem;padding:1rem 0;border-bottom:1px solid light-dark(#ded5e3,#493852);}
+input {width:1.25rem;height:1.25rem;accent-color:#a94aca;} #status {min-height:2rem;}

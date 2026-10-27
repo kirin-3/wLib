@@ -2648,3 +2648,53 @@ def test_installed_catalog_stays_out_of_library_export(tmp_path, monkeypatch):
     for marker in ("CATALOG_DB_CONTENT", "CATALOG_STATUS", "f95_threads", "vndb"):
         assert marker not in text
     assert "Exported" in text
+
+
+def test_store_links_round_trip_and_match_before_title():
+    from core.database import get_game_links, replace_game_links, delete_game
+
+    game_id = add_game("Original", "", developer="One")
+    replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
+    backup = build_library_backup({"sections": [SECTION_USER_STATE]})
+    assert backup["games"][0]["metadata"]["links"][0]["id"] == "v1"
+    delete_game(game_id)
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]})["created"] == 1
+    )
+    restored_id = get_all_games()[0]["id"]
+    assert get_game_links(restored_id)[0]["id"] == "v1"
+    backup["games"][0]["metadata"]["title"] = "Renamed"
+    backup["games"][0]["metadata"]["developer"] = "Two"
+    backup["games"][0]["metadata"]["links"].append(
+        {
+            "source": "steam",
+            "id": "123",
+            "url": "https://store.steampowered.com/app/123/",
+        }
+    )
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]})["updated"] == 1
+    )
+    assert len(get_all_games()) == 1
+    assert {link["source"] for link in get_game_links(restored_id)} == {"vndb", "steam"}
+    del backup["games"][0]["metadata"]["links"]
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]})["updated"] == 1
+    )
+    assert len(get_game_links(restored_id)) == 2
+
+
+def test_ambiguous_store_link_import_never_merges():
+    from core.database import replace_game_links
+    from core.library_backup import _match_imported_game
+
+    for title in ("First", "Second"):
+        replace_game_links(
+            add_game(title, ""), "page", [{"url": "https://vndb.org/v1"}]
+        )
+    imported = {
+        "metadata": {"title": "Third", "links": [{"url": "https://vndb.org/v1"}]}
+    }
+    result = _match_imported_game(imported, get_all_games())
+    assert result["status"] == "ambiguous"
+    assert result["candidate_count"] == 2

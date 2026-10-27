@@ -34,11 +34,13 @@ from core.database import (
     get_all_play_sessions,
     find_matching_game_row,
     get_setting,
+    replace_game_links,
     normalize_launch_mode,
     normalize_play_status,
 )
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import is_windows
+from core.store_links import MATCHABLE_SOURCES, coerce_store_links
 
 __all__ = [
     "BACKUP_FORMAT",
@@ -86,6 +88,7 @@ METADATA_FIELDS = (
     "thread_completed",
     "cover_image_path",
     "screenshots",
+    "links",
 )
 USER_STATE_FIELDS = (
     "play_status",
@@ -149,7 +152,7 @@ REAL_GAME_FIELDS = (
 )
 TIMESTAMP_GAME_FIELDS = ("last_played", "date_added")
 IMPORTABLE_GAME_FIELDS = (
-    *METADATA_FIELDS,
+    *(field for field in METADATA_FIELDS if field != "links"),
     *USER_STATE_FIELDS,
     *LAUNCH_CONFIG_FIELDS,
     *EXECUTABLE_PATH_FIELDS,
@@ -672,6 +675,20 @@ def _local_games() -> list[dict[str, object]]:
     ]
 
 
+def _local_link_keys(game: Mapping[str, object]) -> set[tuple[str, str]]:
+    links = game.get("links")
+    if not isinstance(links, list):
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for link in cast(list[object], links):
+        if isinstance(link, dict):
+            row = cast(dict[str, object], link)
+            source, identity = row.get("source"), row.get("id")
+            if isinstance(source, str) and isinstance(identity, str):
+                keys.add((source, identity))
+    return keys
+
+
 def _fallback_identity_key(game_metadata: Mapping[str, object]) -> tuple[str, str]:
     return (
         _normalize_identity_text(game_metadata.get("title")),
@@ -689,6 +706,44 @@ def _match_imported_game(
     title = _coerce_text(metadata.get("title")).strip()
     f95_url = normalize_thread_url(metadata.get("f95_url"))
     title_key, developer_key = _fallback_identity_key(metadata)
+
+    incoming_links = {
+        (link["source"], link["id"])
+        for link in coerce_store_links(metadata.get("links"))
+        if link["source"] in MATCHABLE_SOURCES
+    }
+    # Local links are already normalized database rows; re-parsing them for
+    # every imported game would make large imports quadratic in URL parsing.
+    linked_games = (
+        [
+            game
+            for game in local_games
+            if incoming_links.intersection(_local_link_keys(game))
+        ]
+        if incoming_links
+        else []
+    )
+    link_match: dict[str, object] = {}
+    if len(linked_games) > 1:
+        link_match = {
+            "status": "ambiguous",
+            "game": imported_game,
+            "title": title,
+            "reason": "Multiple local games share a store identity.",
+            "candidate_count": len(linked_games),
+            "candidate_ids": [game["id"] for game in linked_games],
+        }
+    elif len(linked_games) == 1:
+        linked_game = linked_games[0]
+        if not linked_game.get("f95_url") or thread_urls_match(
+            linked_game.get("f95_url"), f95_url
+        ):
+            link_match = {
+                "status": "matched",
+                "game": imported_game,
+                "local_id": int(str(linked_game["id"])),
+                "match_type": "store_link",
+            }
 
     if f95_url:
         f95_matches = [
@@ -712,6 +767,8 @@ def _match_imported_game(
                 "candidate_count": len(f95_matches),
                 "candidate_ids": [game["id"] for game in f95_matches],
             }
+        if link_match:
+            return link_match
         # The thread is not in this library, but the same game may have been
         # added manually with matching title and developer and no URL yet.
         # Only those URL-less copies are merged; two different threads that
@@ -745,6 +802,9 @@ def _match_imported_game(
         _game_section(imported_game, SECTION_EXECUTABLE_PATHS).get("exe_path")
     ).strip()
     second_key = "developer" if developer_key else "executable"
+    if link_match:
+        return link_match
+
     if title_key and (developer_key or exe_key or sync):
         fallback_matches = [
             game
@@ -1609,6 +1669,27 @@ def apply_library_backup(
                     game_id = _insert_game(cursor, fields)
                     created += 1
                     created_ids.append(game_id)
+
+                metadata = _game_section(imported_game, SECTION_METADATA)
+                if "links" in metadata and (
+                    local_id is None or SECTION_METADATA in sections
+                ):
+                    keep_links = (
+                        merge_mode == "fill_missing"
+                        and cursor.execute(
+                            "SELECT 1 FROM game_links WHERE game_id = ? LIMIT 1",
+                            (game_id,),
+                        ).fetchone()
+                        is not None
+                    )
+                    if not keep_links:
+                        replace_game_links(
+                            game_id,
+                            "backup",
+                            coerce_store_links(metadata["links"]),
+                            connection=conn,
+                            replace_all=True,
+                        )
 
                 if SECTION_LAUNCH_CONFIG in sections:
                     _import_companion_overrides(

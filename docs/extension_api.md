@@ -23,9 +23,10 @@ Because of that restriction, the extension does not call `GET /api/check` direct
 ## REST API Endpoints
 
 ### 1. Check if Game Exists 
-**`GET /api/check?url={f95_url}`**
+**`GET /api/check?url={page_url}&id={source:id}`**
 Allows the extension to decorate an F95Zone page based on ownership.
 - **Request:** `http://localhost:8183/api/check?url=https://f95zone.to/threads/example.123/`
+- **IDs:** `id=source:value` can be repeated. DLsite, VNDB and Ryuugames page URLs resolve through `core/game_lookup.py`, including one hop of installed catalog links. Exact work IDs match; creator links and titles never do. Checks have no side effects.
 - **Matching Behavior:** wLib compares F95Zone threads by thread identity, not only by raw URL text. Equivalent URL variants such as slug changes, `page-*` paths, query strings, and fragments still resolve to the same game when the thread ID matches.
 - **Response:**
   ```json
@@ -33,11 +34,13 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "exists": true,
     "playStatus": "Playing",
     "wishlisted": false,
-    "app_version": "0.4.1",
-    "extension_version": "1.1.2"
+    "app_version": "0.4.2",
+    "extension_version": "1.2.0"
   }
   ```
 - **Contract Notes:**
+  - `canAttachThread: true` is present on F95 checks only when exactly one matching game has no F95 URL. The widget offers **Attach F95 thread** alongside Open; ambiguous matches never receive this flag.
+  - `gameId` is the local integer ID when a game matches. An ambiguous identity returns one game to open and never modifies any of the matches.
   - `exists` remains the stable boolean consumed by both the thread widget and latest-alpha page badges.
   - `playStatus` is optional enrichment for matching games only. It may contain a canonical desktop status or a custom name (at most 40 characters).
   - `wishlisted` is present for matching games. It is `true` when `exe_path` is empty after trimming.
@@ -45,10 +48,10 @@ Allows the extension to decorate an F95Zone page based on ownership.
   - `extension_version` is the manifest version currently installed in the synced Chromium extension folder. It is omitted when startup extension sync did not succeed or the installed version is unknown.
 
 ### 2. Focus the App & Open Game
-**`GET /api/open?url={f95_url}`**
+**`GET /api/open?url={page_url}&id={source:id}`**
 Requests that the OS brings the wLib window to the foreground and opens the modal to the specified game.
 - **Requires:** an extension `Origin` or the `X-wLib-Extension: 1` header; otherwise HTTP 403.
-- **Action:** Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
+- **Action:** The query accepts the same repeated IDs as `/api/check`. The response and `wlib-extension-open` detail include `gameId` when resolved, so games without an F95 thread can open. Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
 - **Response:**
   ```json
   {
@@ -70,6 +73,7 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
   }
   ```
 
+- **Store pages:** The body also accepts `pageUrl` and `links: [{source, id, url}]`. A title and either an F95 thread URL or at least one valid HTTP(S) link are required. With a catalog, metadata for the page’s own ID takes priority over fallback page metadata. Without it, the extension’s title and cover are used.
 - **Action:** Emits `wlib-extension-add` payload to the Vue frontend, which catches the event and displays the UI form pre-populated with the data above.
 - **Errors:** `{"success": false, "error": "..."}` with HTTP 400 for an invalid body or `Content-Length` (limit 1 MB), or HTTP 503 while the app window is not ready yet.
 - **Response:**
@@ -81,8 +85,8 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
 
 ### 4. Save to Wishlist
 **`POST /api/wishlist`**
-Saves the thread directly as a library game with an empty executable path. The body uses the same 1 MB limit and origin rules as `/api/add`.
-- **Request Body (JSON):** `title`, `url`, `version`, `coverImage`, `tags`, `rating`, `developer`, and `engine` are string fields. `tags` is a comma-separated string.
+Saves the thread or store page directly as a library game with an empty executable path. The body uses the same 1 MB limit and origin rules as `/api/add`.
+- **Request Body (JSON):** Also accepts `pageUrl` and `links` with the same catalog enrichment as `/api/add`. `title`, `url`, `version`, `coverImage`, `tags`, `rating`, `developer`, and `engine` are string fields. `tags` is a comma-separated string.
   ```json
   {
     "title": "Example Visual Novel",
@@ -108,7 +112,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (`protocol: 1`, JSON text messages):**
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.1.2", "can_fetch": true}
+  {"type": "hello", "protocol": 1, "extension_version": "1.2.0", "can_fetch": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -134,7 +138,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.1.2`, and its `MIN_APP_VERSION` floor is `0.4.1`.
+The bundled manifest is currently `1.2.0`, and its `MIN_APP_VERSION` floor is `0.4.2`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -164,3 +168,33 @@ On F95 thread pages, the content script injects a floating widget near the upper
 - Collapse state is ephemeral to the current page runtime. Collapsing compresses the card into a logo-only affordance that rests near the lower-left viewport edge; expanding reverses that transition.
 - The latest-alpha page continues to reuse `GET /api/check` for its `In wLib` tile badges, but it only reads the `exists` field and ignores `playStatus`.
 - Reduced-motion preferences are respected by shortening the collapse/expand transition to an effectively instant state change.
+
+## First-post store link capture
+
+**`POST /api/thread-links`** accepts `{url, links: [{source, id, url}]}` for a
+library game's F95 thread. It uses the same origin rules and 1 MB body limit
+as Wishlist. Success is HTTP 200; a missing game is 404, an invalid request is
+400, and a foreign origin is 403. It replaces only links with `f95_post`
+origin. An empty visible list removes those rows; the content script sends
+nothing when the page still hides its links. This route never fetches F95.
+
+Add and Wishlist reject duplicates by exact F95 or matchable store identity.
+When exactly one matching game has no F95 thread, adding that thread attaches
+it and starts the normal metadata fetch. Wishlist returns HTTP 409 with
+`error_code: duplicate_url` and `attached: true` so the widget confirms that
+the game is already saved. Ambiguous matches never attach or create a game.
+
+## Optional store sites
+
+Extension `1.2.0` requires wLib `0.4.2` and adds the `scripting` permission.
+DLsite (`https://www.dlsite.com/*`), VNDB (`https://vndb.org/*`) and Ryuugames
+(`https://www.ryuugames.com/*`) are **optional_host_permissions**. They are
+absent from required hosts and static content-script matches. The toolbar
+action opens `options.html`, with a permission switch for each site. Declining
+a prompt resets its switch; turning it off revokes access.
+
+The background registers `wlib-dlsite`, `wlib-vndb` and `wlib-ryuugames` scripts
+only for granted sites and reconciles them on startup, update and permission
+changes. Widgets appear only on work/VN/post pages, offer Open or Add/Wishlist,
+show wishlisted and outdated-app states, and offer Retry when wLib is offline.
+Page data is sent only to the local app; page scripts fetch no other pages.

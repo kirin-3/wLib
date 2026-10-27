@@ -653,6 +653,7 @@ def test_extension_check_payload_includes_play_status_for_matches():
         "exists": True,
         "playStatus": "Playing",
         "wishlisted": False,
+        "gameId": 1,
         "app_version": main.APP_VERSION,
     }
 
@@ -712,6 +713,7 @@ def test_extension_check_includes_app_and_extension_versions(monkeypatch):
         "exists": True,
         "playStatus": "Playing",
         "wishlisted": False,
+        "gameId": 1,
         "app_version": main.APP_VERSION,
         "extension_version": "1.0.11",
     }
@@ -824,8 +826,11 @@ def test_extension_request_validates_host_and_origin(
             connection.putheader("Host", host)
         if origin is not None:
             connection.putheader("Origin", origin)
-        connection.putheader("Content-Length", "2")
-        connection.endheaders(b"{}")
+        request_body = json.dumps(
+            {"title": "Game", "url": "https://f95zone.to/threads/123/"}
+        ).encode()
+        connection.putheader("Content-Length", str(len(request_body)))
+        connection.endheaders(request_body)
         response = connection.getresponse()
         body = response.read()
         assert response.status == status
@@ -1372,3 +1377,90 @@ def test_bridge_rejects_bad_host(extension_server):
     )
     assert status == 403
     assert json.loads(body)["success"] is False
+
+
+def test_store_page_wishlist_check_open_and_thread_links(
+    monkeypatch, tmp_path, extension_server
+):
+    from urllib.parse import urlencode
+    from core.api import Api
+    from core import database
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "links.db"))
+    database.init_db()
+    api = Api()
+    monkeypatch.setattr(api, "_fetch_added_game_metadata", lambda *_: None)
+    monkeypatch.setattr(main, "api_ref", api)
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib"}
+    page = "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"
+    payload = {"title": "Work", "pageUrl": page, "links": [{"url": page}]}
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.request("POST", "/api/wishlist", json.dumps(payload), headers)
+        response = connection.getresponse()
+        assert response.status == 200
+        game_id = json.loads(response.read())["id"]
+        connection.request(
+            "GET", "/api/check?" + urlencode({"url": page}), headers=headers
+        )
+        response = connection.getresponse()
+        checked = json.loads(response.read())
+        assert (
+            checked["exists"] and checked["gameId"] == game_id and checked["wishlisted"]
+        )
+        connection.request(
+            "GET", "/api/open?" + urlencode({"url": page}), headers=headers
+        )
+        response = connection.getresponse()
+        assert json.loads(response.read())["gameId"] == game_id
+        assert "gameId:" in window.evaluate_js.call_args[0][0]
+        connection.request("POST", "/api/wishlist", json.dumps(payload), headers)
+        response = connection.getresponse()
+        assert response.status == 409
+        response.read()
+        connection.request(
+            "GET",
+            "/api/check?"
+            + urlencode(
+                {"url": "https://f95zone.to/threads/123/", "id": "dlsite:RJ123"}
+            ),
+            headers=headers,
+        )
+        response = connection.getresponse()
+        assert json.loads(response.read())["canAttachThread"]
+        assert not database.get_game(game_id)["f95_url"]
+        payload["url"] = "https://f95zone.to/threads/123/"
+        payload["pageUrl"] = payload["url"]
+        connection.request("POST", "/api/wishlist", json.dumps(payload), headers)
+        response = connection.getresponse()
+        assert response.status == 409
+        assert json.loads(response.read())["attached"]
+        assert len(database.get_all_games()) == 1
+        connection.request(
+            "POST",
+            "/api/thread-links",
+            json.dumps(
+                {"url": payload["url"], "links": [{"url": "https://vndb.org/v1"}]}
+            ),
+            headers,
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        assert {link["source"] for link in database.get_game_links(game_id)} == {
+            "dlsite",
+            "vndb",
+        }
+        connection.request(
+            "POST",
+            "/api/thread-links",
+            "{}",
+            {"Host": "localhost:8183", "Origin": "https://foreign.example"},
+        )
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+    finally:
+        connection.close()

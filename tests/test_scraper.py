@@ -935,6 +935,107 @@ _SIGNED_IN_PAGE = _GUEST_HIDDEN_PAGE.replace(
 )
 
 
+_STORE_HEADER = (
+    '<b>Developer</b>: <a href="https://www.patreon.com/creator">Creator</a><br>'
+    '<strong>Publisher:</strong> <a href="https://creator.itch.io/game">Publisher</a><br/>'
+    '<b>sToReS</b>: <a href="https://www.dlsite.com/maniax/work/=/product_id/RJ123.html">DLsite</a>'
+    ' | <a href="https://store.steampowered.com/app/456/?l=english">Steam</a><br />'
+)
+
+
+def test_first_post_store_links_ignore_notes_spoilers_and_replies():
+    html = (
+        '<h1 class="p-title-value">Game [v1.0]</h1>'
+        '<article class="message-threadStarterPost"><div class="bbWrapper">'
+        + _STORE_HEADER
+        + '<b>Developer Notes</b>: <a href="https://store.steampowered.com/app/999/">Another game</a><br>'
+        '<div class="bbCodeSpoiler"><div><b>Store</b>: '
+        '<a href="https://vndb.org/v999">Hidden</a><br></div></div>'
+        '<b>Downloads</b>: <a href="https://store.steampowered.com/app/888/">Download</a><br>'
+        '</div></article><article class="message--post"><div class="bbWrapper">'
+        '<b>Store</b>: <a href="https://vndb.org/v777">Reply</a>'
+        "</div></article>"
+    )
+    links = Scraper()._extract_page(html)["store_links"]
+    assert [(link["source"], link["id"]) for link in links] == [
+        ("patreon", "creator"),
+        ("itch", "creator/game"),
+        ("dlsite", "RJ123"),
+        ("steam", "456"),
+    ]
+
+
+def test_guest_first_post_hidden_links_yield_no_store_links():
+    html = _GUEST_HIDDEN_PAGE.replace("messageHide--attach", "messageHide--link")
+    assert Scraper()._extract_page(html)["store_links"] == []
+
+
+def test_real_signed_in_first_post_store_links():
+    html = (Path(__file__).parent / "fixtures/f95_thread_signed_in.html").read_text()
+    assert Scraper()._extract_page(html)["store_links"] == [
+        {
+            "source": "other",
+            "id": "https://ci-en.dlsite.com/creator/16998",
+            "url": "https://ci-en.dlsite.com/creator/16998",
+        },
+        {
+            "source": "dlsite",
+            "id": "RJ01664771",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ01664771.html",
+        },
+    ]
+
+
+@pytest.mark.parametrize("attachments", [False, True])
+@pytest.mark.parametrize("available", [False, True])
+def test_hidden_links_reload_signed_in_at_most_once(
+    monkeypatch, attachments, available
+):
+    _reset_scraper_globals()
+    hidden = '<div class="messageHide--link">Log in to see links</div>'
+    guest = _GUEST_HIDDEN_PAGE.replace(
+        '<div class="messageHide messageHide--attach">Log in or register to see attachments</div>',
+        hidden
+        + (
+            '<div class="messageHide--attach">Hidden attachments</div>'
+            if attachments
+            else ""
+        ),
+    )
+    signed_in = guest.replace(hidden, _STORE_HEADER)
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, guest))
+    )
+    monkeypatch.setattr(
+        scraper_module.extension_bridge, "is_available", lambda: available
+    )
+    via_ext = MagicMock(return_value=(200, signed_in))
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_ext)
+    result = Scraper()._get_page("1")
+    assert result["success"]
+    assert len(result["store_links"]) == (4 if available else 0)
+    assert via_ext.call_count == int(available)
+    _reset_scraper_globals()
+
+
+@pytest.mark.parametrize("response", [(500, "Error"), (200, "<title>Log in</title>")])
+def test_hidden_links_failed_reload_keeps_guest_metadata(monkeypatch, response):
+    _reset_scraper_globals()
+    guest = _GUEST_HIDDEN_PAGE.replace("messageHide--attach", "messageHide--link")
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, guest))
+    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
+    monkeypatch.setattr(
+        scraper_module, "_f95_get_via_extension", MagicMock(return_value=response)
+    )
+    result = Scraper()._get_page("1")
+    assert result["success"]
+    assert result["title"] == "Game [v1.0]"
+    assert result["store_links"] == []
+    _reset_scraper_globals()
+
+
 def test_hidden_attachments_reload_through_extension(monkeypatch):
     _reset_scraper_globals()
     monkeypatch.setattr(

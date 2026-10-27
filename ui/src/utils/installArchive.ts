@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /** Opens the global install-from-archive dialog (hosted in App.vue). */
+import type { StoreLink } from "../services/api";
 
 export interface InstallArchiveSeed {
+  links?: StoreLink[];
   title: string;
   version: string;
   creator: string;

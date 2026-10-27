@@ -9,15 +9,17 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from html import unescape
+from html.parser import HTMLParser
 from http.client import HTTPException, HTTPResponse
-from typing import Protocol, TypeAlias, cast
+from typing import Protocol, TypeAlias, cast, override
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from core import extension_bridge
+from core.store_links import StoreLink, parse_store_link
 from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
-ScraperResultValue: TypeAlias = bool | str | list[str]
+ScraperResultValue: TypeAlias = bool | str | list[str] | list[StoreLink]
 ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
 ScraperResultDict: TypeAlias = dict[str, ScraperResultValue]
 ThreadMetadata: TypeAlias = dict[str, str | list[str]]
@@ -162,6 +164,106 @@ def _blocks(html: str, tag: str, class_name: str = "") -> Iterator[tuple[str, st
             if depth == 0:
                 yield opening.group(), html[opening.end() : token.start()]
                 break
+
+
+class _StoreHeaderParser(HTMLParser):
+    """Read bold labelled header lines while skipping entire spoiler trees."""
+
+    _VOID: frozenset[str] = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.links: dict[tuple[str, str], StoreLink] = {}
+        self._hidden_depth: int = 0
+        self._text: str = ""
+        self._bold_depth: int = 0
+        self._bold_text: str = ""
+        self._labels: list[str] = []
+        self._urls: list[str] = []
+
+    def _finish_line(self) -> None:
+        match = re.match(r"\s*(Developer|Publisher|Stores?)\s*:", self._text, re.I)
+        if match and match[1].lower() in self._labels:
+            for url in self._urls:
+                link = parse_store_link(url)
+                if link:
+                    _ = self.links.setdefault((link["source"], link["id"]), link)
+        self._text = ""
+        self._labels = []
+        self._urls = []
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        if self._hidden_depth:
+            if tag not in self._VOID:
+                self._hidden_depth += 1
+            return
+        classes = (attributes.get("class") or "").split()
+        if any(
+            name.startswith("bbCodeSpoiler") or name == "bbCodeBlock--spoiler"
+            for name in classes
+        ):
+            self._finish_line()
+            self._hidden_depth = 1
+            return
+        if tag in {"br", "div", "p", "hr"}:
+            self._finish_line()
+        if tag in {"b", "strong"}:
+            if not self._bold_depth:
+                self._bold_text = ""
+            self._bold_depth += 1
+        if tag == "a" and (url := attributes.get("href")):
+            self._urls.append(url)
+
+    @override
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag not in self._VOID:
+            self.handle_endtag(tag)
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        if self._hidden_depth:
+            if tag not in self._VOID:
+                self._hidden_depth -= 1
+            return
+        if tag in {"b", "strong"} and self._bold_depth:
+            self._bold_depth -= 1
+            if not self._bold_depth:
+                label = self._bold_text.strip().rstrip(":").strip().lower()
+                self._labels.append(label)
+        if tag in {"div", "p"}:
+            self._finish_line()
+
+    @override
+    def handle_data(self, data: str) -> None:
+        if not self._hidden_depth:
+            self._text += data
+            if self._bold_depth:
+                self._bold_text += data
+
+    def collect(self, html: str) -> list[StoreLink]:
+        self.feed(html)
+        self._finish_line()
+        return list(self.links.values())
 
 
 class Scraper:
@@ -540,6 +642,7 @@ class Scraper:
             "tags": tags,
             "cover_image": normalized_cover,
             "screenshots": screenshots,
+            "store_links": _StoreHeaderParser().collect(wrapper),
             "thread_main_post_last_edit_at": last_edit,
             "thread_main_post_checked_at": datetime.now().isoformat(),
         }
@@ -551,8 +654,14 @@ class Scraper:
         )[1]
         return "messageHide--attach" in starter
 
+    def _starter_hides_links(self, html: str) -> bool:
+        starter = next(_blocks(html, "article", "message-threadStarterPost"), ("", ""))[
+            1
+        ]
+        return "messageHide--link" in starter
+
     def _reload_signed_in(self, url: str, guest_html: str) -> str:
-        """Re-fetch a guest page through the extension to reveal attachments.
+        """Re-fetch a guest page through the extension to reveal links and attachments.
 
         Plain HTTP is always a guest session, so screenshots posted as
         attachments are replaced by a login prompt. The extension runs with
@@ -584,7 +693,9 @@ class Scraper:
                 return self._error(
                     "scraper_error", f"F95Zone returned HTTP {status}"
                 )
-            if fallback is None and self._starter_hides_attachments(html):
+            if fallback is None and (
+                self._starter_hides_attachments(html) or self._starter_hides_links(html)
+            ):
                 html = self._reload_signed_in(
                     f"https://f95zone.to/threads/{thread_id}/", html
                 )

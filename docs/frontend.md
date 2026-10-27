@@ -150,8 +150,8 @@ The game detail modal has a **Notes** tab after Overview, Journal, Launch, and I
 Backend background tasks push updates into the UI using webview JS evaluation. The frontend listens via DOM events:
 
 - **`wlib-playtime-tick`**: Includes `gameId`, interval `delta` seconds, and `isFinal`; final events clear running state as well as recording playtime
-- **`wlib-extension-open`**: Emitted when the browser extension requests to open a game in wLib; includes the F95Zone URL
-- **`wlib-extension-add`**: Emitted when the browser extension queues a new game to add; includes scraped metadata (title, URL, engine, tags)
+- **`wlib-extension-open`**: Emitted when the browser extension requests to open a game in wLib; includes the URL and an optional integer `gameId`; the library opens by ID when present
+- **`wlib-extension-add`**: Emitted when the browser extension queues a new game to add; includes scraped metadata (title, URL, engine, tags) and `links: [{source, id, url}]` for store pages, which can omit the F95 URL
 - **`wlib-refresh-library`**: Emitted by frontend workflows such as backup import when the Library view should reload game data from the backend
 - **`wlib-install-archive`**: Dispatched by Library/Updates views, the game detail modal, and download-offer toasts to open the global install dialog; detail is `{ gameId?, archivePath?, seed? }`; the seed carries `{title, version, creator, engine, f95Url, coverImage, tags, rating}` (see `ui/src/utils/installArchive.ts`)
 
@@ -287,3 +287,19 @@ Game Detail's Launch tab mounts `GameCompanionTools.vue` whenever the modal open
 Library context menus fetch launchable tools only for running games. Supported visible tools appear after Play/Stop with dividers, share the menu's keyboard navigation, and close the menu on successful launch. Failure uses the existing launch-error toast and names the tool. Requests are discarded if the menu changes or closes; stopped games render no tool entries.
 
 The typed bridge mirrors all seven companion methods, with persistent browser mock definitions and per-game overrides. Set `wlib-mock-platform` to `linux` in localStorage to expose the Linux controls; mocks capture Wine support when a game starts and enforce duplicate launches per game.
+
+## Store links
+
+`GameRecord.links` carries portable `{source, id, url}` metadata. The Add Game
+modal accepts links from `wlib-extension-add`, shows them read-only with site
+labels, and forwards them through `api.addGame`. A store import can be saved
+without an executable, creating a wishlist entry. Query helpers in
+`utils/storeLinks.ts` preserve link-only imports and validate `gameId` for
+`wlib-extension-open`.
+
+The Overview tab of Game Detail lists store links as site-labelled buttons
+that call `api.openInBrowser`. Open in Browser and the library's thread
+context action use the F95 URL when available, otherwise the first store
+link; the action is hidden when neither exists. Both themes use the shared
+modal and action styles. Browser mocks store links and apply the same exact-ID
+duplicate/attachment rules as the backend.

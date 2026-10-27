@@ -345,6 +345,7 @@ const install = async () => {
       tags: tags.value,
       rating: rating.value,
       f95_url: f95Url.value.trim(),
+      links: requestSeed.value?.links,
       library_folder: libraryFolder.value || undefined,
       remove_old: removeOld.value,
       delete_archive: deleteArchive.value,

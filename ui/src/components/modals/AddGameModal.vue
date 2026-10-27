@@ -6,6 +6,7 @@ import {
   api,
   CONSERVATIVE_PLATFORM_CAPABILITIES,
   type PlatformCapabilities,
+  type StoreLink,
 } from "../../services/api";
 import { getLaunchModeOptions } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
@@ -14,7 +15,10 @@ import { useModalKeyboard } from "../../utils/modalKeyboard";
 import { openInstallArchive } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
+import { queryText, readStoreLinks, storeLabel } from "../../utils/storeLinks";
+
 interface AddGamePayload {
+  links: StoreLink[];
   title: string;
   exe_path: string;
   f95_url: string;
@@ -38,6 +42,7 @@ const emit = defineEmits<{
 const route = useRoute();
 const router = useRouter();
 
+const links = ref<StoreLink[]>([]);
 const title = ref("");
 const exePath = ref("");
 const f95Url = ref("");
@@ -122,6 +127,7 @@ watch(
     }
 
     if (readQueryValue(query.action) === "import") {
+      links.value = readStoreLinks(queryText(query.links));
       title.value = readQueryValue(query.title);
       f95Url.value = readQueryValue(query.f95url);
       version.value = readQueryValue(query.version);
@@ -144,6 +150,7 @@ watch(
     }
     // Reset on every close, including when the parent closes the modal after saving.
     isSubmitting.value = false;
+    links.value = [];
     title.value = "";
     exePath.value = "";
     f95Url.value = "";
@@ -170,6 +177,7 @@ const close = () => {
 const installFromArchive = async () => {
   if (props.saving || isSubmitting.value) return;
   const seed = {
+    links: links.value,
     title: title.value, version: version.value, creator: developer.value,
     engine: engine.value, f95Url: f95Url.value, coverImage: coverImage.value,
     tags: tags.value, rating: rating.value,
@@ -215,9 +223,10 @@ const browseExe = async () => {
 };
 
 const save = () => {
-  if (!title.value.trim() || !exePath.value.trim() || props.saving || isSubmitting.value) return;
+  if (!title.value.trim() || (!exePath.value.trim() && !links.value.length) || props.saving || isSubmitting.value) return;
   isSubmitting.value = true;
   emit("save", {
+    links: links.value,
     title: title.value.trim(),
     exe_path: exePath.value.trim(),
     f95_url: f95Url.value.trim(),
@@ -311,7 +320,7 @@ const save = () => {
             class="block text-sm font-medium mb-1.5 flex justify-between"
             style="color: var(--text-secondary)"
           >
-            Path to Executable <span class="text-red-400 text-xs">*</span>
+            Path to Executable <span v-if="!links.length" class="text-red-400 text-xs">*</span>
           </label>
           <div class="flex gap-2">
             <input
@@ -327,6 +336,7 @@ const save = () => {
           <PathStatus :path="exePath" kind="file" />
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             The .exe or .sh file that launches the game.
+            <span v-if="links.length">Leave empty to add to your wishlist.</span>
             <template v-if="engine || version">
               Detected:
               <span style="color: var(--text-secondary)">{{
@@ -351,8 +361,32 @@ const save = () => {
             @keydown.enter="save"
           />
           <p class="text-xs mt-2" style="color: var(--text-muted)">
-            Required for checking game updates automatically.
+            Optional. Enables update checks from the F95 thread.
           </p>
+        </div>
+
+        <div v-if="links.length" class="space-y-2">
+          <h3 class="text-sm font-medium" style="color: var(--text-secondary)">Store links</h3>
+          <p v-for="link in links" :key="`${link.source}:${link.id}`" class="text-sm break-all" style="color: var(--text-muted)">{{ storeLabel(link.source) }} · {{ link.id }}</p>
+        </div>
+
+        <div v-if="links.length" class="grid grid-cols-2 gap-3">
+          <label class="text-sm" style="color: var(--text-secondary)">
+            Developer
+            <input v-model="developer" type="text" class="modal-input w-full mt-1.5" />
+          </label>
+          <label class="text-sm" style="color: var(--text-secondary)">
+            Version
+            <input v-model="version" type="text" class="modal-input w-full mt-1.5" />
+          </label>
+          <label class="col-span-2 text-sm" style="color: var(--text-secondary)">
+            Tags
+            <input v-model="tags" type="text" class="modal-input w-full mt-1.5" placeholder="Comma-separated tags" />
+          </label>
+          <label class="col-span-2 text-sm" style="color: var(--text-secondary)">
+            Cover image URL
+            <input v-model="coverImage" type="url" class="modal-input w-full mt-1.5" />
+          </label>
         </div>
 
         <div>
@@ -403,7 +437,7 @@ const save = () => {
         </button>
         <button
           @click="save"
-          :disabled="!title.trim() || !exePath.trim() || saving || isSubmitting"
+          :disabled="!title.trim() || (!exePath.trim() && !links.length) || saving || isSubmitting"
           class="px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
