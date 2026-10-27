@@ -2,7 +2,6 @@
 """Command line: `python -m catalog_server run|status`."""
 
 import argparse
-import fcntl
 import json
 import logging
 import os
@@ -10,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
+from typing import IO
 
 from core.catalog_format import SOURCES
 
@@ -85,17 +85,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _try_lock(handle: IO[str]) -> bool:
+    # The builder runs on Linux; the Windows branch keeps the tests importable there.
+    if sys.platform == "win32":
+        import msvcrt  # pyright: ignore[reportUnreachable]
+
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
 @contextmanager
 def _run_lock(folder: str) -> Generator[bool]:
     """Yield False when another run holds the lock, so runs never overlap."""
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "run.lock"), "w") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        yield True
+        yield _try_lock(handle)
 
 
 def _status(folder: str) -> int:
