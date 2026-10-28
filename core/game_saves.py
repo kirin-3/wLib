@@ -419,13 +419,23 @@ def list_backups(backup_dir: str) -> list[str]:
 
 
 def new_backup_name(backup_dir: str, now: datetime | None = None) -> str:
+    """A fresh name for this second, always above the highest suffix in use.
+
+    Retention can delete the base folder while a suffixed one stays, so picking
+    the first free slot could return a name that sorts older than an existing
+    backup (and a name a user already saw could later mean a different backup).
+    """
     stamp = (now or datetime.now()).strftime(BACKUP_TIMESTAMP_FORMAT)
-    name = stamp
-    counter = 0
-    while os.path.lexists(os.path.join(backup_dir, name)):
-        counter += 1
-        name = f"{stamp}-{counter}"
-    return name
+    highest = -1
+    try:
+        entries = os.listdir(backup_dir)
+    except OSError:
+        entries = []
+    for entry in entries:
+        match = BACKUP_NAME_PATTERN.match(entry)
+        if match is not None and match.group(1) == stamp:
+            highest = max(highest, int(match.group(2) or 0))
+    return stamp if highest < 0 else f"{stamp}-{highest + 1}"
 
 
 def prune_backups(

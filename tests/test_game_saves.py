@@ -118,6 +118,30 @@ def test_backup_names_get_a_suffix_on_collision(tmp_path):
     assert new_backup_name(str(tmp_path), NOW) == "2026-10-23_12-00-00-2"
 
 
+def test_backup_names_do_not_reuse_a_lower_suffix_after_pruning(tmp_path):
+    # Pruning can delete the base folder while a suffixed backup stays.
+    (tmp_path / "2026-10-23_12-00-00-1").mkdir()
+
+    assert new_backup_name(str(tmp_path), NOW) == "2026-10-23_12-00-00-2"
+
+
+def test_same_second_backups_stay_in_creation_order_and_respect_retention(tmp_path):
+    saves = tmp_path / "saves"
+    _ = _write(saves / "a.save")
+    root = tmp_path / "backups"
+
+    names = [
+        backup_saves(str(saves), str(root), 1, 1, now=NOW).name for _ in range(3)
+    ]
+
+    assert names == [
+        "2026-10-23_12-00-00",
+        "2026-10-23_12-00-00-1",
+        "2026-10-23_12-00-00-2",
+    ]
+    assert list_backups(str(root / "1")) == ["2026-10-23_12-00-00-2"]
+
+
 def test_list_backups_orders_newest_first_and_ignores_foreign(tmp_path):
     names = [
         "2026-10-23_12-00-00",
