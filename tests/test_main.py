@@ -1621,3 +1621,56 @@ def test_store_page_wishlist_check_open_and_thread_links(
         response.read()
     finally:
         connection.close()
+
+
+def test_database_endpoints_wait_until_startup_has_run_init_db(
+    monkeypatch, extension_server
+):
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", None)
+    monkeypatch.setattr(main, "DATABASE_READY_TIMEOUT", 0.05)
+    ready = threading.Event()
+    extension_server.database_ready = ready
+    find_calls: list[object] = []
+    monkeypatch.setattr(
+        main.ExtensionRequestHandler,
+        "_build_check_payload",
+        lambda _s, url, _ids: find_calls.append(url) or {"exists": False},
+    )
+    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib"}
+    links = json.dumps({"url": "https://f95zone.to/threads/123/", "links": []})
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        # The instance lock still answers while the database is not ready.
+        connection.request("GET", "/api/open", headers=headers)
+        response = connection.getresponse()
+        assert json.loads(response.read())["success"] is False
+        connection.request(
+            "GET", "/api/check?url=https://f95zone.to/threads/123/", headers=headers
+        )
+        response = connection.getresponse()
+        assert response.status == 503
+        not_ready = json.loads(response.read())
+        assert not_ready["error"] == "Application is not ready"
+        assert not_ready["app_version"] == main.APP_VERSION
+        connection.request("POST", "/api/thread-links", links, headers)
+        response = connection.getresponse()
+        assert response.status == 503
+        response.read()
+        assert find_calls == []
+
+        ready.set()
+        monkeypatch.setattr(main, "window_ref", window)
+        connection.request(
+            "GET", "/api/check?url=https://f95zone.to/threads/123/", headers=headers
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        connection.request("POST", "/api/thread-links", links, headers)
+        response = connection.getresponse()
+        assert response.status == 404
+        response.read()
+        assert find_calls == ["https://f95zone.to/threads/123/"]
+    finally:
+        connection.close()

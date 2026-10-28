@@ -56,6 +56,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
   - `wishlisted` is present for matching games. It is `true` when `exe_path` is empty after trimming.
   - `app_version` is the running wLib app version without a leading `v`. It is present on every check response, including checks without a `url` parameter and checks whose library lookup fails.
   - `extension_version` is the manifest version currently installed in the synced Chromium extension folder. It is omitted when startup extension sync did not succeed or the installed version is unknown.
+  - The server answers before the database is initialized at startup. A check with a `url` waits up to 8 seconds for it, then returns HTTP 503 with `{"exists": false, "error": "Application is not ready", "app_version": "..."}`.
 
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={page_url}&id={source:id}`**
@@ -184,7 +185,8 @@ On F95 thread pages, the content script injects a floating widget near the upper
 **`POST /api/thread-links`** accepts `{url, links: [{source, id, url}]}` for a
 library game's F95 thread. It uses the same origin rules and 1 MB body limit
 as Wishlist. Success is HTTP 200; a missing game is 404, an invalid request is
-400, and a foreign origin is 403. It replaces only links with `f95_post`
+400, a foreign origin is 403, and a database still initializing after 8
+seconds at startup is 503. It replaces only links with `f95_post`
 origin. An empty visible list removes those rows; the content script sends
 nothing when the page still hides its links. This route never fetches F95.
 

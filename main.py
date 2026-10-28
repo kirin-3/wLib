@@ -45,6 +45,8 @@ OAUTH_CALLBACKS = {
     "/gdrive/callback": ("complete_gdrive_callback", "Google Drive"),
 }
 MAX_EXTENSION_BODY_BYTES = 1024 * 1024
+# Stays under the extension's 10 s request timeout.
+DATABASE_READY_TIMEOUT = 8.0
 RENDERER_DIAGNOSTICS_MAX_BYTES = 512 * 1024
 renderer_log_lock = threading.Lock()
 
@@ -710,6 +712,14 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if 0 < length <= MAX_EXTENSION_BODY_BYTES:
             _ = self.rfile.read(length)
 
+    def _wait_for_database(self) -> bool:
+        # main() serves this port before Api() has run init_db(), so database
+        # endpoints wait for the schema instead of reading it mid-migration.
+        ready = getattr(getattr(self, "server", None), "database_ready", None)
+        return not isinstance(ready, threading.Event) or ready.wait(
+            DATABASE_READY_TIMEOUT
+        )
+
     def _find_matching_game(
         self, url: object, ids: Sequence[str] = ()
     ) -> dict[str, object] | None:
@@ -961,6 +971,18 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             check_url = query.get("url", [""])[0]
 
             check_payload: dict[str, object] = {"exists": False}
+            if check_url and not self._wait_for_database():
+                self.send_response(503)
+                self._send_cors_headers(allowed_origin)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                not_ready = {
+                    "exists": False,
+                    "error": "Application is not ready",
+                    "app_version": APP_VERSION,
+                }
+                _ = self.wfile.write(json.dumps(not_ready).encode())
+                return
             if check_url:
                 try:
                     check_payload = self._build_check_payload(
@@ -1180,8 +1202,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     body.get("links"), list
                 ):
                     raise ValueError("A thread URL and links list are required")
-                game = find_game_by_f95_url(body.get("url"))
-                if game is None:
+                if not self._wait_for_database():
+                    status = 503
+                    response = {"success": False, "error": "Application is not ready"}
+                elif (game := find_game_by_f95_url(body.get("url"))) is None:
                     status = 404
                     response = {"success": False, "error": "Game not found"}
                 else:
@@ -1208,6 +1232,8 @@ class ExtensionServer(ThreadingHTTPServer):
     # let a second wLib bind it while the first is still listening.
     allow_reuse_address: bool = sys.platform != "win32"
     sync_api: Api | None = None
+    # Set by main() while Api() has not run init_db() yet.
+    database_ready: threading.Event | None = None
 
 
 def bind_extension_server() -> ThreadingHTTPServer | None:
@@ -1349,12 +1375,14 @@ def main() -> None:
 
     _ = setup_app_log(APP_DATA_DIR)
     print(f"[wLib] SSL certificates: {ssl_summary or 'system defaults'}")
+    database_ready = threading.Event()
     if extension_server is not None:
         # Serve before the slow WebView/API startup. The port is the
         # single-instance lock, so a second launch during this window must
         # still get a reply and exit instead of opening a second window that
         # shares the database.
         print("Starting extension HTTP receiver on port 8183...")
+        cast(ExtensionServer, extension_server).database_ready = database_ready
         threading.Thread(
             target=extension_server.serve_forever, daemon=True
         ).start()
@@ -1375,6 +1403,7 @@ def main() -> None:
 
     api = Api()
     api_ref = api
+    database_ready.set()
     sync_result = api.sync_extension_files()
     api.set_startup_extension_sync_status(sync_result)
     if sync_result.get("success") is False:
