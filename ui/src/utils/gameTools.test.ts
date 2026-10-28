@@ -11,6 +11,7 @@ import {
   getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
+  shouldSyncDeveloperOption,
   toolProgressPercent,
 } from "./gameTools.ts";
 
@@ -84,6 +85,15 @@ test("only long runs are re-attached after reopening the tab", () => {
   assert.equal(getResumableToolAction(status(true, "console")), "");
   assert.equal(getResumableToolAction(status(true, "urm")), "");
   assert.equal(getResumableToolAction(status(false, "extract")), "");
+});
+
+test("a pending developer-mode choice survives a reload that leaves the console off", () => {
+  assert.equal(shouldSyncDeveloperOption("off", "off"), false);
+  assert.equal(shouldSyncDeveloperOption(undefined, "off"), true);
+  assert.equal(shouldSyncDeveloperOption("on", "off"), true);
+  assert.equal(shouldSyncDeveloperOption("off", "on"), true);
+  assert.equal(shouldSyncDeveloperOption("off", "developer"), true);
+  assert.equal(shouldSyncDeveloperOption("developer", "developer"), true);
 });
 
 test("console hint and key label", () => {

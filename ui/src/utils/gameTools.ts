@@ -27,6 +27,14 @@ export const getResumableToolAction = (status: GameToolStatus): "extract" | "dec
   return status.action === "extract" || status.action === "decrypt" ? status.action : "";
 };
 
+// The developer checkbox is a pending choice while the console is off, so a
+// reload that leaves the console off must not reset it. A console change (on,
+// off or developer) always re-syncs the checkbox to the stored script.
+export const shouldSyncDeveloperOption = (
+  previous: RenpyConsoleState | undefined,
+  next: RenpyConsoleState | undefined,
+): boolean => next !== "off" || previous !== next;
+
 export const formatToolBytes = (size: number): string => {
   if (!Number.isFinite(size) || size < 0) return "";
   const units = ["B", "KB", "MB", "GB"];

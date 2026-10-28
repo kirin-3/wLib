@@ -19,6 +19,7 @@ import {
   getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
+  shouldSyncDeveloperOption,
   toolProgressPercent,
 } from "../utils/gameTools";
 import { notify, notifyError } from "../utils/toast";
@@ -90,6 +91,7 @@ const load = async (gameId: number, keepVisible = false) => {
   const request = ++requestId;
   loading.value = true;
   loadError.value = "";
+  const previousConsole = tools.value?.renpy?.console;
   if (!keepVisible) tools.value = null;
   try {
     const result = await api.getGameTools(gameId);
@@ -100,7 +102,10 @@ const load = async (gameId: number, keepVisible = false) => {
       return;
     }
     tools.value = result;
-    developerOption.value = result.renpy?.console === "developer";
+    const nextConsole = result.renpy?.console;
+    if (shouldSyncDeveloperOption(previousConsole, nextConsole)) {
+      developerOption.value = nextConsole === "developer";
+    }
     // Re-attach a long run that started before this tab was (re)opened, so its
     // progress and Cancel are still reachable and no action is offered twice.
     try {
