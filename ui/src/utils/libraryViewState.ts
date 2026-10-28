@@ -210,6 +210,27 @@ export const normalizeFilterStatuses = (
   return statuses.filter((status) => allowed.has(status.toLowerCase()));
 };
 
+// A restored filter can keep a spelling that differs in case from the status
+// option (imported preset, renamed custom status). Matching is case-insensitive
+// everywhere else, so the sidebar checkbox must agree with the applied filter
+// and toggling it must remove every spelling of that status.
+export const hasStatusFilter = (
+  values: readonly string[],
+  status: string,
+): boolean =>
+  values.some((value) => value.toLowerCase() === status.toLowerCase());
+
+export const toggleStatusFilter = (
+  values: readonly string[],
+  status: string,
+  checked: boolean,
+): string[] => {
+  const remaining = values.filter(
+    (value) => value.toLowerCase() !== status.toLowerCase(),
+  );
+  return checked ? [...remaining, status] : remaining;
+};
+
 const readStorageItem = (storage: Storage, key: string): string | null => {
   try {
     return storage.getItem(key);

@@ -10,11 +10,13 @@ import {
   LIBRARY_PLAY_STATUSES,
   LIBRARY_VIEW_STATE_STORAGE_KEY,
   clearLegacyLibraryViewState,
+  hasStatusFilter,
   normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
   saveLibraryViewState,
+  toggleStatusFilter,
   type LibraryViewState,
 } from "./libraryViewState.ts";
 
@@ -363,4 +365,21 @@ test("missing or invalid card sizes retain the other preferences", () => {
     assert.equal(state.sortBy, "rating");
     assert.equal(state.activeCollection, "Backlog");
   }
+});
+
+test("status filters match and toggle case-insensitively", () => {
+  // A restored preset keeps its spelling; the sidebar option uses the canonical one.
+  assert.equal(hasStatusFilter(["playing"], "Playing"), true);
+  assert.equal(hasStatusFilter(["Playing", "Backlog"], "Backlog"), true);
+  assert.equal(hasStatusFilter(["Completed"], "Playing"), false);
+  assert.equal(hasStatusFilter([], "Playing"), false);
+
+  // Unchecking removes every spelling so the filter cannot stay applied with an
+  // unchecked box; checking replaces the stale spelling with the visible one.
+  assert.deepEqual(toggleStatusFilter(["playing", "Playing"], "Playing", false), []);
+  assert.deepEqual(toggleStatusFilter(["playing"], "Playing", true), ["Playing"]);
+  assert.deepEqual(toggleStatusFilter(["Completed"], "Playing", true), ["Completed", "Playing"]);
+  assert.deepEqual(toggleStatusFilter(["Completed"], "Playing", false), ["Completed"]);
+  // Toggling a spelling that was not selected only affects the matching name.
+  assert.deepEqual(toggleStatusFilter(["backlog", "BACKLOG", "Playing"], "Backlog", false), ["Playing"]);
 });

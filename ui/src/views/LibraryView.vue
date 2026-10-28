@@ -47,12 +47,14 @@ import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
   clearLegacyLibraryViewState,
+  hasStatusFilter,
   normalizeActiveCollection,
   normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
   saveLibraryViewState,
+  toggleStatusFilter,
   type FilterCollection,
   type FilterInstallState,
   type FilterSections,
@@ -348,6 +350,19 @@ const toggleFilter = (arr: string[], val: string) => {
   const idx = arr.indexOf(val);
   if (idx === -1) arr.push(val);
   else arr.splice(idx, 1);
+};
+
+// Status filters keep the spelling they were restored with, so the checkbox
+// matches case-insensitively and toggling it clears every spelling of the name.
+const statusFilterActive = (status: string): boolean =>
+  hasStatusFilter(filterStatuses.value, status);
+
+const applyStatusFilter = (status: string, event: Event): void => {
+  filterStatuses.value = toggleStatusFilter(
+    filterStatuses.value,
+    status,
+    (event.target as HTMLInputElement).checked,
+  );
 };
 
 const normalizeEngineFilterValue = (value: unknown): string =>
@@ -1608,8 +1623,8 @@ onUnmounted(() => {
             >
               <input
                 type="checkbox"
-                :value="s.value"
-                v-model="filterStatuses"
+                :checked="statusFilterActive(s.value)"
+                @change="applyStatusFilter(s.value, $event)"
                 class="filters-checkbox rounded"
               />
               <span class="ui-status-option" :class="s.toneClass">
