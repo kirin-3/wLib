@@ -105,6 +105,12 @@ def test_valid_thread_titles_are_not_mistaken_for_login_or_challenge(thread_html
         html = thread_html.replace(
             "<title>Example Game | F95zone</title>", f"<title>{title} | F95zone</title>"
         ).replace("Example &amp; Game [v1.10] [Dev]", f"{title} [v1.10] [Dev]")
+        # Real thread pages repeat the title in their metadata.
+        html = html.replace(
+            "</title>",
+            f'</title><meta property="og:title" content="{title} [v1.10] [Dev]">',
+            1,
+        )
         issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
         assert issue is None, (title, issue)
 

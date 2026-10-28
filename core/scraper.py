@@ -547,9 +547,11 @@ class Scraper:
             "cf-challenge",
             "challenge-platform",
         )
-        if any(marker in page_html for marker in challenge_markers) or (
-            not has_thread_heading
-            and any(marker in page_title for marker in challenge_markers)
+        # Challenge pages replace the whole forum page. Once XenForo rendered
+        # the thread heading, the game title also repeats in og:title and
+        # JSON-LD, and post text may use the same phrases.
+        if not has_thread_heading and any(
+            marker in combined for marker in challenge_markers
         ):
             return {
                 "code": "blocked",
