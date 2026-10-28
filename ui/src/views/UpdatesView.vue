@@ -17,6 +17,8 @@ import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
 import { openInstallArchive } from "../utils/installArchive";
 import { hasAvailableUpdate } from "../utils/libraryGames";
+import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
+import { libraryOpenQuery } from "../utils/storeLinks";
 import { isNewerVersion } from "../utils/appVersion";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
@@ -54,7 +56,7 @@ const installUpdate = (game: GameRecord) => {
 };
 
 const openGame = (game: GameRecord) => {
-  void router.push({ path: "/", query: { action: "open", f95url: game.f95_url } });
+  void router.push({ path: "/", query: libraryOpenQuery(game) });
 };
 
 const recheck = async (game: GameRecord) => {
@@ -290,7 +292,24 @@ const retryStatus = () => {
 };
 
 const openInBrowser = async (url?: string) => {
-  if (url) await api.openInBrowser(url);
+  if (!url) return;
+  try {
+    const result = await api.openInBrowser(url);
+    if (result && result.success === false) notifyError(result.error || "Could not open the link");
+  } catch (error) {
+    notifyError(String(error));
+  }
+};
+
+// Release notes are rendered as HTML. A plain link would navigate the whole
+// WebView away from wLib, so http(s) links open in the system browser instead
+// and anything else is swallowed.
+const openChangelogLink = (event: MouseEvent) => {
+  const href = renderedLinkHref(event.target);
+  if (href === null) return;
+  event.preventDefault();
+  const url = getSafeNotesLinkUrl(href);
+  if (url) void openInBrowser(url);
 };
 
 const progress = computed(() => {
@@ -489,6 +508,7 @@ onUnmounted(() => {
         <div
           class="changelog-wrapper rounded-lg p-5 text-sm relative z-10 max-h-64 overflow-y-auto wlib-changelog"
           style="color: var(--text-secondary)"
+          @click="openChangelogLink"
           v-html="appUpdate.changelogHtml"
         ></div>
       </section>
@@ -747,9 +767,9 @@ onUnmounted(() => {
               </button>
               <button
                 @click="recheck(game)"
-                :disabled="recheckingIds.has(game.id) || status.running"
+                :disabled="!game.f95_url || recheckingIds.has(game.id) || status.running"
                 class="ui-action-btn update-btn !px-2 !py-1.5 disabled:opacity-50"
-                :title="`Check F95Zone again for ${game.title}`"
+                :title="game.f95_url ? `Check F95Zone again for ${game.title}` : 'Only games with an F95Zone thread can be re-checked'"
               >
                 <IconLoader2
                   v-if="recheckingIds.has(game.id)"
