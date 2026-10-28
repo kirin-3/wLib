@@ -120,16 +120,28 @@ def publish(
     data = json.dumps(manifest, indent=2).encode()
     storage.put_bytes(MANIFEST_KEY, data, "application/json", MANIFEST_CACHE)
     log.info("uploaded %s (%d bytes)", MANIFEST_KEY, len(data))
-    _ = prune_snapshots(storage)
+    _ = prune_snapshots(storage, current=key)
     return manifest
 
 
-def prune_snapshots(storage: Storage, keep: int = SNAPSHOTS_TO_KEEP) -> list[str]:
-    """Keep the newest `keep` snapshots; names sort by their UTC timestamp."""
+def prune_snapshots(
+    storage: Storage,
+    keep: int = SNAPSHOTS_TO_KEEP,
+    *,
+    current: str | None = None,
+) -> list[str]:
+    """Keep the newest `keep` snapshots and the current manifest's snapshot.
+
+    Names sort by their UTC timestamp, but a clock step backwards must not
+    delete the snapshot the manifest was just switched to.
+    """
     keys = sorted(
         key for key in storage.list_keys(SNAPSHOT_PREFIX) if key.endswith(".sqlite.xz")
     )
-    stale = keys[:-keep] if len(keys) > keep else []
+    retained: set[str] = set(keys[-keep:]) if keep > 0 else set()
+    if current is not None:
+        retained.add(current)
+    stale = [key for key in keys if key not in retained]
     for key in stale:
         storage.delete(key)
         log.info("deleted %s", key)
