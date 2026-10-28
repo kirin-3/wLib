@@ -1403,11 +1403,19 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
     pending: list[dict[str, object]] = []
     try:
         for game in get_all_games():
+            # A game without an executable is wishlisted: it has no installed
+            # version to update, and the library treats it as having no update.
+            if not str(game.get("exe_path") or "").strip():
+                continue
             installed = str(game.get("version") or "")
             latest = str(game.get("latest_version") or "")
             if not latest.strip():
                 continue
             if _normalize_version(latest) == _normalize_version(installed):
+                continue
+            # A skipped update is treated as no update everywhere else.
+            skipped = _normalize_version(str(game.get("skipped_version") or ""))
+            if skipped and skipped == _normalize_version(latest):
                 continue
             try:
                 gid = int(str(game.get("id", 0)))
