@@ -659,7 +659,7 @@ class Launcher:
 
                 threading.Thread(target=force_stop, daemon=True).start()
             return {"success": True}
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
             return {"success": False, "error": str(exc)}
 
     def _resolve_runner_candidate_path(self, raw_path: str) -> str:

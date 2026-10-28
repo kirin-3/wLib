@@ -2378,6 +2378,24 @@ def test_stop_sandboxie_uses_box_termination(monkeypatch):
     ]
 
 
+def test_stop_sandboxie_failure_returns_error(monkeypatch):
+    launcher = Launcher()
+    launcher._running[12] = RunningGame(
+        MagicMock(pid=123),
+        None,
+        sandbox_box="wLib_12",
+        sandbox_tool=r"C:\Sandboxie\Start.exe",
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.terminate_box",
+        MagicMock(side_effect=RuntimeError("Sandboxie command failed (1)")),
+    )
+    result = launcher.stop(12)
+    assert result["success"] is False
+    assert "Sandboxie command failed" in str(result["error"])
+    assert 12 in launcher.get_running_games()
+
+
 def test_sandbox_configuration_failure_never_starts_game(monkeypatch):
     monkeypatch.setattr("core.launcher.is_windows", lambda: True)
     monkeypatch.setattr(
