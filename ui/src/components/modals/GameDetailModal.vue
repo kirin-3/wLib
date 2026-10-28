@@ -790,12 +790,19 @@ const close = () => {
 };
 
 // User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
-const requestClose = () => {
-  if (saving.value || deleting.value) return;
+const requestClose = (): boolean => {
+  if (saving.value || deleting.value) return false;
   if (hasUnsavedChanges.value && !confirm("Discard unsaved changes to this game?")) {
-    return;
+    return false;
   }
   close();
+  return true;
+};
+
+// Links that leave the modal for Settings must pass the same discard prompt.
+const closeAndNavigate = (hash: string) => {
+  if (!requestClose()) return;
+  void sandboxRouter.push(hash);
 };
 
 const modalRef = ref<HTMLElement | null>(null);
@@ -1255,6 +1262,10 @@ const save = async () => {
   // Snapshot before awaiting: the sync watcher replaces these if props.game changes mid-save.
   const previousCollections = [...(props.game.collections || [])];
   const desiredCollections = [...collectionMembership.value];
+  // The form can still be edited while the request is in flight; only this
+  // snapshot was submitted, so it is the only state that may become the saved baseline.
+  const submittedSnapshot = formSnapshot();
+  const submittedQuickFields = quickFields();
   saving.value = true;
   try {
     const res = await api.updateGame(gameId, {
@@ -1265,7 +1276,7 @@ const save = async () => {
       finished_version: finishedVersion.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
-      ...quickFields(),
+      ...submittedQuickFields,
       progress: notes.value,
       engine: normalizeEngine(engine.value),
       sandbox_enabled: sandboxEnabled.value,
@@ -1308,14 +1319,30 @@ const save = async () => {
             "Failed to save collections: " +
               (collectionsResult.error || "Unknown error"),
           );
+          // The game fields were saved, but the membership was not. Keep the
+          // modal open so Save can retry the collections instead of closing
+          // with the membership change silently dropped. The parent's updated
+          // handler closes the modal, so refresh the library directly instead.
+          window.dispatchEvent(new Event("wlib-refresh-library"));
+          return;
         }
       }
-      if (isCurrentGame(gameId)) {
-        savedSnapshot.value = formSnapshot();
-        savedQuickFields.value = quickFields();
+      const stillCurrent = isCurrentGame(gameId);
+      if (stillCurrent) {
+        savedSnapshot.value = submittedSnapshot;
+        savedQuickFields.value = submittedQuickFields;
       }
-      emit("updated");
-      close();
+      if (stillCurrent && !hasUnsavedChanges.value) {
+        emit("updated");
+        close();
+      } else {
+        // Edits made while the request ran were not submitted. Keep the modal
+        // open with them marked unsaved instead of closing over them. The
+        // parent's updated handler would close it, so refresh the library
+        // behind the modal directly.
+        window.dispatchEvent(new Event("wlib-refresh-library"));
+        if (stillCurrent) notify("Saved. Changes made while saving are still unsaved.", "success");
+      }
     }
   } catch (e) {
     console.error("Failed to save game", e);
@@ -2010,7 +2037,7 @@ const removeAttachment = async (name: string) => {
         </section>
 
         <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="space-y-6">
-          <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="emit('update:modelValue', false); sandboxRouter.push('/settings#custom-tools')" />
+          <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">
               <span>Run in sandbox</span>
@@ -2018,7 +2045,7 @@ const removeAttachment = async (name: string) => {
             </label>
             <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }}</p>
             <div class="flex flex-wrap gap-2">
-              <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="emit('update:modelValue', false); sandboxRouter.push('/settings#sandbox')">Open Sandbox settings</button>
+              <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="closeAndNavigate('/settings#sandbox')">Open Sandbox settings</button>
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
             </div>
           </div>
