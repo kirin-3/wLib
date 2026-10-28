@@ -274,10 +274,18 @@ class CatalogClient:
         installed = sidecar.get("manifest")
         if isinstance(installed, dict) and os.path.isfile(self.catalog_path):
             current = cast(dict[str, object], installed).get(MANIFEST_SNAPSHOT)
-            if isinstance(current, dict) and cast(dict[str, object], current).get(
-                SNAPSHOT_SHA256
-            ) == digest:
-                return False
+            if (
+                isinstance(current, dict)
+                and cast(dict[str, object], current).get(SNAPSHOT_SHA256) == digest
+            ):
+                # A crash, manual edit or partial replacement can leave a
+                # corrupt file behind while the sidecar still names this hash.
+                try:
+                    self._verify(self.catalog_path)
+                except CatalogError:
+                    pass
+                else:
+                    return False
 
         os.makedirs(self.data_dir, exist_ok=True)
         xz_fd, xz_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".xz")

@@ -159,6 +159,24 @@ def test_checks_at_most_every_12_hours_unless_forced(tmp_path, server):
     assert len(server.requests) == 2
 
 
+def test_corrupt_installed_catalog_is_replaced_even_when_manifest_is_unchanged(
+    tmp_path, server
+):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
+    client = _client(tmp_path)
+    client.check()
+    with open(client.catalog_path, "wb") as handle:
+        _ = handle.write(b"not a database")
+    server.requests.clear()
+
+    assert client.check(force=True) == {"success": True, "updated": True}
+    assert _titles(client) == ["A"]
+    assert [request["path"] for request in server.requests] == [
+        "/v1/manifest.json",
+        "/v1/snapshots/catalog-20261027T050000Z.sqlite.xz",
+    ]
+
+
 def test_newer_snapshot_replaces_the_old_one(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("old",))
     client = _client(tmp_path)
