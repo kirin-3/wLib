@@ -69,6 +69,18 @@ def test_continuation_reassembly():
     assert payload == b"hello"
 
 
+def test_control_frame_between_fragments_keeps_message():
+    # RFC 6455 lets a control frame sit between the fragments of a data message.
+    state = extension_ws.MessageState()
+    stream = io.BytesIO(
+        extension_ws.encode_client_frame(extension_ws.OP_TEXT, b"hel", fin=False)
+        + extension_ws.encode_client_frame(extension_ws.OP_PING, b"p")
+        + extension_ws.encode_client_frame(extension_ws.OP_CONT, b"lo", fin=True)
+    )
+    assert extension_ws.recv_message(stream, state) == ("ping", b"p")
+    assert extension_ws.recv_message(stream, state) == ("text", b"hello")
+
+
 def test_oversize_frame_rejected():
     header = bytes([0x81, 0x80 | 127]) + (9 * 1024 * 1024).to_bytes(8, "big")
     stream = io.BytesIO(header + b"\x01\x02\x03\x04")

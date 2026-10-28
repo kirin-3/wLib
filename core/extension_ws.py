@@ -16,7 +16,7 @@ import base64
 import hashlib
 import struct
 from io import BufferedIOBase
-from typing import BinaryIO
+from typing import BinaryIO, final
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -149,6 +149,7 @@ def read_frame(rfile: BinaryIO | BufferedIOBase) -> tuple[bool, int, bytes]:
 
 def recv_message(
     rfile: BinaryIO | BufferedIOBase,
+    state: MessageState | None = None,
 ) -> tuple[str, bytes]:
     """Read frames until a complete data message or control action arrives.
 
@@ -156,29 +157,37 @@ def recv_message(
     frames joined), ``("ping", payload)``, ``("pong", payload)``, or
     ``("close", payload)``. Binary frames are rejected. Reassembled text over
     8 MiB raises :class:`MessageTooLarge`.
+
+    Pass a per-connection :class:`MessageState` to keep a partly reassembled
+    message across a control frame (RFC 6455 allows ping/pong between
+    fragments). Without one, each call starts with an empty message.
     """
-    fragments: list[bytes] = []
-    in_fragments = False
+    message = state if state is not None else MessageState()
     while True:
         fin, opcode, payload = read_frame(rfile)
         if opcode == OP_TEXT:
-            if in_fragments:
+            if message.active:
                 raise WebSocketError("new data frame inside fragments")
             if fin:
                 if len(payload) > MAX_MESSAGE_BYTES:
                     raise MessageTooLarge("message exceeds 8 MiB")
                 return ("text", payload)
-            fragments.append(payload)
-            in_fragments = True
+            message.fragments.append(payload)
+            message.active = True
         elif opcode == OP_CONT:
-            if not in_fragments:
+            if not message.active:
                 raise WebSocketError("orphan continuation frame")
-            fragments.append(payload)
-            total = sum(len(part) for part in fragments)
+            message.fragments.append(payload)
+            total = sum(len(part) for part in message.fragments)
             if total > MAX_MESSAGE_BYTES:
+                message.fragments.clear()
+                message.active = False
                 raise MessageTooLarge("message exceeds 8 MiB")
             if fin:
-                return ("text", b"".join(fragments))
+                data = b"".join(message.fragments)
+                message.fragments.clear()
+                message.active = False
+                return ("text", data)
         elif opcode == OP_PING:
             return ("ping", payload)
         elif opcode == OP_PONG:
@@ -187,3 +196,12 @@ def recv_message(
             return ("close", payload)
         else:
             raise WebSocketError(f"unsupported opcode {opcode:#x}")
+
+
+@final
+class MessageState:
+    """Partial text message carried across ``recv_message`` calls."""
+
+    def __init__(self) -> None:
+        self.fragments: list[bytes] = []
+        self.active: bool = False

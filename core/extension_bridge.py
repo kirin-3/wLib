@@ -224,10 +224,11 @@ def serve_bridge_connection(
 
     conn = BridgeConnection(send_text=_send_text)
     _register_connection(conn)
+    state = extension_ws.MessageState()
     try:
         while True:
             try:
-                kind, payload = extension_ws.recv_message(rfile)
+                kind, payload = extension_ws.recv_message(rfile, state)
             except extension_ws.MessageTooLarge:
                 try:
                     _send_raw(wfile, extension_ws.encode_server_close(1009))
