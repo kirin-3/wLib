@@ -766,11 +766,20 @@ class SyncManager:
                         "Choose an existing writable sync folder.",
                         "invalid_sync_folder",
                     )
+                resolved = str(location.folder.resolve())
+                # Re-selecting the folder already in use must not forget the
+                # sync state (revision, last sync time, encryption key) and
+                # look like a fresh connection.
+                if (
+                    self._setting("location") == "folder"
+                    and self._setting("folder_path") == resolved
+                ):
+                    return self.status()
                 self._disconnect_locked()
                 self._reset_connection(
                     {
                         "sync_location": "folder",
-                        "sync_folder_path": str(location.folder.resolve()),
+                        "sync_folder_path": resolved,
                     }
                 )
                 return self.status()

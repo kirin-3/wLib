@@ -1185,3 +1185,27 @@ def test_auto_push_due_waits_for_quiet_but_not_for_a_future_change_time():
     database.update_setting("sync_local_modified_at", "2099-01-01T00:00:00Z")
     assert timestamp(database.get_setting("sync_local_modified_at")) > time.time()
     assert sync._auto_push_due() is True
+
+
+def test_reselecting_the_same_folder_keeps_sync_state(tmp_path):
+    sync = SyncManager()
+    assert sync.set_folder(str(tmp_path))["success"]
+    database.update_settings(
+        {
+            "sync_last_synced_at": "2026-10-01T00:00:00.000Z",
+            "sync_last_revision": "rev",
+            "sync_encryption_key": "a2V5",
+            "sync_encryption_salt": "c2FsdA==",
+        }
+    )
+
+    assert sync.set_folder(str(tmp_path))["success"]
+    assert database.get_setting("sync_last_revision") == "rev"
+    assert database.get_setting("sync_last_synced_at") == "2026-10-01T00:00:00.000Z"
+    assert database.get_setting("sync_encryption_key") == "a2V5"
+
+    other = tmp_path / "other"
+    other.mkdir()
+    assert sync.set_folder(str(other))["success"]
+    assert database.get_setting("sync_last_revision") == ""
+    assert database.get_setting("sync_encryption_key") == ""
