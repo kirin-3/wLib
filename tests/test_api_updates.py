@@ -7,6 +7,7 @@ import os
 import sqlite3
 import ssl
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import cast
@@ -336,6 +337,46 @@ def test_download_proton_ge_streams_and_filters_tar(
         assert executable.read_bytes() == payload
         assert get_setting("proton_path") == str(executable)
         assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
+
+
+def test_download_proton_ge_does_not_follow_predictable_temp_symlink(
+    monkeypatch, tmp_path
+):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    predictable = tmp_path / "GE-Proton-test.tar.gz"
+    predictable.symlink_to(victim)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+
+    release = {
+        "tag_name": "GE-Proton-test",
+        "assets": [
+            {
+                "name": "GE-Proton-test.tar.gz",
+                "browser_download_url": "https://example.com/GE-Proton-test.tar.gz",
+            },
+            {
+                "name": "GE-Proton-test.sha512sum",
+                "browser_download_url": "https://example.com/GE-Proton-test.sha512sum",
+            },
+        ],
+    }
+    responses = iter(
+        [
+            io.BytesIO(json.dumps(release).encode()),
+            io.BytesIO(b"0" * 128),
+            io.BytesIO(b"tarball"),
+        ]
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *_args, **_kwargs: next(responses)
+    )
+
+    result = Api().download_proton_ge()
+
+    assert result["success"] is False
+    assert victim.read_text(encoding="utf-8") == "keep me"
 
 
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])

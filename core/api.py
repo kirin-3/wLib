@@ -4551,7 +4551,12 @@ class Api:
             wlib_share_dir = get_proton_dir()
             os.makedirs(wlib_share_dir, exist_ok=True)
 
-            tar_path = os.path.join(tempfile.gettempdir(), f"{release_name}.tar.gz")
+            # A predictable name in the shared temp directory can be pre-created
+            # as a symlink by another local user, so create the file exclusively.
+            tar_fd, tar_path = tempfile.mkstemp(
+                prefix="wlib-proton-", suffix=".tar.gz"
+            )
+            os.close(tar_fd)
 
             # The .sha512sum file reads "<hash>  <tarball name>".
             checksum_req = urllib.request.Request(
