@@ -12,13 +12,14 @@ PyInstaller, the AppImage or other packages.
 |---|---|---|
 | F95Zone | Games in the public `latest_data` feed | 90 per page, at most 90 requests per rolling hour, 3 s apart |
 | DLsite | Adult (`age_category == 3`) games from `/maniax/` (doujin) and `/pro/` (commercial PC) | Listing pages for IDs, circles and genres, then `product/info/ajax` for 100 IDs per request, 3 s apart |
-| Ryuugames | Posts from the WordPress REST API | 100 per page, 3 s apart; only IDs, developer, version and categories are kept |
+| Ryuugames | Posts from the WordPress REST API | 100 per page, 3 s apart; title, developer, version, categories and store IDs are kept from the post body; download links are never stored |
 | VNDB | Visual novels with an 18+ release, and adult releases that link to DLsite or Steam | Official kana API, at most 150 requests per 5 minutes (waited out within a run), 1 s apart; refreshed weekly |
 
 Every request carries the user agent `wLib-catalog-builder/1
 (+https://github.com/kirin-3/wLib)`. The builder never logs in to any site and
-stores no download links or game files. A 429 or a rate-limit message pauses
-that source for the rest of the run; the other sources continue.
+stores no download links or game files. Timeouts and 5xx answers get up to three
+attempts with a 30-second backoff. A 429 or a rate-limit message pauses that
+source for the rest of the run; the other sources continue.
 
 Links between sites come only from what a source states: a DLsite RJ/VJ code,
 Steam app ID or VNDB ID in a Ryuugames post, and DLsite or Steam store links on
@@ -123,13 +124,16 @@ python -m catalog_server status                   # recent runs, cursors, counts
 `--data-dir` (before the command) or `WLIB_CATALOG_DATA_DIR` picks the data
 folder; the default is `/var/lib/wlib-catalog`. It holds `catalog.sqlite` (what
 gets published) and `state.sqlite` (cursors, high-water marks, the request log
-and run history; never published).
+and run history; never published). A `run.lock` in that folder prevents
+overlapping runs: a second invocation logs that another run is in progress and
+exits 0.
 
 Each run does, for every selected source, its incremental fetch and then
 advances the full-listing sweep. F95 sweeps with whatever is left of its
-hourly budget, so it re-crawls continuously. DLsite, Ryuugames and VNDB have
-no budget, so they start a new full sweep only once a week after the last one
-completed. Interrupted sweeps resume from their cursor. `--until-swept` waits out request budgets
+hourly budget, so it re-crawls continuously. DLsite and Ryuugames have no
+budget; VNDB waits out its 150-request, five-minute budget within a run.
+DLsite, Ryuugames and VNDB start a new full sweep only once a week after the
+last one completed. Interrupted sweeps resume from their cursor. `--until-swept` waits out request budgets
 instead of stopping, so the first F95 load (about 311 pages) takes about 3.5 hours.
 The exit code is 1 when a source failed, 2 when publishing was requested
 without R2 credentials.
@@ -148,11 +152,7 @@ Setup (as root, from a checkout):
 bash catalog_server/deploy/setup.sh
 ```
 
-It installs git and xz, creates the `wlibcat` system user and
-`/var/lib/wlib-catalog`, clones the repository into `/opt/wlib-catalog`,
-creates the venv, installs `wlib-catalog.service` and `wlib-catalog.timer`, and
-leaves the timer off. Put the token in `/etc/wlib-catalog/r2.env` (root-owned,
-mode 0600):
+It installs git, xz and Python 3; the selected interpreter must be 3.12 or newer (`WLIB_CATALOG_PYTHON` overrides the default `python3`). It creates the `wlibcat` system user and `/var/lib/wlib-catalog`, clones the repository into `/opt/wlib-catalog`, creates the venv, installs `wlib-catalog.service` and `wlib-catalog.timer`, and leaves the timer off. Put the token in `/etc/wlib-catalog/r2.env` (root-owned, mode 0600):
 
 ```
 R2_ACCOUNT_ID=…

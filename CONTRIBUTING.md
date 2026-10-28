@@ -95,7 +95,7 @@ For frontend-only work, run `npm run dev` in `ui/` and open it in a normal brows
 2. Binds the extension HTTP server on `127.0.0.1:8183`; this doubles as the single-instance check
 3. Installs the rotating app log at `<data dir>/logs/wlib.log`
 4. Configures the Qt runtime environment and refreshes the packaged WebView cache when needed
-5. Creates the `Api` bridge, which initializes the SQLite database with WAL mode
+5. Creates the `Api` bridge, which initializes the SQLite database with WAL mode and starts the optional game-catalog check
 6. Syncs browser extension files to the platform data directory: `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows
 7. Opens the PyWebView window, cleans up app-owned legacy browser data in the background, and starts the extension server and sync watcher
 
@@ -112,7 +112,7 @@ pytest
 # Run a specific test module
 pytest tests/test_database.py -v
 
-# Run backend type checking (main.py + core/)
+# Run backend type checking (main.py, core/ and catalog_server/)
 basedpyright
 
 # Run repo-wide Python linting
@@ -168,6 +168,7 @@ Before making architectural changes, reviewing our internal documentation is hig
 - [Backend Systems](docs/backend.md)
 - [Frontend Details](docs/frontend.md)
 - [Database & Schema](docs/database.md)
+- [Game Catalog](docs/catalog.md)
 - [Browser Extension API](docs/extension_api.md)
 - [Build & Packaging](docs/build.md)
 
@@ -195,8 +196,8 @@ docs: update installation instructions for Fedora
 ## 🔀 Submitting a Pull Request
 
 1. **Commit and Push** your changes to your fork.
-2. Open a **Pull Request** against the `main` branch.
-3. Fill out the PR template, describing what you changed and how you tested it.
+2. Open a **Pull Request** against the `master` branch.
+3. Describe what you changed and how you tested it.
 4. Link any related issues (e.g., "Closes #42").
 
 ### PR Checklist
@@ -213,7 +214,7 @@ When reporting a bug, please include:
 - Steps to reproduce the issue.
 - Expected vs. actual behavior.
 - Windows version/build, or Linux distribution, version, and desktop environment (Wayland/X11).
-- Installation format (Windows MSI/portable ZIP, Linux package/AppImage, or source).
+- Installation format (Windows MSI/portable ZIP, Linux package/AppImage/Flatpak/Nix/tar.gz, or source).
 - Terminal output for source runs and renderer diagnostics for packaged runs.
 
 ### Debug Logs & Diagnostics
@@ -226,6 +227,9 @@ wLib stores its data under `~/.local/share/wLib` on Linux or `%LOCALAPPDATA%\wLi
 - **Extension Files**: `extension/` - Installed browser extension copies
 - **Save Backups**: `save-backups/<game id>/` - Local save backups, never exported or synced
 - **PDF Attachments**: `attachments/<game id>/` - Local PDF attachments, never exported or synced
+- **Local Covers**: `covers/` - Device-local cover images, never exported or synced
+- **Sandbox Storage**: `sandbox/<game id>/` - Per-game private home and persistent sandbox data
+- **Game Catalog**: `catalog.db` - Read-only cached catalog, download-only and deleted when disabled
 
 Use the **Diagnostics** link in the Settings footer to copy a redacted report or open the log folder. **Enable Debug Logging** in Settings is separate: it saves Wine/Proton or native launch output next to the game executable.
 

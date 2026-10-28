@@ -26,10 +26,11 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Your library
 
-- Add games with cover art, tags, ratings, Markdown notes, PDF attachments and a play status. wLib tracks how long you've played each one.
+- Add games with cover art (from F95Zone or an image of your own), tags, ratings, Markdown notes, PDF attachments and a play status. wLib tracks how long you've played each one.
 - Point wLib at a folder of game installs and import several at once. It guesses titles, versions and engines from what it finds, so you can correct them after importing.
 - Browse the library as a grid, a list, compact tiles, or wide 2:1 banners, and pick a card size with the slider in the toolbar.
 - See a game's screenshots from its F95Zone thread in the detail window. Screenshots that F95Zone only shows to logged-in users load through the browser extension.
+- Add games from DLsite, VNDB and Ryuugames as well as F95Zone through the browser extension. wLib keeps those store links, uses their exact work IDs to recognise duplicates, and can fill in metadata from a shared game catalog (on by default; **Settings > Game catalog**).
 - Color-code tags from an 8-color palette: right-click a tag in the library filters or in a game's detail window.
 - Open a game's **Journal** to see sessions and playtime by version, including a **Before journal** row for older playtime. The **Unplayed update** collection and **Unplayed** badge flag installed versions you have not played for five minutes yet, once a last played version is known.
 - Sort games into your own collections, which show up as tabs above the library. Save a filter and sort you use often, and get it back with one click.
@@ -40,10 +41,10 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Updates and installing
 
-- Check your whole library for updates in one go. wLib compares your versions with F95Zone and fills in missing details from the thread page.
+- Check your whole library for updates in one go. wLib compares your versions with F95Zone and fills in missing details from the thread page. Games saved from Ryuugames without an F95 thread are checked against the game catalog.
 - Choose **Skip version <version>** from a game's menu or detail window to hide that release, and **Stop skipping <version>** to undo it. Checks continue; a different release shows up again. Changing the installed version clears the skip.
 - On Linux, new releases and newly completed wishlist games can trigger one desktop notification after an automatic check, or a manual check that finishes while you are away. Turn **Desktop notifications** off under **Updates > Automatic Checking**.
-- Install a new game or an update straight from a downloaded `.zip`, `.7z` or `.rar`. wLib puts it in your library folder, moves your saves over and removes the old version. It also notices matching archives in your Downloads folder. For `.7z` and `.rar` you need 7-Zip on Windows, or `7z`, `bsdtar` or `unrar` on Linux.
+- Install a new game or an update straight from a downloaded `.zip`, `.7z` or `.rar`. wLib puts it in your library folder, moves your saves over and removes the old version. It also notices matching archives in your Downloads folder. For `.7z` and `.rar` you need 7-Zip on Windows, or `7z`, `bsdtar` or `unrar` on Linux; the Flatpak and Nix packages include 7-Zip.
 - wLib can check GitHub for a newer version of itself from the Updates page.
 
 ### Saves and tools
@@ -55,10 +56,10 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Moving and syncing your library
 
-- Bring your library over from F95Checker, Atlas, XLibrary or f69.
+- Bring your library over from F95Checker, Atlas, XLibrary, f69 or Playnite.
 - Back up everything to one JSON file and restore it on another machine, including Linux to Windows and back. You can protect the file with a passphrase.
 - Keep your library in sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what gets synced.
-- Journal sessions, last played versions, and skipped versions travel with user state in backups and sync. Sync replaces the journal with the newer library's sessions; it does not combine sessions played offline on two computers.
+- Journal sessions and finished, last-played and skipped versions travel with user state in backups and sync. Sync replaces the journal with the newer library's sessions; it does not combine sessions played offline on two computers.
 
 ### Launching
 
@@ -75,9 +76,9 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 - Run a game in a sandbox by turning on **Run in sandbox** in its Launch tab, or turn on **Sandbox new games** in **Settings > Sandbox**. Linux uses bubblewrap for every launch mode: the game gets its own private home folder and can only write to its own folder and its Wine prefix. Windows uses Sandboxie-Plus with a separate box per game. Settings shows whether the tool is ready and can install it. If the tool is missing, the game doesn't launch, rather than running unsandboxed.
 - On Linux, add your own Wine programs, native programs or commands in **Settings > Custom tools**, then open them from a running game's right-click menu. Wine tools use the game's own Wine or Proton prefix and close when the game exits. Choose which tools appear on every game, and change that for any single game.
 
-### On F95Zone
+### On F95Zone and store pages
 
-The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads. It keeps itself up to date. See [Browser extension](#browser-extension) for setup.
+The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads, and to DLsite, VNDB and Ryuugames pages once you enable those sites. It keeps itself up to date. See [Browser extension](#browser-extension) for setup.
 
 ### Everything else
 
@@ -229,7 +230,7 @@ flatpak install --user wLib-<version>-x86_64.flatpak
 flatpak run io.github.kirin_3.wLib
 ```
 
-The Flatpak reuses your existing library at `~/.local/share/wLib`, so you can switch formats without losing games. Games and runners still run on the host: install Wine/Proton, winetricks and archive extractors on the host as below.
+The Flatpak reuses your existing library at `~/.local/share/wLib` (or the XDG data folder you already use), so you can switch formats without losing games. Games and runners still run on the host: install Wine/Proton and winetricks on the host as below. The bundle includes 7-Zip, so `.7z` and `.rar` installs need no host extractor.
 
 **NixOS and Nix** (builds from source with the repository's flake):
 
@@ -239,7 +240,7 @@ nix run github:kirin-3/wLib
 
 To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-linux.default` in `environment.systemPackages` or `home.packages`, or apply `inputs.wlib.overlays.default` and use `pkgs.wlib`. The package brings Wine, winetricks, 7-Zip, bsdtar and bubblewrap with it; Wine and winetricks you install yourself take precedence, and `wlib.override { withWine = false; }` leaves them out. Proton-GE, native Linux games and the RPG Maker runner are prebuilt for regular distros, so on NixOS they need `programs.nix-ld.enable = true;` (or `steam-run`). The Nix build has no signed Firefox add-on, so Firefox users should install `wlib-firefox-<version>.xpi` from the [releases page](https://github.com/kirin-3/wLib/releases).
 
-Your library is stored in `~/.local/share/wLib`.
+Your library is stored in `~/.local/share/wLib` by default.
 
 ### Optional extras
 
@@ -250,16 +251,18 @@ wLib runs on its own, but some games need a bit more:
 | Play Windows games on Linux | Wine, or use Proton (wLib can download Proton-GE for you) |
 | Use the one-click runtime installers on Linux | Winetricks |
 | Play `.jar` games | Java |
-| Install games from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux |
+| Install games from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux (included in the Flatpak and Nix packages) |
 | Run games in a sandbox | bubblewrap on Linux; Sandboxie-Plus on Windows (wLib can install either from **Settings > Sandbox**) |
 
 For example, on Ubuntu or Debian: `sudo apt install wine winetricks`.
 
 ## Browser extension
 
-The extension adds wLib buttons to F95Zone threads. It only talks to wLib on your own computer (port `8183`), so wLib has to be running for the buttons to work.
+The extension adds wLib buttons to F95Zone threads and, when you enable those sites, to DLsite, VNDB and Ryuugames pages. It only talks to wLib on your own computer (port `8183`), so wLib has to be running for the buttons to work.
 
 If F95Zone challenges wLib's own requests, the extension can retry them using your browser's sign-in, so threads that are only visible when logged in still load.
+
+F95Zone support is always on. For the other sites, click the wLib toolbar button to open the extension's options and turn each site on; your browser asks for permission. Those permissions are optional, so the extension can stay limited to F95Zone and wLib.
 
 wLib keeps the extension files in its data folder. Click **Open Extension Folder** in wLib to find them.
 
@@ -298,7 +301,7 @@ If the extension says your wLib app is out of date, update wLib. The buttons kee
 
 - what you did, what you expected, and what happened instead
 - your OS: the Windows version, or your Linux distro and whether you use X11 or Wayland
-- how you installed wLib (installer, portable ZIP, AppImage, package, or from source)
+- how you installed wLib (Windows installer or portable ZIP; Linux AppImage, deb/rpm, Flatpak, Nix, tar.gz, or from source)
 - your Wine or Proton version, if the game runs through one
 - logs, if you have them (see Troubleshooting above)
 

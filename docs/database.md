@@ -25,7 +25,7 @@ Local settings keys, all excluded from manual exports/imports and the sync file:
 
 `update_settings` commits several state keys atomically. Mirror imports use one write transaction, preserve local launch data, delete unmatched games with foreign-key cascade to their targets, and protect ambiguous candidates. Pulls set the winning timestamps in that transaction to cancel self-triggered change bumps. A local snapshot at `<data dir>/sync/last-local.json` contains all allowlisted backup sections for undoing a mistaken pull.
 
-wLib manages all relational states locally via a single SQLite database file.
+wLib manages its relational library state in one SQLite database file. The optional game catalog is a separate read-only cache (`catalog.db`) downloaded by `core/catalog.py`; the app never writes library data to it, and it is not part of backups or sync.
 
 **Location**: `~/.local/share/wLib/wlib.db` on Linux or `%LOCALAPPDATA%\wLib\wlib.db` on Windows. `WLIB_DATA_DIR` overrides the root for isolated smoke and packaging tests.
 
@@ -171,7 +171,7 @@ Stores additional executable targets for games that ship with multiple playable 
 
 `(game_id, tool_id)` is the composite primary key. No row means follow the tool's default; resetting removes the row. Deleting either the game or tool removes its overrides. These machine-specific tables do not mark shared sync data changed.
 
-Semantic backups export definitions without IDs under `settings.paths.companion_tools`, and explicit overrides by tool name under each game's `launch_config.companion_tools`. Imports merge names ignoring case, retain local IDs, skip foreign-host definitions, and resolve overrides after importing tools. Backups without these fields preserve local data.
+Semantic backups export definitions without IDs under `settings.paths.companion_tools`, and explicit overrides by tool name under each game's `launch_config.companion_tools`. Imports merge names ignoring case and retain local IDs. On Linux, definitions whose executable is not on the host are skipped; Windows keeps imported Linux definitions unchanged because tools only run on Linux. Overrides resolve after importing tools; backups without these fields preserve local data.
 
 ### Table: `play_sessions`
 
@@ -214,11 +214,11 @@ storage under `<data dir>/sandbox/<game id>/` is excluded from JSON backups and
 sync. Missing sandbox fields in older backups preserve a matched game's local
 value.
 
-Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder`, `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), and `urm_rpa_path` (empty by default).
+Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder`, `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), `catalog_enabled` (`"1"`/`"0"`, missing means on, local-only), and `urm_rpa_path` (empty by default).
 
 `custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
 
-`collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, `reorder_collections`, and `set_game_collections` each rewrite the setting and the affected games' `collections` column in one transaction. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. `collections`, `library_filter_presets`, `tag_colors`, and `save_backup_keep` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
+`collections` stores the ordered JSON list of user-defined collection names (default `[]`). `get_collections()` validates it on read like custom play statuses: names of 1–40 characters, unique ignoring case, never `All` (reserved for the built-in tab). `create_collection`, `rename_collection`, `delete_collection`, and `set_game_collections` rewrite the setting and the affected games' `collections` column in one transaction; `reorder_collections` rewrites only the setting. Renames rewrite matching memberships (case-insensitive) so members are kept; deletes strip only that membership. `collections`, `library_filter_presets`, `tag_colors`, and `save_backup_keep` sit in `GENERAL_SETTINGS_KEYS`, so backups and sync carry them and the settings triggers watch them.
 
 `library_filter_presets` stores a JSON list of `{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}` objects (default `[]`). `get_library_filter_presets()` drops entries without a 1–40 character name and case-insensitive duplicate names; the frontend further normalises each preset through `normalizeFilterPreset` so unknown engines/tags are dropped on apply.
 
@@ -229,9 +229,9 @@ Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_ch
 wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db` directly. This avoids WAL sidecar issues, schema drift, and local primary-key coupling when moving a library between machines.
 
 - **Format metadata**: Exports include `format`, `format_version`, `exported_at`, app metadata, and the selected optional sections.
-- **Always-included game metadata**: Every exported game includes title, developer, engine, tags, F95 URL, local/latest version fields, thread completion flag, screenshot URLs, and a cover reference.
-- **Optional sections**: Users can include user state (play status, ratings, notes, favorites, playtime, timestamps), launch configuration, executable paths, additional launch targets, general settings, and machine-specific path settings.
-- **Import matching**: Imports match by normalized F95 thread identity first. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous; records with no developer or executable match a unique same-title local game that has no F95 URL or developer. A record whose thread URL is not in the library merges into a unique URL-less local game with the same title/developer.
+- **Always-included game metadata**: Every exported game includes title, developer, engine, tags, F95 URL, local/latest version fields, thread completion flag, store links, screenshot URLs, and a cover reference.
+- **Optional sections**: Users can include user state (play status, ratings, notes, favorites, playtime, timestamps), launch configuration, executable paths, additional launch targets, general settings, and machine-specific path settings. External-library imports also offer a `covers` section that copies the source app's local cover images.
+- **Import matching**: Imports match by normalized F95 thread identity first, then by an exact shared store identity. Games without F95 URLs fall back to normalized title/developer only when the match is unambiguous; records with no developer or executable match a unique same-title local game that has no F95 URL or developer. A record whose thread URL is not in the library merges into a unique URL-less local game with the same title/developer.
 - **Merge semantics**: For matched games, backup values win for always-included metadata and selected optional sections; unselected optional sections preserve local values. Playtime is overwritten from the backup when user state is selected and is not summed.
 - **Excluded data**: Cookies, webview storage, downloaded runtimes, extension copies, caches, logs, save backups, attached PDFs, and embedded cover image files are not part of JSON backups.
 - **Journal user state**: `last_played_version`, `skipped_version`, and `play_sessions` travel with user state. Sessions include only version, start/end time, and duration. Imports replace sessions only when that key is present, and fill-missing imports keep a game's existing sessions; missing scalar fields also preserve local values. The additive fields keep format version 1. Sync uses the same replacement rule; it does not merge sessions from two machines.

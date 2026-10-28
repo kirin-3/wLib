@@ -25,6 +25,7 @@ flowchart TD
         DB[core/database.py]:::backend
         BACKUP[core/library_backup.py]:::backend
         SCRAPER[core/scraper.py]:::backend
+        CATALOG[core/catalog.py]:::backend
         LAUNCHER[core/launcher.py]:::backend
         EXT_SERVER[Extension HTTP Server]:::backend
         RENDERER[Renderer Diagnostics]:::diagnostics
@@ -33,12 +34,14 @@ flowchart TD
 
     subgraph "Local OS & Storage"
         SQLITE[(SQLite DB)]:::storage
+        CATALOG_DB[(Catalog cache)]:::storage
         FS[Filesystem / Games]:::storage
         DIAG_LOG[Renderer Diagnostics Log]:::storage
     end
 
     subgraph "External Systems"
         F95[F95Zone Web]:::external
+        R2[Catalog on Cloudflare R2]:::external
         EXT[Browser Extension]:::external
     end
 
@@ -50,6 +53,7 @@ flowchart TD
     API_PY --> BACKUP
     BACKUP <--> DB
     API_PY --> SCRAPER
+    API_PY --> CATALOG
     API_PY --> LAUNCHER
     MAIN --> API_PY
     MAIN -.-> EXT_SERVER
@@ -57,7 +61,9 @@ flowchart TD
     MAIN --> SSL
 
     DB <--> SQLITE
+    CATALOG <--> CATALOG_DB
     SCRAPER <-->|Paced HTTP: checker.php and thread pages| F95
+    CATALOG -->|Manifest + snapshot| R2
     LAUNCHER -->|Subprocess / Native / Wine / Proton / RPGMaker Linux| FS
     
     EXT <-->|CORS HTTP| EXT_SERVER
@@ -72,11 +78,11 @@ flowchart TD
 | Area | Modules |
 |------|---------|
 | App shell and bridge | `main.py`, `core/api.py`, `core/database.py`, `core/host_platform.py` |
-| Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/backup_format.py` |
-| Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py` |
+| Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/litedb.py`, `core/backup_format.py` |
+| Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py` |
-| Launching and updates | `core/launcher.py`, `core/desktop_notify.py` |
-| Scraping and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
+| Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/desktop_notify.py` |
+| Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
 
 `core/versions.py` holds the normalized version comparison shared with the UI. See [Backend Systems](backend.md) for runtime behavior and [Database & Schema](database.md) for persistence.
@@ -88,7 +94,8 @@ flowchart TD
 - **Frontend Framework**: Vue 3 (Composition API) + TypeScript + Vite + TailwindCSS
 - **Database**: SQLite3 (Local file-based database)
 - **F95 Requests**: Python urllib with TLS verification, batch version checks, HTML metadata parsing, and an optional browser-extension fallback for challenged or login-gated pages
-- **Packaging**: PyInstaller and release scripts for Linux AppImage/tar.gz/DEB/RPM/AUR plus Windows x64 portable ZIP and per-user MSI
+- **Game Catalog**: Optional read-only SQLite snapshot downloaded from Cloudflare R2, used for store-page metadata and catalog-backed version checks
+- **Packaging**: PyInstaller and release scripts for Linux AppImage/tar.gz/DEB/RPM/AUR/Flatpak, a source-built Nix flake, plus Windows x64 portable ZIP and per-user MSI
 
 ## Platform Paths
 
@@ -103,6 +110,9 @@ flowchart TD
 | Cache root | `~/.cache` | `%LOCALAPPDATA%\wLib\cache` |
 | Renderer diagnostics | `~/.local/share/wLib/renderer-diagnostics.log` | `%LOCALAPPDATA%\wLib\renderer-diagnostics.log` |
 | App log | `~/.local/share/wLib/logs/wlib.log` | `%LOCALAPPDATA%\wLib\logs\wlib.log` |
+| Game catalog cache | `~/.local/share/wLib/catalog.db` + `catalog.json` | `%LOCALAPPDATA%\wLib\catalog.db` + `catalog.json` |
+| Local covers | `~/.local/share/wLib/covers/` | `%LOCALAPPDATA%\wLib\covers\` |
+| Sandbox storage | `~/.local/share/wLib/sandbox/<game id>/` | `%LOCALAPPDATA%\wLib\sandbox\<game id>\` |
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
 | PDF attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
 | Sync snapshot | `~/.local/share/wLib/sync/last-local.json` | `%LOCALAPPDATA%\wLib\sync\last-local.json` |
@@ -130,6 +140,7 @@ wLib operates across two distinct contexts that never directly share memory:
    - Configures SSL certificates and Qt runtime environment.
    - Installs the rotating app log under the data directory.
    - Bootstraps the local SQLite database.
+   - Starts the background game-catalog refresh when the catalog is enabled.
    - Removes app-owned legacy browser data in a background thread.
    - Starts the `http.server` daemon thread for the browser extension.
    - Starts the library sync watcher and allows a final sync push on exit.

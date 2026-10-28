@@ -80,7 +80,7 @@ if [ ! -d "$SCRIPT_DIR/ui/dist" ]; then
         cd "$SCRIPT_DIR"
     else
         echo "⚠️  Warning: npm not found, cannot build frontend."
-        echo "   Install Node.js 18+ or pre-build with: cd ui && npm install && npm run build"
+        echo "   Install Node.js 22.12+ or pre-build with: cd ui && npm install && npm run build"
     fi
 fi
 

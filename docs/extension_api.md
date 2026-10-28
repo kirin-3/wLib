@@ -3,7 +3,7 @@
 wLib bundles an optional companion web extension that integrates deeply with F95Zone in standard desktop browsers (Firefox, Chrome). To facilitate instantaneous data transfer without requiring cloud synchronization, wLib runs a background REST server.
 
 ## The Local Daemon
-Inside `main.py`, `bind_extension_server()` binds a `ThreadingHTTPServer` subclass to `127.0.0.1:8183` at startup and a daemon thread serves it. The port also acts as the single-instance lock: a second wLib that cannot bind it calls `GET /api/open` to bring the running window forward and exits. Requests run in separate threads so waiting for the UI to process an open/add event does not block library checks. On startup, the app synchronizes bundled extension files into `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows so the installed unpacked/XPI copy tracks the app version.
+Inside `main.py`, `bind_extension_server()` binds a `ThreadingHTTPServer` subclass to `127.0.0.1:8183` at startup and a daemon thread serves it. The port also acts as the single-instance lock: a second wLib that cannot bind it calls `GET /api/open` to bring the running window forward and exits. Requests run in separate threads so waiting for the UI to process an open/add event does not block library checks. On startup, the app synchronizes bundled extension files into the resolved app-data folder (`~/.local/share/wLib/extension/` by default on Linux, `%LOCALAPPDATA%\wLib\extension` on Windows) so the installed unpacked/XPI copy tracks the app version.
 
 ## CORS Restrictions (Security Model)
 Because the daemon binds to `localhost`, any website visited by the user *could* theoretically perform background requests against it.
@@ -133,7 +133,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
    "final_url": "https://f95zone.to/threads/slug.123/", "body": "<html>..."}
   {"type": "fetch_result", "id": "...", "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network"}
   ```
-  A connection is eligible only after `hello` with `protocol == 1` and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are echoed.
+  A connection is eligible only after `hello` with `protocol == 1` and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
 - **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB. Only the newest eligible connection receives a request.
 - **Security notes:** the bridge accepts only extension-scheme origins on the local host, but a local process can forge an `Origin` and pose as the bridge. It only receives F95 thread/batch URLs and can return forged page content; that content is treated as untrusted input at the same level as F95 HTML itself, and local attackers already have stronger options, so this is accepted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`.
 
@@ -158,7 +158,7 @@ Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter
 
 The scraper's `_extract_version_from_title` mirrors these title rules exactly (both parsers are tested against `tests/version_title_cases.json`), so a version stored by the extension is not later reported as an update. Hyphenated releases such as `[v1.0.0-beta2]` are kept whole. 1.0.7 also sends `X-wLib-Extension` on open and add requests and reports wLib's `{"success": false}` replies as failures instead of success.
 
-The packaged extension files used by browsers live under `~/.local/share/wLib/extension/` on Linux or `%LOCALAPPDATA%\wLib\extension` on Windows by default. **Open Extension Folder** resolves the actual location, including any `WLIB_DATA_DIR` override:
+The packaged extension files used by browsers live in the resolved app-data folder (`~/.local/share/wLib/extension/` by default on Linux, `%LOCALAPPDATA%\wLib\extension` on Windows). **Open Extension Folder** resolves the actual location, including any `WLIB_DATA_DIR` or `XDG_DATA_HOME` override:
 
 - `chrome/`: unpacked extension directory for Chromium-based browsers
 - `firefox/wLib.xpi`: signed Firefox archive in release builds, or an unsigned generated fallback in local development builds

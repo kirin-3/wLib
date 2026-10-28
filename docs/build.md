@@ -23,9 +23,9 @@ Backend changes are validated separately from release packaging through `.github
 
 `.github/workflows/release.yml` first validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Tagged signing uses the `JWT_USER` and `JWT_SECRET` repository secrets for the add-on developer account. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums.
 
-Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. The publish job also adds the signed Firefox XPI as `wlib-firefox-<extension version>.xpi` and an `updates.json` manifest pointing at it, so installed Firefox add-ons update themselves. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
+Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. The publish job also adds the signed Firefox XPI as `wlib-firefox-<extension version>.xpi` and an `updates.json` manifest pointing at it, so installed Firefox add-ons update themselves. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Use a three-part tag such as `v1.2.3` for a release (or the same form for a manual dispatch), because the Windows MSI and frozen build reject suffixes such as `-rc1` or `-test`. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
 
-A separate `aur` job pushes the generated `wlib-bin` `PKGBUILD` and `.SRCINFO` to the AUR for stable tags when the `AUR_SSH_PRIVATE_KEY` secret is configured. Pre-release tags such as `v1.2.3-rc1` skip the job. Set the `WLIB_MAINTAINER` repository variable before a release; native package metadata and the AUR commit use it.
+A separate `aur` job pushes the generated `wlib-bin` `PKGBUILD` and `.SRCINFO` to the AUR for stable `vX.Y.Z` tags when the `AUR_SSH_PRIVATE_KEY` secret is configured. Tags with suffixes such as `v1.2.3-rc1` cannot complete the Windows build, so they do not reach the AUR. Set the `WLIB_MAINTAINER` repository variable before a release; native package metadata and the AUR commit use it.
 
 ### Google Drive client secret
 
@@ -118,9 +118,11 @@ When the build script executes, it follows these precise steps:
    - Adds `wlib.desktop`, `wlib.png`, `icon.svg`, and `LICENSE`.
 5. **Artifact Creation**:
    - Creates `dist/wLib-<version>-linux-x86_64.tar.gz` from the staged folder.
-   - When `nfpm` is available, or when `WLIB_BUILD_NATIVE_PACKAGES=1`, creates `.deb` and `.rpm` from `packaging/nfpm.yaml`.
+   - When `nfpm` is available and the version is package-manager valid, or when `WLIB_BUILD_NATIVE_PACKAGES=1`, creates `.deb` and `.rpm` from `packaging/nfpm.yaml`.
    - When the version is release-like, or when `WLIB_BUILD_AUR=1`, generates AUR `PKGBUILD` and `.SRCINFO` under `dist/aur/`.
    - Uses `appimagetool` to convert an AppDir copy of the staged folder into a single executable `.AppImage`.
+
+Set `WLIB_SIGNED_FIREFOX_XPI=/path/to/wLib.xpi` to bundle a signed Firefox add-on; without it, the build generates an unsigned local fallback. The release workflow sets it from the signed extension artifact.
 
 ## Shared Release Launcher
 
@@ -192,24 +194,24 @@ nFPM reads `packaging/nfpm.yaml` and receives these environment variables from t
 
 ## Flatpak Bundle
 
-The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and `flatpak-builder` on the build host, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 26.08 runtime. The matching runtime is fetched on first install if needed.
+The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and either Flathub's `org.flatpak.Builder` or a `flatpak-builder` on `PATH`, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 26.08 runtime. The matching runtime is fetched on first install if needed.
 
 The manifest also builds 7-Zip 26.05 from pinned upstream sources verified by SHA-256. It installs `/app/bin/7zz` with RAR decoding support and `/app/share/licenses/7zip/License.txt`, so `.7z` and `.rar` installs need no host extractor. This module is exclusive to Flatpak; other release formats keep using system archive tools.
 
 The source archive has no enclosing directory, so extraction uses `strip-components: 0`. The SDK's GCC emits an array-bounds diagnostic in upstream COM progress code; the build keeps that diagnostic as a warning while retaining errors for other warnings.
 
 ```bash
-# Build AppImage/tar.gz and, if flatpak-builder is installed, the Flatpak bundle
+# Build AppImage/tar.gz and, when Flatpak tooling is available, the Flatpak bundle
 bash scripts/build.sh "1.2.0"
 
-# Force Flatpak generation and fail if flatpak-builder is unavailable
+# Force Flatpak generation and fail if no Flatpak builder is available
 WLIB_BUILD_FLATPAK=1 bash scripts/build.sh "1.2.0"
 
 # Skip the Flatpak bundle explicitly
 WLIB_BUILD_FLATPAK=0 bash scripts/build.sh "1.2.0"
 ```
 
-`WLIB_BUILD_FLATPAK` accepts `auto|1|0` like `WLIB_BUILD_NATIVE_PACKAGES`. `auto` builds only when `flatpak-builder` exists, so local builds without Flatpak tooling still produce the other artifacts. The bundle is written to `dist/wLib-<version>-x86_64.flatpak` and starts through the shared `packaging/wlib-launcher`, keeping GPU detection, crash guard handling, SSL setup and launch logging.
+`WLIB_BUILD_FLATPAK` accepts `auto|1|0` like `WLIB_BUILD_NATIVE_PACKAGES`. `auto` builds when `flatpak-builder` is on `PATH` or Flathub's `org.flatpak.Builder` is installed, so local builds without Flatpak tooling still produce the other artifacts. The bundle is written to `dist/wLib-<version>-x86_64.flatpak` and starts through the shared `packaging/wlib-launcher`, keeping GPU detection, crash guard handling, SSL setup and launch logging.
 
 The build prefers Flathub's `org.flatpak.Builder` when it is installed (the release workflow installs it): distro `flatpak-builder` packages as old as 1.2.x invoke the legacy `appstream-compose` binary that current SDKs no longer ship, while the modern builder runs `appstreamcli compose`. Its dependency install is wrapped in `dbus-run-session` when available, since headless runners provide no session bus. A `flatpak-builder` on `PATH` is used as fallback.
 
@@ -266,6 +268,6 @@ The resulting artifacts are placed in `dist/`. With nFPM available, the output i
 - `dist/aur/PKGBUILD`
 - `dist/aur/.SRCINFO`
 
-With `flatpak-builder` available, or with `WLIB_BUILD_FLATPAK=1`, it also includes:
+With Flatpak tooling available, or with `WLIB_BUILD_FLATPAK=1`, it also includes:
 
 - `wLib-1.2.0-x86_64.flatpak`
