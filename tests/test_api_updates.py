@@ -181,6 +181,27 @@ def test_urm_install_overwrite_remove_and_errors(tmp_path):
     assert api.set_urm_installed(999, True)["success"] is False
 
 
+def test_urm_source_path_expands_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    folder = tmp_path / "RenPy"
+    (folder / "renpy").mkdir(parents=True)
+    (folder / "game").mkdir()
+    target = folder / "game.exe"
+    target.touch()
+    game_id = add_game("RenPy", str(target))
+    source = tmp_path / "mod.rpa"
+    source.write_bytes(b"mod")
+    update_setting("urm_rpa_path", "~/mod.rpa")
+    api = Api()
+
+    assert api.get_urm_status(game_id)["source_configured"] is True
+    installed = api.set_urm_installed(game_id, True)
+    assert installed["success"] is True
+    assert installed["installed"] is True
+    assert (folder / "game" / "0x52_URM.rpa").read_bytes() == b"mod"
+
+
 def test_urm_failed_copy_preserves_existing_mod(monkeypatch, tmp_path):
     folder = tmp_path / "RenPy"
     (folder / "renpy").mkdir(parents=True)

@@ -3710,7 +3710,8 @@ class Api:
 
         try:
             folder = self._get_urm_game_dir(game_id)
-            source = get_setting("urm_rpa_path") or ""
+            raw_source = str(get_setting("urm_rpa_path") or "").strip()
+            source = os.path.expanduser(raw_source) if raw_source else ""
             renpy = all(
                 os.path.isdir(os.path.join(folder, part)) for part in ("renpy", "game")
             )
@@ -3753,7 +3754,10 @@ class Api:
                     dir=os.path.dirname(target), delete=False
                 ) as file:
                     temporary = file.name
-                _ = shutil.copyfile(get_setting("urm_rpa_path") or "", temporary)
+                source = os.path.expanduser(
+                    str(get_setting("urm_rpa_path") or "").strip()
+                )
+                _ = shutil.copyfile(source, temporary)
                 os.replace(temporary, target)
             elif os.path.lexists(target):
                 os.remove(target)
