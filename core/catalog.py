@@ -21,6 +21,7 @@ from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
 from http.client import HTTPResponse
+from pathlib import Path
 from typing import Protocol, cast
 from urllib.request import Request, urlopen
 
@@ -322,7 +323,7 @@ class CatalogClient:
 
     def _verify(self, path: str) -> None:
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = sqlite3.connect(f"{Path(os.path.abspath(path)).as_uri()}?mode=ro", uri=True)
             try:
                 check = cast(tuple[str] | None, conn.execute("PRAGMA quick_check").fetchone())
                 row = cast(

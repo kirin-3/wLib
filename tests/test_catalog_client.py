@@ -124,6 +124,16 @@ def test_installs_a_snapshot_and_reports_status(tmp_path, server):
     assert _leftovers(client) == []
 
 
+def test_data_dir_with_uri_characters_can_install(tmp_path, server):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
+    client = CatalogClient(
+        str(tmp_path / "data #1 ?2"),
+        app_version="9.9.9",
+    )
+    assert client.check() == {"success": True, "updated": True}
+    assert client.status()["installed"] is True
+
+
 def test_unchanged_hash_downloads_only_the_manifest(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     client = _client(tmp_path)
