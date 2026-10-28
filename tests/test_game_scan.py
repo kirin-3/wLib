@@ -154,6 +154,34 @@ def test_scan_title_match_beats_generic_launcher(tmp_path):
     assert find_launcher(str(folder)) == str(folder / "MyAdventure.exe")
 
 
+def test_scan_relative_folder_returns_absolute_exe_paths(tmp_path, monkeypatch):
+    import os
+
+    folder = tmp_path / "library" / "Demo"
+    folder.mkdir(parents=True)
+    (folder / "Demo.exe").touch()
+    monkeypatch.chdir(tmp_path)
+
+    result = Api().scan_games_folder("library")
+
+    exe_path = result["games"][0]["exe_path"]
+    assert os.path.isabs(exe_path)
+    assert exe_path == str(folder / "Demo.exe")
+
+
+def test_inspect_relative_exe_path_returns_absolute_path(tmp_path, monkeypatch):
+    folder = tmp_path / "Game"
+    folder.mkdir()
+    exe = folder / "Game.exe"
+    exe.touch()
+    monkeypatch.chdir(tmp_path)
+
+    result = Api().inspect_game_path("Game/Game.exe")
+
+    assert result["exe_path"] == str(exe)
+    assert result["title"] == "Game"
+
+
 def test_scan_ignores_staging_folder(tmp_path):
     from core.game_scan import find_launcher
 

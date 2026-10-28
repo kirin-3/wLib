@@ -91,13 +91,16 @@ def detect_engine(game_dir: str, exe_path: str = "") -> str:
 
 
 def inspect_game_path(exe_path: str) -> GameGuess:
-    game_dir = os.path.dirname(os.path.abspath(exe_path))
+    # Return an absolute path: a typed relative path would otherwise be stored
+    # in the library and resolve against the app's working directory later.
+    absolute = os.path.abspath(os.path.expanduser(exe_path))
+    game_dir = os.path.dirname(absolute)
     title, version = guess_title_and_version(os.path.basename(game_dir))
     return {
         "title": title,
         "version": version,
-        "engine": detect_engine(game_dir, exe_path),
-        "exe_path": exe_path,
+        "engine": detect_engine(game_dir, absolute),
+        "exe_path": absolute,
     }
 
 
@@ -173,6 +176,11 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
 
 def scan_games_folder(root: str) -> list[GameGuess]:
     """One game per direct subfolder of root that holds a launch file."""
+    if not (root or "").strip():
+        return []
+    # Absolute root → absolute exe paths, so a typed relative folder does not
+    # store paths that only resolve from the app's working directory.
+    root = os.path.abspath(os.path.expanduser(root))
     try:
         subdirs = sorted(
             (entry.path for entry in os.scandir(root) if entry.is_dir()),
