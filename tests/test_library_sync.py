@@ -25,6 +25,8 @@ from core.library_sync import (
     SyncError,
     SyncManager,
     _gdrive_client_secret,
+    timestamp,
+    utc_now,
 )
 
 
@@ -1165,3 +1167,21 @@ def test_newer_sync_replaces_matched_links_and_link_edits_mark_changed():
     assert not sync.local_changed()
     database.replace_game_links(game_id, "f95_post", [{"url": "https://vndb.org/v2"}])
     assert sync.local_changed()
+
+
+def test_auto_push_due_waits_for_quiet_but_not_for_a_future_change_time():
+    location = MemoryLocation()
+    sync = manager(location)
+    database.add_game("Clock", "/clock.exe")
+    assert sync.run()["state"] == "idle"
+
+    database.update_setting("sync_last_synced_at", "2000-01-01T00:00:00Z")
+    database.update_setting("sync_local_modified_at", utc_now())
+    assert sync.local_changed()
+    assert sync._auto_push_due() is False
+
+    # A pull from a device with a fast clock stores a change time ahead of
+    # this machine's clock; auto-sync must not stall until it catches up.
+    database.update_setting("sync_local_modified_at", "2099-01-01T00:00:00Z")
+    assert timestamp(database.get_setting("sync_local_modified_at")) > time.time()
+    assert sync._auto_push_due() is True

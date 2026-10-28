@@ -875,6 +875,16 @@ class SyncManager:
             or bool(self._setting("encryption_change"))
         )
 
+    def _auto_push_due(self) -> bool:
+        """True when local changes have been quiet long enough for a push."""
+        if not self.local_changed():
+            return False
+        elapsed = time.time() - timestamp(self._setting("local_modified_at"))
+        # A pull from a device with a fast clock stores a change time ahead of
+        # this machine's clock. That value cannot measure a quiet period, so
+        # push at the next tick instead of stalling until the clock catches up.
+        return elapsed >= 30 or elapsed < 0
+
     def run(
         self, choice: str | None = None, *, push_only: bool = False
     ) -> dict[str, object]:
@@ -1258,11 +1268,7 @@ class SyncManager:
         def watch() -> None:
             while not self._stop.wait(60):
                 try:
-                    if (
-                        self.local_changed()
-                        and time.time() - timestamp(self._setting("local_modified_at"))
-                        >= 30
-                    ):
+                    if self._auto_push_due():
                         _ = self.start_run(push_only=True)
                 except Exception:  # Keep auto-sync alive through transient DB/OS errors.
                     pass
