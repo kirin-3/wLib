@@ -290,6 +290,23 @@ def test_default_url_and_override(monkeypatch):
         catalog_module.snapshot_url(catalog_module.manifest_url(), "https://evil.example/x.sqlite.xz")
 
 
+def test_background_check_stays_available_when_a_thread_cannot_start(
+    tmp_path, monkeypatch
+):
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        def start(self):
+            raise OSError("no threads")
+
+    monkeypatch.setattr(catalog_module.threading, "Thread", FailingThread)
+    client = _client(tmp_path)
+    assert client.start_background() is False
+    # A later attempt is not blocked by a stuck "checking" flag.
+    assert client.status()["checking"] is False
+
+
 def test_background_check_does_not_block(tmp_path, server, monkeypatch):
     # conftest disables start_background for Api(); exercise the real one here.
     monkeypatch.undo()

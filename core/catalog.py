@@ -191,7 +191,14 @@ class CatalogClient:
             if self._checking:
                 return False
             self._checking = True
-        threading.Thread(target=self._run_check, args=(force,), daemon=True).start()
+        try:
+            threading.Thread(target=self._run_check, args=(force,), daemon=True).start()
+        except Exception as exc:
+            # A catalog problem must never stop the app from starting.
+            print(f"[wLib] Could not start the catalog check: {exc}")
+            with self._lock:
+                self._checking = False
+            return False
         return True
 
     def _run_check(self, force: bool) -> None:
