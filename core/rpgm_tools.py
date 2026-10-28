@@ -59,7 +59,7 @@ def _load_system(root: str) -> dict[str, object]:
     try:
         with open(system_json_path(root), encoding="utf-8-sig") as file:
             data = cast(object, json.load(file))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise GameToolError(f"Could not read System.json: {exc}") from exc
     if not isinstance(data, dict):
         raise GameToolError("System.json has an unexpected shape")
@@ -264,7 +264,7 @@ def _original_flags(backup: str) -> dict[str, bool]:
     try:
         with open(backup, encoding="utf-8-sig") as file:
             data = cast(object, json.load(file))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return flags
     if isinstance(data, dict):
         for name in flags:
@@ -296,7 +296,7 @@ def set_use_decrypted(root: str, enabled: bool) -> None:
         with open(temporary, "w", encoding="utf-8", newline="") as file:
             _ = file.write(json.dumps(data, ensure_ascii=False, separators=(",", ":")))
         os.replace(temporary, path)
-    except OSError as exc:
+    except (OSError, RecursionError) as exc:
         raise GameToolError(str(exc)) from exc
     finally:
         try:

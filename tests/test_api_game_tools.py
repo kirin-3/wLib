@@ -302,6 +302,27 @@ def test_rpgm_api_nothing_to_decrypt_and_key_recovery(tmp_path):
     assert "key recovered" in str(recovered["message"])
 
 
+def test_rpgm_api_survives_malformed_system_json(tmp_path):
+    api = Api()
+    folder = tmp_path / "Deep"
+    data = folder / "www" / "data"
+    data.mkdir(parents=True)
+    (data / "System.json").write_text(
+        "[" * 100_000 + "]" * 100_000, encoding="utf-8"
+    )
+    (folder / "Game.exe").touch()
+    game_id = add_game("Deep", str(folder / "Game.exe"))
+
+    state = api.get_game_tools(game_id)
+    assert state["success"] is True
+    assert state["rpgm"]["use_decrypted"] is False
+    assert state["rpgm"]["key_source"] == ""
+
+    refused = api.set_rpgm_use_decrypted(game_id, True)
+    assert refused["success"] is False
+    assert "System.json" in str(refused["error"])
+
+
 def test_status_is_visible_while_a_run_is_in_flight(tmp_path, monkeypatch):
     api = Api()
     folder, game_id = renpy_game(tmp_path)
