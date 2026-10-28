@@ -1313,6 +1313,18 @@ PLAYNITE_COLLECTIONS = {
 }
 
 
+def _is_playnite_file_action(action: Mapping[str, object]) -> bool:
+    """File-type actions. LiteDB serializes the GameActionType enum as its name.
+
+    Playnite's mapper writes ``"File"`` (not ``0``), while older fixtures and
+    hand-built documents use the numeric enum value.
+    """
+    action_type = action.get("Type")
+    if isinstance(action_type, str):
+        return action_type.strip().casefold() == "file"
+    return action_type == 0
+
+
 def _translate_playnite_game(
     record: Mapping[str, object],
     related: Mapping[str, dict[str, str]],
@@ -1421,7 +1433,7 @@ def _translate_playnite_game(
     dropped = 0
     for raw in _as_list(record.get("GameActions")):
         action = _as_dict(raw)
-        if action.get("Type") != 0 or action.get("IsPlayAction") is not True:
+        if not _is_playnite_file_action(action) or action.get("IsPlayAction") is not True:
             continue
         raw_path = expand(action.get("Path"))
         working = resolve_relative_path(expand(action.get("WorkingDir")), install)

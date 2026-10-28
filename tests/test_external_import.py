@@ -1445,3 +1445,46 @@ def test_playnite_encrypted_library_reports_unsupported_encryption(tmp_path):
     database.write_bytes(data)
     with pytest.raises(BackupValidationError, match="Encrypted Playnite"):
         read_external_library("playnite", str(database))
+
+
+def test_playnite_string_enum_play_actions_are_imported(tmp_path, monkeypatch):
+    """Real Playnite databases store GameAction.Type as "File", not 0."""
+    from core.external_import import _translate_playnite_game
+
+    monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+    game, dropped = _translate_playnite_game(
+        {
+            "Name": "F95-12345",
+            "InstallDirectory": "/opt/games/sakura",
+            "GameActions": [
+                {
+                    "Name": "Play",
+                    "Type": "File",
+                    "IsPlayAction": True,
+                    "Path": "{InstallDir}/game.sh",
+                },
+                {
+                    "Name": "Play (32-bit)",
+                    "Type": "File",
+                    "IsPlayAction": True,
+                    "Path": "{InstallDir}/game32.sh",
+                },
+                {
+                    "Name": "Store",
+                    "Type": "URL",
+                    "IsPlayAction": True,
+                    "Path": "https://example.com",
+                },
+            ],
+        },
+        {},
+        str(tmp_path),
+    )
+    assert game is not None
+    assert dropped == 0
+    assert (
+        game["executable_paths"]["exe_path"] == "/opt/games/sakura/game.sh"
+    )
+    assert game["launch_targets"] == [
+        {"label": "Play (32-bit)", "exe_path": "/opt/games/sakura/game32.sh"}
+    ]
