@@ -346,6 +346,14 @@ def test_infolder_saves_carry_over_and_overwrite(tmp_path):
     assert "notes.dat" not in infolder_save_relpaths(str(old))
 
 
+def test_infolder_saves_found_when_install_path_has_brackets(tmp_path):
+    root = tmp_path / "Game [v1.0]"
+    root.mkdir()
+    (root / "slot1.sav").write_text("save")
+    assert infolder_save_relpaths(str(root)) == ["slot1.sav"]
+
+
+
 def test_can_remove_old_folder_guards(tmp_path):
     lib = tmp_path / "lib"
     lib.mkdir()
