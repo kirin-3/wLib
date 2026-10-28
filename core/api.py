@@ -4288,6 +4288,13 @@ class Api:
                 except Exception as e:
                     failures.append(f"{rtp_name}: install failed ({e})")
                     print(f"Wine failed to run {rtp_name} setup: {e}")
+                    # A silently truncated download would otherwise be reused
+                    # forever; force the next attempt to download it again.
+                    if os.path.abspath(str(setup_exe)) == os.path.abspath(
+                        download_path
+                    ):
+                        with suppress(OSError):
+                            os.remove(download_path)
 
             final_error = ""
             if failures:

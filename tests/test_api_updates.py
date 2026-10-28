@@ -2620,6 +2620,43 @@ def test_install_rpgmaker_rtp_recovers_from_interrupted_download(monkeypatch, tm
     assert not list(rtp_dir.glob("*.part"))
 
 
+def test_install_rpgmaker_rtp_drops_a_failed_exe_download(monkeypatch, tmp_path):
+    api = Api()
+    rtp_dir = tmp_path / "rtp"
+    rtp_dir.mkdir()
+    # A truncated installer that a previous attempt left behind.
+    (rtp_dir / "xp_rtp104e.exe").write_bytes(b"MZ")
+    packages = [
+        {
+            "name": "XP",
+            "url": "https://example.com/xp_rtp104e.exe",
+            "filename": "xp_rtp104e.exe",
+            "sentinels": ("drive_c/never-installed",),
+        }
+    ]
+
+    class RunInline:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
+    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
+    monkeypatch.setattr(
+        "subprocess.run", MagicMock(side_effect=RuntimeError("wine failed"))
+    )
+    monkeypatch.setattr(api, "_get_rtp_packages", lambda: packages)
+
+    _ = api.install_rpgmaker_rtp(str(tmp_path / "prefix"), "")
+
+    assert not (rtp_dir / "xp_rtp104e.exe").exists()
+    status = api.get_install_status(str(tmp_path / "prefix"), "")
+    assert "install failed" in str(cast(dict[str, object], status["rtps"])["error"])
+
+
 def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
     api = Api()
     proton = tmp_path / "GE-Proton" / "proton"
