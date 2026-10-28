@@ -961,7 +961,12 @@ def other_game_paths(exclude_id: int | None = None) -> list[str]:
     return paths
 
 
-def _pick_exe(destination: str, old_exe: str = "", old_root: str = "") -> str:
+def _pick_exe(
+    destination: str,
+    old_exe: str = "",
+    old_root: str = "",
+    preferred_title: str = "",
+) -> str:
     from core.game_scan import find_launcher
 
     if old_exe and old_root:
@@ -970,7 +975,7 @@ def _pick_exe(destination: str, old_exe: str = "", old_root: str = "") -> str:
             candidate = os.path.join(destination, rel)
             if os.path.isfile(candidate):
                 return candidate
-    return find_launcher(destination)
+    return find_launcher(destination, preferred_title=preferred_title)
 
 
 def install_archive(
@@ -1112,7 +1117,7 @@ def install_archive(
         if "{engine}" in pattern and not engine.strip():
             from core.game_scan import detect_engine
 
-            picked_exe = _pick_exe(staging, old_exe, old_root)
+            picked_exe = _pick_exe(staging, old_exe, old_root, title)
             engine = detect_engine(staging, picked_exe)
             if not engine and picked_exe:
                 engine = detect_engine(os.path.dirname(picked_exe), picked_exe)
@@ -1176,7 +1181,7 @@ def install_archive(
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
 
-        exe_path = _pick_exe(destination, old_exe, old_root)
+        exe_path = _pick_exe(destination, old_exe, old_root, title)
         if not exe_path:
             raise ArchiveInstallError(
                 "No launchable file was found. The extracted folder was kept; choose the executable manually."
