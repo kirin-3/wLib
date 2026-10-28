@@ -175,6 +175,16 @@
     "id": null
   },
   {
+    "url": "https://example.com:443/store/game",
+    "source": "other",
+    "id": "https://example.com/store/game"
+  },
+  {
+    "url": "http://example.com:80/store/game",
+    "source": "other",
+    "id": "http://example.com/store/game"
+  },
+  {
     "url": "not a url",
     "source": null,
     "id": null
