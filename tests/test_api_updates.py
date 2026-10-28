@@ -7,6 +7,7 @@ import os
 import sqlite3
 import ssl
 import tarfile
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import cast
@@ -1848,6 +1849,88 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     assert (firefox_dir / "wLib.xpi").is_file()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux in this test")
+def test_sync_extension_files_replaces_symlinked_live_folder(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    outside = tmp_path / "linked-extension"
+    outside.mkdir()
+    (outside / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "version": "0.0.1",
+                "background": {"service_worker": "background.js"},
+            }
+        )
+    )
+    (outside / "keep.txt").write_text("keep")
+    persistent_dir.mkdir()
+    chrome_dir = persistent_dir / "chrome"
+    try:
+        chrome_dir.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need privileges")
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert not chrome_dir.is_symlink()
+    manifest = json.loads((chrome_dir / "manifest.json").read_text())
+    assert manifest["version"] == _bundled_extension_version()
+    # The link target is not part of the sync and must stay untouched.
+    assert (outside / "keep.txt").read_text() == "keep"
+    assert json.loads((outside / "manifest.json").read_text())["version"] == "0.0.1"
+    assert not (persistent_dir / "chrome.old").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux in this test")
+def test_sync_extension_files_removes_symlinked_staging_folder(monkeypatch, tmp_path):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    outside = tmp_path / "linked-extension"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    persistent_dir.mkdir()
+    staging = persistent_dir / "chrome.new"
+    try:
+        staging.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks need privileges")
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    assert not os.path.lexists(staging)
+    assert (outside / "keep.txt").read_text() == "keep"
+    assert (persistent_dir / "chrome" / "manifest.json").is_file()
+
+
+def test_sync_extension_files_removes_leftover_staging_when_up_to_date(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    first = api.sync_extension_files()
+    assert first["success"] is True
+
+    leftover = persistent_dir / "chrome.old"
+    leftover.mkdir()
+    (leftover / "stale.txt").write_text("stale")
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is False
+    assert not leftover.exists()
+
+
 def test_sync_extension_files_copies_bundled_signed_firefox_xpi(monkeypatch, tmp_path):
     api = Api()
     bundled_dir = tmp_path / "bundled-extension"
@@ -2206,13 +2289,18 @@ def test_get_extension_service_status_reports_reachable(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(request, timeout=0):
-        captured["url"] = request.full_url
-        captured["timeout"] = timeout
-        captured["origin"] = request.headers.get("Origin")
-        return FakeResponse()
+    class FakeOpener:
+        def open(self, request, timeout=0):
+            captured["url"] = request.full_url
+            captured["timeout"] = timeout
+            captured["origin"] = request.headers.get("Origin")
+            return FakeResponse()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    def fake_build_opener(*handlers):
+        captured["handlers"] = handlers
+        return FakeOpener()
+
+    monkeypatch.setattr("urllib.request.build_opener", fake_build_opener)
 
     result = api.get_extension_service_status()
 
@@ -2220,15 +2308,22 @@ def test_get_extension_service_status_reports_reachable(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:8183/api/check?url=__ping__"
     assert captured["timeout"] == 2
     assert captured["origin"] is None
+    # A loopback probe must not use a configured HTTP proxy.
+    assert len(captured["handlers"]) == 1
+    assert isinstance(captured["handlers"][0], urllib.request.ProxyHandler)
+    assert captured["handlers"][0].proxies == {}
 
 
 def test_get_extension_service_status_reports_unreachable(monkeypatch):
     api = Api()
 
-    def fake_urlopen(_request, timeout=0):
-        raise URLError("connection refused")
+    class FailingOpener:
+        def open(self, _request, timeout=0):
+            raise URLError("connection refused")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "urllib.request.build_opener", lambda *_handlers: FailingOpener()
+    )
 
     result = api.get_extension_service_status()
 
