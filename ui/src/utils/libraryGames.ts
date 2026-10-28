@@ -105,6 +105,11 @@ export const compareLibraryGames = (
         return Date.parse(game[field] || "") || 0;
       case "play_status":
         return normalizePlayStatus(game.play_status, game.status).toLowerCase();
+      case "version":
+        // "v0.9" and "0.9" are the same version. Sorting raw strings would put
+        // every "v"-prefixed version on one side of the list regardless of the
+        // number, so compare the normalized form.
+        return normalizeVersion(game.version);
       default:
         return String(game[field] ?? "").trim().toLowerCase();
     }

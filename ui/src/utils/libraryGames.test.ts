@@ -191,6 +191,25 @@ test("table sorts versions naturally, statuses through normalization, and recent
   }
 });
 
+test("version sorting treats a leading v as the same version", () => {
+  const prefixed: GameRecord = { id: 1, title: "Prefixed", exe_path: "", version: "v0.9" };
+  const plain: GameRecord = { id: 2, title: "Plain", exe_path: "", version: "0.10" };
+  // 0.9 < 0.10 under the same natural-number rule the version column already
+  // uses; the "v" prefix must not flip the two.
+  assert.ok(compareLibraryGames(prefixed, plain, "version", "asc") < 0);
+  assert.ok(compareLibraryGames(prefixed, plain, "version", "desc") > 0);
+  const same: GameRecord = {
+    id: 9,
+    title: "Same",
+    exe_path: "",
+    version: "v0.10",
+  };
+  assert.equal(
+    compareLibraryGames(same, { ...same, version: "V 0.10 " }, "version", "asc"),
+    0,
+  );
+});
+
 test("folder actions preserve POSIX and Windows roots and reject bare commands", () => {
   assert.equal(gameFolder("/games/title/run.sh"), "/games/title/");
   assert.equal(gameFolder("/run.sh"), "/");
