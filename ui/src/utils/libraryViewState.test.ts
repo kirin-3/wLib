@@ -15,8 +15,10 @@ import {
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
+  readPresetsForSave,
   saveLibraryViewState,
   toggleStatusFilter,
+  type LibraryFilterPreset,
   type LibraryViewState,
 } from "./libraryViewState.ts";
 
@@ -382,4 +384,54 @@ test("status filters match and toggle case-insensitively", () => {
   assert.deepEqual(toggleStatusFilter(["Completed"], "Playing", false), ["Completed"]);
   // Toggling a spelling that was not selected only affects the matching name.
   assert.deepEqual(toggleStatusFilter(["backlog", "BACKLOG", "Playing"], "Backlog", false), ["Playing"]);
+});
+
+test("saving presets reloads the stored list when settings have not loaded", async () => {
+  const stored: LibraryFilterPreset[] = [
+    {
+      name: "Existing",
+      filterCollection: "All",
+      filterStatuses: [],
+      filterInstallState: "",
+      filterEngines: [],
+      filterTags: [],
+      sortBy: "title",
+      sortDir: "asc",
+    },
+  ];
+  let reads = 0;
+
+  // An unloaded view must read the stored list before replacing it.
+  const fetched = await readPresetsForSave(
+    async () => {
+      reads += 1;
+      return { library_filter_presets: stored };
+    },
+    [],
+    false,
+  );
+  assert.deepEqual(fetched, { presets: stored, loaded: true });
+  assert.equal(reads, 1);
+
+  // Once loaded, sharing the current list needs no extra read.
+  const cached = await readPresetsForSave(
+    async () => {
+      reads += 1;
+      return { library_filter_presets: [] };
+    },
+    stored,
+    true,
+  );
+  assert.deepEqual(cached, { presets: stored, loaded: true });
+  assert.equal(reads, 1);
+
+  // A failed read must not report an empty list as loaded.
+  const failed = await readPresetsForSave(
+    async () => {
+      throw new Error("database is locked");
+    },
+    stored,
+    false,
+  );
+  assert.deepEqual(failed, { presets: stored, loaded: false });
 });

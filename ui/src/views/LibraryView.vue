@@ -53,6 +53,7 @@ import {
   normalizeFilterPreset,
   normalizeLibraryViewState,
   readLibraryViewState,
+  readPresetsForSave,
   saveLibraryViewState,
   toggleStatusFilter,
   type FilterCollection,
@@ -150,6 +151,8 @@ const collectionTabMenu = ref<{ name: string; x: number; y: number } | null>(nul
 const collectionTabMenuElement = ref<HTMLElement | null>(null);
 // Saved filter presets listed at the top of the filters pane.
 const savedPresets = ref<LibraryFilterPreset[]>([]);
+// True once Settings has answered, so a save can't treat "not loaded" as empty.
+const presetsLoaded = ref(false);
 const newPresetName = ref("");
 const presetError = ref("");
 const showAddModal = ref(false);
@@ -770,6 +773,20 @@ const saveFilterPreset = async () => {
     presetError.value = "Preset names must contain 1–40 characters.";
     return;
   }
+  if (!presetsLoaded.value) {
+    const loaded = await readPresetsForSave(
+      () => api.getSettings(),
+      savedPresets.value,
+      false,
+    );
+    if (!loaded.loaded) {
+      presetError.value =
+        "Could not load your saved filters, so the preset was not saved. Try again.";
+      return;
+    }
+    savedPresets.value = loaded.presets;
+    presetsLoaded.value = true;
+  }
   const existing = savedPresets.value.find(
     (preset) => preset.name.toLowerCase() === name.toLowerCase(),
   );
@@ -918,6 +935,7 @@ const handleLibraryRefresh = () => {
       customStatusesLoaded.value = true;
       applyCollectionsFromPayload(settings.collections);
       savedPresets.value = settings.library_filter_presets || [];
+      presetsLoaded.value = true;
     })
     .catch(console.error);
 };
@@ -1470,6 +1488,7 @@ onMounted(() => {
       customStatusesLoaded.value = true;
       applyCollectionsFromPayload(settings.collections);
       savedPresets.value = settings.library_filter_presets || [];
+      presetsLoaded.value = true;
     }).catch(console.error);
   });
 });

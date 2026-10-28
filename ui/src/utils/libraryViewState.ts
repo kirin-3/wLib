@@ -346,6 +346,27 @@ export const normalizeFilterPreset = (
   return { name, ...normalizeFilterAndSort(source, options) };
 };
 
+// Saving replaces the whole stored preset list, so a view that has not managed
+// to read settings yet must read them first: treating an unloaded (or failed)
+// read as "no presets" would delete the presets that are still stored.
+export interface PresetSettingsLike {
+  library_filter_presets?: LibraryFilterPreset[] | undefined;
+}
+
+export const readPresetsForSave = async (
+  read: () => Promise<PresetSettingsLike>,
+  current: LibraryFilterPreset[],
+  alreadyLoaded: boolean,
+): Promise<{ presets: LibraryFilterPreset[]; loaded: boolean }> => {
+  if (alreadyLoaded) return { presets: current, loaded: true };
+  try {
+    const settings = await read();
+    return { presets: settings.library_filter_presets || [], loaded: true };
+  } catch {
+    return { presets: current, loaded: false };
+  }
+};
+
 export const normalizeLibraryViewState = (
   value: unknown,
   options: NormalizeLibraryViewStateOptions = {},
