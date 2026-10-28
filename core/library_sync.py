@@ -670,6 +670,9 @@ class SyncManager:
         enabled = bool(location)
         gdrive_reason = self._gdrive_unavailable()
         error = self._setting("last_error")
+        pending = self._pending
+        # An expired sign-in can no longer complete, so it is not "connecting".
+        connecting = pending is not None and time.monotonic() <= pending[2]
         return {
             "success": True,
             "state": (
@@ -699,7 +702,7 @@ class SyncManager:
             ),
             "gdrive_available": not gdrive_reason,
             "gdrive_unavailable_reason": gdrive_reason,
-            "connecting": self._pending is not None,
+            "connecting": connecting,
         }
 
     def _error(self, error: Exception) -> dict[str, object]:

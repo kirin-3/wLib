@@ -1230,3 +1230,14 @@ def test_folder_write_returns_revision_of_the_written_bytes(tmp_path, monkeypatc
     written_rev = location.write(b"ours", rev)
     assert location.read()[0] == b"theirs"
     assert written_rev != location.revision()
+
+
+def test_expired_pending_signin_is_not_connecting():
+    sync = SyncManager()
+    sync.server_available = True
+    assert sync.connect_dropbox()["success"]
+    assert sync.status()["connecting"] is True
+    pending = sync._pending
+    assert pending is not None
+    sync._pending = (pending[0], pending[1], time.monotonic() - 1, pending[3])
+    assert sync.status()["connecting"] is False
