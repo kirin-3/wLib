@@ -341,12 +341,12 @@ def test_download_proton_ge_streams_and_filters_tar(
     size = len(archive_buffer.getvalue())
     assert ("Downloading GE-Proton-test", size, size, True) in stages
     assert api.get_proton_download_status()["running"] is False
+    assert list(tmp_path.glob("wlib-proton-*")) == []
 
     if not checksum_ok:
         assert result["success"] is False
         assert "SHA-512" in str(result["error"])
         assert not (install_dir / member_name).exists()
-        assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
         assert get_setting("proton_path") == ""
     elif member_name == "../escaped":
         assert result["success"] is False
@@ -358,7 +358,6 @@ def test_download_proton_ge_streams_and_filters_tar(
         assert result == {"success": True, "path": str(executable)}
         assert executable.read_bytes() == payload
         assert get_setting("proton_path") == str(executable)
-        assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
 
 
 def test_download_proton_ge_does_not_follow_predictable_temp_symlink(
@@ -399,6 +398,50 @@ def test_download_proton_ge_does_not_follow_predictable_temp_symlink(
 
     assert result["success"] is False
     assert victim.read_text(encoding="utf-8") == "keep me"
+
+
+def test_download_proton_ge_removes_partial_tarball_after_failure(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+
+    release = {
+        "tag_name": "GE-Proton-test",
+        "assets": [
+            {
+                "name": "GE-Proton-test.tar.gz",
+                "browser_download_url": "https://example.com/GE-Proton-test.tar.gz",
+            },
+            {
+                "name": "GE-Proton-test.sha512sum",
+                "browser_download_url": "https://example.com/GE-Proton-test.sha512sum",
+            },
+        ],
+    }
+
+    class DroppedResponse(io.BytesIO):
+        def read(self, size=-1):
+            if self.tell():
+                raise OSError("connection reset")
+            return super().read(size)
+
+    responses = iter(
+        [
+            io.BytesIO(json.dumps(release).encode()),
+            io.BytesIO(b"0" * 128),
+            DroppedResponse(b"partial tarball"),
+        ]
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *_args, **_kwargs: next(responses)
+    )
+
+    result = Api().download_proton_ge()
+
+    assert result["success"] is False
+    assert "connection reset" in str(result["error"])
+    assert list(tmp_path.glob("wlib-proton-*")) == []
 
 
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])

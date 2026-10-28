@@ -4550,6 +4550,7 @@ class Api:
         import tempfile
         import urllib.request
 
+        tar_path = ""
         try:
             print("Fetching latest GE-Proton release info...")
             api_url = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest"
@@ -4659,7 +4660,6 @@ class Api:
             with open(tar_path, "rb") as tar_file:
                 actual_sha512 = hashlib.file_digest(tar_file, "sha512").hexdigest()
             if actual_sha512 != expected_sha512:
-                os.remove(tar_path)
                 return {
                     "success": False,
                     "error": "Downloaded GE-Proton archive failed its SHA-512 check.",
@@ -4672,8 +4672,6 @@ class Api:
                 # Find the root extracted folder name (usually GE-Proton-X)
                 root_dir = members[0].name.split("/")[0]
                 tar.extractall(path=wlib_share_dir, filter="tar")
-
-            os.remove(tar_path)
 
             proton_executable = os.path.join(wlib_share_dir, root_dir, "proton")
             if not os.path.exists(proton_executable):
@@ -4690,6 +4688,12 @@ class Api:
             return {"success": True, "path": proton_executable}
         except Exception as e:
             return {"success": False, "error": str(e)}
+        finally:
+            # mkstemp names are unique, so a failed attempt would otherwise
+            # leave a new partial tarball behind in the temp dir every time.
+            if tar_path:
+                with suppress(OSError):
+                    os.remove(tar_path)
 
     def _catalog_enabled(self) -> bool:
         import sqlite3
