@@ -256,6 +256,60 @@ def test_sync_change_tracking():
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
 
 
+def test_unparseable_sync_timestamp_does_not_block_writes():
+    from datetime import datetime
+
+    malformed = "2026-W44-3T12:00:00+00:00"
+    game_id = add_game("Timestamp", "/game.exe")
+    session_id = start_play_session(game_id, "1.0")
+
+    def assert_write_succeeds(action) -> None:
+        update_setting("sync_local_modified_at", malformed)
+        action()
+        stored = get_setting("sync_local_modified_at") or ""
+        assert stored != malformed
+        datetime.fromisoformat(stored.replace("Z", "+00:00"))
+
+    assert_write_succeeds(lambda: update_game(game_id, {"progress": "notes"}))
+    assert_write_succeeds(lambda: add_game("Inserted", ""))
+    assert_write_succeeds(lambda: update_setting("collections", "[]"))
+    assert_write_succeeds(
+        lambda: replace_game_links(
+            game_id, "page", [{"url": "https://vndb.org/v1"}]
+        )
+    )
+    assert_write_succeeds(lambda: start_play_session(game_id, "1.0"))
+    assert_write_succeeds(lambda: record_play_tick(game_id, session_id, 60, True))
+    disposable = add_game("Delete me", "")
+    assert_write_succeeds(lambda: delete_game(disposable))
+
+
+def test_init_db_rebuilds_every_sync_trigger_with_safe_bump():
+    with closing(get_connection()) as conn:
+        names = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'"
+            ).fetchall()
+        ]
+        assert names
+        for name in names:
+            conn.execute(f"DROP TRIGGER {name}")
+            conn.execute(
+                f"CREATE TRIGGER {name} AFTER INSERT ON games BEGIN SELECT 1; END"
+            )
+        conn.commit()
+
+    init_db()
+
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'"
+        ).fetchall()
+    assert rows
+    assert all("COALESCE" in str(sql) for _, sql in rows)
+
+
 def test_journal_migrates_old_schema_and_cascades():
     game_id = add_game("Older game", "/game")
     conn = get_connection()
