@@ -198,6 +198,7 @@ def build_bwrap_argv(
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
+    check_readonly_mounts(readonly_paths, home)
     argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
     system = ["/usr", "/bin", "/sbin", "/opt"]
     system += ["/nix"] if nixos else ["/lib", "/lib64", "/lib32"]
@@ -589,6 +590,22 @@ def check_writable_mounts(paths: tuple[str, ...], home: str) -> None:
                 f"Cannot sandbox a game whose folder or Wine prefix is {path}: "
                 + "mounting it would expose your whole home folder. "
                 + "Move the game into its own folder, or turn sandboxing off for it."
+            )
+
+
+def check_readonly_mounts(paths: tuple[str, ...], home: str) -> None:
+    """Refuse read-only mounts that would still reveal HOME or an ancestor.
+
+    A runtime folder can resolve to HOME when the configured Wine/Proton
+    executable or RPGMaker runner sits directly in the home folder. Mounting it
+    read-only is not a safe substitute: the game could read every file there.
+    """
+    for path in paths:
+        if path and exposes_home(path, home):
+            raise ValueError(
+                f"Cannot sandbox a launch whose runtime folder is {path}: "
+                + "mounting it would expose your whole home folder. "
+                + "Move the runtime into its own folder, or turn sandboxing off for this game."
             )
 
 

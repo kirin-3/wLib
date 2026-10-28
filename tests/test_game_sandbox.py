@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import os
 import sys
 import subprocess
 from unittest.mock import Mock
@@ -440,3 +441,28 @@ def test_direct_installer_verification_and_elevation_cancel(monkeypatch,tmp_path
         sandbox._download_sandboxie_installer()
     assert not list(tmp_path.iterdir())
     assert install.call_count==int(valid_signature)
+
+
+def test_bwrap_refuses_read_only_mounts_that_expose_home(tmp_path):
+    home = str(tmp_path / "home")
+    for path in (home, os.path.dirname(home), "/"):
+        with pytest.raises(ValueError, match="whole home folder"):
+            sandbox.build_bwrap_argv(
+                ["true"],
+                game_dir="/games",
+                home=home,
+                sandbox_home="/sandbox",
+                cwd="/games",
+                readonly_paths=(path,),
+            )
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir="/games",
+        home=home,
+        sandbox_home="/sandbox",
+        cwd="/games",
+        readonly_paths=("/opt/proton",),
+    )
+    assert ["--ro-bind", "/opt/proton", "/opt/proton"] in [
+        argv[i : i + 3] for i in range(len(argv) - 2)
+    ]

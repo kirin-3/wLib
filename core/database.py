@@ -1192,14 +1192,17 @@ def record_play_tick(game_id: int, session_id: int, delta: int, is_final: bool) 
                 "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
                 (clamped_delta, datetime.now().isoformat(), game_id),
             )
-        elif session["ended_at"] is None:
+        elif session["ended_at"] is None or not is_final:
             now = datetime.now().isoformat()
             _ = conn.execute(
                 "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
                 (clamped_delta, now, game_id),
             )
+            # A periodic tick can land after the final tick when the app shuts
+            # down mid-tick: its interval was never recorded, so keep it while
+            # leaving the session's original end time untouched.
             _ = conn.execute(
-                "UPDATE play_sessions SET duration_seconds = duration_seconds + ?, ended_at = ? WHERE id = ?",
+                "UPDATE play_sessions SET duration_seconds = duration_seconds + ?, ended_at = COALESCE(ended_at, ?) WHERE id = ?",
                 (clamped_delta, now if is_final else None, session_id),
             )
             version = normalize_version(cast(object, session["version"]))

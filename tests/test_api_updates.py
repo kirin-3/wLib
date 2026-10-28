@@ -7,6 +7,7 @@ import os
 import sqlite3
 import ssl
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -358,6 +359,46 @@ def test_download_proton_ge_streams_and_filters_tar(
         assert executable.read_bytes() == payload
         assert get_setting("proton_path") == str(executable)
         assert not (tmp_path / "GE-Proton-test.tar.gz").exists()
+
+
+def test_download_proton_ge_does_not_follow_predictable_temp_symlink(
+    monkeypatch, tmp_path
+):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    predictable = tmp_path / "GE-Proton-test.tar.gz"
+    predictable.symlink_to(victim)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+
+    release = {
+        "tag_name": "GE-Proton-test",
+        "assets": [
+            {
+                "name": "GE-Proton-test.tar.gz",
+                "browser_download_url": "https://example.com/GE-Proton-test.tar.gz",
+            },
+            {
+                "name": "GE-Proton-test.sha512sum",
+                "browser_download_url": "https://example.com/GE-Proton-test.sha512sum",
+            },
+        ],
+    }
+    responses = iter(
+        [
+            io.BytesIO(json.dumps(release).encode()),
+            io.BytesIO(b"0" * 128),
+            io.BytesIO(b"tarball"),
+        ]
+    )
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *_args, **_kwargs: next(responses)
+    )
+
+    result = Api().download_proton_ge()
+
+    assert result["success"] is False
+    assert victim.read_text(encoding="utf-8") == "keep me"
 
 
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
@@ -2695,6 +2736,43 @@ def test_install_rpgmaker_rtp_recovers_from_interrupted_download(monkeypatch, tm
     assert not list(rtp_dir.glob("*.part"))
 
 
+def test_install_rpgmaker_rtp_drops_a_failed_exe_download(monkeypatch, tmp_path):
+    api = Api()
+    rtp_dir = tmp_path / "rtp"
+    rtp_dir.mkdir()
+    # A truncated installer that a previous attempt left behind.
+    (rtp_dir / "xp_rtp104e.exe").write_bytes(b"MZ")
+    packages = [
+        {
+            "name": "XP",
+            "url": "https://example.com/xp_rtp104e.exe",
+            "filename": "xp_rtp104e.exe",
+            "sentinels": ("drive_c/never-installed",),
+        }
+    ]
+
+    class RunInline:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
+    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
+    monkeypatch.setattr(
+        "subprocess.run", MagicMock(side_effect=RuntimeError("wine failed"))
+    )
+    monkeypatch.setattr(api, "_get_rtp_packages", lambda: packages)
+
+    _ = api.install_rpgmaker_rtp(str(tmp_path / "prefix"), "")
+
+    assert not (rtp_dir / "xp_rtp104e.exe").exists()
+    status = api.get_install_status(str(tmp_path / "prefix"), "")
+    assert "install failed" in str(cast(dict[str, object], status["rtps"])["error"])
+
+
 def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
     api = Api()
     proton = tmp_path / "GE-Proton" / "proton"
@@ -3648,6 +3726,33 @@ def test_launch_journal_keeps_launch_version_and_buffers_early_exit(monkeypatch)
     }
 
 
+def test_late_playtime_tick_after_shutdown_final_is_recorded(monkeypatch):
+    """A periodic tick can race the shutdown flush and land after the final one."""
+    from core.database import get_play_sessions
+
+    api = Api()
+    game_id = add_game("Late tick", "/game", version="1.0")
+    callback = None
+
+    def launch(*args, on_exit_callback=None, **kwargs):
+        nonlocal callback
+        callback = on_exit_callback
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    assert api.launch_game(game_id, "/game")["success"]
+    assert callback is not None
+    # Launcher.shutdown() sees the in-flight tick's already-advanced
+    # last_saved_time, so its final delta is 0; the tick's own delta arrives
+    # afterwards and still represents unrecorded playtime.
+    callback(0, True)
+    callback(60, False)
+    assert get_all_games()[0]["playtime_seconds"] == 60
+    sessions = get_play_sessions(game_id)
+    assert sessions[0]["duration_seconds"] == 60
+    assert sessions[0]["ended_at"]
+
+
 @pytest.mark.parametrize("remote, expected", [("v0.8", True), ("0.9", False)])
 def test_single_check_preserves_skip_and_scrapes_metadata(
     monkeypatch, remote, expected
@@ -3728,6 +3833,19 @@ def test_untracked_or_failed_launch_has_no_session(monkeypatch, result):
     monkeypatch.setattr(api.launcher, "launch", lambda *args, **kwargs: result)
     assert api.launch_game(game_id, "/game.html") == result
     assert get_play_sessions(game_id) == []
+
+
+def test_launch_game_reports_launcher_setup_exceptions(monkeypatch):
+    api = Api()
+    game_id = add_game("Broken launch", "/game")
+    monkeypatch.setattr(
+        api.launcher,
+        "launch",
+        MagicMock(side_effect=OSError("Read-only file system")),
+    )
+    result = api.launch_game(game_id, "/game")
+    assert result["success"] is False
+    assert "Read-only file system" in str(result["error"])
 
 
 def test_newly_completed_wishlist_notification_and_auto_check_flag(monkeypatch):

@@ -2142,6 +2142,49 @@ def test_sandbox_refuses_game_folder_that_is_home(monkeypatch, tmp_path):
     assert 12 not in launcher._running
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+def test_sandbox_refuses_runtime_folder_that_is_home(monkeypatch, tmp_path):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    home.mkdir()
+    runner = home / "runner.sh"
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _game_id: str(tmp_path / "sandbox-home"),
+    )
+    launcher = Launcher()
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("core.launcher.host_which", return_value=None),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = launcher.launch(
+            str(tmp_path / "games" / "game.exe"),
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode="wine_proton",
+            proton_version=str(runner),
+        )
+    assert not result["success"]
+    assert "whole home folder" in str(result["error"])
+    popen.assert_not_called()
+    assert 12 not in launcher._running
+
+
 @pytest.mark.parametrize(
     "status,code", [("missing", "sandbox_missing"), ("unusable", "sandbox_unusable")]
 )
@@ -2333,6 +2376,24 @@ def test_stop_sandboxie_uses_box_termination(monkeypatch):
         "/box:wLib_12",
         "/terminate",
     ]
+
+
+def test_stop_sandboxie_failure_returns_error(monkeypatch):
+    launcher = Launcher()
+    launcher._running[12] = RunningGame(
+        MagicMock(pid=123),
+        None,
+        sandbox_box="wLib_12",
+        sandbox_tool=r"C:\Sandboxie\Start.exe",
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.terminate_box",
+        MagicMock(side_effect=RuntimeError("Sandboxie command failed (1)")),
+    )
+    result = launcher.stop(12)
+    assert result["success"] is False
+    assert "Sandboxie command failed" in str(result["error"])
+    assert 12 in launcher.get_running_games()
 
 
 def test_sandbox_configuration_failure_never_starts_game(monkeypatch):
