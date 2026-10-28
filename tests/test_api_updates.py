@@ -2732,6 +2732,75 @@ def test_bulk_prefix_fetch_only_for_changed_wishlist(
     assert get_all_games()[0]["latest_version"] == remote
 
 
+def test_bulk_page_fallback_stores_metadata_for_installed_game(monkeypatch):
+    from core.database import get_game_links
+
+    api = Api()
+    url = "https://f95zone.to/threads/installed.129/"
+    game_id = add_game("Installed", "/tmp/installed.sh", f95_url=url, version="1.0")
+    page_result = {
+        "success": True,
+        "version": "1.1",
+        "thread_completed": True,
+        "screenshots": ["https://example.com/shot.png"],
+        "thread_main_post_checked_at": "2026-10-28T00:00:00",
+        "thread_main_post_last_edit_at": "2026-10-27T00:00:00",
+        "store_links": [
+            {
+                "source": "steam",
+                "id": "123",
+                "url": "https://store.steampowered.com/app/123/",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["success"]
+    game = get_all_games()[0]
+    assert game["latest_version"] == "1.1"
+    assert game["thread_completed"] == 1
+    assert game["screenshots"] == ["https://example.com/shot.png"]
+    assert game["thread_main_post_checked_at"] == "2026-10-28T00:00:00"
+    assert [(link["source"], link["id"]) for link in get_game_links(game_id)] == [
+        ("steam", "123")
+    ]
+
+
+def test_bulk_page_fallback_records_completion_for_wishlist_without_version_change(
+    monkeypatch,
+):
+    api = Api()
+    url = "https://f95zone.to/threads/wishlist.130/"
+    game_id = add_game("Wishlist", "", f95_url=url, version="1.0")
+    assert game_id is not None
+    update_game(game_id, {"latest_version": "1.1"})
+    page_result = {
+        "success": True,
+        "version": "1.1",
+        "thread_completed": True,
+        "thread_main_post_checked_at": "2026-10-28T00:00:00",
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    fetch_metadata = MagicMock()
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch_metadata)
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["success"]
+    fetch_metadata.assert_not_called()
+    game = get_all_games()[0]
+    assert game["thread_completed"] == 1
+    assert api.get_update_status()["results"][0]["newly_finished"] is True
+
+
 def test_bulk_prefix_check_reuses_thread_page_fallback(monkeypatch):
     import time
 
