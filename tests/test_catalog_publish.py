@@ -91,7 +91,7 @@ def test_current_snapshot_survives_a_backwards_clock(tmp_path):
         "2026-10-26T05:00:00Z",
         "2026-10-27T05:00:00Z",
     ):
-        publish(storage, _snapshot(tmp_path / stamp, stamp), SOURCES)
+        publish(storage, _snapshot(tmp_path / stamp.replace(":", ""), stamp), SOURCES)
     manifest = publish(
         storage,
         _snapshot(tmp_path / "older", "2026-10-20T05:00:00Z"),

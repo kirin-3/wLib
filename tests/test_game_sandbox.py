@@ -443,6 +443,7 @@ def test_direct_installer_verification_and_elevation_cancel(monkeypatch,tmp_path
     assert install.call_count==int(valid_signature)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 def test_bwrap_refuses_read_only_mounts_that_expose_home(tmp_path):
     home = str(tmp_path / "home")
     for path in (home, os.path.dirname(home), "/"):

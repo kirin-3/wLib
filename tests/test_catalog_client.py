@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -127,7 +128,8 @@ def test_installs_a_snapshot_and_reports_status(tmp_path, server):
 def test_data_dir_with_uri_characters_can_install(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
     client = CatalogClient(
-        str(tmp_path / "data #1 ?2"),
+        # Windows forbids "?" in file names; "%" still exercises URI escaping there.
+        str(tmp_path / ("data #1 %3F2" if sys.platform == "win32" else "data #1 ?2")),
         app_version="9.9.9",
     )
     assert client.check() == {"success": True, "updated": True}
