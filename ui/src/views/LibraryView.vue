@@ -721,7 +721,12 @@ const toggleGameCollection = async (game: GameRecord, name: string) => {
   const result = await api.setGameCollections(game.id, next);
   if (!result.success) {
     notifyError(result.error || "Could not update the collection.");
+    // Undo the optimistic change first so the open menu is right even if the
+    // reload fails, then take whatever the database actually stored.
+    setLocalMembership(game.id, current);
     await loadGames();
+    const refreshed = games.value.find((entry) => entry.id === game.id);
+    if (refreshed) setLocalMembership(game.id, refreshed.collections || []);
   }
 };
 
@@ -2407,6 +2412,7 @@ onUnmounted(() => {
               :disabled="updatingId !== null"
               :title="`Check updates for ${game.title}`"
               class="update-overlay-btn ui-icon-btn absolute top-2 right-2 p-1.5 rounded-lg"
+              :class="{ 'update-check-running': updatingId === game.id }"
             >
               <IconRefresh
                 v-if="updatingId !== game.id"
@@ -3162,7 +3168,9 @@ onUnmounted(() => {
 
 .game-card:hover .update-overlay-btn,
 .game-card:focus-within .update-overlay-btn,
-.update-overlay-btn:disabled {
+/* Every card's control is disabled while any check runs; only the card being
+   checked keeps its spinner visible at rest. */
+.update-overlay-btn.update-check-running {
   opacity: 1;
 }
 

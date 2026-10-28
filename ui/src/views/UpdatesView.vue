@@ -174,14 +174,18 @@ const loadAutoCheckSetting = async () => {
 };
 
 const setFrequency = async (freq: string) => {
+  // Restore the previous choice on failure so the selector matches what is saved.
+  const previous = autoCheckFreq.value;
   autoCheckFreq.value = freq;
   try {
     const res = await api.setAutoCheckSetting(freq);
     if (res && res.success === false) {
+      if (autoCheckFreq.value === freq) autoCheckFreq.value = previous;
       notifyError("Failed to set frequency: " + (res.error || "Unknown error"));
     }
   } catch (e) {
     console.error("Failed to set frequency", e);
+    if (autoCheckFreq.value === freq) autoCheckFreq.value = previous;
     notifyError("Error setting frequency: " + String(e));
   }
 };
