@@ -122,7 +122,7 @@ def redact_paths(text: str) -> str:
             )
         text = re.sub(pattern + r"(?=$|[/\\\s\"'])", "~", text, flags=flags)
     username = getpass.getuser()
-    if len(username) >= 3:
+    if username:
         text = re.sub(
             r"(?<=[/\\])" + re.escape(username) + r"(?=$|[/\\\s\"'])",
             "<user>",

@@ -149,7 +149,7 @@ def test_tools(monkeypatch, linux):
             "/home/ab",
             "ab",
             "/opt/ab/tool /home/abc/tool /home/ab/data",
-            "/opt/ab/tool /home/abc/tool ~/data",
+            "/opt/<user>/tool /home/abc/tool ~/data",
         ),
     ],
 )
