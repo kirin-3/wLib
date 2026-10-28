@@ -15,8 +15,11 @@ import {
   formatToolProgress,
   getDecryptState,
   getExtractState,
+  getResumableToolAction,
+  getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
+  shouldSyncDeveloperOption,
   toolProgressPercent,
 } from "../utils/gameTools";
 import { notify, notifyError } from "../utils/toast";
@@ -43,6 +46,8 @@ const extractMode = ref<RenpyExtractMode>("folder");
 const outputFolder = ref("");
 const progress = ref<GameToolStatus | null>(null);
 const cancelling = ref(false);
+// True when polling belongs to a run that was already going before the tab loaded.
+const resumedRun = ref(false);
 
 let loadedFor: number | null = null;
 let requestId = 0;
@@ -53,14 +58,27 @@ const stopPolling = () => {
   pollTimer = null;
 };
 
-const startPolling = (gameId: number) => {
+const startPolling = (gameId: number, watchCompletion = false) => {
   stopPolling();
   progress.value = null;
   cancelling.value = false;
+  resumedRun.value = watchCompletion;
   pollTimer = setInterval(async () => {
     try {
       const status = await api.getGameToolStatus(gameId);
-      if (props.gameId === gameId && pollTimer !== null && status.running) progress.value = status;
+      if (props.gameId !== gameId || pollTimer === null) return;
+      if (status.running) {
+        progress.value = status;
+        return;
+      }
+      if (!resumedRun.value) return;
+      // A run started before this tab was shown ended: unlock the tab and reload.
+      resumedRun.value = false;
+      stopPolling();
+      progress.value = null;
+      busy.value = "";
+      lastResult.value = "The tool run finished.";
+      await load(gameId, true);
     } catch {
       // the run's own response reports failures
     }
@@ -73,6 +91,7 @@ const load = async (gameId: number, keepVisible = false) => {
   const request = ++requestId;
   loading.value = true;
   loadError.value = "";
+  const previousConsole = tools.value?.renpy?.console;
   if (!keepVisible) tools.value = null;
   try {
     const result = await api.getGameTools(gameId);
@@ -80,9 +99,26 @@ const load = async (gameId: number, keepVisible = false) => {
     if (result.success === false) {
       tools.value = null;
       loadError.value = result.error || "Could not load the tools";
-    } else {
-      tools.value = result;
-      developerOption.value = result.renpy?.console === "developer";
+      return;
+    }
+    tools.value = result;
+    const nextConsole = result.renpy?.console;
+    if (shouldSyncDeveloperOption(previousConsole, nextConsole)) {
+      developerOption.value = nextConsole === "developer";
+    }
+    // Re-attach a long run that started before this tab was (re)opened, so its
+    // progress and Cancel are still reachable and no action is offered twice.
+    try {
+      const status = await api.getGameToolStatus(gameId);
+      if (request !== requestId || props.gameId !== gameId || busy.value) return;
+      const action = getResumableToolAction(status);
+      if (action) {
+        busy.value = action;
+        startPolling(gameId, true);
+        progress.value = status;
+      }
+    } catch {
+      // The status is optional; the tab still works without it.
     }
   } catch (error) {
     if (request !== requestId || props.gameId !== gameId) return;
@@ -100,6 +136,7 @@ watch(
       // A different game: drop the old payload, any in-flight response and any polling.
       requestId++;
       stopPolling();
+      resumedRun.value = false;
       tools.value = null;
       loadError.value = "";
       loading.value = false;
@@ -131,6 +168,7 @@ const extractState = computed(() =>
 );
 const decryptState = computed(() => (rpgm.value ? getDecryptState(rpgm.value, isBusy.value) : null));
 const switchState = computed(() => (rpgm.value ? getUseDecryptedState(rpgm.value, isBusy.value) : null));
+const urmState = computed(() => (renpy.value ? getUrmToggleState(renpy.value.urm, isBusy.value) : null));
 
 const progressInput = computed(() => ({
   running: true,
@@ -147,6 +185,7 @@ const run = async <T extends { success?: boolean; error?: string; message?: stri
 ): Promise<T | null> => {
   if (busy.value) return null;
   const gameId = props.gameId;
+  resumedRun.value = false;
   busy.value = action;
   lastResult.value = "";
   if (action === "extract" || action === "decrypt") startPolling(gameId);
@@ -384,20 +423,20 @@ const useDecryptedChecked = computed({
           <span id="tools-urm-title" class="text-sm font-medium" style="color: var(--text-primary)">Universal Ren'Py Mod (URM)</span>
           <label
             class="relative inline-flex items-center"
-            :class="renpy.urm.source_configured && !isBusy ? 'cursor-pointer' : 'cursor-not-allowed'"
+            :class="urmState?.enabled ? 'cursor-pointer' : 'cursor-not-allowed'"
           >
             <input
               v-model="urmInstalled"
               type="checkbox"
               class="sr-only peer"
               aria-label="Universal Ren'Py Mod (URM)"
-              :disabled="isBusy || !renpy.urm.source_configured"
+              :disabled="!urmState?.enabled"
             />
             <div class="ui-toggle"></div>
           </label>
         </div>
-        <p v-if="!renpy.urm.source_configured" class="text-xs" style="color: var(--text-muted)">
-          Configure a URM .rpa source file in Settings to enable this control.
+        <p v-if="urmState?.message && !isBusy" class="text-xs" style="color: var(--text-muted)">
+          {{ urmState.message }}
         </p>
         <p v-if="urmError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ urmError }}</p>
       </section>

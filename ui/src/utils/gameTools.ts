@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RenpyArchive, RenpyConsoleState, RenpyExtractMode, RpgmToolsState } from "../services/api";
+import type {
+  GameToolStatus,
+  RenpyArchive,
+  RenpyConsoleState,
+  RenpyExtractMode,
+  RpgmToolsState,
+  UrmStatusResponse,
+} from "../services/api";
 
 export interface ToolProgressInput {
   running: boolean;
@@ -13,6 +20,20 @@ export interface ToolActionState {
   // Why the action is disabled, or "" when nothing needs explaining.
   message: string;
 }
+
+// A long run that started before this tab was shown can be re-attached to.
+export const getResumableToolAction = (status: GameToolStatus): "extract" | "decrypt" | "" => {
+  if (!status.running) return "";
+  return status.action === "extract" || status.action === "decrypt" ? status.action : "";
+};
+
+// The developer checkbox is a pending choice while the console is off, so a
+// reload that leaves the console off must not reset it. A console change (on,
+// off or developer) always re-syncs the checkbox to the stored script.
+export const shouldSyncDeveloperOption = (
+  previous: RenpyConsoleState | undefined,
+  next: RenpyConsoleState | undefined,
+): boolean => next !== "off" || previous !== next;
 
 export const formatToolBytes = (size: number): string => {
   if (!Number.isFinite(size) || size < 0) return "";
@@ -70,6 +91,22 @@ export const getUseDecryptedState = (state: RpgmToolsState, busy: boolean): Tool
   if (state.encrypted === 0) return { enabled: false, message: "This game's assets are not encrypted." };
   if (state.missing > 0) {
     return { enabled: false, message: `Decrypt ${state.missing} more asset${state.missing === 1 ? "" : "s"} first.` };
+  }
+  return { enabled: true, message: "" };
+};
+
+// Removing URM only deletes its archive; the source is needed to install one.
+export const getUrmToggleState = (
+  urm: Pick<UrmStatusResponse, "installed" | "source_configured">,
+  busy: boolean,
+): ToolActionState => {
+  if (busy) return { enabled: false, message: "A tool is running. Please wait." };
+  if (urm.installed) return { enabled: true, message: "" };
+  if (!urm.source_configured) {
+    return {
+      enabled: false,
+      message: "Configure a URM .rpa source file in Settings to install URM.",
+    };
   }
   return { enabled: true, message: "" };
 };

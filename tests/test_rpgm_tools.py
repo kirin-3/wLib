@@ -75,6 +75,19 @@ def test_read_key_valid_bom_and_malformed(tmp_path):
         assert rpgm_tools.read_key(str(tmp_path)) is None
 
 
+def test_deeply_nested_system_json_is_reported_not_a_crash(tmp_path):
+    # json.load raises RecursionError (not ValueError) for deeply nested input.
+    root = tmp_path / "www"
+    (root / "data").mkdir(parents=True)
+    nested = "[" * 100_000 + "]" * 100_000
+    (root / "data" / "System.json").write_text(nested, encoding="utf-8")
+
+    assert rpgm_tools.read_key(str(root)) is None
+    assert rpgm_tools.read_use_decrypted(str(root)) is False
+    with pytest.raises(GameToolError, match="System.json"):
+        rpgm_tools.set_use_decrypted(str(root), True)
+
+
 def test_recover_key_and_second_image_confirmation(tmp_path):
     root = make_mv(tmp_path)
     system_json(root, encryptionKey="")
