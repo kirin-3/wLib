@@ -3422,6 +3422,33 @@ def test_launch_journal_keeps_launch_version_and_buffers_early_exit(monkeypatch)
     }
 
 
+def test_late_playtime_tick_after_shutdown_final_is_recorded(monkeypatch):
+    """A periodic tick can race the shutdown flush and land after the final one."""
+    from core.database import get_play_sessions
+
+    api = Api()
+    game_id = add_game("Late tick", "/game", version="1.0")
+    callback = None
+
+    def launch(*args, on_exit_callback=None, **kwargs):
+        nonlocal callback
+        callback = on_exit_callback
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    assert api.launch_game(game_id, "/game")["success"]
+    assert callback is not None
+    # Launcher.shutdown() sees the in-flight tick's already-advanced
+    # last_saved_time, so its final delta is 0; the tick's own delta arrives
+    # afterwards and still represents unrecorded playtime.
+    callback(0, True)
+    callback(60, False)
+    assert get_all_games()[0]["playtime_seconds"] == 60
+    sessions = get_play_sessions(game_id)
+    assert sessions[0]["duration_seconds"] == 60
+    assert sessions[0]["ended_at"]
+
+
 @pytest.mark.parametrize("remote, expected", [("v0.8", True), ("0.9", False)])
 def test_single_check_preserves_skip_and_scrapes_metadata(
     monkeypatch, remote, expected
