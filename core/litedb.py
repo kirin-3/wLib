@@ -269,6 +269,9 @@ class LiteDBReader:
             if len(documents) != count:
                 raise _invalid()
             return documents
+        except BackupValidationError:
+            # Locked and encrypted libraries carry their own error code/message.
+            raise
         except (
             ValueError,
             UnicodeError,

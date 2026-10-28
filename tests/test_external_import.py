@@ -1414,3 +1414,34 @@ def test_sqlite_nonfinite_playtime_is_omitted(tmp_path):
     conn.close()
     backup, _stats = read_external_library("atlas", str(atlas_source))
     assert "playtime_seconds" not in backup["games"][0].get("user_state", {})
+
+
+def test_playnite_unfinished_write_asks_to_close_playnite(tmp_path):
+    """A LiteDB recovery flag means Playnite crashed or is writing: source_locked."""
+    from core.backup_format import BackupValidationError
+
+    library = tmp_path / "library"
+    shutil.copytree(PLAYNITE_FIXTURE, library)
+    database = library / "games.db"
+    data = bytearray(database.read_bytes())
+    # HeaderPage.Recovery is the last byte of the first page.
+    data[4095] = 1
+    database.write_bytes(data)
+    with pytest.raises(BackupValidationError) as exc:
+        read_external_library("playnite", str(database))
+    assert exc.value.error_code == "source_locked"
+    assert "Close Playnite" in str(exc.value)
+
+
+def test_playnite_encrypted_library_reports_unsupported_encryption(tmp_path):
+    from core.backup_format import BackupValidationError
+
+    library = tmp_path / "library"
+    shutil.copytree(PLAYNITE_FIXTURE, library)
+    database = library / "games.db"
+    data = bytearray(database.read_bytes())
+    # HeaderPage.Password is a 20-byte block after the 65-byte page prefix.
+    data[65] = 1
+    database.write_bytes(data)
+    with pytest.raises(BackupValidationError, match="Encrypted Playnite"):
+        read_external_library("playnite", str(database))
