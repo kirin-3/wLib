@@ -19,6 +19,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let requestVersion = 0;
 let previousState = "";
 let pollRunning = false;
+let disposed = false;
 // Only status-read failures are cleared by a later successful read; action errors stay.
 let errorFromStatus = false;
 let browsing = false;
@@ -129,8 +130,17 @@ async function openPrivacy() {
     if (result.success === false) error.value = result.error || "Could not open the privacy policy.";
   } catch { error.value = "Could not open the privacy policy."; }
 }
-onMounted(async () => { await refreshStatus(); timer = setInterval(() => void refreshStatus(), 1500); });
-onBeforeUnmount(() => { if (timer) clearInterval(timer); requestVersion++; });
+onMounted(async () => {
+  await refreshStatus();
+  // The view can unmount while the first status read is still in flight.
+  if (disposed) return;
+  timer = setInterval(() => void refreshStatus(), 1500);
+});
+onBeforeUnmount(() => {
+  disposed = true;
+  if (timer) clearInterval(timer);
+  requestVersion++;
+});
 </script>
 
 <template>
