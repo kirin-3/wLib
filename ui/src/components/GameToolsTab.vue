@@ -85,7 +85,12 @@ const startPolling = (gameId: number, watchCompletion = false) => {
   }, POLL_MS);
 };
 
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  // Drop in-flight loads too, so a late status response cannot start polling
+  // for a tab that is already gone.
+  requestId++;
+  stopPolling();
+});
 
 const load = async (gameId: number, keepVisible = false) => {
   const request = ++requestId;
