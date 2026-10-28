@@ -1209,3 +1209,24 @@ def test_reselecting_the_same_folder_keeps_sync_state(tmp_path):
     assert sync.set_folder(str(other))["success"]
     assert database.get_setting("sync_last_revision") == ""
     assert database.get_setting("sync_encryption_key") == ""
+
+
+def test_folder_write_returns_revision_of_the_written_bytes(tmp_path, monkeypatch):
+    location = FolderLocation(str(tmp_path))
+    rev = location.write(b"base", None)
+    real_replace = os.replace
+
+    def external_replace(src, dst):
+        result = real_replace(src, dst)
+        with open(dst, "rb") as current:
+            if current.read() == b"ours":
+                # A program that ignores the advisory lock (cloud client,
+                # editor) replaces the file right after our rename.
+                with open(dst, "wb") as rival:
+                    _ = rival.write(b"theirs")
+        return result
+
+    monkeypatch.setattr(os, "replace", external_replace)
+    written_rev = location.write(b"ours", rev)
+    assert location.read()[0] == b"theirs"
+    assert written_rev != location.revision()

@@ -193,6 +193,7 @@ class FolderLocation:
                 _ = target.write(data)
                 target.flush()
                 os.fsync(target.fileno())
+                written = os.fstat(target.fileno())
             if self.revision() != expected_revision:
                 raise SyncConflict()
             if expected_revision is not None:
@@ -202,10 +203,12 @@ class FolderLocation:
             os.replace(temporary, self.path)
         finally:
             temporary.unlink(missing_ok=True)
-        revision = self.revision()
-        if revision is None:
-            raise SyncConflict()
-        return revision
+        # Report the revision of the content this writer installed. A program
+        # that does not take the advisory lock (a cloud client, an editor) can
+        # replace the file right after the rename; re-statting the path would
+        # then record that writer's revision as synced and this machine would
+        # never read the replacement.
+        return _folder_revision(written)
 
 
 def _json_object(data: bytes) -> dict[str, object]:
