@@ -1249,6 +1249,15 @@ def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
     return None
 
 
+def stop_vite_dev_server(process: subprocess.Popen[bytes] | None) -> None:
+    if process is None:
+        return
+    try:
+        process.terminate()
+    except Exception as e:
+        print(f"[wLib] Failed to stop Vite dev server: {e}")
+
+
 def get_bundle_root() -> str:
     if getattr(sys, "frozen", False):
         return str(
@@ -1340,6 +1349,15 @@ def main() -> None:
 
     _ = setup_app_log(APP_DATA_DIR)
     print(f"[wLib] SSL certificates: {ssl_summary or 'system defaults'}")
+    if extension_server is not None:
+        # Serve before the slow WebView/API startup. The port is the
+        # single-instance lock, so a second launch during this window must
+        # still get a reply and exit instead of opening a second window that
+        # shares the database.
+        print("Starting extension HTTP receiver on port 8183...")
+        threading.Thread(
+            target=extension_server.serve_forever, daemon=True
+        ).start()
     _ = configure_qt_runtime_environment()
     ensure_packaged_webview_cache_fresh()
     webview_module = load_webview_module()
@@ -1380,46 +1398,50 @@ def main() -> None:
         # Give Vite a second to start
         time.sleep(2)
 
-    window = webview_module.create_window(
-        "wLib - Game Manager",
-        url,
-        js_api=api,
-        width=1200,
-        height=800,
-        background_color="#101014",
-    )
-    window_ref = window
-    api.set_window(window)
-
-    cleanup_legacy_browser_data_async()
-
-    # Start the extension background server in a daemon thread
-    if extension_server is not None:
-        cast(ExtensionServer, extension_server).sync_api = api
-        api.library_sync.server_available = True
-        print("Starting extension HTTP receiver on port 8183...")
-        threading.Thread(target=extension_server.serve_forever, daemon=True).start()
-
-    api.library_sync.start()
-
-    # Start the PyWebView UI loop
-    # We set debug=False so it doesn't open the Web Inspector automatically
-    icon_path = os.path.join(script_dir, "wlib.png")
+    library_sync_started = False
     try:
+        window = webview_module.create_window(
+            "wLib - Game Manager",
+            url,
+            js_api=api,
+            width=1200,
+            height=800,
+            background_color="#101014",
+        )
+        window_ref = window
+        api.set_window(window)
+        cleanup_legacy_browser_data_async()
+
+        if extension_server is not None:
+            cast(ExtensionServer, extension_server).sync_api = api
+            api.library_sync.server_available = True
+
+        api.library_sync.start()
+        library_sync_started = True
+
+        # Start the PyWebView UI loop
+        # We set debug=False so it doesn't open the Web Inspector automatically
+        icon_path = os.path.join(script_dir, "wlib.png")
         start_webview(
             webview_module,
             dev_mode=DEV_MODE,
             icon_path=icon_path if os.path.exists(icon_path) else None,
         )
     finally:
-        api.library_sync.finish(timeout=10)
-        # Cleanup Vite server when window closes, including when the
-        # WebView fails to start (otherwise the npm dev process leaks).
-        if vite_process is not None:
+        # Release the port before the final sync can take up to 10 seconds:
+        # relaunching wLib while it shuts down must be able to bind it instead
+        # of finding this closing instance and exiting.
+        if extension_server is not None:
             try:
-                vite_process.terminate()
+                extension_server.shutdown()
+                extension_server.server_close()
             except Exception as e:
-                print(f"[wLib] Failed to stop Vite dev server: {e}")
+                print(f"[wLib] Failed to stop extension HTTP server: {e}")
+        if library_sync_started:
+            api.library_sync.finish(timeout=10)
+        # Cleanup Vite server when startup fails or the window closes,
+        # otherwise the npm dev process leaks.
+        stop_vite_dev_server(vite_process)
 
 
 if __name__ == "__main__":

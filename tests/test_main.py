@@ -504,6 +504,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
             return None
 
     monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
     monkeypatch.setattr(
         main,
@@ -535,6 +536,65 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     main.main()
 
     assert call_order[:2] == ["cleanup", "load_webview"]
+
+
+def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
+    order: list[str] = []
+    server = MagicMock()
+    server.serve_forever.side_effect = lambda **_kwargs: order.append("serve")
+    fake_webview = MagicMock()
+    fake_webview.create_window.return_value = MagicMock()
+
+    class FakeApi:
+        library_sync = MagicMock()
+
+        def sync_extension_files(self):
+            return {"success": True}
+
+        def set_startup_extension_sync_status(self, _status):
+            return None
+
+        def set_window(self, _window):
+            return None
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+            self.daemon = daemon
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
+    monkeypatch.setattr(
+        main,
+        "load_webview_module",
+        lambda: order.append("load") or fake_webview,
+    )
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _m: {})
+    monkeypatch.setattr(main, "Api", FakeApi)
+    monkeypatch.setattr(main, "cleanup_legacy_browser_data_async", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(main, "bind_extension_server", lambda: server)
+    monkeypatch.setattr(
+        main, "start_webview", lambda *_args, **_kwargs: order.append("start")
+    )
+    monkeypatch.setattr(main, "DEV_MODE", False)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    # A second launch during WebView startup must reach the server and exit;
+    # otherwise both copies open windows and share the database.
+    assert "serve" in order
+    assert order.index("serve") < order.index("load")
 
 
 def test_get_webview_storage_path_creates_directory(monkeypatch, tmp_path):
@@ -1215,7 +1275,9 @@ def test_log_renderer_diagnostics_does_not_kill_startup_when_data_dir_unwritable
 
 def test_main_terminates_vite_when_webview_fails(monkeypatch):
     vite_process = MagicMock()
+    extension_server = MagicMock()
     monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
     monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
     monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
@@ -1223,7 +1285,7 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
         main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
     )
     monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _m: {})
-    monkeypatch.setattr(main, "bind_extension_server", MagicMock())
+    monkeypatch.setattr(main, "bind_extension_server", lambda: extension_server)
     fake_webview = MagicMock()
     fake_webview.create_window.return_value = MagicMock()
     monkeypatch.setattr(main, "load_webview_module", lambda: fake_webview)
@@ -1264,6 +1326,59 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
         main.main()
 
     vite_process.terminate.assert_called_once()
+    extension_server.shutdown.assert_called_once()
+    extension_server.server_close.assert_called_once()
+
+
+def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
+    vite_process = MagicMock()
+    extension_server = MagicMock()
+    fake_webview = MagicMock()
+    fake_webview.create_window.side_effect = RuntimeError("no display")
+
+    class FakeApi:
+        library_sync = MagicMock()
+
+        def sync_extension_files(self):
+            return {"success": True}
+
+        def set_startup_extension_sync_status(self, _status):
+            return None
+
+        def set_window(self, _window):
+            return None
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _m: {})
+    monkeypatch.setattr(main, "Api", FakeApi)
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(main, "bind_extension_server", lambda: extension_server)
+    monkeypatch.setattr(main, "load_webview_module", lambda: fake_webview)
+    monkeypatch.setattr(main, "start_vite_dev_server", lambda: vite_process)
+    monkeypatch.setattr(main, "DEV_MODE", True)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    with pytest.raises(RuntimeError, match="no display"):
+        main.main()
+
+    vite_process.terminate.assert_called_once()
+    extension_server.shutdown.assert_called_once()
+    extension_server.server_close.assert_called_once()
+    FakeApi.library_sync.finish.assert_not_called()
 
 
 @pytest.mark.parametrize("path", ["/api/checkpoint", "/api/check-evil", "/api/openx"])
