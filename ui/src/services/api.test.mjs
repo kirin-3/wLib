@@ -178,6 +178,24 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
     );
     const added = await api.addGame("Eternum", "/tmp/Eternum-0.6-pc/Eternum.exe");
     assert.equal(added.title, "Eternum");
+
+    // Adding from the browser preview stores the same launch and metadata fields
+    // the desktop database writes.
+    const detailed = await api.addGame(
+      "Detailed", "/tmp/detailed/game.exe", "", "1.2", "", "one, two", "4.5", "Dev", "Ren'Py",
+      true, true, true, "/tmp/prefix", "GE-Proton9-1", "wine_proton", "--flag", [],
+    );
+    const detailedGame = (await api.getGames()).find((game) => game.id === detailed.id);
+    assert.equal(detailedGame.rating, "4.5");
+    assert.equal(detailedGame.tags, "one, two");
+    assert.equal(detailedGame.run_japanese_locale, true);
+    assert.equal(detailedGame.run_wayland, true);
+    assert.equal(detailedGame.auto_inject_ce, true);
+    assert.equal(detailedGame.custom_prefix, "/tmp/prefix");
+    assert.equal(detailedGame.proton_version, "GE-Proton9-1");
+    assert.equal(detailedGame.launch_mode, "wine_proton");
+    assert.equal(detailedGame.command_line_args, "--flag");
+    assert.ok(detailedGame.date_added);
   } finally {
     await server.close();
     delete globalThis.window;

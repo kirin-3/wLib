@@ -2273,9 +2273,14 @@ class ApiService {
         const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
           f95_url: String(args[2] || ""), version: String(args[3] || ""), links,
-          cover_image_path: String(args[4] || ""), tags: String(args[5] || ""), developer: String(args[7] || ""),
-          engine: String(args[8] || ""), launch_mode: args[14] as LaunchMode,
-          command_line_args: String(args[15] || ""), sandbox_enabled: readMockSettings().sandbox_new_games, play_status: "Not Started", thread_completed: false };
+          cover_image_path: String(args[4] || ""), tags: String(args[5] || ""),
+          rating: String(args[6] || ""), developer: String(args[7] || ""),
+          engine: String(args[8] || ""),
+          run_japanese_locale: !!args[9], run_wayland: !!args[10], auto_inject_ce: !!args[11],
+          custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
+          launch_mode: args[14] as LaunchMode,
+          command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
+          sandbox_enabled: readMockSettings().sandbox_new_games, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
