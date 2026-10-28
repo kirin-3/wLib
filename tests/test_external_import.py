@@ -200,6 +200,9 @@ def test_playnite_import_covers_sections_merge_rollback(tmp_path, monkeypatch):
     result = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
     assert result["covers_copied"] == 2
     names = {p.name for p in game_covers.covers_dir().iterdir()}
+    preview = inspect_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert preview["counts"]["covers_to_copy"] == 2
+    assert preview["counts"]["covers_to_fill"] == 0
     result = import_external_library(
         "playnite", str(PLAYNITE_FIXTURE / "games.db"), {"merge_mode": "fill_missing"}
     )

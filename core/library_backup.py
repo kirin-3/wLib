@@ -512,6 +512,8 @@ def write_library_backup(
         with open(tmp_path, "w", encoding="utf-8") as backup_file:
             json.dump(document, backup_file, ensure_ascii=False, indent=2)
             _ = backup_file.write("\n")
+            backup_file.flush()
+            os.fsync(backup_file.fileno())
         os.replace(tmp_path, output_path)
     except OSError as exc:
         try:
@@ -1891,6 +1893,9 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
     plan = _build_import_plan(backup)
     warnings = _build_backup_warnings(backup)
     cover_files = _plan_cover_files(plan, {SECTION_COVERS}, "overwrite", warnings)
+    # "Only fill missing" keeps local covers on matched games; the warnings
+    # are the same as the overwrite pass, so they are not collected twice.
+    fill_cover_files = _plan_cover_files(plan, {SECTION_COVERS}, "fill_missing", [])
     ambiguous_games = [item for item in plan if item.get("status") == "ambiguous"]
 
     return {
@@ -1903,6 +1908,7 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
             "new_games": sum(1 for item in plan if item.get("status") == "new"),
             "ambiguous_games": len(ambiguous_games),
             "covers_to_copy": len(cover_files),
+            "covers_to_fill": len(fill_cover_files),
             "skipped_no_identity": int(str(stats.get("skipped_no_identity", 0))),
             "dropped_paths": int(str(stats.get("dropped_paths", 0))),
             "warnings": len(warnings),

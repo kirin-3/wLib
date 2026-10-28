@@ -463,6 +463,7 @@ export interface ExternalLibraryDetectResponse extends ApiBasicResponse {
 
 export interface ExternalLibraryCounts {
   covers_to_copy?: number;
+  covers_to_fill?: number;
   total_games: number;
   matched_games: number;
   new_games: number;
@@ -2844,7 +2845,7 @@ class ApiService {
           schema_version: "",
           available_sections: ["metadata", "user_state", "executable_paths", "launch_targets", ...(source === "playnite" ? ["covers"] : [])],
           counts: {
-            ...(source === "playnite" ? { covers_to_copy: 2 } : {}),
+            ...(source === "playnite" ? { covers_to_copy: 2, covers_to_fill: 2 } : {}),
             total_games: source === "playnite" ? 147 : 0,
             matched_games: 0,
             new_games: source === "playnite" ? 146 : 0,

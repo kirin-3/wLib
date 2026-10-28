@@ -652,6 +652,28 @@ def test_export_reports_invalid_destination(tmp_path):
     assert result["error_code"] == "invalid_destination"
 
 
+def test_export_is_synced_to_disk_before_replace(tmp_path, monkeypatch):
+    destination = tmp_path / "backup.json"
+    events: list[str] = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd: int) -> None:
+        events.append("fsync")
+        real_fsync(fd)
+
+    def replace(src: str, dst: str) -> None:
+        events.append("replace")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    result = Api().export_library_backup({}, str(destination))
+
+    assert result["success"] is True
+    assert events == ["fsync", "replace"]
+    assert json.loads(destination.read_text(encoding="utf-8"))["format"]
+
+
 def test_reimport_matches_games_without_url_or_developer(tmp_path):
     api = Api()
     add_game(title="Manual Game", exe_path="/games/manual/game.exe")

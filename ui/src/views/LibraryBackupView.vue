@@ -167,6 +167,13 @@ const canImportSelected = computed(() => {
   return Boolean(inspectResult.value) && importSections.value.length > 0;
 });
 const externalCounts = computed(() => externalPreview.value?.counts || null);
+const externalCoversToCopy = computed(() => {
+  const counts = externalCounts.value;
+  if (externalMergeMode.value === "fill_missing") {
+    return counts?.covers_to_fill ?? counts?.covers_to_copy ?? 0;
+  }
+  return counts?.covers_to_copy ?? 0;
+});
 const externalAvailableSections = computed<LibraryBackupSection[]>(
   () => externalPreview.value?.available_sections || [],
 );
@@ -738,7 +745,7 @@ const runImport = async () => {
             <span>Ambiguous: {{ externalCounts?.ambiguous_games ?? 0 }}</span>
             <span>Skipped: {{ externalCounts?.skipped_no_identity ?? 0 }}</span>
             <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
-            <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCounts?.covers_to_copy ?? 0 }}</span>
+            <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCoversToCopy }}</span>
           </div>
 
           <div class="backup-field">
