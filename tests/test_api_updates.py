@@ -3572,6 +3572,19 @@ def test_untracked_or_failed_launch_has_no_session(monkeypatch, result):
     assert get_play_sessions(game_id) == []
 
 
+def test_launch_game_reports_launcher_setup_exceptions(monkeypatch):
+    api = Api()
+    game_id = add_game("Broken launch", "/game")
+    monkeypatch.setattr(
+        api.launcher,
+        "launch",
+        MagicMock(side_effect=OSError("Read-only file system")),
+    )
+    result = api.launch_game(game_id, "/game")
+    assert result["success"] is False
+    assert "Read-only file system" in str(result["error"])
+
+
 def test_newly_completed_wishlist_notification_and_auto_check_flag(monkeypatch):
     api = Api()
     game_id = add_game("Wishlist", "", f95_url="https://f95zone.to/threads/123/")

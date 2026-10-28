@@ -3648,20 +3648,27 @@ class Api:
             except Exception as e:
                 print(f"Failed to update playtime for game {game_id}: {e}")
 
-        result = self.launcher.launch(
-            target_path,
-            command_line_args,
-            run_japanese_locale,
-            run_wayland,
-            auto_inject_ce,
-            custom_prefix,
-            proton_version,
-            normalize_launch_mode(launch_mode),
-            on_exit_callback=on_exit,
-            game_id=game_id,
-            sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
-            game_title=str(stored_game.get("title") or ""),
-        )
+        try:
+            result = self.launcher.launch(
+                target_path,
+                command_line_args,
+                run_japanese_locale,
+                run_wayland,
+                auto_inject_ce,
+                custom_prefix,
+                proton_version,
+                normalize_launch_mode(launch_mode),
+                on_exit_callback=on_exit,
+                game_id=game_id,
+                sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
+                game_title=str(stored_game.get("title") or ""),
+            )
+        except Exception as exc:
+            # Launcher setup can still fail outside its own error paths (for
+            # example creating the default Wine prefix). Keep the bridge
+            # contract: report a failure payload instead of rejecting the call.
+            print(f"Failed to launch game {game_id}: {exc}")
+            return {"success": False, "error": str(exc) or "Could not launch the game."}
         if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
             with session_lock:
                 try:
