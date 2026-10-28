@@ -104,12 +104,21 @@ def inspect_game_path(exe_path: str) -> GameGuess:
     }
 
 
-def _best_launcher(game_dir: str, names: list[str]) -> str:
-    """Prefer a name matching the folder title, then a generic game launcher."""
+def _best_launcher(
+    game_dir: str, names: list[str], preferred_title: str = ""
+) -> str:
+    """Prefer a name matching the game title, then a generic game launcher.
+
+    `preferred_title` wins over the folder name: archive installs rename the
+    extracted tree to the version (`.../0.8`), so the folder name no longer
+    carries the title there.
+    """
     def squash(text: str) -> str:
         return re.sub(r"[^a-z0-9]", "", text.lower())
 
-    title = squash(guess_title_and_version(os.path.basename(game_dir))[0])
+    title = squash(preferred_title) or squash(
+        guess_title_and_version(os.path.basename(game_dir))[0]
+    )
     stems = {name: os.path.splitext(name)[0].lower() for name in names}
     if title:
         exact = [n for n in names if squash(stems[n]) == title]
@@ -124,8 +133,14 @@ def _best_launcher(game_dir: str, names: list[str]) -> str:
     )
 
 
-def find_launcher(game_dir: str, depth: int = 2) -> str:
-    """Best launch file in game_dir, looking one folder deeper when it holds none."""
+def find_launcher(
+    game_dir: str, depth: int = 2, preferred_title: str = ""
+) -> str:
+    """Best launch file in game_dir, looking one folder deeper when it holds none.
+
+    `preferred_title` is passed to the name heuristic; callers that rename the
+    folder (archive installs) keep the guessed-title preference that way.
+    """
     try:
         entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
     except OSError:
@@ -149,12 +164,16 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
     ]
     if is_linux() and native:
         scripts = [name for name in native if name.lower().endswith(".sh")]
-        return os.path.join(game_dir, _best_launcher(game_dir, scripts or native))
+        return os.path.join(
+            game_dir, _best_launcher(game_dir, scripts or native, preferred_title)
+        )
     preferred = (".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64")
     for ext in (*preferred, ".jar"):
         matches = [name for name in files if name.lower().endswith(ext)]
         if matches:
-            return os.path.join(game_dir, _best_launcher(game_dir, matches))
+            return os.path.join(
+                game_dir, _best_launcher(game_dir, matches, preferred_title)
+            )
     for name in ("index.html", "index.htm"):
         if name in (f.lower() for f in files):
             return os.path.join(game_dir, next(f for f in files if f.lower() == name))
@@ -170,7 +189,7 @@ def find_launcher(game_dir: str, depth: int = 2) -> str:
             and not entry.name.startswith(".wlib-staging-")  # archive_install.STAGING_PREFIX
         ]
         if len(subdirs) == 1:
-            return find_launcher(subdirs[0], depth - 1)
+            return find_launcher(subdirs[0], depth - 1, preferred_title)
     return ""
 
 

@@ -154,6 +154,23 @@ def test_scan_title_match_beats_generic_launcher(tmp_path):
     assert find_launcher(str(folder)) == str(folder / "MyAdventure.exe")
 
 
+def test_scan_preferred_title_beats_alphabetical_pick(tmp_path):
+    from core.game_scan import find_launcher
+
+    # Archive installs put the game in a version-named folder, which carries no
+    # title; the caller passes the title so the right launcher still wins.
+    folder = tmp_path / "0.8"
+    folder.mkdir()
+    (folder / "Config.exe").touch()
+    (folder / "Eternum.exe").touch()
+
+    assert find_launcher(str(folder), preferred_title="Eternum") == str(
+        folder / "Eternum.exe"
+    )
+    # Without a hint the folder name is used, and "0.8" matches nothing.
+    assert find_launcher(str(folder)) == str(folder / "Config.exe")
+
+
 def test_scan_relative_folder_returns_absolute_exe_paths(tmp_path, monkeypatch):
     import os
 

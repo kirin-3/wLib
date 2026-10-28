@@ -475,6 +475,30 @@ def test_install_new_game(tmp_path, monkeypatch):
     assert len(games) == 1 and games[0]["version"] == "0.8"
 
 
+def test_install_prefers_title_executable_over_alphabetically_earlier_tool(
+    tmp_path, monkeypatch
+):
+    # The destination folder is named by version, so the title has to come from
+    # the install request; otherwise "Config.exe" wins over "Eternum.exe".
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    archive = tmp_path / "Eternum-0.8-pc.zip"
+    _write_game_zip(archive, {"Config.exe": b"config", "Eternum.exe": b"game"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Eternum",
+        version="0.8",
+    )
+    expected = str(lib / "Eternum" / "0.8" / "Eternum.exe")
+    assert result["exe_path"] == expected
+    assert db.get_all_games()[0]["exe_path"] == expected
+
+
+
 def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
