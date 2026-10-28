@@ -76,6 +76,9 @@ def _catalog_page(
                 "vndb": ("vndb_vns", "vn_id"),
                 "ryuugames": ("ryuu_posts", "post_id"),
             }
+            # Removed catalog rows keep their identity for a live page, but
+            # their stale links must not resolve games any more.
+            expand_links = True
             if source in tables:
                 table, key = tables[source]
                 row = cast(
@@ -85,6 +88,7 @@ def _catalog_page(
                         (identity,),
                     ).fetchone(),
                 )
+                expand_links = row is not None
                 if row is not None:
                     data = {str(key): cast(object, row[key]) for key in row.keys()}
                     entry = {
@@ -109,16 +113,17 @@ def _catalog_page(
                                     extra.append(link)
             # Only expand the page's own ID. IDs discovered here are never
             # recursively expanded, even when several releases share a VN.
-            rows = cast(
-                list[tuple[str, str]],
-                conn.execute(
-                    "SELECT src_b, id_b FROM links WHERE src_a = ? AND id_a = ? UNION SELECT src_a, id_a FROM links WHERE src_b = ? AND id_b = ?",
-                    (source, identity, source, identity),
-                ).fetchall(),
-            )
-            for target, value in rows:
-                if link := link_from_id(target, value):
-                    extra.append(link)
+            if expand_links:
+                rows = cast(
+                    list[tuple[str, str]],
+                    conn.execute(
+                        "SELECT src_b, id_b FROM links WHERE src_a = ? AND id_a = ? UNION SELECT src_a, id_a FROM links WHERE src_b = ? AND id_b = ?",
+                        (source, identity, source, identity),
+                    ).fetchall(),
+                )
+                for target, value in rows:
+                    if link := link_from_id(target, value):
+                        extra.append(link)
     except (sqlite3.Error, OSError, ValueError):
         return {}, []
     return entry, extra
