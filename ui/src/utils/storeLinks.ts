@@ -42,3 +42,12 @@ export function extensionAddQuery(data: ExtensionGameDetail): Record<string, str
 export function extensionOpenQuery(data: ExtensionGameDetail): Record<string, string> {
   return { action: "open", f95url: data.url || "", ...(extensionGameId(data.gameId) ? { gameId: String(data.gameId) } : {}) };
 }
+
+// Opens one of the user's games in the library. The id is the exact key, so
+// games without an F95 thread (store-link-only) can still be opened; the URL is
+// kept for older handlers that only understand thread identity.
+export function libraryOpenQuery(
+  game: Pick<GameRecord, "id" | "f95_url">,
+): Record<string, string> {
+  return extensionOpenQuery({ url: game.f95_url || "", gameId: game.id });
+}
