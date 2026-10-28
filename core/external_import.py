@@ -720,11 +720,16 @@ def _translate_xlibrary_game(
     title = _as_str(data.get("name"))
     developer = _as_str(data.get("developer"))
     f95_url = _xlibrary_f95_url(data)
+    links = _recognized_store_links(
+        [_as_dict(link).get("url") for link in _as_list(data.get("externalLinks"))]
+    )
 
     metadata = _title_metadata(title, f95_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
+    if links:
+        metadata["links"] = links
     if developer:
         metadata["developer"] = developer
     installed = _as_str(data.get("installedVersion"))
@@ -762,9 +767,7 @@ def _translate_xlibrary_game(
 
     exe_path, targets, dropped = _xlibrary_executables(data)
 
-    if not _has_import_identity(
-        f95_url, coerce_store_links(metadata.get("links")), exe_path
-    ):
+    if not _has_import_identity(f95_url, links, exe_path):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
     if user_state:

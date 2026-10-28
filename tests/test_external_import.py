@@ -1509,3 +1509,49 @@ def test_playnite_skips_unrecognized_links():
     assert game["metadata"]["links"] == [
         {"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}
     ]
+
+
+def test_xlibrary_reader_imports_store_links_and_link_only_games(tmp_path):
+    source = tmp_path / "library.games.json"
+    dlsite_only = _xgame("DLsite Only")
+    dlsite_only["externalLinks"] = [
+        {
+            "providerId": "dlsite",
+            "externalId": "RJ123456",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html",
+        }
+    ]
+    linked = _xgame("Linked", links=[_xlink(950)])
+    linked["externalLinks"].append(
+        {
+            "providerId": "vndb",
+            "externalId": "v4321",
+            "url": "https://vndb.org/v4321",
+        }
+    )
+    linked["externalLinks"].append(
+        {"providerId": "other", "externalId": "", "url": "https://example.com/x"}
+    )
+    _write_xlibrary_live(source, [dlsite_only, linked])
+
+    backup, stats = read_external_library("xlibrary", str(source))
+    assert stats["skipped_no_identity"] == 0
+    by_title = {game["metadata"]["title"]: game for game in backup["games"]}
+    assert by_title["DLsite Only"]["metadata"]["links"] == [
+        {
+            "source": "dlsite",
+            "id": "RJ123456",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html",
+        }
+    ]
+    assert by_title["Linked"]["metadata"]["links"] == [
+        {"source": "vndb", "id": "v4321", "url": "https://vndb.org/v4321"}
+    ]
+
+    from core.library_backup import import_external_library as run_import
+
+    result = run_import("xlibrary", str(source), {"merge_mode": "overwrite"})
+    assert result["created"] == 2
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["DLsite Only"]["f95_url"] == ""
+    assert games["DLsite Only"]["exe_path"] == ""
