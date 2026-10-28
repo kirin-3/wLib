@@ -283,15 +283,17 @@ async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
             }
             // Reassemble as text (tests stub getReader with string chunks).
             let body = "";
+            const decoder = new TextDecoder();
             for (const chunk of chunks) {
                 if (typeof chunk === "string") {
                     body += chunk;
                 } else if (chunk instanceof Uint8Array) {
-                    body += new TextDecoder().decode(chunk, { stream: true });
+                    body += decoder.decode(chunk, { stream: true });
                 } else if (chunk && typeof chunk.byteLength === "number") {
-                    body += new TextDecoder().decode(new Uint8Array(chunk.buffer || chunk), { stream: true });
+                    body += decoder.decode(new Uint8Array(chunk.buffer || chunk), { stream: true });
                 }
             }
+            body += decoder.decode();
             if (body.length > BRIDGE_MAX_BODY_BYTES) {
                 return { ok: false, error: "too_large" };
             }
