@@ -1,6 +1,8 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import threading
+import time
 from contextlib import closing
 
 import pytest
@@ -147,6 +149,68 @@ def test_game_links_url_changes_mark_sync_and_keep_other_origins():
         replace_game_links(game_id, "invalid", [])
 
 
+def test_game_links_concurrent_origins_share_one_identity(monkeypatch):
+    """Two saves of the same link must not race the unique constraint."""
+    game_id = add_game("Concurrent links", "")
+    real_get_connection = get_connection
+
+    class SlowFetchCursor:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def fetchall(self):
+            rows = self._cursor.fetchall()
+            # Give both threads time to finish reading before either writes.
+            time.sleep(0.5)
+            return rows
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+    class SlowReadConnection:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, params=()):
+            cursor = self._conn.execute(sql, params)
+            if sql.startswith(
+                "SELECT id, source, external_id, url, origin FROM game_links"
+            ):
+                return SlowFetchCursor(cursor)
+            return cursor
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(
+        "core.database.get_connection",
+        lambda: SlowReadConnection(real_get_connection()),
+    )
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+    link = {"url": "https://store.steampowered.com/app/123/"}
+
+    def save(origin: str) -> None:
+        barrier.wait()
+        try:
+            replace_game_links(game_id, origin, [link])
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=save, args=("user",)),
+        threading.Thread(target=save, args=("page",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert [game_link["id"] for game_link in get_game_links(game_id)] == ["123"]
+
+
 def test_tag_colors_validation_and_sync_tracking():
     assert get_tag_colors() == {}
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
@@ -190,6 +254,60 @@ def test_sync_change_tracking():
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     delete_game(game_id)
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_unparseable_sync_timestamp_does_not_block_writes():
+    from datetime import datetime
+
+    malformed = "2026-W44-3T12:00:00+00:00"
+    game_id = add_game("Timestamp", "/game.exe")
+    session_id = start_play_session(game_id, "1.0")
+
+    def assert_write_succeeds(action) -> None:
+        update_setting("sync_local_modified_at", malformed)
+        action()
+        stored = get_setting("sync_local_modified_at") or ""
+        assert stored != malformed
+        datetime.fromisoformat(stored.replace("Z", "+00:00"))
+
+    assert_write_succeeds(lambda: update_game(game_id, {"progress": "notes"}))
+    assert_write_succeeds(lambda: add_game("Inserted", ""))
+    assert_write_succeeds(lambda: update_setting("collections", "[]"))
+    assert_write_succeeds(
+        lambda: replace_game_links(
+            game_id, "page", [{"url": "https://vndb.org/v1"}]
+        )
+    )
+    assert_write_succeeds(lambda: start_play_session(game_id, "1.0"))
+    assert_write_succeeds(lambda: record_play_tick(game_id, session_id, 60, True))
+    disposable = add_game("Delete me", "")
+    assert_write_succeeds(lambda: delete_game(disposable))
+
+
+def test_init_db_rebuilds_every_sync_trigger_with_safe_bump():
+    with closing(get_connection()) as conn:
+        names = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'"
+            ).fetchall()
+        ]
+        assert names
+        for name in names:
+            conn.execute(f"DROP TRIGGER {name}")
+            conn.execute(
+                f"CREATE TRIGGER {name} AFTER INSERT ON games BEGIN SELECT 1; END"
+            )
+        conn.commit()
+
+    init_db()
+
+    with closing(get_connection()) as conn:
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'"
+        ).fetchall()
+    assert rows
+    assert all("COALESCE" in str(sql) for _, sql in rows)
 
 
 def test_journal_migrates_old_schema_and_cascades():
@@ -1529,6 +1647,11 @@ def test_save_backup_keep_validation():
     ):
         update_setting("save_backup_keep", raw)
         assert get_save_backup_keep() == expected, raw
+
+
+def test_save_backup_keep_huge_numeric_value_is_invalid():
+    update_setting("save_backup_keep", "9" * 5000)
+    assert get_save_backup_keep() is None
 
 
 def test_save_backup_keep_bumps_sync_timestamp():

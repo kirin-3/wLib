@@ -557,16 +557,24 @@ def init_db() -> None:
             VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
             ON CONFLICT(key) DO UPDATE SET value = CASE
                 WHEN settings.value >= excluded.value
-                THEN strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds')
+                THEN COALESCE(
+                    strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds'),
+                    excluded.value
+                )
                 ELSE excluded.value END;
         """
         for action in ("INSERT", "DELETE"):
-            _ = cursor.execute(
-                f"CREATE TRIGGER IF NOT EXISTS sync_game_links_{action.lower()} AFTER {action} ON game_links BEGIN {bump_sync_time} END"
-            )
-            _ = cursor.execute(
-                f"CREATE TRIGGER IF NOT EXISTS sync_games_{action.lower()} AFTER {action} ON games BEGIN {bump_sync_time} END"
-            )
+            for table, prefix in (
+                ("game_links", "sync_game_links"),
+                ("games", "sync_games"),
+            ):
+                trigger = f"{prefix}_{action.lower()}"
+                # Recreate on every start so upgraded databases pick up
+                # changes to the bump statement.
+                _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+                _ = cursor.execute(
+                    f"CREATE TRIGGER {trigger} AFTER {action} ON {table} BEGIN {bump_sync_time} END"
+                )
         columns = ", ".join(SYNC_GAME_COLUMNS)
         changed = " OR ".join(
             f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
@@ -579,8 +587,10 @@ def init_db() -> None:
         )
         keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
         for action in ("INSERT", "UPDATE", "DELETE"):
+            trigger = f"sync_play_sessions_{action.lower()}"
+            _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             _ = cursor.execute(
-                f"CREATE TRIGGER IF NOT EXISTS sync_play_sessions_{action.lower()} AFTER {action} ON play_sessions BEGIN {bump_sync_time} END"
+                f"CREATE TRIGGER {trigger} AFTER {action} ON play_sessions BEGIN {bump_sync_time} END"
             )
             row = "OLD" if action == "DELETE" else "NEW"
             condition = f"{row}.key IN ({keys})"
@@ -701,6 +711,10 @@ def replace_game_links(
     }
     if connection is None:
         with closing(get_connection()) as conn:
+            # Read the current rows under the write lock. Without it, two saves
+            # can both see no row for an identity and then race the unique
+            # constraint, failing one of them with IntegrityError.
+            _ = conn.execute("BEGIN IMMEDIATE")
             replace_game_links(
                 game_id, origin, links, connection=conn, replace_all=replace_all
             )
@@ -1275,7 +1289,11 @@ def get_save_backup_keep() -> int | None:
     raw = str(get_setting("save_backup_keep") or "").strip()
     if not raw.isascii() or not raw.isdigit():
         return None
-    keep = int(raw)
+    try:
+        keep = int(raw)
+    except (ValueError, OverflowError):
+        # Imported/synced settings can hold an arbitrarily long digit string.
+        return None
     return keep if 1 <= keep <= SAVE_BACKUP_KEEP_MAX else None
 
 

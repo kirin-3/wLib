@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from core.api import Api
-from core.database import add_game, init_db
+from core.database import add_game, init_db, update_setting
 
 
 @pytest.fixture(autouse=True)
@@ -150,6 +150,15 @@ def test_save_settings_rejects_non_string_paths(api):
     assert api.save_settings({"proton_path": 123})["success"] is False
     # Valid string still saves.
     assert api.save_settings({"proton_path": "/tmp/wine"})["success"] is True
+
+
+def test_save_backup_keep_huge_numeric_value_does_not_crash_settings(api):
+    update_setting("save_backup_keep", "9" * 5000)
+
+    # Loading settings must treat the unparseable stored value as "keep all".
+    assert api.get_settings()["save_backup_keep"] == "all"
+    # Saving the same oversized value is rejected, not raised into the bridge.
+    assert api.save_settings({"save_backup_keep": "9" * 5000})["success"] is False
 
 
 def test_update_game_rejects_unbindable_values(api):

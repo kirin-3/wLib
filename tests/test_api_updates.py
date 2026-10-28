@@ -2651,6 +2651,29 @@ def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatc
     assert api.get_auto_check_setting()["last_check"] == ""
 
 
+def test_set_auto_check_frequency_validates_and_keeps_db_writable():
+    api = Api()
+    assert api.set_auto_check_setting("weekly")["success"] is True
+    assert get_setting("auto_update_check") == "weekly"
+
+    for bad in (None, ["weekly"], {"frequency": "weekly"}, "", "hourly"):
+        result = api.set_auto_check_setting(bad)
+        assert result["success"] is False
+
+    # A bad payload must not leave a write transaction holding the database.
+    assert add_game("After invalid frequency", "") is not None
+
+
+def test_set_auto_check_same_frequency_does_not_bump_sync():
+    api = Api()
+    update_setting("auto_update_check", "weekly")
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+
+    assert api.set_auto_check_setting("weekly")["success"] is True
+
+    assert get_setting("sync_local_modified_at") == "2000-01-01T00:00:00Z"
+
+
 def test_bulk_check_preserves_thread_edit_metadata(monkeypatch):
     import time
 
