@@ -1330,7 +1330,9 @@ def _normalize_version(version: object) -> str:
 
 
 def _squash_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+    # Keep letters and digits from every script. Dropping non-ASCII characters
+    # made every non-Latin title compare equal to every other one.
+    return "".join(ch for ch in (value or "").lower() if ch.isalnum())
 
 
 def _dismissal_key(path: str, size: int, mtime: float) -> str:
@@ -1417,6 +1419,9 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
             skipped = _normalize_version(str(game.get("skipped_version") or ""))
             if skipped and skipped == _normalize_version(latest):
                 continue
+            key = _squash_key(str(game.get("title") or ""))
+            if not key:
+                continue
             try:
                 gid = int(str(game.get("id", 0)))
             except (TypeError, ValueError):
@@ -1425,7 +1430,7 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
                 {
                     "id": gid,
                     "title": str(game.get("title") or ""),
-                    "key": _squash_key(str(game.get("title") or "")),
+                    "key": key,
                     "version": installed,
                     "latest_version": latest,
                 }
@@ -1469,6 +1474,8 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
         stem = re.sub(r"\.part\d+$", "", stem, flags=re.IGNORECASE)
         guessed_title, guessed_version = guess_title_and_version(stem)
         squashed = _squash_key(guessed_title)
+        if not squashed:
+            continue
         games = by_key.get(squashed, [])
         if not games:
             continue

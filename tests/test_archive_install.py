@@ -764,6 +764,39 @@ def test_find_download_offers_skips_skipped_update_and_wishlisted_game(
     assert [offer["game_id"] for offer in offers] == [int(skipped_id)]
 
 
+def test_find_download_offers_keeps_non_latin_titles_apart(tmp_path, monkeypatch):
+    import time as _time
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import find_download_offers
+
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    db.update_setting("downloads_folder", str(downloads))
+    for title in ("エターナム", "別のゲーム"):
+        game_id = db.add_game(title, f"/games/{title}/old/Game.exe", version="0.7")
+        assert game_id is not None
+        db.update_game(int(game_id), {"latest_version": "0.8"})
+
+    old = _time.time() - 60
+
+    def _touch(name):
+        file = downloads / name
+        file.write_bytes(b"x" * 16)
+        os.utime(file, (old, old))
+        return file
+
+    # Every non-Latin title used to squash to the same empty key, so an
+    # unrelated archive matched all of them.
+    _touch("全然関係ない-9.9.zip")
+    assert find_download_offers() == []
+
+    match = _touch("エターナム-0.8-pc.zip")
+    offers = find_download_offers()
+    assert [offer["archive_path"] for offer in offers] == [str(match)]
+    assert [offer["game_title"] for offer in offers] == ["エターナム"]
+
+
 def test_7z_listing_skips_archive_self_entry(monkeypatch, tmp_path):
     import core.archive_install as ai
 
