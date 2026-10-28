@@ -718,7 +718,9 @@ def infolder_save_relpaths(root: str) -> list[str]:
         if os.path.isdir(os.path.join(root, rel)):
             found.append(rel)
     for pattern in LOOSE_SAVE_PATTERNS:
-        for path in glob.glob(os.path.join(root, pattern)):
+        # Escape the install path: a folder named "Game [v1.0]" would otherwise
+        # be read as a glob character class and its loose saves would be missed.
+        for path in glob.glob(os.path.join(glob.escape(root), pattern)):
             try:
                 if os.path.isfile(path) and not os.path.islink(path):
                     found.append(os.path.relpath(path, root))
