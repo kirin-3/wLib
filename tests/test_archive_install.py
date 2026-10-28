@@ -728,6 +728,42 @@ def test_find_download_offers_match_and_filters(tmp_path, monkeypatch):
     assert find_download_offers() == []
 
 
+def test_find_download_offers_skips_skipped_update_and_wishlisted_game(
+    tmp_path, monkeypatch
+):
+    import time as _time
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import find_download_offers
+
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    db.update_setting("downloads_folder", str(downloads))
+
+    skipped_id = db.add_game(
+        "Eternum", "/games/Eternum/0.7/Eternum.exe", version="0.7"
+    )
+    assert skipped_id is not None
+    db.update_game(int(skipped_id), {"latest_version": "0.8", "skipped_version": "v0.8"})
+    wishlist_id = db.add_game("Wanted", "", version="")
+    assert wishlist_id is not None
+    db.update_game(int(wishlist_id), {"latest_version": "1.0"})
+
+    old = _time.time() - 60
+    for name in ("Eternum-0.8-pc.zip", "Wanted-1.0.zip"):
+        file = downloads / name
+        file.write_bytes(b"x" * 16)
+        os.utime(file, (old, old))
+
+    # Neither game has an available update, so no archive is offered for them.
+    assert find_download_offers() == []
+
+    # The same archive is offered once the skip is cleared.
+    db.update_game(int(skipped_id), {"skipped_version": ""})
+    offers = find_download_offers()
+    assert [offer["game_id"] for offer in offers] == [int(skipped_id)]
+
+
 def test_7z_listing_skips_archive_self_entry(monkeypatch, tmp_path):
     import core.archive_install as ai
 
