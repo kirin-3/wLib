@@ -1114,10 +1114,21 @@ def install_archive(
         # something different at staging/link). Re-check after the move.
         check_symlinks_inside_staging(staging)
 
+        # The archive root is not always the game folder: an archive can keep
+        # the game one level down (e.g. readme.txt + Game/). Saves must land in
+        # the folder the new executable will run from, so pick that first.
+        staging_install_dir = staging
+        picked_exe = ""
+        if old_root or ("{engine}" in pattern and not engine.strip()):
+            picked_exe = _pick_exe(staging, old_exe, old_root, title)
+            if picked_exe:
+                picked_dir = os.path.dirname(picked_exe)
+                if picked_dir and _relative_inside(picked_dir, staging) is not None:
+                    staging_install_dir = picked_dir
+
         if "{engine}" in pattern and not engine.strip():
             from core.game_scan import detect_engine
 
-            picked_exe = _pick_exe(staging, old_exe, old_root, title)
             engine = detect_engine(staging, picked_exe)
             if not engine and picked_exe:
                 engine = detect_engine(os.path.dirname(picked_exe), picked_exe)
@@ -1126,10 +1137,12 @@ def install_archive(
         override_rel: str | None = None
         if old_root and os.path.isdir(old_root):
             _progress("carrying saves")
-            _ = copy_infolder_saves(old_root, staging)
+            _ = copy_infolder_saves(old_root, staging_install_dir)
             override_rel = override_relpath(old_override, old_root)
             if override_rel is not None:
-                _ = copy_override_saves(old_override, override_rel, staging)
+                _ = copy_override_saves(
+                    old_override, override_rel, staging_install_dir
+                )
             check_symlinks_inside_staging(staging)
 
         _progress("moving into place")
@@ -1186,6 +1199,10 @@ def install_archive(
             raise ArchiveInstallError(
                 "No launchable file was found. The extracted folder was kept; choose the executable manually."
             )
+        # Where the game actually runs from. For archives that keep the game
+        # below the archive root this is not `destination`, and saves, the
+        # saves override and launch targets are relative to it.
+        new_install_dir = os.path.dirname(exe_path) or destination
         detected_engine = ""
         try:
             detected_engine = _detect_engine(os.path.dirname(exe_path), exe_path)
@@ -1224,7 +1241,9 @@ def install_archive(
                     except (TypeError, ValueError):
                         continue
             if override_rel is not None:
-                new_override = os.path.normpath(os.path.join(destination, override_rel))
+                new_override = os.path.normpath(
+                    os.path.join(new_install_dir, override_rel)
+                )
                 if new_override != os.path.normpath(old_override):
                     fields["save_path_override"] = new_override
             _ = _db.update_game(int(game_id), fields)
@@ -1238,7 +1257,7 @@ def install_archive(
                     for t in targets
                 ]
                 updated_targets, unmoved = relocate_launch_targets(
-                    old_root, destination, target_dicts
+                    old_root, new_install_dir, target_dicts
                 )
                 for before, after in zip(targets, updated_targets):
                     if str(before.get("exe_path") or "") != str(
