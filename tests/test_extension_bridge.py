@@ -81,6 +81,28 @@ def test_control_frame_between_fragments_keeps_message():
     assert extension_ws.recv_message(stream, state) == ("text", b"hello")
 
 
+def test_bridge_loop_keeps_fragments_across_control_frame(monkeypatch):
+    messages: list[object] = []
+    monkeypatch.setattr(
+        bridge,
+        "_handle_message",
+        lambda _connection, message: messages.append(message),
+    )
+    first = extension_ws.encode_client_frame(
+        extension_ws.OP_TEXT, b'{"type":"he', fin=False
+    )
+    ping = extension_ws.encode_client_frame(extension_ws.OP_PING, b"p")
+    last = extension_ws.encode_client_frame(
+        extension_ws.OP_CONT, b'llo","protocol":1,"can_fetch":true}', fin=True
+    )
+    out = io.BytesIO()
+
+    bridge.serve_bridge_connection(object(), io.BytesIO(first + ping + last), out)
+
+    assert messages == [{"type": "hello", "protocol": 1, "can_fetch": True}]
+    assert out.getvalue() == extension_ws.encode_server_pong(b"p")
+
+
 def test_oversize_frame_rejected():
     header = bytes([0x81, 0x80 | 127]) + (9 * 1024 * 1024).to_bytes(8, "big")
     stream = io.BytesIO(header + b"\x01\x02\x03\x04")
