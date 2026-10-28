@@ -183,7 +183,14 @@ def scan_games_folder(root: str) -> list[GameGuess]:
     root = os.path.abspath(os.path.expanduser(root))
     try:
         subdirs = sorted(
-            (entry.path for entry in os.scandir(root) if entry.is_dir()),
+            (
+                entry.path
+                for entry in os.scandir(root)
+                if entry.is_dir()
+                # A crashed archive install leaves its staging folder in the
+                # library; it is internal state, not a game.
+                and not entry.name.startswith(".wlib-staging-")
+            ),
             key=str.lower,
         )
     except OSError:
