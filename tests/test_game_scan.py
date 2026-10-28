@@ -171,6 +171,19 @@ def test_scan_preferred_title_beats_alphabetical_pick(tmp_path):
     assert find_launcher(str(folder)) == str(folder / "Config.exe")
 
 
+def test_scan_preferred_non_latin_title_beats_alphabetical_pick(tmp_path):
+    from core.game_scan import find_launcher
+
+    folder = tmp_path / "0.8"
+    folder.mkdir()
+    (folder / "Config.exe").touch()
+    (folder / "エターナム.exe").touch()
+
+    assert find_launcher(str(folder), preferred_title="エターナム") == str(
+        folder / "エターナム.exe"
+    )
+
+
 def test_scan_relative_folder_returns_absolute_exe_paths(tmp_path, monkeypatch):
     import os
 

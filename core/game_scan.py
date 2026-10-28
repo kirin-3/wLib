@@ -114,7 +114,9 @@ def _best_launcher(
     carries the title there.
     """
     def squash(text: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", text.lower())
+        # Keep letters and digits from every script, so a non-Latin title
+        # still matches its launcher instead of squashing to "".
+        return "".join(ch for ch in text.lower() if ch.isalnum())
 
     title = squash(preferred_title) or squash(
         guess_title_and_version(os.path.basename(game_dir))[0]
