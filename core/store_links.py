@@ -86,6 +86,10 @@ def parse_store_link(url: str) -> StoreLink | None:
         host == domain or host.endswith("." + domain)
         for domain in ("dmm.co.jp", "dmm.com", "fanza.com")
     ):
+        # Only work pages live under /detail/; a search or list page may
+        # carry a cid query or path segment without identifying a work.
+        if not re.search(r"/detail(?:/|$)", path, re.I):
+            return None
         match = re.search(
             r"(?:^|[/?&])cid=([a-z_0-9]+)(?:/|&|$)",
             path + ("?" + parts.query if parts.query else ""),
