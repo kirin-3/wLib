@@ -4,7 +4,12 @@ import { onUnmounted, ref, watch } from "vue";
 import { IconCheck, IconX } from "@tabler/icons-vue";
 import { api, type PathCheckKind } from "../services/api";
 
-const props = defineProps<{ path: string; kind: PathCheckKind }>();
+const props = defineProps<{
+  path: string;
+  kind: PathCheckKind;
+  // The destination may be an existing folder or a file in one.
+  acceptDirectory?: boolean;
+}>();
 
 const status = ref<{ ok: boolean; reason: string } | null>(null);
 
@@ -25,6 +30,16 @@ const checkNow = async (value: string, kind: PathCheckKind) => {
     // Ignore responses that arrived after the value changed.
     if (request !== requestId) return;
     if (result && typeof result.ok === "boolean") {
+      if (!result.ok && props.acceptDirectory && kind === "parent") {
+        // A folder is also a valid destination even though the file-parent
+        // rule treats an existing folder as the wrong kind.
+        const directory = await api.checkPath(value, "dir");
+        if (request !== requestId) return;
+        if (directory && directory.ok) {
+          status.value = { ok: true, reason: "" };
+          return;
+        }
+      }
       status.value = { ok: result.ok, reason: result.reason || "" };
     } else {
       status.value = null;
@@ -53,7 +68,7 @@ const scheduleCheck = (value: string, kind: PathCheckKind) => {
 };
 
 watch(
-  () => [props.path, props.kind] as const,
+  () => [props.path, props.kind, props.acceptDirectory] as const,
   ([value, kind]) => scheduleCheck(value, kind),
   { immediate: true },
 );

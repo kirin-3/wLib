@@ -141,7 +141,14 @@ const externalError = ref("");
 const externalInspecting = ref(false);
 const externalImporting = ref(false);
 const externalResult = ref<ExternalLibraryImportResponse | null>(null);
+// Bumped when the path or source changes so a late answer for the previous
+// file/source cannot populate the new preview.
+let importInspectRequest = 0;
+let externalDetectRequest = 0;
+let externalInspectRequest = 0;
 watch(importPath, () => {
+  importInspectRequest++;
+  inspecting.value = false;
   importPassphrase.value = "";
   importNeedsPassphrase.value = false;
   inspectResult.value = null;
@@ -277,13 +284,16 @@ const runExport = async () => {
 
 const inspectImport = async () => {
   if (inspecting.value) return;
+  const path = importPath.value;
+  const requestId = ++importInspectRequest;
   importMessage.value = "";
   importError.value = "";
   inspectResult.value = null;
   inspecting.value = true;
 
   try {
-    const result = await api.inspectLibraryBackup(importPath.value, importPassphrase.value || null);
+    const result = await api.inspectLibraryBackup(path, importPassphrase.value || null);
+    if (requestId !== importInspectRequest || importPath.value !== path) return;
     if (!result || result.success === false) {
       importError.value = result?.error || "Could not inspect backup.";
       if (result?.error_code === "passphrase_required") importNeedsPassphrase.value = true;
@@ -295,30 +305,37 @@ const inspectImport = async () => {
       (section) => section !== "settings_paths",
     );
   } catch (error) {
+    if (requestId !== importInspectRequest || importPath.value !== path) return;
     importError.value = `Could not inspect backup: ${String(error)}`;
   } finally {
-    inspecting.value = false;
+    if (requestId === importInspectRequest) inspecting.value = false;
   }
 };
 
 const detectExternal = async () => {
   if (externalDetecting.value) return;
+  const source = externalSource.value;
+  const requestId = ++externalDetectRequest;
+  const initialPath = externalPath.value;
   externalError.value = "";
   externalDetecting.value = true;
   try {
-    const result = await api.detectExternalLibrary(externalSource.value);
+    const result = await api.detectExternalLibrary(source);
+    if (requestId !== externalDetectRequest || externalSource.value !== source) return;
     if (!result || result.success === false) {
       externalError.value = result?.error || "Could not locate the source library.";
       return;
     }
     externalDetectedPath.value = result.path || "";
     externalCheckedPaths.value = result.checked || [];
-    externalDetectedSources.add(externalSource.value);
-    if (result.path) externalPath.value = result.path;
+    externalDetectedSources.add(source);
+    // Never overwrite a path the user typed while detection was running.
+    if (result.path && externalPath.value === initialPath) externalPath.value = result.path;
   } catch (error) {
+    if (requestId !== externalDetectRequest || externalSource.value !== source) return;
     externalError.value = `Could not locate the source library: ${String(error)}`;
   } finally {
-    externalDetecting.value = false;
+    if (requestId === externalDetectRequest) externalDetecting.value = false;
   }
 };
 
@@ -329,13 +346,14 @@ const openExternalTab = () => {
 
 const browseExternalFile = async () => {
   if (browsing.value) return;
+  const source = externalSource.value;
   browsing.value = true;
   try {
     const selected = await api.browseExternalLibraryFile(
-      externalSource.value,
+      source,
       externalPath.value || "",
     );
-    if (selected) {
+    if (selected && externalSource.value === source) {
       externalPath.value = selected;
       externalPreview.value = null;
       externalResult.value = null;
@@ -351,6 +369,9 @@ const browseExternalFile = async () => {
 
 const inspectExternal = async () => {
   if (externalInspecting.value) return;
+  const source = externalSource.value;
+  const path = externalPath.value;
+  const requestId = ++externalInspectRequest;
   externalMessage.value = "";
   externalError.value = "";
   externalPreview.value = null;
@@ -358,10 +379,14 @@ const inspectExternal = async () => {
   externalInspecting.value = true;
 
   try {
-    const result = await api.inspectExternalLibrary(
-      externalSource.value,
-      externalPath.value,
-    );
+    const result = await api.inspectExternalLibrary(source, path);
+    if (
+      requestId !== externalInspectRequest ||
+      externalSource.value !== source ||
+      externalPath.value !== path
+    ) {
+      return;
+    }
     if (!result || result.success === false) {
       externalError.value = result?.error_code === "source_locked"
         ? "Close Playnite and try again."
@@ -374,9 +399,16 @@ const inspectExternal = async () => {
         externalImportSectionIds.includes(section),
     );
   } catch (error) {
+    if (
+      requestId !== externalInspectRequest ||
+      externalSource.value !== source ||
+      externalPath.value !== path
+    ) {
+      return;
+    }
     externalError.value = `Could not inspect library: ${String(error)}`;
   } finally {
-    externalInspecting.value = false;
+    if (requestId === externalInspectRequest) externalInspecting.value = false;
   }
 };
 
@@ -410,6 +442,10 @@ const runExternalImport = async () => {
 };
 
 watch(externalSource, () => {
+  externalDetectRequest++;
+  externalDetecting.value = false;
+  externalInspectRequest++;
+  externalInspecting.value = false;
   externalPath.value = "";
   externalDetectedPath.value = "";
   externalCheckedPaths.value = [];
@@ -421,6 +457,8 @@ watch(externalSource, () => {
   void detectExternal();
 });
 watch(externalPath, () => {
+  externalInspectRequest++;
+  externalInspecting.value = false;
   externalPreview.value = null;
   externalResult.value = null;
   externalMessage.value = "";
@@ -530,7 +568,7 @@ const runImport = async () => {
               Browse
             </button>
           </div>
-          <PathStatus :path="exportPath" kind="parent" />
+          <PathStatus :path="exportPath" kind="parent" accept-directory />
         </div>
 
         <div class="backup-section-list">
