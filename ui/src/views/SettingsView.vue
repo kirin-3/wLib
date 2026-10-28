@@ -232,6 +232,34 @@ const hasUnsavedChanges = computed(
   () => JSON.stringify(formValues()) !== JSON.stringify(savedValues.value),
 );
 
+const applyFormValues = (values: ReturnType<typeof formValues>) => {
+  protonPath.value = values.protonPath;
+  prefixPath.value = values.prefixPath;
+  rpgmakerLinuxRunnerPath.value = values.rpgmakerLinuxRunnerPath;
+  customStatuses.value = [...values.customStatuses];
+  urmPath.value = values.urmPath;
+  libraryFolder.value = values.libraryFolder;
+  libraryFolderPattern.value = values.libraryFolderPattern;
+  downloadsFolder.value = values.downloadsFolder;
+  downloadDetectionEnabled.value = values.downloadDetectionEnabled;
+};
+
+// Fields the user changed while the save request was in flight, which were not
+// part of the values that request submitted.
+const formValuesChangedSince = (
+  current: ReturnType<typeof formValues>,
+  submitted: ReturnType<typeof formValues>,
+): Partial<ReturnType<typeof formValues>> => {
+  const changed: Partial<ReturnType<typeof formValues>> = {};
+  const keys = Object.keys(submitted) as (keyof ReturnType<typeof formValues>)[];
+  for (const key of keys) {
+    if (JSON.stringify(current[key]) !== JSON.stringify(submitted[key])) {
+      Object.assign(changed, { [key]: current[key] });
+    }
+  }
+  return changed;
+};
+
 onBeforeRouteLeave(
   () => !hasUnsavedChanges.value || confirm("Discard unsaved settings changes?"),
 );
@@ -316,7 +344,9 @@ const loadSettings = async () => {
 
       await pollInstallStatus();
       // An install started before leaving this page is still running; keep tracking it.
-      if (installingDeps.value || installingRtps.value) startPolling();
+      // If this page closed while that read was in flight, do not arm a timer
+      // that onUnmounted has already run past.
+      if (!pageDisposed && (installingDeps.value || installingRtps.value)) startPolling();
 
       // The same applies to a GE-Proton download: it keeps running in the
       // backend after this page is closed, so re-attach to its progress
@@ -340,7 +370,7 @@ const loadSettings = async () => {
 };
 
 const pollInstallStatus = async () => {
-  if (!supportsLinuxRuntimes.value) return;
+  if (!supportsLinuxRuntimes.value || pageDisposed) return;
   try {
     const s = await api.getInstallStatus(prefixPath.value, protonPath.value);
     if (s) {
@@ -572,10 +602,10 @@ const installDeps = async () => {
 };
 
 const startPolling = () => {
-  if (pollTimer) return;
+  if (pageDisposed || pollTimer) return;
   const tick = async () => {
     await pollInstallStatus();
-    if (installingDeps.value || installingRtps.value) {
+    if (!pageDisposed && (installingDeps.value || installingRtps.value)) {
       pollTimer = setTimeout(tick, 2000);
     } else {
       pollTimer = null;
@@ -657,20 +687,23 @@ const saveSettings = async () => {
   statusError.value = validateCustomPlayStatuses(customStatuses.value);
   if (statusError.value) return;
 
+  // Only the values in this snapshot are submitted; edits typed while the
+  // request runs must stay unsaved instead of being replaced by the response.
+  const submittedValues = formValues();
   saving.value = true;
   saveError.value = "";
 
   try {
     const res = await api.saveSettings({
-      proton_path: protonPath.value,
-      wine_prefix_path: prefixPath.value,
-      rpgmaker_linux_runner_path: rpgmakerLinuxRunnerPath.value,
-      custom_play_statuses: customStatuses.value,
-      urm_rpa_path: urmPath.value,
-      library_folder: libraryFolder.value,
-      library_folder_pattern: libraryFolderPattern.value.trim() || "{creator}/{title}/{version}",
-      downloads_folder: downloadsFolder.value,
-      download_detection_enabled: downloadDetectionEnabled.value,
+      proton_path: submittedValues.protonPath,
+      wine_prefix_path: submittedValues.prefixPath,
+      rpgmaker_linux_runner_path: submittedValues.rpgmakerLinuxRunnerPath,
+      custom_play_statuses: submittedValues.customStatuses,
+      urm_rpa_path: submittedValues.urmPath,
+      library_folder: submittedValues.libraryFolder,
+      library_folder_pattern: submittedValues.libraryFolderPattern.trim() || "{creator}/{title}/{version}",
+      downloads_folder: submittedValues.downloadsFolder,
+      download_detection_enabled: submittedValues.downloadDetectionEnabled,
     });
 
     if (!res || res.success === false) {
@@ -684,9 +717,19 @@ const saveSettings = async () => {
       return;
     }
 
+    // Keep values typed during the save, and leave them marked unsaved.
+    const editsDuringSave = formValuesChangedSince(formValues(), submittedValues);
     applySettings(persistedSettings);
+    if (Object.keys(editsDuringSave).length > 0) {
+      applyFormValues({ ...formValues(), ...editsDuringSave });
+    }
     if (supportsLinuxRuntimes.value) await pollInstallStatus();
-    notify("Settings saved.", "success");
+    notify(
+      Object.keys(editsDuringSave).length > 0
+        ? "Settings saved. Changes made while saving are still unsaved."
+        : "Settings saved.",
+      "success",
+    );
   } catch (e) {
     console.error("Failed to save settings", e);
     saveError.value = "Error saving settings: " + String(e);
@@ -1623,6 +1666,7 @@ const browseUrm = async () => {
             <IconFolderOpen class="ui-action-icon" />Browse
           </button>
         </div>
+        <PathStatus :path="urmPath" kind="file" />
         <p id="settings-urm-help" class="text-xs" style="color: var(--text-muted)">
           Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.
         </p>
