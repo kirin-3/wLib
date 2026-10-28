@@ -7,6 +7,8 @@ import {
   formatToolProgress,
   getDecryptState,
   getExtractState,
+  getResumableToolAction,
+  getUrmToggleState,
   getUseDecryptedState,
   keySourceLabel,
   toolProgressPercent,
@@ -63,6 +65,25 @@ test("use-decrypted switch availability", () => {
   assert.equal(getUseDecryptedState(rpgm({ missing: 5, use_decrypted: true }), false).enabled, true);
   assert.equal(getUseDecryptedState(rpgm({ missing: 0 }), true).enabled, false);
   assert.match(getUseDecryptedState(rpgm({ encrypted: 0, missing: 0 }), false).message, /not encrypted/);
+});
+
+test("URM can be removed without the source file", () => {
+  assert.equal(getUrmToggleState({ installed: true, source_configured: false }, false).enabled, true);
+  assert.equal(getUrmToggleState({ installed: true, source_configured: true }, false).enabled, true);
+  assert.equal(getUrmToggleState({ installed: false, source_configured: true }, false).enabled, true);
+  const missing = getUrmToggleState({ installed: false, source_configured: false }, false);
+  assert.equal(missing.enabled, false);
+  assert.match(missing.message, /URM \.rpa source/);
+  assert.equal(getUrmToggleState({ installed: true, source_configured: false }, true).enabled, false);
+});
+
+test("only long runs are re-attached after reopening the tab", () => {
+  const status = (running: boolean, action: string) => ({ running, action, done: 0, total: 0, current: "", cancel: false });
+  assert.equal(getResumableToolAction(status(true, "extract")), "extract");
+  assert.equal(getResumableToolAction(status(true, "decrypt")), "decrypt");
+  assert.equal(getResumableToolAction(status(true, "console")), "");
+  assert.equal(getResumableToolAction(status(true, "urm")), "");
+  assert.equal(getResumableToolAction(status(false, "extract")), "");
 });
 
 test("console hint and key label", () => {
