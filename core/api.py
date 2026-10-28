@@ -828,6 +828,12 @@ class Api:
         # modes, which would stop later syncs from editing or removing them.
         import stat
 
+        # Never walk through a link or junction: that would chmod files outside
+        # the app data directory.
+        isjunction = getattr(os.path, "isjunction", None)
+        if os.path.islink(path) or (callable(isjunction) and isjunction(path)):
+            return
+
         for root, _dirs, files in os.walk(path):
             for entry in (root, *(os.path.join(root, name) for name in files)):
                 mode = os.lstat(entry).st_mode
@@ -836,6 +842,24 @@ class Api:
 
     def sync_extension_files(self) -> ExtensionSyncStatus:
         import shutil
+
+        def remove_tree_or_link(path: str) -> None:
+            # A leftover staging/live path can be a symlink or a Windows
+            # junction. Remove the link itself; never recurse into its target.
+            isjunction = getattr(os.path, "isjunction", None)
+            if os.path.islink(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    # Windows directory symlinks need rmdir, not unlink.
+                    os.rmdir(path)
+            elif callable(isjunction) and isjunction(path):
+                os.rmdir(path)
+            elif os.path.isdir(path):
+                self._make_tree_owner_writable(path)
+                shutil.rmtree(path)
+            elif os.path.lexists(path):
+                os.remove(path)
 
         bundled_ext_dir = self._get_bundled_extension_dir()
         persistent_ext_dir = self._get_persistent_extension_dir()
@@ -849,6 +873,12 @@ class Api:
         installed_firefox_xpi = os.path.join(firefox_dir, "wLib.xpi")
 
         try:
+            # Leftover staging folders from an interrupted earlier sync must go
+            # even when the installed files already look complete.
+            if os.path.isdir(bundled_ext_dir):
+                for stale_dir in (chrome_new_dir, chrome_old_dir):
+                    remove_tree_or_link(stale_dir)
+
             bundled_version = self._read_manifest_version(bundled_manifest)
             installed_version = self._read_manifest_version(installed_manifest)
             needs_copy = False
@@ -878,14 +908,6 @@ class Api:
 
             if needs_copy and os.path.isdir(bundled_ext_dir):
                 os.makedirs(persistent_ext_dir, exist_ok=True)
-
-                # Drop staging folders left behind by an interrupted earlier sync.
-                for stale_dir in (chrome_new_dir, chrome_old_dir):
-                    if os.path.isdir(stale_dir):
-                        self._make_tree_owner_writable(stale_dir)
-                        shutil.rmtree(stale_dir)
-                    elif os.path.lexists(stale_dir):
-                        os.remove(stale_dir)
 
                 _ = shutil.copytree(
                     bundled_ext_dir,
@@ -918,11 +940,7 @@ class Api:
                 if os.path.isdir(chrome_dir) or os.path.lexists(chrome_dir):
                     os.rename(chrome_dir, chrome_old_dir)
                 os.rename(chrome_new_dir, chrome_dir)
-                if os.path.isdir(chrome_old_dir):
-                    self._make_tree_owner_writable(chrome_old_dir)
-                    shutil.rmtree(chrome_old_dir)
-                elif os.path.lexists(chrome_old_dir):
-                    os.remove(chrome_old_dir)
+                remove_tree_or_link(chrome_old_dir)
 
                 os.makedirs(firefox_dir, exist_ok=True)
                 firefox_tmp_path = installed_firefox_xpi + ".tmp"
@@ -1362,11 +1380,13 @@ class Api:
             "http://127.0.0.1:8183/api/check?url=__ping__",
             headers={"User-Agent": "wLib-ExtensionStatus"},
         )
+        # Never route this loopback probe through a configured HTTP proxy.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
         try:
             with cast(
                 URLResponseContext,
-                urllib.request.urlopen(request, timeout=2),
+                opener.open(request, timeout=2),
             ) as response:
                 if getattr(response, "status", None) != 200:
                     return {
