@@ -1289,7 +1289,11 @@ def get_save_backup_keep() -> int | None:
     raw = str(get_setting("save_backup_keep") or "").strip()
     if not raw.isascii() or not raw.isdigit():
         return None
-    keep = int(raw)
+    try:
+        keep = int(raw)
+    except (ValueError, OverflowError):
+        # Imported/synced settings can hold an arbitrarily long digit string.
+        return None
     return keep if 1 <= keep <= SAVE_BACKUP_KEEP_MAX else None
 
 

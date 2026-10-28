@@ -1649,6 +1649,11 @@ def test_save_backup_keep_validation():
         assert get_save_backup_keep() == expected, raw
 
 
+def test_save_backup_keep_huge_numeric_value_is_invalid():
+    update_setting("save_backup_keep", "9" * 5000)
+    assert get_save_backup_keep() is None
+
+
 def test_save_backup_keep_bumps_sync_timestamp():
     update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
     update_setting("save_backup_keep", "3")

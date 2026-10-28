@@ -4854,12 +4854,17 @@ class Api:
                 raw_keep = None
             if isinstance(raw_keep, (int, str)):
                 candidate = str(raw_keep).strip()
-                if candidate == "all" or (
-                    candidate.isascii()
-                    and candidate.isdigit()
-                    and 1 <= int(candidate) <= SAVE_BACKUP_KEEP_MAX
-                ):
+                if candidate == "all":
                     save_backup_keep = candidate
+                elif candidate.isascii() and candidate.isdigit():
+                    try:
+                        parsed_keep = int(candidate)
+                    except (ValueError, OverflowError):
+                        # A bridge payload can contain more digits than Python
+                        # will convert; treat it like any other invalid value.
+                        parsed_keep = 0
+                    if 1 <= parsed_keep <= SAVE_BACKUP_KEEP_MAX:
+                        save_backup_keep = candidate
             if save_backup_keep is None:
                 return {
                     "success": False,
