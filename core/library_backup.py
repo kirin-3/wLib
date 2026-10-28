@@ -1205,6 +1205,12 @@ def _import_fields_for_game(
                 _game_section(imported_game, SECTION_METADATA), METADATA_FIELDS
             )
         )
+        # An empty title means the source could not read it, not a request to
+        # clear the local title. New games still get the insert default.
+        if not _coerce_text(
+            _game_section(imported_game, SECTION_METADATA).get("title")
+        ).strip():
+            _ = fields.pop("title", None)
 
     if SECTION_USER_STATE in sections:
         fields.update(
@@ -1739,7 +1745,7 @@ def apply_library_backup(
                         )
 
                 metadata = _game_section(imported_game, SECTION_METADATA)
-                if "links" in metadata and (
+                if isinstance(metadata.get("links"), list) and (
                     local_id is None or SECTION_METADATA in sections
                 ):
                     keep_links = (

@@ -1414,3 +1414,144 @@ def test_sqlite_nonfinite_playtime_is_omitted(tmp_path):
     conn.close()
     backup, _stats = read_external_library("atlas", str(atlas_source))
     assert "playtime_seconds" not in backup["games"][0].get("user_state", {})
+
+
+def test_playnite_unfinished_write_asks_to_close_playnite(tmp_path):
+    """A LiteDB recovery flag means Playnite crashed or is writing: source_locked."""
+    from core.backup_format import BackupValidationError
+
+    library = tmp_path / "library"
+    shutil.copytree(PLAYNITE_FIXTURE, library)
+    database = library / "games.db"
+    data = bytearray(database.read_bytes())
+    # HeaderPage.Recovery is the last byte of the first page.
+    data[4095] = 1
+    database.write_bytes(data)
+    with pytest.raises(BackupValidationError) as exc:
+        read_external_library("playnite", str(database))
+    assert exc.value.error_code == "source_locked"
+    assert "Close Playnite" in str(exc.value)
+
+
+def test_playnite_encrypted_library_reports_unsupported_encryption(tmp_path):
+    from core.backup_format import BackupValidationError
+
+    library = tmp_path / "library"
+    shutil.copytree(PLAYNITE_FIXTURE, library)
+    database = library / "games.db"
+    data = bytearray(database.read_bytes())
+    # HeaderPage.Password is a 20-byte block after the 65-byte page prefix.
+    data[65] = 1
+    database.write_bytes(data)
+    with pytest.raises(BackupValidationError, match="Encrypted Playnite"):
+        read_external_library("playnite", str(database))
+
+
+def test_playnite_string_enum_play_actions_are_imported(tmp_path, monkeypatch):
+    """Real Playnite databases store GameAction.Type as "File", not 0."""
+    from core.external_import import _translate_playnite_game
+
+    monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+    game, dropped = _translate_playnite_game(
+        {
+            "Name": "F95-12345",
+            "InstallDirectory": "/opt/games/sakura",
+            "GameActions": [
+                {
+                    "Name": "Play",
+                    "Type": "File",
+                    "IsPlayAction": True,
+                    "Path": "{InstallDir}/game.sh",
+                },
+                {
+                    "Name": "Play (32-bit)",
+                    "Type": "File",
+                    "IsPlayAction": True,
+                    "Path": "{InstallDir}/game32.sh",
+                },
+                {
+                    "Name": "Store",
+                    "Type": "URL",
+                    "IsPlayAction": True,
+                    "Path": "https://example.com",
+                },
+            ],
+        },
+        {},
+        str(tmp_path),
+    )
+    assert game is not None
+    assert dropped == 0
+    assert (
+        game["executable_paths"]["exe_path"] == "/opt/games/sakura/game.sh"
+    )
+    assert game["launch_targets"] == [
+        {"label": "Play (32-bit)", "exe_path": "/opt/games/sakura/game32.sh"}
+    ]
+
+
+def test_playnite_skips_unrecognized_links():
+    from core.external_import import _translate_playnite_game
+
+    game, _dropped = _translate_playnite_game(
+        {
+            "Name": "Known Game",
+            "Links": [
+                {"Name": "F95zone", "Url": "https://f95zone.to/threads/12345"},
+                {"Name": "Forum", "Url": "https://example.com/threads/1"},
+                {"Name": "VNDB", "Url": "https://vndb.org/v1234"},
+            ],
+        },
+        {},
+        "/tmp",
+    )
+    assert game is not None
+    assert game["metadata"]["links"] == [
+        {"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}
+    ]
+
+
+def test_xlibrary_reader_imports_store_links_and_link_only_games(tmp_path):
+    source = tmp_path / "library.games.json"
+    dlsite_only = _xgame("DLsite Only")
+    dlsite_only["externalLinks"] = [
+        {
+            "providerId": "dlsite",
+            "externalId": "RJ123456",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html",
+        }
+    ]
+    linked = _xgame("Linked", links=[_xlink(950)])
+    linked["externalLinks"].append(
+        {
+            "providerId": "vndb",
+            "externalId": "v4321",
+            "url": "https://vndb.org/v4321",
+        }
+    )
+    linked["externalLinks"].append(
+        {"providerId": "other", "externalId": "", "url": "https://example.com/x"}
+    )
+    _write_xlibrary_live(source, [dlsite_only, linked])
+
+    backup, stats = read_external_library("xlibrary", str(source))
+    assert stats["skipped_no_identity"] == 0
+    by_title = {game["metadata"]["title"]: game for game in backup["games"]}
+    assert by_title["DLsite Only"]["metadata"]["links"] == [
+        {
+            "source": "dlsite",
+            "id": "RJ123456",
+            "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html",
+        }
+    ]
+    assert by_title["Linked"]["metadata"]["links"] == [
+        {"source": "vndb", "id": "v4321", "url": "https://vndb.org/v4321"}
+    ]
+
+    from core.library_backup import import_external_library as run_import
+
+    result = run_import("xlibrary", str(source), {"merge_mode": "overwrite"})
+    assert result["created"] == 2
+    games = {game["title"]: game for game in get_all_games()}
+    assert games["DLsite Only"]["f95_url"] == ""
+    assert games["DLsite Only"]["exe_path"] == ""

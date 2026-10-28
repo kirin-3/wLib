@@ -2698,3 +2698,45 @@ def test_ambiguous_store_link_import_never_merges():
     result = _match_imported_game(imported, get_all_games())
     assert result["status"] == "ambiguous"
     assert result["candidate_count"] == 2
+
+
+@pytest.mark.parametrize("malformed", ["garbage", None, {"url": "https://vndb.org/v2"}])
+def test_malformed_links_do_not_clear_local_links(malformed):
+    from core.database import get_game_links, replace_game_links
+
+    game_id = add_game("Linked", "", f95_url="https://f95zone.to/threads/linked.910/")
+    replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
+    backup = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Linked",
+                    "f95_url": "https://f95zone.to/threads/linked.910/",
+                    "links": malformed,
+                }
+            }
+        ]
+    )
+    assert (
+        apply_library_backup(backup, {"sections": [SECTION_METADATA]})["updated"] == 1
+    )
+    assert [link["id"] for link in get_game_links(game_id)] == ["v1"]
+
+
+def test_empty_backup_title_does_not_replace_matched_title():
+    url = "https://f95zone.to/threads/real-title.911/"
+    game_id = add_game("Real Title", "/real/game.sh", f95_url=url)
+    assert game_id is not None
+    payload = base_backup([{"metadata": {"title": "", "f95_url": url}}])
+    result = apply_library_backup(payload, {"sections": [SECTION_METADATA]})
+    assert result["updated"] == 1
+    assert get_all_games()[0]["title"] == "Real Title"
+
+    # A new game from a title-less record still gets the insert fallback.
+    payload = base_backup(
+        [{"metadata": {"title": "", "f95_url": "https://f95zone.to/threads/new.912/"}}]
+    )
+    result = apply_library_backup(payload, {"sections": [SECTION_METADATA]})
+    assert result["created"] == 1
+    titles = {game["title"] for game in get_all_games()}
+    assert titles == {"Real Title", "Imported Game"}

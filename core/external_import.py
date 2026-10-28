@@ -165,6 +165,17 @@ def _has_import_identity(f95_url: str, links: list[StoreLink], exe_path: str) ->
     )
 
 
+def _recognized_store_links(urls: list[object]) -> list[StoreLink]:
+    """Source links wLib recognises as a store, creator, or catalog page.
+
+    ``coerce_store_links`` maps any other http(s) URL to the generic ``other``
+    source. External imports skip those instead of importing arbitrary
+    website, forum, or social links.
+    """
+    links = coerce_store_links([{"url": _as_str(url)} for url in urls])
+    return [link for link in links if link["source"] != "other"]
+
+
 def _as_dict(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
@@ -709,11 +720,16 @@ def _translate_xlibrary_game(
     title = _as_str(data.get("name"))
     developer = _as_str(data.get("developer"))
     f95_url = _xlibrary_f95_url(data)
+    links = _recognized_store_links(
+        [_as_dict(link).get("url") for link in _as_list(data.get("externalLinks"))]
+    )
 
     metadata = _title_metadata(title, f95_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
+    if links:
+        metadata["links"] = links
     if developer:
         metadata["developer"] = developer
     installed = _as_str(data.get("installedVersion"))
@@ -751,9 +767,7 @@ def _translate_xlibrary_game(
 
     exe_path, targets, dropped = _xlibrary_executables(data)
 
-    if not _has_import_identity(
-        f95_url, coerce_store_links(metadata.get("links")), exe_path
-    ):
+    if not _has_import_identity(f95_url, links, exe_path):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
     if user_state:
@@ -1313,6 +1327,18 @@ PLAYNITE_COLLECTIONS = {
 }
 
 
+def _is_playnite_file_action(action: Mapping[str, object]) -> bool:
+    """File-type actions. LiteDB serializes the GameActionType enum as its name.
+
+    Playnite's mapper writes ``"File"`` (not ``0``), while older fixtures and
+    hand-built documents use the numeric enum value.
+    """
+    action_type = action.get("Type")
+    if isinstance(action_type, str):
+        return action_type.strip().casefold() == "file"
+    return action_type == 0
+
+
 def _translate_playnite_game(
     record: Mapping[str, object],
     related: Mapping[str, dict[str, str]],
@@ -1330,7 +1356,7 @@ def _translate_playnite_game(
         or name_url
         or (build_thread_url_from_id(placeholder[1]) if placeholder else "")
     )
-    links = coerce_store_links([{"url": link.get("Url")} for link in raw_links])
+    links = _recognized_store_links([link.get("Url") for link in raw_links])
     game_id = _as_str(record.get("GameId"))
     if re.fullmatch(r"(?:RJ|VJ|BJ)\d+", game_id, re.I):
         dlsite = link_from_id("dlsite", game_id)
@@ -1421,7 +1447,7 @@ def _translate_playnite_game(
     dropped = 0
     for raw in _as_list(record.get("GameActions")):
         action = _as_dict(raw)
-        if action.get("Type") != 0 or action.get("IsPlayAction") is not True:
+        if not _is_playnite_file_action(action) or action.get("IsPlayAction") is not True:
             continue
         raw_path = expand(action.get("Path"))
         working = resolve_relative_path(expand(action.get("WorkingDir")), install)
