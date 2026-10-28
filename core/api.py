@@ -3095,7 +3095,25 @@ class Api:
                         finally:
                             if conn is not None:
                                 conn.close()
-                        if (
+                        # A page fallback already read the thread; store what it
+                        # found for this game too, not only wishlist prefixes.
+                        page_metadata = any(
+                            key in result_dict
+                            for key in ("thread_completed", "screenshots", "store_links")
+                        )
+                        if not callback_error and page_metadata:
+                            try:
+                                finished_ids = (
+                                    self._update_thread_edit_metadata_for_url(
+                                        url, result_dict
+                                    )
+                                )
+                                newly_finished = (
+                                    wishlisted and game["id"] in finished_ids
+                                )
+                            except Exception:
+                                pass
+                        elif (
                             not callback_error
                             and wishlisted
                             and str(game.get("latest_version") or "").strip()
@@ -3103,13 +3121,8 @@ class Api:
                             != remote_version
                         ):
                             try:
-                                # A thread-page fallback already read the prefixes; skip a second request.
-                                metadata = (
-                                    result_dict
-                                    if "thread_completed" in result_dict
-                                    else self._coerce_string_key_dict(
-                                        self.scraper.get_thread_metadata(url)
-                                    )
+                                metadata = self._coerce_string_key_dict(
+                                    self.scraper.get_thread_metadata(url)
                                 )
                                 if metadata and metadata.get("success"):
                                     newly_finished = game["id"] in (

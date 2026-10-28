@@ -99,6 +99,16 @@ def test_page_classification(status, title, html, code):
     assert (issue["code"] if issue else None) == code
 
 
+def test_valid_thread_titles_are_not_mistaken_for_login_or_challenge(thread_html):
+    scraper = Scraper()
+    for title in ("Login Simulator", "Just a Moment", "Sign In: The Game"):
+        html = thread_html.replace(
+            "<title>Example Game | F95zone</title>", f"<title>{title} | F95zone</title>"
+        ).replace("Example &amp; Game [v1.10] [Dev]", f"{title} [v1.10] [Dev]")
+        issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+        assert issue is None, (title, issue)
+
+
 def test_starter_metadata_and_nested_wrapper(thread_html):
     result = Scraper()._extract_page(thread_html)
     assert result["title"] == "Example & Game [v1.10] [Dev]"

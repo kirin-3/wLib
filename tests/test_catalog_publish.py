@@ -83,6 +83,25 @@ def test_retention_keeps_the_four_newest(tmp_path):
     assert current == kept[-1]
 
 
+def test_current_snapshot_survives_a_backwards_clock(tmp_path):
+    storage = MemoryStorage()
+    for stamp in (
+        "2026-10-24T05:00:00Z",
+        "2026-10-25T05:00:00Z",
+        "2026-10-26T05:00:00Z",
+        "2026-10-27T05:00:00Z",
+    ):
+        publish(storage, _snapshot(tmp_path / stamp, stamp), SOURCES)
+    manifest = publish(
+        storage,
+        _snapshot(tmp_path / "older", "2026-10-20T05:00:00Z"),
+        SOURCES,
+    )
+    current = manifest["snapshot"]["path"]
+    assert current in storage.objects
+    assert len(storage.list_keys("v1/snapshots/")) == 5
+
+
 def test_logs_name_keys_and_sizes_but_no_credentials(tmp_path, caplog, monkeypatch):
     monkeypatch.setenv("R2_ACCOUNT_ID", "acct123")
     monkeypatch.setenv("R2_ACCESS_KEY_ID", "AKIDSECRETVALUE")

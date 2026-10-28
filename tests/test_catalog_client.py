@@ -124,6 +124,16 @@ def test_installs_a_snapshot_and_reports_status(tmp_path, server):
     assert _leftovers(client) == []
 
 
+def test_data_dir_with_uri_characters_can_install(tmp_path, server):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
+    client = CatalogClient(
+        str(tmp_path / "data #1 ?2"),
+        app_version="9.9.9",
+    )
+    assert client.check() == {"success": True, "updated": True}
+    assert client.status()["installed"] is True
+
+
 def test_unchanged_hash_downloads_only_the_manifest(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     client = _client(tmp_path)
@@ -147,6 +157,24 @@ def test_checks_at_most_every_12_hours_unless_forced(tmp_path, server):
     clock.now += 12 * 3600 + 1
     _client(tmp_path, clock).check()
     assert len(server.requests) == 2
+
+
+def test_corrupt_installed_catalog_is_replaced_even_when_manifest_is_unchanged(
+    tmp_path, server
+):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z", titles=("A",))
+    client = _client(tmp_path)
+    client.check()
+    with open(client.catalog_path, "wb") as handle:
+        _ = handle.write(b"not a database")
+    server.requests.clear()
+
+    assert client.check(force=True) == {"success": True, "updated": True}
+    assert _titles(client) == ["A"]
+    assert [request["path"] for request in server.requests] == [
+        "/v1/manifest.json",
+        "/v1/snapshots/catalog-20261027T050000Z.sqlite.xz",
+    ]
 
 
 def test_newer_snapshot_replaces_the_old_one(tmp_path, server):
@@ -278,6 +306,23 @@ def test_default_url_and_override(monkeypatch):
         catalog_module.snapshot_url(catalog_module.manifest_url(), "../../etc/passwd")
     with pytest.raises(catalog_module.CatalogError):
         catalog_module.snapshot_url(catalog_module.manifest_url(), "https://evil.example/x.sqlite.xz")
+
+
+def test_background_check_stays_available_when_a_thread_cannot_start(
+    tmp_path, monkeypatch
+):
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        def start(self):
+            raise OSError("no threads")
+
+    monkeypatch.setattr(catalog_module.threading, "Thread", FailingThread)
+    client = _client(tmp_path)
+    assert client.start_background() is False
+    # A later attempt is not blocked by a stuck "checking" flag.
+    assert client.status()["checking"] is False
 
 
 def test_background_check_does_not_block(tmp_path, server, monkeypatch):

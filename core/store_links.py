@@ -51,11 +51,16 @@ def parse_store_link(url: str) -> StoreLink | None:
         if parts.username or parts.password:
             return None
         host = parts.hostname.lower()
-        netloc = host + (f":{parts.port}" if parts.port else "")
+        scheme = parts.scheme.lower()
+        port = parts.port
+        default_port = (scheme == "http" and port == 80) or (
+            scheme == "https" and port == 443
+        )
+        netloc = host if port is None or default_port else f"{host}:{port}"
     except ValueError:
         return None
     path = parts.path or "/"
-    clean_url = urlunsplit((parts.scheme.lower(), netloc, path, "", ""))
+    clean_url = urlunsplit((scheme, netloc, path, "", ""))
     source = "other"
     identity = clean_url
     match: re.Match[str] | None
@@ -81,6 +86,10 @@ def parse_store_link(url: str) -> StoreLink | None:
         host == domain or host.endswith("." + domain)
         for domain in ("dmm.co.jp", "dmm.com", "fanza.com")
     ):
+        # Only work pages live under /detail/; a search or list page may
+        # carry a cid query or path segment without identifying a work.
+        if not re.search(r"/detail(?:/|$)", path, re.I):
+            return None
         match = re.search(
             r"(?:^|[/?&])cid=([a-z_0-9]+)(?:/|&|$)",
             path + ("?" + parts.query if parts.query else ""),

@@ -111,6 +111,34 @@ def test_f95_page_ids_match_other_supported_work_sites(catalog, source, identity
     ] == [game_id]
 
 
+def test_removed_catalog_rows_do_not_expand_stale_links(catalog):
+    game_id = database.add_game("Steam work", "")
+    database.replace_game_links(
+        game_id,
+        "page",
+        [{"url": "https://store.steampowered.com/app/999/"}],
+    )
+    catalog.execute(
+        "INSERT INTO links VALUES ('dlsite', 'RJ123', 'steam', '999', 'dlsite')"
+    )
+    catalog.execute(
+        "UPDATE dlsite_works SET removed_at = '2026-10-27T00:00:00Z' "
+        "WHERE product_id = 'RJ123'"
+    )
+    catalog.commit()
+
+    result = resolve_page(
+        "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"
+    )
+    # The live page keeps its own identity, but the removed row's stale
+    # catalog link must not report a different library game as a match.
+    assert [(link["source"], link["id"]) for link in result["ids"]] == [
+        ("dlsite", "RJ123")
+    ]
+    assert result["catalog_entry"] == {}
+    assert result["matches"] == []
+
+
 def test_ryuu_store_code_is_never_a_version(catalog):
     catalog.execute(
         "INSERT INTO ryuu_posts (post_id,title,raw_title,version,url,first_seen,last_seen) VALUES (43,'Work','Work (VJ01002857)','VJ01002857','https://www.ryuugames.com/work/','','')"

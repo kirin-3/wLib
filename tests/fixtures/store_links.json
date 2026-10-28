@@ -75,6 +75,16 @@
     "id": null
   },
   {
+    "url": "https://www.dmm.co.jp/search/?q=game&cid=d_123456",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.dmm.co.jp/dc/doujin/-/list/=/cid=d_123456/",
+    "source": null,
+    "id": null
+  },
+  {
     "url": "https://www.patreon.com/c/Creator/posts",
     "source": "patreon",
     "id": "creator"
@@ -173,6 +183,16 @@
     "url": "https://example.com:bad/game",
     "source": null,
     "id": null
+  },
+  {
+    "url": "https://example.com:443/store/game",
+    "source": "other",
+    "id": "https://example.com/store/game"
+  },
+  {
+    "url": "http://example.com:80/store/game",
+    "source": "other",
+    "id": "http://example.com/store/game"
   },
   {
     "url": "not a url",

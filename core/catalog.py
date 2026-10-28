@@ -21,6 +21,7 @@ from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import UTC, datetime
 from http.client import HTTPResponse
+from pathlib import Path
 from typing import Protocol, cast
 from urllib.request import Request, urlopen
 
@@ -190,7 +191,14 @@ class CatalogClient:
             if self._checking:
                 return False
             self._checking = True
-        threading.Thread(target=self._run_check, args=(force,), daemon=True).start()
+        try:
+            threading.Thread(target=self._run_check, args=(force,), daemon=True).start()
+        except Exception as exc:
+            # A catalog problem must never stop the app from starting.
+            print(f"[wLib] Could not start the catalog check: {exc}")
+            with self._lock:
+                self._checking = False
+            return False
         return True
 
     def _run_check(self, force: bool) -> None:
@@ -266,10 +274,18 @@ class CatalogClient:
         installed = sidecar.get("manifest")
         if isinstance(installed, dict) and os.path.isfile(self.catalog_path):
             current = cast(dict[str, object], installed).get(MANIFEST_SNAPSHOT)
-            if isinstance(current, dict) and cast(dict[str, object], current).get(
-                SNAPSHOT_SHA256
-            ) == digest:
-                return False
+            if (
+                isinstance(current, dict)
+                and cast(dict[str, object], current).get(SNAPSHOT_SHA256) == digest
+            ):
+                # A crash, manual edit or partial replacement can leave a
+                # corrupt file behind while the sidecar still names this hash.
+                try:
+                    self._verify(self.catalog_path)
+                except CatalogError:
+                    pass
+                else:
+                    return False
 
         os.makedirs(self.data_dir, exist_ok=True)
         xz_fd, xz_tmp = tempfile.mkstemp(dir=self.data_dir, prefix=".catalog-", suffix=".xz")
@@ -322,7 +338,7 @@ class CatalogClient:
 
     def _verify(self, path: str) -> None:
         try:
-            conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            conn = sqlite3.connect(f"{Path(os.path.abspath(path)).as_uri()}?mode=ro", uri=True)
             try:
                 check = cast(tuple[str] | None, conn.execute("PRAGMA quick_check").fetchone())
                 row = cast(
