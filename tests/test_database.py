@@ -1,6 +1,8 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import threading
+import time
 from contextlib import closing
 
 import pytest
@@ -145,6 +147,68 @@ def test_game_links_url_changes_mark_sync_and_keep_other_origins():
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
     with pytest.raises(ValueError, match="origin"):
         replace_game_links(game_id, "invalid", [])
+
+
+def test_game_links_concurrent_origins_share_one_identity(monkeypatch):
+    """Two saves of the same link must not race the unique constraint."""
+    game_id = add_game("Concurrent links", "")
+    real_get_connection = get_connection
+
+    class SlowFetchCursor:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def fetchall(self):
+            rows = self._cursor.fetchall()
+            # Give both threads time to finish reading before either writes.
+            time.sleep(0.5)
+            return rows
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+    class SlowReadConnection:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, params=()):
+            cursor = self._conn.execute(sql, params)
+            if sql.startswith(
+                "SELECT id, source, external_id, url, origin FROM game_links"
+            ):
+                return SlowFetchCursor(cursor)
+            return cursor
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(
+        "core.database.get_connection",
+        lambda: SlowReadConnection(real_get_connection()),
+    )
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(2)
+    link = {"url": "https://store.steampowered.com/app/123/"}
+
+    def save(origin: str) -> None:
+        barrier.wait()
+        try:
+            replace_game_links(game_id, origin, [link])
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=save, args=("user",)),
+        threading.Thread(target=save, args=("page",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert [game_link["id"] for game_link in get_game_links(game_id)] == ["123"]
 
 
 def test_tag_colors_validation_and_sync_tracking():

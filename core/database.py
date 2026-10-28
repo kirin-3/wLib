@@ -701,6 +701,10 @@ def replace_game_links(
     }
     if connection is None:
         with closing(get_connection()) as conn:
+            # Read the current rows under the write lock. Without it, two saves
+            # can both see no row for an identity and then race the unique
+            # constraint, failing one of them with IntegrityError.
+            _ = conn.execute("BEGIN IMMEDIATE")
             replace_game_links(
                 game_id, origin, links, connection=conn, replace_all=replace_all
             )
