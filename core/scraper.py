@@ -512,6 +512,19 @@ class Scraper:
             "",
             html.lower(),
         )
+        # A real thread page always has its title heading. Words such as
+        # "login" or "just a moment" in a game title must not classify it.
+        has_thread_heading = bool(
+            _text(next(_blocks(html, "h1", "p-title-value"), ("", ""))[1])
+        )
+        # Check body markers separately from the thread title and heading.
+        page_html = re.sub(r"<title\b[^>]*>.*?</title>", "", page_html, flags=re.S)
+        page_html = re.sub(
+            r"<h1\b[^>]*\bp-title-value\b[^>]*>.*?</h1>",
+            "",
+            page_html,
+            flags=re.S,
+        )
         combined = f"{page_title}\n{page_html}"
         if status == 429:
             return {"code": "rate_limited", "error": "Rate limited by F95Zone"}
@@ -526,29 +539,33 @@ class Scraper:
                 "code": "not_found",
                 "error": "Thread not found; it may have been deleted or moved",
             }
-        if any(
-            marker in combined
-            for marker in (
-                "just a moment",
-                "checking your browser",
-                "verify you are human",
-                "attention required",
-                "cf-challenge",
-                "challenge-platform",
-            )
+        challenge_markers = (
+            "just a moment",
+            "checking your browser",
+            "verify you are human",
+            "attention required",
+            "cf-challenge",
+            "challenge-platform",
+        )
+        if any(marker in page_html for marker in challenge_markers) or (
+            not has_thread_heading
+            and any(marker in page_title for marker in challenge_markers)
         ):
             return {
                 "code": "blocked",
                 "error": "Blocked by anti-bot challenge while loading thread",
             }
-        if any(
-            marker in page_title for marker in ("log in", "login", "sign in")
-        ) or any(
-            marker in combined
-            for marker in (
-                "you must be logged-in",
-                "you must be logged in",
-                'action="/login/login"',
+        login_title_markers = ("log in", "login", "sign in")
+        login_body_markers = (
+            "you must be logged-in",
+            "you must be logged in",
+            'action="/login/login"',
+        )
+        if any(marker in page_html for marker in login_body_markers) or (
+            not has_thread_heading
+            and any(
+                marker in page_title
+                for marker in (*login_title_markers, *login_body_markers)
             )
         ):
             return {
