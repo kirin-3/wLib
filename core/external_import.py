@@ -1658,7 +1658,9 @@ def locate_external_library(source: object) -> dict[str, object]:
                     custom = re.sub(r"%appdata%", lambda _: appdata, custom, flags=re.I)
                     custom = custom.replace("{PlayniteDir}", playnite_dir)
                     if custom:
-                        checked.append(os.path.join(custom, "games.db"))
+                        checked.append(
+                            os.path.join(os.path.normpath(custom), "games.db")
+                        )
                 except (OSError, ValueError):
                     pass
                 checked.append(os.path.join(playnite_dir, "library", "games.db"))

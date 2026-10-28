@@ -221,9 +221,11 @@ def test_playnite_import_covers_sections_merge_rollback(tmp_path, monkeypatch):
 def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch):
     from core.external_import import _translate_playnite_game
 
+    # Linux path rules are forced for this module, so use a POSIX install
+    # folder rather than tmp_path, which is a drive path on Windows hosts.
     base = {
         "Name": "F95-12345",
-        "InstallDirectory": str(tmp_path),
+        "InstallDirectory": "/opt/games/sakura",
         "GameActions": [
             {
                 "Name": "Play",
@@ -235,14 +237,15 @@ def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch)
         ],
     }
     game, dropped = _translate_playnite_game(base, {}, str(tmp_path))
-    assert game["executable_paths"]["exe_path"] == str(tmp_path / "bin/run.sh")
+    assert game["executable_paths"]["exe_path"] == "/opt/games/sakura/bin/run.sh"
     assert dropped == 0
     monkeypatch.setattr("core.external_import.is_windows", lambda: True)
     base["InstallDirectory"] = "D:\\Games\\Sakura"
     base["GameActions"][0]["Path"] = "{InstallDir}\\Game.exe"
     game, _ = _translate_playnite_game(base, {}, str(tmp_path))
     assert game["executable_paths"]["exe_path"] == "D:\\Games\\Sakura\\Game.exe"
-    monkeypatch.setattr("core.external_import.is_windows", lambda: False)
+    # The launcher fallback needs a real folder, so use the host's own rules.
+    monkeypatch.setattr("core.external_import.is_windows", lambda: os.name == "nt")
     base["InstallDirectory"] = str(tmp_path)
     base["GameActions"] = []
     monkeypatch.setattr(
