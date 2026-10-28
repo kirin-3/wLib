@@ -3018,6 +3018,24 @@ def test_version_normalization_ignores_v_prefix_case_and_whitespace():
     assert normalize_version("vX") == "vx"
 
 
+@pytest.mark.parametrize(
+    ("current", "remote", "skipped", "expected"),
+    [
+        ("v0.9", "v0.10", "", True),
+        ("0.10", "v0.10", "", False),
+        ("b12", "Final", "", True),
+        ("Final", "final", "", False),
+        ("0.6", "Ch. 3", "", True),
+        ("2026-10-07", "2026-10-08", "", True),
+        ("0.6", "0.7", "v0.7", False),
+        ("0.7", "0.8", "v0.7", True),
+        ("0.6", "0.7", "0.7", False),
+    ],
+)
+def test_has_update_version_comparison(current, remote, skipped, expected):
+    assert Api()._has_update(current, remote, skipped) is expected
+
+
 def _write_archive(path, files):
     with zipfile.ZipFile(str(path), "w") as archive:
         for name, data in files.items():
