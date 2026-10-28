@@ -169,6 +169,21 @@ def test_scan_relative_folder_returns_absolute_exe_paths(tmp_path, monkeypatch):
     assert exe_path == str(folder / "Demo.exe")
 
 
+def test_scan_skips_leftover_staging_folders(tmp_path):
+    from core.game_scan import scan_games_folder
+
+    real = tmp_path / "Demo"
+    real.mkdir()
+    (real / "Demo.exe").touch()
+    staging = tmp_path / ".wlib-staging-abc123"
+    staging.mkdir()
+    (staging / "Demo.exe").touch()
+
+    games = scan_games_folder(str(tmp_path))
+
+    assert [game["exe_path"] for game in games] == [str(real / "Demo.exe")]
+
+
 def test_inspect_relative_exe_path_returns_absolute_path(tmp_path, monkeypatch):
     folder = tmp_path / "Game"
     folder.mkdir()
