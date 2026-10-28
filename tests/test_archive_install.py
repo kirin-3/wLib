@@ -1356,6 +1356,71 @@ def test_install_override_copy_failure_leaves_game_on_old_version(
     assert not (lib / "Game" / "2.0").exists()
 
 
+def test_install_nested_game_folder_carries_saves_targets_and_override(
+    tmp_path, monkeypatch
+):
+    # A readme beside the game folder keeps the wrapper from being flattened,
+    # so the executable sits one level below the archive root. Saves, the
+    # saves override and launch targets are relative to the executable's
+    # folder, not to the archive root.
+    from pathlib import Path
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    archive = tmp_path / "Game-1.0.zip"
+    _write_game_zip(
+        archive,
+        {"readme.txt": b"hi", "Game/Game.exe": b"v1", "Game/Config.exe": b"cfg1"},
+    )
+    first = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="1.0",
+    )
+    old_dir = Path(str(first["exe_path"])).parent
+    game_id = int(str(first["game_id"]))
+    assert old_dir == lib / "Game" / "1.0" / "Game"
+    assert db.add_game_launch_target(game_id, "Config", str(old_dir / "Config.exe"))
+    db.update_game(game_id, {"save_path_override": str(old_dir / "MySaves")})
+    renpy_saves = old_dir / "game" / "saves"
+    renpy_saves.mkdir(parents=True)
+    (renpy_saves / "1-1-LT1.save").write_text("mysave")
+    (old_dir / "slot1.sav").write_text("loose")
+    (old_dir / "MySaves").mkdir()
+    (old_dir / "MySaves" / "a.save").write_text("user")
+
+    update = tmp_path / "Game-2.0.zip"
+    _write_game_zip(
+        update,
+        {"readme.txt": b"hi", "Game/Game.exe": b"v2", "Game/Config.exe": b"cfg2"},
+    )
+    result = install_archive(
+        str(update),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=game_id,
+    )
+    new_dir = Path(str(result["exe_path"])).parent
+    assert result["success"] is True
+    assert new_dir == lib / "Game" / "2.0" / "Game"
+    assert result["unmoved_targets"] == []
+    assert not old_dir.exists()
+    assert (new_dir / "game" / "saves" / "1-1-LT1.save").read_text() == "mysave"
+    assert (new_dir / "slot1.sav").read_text() == "loose"
+    assert (new_dir / "MySaves" / "a.save").read_text() == "user"
+    row = db.get_game(game_id)
+    assert row["save_path_override"] == str(new_dir / "MySaves")
+    targets = db.list_game_launch_targets(game_id)
+    assert [target["exe_path"] for target in targets] == [str(new_dir / "Config.exe")]
+    assert (new_dir / "Config.exe").is_file()
+
+
 def test_install_same_folder_swap_keeps_override(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
