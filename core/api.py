@@ -3400,20 +3400,30 @@ class Api:
                 last = str(row2[0])
         return {"frequency": freq, "last_check": last}
 
-    def set_auto_check_setting(self, frequency: str) -> dict[str, bool]:
+    def set_auto_check_setting(self, frequency: object = "") -> dict[str, object]:
         """Set auto update check frequency: 'weekly', 'monthly', or 'off'."""
-        from core.database import get_connection
+        import sqlite3
 
-        get_connection_fn = get_connection
+        from core.database import update_setting
 
-        conn = get_connection_fn()
-        cursor = conn.cursor()
-        _ = cursor.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('auto_update_check', ?)",
-            (frequency,),
-        )
-        conn.commit()
-        conn.close()
+        if not isinstance(frequency, str):
+            return {
+                "success": False,
+                "error": "Frequency must be weekly, monthly or off",
+            }
+        normalized = frequency.strip().lower()
+        if normalized not in {"weekly", "monthly", "off"}:
+            return {
+                "success": False,
+                "error": "Frequency must be weekly, monthly or off",
+            }
+        try:
+            update_setting("auto_update_check", normalized)
+        except sqlite3.Error as exc:
+            return {
+                "success": False,
+                "error": str(exc) or "Could not save update frequency",
+            }
         return {"success": True}
 
     def maybe_auto_check(self) -> dict[str, object]:
