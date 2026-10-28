@@ -222,8 +222,10 @@ html { zoom: var(--ui-scale, 1); }
 
   /* The -400 status utilities are tuned for dark surfaces; darken them on white. */
   --color-red-400: #b91c1c;
-  --color-green-400: #15803d;
-  --color-yellow-400: #a16207;
+  --color-green-400: #166534;
+  --color-yellow-400: #854d0e;
+  --color-blue-400: #1d4ed8;
+  --color-orange-400: #9a3412;
 
   --status-not-started-bg: rgba(148, 163, 184, 0.12);
   --status-not-started-border: rgba(148, 163, 184, 0.28);

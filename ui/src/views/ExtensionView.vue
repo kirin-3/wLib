@@ -356,7 +356,9 @@ onUnmounted(() => {
 }
 
 .ext-code {
-  background: var(--bg-raised);
+  /* Accent text is tested against the surface color, not the raised one. */
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   font-size: 0.75rem;
