@@ -345,6 +345,45 @@ test('bridge refuses oversized bodies', async () => {
   assert.equal(result.error, 'too_large');
 });
 
+test('bridge keeps multi-byte characters split across stream chunks', async () => {
+  const encoded = new TextEncoder().encode('ゲーム [v1.0]');
+  const split = 2; // Inside the first three-byte character.
+  const chunks = [
+    new Uint8Array(encoded.slice(0, split)),
+    new Uint8Array(encoded.slice(split)),
+  ];
+  const body = {
+    getReader() {
+      let index = 0;
+      return {
+        async read() {
+          return index < chunks.length
+            ? { done: false, value: chunks[index++] }
+            : { done: true, value: undefined };
+        },
+        async cancel() {},
+        releaseLock() {},
+      };
+    },
+  };
+  const context = runBackground({
+    fetch: async () => ({
+      status: 200,
+      url: 'https://f95zone.to/threads/12345/',
+      body,
+    }),
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  const result = await vm.runInContext(
+    'bridgeFetchUrl("https://f95zone.to/threads/12345/")',
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.body, 'ゲーム [v1.0]');
+});
+
 test('bridge fetch aborts on timeout', async () => {
   const context = runBackground({
     fetch: (url, options) => new Promise((resolve, reject) => {
