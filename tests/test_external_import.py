@@ -1488,3 +1488,24 @@ def test_playnite_string_enum_play_actions_are_imported(tmp_path, monkeypatch):
     assert game["launch_targets"] == [
         {"label": "Play (32-bit)", "exe_path": "/opt/games/sakura/game32.sh"}
     ]
+
+
+def test_playnite_skips_unrecognized_links():
+    from core.external_import import _translate_playnite_game
+
+    game, _dropped = _translate_playnite_game(
+        {
+            "Name": "Known Game",
+            "Links": [
+                {"Name": "F95zone", "Url": "https://f95zone.to/threads/12345"},
+                {"Name": "Forum", "Url": "https://example.com/threads/1"},
+                {"Name": "VNDB", "Url": "https://vndb.org/v1234"},
+            ],
+        },
+        {},
+        "/tmp",
+    )
+    assert game is not None
+    assert game["metadata"]["links"] == [
+        {"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}
+    ]

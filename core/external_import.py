@@ -165,6 +165,17 @@ def _has_import_identity(f95_url: str, links: list[StoreLink], exe_path: str) ->
     )
 
 
+def _recognized_store_links(urls: list[object]) -> list[StoreLink]:
+    """Source links wLib recognises as a store, creator, or catalog page.
+
+    ``coerce_store_links`` maps any other http(s) URL to the generic ``other``
+    source. External imports skip those instead of importing arbitrary
+    website, forum, or social links.
+    """
+    links = coerce_store_links([{"url": _as_str(url)} for url in urls])
+    return [link for link in links if link["source"] != "other"]
+
+
 def _as_dict(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
@@ -1342,7 +1353,7 @@ def _translate_playnite_game(
         or name_url
         or (build_thread_url_from_id(placeholder[1]) if placeholder else "")
     )
-    links = coerce_store_links([{"url": link.get("Url")} for link in raw_links])
+    links = _recognized_store_links([link.get("Url") for link in raw_links])
     game_id = _as_str(record.get("GameId"))
     if re.fullmatch(r"(?:RJ|VJ|BJ)\d+", game_id, re.I):
         dlsite = link_from_id("dlsite", game_id)
