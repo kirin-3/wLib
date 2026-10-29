@@ -10,6 +10,7 @@ uses. It knows nothing about F95 parsing.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -18,6 +19,8 @@ from io import BufferedIOBase
 from typing import BinaryIO, Callable, cast, final
 
 from core import extension_ws
+
+logger = logging.getLogger("wlib.bridge")
 
 
 class BridgeUnavailable(Exception):
@@ -55,6 +58,8 @@ class BridgeConnection:
         self.can_fetch = False
         self.eligible = False
         self.closed = False
+        self.extension_version = ""
+        self.opened_at = time.monotonic()
 
     def send_text(self, message: str) -> None:
         fn = self._send_text_fn
@@ -63,10 +68,14 @@ class BridgeConnection:
         with self._send_lock:
             fn(message)
 
-    def note_hello(self, protocol: object, can_fetch: object) -> None:
+    def note_hello(
+        self, protocol: object, can_fetch: object, extension_version: object = ""
+    ) -> None:
         self._hello_ok = protocol == 1
         self.can_fetch = bool(can_fetch) if isinstance(can_fetch, bool) else False
         self.eligible = self._hello_ok and self.can_fetch
+        if isinstance(extension_version, str):
+            self.extension_version = extension_version.strip()[:32]
 
     def note_status(self, can_fetch: object) -> None:
         if isinstance(can_fetch, bool):
@@ -77,13 +86,24 @@ class BridgeConnection:
 _lock = threading.Lock()
 _connections: list[BridgeConnection] = []
 _pending: dict[str, _Pending] = {}
+# Connection history for diagnostics. A browser that suspends the extension's
+# background page shows up as many short connections.
+_disconnects = 0
+_last_disconnect_at: float | None = None
+_last_connection_seconds: float | None = None
+_last_fetch: dict[str, object] | None = None
 
 
 def reset_for_tests() -> None:
     """Clear registry and pending (tests only)."""
+    global _disconnects, _last_disconnect_at, _last_connection_seconds, _last_fetch
     with _lock:
         _connections.clear()
         _pending.clear()
+        _disconnects = 0
+        _last_disconnect_at = None
+        _last_connection_seconds = None
+        _last_fetch = None
 
 
 def _register_connection(conn: BridgeConnection) -> None:
@@ -93,10 +113,19 @@ def _register_connection(conn: BridgeConnection) -> None:
 
 
 def _remove_connection(conn: BridgeConnection) -> None:
+    global _disconnects, _last_disconnect_at, _last_connection_seconds
+    duration = 0.0
     with _lock:
+        was_open = not conn.closed
         conn.closed = True
         if conn in _connections:
             _connections.remove(conn)
+        if was_open:
+            now = time.monotonic()
+            duration = now - conn.opened_at
+            _disconnects += 1
+            _last_disconnect_at = now
+            _last_connection_seconds = duration
         doomed = [
             key for key, item in _pending.items() if item.connection is conn
         ]
@@ -104,6 +133,8 @@ def _remove_connection(conn: BridgeConnection) -> None:
             item = _pending.pop(key)
             item.error = "disconnected"
             item.event.set()
+    if was_open:
+        logger.info("Browser extension disconnected after %.0f s", duration)
 
 
 def _newest_eligible() -> BridgeConnection | None:
@@ -119,6 +150,69 @@ def is_available() -> bool:
     return _newest_eligible() is not None
 
 
+def record_fetch_outcome(
+    status: int | None, signed_in: bool | None, error: str = ""
+) -> None:
+    """Remember the latest extension fetch for diagnostics.
+
+    ``signed_in`` is the caller's reading of the page (``None`` when the
+    response does not say). A change in signed-in state is logged once, so a
+    browser that sends no site cookies leaves a trace without flooding the log.
+    """
+    global _last_fetch
+    with _lock:
+        previous = _last_fetch.get("signed_in") if _last_fetch else None
+        _last_fetch = {
+            "at": time.monotonic(),
+            "status": status,
+            "signed_in": signed_in,
+            "error": error,
+        }
+    if error:
+        logger.warning("Browser extension fetch failed: %s", error)
+    elif signed_in is False and previous is not False:
+        logger.warning(
+            "Browser extension fetched F95Zone without a login (no F95Zone cookies sent)"
+        )
+    elif signed_in is True and previous is not True:
+        logger.info("Browser extension fetched F95Zone while logged in")
+
+
+def status_snapshot() -> dict[str, object]:
+    """JSON-serializable bridge state for diagnostics."""
+    now = time.monotonic()
+    with _lock:
+        open_connections = [conn for conn in _connections if not conn.closed]
+        newest = open_connections[0] if open_connections else None
+        last_fetch = dict(_last_fetch) if _last_fetch else None
+        snapshot: dict[str, object] = {
+            "connected": newest is not None,
+            "connections": len(open_connections),
+            "eligible": any(conn.eligible for conn in open_connections),
+            "extension_version": newest.extension_version if newest else "",
+            "can_fetch": newest.can_fetch if newest else None,
+            "connected_seconds": (
+                round(now - newest.opened_at) if newest else None
+            ),
+            "disconnects": _disconnects,
+            "last_connection_seconds": (
+                round(_last_connection_seconds)
+                if _last_connection_seconds is not None
+                else None
+            ),
+            "last_disconnect_seconds_ago": (
+                round(now - _last_disconnect_at)
+                if _last_disconnect_at is not None
+                else None
+            ),
+        }
+    if last_fetch is not None:
+        fetched_at = cast(float, last_fetch.pop("at"))
+        last_fetch["seconds_ago"] = round(now - fetched_at)
+    snapshot["last_fetch"] = last_fetch
+    return snapshot
+
+
 def _handle_message(conn: BridgeConnection, message: object) -> None:
     """Dispatch one decoded JSON message from the extension."""
     if not isinstance(message, dict):
@@ -128,9 +222,22 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
     if not isinstance(raw_type, str):
         return
     if raw_type == "hello":
-        conn.note_hello(message.get("protocol"), message.get("can_fetch"))
+        conn.note_hello(
+            message.get("protocol"),
+            message.get("can_fetch"),
+            message.get("extension_version"),
+        )
+        logger.info(
+            "Browser extension connected (version %s, protocol %s, can fetch: %s)",
+            conn.extension_version or "unknown",
+            message.get("protocol"),
+            conn.can_fetch,
+        )
     elif raw_type == "status":
+        could_fetch = conn.can_fetch
         conn.note_status(message.get("can_fetch"))
+        if conn.can_fetch != could_fetch:
+            logger.info("Browser extension can fetch: %s", conn.can_fetch)
     elif raw_type == "ping":
         try:
             conn.send_text(json.dumps({"type": "pong"}))

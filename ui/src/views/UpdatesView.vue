@@ -927,10 +927,10 @@ onUnmounted(() => {
           <div
             v-for="err in gamesWithErrors"
             :key="err.id"
-            class="text-xs text-red-400/70 flex items-center gap-2"
+            class="text-xs text-red-400/70 flex items-start gap-2"
           >
-            <span style="color: var(--text-muted)">{{ err.title }}:</span>
-            <span class="truncate">{{ err.error }}</span>
+            <span class="shrink-0" style="color: var(--text-muted)">{{ err.title }}:</span>
+            <span class="min-w-0 break-words">{{ err.error }}</span>
           </div>
         </div>
       </section>

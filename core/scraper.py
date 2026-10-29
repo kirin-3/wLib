@@ -149,10 +149,23 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
     """Fetch one F95 URL through the connected extension, paced like HTTP."""
 
     def _transport() -> tuple[int, str]:
-        response = extension_bridge.fetch(url, timeout=30)
+        try:
+            response = extension_bridge.fetch(url, timeout=30)
+        except extension_bridge.BridgeFailed as exc:
+            extension_bridge.record_fetch_outcome(None, None, str(exc))
+            raise
+        extension_bridge.record_fetch_outcome(
+            response.status, _xenforo_signed_in(response.body)
+        )
         return response.status, response.body
 
     return _run_paced_f95_request(_transport)
+
+
+def _xenforo_signed_in(html: str) -> bool | None:
+    """Read XenForo's ``data-logged-in`` flag; ``None`` for non-page bodies."""
+    match = re.search(r"\bdata-logged-in=[\"'](true|false)[\"']", html[:4096])
+    return match.group(1) == "true" if match else None
 
 
 def _attribute(opening: str, name: str) -> str:
@@ -419,7 +432,7 @@ class Scraper:
             "code": code,
             "error": message,
         }
-        if browser_fallback in ("unavailable", "failed"):
+        if browser_fallback in ("unavailable", "failed", "logged_out"):
             result["browser_fallback"] = browser_fallback
         return result
 
@@ -433,8 +446,9 @@ class Scraper:
 
         Returns ``(status, body, browser_fallback)`` where the flag is
         ``None`` on success or when no fallback applied, ``"unavailable"``
-        when a blocked/login page had no eligible extension, and ``"failed"``
-        when the extension was tried but did not recover the page. Only
+        when a blocked/login page had no eligible extension, ``"logged_out"``
+        when the extension returned F95's login page, and ``"failed"`` when
+        the extension was tried but did not recover the page otherwise. Only
         plain-HTTP ``blocked`` opens the 15-minute extension-first window.
         Timeouts and network errors propagate without fallback.
         """
@@ -464,12 +478,11 @@ class Scraper:
                     ext_issue = self._classify_page_issue(
                         ext_status, self._page_title(ext_body), ext_body
                     )
-                    if ext_issue and ext_issue["code"] in (
-                        "blocked",
-                        "login_required",
-                    ):
-                        return (ext_status, ext_body, "failed")
-                    return (ext_status, ext_body, None)
+                    return (
+                        ext_status,
+                        ext_body,
+                        self._extension_fallback_flag(ext_issue),
+                    )
                 # Extension failed inside the window: use plain HTTP once,
                 # without a second fallback attempt.
                 try:
@@ -515,9 +528,18 @@ class Scraper:
         ext_issue = self._classify_page_issue(
             ext_status, self._page_title(ext_body), ext_body
         )
-        if ext_issue and ext_issue["code"] in ("blocked", "login_required"):
-            return (ext_status, ext_body, "failed")
-        return (ext_status, ext_body, None)
+        return (ext_status, ext_body, self._extension_fallback_flag(ext_issue))
+
+    def _extension_fallback_flag(self, ext_issue: dict[str, str] | None) -> str | None:
+        """Fallback flag for a page the extension did return."""
+        if not ext_issue:
+            return None
+        if ext_issue["code"] == "login_required":
+            # The browser answered, but F95 saw no login on its request.
+            return "logged_out"
+        if ext_issue["code"] == "blocked":
+            return "failed"
+        return None
 
     def _is_non_actionable_version(self, version: object) -> bool:
         return str(version or "").strip().lower() in (

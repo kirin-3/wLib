@@ -962,25 +962,57 @@ def test_build_scraper_error_payload_blocked_failed():
     assert "complete any check" in str(result["error"]).lower()
 
 
-def test_build_scraper_error_payload_login_required():
+@pytest.mark.parametrize(
+    ("fallback", "hint"),
+    [
+        ("unavailable", "extension is not connected"),
+        ("logged_out", "without an F95Zone login"),
+        ("failed", "could not load it"),
+        (None, "Log in to F95Zone in the browser"),
+    ],
+)
+def test_build_scraper_error_payload_login_required(fallback, hint):
     api = Api()
-    for fallback in ("unavailable", "failed", None):
-        payload: dict[str, object] = {
-            "success": False,
-            "code": "login_required",
-            "error": "Login is required",
-        }
-        if fallback is not None:
-            payload["browser_fallback"] = fallback
-        result = api._build_scraper_error_payload(payload, "Failed to check")
-        assert result["error_code"] == "login_required"
-        assert "log in to F95Zone in the browser" in str(result["error"]).lower() or (
-            "Log in to F95Zone in the browser" in str(result["error"])
-        )
-        if fallback is not None:
-            assert result["browser_fallback"] == fallback
-        else:
-            assert "browser_fallback" not in result
+    payload: dict[str, object] = {
+        "success": False,
+        "code": "login_required",
+        "error": "Login is required",
+    }
+    if fallback is not None:
+        payload["browser_fallback"] = fallback
+    result = api._build_scraper_error_payload(payload, "Failed to check")
+    assert result["error_code"] == "login_required"
+    assert str(result["error"]).startswith("Login is required. ")
+    assert hint in str(result["error"])
+    if fallback is not None:
+        assert result["browser_fallback"] == fallback
+    else:
+        assert "browser_fallback" not in result
+
+
+def test_bulk_check_error_explains_extension_login(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/requests.61053/"
+    _ = add_game("Members Only", "0.1", f95_url=url)
+    page_result = {
+        "success": False,
+        "code": "login_required",
+        "error": "Login is required to access this thread",
+        "browser_fallback": "logged_out",
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["success"]
+
+    result = api.get_update_status()["results"][0]
+    assert result["error_code"] == "login_required"
+    assert result["browser_fallback"] == "logged_out"
+    assert "without an F95Zone login" in result["error"]
 
 
 def test_build_scraper_error_payload_rate_limited_unchanged():
@@ -2495,7 +2527,9 @@ def test_get_extension_service_status_reports_reachable(monkeypatch):
 
     result = api.get_extension_service_status()
 
-    assert result == {"success": True, "reachable": True}
+    assert result["success"] is True
+    assert result["reachable"] is True
+    assert result.get("bridge", {}).get("connected") is False
     assert captured["url"] == "http://127.0.0.1:8183/api/check?url=__ping__"
     assert captured["timeout"] == 2
     assert captured["origin"] is None

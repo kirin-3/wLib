@@ -294,3 +294,58 @@ def test_bridge_ping_answered_with_pong():
     bridge._handle_message(conn, {"type": "ping"})
     assert sent
     assert json.loads(sent[0]) == {"type": "pong"}
+
+
+def test_bridge_status_snapshot_tracks_connections():
+    conn = _fake_conn([])
+    bridge._register_connection(conn)
+    bridge._handle_message(
+        conn,
+        {
+            "type": "hello",
+            "protocol": 1,
+            "can_fetch": True,
+            "extension_version": "1.2.0",
+        },
+    )
+    snapshot = bridge.status_snapshot()
+    assert snapshot["connected"] is True
+    assert snapshot["eligible"] is True
+    assert snapshot["extension_version"] == "1.2.0"
+    assert snapshot["can_fetch"] is True
+    assert snapshot["disconnects"] == 0
+    assert snapshot["last_fetch"] is None
+    json.dumps(snapshot)
+
+    bridge._remove_connection(conn)
+    bridge._remove_connection(conn)
+    snapshot = bridge.status_snapshot()
+    assert snapshot["connected"] is False
+    assert snapshot["can_fetch"] is None
+    # A repeated removal must not count a second disconnect.
+    assert snapshot["disconnects"] == 1
+    assert snapshot["last_connection_seconds"] == 0
+    assert snapshot["last_disconnect_seconds_ago"] == 0
+
+
+def test_bridge_records_fetch_outcome_and_logs_state_changes(caplog):
+    caplog.set_level("INFO", logger="wlib.bridge")
+    bridge.record_fetch_outcome(200, False)
+    bridge.record_fetch_outcome(200, False)
+    guest_logs = [r for r in caplog.records if "without a login" in r.getMessage()]
+    assert len(guest_logs) == 1
+    bridge.record_fetch_outcome(200, True)
+    assert any("while logged in" in r.getMessage() for r in caplog.records)
+
+    last_fetch = bridge.status_snapshot()["last_fetch"]
+    assert last_fetch == {
+        "status": 200,
+        "signed_in": True,
+        "error": "",
+        "seconds_ago": 0,
+    }
+
+    bridge.record_fetch_outcome(None, None, "extension did not answer in time")
+    last_fetch = bridge.status_snapshot()["last_fetch"]
+    assert isinstance(last_fetch, dict)
+    assert last_fetch["error"] == "extension did not answer in time"

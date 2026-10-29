@@ -90,6 +90,7 @@ class ExtensionServiceStatus(TypedDict):
     success: bool
     reachable: bool
     error: NotRequired[str]
+    bridge: NotRequired[dict[str, object]]
 
 
 class ScraperResponse(TypedDict, total=False):
@@ -1378,6 +1379,15 @@ class Api:
         return self._open_path_with_system_handler(persistent_ext_dir)
 
     def get_extension_service_status(self) -> ExtensionServiceStatus:
+        from core import extension_bridge
+
+        status = self._probe_extension_service()
+        # The local server answering says nothing about the browser side; the
+        # bridge snapshot shows whether an extension is connected and logged in.
+        status["bridge"] = extension_bridge.status_snapshot()
+        return status
+
+    def _probe_extension_service(self) -> ExtensionServiceStatus:
         import json
         import urllib.request
 
@@ -2620,7 +2630,7 @@ class Api:
                 or fallback_message
             )
             fallback_value = payload_dict.get("browser_fallback")
-            if fallback_value in ("unavailable", "failed"):
+            if fallback_value in ("unavailable", "failed", "logged_out"):
                 browser_fallback = cast(str, fallback_value)
         elif isinstance(payload, str) and payload.strip():
             message = payload.strip()
@@ -2647,10 +2657,26 @@ class Api:
                     f"{message}. F95Zone is challenging HTTP requests; try again later."
                 )
         elif code == "login_required":
-            result["error"] = (
-                f"{message}. Log in to F95Zone in the browser where the wLib "
-                "extension is installed."
-            )
+            if browser_fallback == "unavailable":
+                result["error"] = (
+                    f"{message}. The wLib browser extension is not connected; "
+                    "keep the browser where it is installed open and try again."
+                )
+            elif browser_fallback == "logged_out":
+                result["error"] = (
+                    f"{message}. The wLib extension loaded it without an F95Zone "
+                    "login. Log in to F95Zone in that browser; in Firefox, "
+                    "Strict tracking protection can also block the login."
+                )
+            elif browser_fallback == "failed":
+                result["error"] = (
+                    f"{message}. The wLib extension could not load it; try again."
+                )
+            else:
+                result["error"] = (
+                    f"{message}. Log in to F95Zone in the browser where the wLib "
+                    "extension is installed."
+                )
         elif code == "rate_limited":
             result["error"] = f"{message}; try again later."
         return result
@@ -3085,11 +3111,17 @@ class Api:
                     callback_fallback = result_dict.get("browser_fallback")
                     callback_browser_fallback = (
                         str(callback_fallback)
-                        if callback_fallback in ("unavailable", "failed")
+                        if callback_fallback in ("unavailable", "failed", "logged_out")
                         else ""
                     )
-                    if not result_dict.get("success") and not callback_error:
-                        callback_error = "Update check failed"
+                    if not result_dict.get("success"):
+                        # Same guidance as a single check, so the results list
+                        # says what to do about blocked and login pages.
+                        callback_error = str(
+                            self._build_scraper_error_payload(
+                                result_dict, "Update check failed"
+                            )["error"]
+                        )
 
                     if result_dict.get(
                         "success"

@@ -80,9 +80,28 @@ export interface ExtensionSyncStatus extends ApiBasicResponse {
   reason?: string;
 }
 
+export interface ExtensionBridgeStatus {
+  connected: boolean;
+  connections: number;
+  eligible: boolean;
+  extension_version: string;
+  can_fetch: boolean | null;
+  connected_seconds: number | null;
+  disconnects: number;
+  last_connection_seconds: number | null;
+  last_disconnect_seconds_ago: number | null;
+  last_fetch: {
+    seconds_ago: number;
+    status: number | null;
+    signed_in: boolean | null;
+    error: string;
+  } | null;
+}
+
 export interface ExtensionServiceStatus extends ApiBasicResponse {
   success: boolean;
   reachable: boolean;
+  bridge?: ExtensionBridgeStatus;
 }
 
 export interface RunnerInfo {
@@ -106,7 +125,7 @@ export interface UpdateCheckResponse extends ApiBasicResponse {
   has_update?: boolean;
   newly_finished?: boolean;
   metadata_updated?: number;
-  browser_fallback?: "unavailable" | "failed";
+  browser_fallback?: "unavailable" | "failed" | "logged_out";
 }
 
 export interface BulkUpdateStartResponse extends ApiBasicResponse {
@@ -125,7 +144,7 @@ export interface BulkUpdateResultItem {
   newly_finished?: boolean;
   error: string;
   error_code: string;
-  browser_fallback?: "unavailable" | "failed";
+  browser_fallback?: "unavailable" | "failed" | "logged_out";
 }
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
@@ -844,7 +863,7 @@ export interface DiagnosticsTools {
   unrar: string | null;
   wine?: string | null;
   runners?: RunnerInfo[];
-  extension: { success: boolean; reachable: boolean; error?: string };
+  extension: { success: boolean; reachable: boolean; error?: string; bridge?: ExtensionBridgeStatus };
 }
 
 const MOCK_DIAGNOSTICS: DiagnosticsBasic = {
@@ -856,7 +875,14 @@ const MOCK_DIAGNOSTICS: DiagnosticsBasic = {
 };
 const MOCK_DIAGNOSTICS_TOOLS: DiagnosticsTools = {
   "7zz": null, "7z": null, "7za": null, bsdtar: null, unrar: null,
-  extension: { success: true, reachable: false },
+  extension: {
+    success: true, reachable: false,
+    bridge: {
+      connected: false, connections: 0, eligible: false, extension_version: "", can_fetch: null,
+      connected_seconds: null, disconnects: 0, last_connection_seconds: null,
+      last_disconnect_seconds_ago: null, last_fetch: null,
+    },
+  },
 };
 const MOCK_DIAGNOSTICS_REPORT = "wLib diagnostics\nBrowser preview: desktop environment details are not available.";
 
@@ -3112,9 +3138,9 @@ class ApiService {
           return {
             success: false,
             mock: true,
-            error: "Login is required. Log in to F95Zone in the browser where the wLib extension is installed.",
+            error: "Login is required to access this thread. The wLib extension loaded it without an F95Zone login. Log in to F95Zone in that browser; in Firefox, Strict tracking protection can also block the login.",
             error_code: "login_required",
-            browser_fallback: "failed" as const,
+            browser_fallback: "logged_out" as const,
           };
         }
         const games = readMockGames();

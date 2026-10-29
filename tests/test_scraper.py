@@ -711,7 +711,7 @@ def test_extension_also_challenged_reports_blocked_failed(monkeypatch):
     _reset_scraper_globals()
 
 
-def test_extension_also_login_reports_login_failed(monkeypatch):
+def test_extension_also_login_reports_logged_out(monkeypatch):
     _reset_scraper_globals()
     monkeypatch.setattr(
         scraper_module,
@@ -728,7 +728,77 @@ def test_extension_also_login_reports_login_failed(monkeypatch):
     )
     result = Scraper().get_thread_metadata("https://f95zone.to/threads/1/")
     assert result["code"] == "login_required"
-    assert result.get("browser_fallback") == "failed"
+    assert result.get("browser_fallback") == "logged_out"
+    _reset_scraper_globals()
+
+
+def test_extension_login_page_in_batch_skips_page_fallback(monkeypatch):
+    _reset_scraper_globals()
+    monkeypatch.setattr(
+        scraper_module,
+        "_f95_get",
+        MagicMock(return_value=(403, "<title>Log in</title>")),
+    )
+    via_extension = MagicMock(return_value=(403, "<title>Log in</title>"))
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_extension)
+    monkeypatch.setattr(
+        scraper_module.extension_bridge, "is_available", lambda: True
+    )
+    urls = ["https://f95zone.to/threads/1/", "https://f95zone.to/threads/2/"]
+    results = Scraper().check_versions(urls)
+    assert all(r.get("browser_fallback") == "logged_out" for r in results.values())
+    # One batch request through the extension, no per-thread page requests.
+    assert via_extension.call_count == 1
+    _reset_scraper_globals()
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('<html id="XF" data-logged-in="true" data-cookie-prefix="xf_">', True),
+        ('<html id="XF"\n\t  data-logged-in="false">', False),
+        ('{"status":"ok","msg":{}}', None),
+    ],
+)
+def test_extension_fetch_records_signed_in_state(monkeypatch, body, expected):
+    _reset_scraper_globals()
+    recorded: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        scraper_module.extension_bridge,
+        "fetch",
+        lambda url, timeout=30: scraper_module.extension_bridge.BridgeResponse(
+            status=200, final_url=url, body=body
+        ),
+    )
+    monkeypatch.setattr(
+        scraper_module.extension_bridge,
+        "record_fetch_outcome",
+        lambda *args: recorded.append(args),
+    )
+    status, _ = scraper_module._f95_get_via_extension(
+        "https://f95zone.to/threads/1/"
+    )
+    assert status == 200
+    assert recorded == [(200, expected)]
+    _reset_scraper_globals()
+
+
+def test_extension_fetch_records_bridge_failure(monkeypatch):
+    _reset_scraper_globals()
+    recorded: list[tuple[object, ...]] = []
+
+    def failing_fetch(url, timeout=30):
+        raise scraper_module.extension_bridge.BridgeFailed("disconnected")
+
+    monkeypatch.setattr(scraper_module.extension_bridge, "fetch", failing_fetch)
+    monkeypatch.setattr(
+        scraper_module.extension_bridge,
+        "record_fetch_outcome",
+        lambda *args: recorded.append(args),
+    )
+    with pytest.raises(scraper_module.extension_bridge.BridgeFailed):
+        scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")
+    assert recorded == [(None, None, "disconnected")]
     _reset_scraper_globals()
 
 

@@ -41,6 +41,25 @@ const toolRows = computed(() => {
   return rows;
 });
 
+const seconds = (value: number | null | undefined): string => value == null ? "Never" : `${value.toLocaleString()} s`;
+const bridgeRows = computed(() => {
+  if (toolsLoading.value) return [["Browser extension", "Checking…"]] as [string, string][];
+  const bridge = tools.value?.extension.bridge;
+  if (toolsError.value || !bridge) return [["Browser extension", "Not available"]] as [string, string][];
+  const rows: [string, string][] = [[
+    "Browser extension",
+    bridge.connected ? `Connected${bridge.extension_version ? ` (v${bridge.extension_version})` : ""} for ${seconds(bridge.connected_seconds)}` : "Not connected",
+  ]];
+  if (bridge.connected) rows.push(["Can fetch F95Zone", bridge.can_fetch ? "Yes" : "No (f95zone.to permission missing)"]);
+  rows.push(["Disconnects since start", bridge.disconnects.toLocaleString()]);
+  if (bridge.disconnects) rows.push(["Last connection lasted", seconds(bridge.last_connection_seconds)]);
+  const fetch = bridge.last_fetch;
+  rows.push(["Last F95Zone fetch", !fetch ? "None yet"
+    : fetch.error ? `Failed ${seconds(fetch.seconds_ago)} ago: ${fetch.error}`
+    : `${fetch.signed_in === true ? "Logged in" : fetch.signed_in === false ? "Not logged in" : `HTTP ${fetch.status ?? "?"}`}, ${seconds(fetch.seconds_ago)} ago`]);
+  return rows;
+});
+
 async function refresh() {
   const id = ++request;
   basicLoading.value = toolsLoading.value = true;
@@ -138,6 +157,7 @@ onBeforeUnmount(() => { request++; });
       <h2 id="diagnostics-extension">Extension</h2>
       <dl><div><dt>Local server (127.0.0.1:8183)</dt><dd>{{ toolsLoading ? 'Checking…' : toolsError ? 'Not available' : tools?.extension.reachable ? 'Reachable' : 'Not reachable' }}</dd></div>
         <div v-if="tools?.extension.error"><dt>Server response</dt><dd>{{ tools.extension.error }}</dd></div>
+        <div v-for="[label, value] in bridgeRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
       </dl>
     </section>
     <section aria-labelledby="diagnostics-tools" :aria-busy="toolsLoading">
