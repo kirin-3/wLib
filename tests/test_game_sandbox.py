@@ -251,6 +251,44 @@ def test_writable_mounts_never_expose_home(path, exposed):
         sandbox.check_writable_mounts((path, ""), "/home/u")
 
 
+def test_mounts_never_expose_the_wlib_data_dir(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    sandbox_root = data / "sandbox"
+    sandbox_root.mkdir(parents=True)
+    (data / "wlib.db").write_text("library")
+    monkeypatch.setenv("WLIB_DATA_DIR", str(data))
+    home = str(tmp_path / "home")
+
+    for path in (str(data), str(sandbox_root)):
+        with pytest.raises(ValueError, match="whole home folder"):
+            sandbox.check_writable_mounts((path,), home)
+        with pytest.raises(ValueError, match="whole home folder"):
+            _ = sandbox.build_bwrap_argv(
+                ["true"],
+                game_dir="/games",
+                home=home,
+                sandbox_home="/sandbox-home",
+                cwd="/games",
+                readonly_paths=(path,),
+            )
+
+    # The default Wine prefix and a Proton runtime live below the data dir;
+    # mounting those subtrees exposes neither the database nor other sandboxes.
+    sandbox.check_writable_mounts((str(data / "prefix"),), home)
+    runtime = str(data / "proton" / "GE-Proton")
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir="/games",
+        home=home,
+        sandbox_home="/sandbox-home",
+        cwd="/games",
+        readonly_paths=(runtime,),
+    )
+    assert ["--ro-bind", runtime, runtime] in [
+        argv[i : i + 3] for i in range(len(argv) - 2)
+    ]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
 @pytest.mark.parametrize(
     "executable,folder",

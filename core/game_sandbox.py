@@ -11,7 +11,12 @@ from typing import Literal, TypedDict, cast
 from http.client import HTTPResponse
 
 from core.database import get_setting
-from core.host_platform import get_host_name, host_command, host_which
+from core.host_platform import (
+    get_data_dir,
+    get_host_name,
+    host_command,
+    host_which,
+)
 
 
 BWRAP_NAMESPACE_OPTIONS = (
@@ -576,35 +581,61 @@ def _json_object(payload: str | bytes) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
+def _exposes_path(path: str, root: str) -> bool:
+    """True when mounting `path` would reveal `root` or one of its ancestors."""
+    target = os.path.realpath(os.path.abspath(path))
+    real_root = os.path.realpath(os.path.abspath(root))
+    return target == real_root or real_root.startswith(target.rstrip(os.sep) + os.sep)
+
+
 def exposes_home(path: str, home: str) -> bool:
     """True when mounting `path` would reveal HOME itself or one of its ancestors."""
-    target = os.path.realpath(os.path.abspath(path))
-    real_home = os.path.realpath(os.path.abspath(home))
-    return target == real_home or real_home.startswith(target.rstrip(os.sep) + os.sep)
+    return _exposes_path(path, home)
+
+
+def _protected_roots(home: str) -> tuple[str, ...]:
+    """Folders a game mount must never contain.
+
+    The library database and settings (including sync credentials) live in the
+    data dir, and every other game's sandbox home lives below `sandbox/`, so an
+    ancestor of either is as unsafe as an ancestor of HOME.
+    """
+    data_dir = os.path.realpath(os.path.abspath(get_data_dir()))
+    return (
+        os.path.realpath(os.path.abspath(home)),
+        data_dir,
+        os.path.join(data_dir, "sandbox"),
+    )
+
+
+def _exposes_protected_root(path: str, home: str) -> bool:
+    return any(_exposes_path(path, root) for root in _protected_roots(home))
 
 
 def check_writable_mounts(paths: tuple[str, ...], home: str) -> None:
     for path in paths:
-        if path and exposes_home(path, home):
+        if path and _exposes_protected_root(path, home):
             raise ValueError(
                 f"Cannot sandbox a game whose folder or Wine prefix is {path}: "
-                + "mounting it would expose your whole home folder. "
+                + "mounting it would expose your whole home folder or wLib's data folder. "
                 + "Move the game into its own folder, or turn sandboxing off for it."
             )
 
 
 def check_readonly_mounts(paths: tuple[str, ...], home: str) -> None:
-    """Refuse read-only mounts that would still reveal HOME or an ancestor.
+    """Refuse read-only mounts that would still reveal HOME or wLib's data.
 
     A runtime folder can resolve to HOME when the configured Wine/Proton
     executable or RPGMaker runner sits directly in the home folder. Mounting it
     read-only is not a safe substitute: the game could read every file there.
+    The wLib data dir is protected for the same reason: it holds the library
+    database, sync settings and every game's sandbox storage.
     """
     for path in paths:
-        if path and exposes_home(path, home):
+        if path and _exposes_protected_root(path, home):
             raise ValueError(
                 f"Cannot sandbox a launch whose runtime folder is {path}: "
-                + "mounting it would expose your whole home folder. "
+                + "mounting it would expose your whole home folder or wLib's data folder. "
                 + "Move the runtime into its own folder, or turn sandboxing off for this game."
             )
 
