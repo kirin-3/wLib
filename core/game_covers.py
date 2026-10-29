@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 from core import database
@@ -47,8 +49,33 @@ def _image_type(header: bytes) -> str:
     raise ValueError("The file is not a supported image (JPEG, PNG, WebP or GIF).")
 
 
+def _open_image_source(path: str | Path) -> BinaryIO:
+    """Open a regular file for reading; reject FIFOs/devices before touching them.
+
+    Opening a FIFO for reading blocks until a writer appears, which would hang
+    the bridge thread (a picked file, or a cover path in an imported backup).
+    O_NONBLOCK makes the open itself safe, then the fstat check rejects
+    anything that is not a regular file.
+    """
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    fd = os.open(os.fspath(path), flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(
+                "The file is not a supported image (JPEG, PNG, WebP or GIF)."
+            )
+    except BaseException:
+        os.close(fd)
+        raise
+    return os.fdopen(fd, "rb")
+
+
 def validate_cover_file(path: str | Path) -> str:
-    with Path(path).open("rb") as stream:
+    with _open_image_source(path) as stream:
         if os.fstat(stream.fileno()).st_size > MAX_COVER_SIZE:
             raise ValueError("The image is larger than 20 MiB.")
         return _image_type(stream.read(12))
@@ -59,7 +86,7 @@ def copy_cover_file(path: str | Path) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     temp_name: str | None = None
     try:
-        with Path(path).open("rb") as source:
+        with _open_image_source(path) as source:
             if os.fstat(source.fileno()).st_size > MAX_COVER_SIZE:
                 raise ValueError("The image is larger than 20 MiB.")
             header = source.read(12)

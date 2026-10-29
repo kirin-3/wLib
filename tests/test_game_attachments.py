@@ -79,6 +79,28 @@ def test_add_attachment_happy_path_and_original_untouched(tmp_path, data_dir):
     assert not os.path.exists(os.path.join(attachments_dir(3), ".guide.pdf.part"))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX FIFOs need Linux")
+def test_fifo_source_is_rejected_without_blocking(tmp_path, data_dir):
+    import threading
+
+    fifo = tmp_path / "guide.pdf"
+    os.mkfifo(str(fifo))
+    errors: list[str] = []
+
+    def run() -> None:
+        try:
+            add_attachment(3, str(fifo))
+        except NotAPdfError as exc:
+            errors.append(str(exc))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors
+    assert list_attachments(3) == []
+
+
 def test_add_attachment_rejects_extension_and_signature(tmp_path, data_dir):
     notes = tmp_path / "notes.txt"
     notes.write_bytes(b"%PDF-1.4\ncontent")
