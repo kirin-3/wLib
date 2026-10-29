@@ -22,6 +22,7 @@ import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
 import { dismissToast, notify, toasts } from "./utils/toast";
 import { hasAvailableUpdate } from "./utils/libraryGames";
+import { shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
 import {
   INSTALL_ARCHIVE_EVENT,
   type InstallArchiveRequest,
@@ -175,11 +176,16 @@ const pollLibraryUpdates = async () => {
       }
     }
     const progress = JSON.stringify([status.running, status.checked, status.total, status.results]);
-    if (progress !== lastUpdateProgress) {
+    const progressChanged = progress !== lastUpdateProgress;
+    if (progressChanged) {
       lastUpdateProgress = progress;
       window.dispatchEvent(new Event("wlib-refresh-library"));
     }
-    if (wasUpdateRunning && !status.running) void scanDownloadOffers();
+    // A short check can start and finish between two polls; don't require
+    // having observed `running` before offering a matching downloaded archive.
+    if (shouldScanDownloadsAfterCheck(status, wasUpdateRunning, progressChanged)) {
+      void scanDownloadOffers();
+    }
     wasUpdateRunning = !!status.running;
   } catch (error) {
     console.error("Failed to refresh update progress", error);

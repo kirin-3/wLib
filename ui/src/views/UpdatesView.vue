@@ -21,6 +21,10 @@ import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
 import { libraryOpenQuery } from "../utils/storeLinks";
 import { isNewerVersion } from "../utils/appVersion";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import {
+  shouldAdoptBackgroundCheck,
+  updateCheckProgressLabel,
+} from "../utils/updateCheck";
 import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -140,6 +144,9 @@ const setDesktopNotifications = async (event: Event) => {
 };
 const lastAutoCheck = ref("");
 let pollInterval: ReturnType<typeof setInterval> | null = null;
+// Set when the view unmounts: onWebviewReady may answer after that, and it must
+// not leave a status poll running for a page that is gone.
+let disposed = false;
 
 // App Update State
 const appUpdate = ref<AppUpdateState | null>(null);
@@ -285,6 +292,7 @@ const pollStatus = async () => {
 };
 
 const startPolling = () => {
+  if (disposed) return;
   stopPolling();
   pollInterval = setInterval(pollStatus, 2000);
   pollStatus();
@@ -319,6 +327,16 @@ const openChangelogLink = (event: MouseEvent) => {
 const progress = computed(() => {
   if (!status.value.total) return 0;
   return Math.round((status.value.checked / status.value.total) * 100);
+});
+
+const progressLabel = computed(() =>
+  updateCheckProgressLabel(status.value.running, status.value.outcome),
+);
+
+const progressToneClass = computed(() => {
+  if (status.value.outcome === "completed") return "text-green-400";
+  if (status.value.outcome === "failed") return "text-red-400";
+  return "";
 });
 
 const statusDelaySeconds = computed(() => {
@@ -383,14 +401,34 @@ const loadAppUpdate = async () => {
   }
 };
 
+// Automatic checks and external imports can start a check after this page has
+// mounted, in which case the mount-time status read saw nothing to poll. The
+// global poll refreshes the library on progress; use that to pick the check up.
+const adoptBackgroundCheck = async () => {
+  if (status.value.running) return;
+  try {
+    const s = await api.getUpdateStatus();
+    if (!s || s.success === false) return;
+    if (!shouldAdoptBackgroundCheck(status.value.running, s)) return;
+    statusError.value = "";
+    status.value = s;
+    if (s.running) startPolling();
+  } catch (e) {
+    console.error("Failed to read background update status", e);
+  }
+};
+
 const handleLibraryRefresh = async () => {
   await Promise.all([loadGames(), loadDownloadOffers()]);
+  await adoptBackgroundCheck();
 };
 
 onMounted(() => {
   window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   onWebviewReady(async () => {
+    if (disposed) return;
     const capabilities = await loadPlatformCapabilities();
+    if (disposed) return;
     notificationsAvailable.value = capabilities.platform === "linux";
     if (notificationsAvailable.value) void loadNotificationSetting();
     void loadAppUpdate();
@@ -419,6 +457,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   gamesRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   stopPolling();
@@ -622,7 +661,7 @@ onUnmounted(() => {
               <IconLoader2 class="ui-action-icon animate-spin text-green-400" />
               Checking: {{ status.current }}
             </span>
-            <span v-else class="text-green-400">✓ Complete</span>
+            <span v-else :class="progressToneClass">{{ progressLabel }}</span>
             <span>{{ status.checked }}/{{ status.total }}</span>
           </div>
           <div
