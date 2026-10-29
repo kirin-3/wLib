@@ -2081,7 +2081,7 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
     with (
         patch("os.path.exists", side_effect=exists),
         patch("os.path.isdir", return_value=False),
-        patch("os.killpg", side_effect=ProcessLookupError()),
+        patch("os.killpg", side_effect=ProcessLookupError(), create=True),
         patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
         patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
         patch("os.makedirs", return_value=None),
@@ -3129,6 +3129,7 @@ def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path)
     assert len(popen_calls) == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and realpath")
 @pytest.mark.parametrize("proton", [False, True])
 def test_stop_finds_wineserver_beside_a_symlinked_runner(
     monkeypatch, tmp_path, proton

@@ -1532,7 +1532,9 @@ class Launcher:
         runner_path = proton_path
         if proton_path and path_module.sep not in proton_path:
             runner_path = host_which(proton_path) or proton_path
-        if runner_path:
+        # Only resolve with the host's own path rules; tests emulate a Linux
+        # host on Windows, where os.path.realpath would rewrite POSIX paths.
+        if runner_path and path_module is os.path:
             runner_path = os.path.realpath(runner_path)
         if is_proton and runner_path:
             for layout in ("files", "dist"):

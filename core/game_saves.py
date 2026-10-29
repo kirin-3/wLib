@@ -391,7 +391,7 @@ def detect_save_locations(
                 continue
 
             for sub_path, label in appdata_variants:
-                appdata_dir = os.path.join(user_path, sub_path)
+                appdata_dir = os.path.join(user_path, *sub_path.split("/"))
                 if not os.path.isdir(appdata_dir):
                     continue
 

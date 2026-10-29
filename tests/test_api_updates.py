@@ -4331,4 +4331,4 @@ def test_api_launch_game_expands_home_path_before_target_fallback(
     result = api.launch_game(game_id, "~/Games/Main.sh")
 
     assert result["success"]
-    assert launched == [str(canonical)]
+    assert [os.path.normpath(path) for path in launched] == [str(canonical)]
