@@ -214,6 +214,30 @@ def test_scan_skips_leftover_staging_folders(tmp_path):
     assert [game["exe_path"] for game in games] == [str(real / "Demo.exe")]
 
 
+def test_scan_skips_leftover_old_version_backups(tmp_path):
+    from core.game_scan import find_launcher, scan_games_folder
+
+    real = tmp_path / "Game"
+    real.mkdir()
+    (real / "Game.exe").touch()
+    old = tmp_path / "Game.wlib-old-1793249770"
+    old.mkdir()
+    (old / "Game.exe").touch()
+    kept = tmp_path / "Game.wlib-new-1793249771"
+    kept.mkdir()
+    (kept / "Game.exe").touch()
+
+    games = scan_games_folder(str(tmp_path))
+    assert [game["exe_path"] for game in games] == [str(real / "Game.exe")]
+
+    wrapper = tmp_path / "Wrapper"
+    wrapper.mkdir()
+    nested = wrapper / "Game.wlib-old-1793249772"
+    nested.mkdir()
+    (nested / "Game.exe").touch()
+    assert find_launcher(str(wrapper)) == ""
+
+
 def test_inspect_relative_exe_path_returns_absolute_path(tmp_path, monkeypatch):
     folder = tmp_path / "Game"
     folder.mkdir()

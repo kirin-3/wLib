@@ -34,6 +34,12 @@ _SKIPPED_EXECUTABLES_RE = re.compile(
     re.I,
 )
 _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
+# Archive installs keep their temporary and backup trees next to the game.
+# They are internal state, not games: `.wlib-staging-*` during extraction,
+# `<destination>.wlib-old-*` when the previous version is kept and
+# `<destination>.wlib-new-*` when a failed in-place update keeps the new tree.
+_INTERNAL_DIR_PREFIXES = (".wlib-staging-",)
+_INTERNAL_DIR_MARKERS = (".wlib-old-", ".wlib-new-")
 _LAUNCHER_EXTENSIONS = (
     ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar"
 )
@@ -63,6 +69,14 @@ def _names(game_dir: str) -> set[str]:
         return {entry.lower() for entry in os.listdir(game_dir)}
     except OSError:
         return set()
+
+
+def _is_internal_dir(name: str) -> bool:
+    """True for archive-install staging/backup trees, which are not games."""
+    lowered = name.lower()
+    return lowered.startswith(_INTERNAL_DIR_PREFIXES) or any(
+        marker in lowered for marker in _INTERNAL_DIR_MARKERS
+    )
 
 
 def detect_engine(game_dir: str, exe_path: str = "") -> str:
@@ -188,7 +202,7 @@ def find_launcher(
             if not entry.is_symlink()
             and entry.is_dir(follow_symlinks=False)
             and entry.name.lower() not in ("__macosx", ".git")
-            and not entry.name.startswith(".wlib-staging-")  # archive_install.STAGING_PREFIX
+            and not _is_internal_dir(entry.name)
         ]
         if len(subdirs) == 1:
             return find_launcher(subdirs[0], depth - 1, preferred_title)
@@ -208,9 +222,9 @@ def scan_games_folder(root: str) -> list[GameGuess]:
                 entry.path
                 for entry in os.scandir(root)
                 if entry.is_dir()
-                # A crashed archive install leaves its staging folder in the
-                # library; it is internal state, not a game.
-                and not entry.name.startswith(".wlib-staging-")
+                # A crashed or kept archive-install tree stays in the library;
+                # it is internal state, not a game.
+                and not _is_internal_dir(entry.name)
             ),
             key=str.lower,
         )
