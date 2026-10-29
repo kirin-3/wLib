@@ -1210,6 +1210,13 @@ const writeMockCollections = (collections: string[]): void => {
 const isSaveBackupKeep = (value: unknown): value is SaveBackupKeep =>
   value === "all" || (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 99);
 
+// Mirrors Api._is_actionable_remote_version: empty and placeholder versions are
+// extraction failures, not successful checks with no update.
+const isActionableVersion = (value: unknown): boolean => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return !["", "unknown", "n/a", "na", "none", "null"].includes(normalized);
+};
+
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const rpgmakerRunnerPath =
@@ -3098,10 +3105,21 @@ class ApiService {
             entry.id === game.id ? { ...entry, thread_completed: completed, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
           )));
         }
+        const version = String(game.latest_version || "").trim() || String(game.version || "").trim();
+        if (!isActionableVersion(version)) {
+          // check_for_updates treats an empty or placeholder scraped version as
+          // an extraction failure; the mock has nothing better to report.
+          return {
+            success: false,
+            mock: true,
+            error: "Could not extract a version from thread",
+            error_code: "extract_failed",
+          };
+        }
         return {
           success: true,
           mock: true,
-          version: game.latest_version || game.version || "",
+          version,
           has_update: hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }),
           skipped: isUpdateSkipped(game),
           newly_finished: newlyFinished,

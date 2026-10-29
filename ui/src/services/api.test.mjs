@@ -494,6 +494,44 @@ test("browser mock game listings carry additional launch targets", async () => {
   }
 });
 
+test("browser mock update checks reject non-actionable versions", async () => {
+  const emptyUrl = "https://f95zone.to/threads/empty.1/";
+  const unknownUrl = "https://f95zone.to/threads/unknown.2/";
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "Empty", exe_path: "/tmp/empty.exe", f95_url: emptyUrl, version: "", latest_version: "" },
+      { id: 2, title: "Unknown", exe_path: "/tmp/unknown.exe", f95_url: unknownUrl, version: "Unknown", latest_version: "Unknown" },
+    ])],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    for (const url of [emptyUrl, unknownUrl]) {
+      const result = await api.checkForUpdates(url);
+      // check_for_updates reports an extraction failure, never a successful
+      // check with a blank/placeholder version (scraper-failure-reporting).
+      assert.equal(result.success, false);
+      assert.equal(result.error_code, "extract_failed");
+    }
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
 test("onWebviewReady waits for the injected bridge API", async () => {
   const listeners = new Map();
   const storage = new Map();
