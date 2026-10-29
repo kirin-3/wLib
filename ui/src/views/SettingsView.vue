@@ -1520,7 +1520,7 @@ const browseUrm = async () => {
                 Browse
               </button>
             </div>
-            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="file" />
+            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="runner" />
 
             <p
               class="copyable-feedback text-xs"
