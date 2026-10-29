@@ -2956,3 +2956,22 @@ def test_companion_sandbox_launch_has_no_wine_context(monkeypatch, tmp_path):
             custom_prefix="/prefix",
         )["success"]
         assert launcher._running[1].wine_context is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX home expansion")
+def test_launch_expands_home_in_executable_path(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    script = home / "Games" / "run.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    with (
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch("~/Games/run.sh")
+    assert result["success"], result
+    assert popen.call_args.args[0] == [str(script)]

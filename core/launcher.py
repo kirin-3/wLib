@@ -810,7 +810,9 @@ class Launcher:
                 "error": "Executable path must be a non-empty string",
             }
 
-        exe_path = exe_path.strip()
+        # A leading ~ is accepted in the path fields; expand it before every
+        # existence check so the launcher uses the same path as path checks.
+        exe_path = os.path.expanduser(exe_path.strip())
 
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
