@@ -948,16 +948,49 @@ const normalizeMockLaunchTarget = (value: unknown): LaunchTarget | null => {
   };
 };
 
+// Seeded mock games (tests/library_ui_check.js) may embed launch targets
+// directly. Move them into the CRUD store once so listings and target
+// mutations work on the same records.
+const migrateEmbeddedMockLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
+  try {
+    const games: unknown = JSON.parse(localStorage.getItem("wlib-mock-games") || "[]");
+    if (!Array.isArray(games) || !games.some((game) => isRecord(game) && "launch_targets" in game)) {
+      return targets;
+    }
+    const migrated = [...targets];
+    const nextGames = games.map((game: unknown) => {
+      if (!isRecord(game) || !("launch_targets" in game)) return game;
+      const { launch_targets: embedded, ...rest } = game;
+      for (const value of Array.isArray(embedded) ? embedded : []) {
+        const target = normalizeMockLaunchTarget(isRecord(value) ? { ...value, game_id: game.id } : value);
+        if (!target) continue;
+        const existing = migrated.find((entry) => entry.id === target.id);
+        if (existing?.game_id === target.game_id) continue;
+        if (existing) target.id = nextMockLaunchTargetId(migrated);
+        migrated.push(target);
+      }
+      return rest;
+    });
+    writeMockLaunchTargets(migrated);
+    localStorage.setItem("wlib-mock-games", JSON.stringify(nextGames));
+    return migrated;
+  } catch (_error) {
+    return targets;
+  }
+};
+
 const readMockLaunchTargets = (): LaunchTarget[] => {
+  let targets: LaunchTarget[] = [];
   try {
     const raw = localStorage.getItem(MOCK_LAUNCH_TARGETS_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
-    return Array.isArray(parsed)
+    targets = Array.isArray(parsed)
       ? parsed.map(normalizeMockLaunchTarget).filter((target): target is LaunchTarget => target !== null)
       : [];
   } catch (_error) {
-    return [];
+    // Fall through with an empty store.
   }
+  return migrateEmbeddedMockLaunchTargets(targets);
 };
 
 const writeMockLaunchTargets = (targets: LaunchTarget[]): void => {
@@ -976,17 +1009,6 @@ const sortMockLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
   return [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
 };
 
-// get_all_games() embeds every game's additional targets in the same order as
-// get_launch_targets(); game listings (and the library launch menu) read them
-// there. Seeded mock games may embed targets directly, so keep those when the
-// CRUD store has none for the game.
-const mockLaunchTargetsForGame = (
-  gameId: number,
-  embedded: LaunchTarget[] = [],
-): LaunchTarget[] => {
-  const stored = readMockLaunchTargets().filter((target) => target.game_id === gameId);
-  return sortMockLaunchTargets(stored.length ? stored : embedded);
-};
 
 const normalizeMockAttachment = (value: unknown): GameAttachment | null => {
   if (!isRecord(value)) return null;
@@ -2276,12 +2298,16 @@ class ApiService {
         localStorage.setItem("wlib-mock-games", JSON.stringify(games));
         return { success: true, mock: true, game };
       }
-      case "get_games":
+      case "get_games": {
+        // get_all_games() embeds every game's additional targets in the same
+        // order as get_launch_targets(); the library launch menu reads them there.
+        const targets = readMockLaunchTargets();
         return readMockGames().map((game) => ({
           ...game,
-          launch_targets: mockLaunchTargetsForGame(game.id, game.launch_targets || []),
+          launch_targets: sortMockLaunchTargets(targets.filter((target) => target.game_id === game.id)),
           ...(this._mockPendingMetadata.has(game.id) ? { metadata_pending: true } : {}),
         }));
+      }
       case "add_game": {
         const games = readMockGames();
         const links = Array.isArray(args[16]) ? args[16] as StoreLink[] : [];
@@ -3221,8 +3247,7 @@ class ApiService {
         return { success: false, modified_at: null, mock: true, error: "Executable timestamps require the desktop app runtime." };
       case "get_launch_targets": {
         const gameId = Number(args[0]);
-        const game = readMockGames().find((entry) => entry.id === gameId);
-        return mockLaunchTargetsForGame(gameId, game?.launch_targets || []);
+        return sortMockLaunchTargets(readMockLaunchTargets().filter((target) => target.game_id === gameId));
       }
       case "create_launch_target": {
         const gameId = Number(args[0]);

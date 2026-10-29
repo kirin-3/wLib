@@ -476,10 +476,23 @@ test("browser mock game listings carry additional launch targets", async () => {
       (await api.getLaunchTargets(game.id)).map((target) => target.id),
       [first.target.id, second.target.id],
     );
-    // Seeded mock games may carry targets inline instead of the CRUD store.
+    // Seeded mock games may carry targets inline; they move into the CRUD
+    // store, so adding, editing and deleting targets keeps them consistent.
     assert.deepEqual(
       (await api.getGames()).find((entry) => entry.id === 9)?.launch_targets?.map((target) => target.label),
       ["Seeded target"],
+    );
+    const added = await api.createLaunchTarget(9, "Seeded extra", "/tmp/seeded-extra.sh");
+    if (!added.success) throw new Error("Could not add a target to the seeded game");
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === 9)?.launch_targets?.map((target) => target.label),
+      ["Seeded target", "Seeded extra"],
+    );
+    assert.equal((await api.updateLaunchTarget(90, { label: "Renamed" })).success, true);
+    assert.equal((await api.deleteLaunchTarget(added.target?.id)).success, true);
+    assert.deepEqual(
+      (await api.getLaunchTargets(9)).map((target) => target.label),
+      ["Renamed"],
     );
 
     await api.deleteLaunchTarget(first.target?.id);
