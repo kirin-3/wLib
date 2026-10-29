@@ -74,6 +74,21 @@ _POST_VERSION_RE = re.compile(
 )
 
 
+def _trim_post_version(token: str) -> str:
+    """Drop sentence punctuation after a post version ("1.0." -> "1.0").
+
+    A closing bracket stays when the token opened it ("0.5(fix)"). Mirrored in
+    extension/content.js.
+    """
+    value = token.strip()
+    while value and value[-1] in ".:!?)]":
+        opener = {")": "(", "]": "["}.get(value[-1])
+        if opener and value.count(opener) >= value.count(value[-1]):
+            break
+        value = value[:-1]
+    return value
+
+
 def _run_paced_f95_request(
     transport: Callable[[], tuple[int, str]],
 ) -> tuple[int, str]:
@@ -313,7 +328,7 @@ class Scraper:
             if match:
                 version = _POST_VERSION_RE.match(unescape(match.group(1)).strip())
                 if version:
-                    return version.group()
+                    return _trim_post_version(version.group())
         version_re = _POST_VERSION_RE.pattern
         text_patterns = [
             rf"(?:Current\s+)?Version\s*:?\s*v?({version_re})",
@@ -323,7 +338,7 @@ class Scraper:
         for pattern in text_patterns:
             match = re.search(pattern, _text(html), re.I)
             if match:
-                return match.group(1).strip()
+                return _trim_post_version(match.group(1))
         return "Unknown"
 
     def _normalize_cover_image_url(self, url: object) -> str:

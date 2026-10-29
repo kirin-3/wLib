@@ -12,5 +12,9 @@
   ["Version: 1.0.0-beta, Ren'Py", "1.0.0-beta"],
   ["Version: 1.2 Hotfix", "1.2 Hotfix"],
   ["Release: v4.0", "4.0"],
+  ["<b>Version</b>: 1.0. The mirror is fixed now.<br>", "1.0"],
+  ["<b>Version</b>: 0.5(fix)<br>", "0.5(fix)"],
+  ["Version: 0.9) and more", "0.9"],
+  ["Release: v4.0.", "4.0"],
   ["No version here", "Unknown"]
 ]

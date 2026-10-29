@@ -479,12 +479,23 @@ function extractGameInfo() {
                 ];
                 // Same as _POST_VERSION_RE in core/scraper.py.
                 const postVersion = String.raw`\d[^\s,;<]*(?:\s+(?:beta|alpha|final|fix\d*|hotfix)\b)?`;
+                // Same as _trim_post_version in core/scraper.py.
+                const trimPostVersion = (token) => {
+                    let value = token.trim();
+                    while (value && '.:!?)]'.includes(value[value.length - 1])) {
+                        const closer = value[value.length - 1];
+                        const opener = { ')': '(', ']': '[' }[closer];
+                        if (opener && value.split(opener).length >= value.split(closer).length) break;
+                        value = value.slice(0, -1);
+                    }
+                    return value;
+                };
                 let found = false;
                 for (const pattern of htmlPatterns) {
                     const htmlMatch = firstPost.innerHTML.match(pattern);
                     const versionMatch = htmlMatch && htmlMatch[1].trim().match(new RegExp(`^${postVersion}`, 'i'));
                     if (versionMatch) {
-                        info.version = versionMatch[0];
+                        info.version = trimPostVersion(versionMatch[0]);
                         found = true;
                         break;
                     }
@@ -500,7 +511,7 @@ function extractGameInfo() {
                     for (const pattern of textPatterns) {
                         const bodyMatch = postText.match(pattern);
                         if (bodyMatch) {
-                            info.version = bodyMatch[1].trim();
+                            info.version = trimPostVersion(bodyMatch[1]);
                             break;
                         }
                     }
