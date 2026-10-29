@@ -4016,6 +4016,26 @@ def test_lookup_thread_details(monkeypatch):
     )
 
 
+def test_inspect_archive_expands_tilde_saved_paths(tmp_path, monkeypatch):
+    # A game added with a typed "~/..." executable launches because the
+    # launcher expands it; the update preview must resolve the same folder.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    lib = tmp_path / "lib"
+    update_setting("library_folder", str(lib))
+    archive = tmp_path / "Game-2.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+    gid = add_game("Game", "~/games/Game/1.0/Game.exe", version="1.0")
+
+    inspected = Api().inspect_archive(str(archive), gid)
+
+    assert inspected["success"] is True
+    assert inspected["old_folder"] == str(home / "games" / "Game" / "1.0")
+
+
 def test_archive_engine_preview(tmp_path):
     lib = tmp_path / "lib"
     update_setting("library_folder", str(lib))

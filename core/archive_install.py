@@ -793,6 +793,20 @@ def _real(path: str) -> str:
         return os.path.abspath(os.path.expanduser(path))
 
 
+def _absolute_game_path(value: object) -> str:
+    """Absolute path for a stored game path, expanding `~` like the launcher.
+
+    Add Game stores the typed value, so a game added as `~/games/Game.exe`
+    keeps the tilde. Every consumer expands it (the launcher, save detection,
+    `in_library` matching); the update path must do the same or it looks for
+    the executable under the app's working directory.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return os.path.abspath(os.path.expanduser(raw))
+
+
 def _is_root(path_real: str) -> bool:
     # Filesystem/drive root: parent == itself (posix "/") or drive root (nt "C:\\").
     parent = os.path.dirname(path_real.rstrip(os.sep))
@@ -855,9 +869,10 @@ def can_remove_old_folder(
                 "reason": "Refusing to remove a parent of the new install.",
             }
     if old_exe:
-        old_exe_real = _real(old_exe)
+        old_exe_path = _absolute_game_path(old_exe)
+        old_exe_real = _real(old_exe_path)
         try:
-            exe_exists = os.path.isfile(old_exe)
+            exe_exists = os.path.isfile(old_exe_path)
         except OSError:
             exe_exists = False
         if not exe_exists or not _is_within(old_exe_real, cand_real):
@@ -1047,8 +1062,10 @@ def install_archive(
         for game in get_all_games():
             try:
                 if int(str(game.get("id"))) == int(game_id):
-                    old_exe = str(game.get("exe_path") or "")
-                    old_override = str(game.get("save_path_override") or "").strip()
+                    old_exe = _absolute_game_path(game.get("exe_path"))
+                    old_override = _absolute_game_path(
+                        game.get("save_path_override")
+                    )
                     # Updates keep the stored engine unless the caller sent one.
                     if not engine.strip():
                         engine = str(game.get("engine") or "")

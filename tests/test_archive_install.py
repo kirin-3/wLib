@@ -580,6 +580,53 @@ def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatc
     assert old_dir2.exists()
 
 
+def test_install_update_expands_tilde_in_stored_game_paths(tmp_path, monkeypatch):
+    # Games added with a typed "~/..." path are launched through expanduser, so
+    # the stored value must be resolved the same way when updating; otherwise
+    # the old folder is not recognised, saves are not carried, and the guard
+    # claims the executable is missing.
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    old_dir = home / "games" / "Game" / "1.0"
+    (old_dir / "saves").mkdir(parents=True)
+    (old_dir / "Game.exe").write_text("old")
+    (old_dir / "saves" / "slot1.sav").write_text("keep")
+    (old_dir / "MySaves").mkdir()
+    (old_dir / "MySaves" / "a.save").write_text("override")
+    game_id = db.add_game("Game", "~/games/Game/1.0/Game.exe", version="1.0")
+    assert game_id is not None
+    _ = db.update_game(
+        int(game_id), {"save_path_override": "~/games/Game/1.0/MySaves"}
+    )
+
+    lib = tmp_path / "lib"
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=int(game_id),
+        remove_old=True,
+    )
+
+    assert result["success"] is True
+    assert result["removed_old"] is True
+    assert result["kept_old_folder_reason"] == ""
+    assert not old_dir.exists()
+    assert (lib / "Game" / "2.0" / "saves" / "slot1.sav").read_text() == "keep"
+    assert (lib / "Game" / "2.0" / "MySaves" / "a.save").read_text() == "override"
+    assert db.get_all_games()[0]["save_path_override"] == str(
+        lib / "Game" / "2.0" / "MySaves"
+    )
+
+
 def test_install_same_folder_pattern_replaces_safely(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive

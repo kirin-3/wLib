@@ -5486,7 +5486,9 @@ class Api:
                         continue
                 except (TypeError, ValueError):
                     continue
-                old_exe = str(game.get("exe_path") or "")
+                old_exe = str(game.get("exe_path") or "").strip()
+                if old_exe:
+                    old_exe = os.path.abspath(os.path.expanduser(old_exe))
                 if not title.strip():
                     title = str(game.get("title") or "")
                 latest = str(game.get("latest_version") or "").strip()
