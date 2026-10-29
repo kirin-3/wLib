@@ -83,8 +83,25 @@ def test_empty_product_details_are_a_failed_step(tmp_path):
     transport.route("/product/info/ajax", json_response({}))
     transport.route("/fsr/ajax/", json_response(fixture_json("dlsite_listing.json")))
     ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert(
+        "dlsite_works",
+        "product_id",
+        [{"product_id": "VJ01006811", "title": "old", "url": "u"}],
+        "2026-01-01T00:00:00Z",
+    )
     with pytest.raises(ValueError, match="no details"):
         DlsiteSource().sweep_step(ctx)
+
+
+def test_a_new_work_without_details_does_not_stall_the_source(tmp_path):
+    transport = FakeTransport()
+    transport.route("/product/info/ajax", json_response({}))
+    transport.route("/fsr/ajax/", json_response(fixture_json("dlsite_listing.json")))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.state.mark_sweep_completed("dlsite", "2026-01-01T00:00:00Z")
+    # Nothing stored is at risk, so missing details are retried later instead.
+    DlsiteSource().incremental(ctx)
+    assert DlsiteSource().sweep_step(ctx) is False
 
 
 def test_incremental_fetches_details_only_for_new_ids(tmp_path):

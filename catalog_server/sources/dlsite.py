@@ -126,8 +126,8 @@ class DlsiteSource:
             # unseen until the removal marking treats them as gone.
             raise ValueError(f"DLsite returned an empty page {page} of {total}")
         ids = [str(item["product_id"]) for item in items]
-        known = ctx.catalog.existing_keys("dlsite_works", "product_id", ids)
-        known |= ctx.state.skipped_dlsite(ids)
+        stored = ctx.catalog.existing_keys("dlsite_works", "product_id", ids)
+        known = stored | ctx.state.skipped_dlsite(ids)
         if only_new:
             ctx.catalog.touch("dlsite_works", "product_id", known, ctx.now())
             items = [item for item in items if str(item["product_id"]) not in known]
@@ -139,10 +139,12 @@ class DlsiteSource:
                 ),
             )
             rows, dropped = merge_details(site, items, info.json())
-            if not rows and not dropped:
+            if not rows and not dropped and stored and not only_new:
                 # An empty details payload is a failed request, not a page of
-                # works to drop. Advancing would hide every listed work from
-                # the sweep and let the removal marking delete them.
+                # works to drop. Advancing would hide the stored works from
+                # the sweep and let the removal marking delete them. New works
+                # without details are simply retried, so they never stall the
+                # source.
                 raise ValueError(
                     f"DLsite returned no details for {len(items)} listed works"
                 )
