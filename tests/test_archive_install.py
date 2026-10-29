@@ -1026,6 +1026,21 @@ def test_check_archive_entry_safe_drive_relative_and_reserved_names():
             check_archive_entry_safe(invalid)
 
 
+def test_check_archive_entry_rejects_parent_with_trailing_spaces():
+    # Windows trims trailing dots/spaces per component, so ".. " is the parent.
+    for bad in (
+        ".. /evil.txt",
+        "dir/..  /evil.txt",
+        "..  /evil.txt",
+        "dir/.. . /evil.txt",
+        ".../evil.txt",
+    ):
+        with pytest.raises(ArchiveSafetyError, match="unsafe"):
+            check_archive_entry_safe(bad)
+    # A normal name with trailing spaces is still allowed on Linux.
+    check_archive_entry_safe("notes.txt ")
+
+
 def test_zip_extract_drive_relative_and_reserved_traversal_aborts(tmp_path):
     for evil in ("D:evil.txt", "CON", "NUL"):
         archive = tmp_path / f"evil_{abs(hash(evil)) % 10000}.zip"

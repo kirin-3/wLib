@@ -224,6 +224,11 @@ def check_archive_entry_safe(entry: str) -> None:
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     if any(p == ".." for p in parts):
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
+    # Windows strips trailing dots and spaces from every path component before
+    # it resolves `..`, so ".. " (or "..." / ".. .") leaves the destination
+    # just like "..". Reject components made only of dots and spaces.
+    if any(not p.strip(". ") for p in parts):
+        raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     for part in parts:
         # A colon starts a device stream on Windows (CON:foo, COM1:data), so
         # the reserved-name check must look at the part before it as well.
