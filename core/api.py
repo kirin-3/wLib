@@ -4107,7 +4107,13 @@ class Api:
                 "error": "Winetricks is not installed. Install it first, then try again.",
             }
 
-        env, target = self._build_runtime_install_env(prefix_path, proton_path)
+        try:
+            env, target = self._build_runtime_install_env(prefix_path, proton_path)
+        except (OSError, ValueError) as exc:
+            return {
+                "success": False,
+                "error": f"Could not prepare the Wine prefix: {exc}",
+            }
 
         verbs = [
             "corefonts",
@@ -4213,7 +4219,13 @@ class Api:
         import urllib.request
         import zipfile
 
-        env, target = self._build_runtime_install_env(prefix_path, proton_path)
+        try:
+            env, target = self._build_runtime_install_env(prefix_path, proton_path)
+        except (OSError, ValueError) as exc:
+            return {
+                "success": False,
+                "error": f"Could not prepare the Wine prefix: {exc}",
+            }
         rtps = self._get_rtp_packages()
 
         runner_command: list[str]
@@ -4234,7 +4246,7 @@ class Api:
             runner_command = [wine_binary]
 
         # We run this in a background thread so we don't block the UI returning 'success' immediately
-        def _download_and_install():
+        def _install_rtps():
             rtp_dir = get_rtp_dir()
             os.makedirs(rtp_dir, exist_ok=True)
 
@@ -4366,6 +4378,20 @@ class Api:
                 print(
                     f"All RTPs installed successfully in {target['resolved_prefix']}."
                 )
+
+        def _download_and_install():
+            # A failure before the per-package loop (for example the RTP cache
+            # folder being unwritable) would otherwise leave the status stuck on
+            # running forever and block every later installer.
+            try:
+                _install_rtps()
+            except Exception as exc:
+                message = str(exc) or "RTP installation failed."
+                with self._status_lock:
+                    self._rtp_install_status["running"] = False
+                    self._rtp_install_status["current"] = ""
+                    self._rtp_install_status["error"] = message
+                print(f"RTP installation stopped unexpectedly: {message}")
 
         with self._status_lock:
             if (
