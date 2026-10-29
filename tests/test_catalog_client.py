@@ -136,6 +136,30 @@ def test_data_dir_with_uri_characters_can_install(tmp_path, server):
     assert client.status()["installed"] is True
 
 
+def test_snapshot_data_is_flushed_before_the_replace(tmp_path, server, monkeypatch):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    client = _client(tmp_path)
+    calls = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def fsync(fd):
+        calls.append("fsync")
+        real_fsync(fd)
+
+    def replace(source, target):
+        if target == client.catalog_path:
+            calls.append("replace")
+        real_replace(source, target)
+
+    monkeypatch.setattr(catalog_module.os, "fsync", fsync)
+    monkeypatch.setattr(catalog_module.os, "replace", replace)
+    assert client.check()["updated"] is True
+    # A rename is only crash-safe once the data it points at has reached disk.
+    assert "fsync" in calls and "replace" in calls
+    assert calls.index("fsync") < calls.index("replace")
+
+
 def test_unchanged_hash_downloads_only_the_manifest(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     client = _client(tmp_path)
