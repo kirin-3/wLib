@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "wLib",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Recognise, add and wishlist games in wLib from F95Zone, DLsite, VNDB and Ryuugames.",
     "permissions": [
         "storage",

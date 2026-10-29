@@ -428,7 +428,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.0');
+  assert.equal(manifest.version, '1.2.1');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
