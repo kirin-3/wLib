@@ -46,14 +46,13 @@ import {
 import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
-  clearLegacyLibraryViewState,
   hasStatusFilter,
   normalizeActiveCollection,
   normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
-  readLibraryViewState,
   readPresetsForSave,
+  restoreSavedLibraryViewState,
   saveLibraryViewState,
   toggleStatusFilter,
   type FilterCollection,
@@ -457,13 +456,7 @@ const persistLibraryViewState = () => {
 };
 
 const restoreLibraryViewState = () => {
-  const restored = readLibraryViewState(localStorage);
-  applyLibraryViewState(restored.state);
-
-  if (restored.source === "legacy") {
-    persistLibraryViewState();
-    clearLegacyLibraryViewState(localStorage);
-  }
+  applyLibraryViewState(restoreSavedLibraryViewState(localStorage));
 };
 
 const filteredGames = computed(() => {

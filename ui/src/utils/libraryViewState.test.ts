@@ -16,6 +16,7 @@ import {
   normalizeLibraryViewState,
   readLibraryViewState,
   readPresetsForSave,
+  restoreSavedLibraryViewState,
   saveLibraryViewState,
   toggleStatusFilter,
   type LibraryFilterPreset,
@@ -148,6 +149,52 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   assert.equal(storage.getItem(LEGACY_FILTERS_PANE_STORAGE_KEY), null);
   assert.equal(storage.getItem(LEGACY_FILTER_SECTIONS_STORAGE_KEY), null);
   assert.notEqual(storage.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+});
+
+test("a failed write reports failure instead of silently dropping the state", () => {
+  const storage = new MemoryStorage();
+  const state = normalizeLibraryViewState({ layoutMode: "list", sortBy: "rating" });
+  assert.equal(saveLibraryViewState(storage, state), true);
+
+  class QuotaStorage extends MemoryStorage {
+    override setItem(key: string, value: string): void {
+      if (key === LIBRARY_VIEW_STATE_STORAGE_KEY) {
+        throw new Error("QuotaExceededError");
+      }
+      super.setItem(key, value);
+    }
+  }
+  assert.equal(saveLibraryViewState(new QuotaStorage(), state), false);
+});
+
+test("legacy keys are only removed once the migrated blob was written", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(LEGACY_LAYOUT_MODE_STORAGE_KEY, "compact");
+  storage.setItem(LEGACY_FILTERS_PANE_STORAGE_KEY, "false");
+
+  const migrated = restoreSavedLibraryViewState(storage);
+  assert.equal(migrated.layoutMode, "compact");
+  assert.equal(migrated.isFiltersCollapsed, false);
+  assert.notEqual(storage.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+  assert.equal(storage.getItem(LEGACY_LAYOUT_MODE_STORAGE_KEY), null);
+  assert.equal(storage.getItem(LEGACY_FILTERS_PANE_STORAGE_KEY), null);
+
+  class QuotaStorage extends MemoryStorage {
+    override setItem(key: string, value: string): void {
+      if (key === LIBRARY_VIEW_STATE_STORAGE_KEY) {
+        throw new Error("QuotaExceededError");
+      }
+      super.setItem(key, value);
+    }
+  }
+  const failing = new QuotaStorage();
+  failing.setItem(LEGACY_LAYOUT_MODE_STORAGE_KEY, "list");
+  const restored = restoreSavedLibraryViewState(failing);
+  // The in-memory state still applies, but the old keys stay so the migration
+  // is retried next launch instead of losing the saved preferences.
+  assert.equal(restored.layoutMode, "list");
+  assert.equal(failing.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+  assert.equal(failing.getItem(LEGACY_LAYOUT_MODE_STORAGE_KEY), "list");
 });
 
 test("readLibraryViewState prefers current blob and prunes unsupported engines and tags", () => {

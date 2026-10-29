@@ -240,11 +240,13 @@ const readStorageItem = (storage: Storage, key: string): string | null => {
   }
 };
 
-const writeStorageItem = (storage: Storage, key: string, value: string): void => {
+const writeStorageItem = (storage: Storage, key: string, value: string): boolean => {
   try {
     storage.setItem(key, value);
+    return true;
   } catch (error) {
     console.warn(`Failed to write localStorage key '${key}'`, error);
+    return false;
   }
 };
 
@@ -483,12 +485,29 @@ export const readLibraryViewState = (
   };
 };
 
-export const saveLibraryViewState = (storage: Storage, state: LibraryViewState): void => {
-  writeStorageItem(
+export const saveLibraryViewState = (storage: Storage, state: LibraryViewState): boolean => {
+  return writeStorageItem(
     storage,
     LIBRARY_VIEW_STATE_STORAGE_KEY,
     JSON.stringify(normalizeLibraryViewState(state)),
   );
+};
+
+// Migrates the old separate keys into the current blob. The old keys are only
+// removed once the blob was written: when storage is full or unavailable the
+// migration is retried on the next launch instead of silently losing the
+// user's layout and filters.
+export const restoreSavedLibraryViewState = (
+  storage: Storage,
+  options: NormalizeLibraryViewStateOptions = {},
+): LibraryViewState => {
+  const restored = readLibraryViewState(storage, options);
+
+  if (restored.source === "legacy" && saveLibraryViewState(storage, restored.state)) {
+    clearLegacyLibraryViewState(storage);
+  }
+
+  return restored.state;
 };
 
 export const clearLegacyLibraryViewState = (storage: Storage): void => {
