@@ -2975,3 +2975,30 @@ def test_launch_expands_home_in_executable_path(monkeypatch, tmp_path):
         result = Launcher().launch("~/Games/run.sh")
     assert result["success"], result
     assert popen.call_args.args[0] == [str(script)]
+
+
+@pytest.mark.parametrize(
+    "other_kill_info",
+    [
+        None,
+        ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix/pfx"}),
+    ],
+)
+def test_stop_skips_wineserver_for_equivalent_prefixes(monkeypatch, other_kill_info):
+    import signal
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(
+        MagicMock(pid=123),
+        ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix-link/pfx"}),
+        prefix="/prefix",
+    )
+    launcher._running[2] = RunningGame(
+        MagicMock(pid=456), other_kill_info, prefix="/prefix"
+    )
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg, raising=False)
+    with patch("subprocess.run") as run, patch("threading.Thread"):
+        assert launcher.stop(1)["success"]
+    run.assert_not_called()
+    killpg.assert_called_with(123, signal.SIGTERM)

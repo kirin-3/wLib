@@ -583,17 +583,23 @@ class Launcher:
         with self._running_lock:
             running = self._running.get(game_id)
             proc = running.proc if running is not None else None
-            prefix = (
-                running.kill_info[1].get("WINEPREFIX")
-                if running and running.kill_info
-                else None
-            )
-            # wineserver -k ends every process in the prefix, so spare games that share it.
-            prefix_shared = any(
-                other.kill_info is not None
-                and other.kill_info[1].get("WINEPREFIX") == prefix
+            # wineserver -k ends every process in the prefix, so spare games that
+            # share it. Compare normalized prefixes and include games that have no
+            # resolved wineserver (for example a Proton runner in a directory
+            # without files/bin or dist/bin).
+            def shareable_prefix(entry: RunningGame) -> str:
+                if entry.prefix:
+                    return entry.prefix
+                if entry.kill_info is not None:
+                    return game_sandbox.normalize_prefix(
+                        str(entry.kill_info[1].get("WINEPREFIX") or "")
+                    )
+                return ""
+
+            running_prefix = shareable_prefix(running) if running is not None else ""
+            prefix_shared = bool(running_prefix) and any(
+                other_id != game_id and shareable_prefix(other) == running_prefix
                 for other_id, other in self._running.items()
-                if other_id != game_id and prefix is not None
             )
         if running is None:
             return {
