@@ -78,3 +78,28 @@ def test_a_later_success_clears_the_last_error(tmp_path):
     state.record_source(run_id + 1, "f95", "ok", 5, 2, None, "2026-01-01T12:00:00Z")
     status = state.source_status("f95")
     assert status["last_error"] is None and status["last_success_at"] == "2026-01-01T12:00:00Z"
+
+
+def test_imported_rows_survive_sweeps_until_the_source_lists_them(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    row = {"thread_id": 1, "title": "A", "url": "u"}
+    catalog.upsert("f95_threads", "thread_id", [row], "2026-01-01T00:00:00Z", origin="import")
+    assert catalog.mark_removed("f95", "2026-02-01T00:00:00Z", "2026-02-01T00:00:00Z") == 0
+    catalog.upsert("f95_threads", "thread_id", [row], "2026-02-01T00:00:00Z")
+    assert catalog.conn.execute("SELECT origin FROM f95_threads").fetchone() == (None,)
+    assert catalog.mark_removed("f95", "2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z") == 1
+
+
+def test_older_catalogs_get_the_origin_column(tmp_path):
+    path = tmp_path / "catalog.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE f95_threads (thread_id INTEGER PRIMARY KEY, title TEXT NOT NULL, "
+        + "url TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, removed_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+    catalog = CatalogStore(str(path))
+    columns = {row[1] for row in catalog.conn.execute("PRAGMA table_info(f95_threads)")}
+    catalog.close()
+    assert "origin" in columns

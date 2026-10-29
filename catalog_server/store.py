@@ -13,10 +13,14 @@ from core.catalog_format import META_SCHEMA_VERSION, SCHEMA_VERSION
 CATALOG_FILE = "catalog.sqlite"
 STATE_FILE = "state.sqlite"
 
+# `origin` is set on rows imported from elsewhere (NULL when the source
+# itself listed it). Imported rows are never marked removed; the first time
+# the source lists one, it becomes an ordinary row.
 _SEEN_COLUMNS = """
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
-    removed_at TEXT
+    removed_at TEXT,
+    origin TEXT
 """
 
 CATALOG_SCHEMA = f"""
@@ -182,7 +186,20 @@ class CatalogStore:
         self.conn: sqlite3.Connection = sqlite3.connect(path)
         _ = self.conn.execute("PRAGMA journal_mode=WAL")
         _ = self.conn.executescript(CATALOG_SCHEMA)
+        self._add_origin_columns()
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
+
+    def _add_origin_columns(self) -> None:
+        """Catalogs created before `origin` existed get the column added."""
+        with self.conn:
+            for tables in SOURCE_TABLES.values():
+                for table, _key in tables:
+                    columns = {
+                        str(row[1])
+                        for row in _rows(self.conn.execute(f"PRAGMA table_info({table})"))
+                    }
+                    if "origin" not in columns:
+                        _ = self.conn.execute(f"ALTER TABLE {table} ADD COLUMN origin TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -201,26 +218,30 @@ class CatalogStore:
         key: str,
         rows: Sequence[Mapping[str, object]],
         now: str,
+        origin: str | None = None,
     ) -> int:
-        """Insert or update rows; keeps `first_seen` and clears `removed_at`."""
+        """Insert or update rows; keeps `first_seen` and clears `removed_at`.
+
+        Sources upsert with no origin, which turns imported rows into ordinary ones.
+        """
         if not rows:
             return 0
         columns = list(rows[0])
-        names = ", ".join([*columns, "first_seen", "last_seen", "removed_at"])
-        marks = ", ".join(["?"] * (len(columns) + 3))
+        names = ", ".join([*columns, "first_seen", "last_seen", "removed_at", "origin"])
+        marks = ", ".join(["?"] * (len(columns) + 4))
         updates = ", ".join(
             f"{column} = excluded.{column}" for column in columns if column != key
         )
         sql = (
             f"INSERT INTO {table} ({names}) VALUES ({marks}) "
             + f"ON CONFLICT({key}) DO UPDATE SET {updates}, "
-            + "last_seen = excluded.last_seen, removed_at = NULL"
+            + "last_seen = excluded.last_seen, removed_at = NULL, origin = excluded.origin"
         )
         with self.conn:
             _ = self.conn.executemany(
                 sql,
                 [
-                    [_json(row[column]) for column in columns] + [now, now, None]
+                    [_json(row[column]) for column in columns] + [now, now, None, origin]
                     for row in rows
                 ],
             )
@@ -245,19 +266,22 @@ class CatalogStore:
         marks = ", ".join(["?"] * len(wanted))
         with self.conn:
             _ = self.conn.execute(
-                f"UPDATE {table} SET last_seen = ?, removed_at = NULL "
+                f"UPDATE {table} SET last_seen = ?, removed_at = NULL, origin = NULL "
                 + f"WHERE CAST({key} AS TEXT) IN ({marks})",
                 [now, *wanted],
             )
 
     def mark_removed(self, source: str, sweep_started_at: str, now: str) -> int:
-        """Mark rows a completed sweep did not see; reappearing rows are cleared by upsert."""
+        """Mark rows a completed sweep did not see; reappearing rows are cleared by upsert.
+
+        Imported rows are skipped: the source never listing them is expected.
+        """
         marked = 0
         with self.conn:
             for table, _key in SOURCE_TABLES[source]:
                 marked += self.conn.execute(
                     f"UPDATE {table} SET removed_at = ? "
-                    + "WHERE removed_at IS NULL AND last_seen < ?",
+                    + "WHERE removed_at IS NULL AND origin IS NULL AND last_seen < ?",
                     (now, sweep_started_at),
                 ).rowcount
         return marked

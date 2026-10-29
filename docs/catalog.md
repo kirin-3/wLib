@@ -99,6 +99,10 @@ get `removed_at`. One missed sweep is not enough, because a deletion on an
 earlier page of a live feed can shift a row past the sweep. A row that appears
 again has `removed_at` cleared. Rows are never deleted.
 
+`origin` is NULL for rows a source listed itself and set on rows imported
+from elsewhere. Sweeps never mark imported rows removed; once the
+source lists one, its `origin` is cleared and it is treated like any other row.
+
 ### Schema versions
 
 - `core/catalog_format.py` holds what the builder and the app share: the
