@@ -863,7 +863,14 @@ class Launcher:
         ext = path_module.splitext(exe_path)[1].lower()
         enable_logging = get_setting("enable_logging") == "true"
         game_dir = path_module.dirname(exe_path)
-        sandboxed = bool(sandbox_enabled and ext not in (".html", ".htm"))
+        # HTML is exempt only when the launch opens the system browser. Custom
+        # Command, the RPGMaker runner and a forced Wine/Proton launch run a
+        # real process even when the selected target happens to be an .html
+        # file, so those still get the sandbox.
+        browser_launch = ext in (".html", ".htm") and (
+            is_windows() or launch_mode in ("auto", "native")
+        )
+        sandboxed = bool(sandbox_enabled and not browser_launch)
         sandbox_status: game_sandbox.SandboxStatus | None = None
         if sandboxed:
             if game_id is None or game_id <= 0:

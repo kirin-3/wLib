@@ -2471,6 +2471,56 @@ def test_sandboxed_html_is_exempt(monkeypatch):
     status.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "mode,command_line_args",
+    [
+        ("custom", "sh %command%"),
+        ("rpgmaker_linux", ""),
+        ("wine_proton", ""),
+    ],
+)
+def test_sandbox_wraps_html_target_outside_browser_modes(
+    monkeypatch, tmp_path, mode, command_line_args
+):
+    from core import game_sandbox
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    launcher = Launcher()
+    monkeypatch.setattr(
+        launcher,
+        "get_rpgmaker_linux_runner_status",
+        lambda: {"available": True, "path": "/runner/start.sh"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.access", return_value=True),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = launcher.launch(
+            "/games/index.html",
+            command_line_args=command_line_args,
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode=mode,
+        )
+    assert result["success"], result
+    assert popen.call_args.args[0][0] == "/usr/bin/bwrap"
+
+
 def test_sandbox_different_prefixes_allowed(monkeypatch):
     from core.game_sandbox import normalize_prefix
 
