@@ -578,3 +578,37 @@ test("onWebviewReady waits for the injected bridge API", async () => {
     delete globalThis.localStorage;
   }
 });
+
+test("browser mock URM detection matches the tools engine label", async () => {
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "RenPy Game", exe_path: "/games/renpy/game.sh", engine: "RenPy" },
+    ])],
+    ["wlib-mock-settings", JSON.stringify({ urm_rpa_path: "/mock/urm.rpa" })],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    assert.equal((await api.getGameToolSupport(1)).engine, "renpy");
+    assert.equal((await api.getUrmStatus(1)).renpy, true);
+    const installed = await api.setUrmInstalled(1, true);
+    assert.equal(installed.success, true);
+    assert.equal((await api.getGameTools(1)).renpy?.urm.installed, true);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

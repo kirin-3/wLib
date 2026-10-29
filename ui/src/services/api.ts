@@ -2390,7 +2390,9 @@ class ApiService {
         const gameId = Number(args[0]);
         const game = readMockGames().find((game) => game.id === gameId);
         if (!game) return { success: false, error: "Game not found" };
-        const renpy = game.engine === "Ren'Py";
+        // Same engine detection as get_game_tools/get_game_tool_support: the
+        // browser mock reads the engine label instead of the game folder.
+        const renpy = this._mockToolEngine(gameId) === "renpy";
         const sourceConfigured = /\.rpa$/i.test(readMockSettings().urm_rpa_path);
         if (method === "set_urm_installed") {
           if (!renpy) return { success: false, error: "This game is not a Ren'Py game" };
