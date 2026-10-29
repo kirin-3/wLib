@@ -3401,11 +3401,18 @@ class ApiService {
 
 export const api = new ApiService();
 
+// pywebview creates window.pywebview with an empty api object before
+// `_createApi` runs, so the object alone does not mean the bridge is ready.
+const bridgeIsReady = (): boolean => {
+  const api = window.pywebview?.api;
+  return !!api && Object.keys(api).length > 0;
+};
+
 // Let PyWebview inject before we consider it fully ready, though in Vue we usually just call it on mount
 export function onWebviewReady(callback: () => void): void {
-  if (window.pywebview) {
+  if (bridgeIsReady()) {
     callback();
-  } else if (/QtWebEngine\//.test(navigator.userAgent)) {
+  } else if (window.pywebview || /QtWebEngine\//.test(window.navigator?.userAgent ?? "")) {
     // Desktop shell (always gui="qt"): the API is injected after load, so wait
     // instead of running once against mocks and again for real.
     window.addEventListener("pywebviewready", callback, { once: true });

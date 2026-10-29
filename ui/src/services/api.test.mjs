@@ -432,3 +432,50 @@ test("companion tools persist definitions, overrides, run support and duplicate 
     globalThis.CustomEvent = previousCustomEvent;
   }
 });
+
+test("onWebviewReady waits for the injected bridge API", async () => {
+  const listeners = new Map();
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    pywebview: { api: {} },
+    navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64) QtWebEngine/6.11.2 Chrome/130" },
+    addEventListener: (type, callback) => listeners.set(type, callback),
+    dispatchEvent() {},
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { onWebviewReady } = await server.ssrLoadModule("/src/services/api.ts");
+    let ready = false;
+    onWebviewReady(() => {
+      ready = true;
+    });
+    // pywebview defines window.pywebview with an empty api before _createApi
+    // runs; that state must not run startup calls against browser mocks.
+    assert.equal(ready, false);
+
+    window.pywebview.api.get_games = () => [];
+    listeners.get("pywebviewready")?.();
+    assert.equal(ready, true);
+
+    // A plain browser has no bridge to wait for, so the mock callbacks still
+    // run immediately.
+    delete window.pywebview;
+    window.navigator.userAgent = "Mozilla/5.0 Chrome/130";
+    let browserReady = false;
+    onWebviewReady(() => {
+      browserReady = true;
+    });
+    assert.equal(browserReady, true);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
