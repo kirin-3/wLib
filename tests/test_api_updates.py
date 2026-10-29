@@ -4022,6 +4022,7 @@ def test_archive_path_fields_expand_tilde(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
     lib = tmp_path / "lib"
     update_setting("library_folder", str(lib))
@@ -4068,6 +4069,7 @@ def test_inspect_archive_expands_tilde_saved_paths(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
     lib = tmp_path / "lib"
     update_setting("library_folder", str(lib))

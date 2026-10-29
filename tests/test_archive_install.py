@@ -603,6 +603,7 @@ def test_install_update_expands_tilde_in_stored_game_paths(tmp_path, monkeypatch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     old_dir = home / "games" / "Game" / "1.0"
     (old_dir / "saves").mkdir(parents=True)
     (old_dir / "Game.exe").write_text("old")
