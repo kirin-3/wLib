@@ -41,9 +41,12 @@ const markingUpdatedIds = ref(new Set<number>());
 const recheckingIds = ref(new Set<number>());
 const downloadOffers = ref(new Map<number, DownloadOffer>());
 
+let offersRequest = 0;
 const loadDownloadOffers = async () => {
+  const request = ++offersRequest;
   try {
     const result = await api.findDownloadOffers();
+    if (request !== offersRequest) return;
     const offers = result?.success ? result.offers || [] : [];
     downloadOffers.value = new Map(offers.map((offer) => [offer.game_id, offer]));
   } catch (e) {
@@ -144,6 +147,7 @@ const setDesktopNotifications = async (event: Event) => {
 };
 const lastAutoCheck = ref("");
 let pollInterval: ReturnType<typeof setInterval> | null = null;
+let statusRequest = 0;
 // Set when the view unmounts: onWebviewReady may answer after that, and it must
 // not leave a status poll running for a page that is gone.
 let disposed = false;
@@ -268,8 +272,10 @@ const failPolling = (message: string) => {
 };
 
 const pollStatus = async () => {
+  const request = ++statusRequest;
   try {
     const s = await api.getUpdateStatus();
+    if (request !== statusRequest) return;
     if (s && s.success === false) {
       console.error("Poll status failed:", s.error);
       failPolling(
@@ -286,6 +292,7 @@ const pollStatus = async () => {
       }
     }
   } catch (e) {
+    if (request !== statusRequest) return;
     console.error("Poll failed", e);
     failPolling("Could not read the update-check status: " + String(e));
   }
@@ -459,6 +466,8 @@ onMounted(() => {
 onUnmounted(() => {
   disposed = true;
   gamesRequest++;
+  offersRequest++;
+  statusRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   stopPolling();
 });

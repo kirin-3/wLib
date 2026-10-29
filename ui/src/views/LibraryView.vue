@@ -922,25 +922,41 @@ const loadGames = async () => {
   }
 };
 
+let runningGamesRequest = 0;
+const loadRunningGames = async () => {
+  const request = ++runningGamesRequest;
+  try {
+    const ids = await api.getRunningGames();
+    if (request !== runningGamesRequest) return;
+    runningGameIds.value = new Set(ids);
+  } catch (error) {
+    console.error("Failed to load running games", error);
+  }
+};
+
 // Sync and imports can replace the collection list and presets, not just games.
+let settingsRequest = 0;
+const loadLibrarySettings = async () => {
+  const request = ++settingsRequest;
+  try {
+    const settings = await api.getSettings();
+    // A slow older read must not overwrite collections or presets that a
+    // newer sync/import refresh already applied.
+    if (request !== settingsRequest) return;
+    customStatuses.value = settings.custom_play_statuses || [];
+    customStatusesLoaded.value = true;
+    applyCollectionsFromPayload(settings.collections);
+    savedPresets.value = settings.library_filter_presets || [];
+    presetsLoaded.value = true;
+  } catch (error) {
+    console.error("Failed to load library settings", error);
+  }
+};
+
 const handleLibraryRefresh = () => {
   void loadGames();
-  void api
-    .getRunningGames()
-    .then((ids) => {
-      runningGameIds.value = new Set(ids);
-    })
-    .catch(console.error);
-  void api
-    .getSettings()
-    .then((settings) => {
-      customStatuses.value = settings.custom_play_statuses || [];
-      customStatusesLoaded.value = true;
-      applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
-      presetsLoaded.value = true;
-    })
-    .catch(console.error);
+  void loadRunningGames();
+  void loadLibrarySettings();
 };
 
 const openDetail = (game: GameRecord) => {
@@ -1038,7 +1054,7 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       else notifyError(`Failed to launch game:\n\n${result.error}`);
     } else if (result?.success) {
       // Reconcile with the registry: HTML is untracked and short commands may already have exited.
-      runningGameIds.value = new Set(await api.getRunningGames());
+      await loadRunningGames();
     }
   } catch (e) {
     console.error("Launch failed", e);
@@ -1485,19 +1501,15 @@ onMounted(() => {
   onWebviewReady(() => {
     void loadTagColors().catch(console.error);
     void loadGames();
-    void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
-    void api.getSettings().then((settings) => {
-      customStatuses.value = settings.custom_play_statuses || [];
-      customStatusesLoaded.value = true;
-      applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
-      presetsLoaded.value = true;
-    }).catch(console.error);
+    void loadRunningGames();
+    void loadLibrarySettings();
   });
 });
 
 onUnmounted(() => {
   gamesRequest++;
+  runningGamesRequest++;
+  settingsRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.removeEventListener("click", handleDocumentClick);
