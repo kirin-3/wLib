@@ -1055,6 +1055,7 @@ def install_archive(
             except Exception:
                 pass
 
+    archive_path = os.path.expanduser(str(archive_path or "").strip())
     if not archive_path or not os.path.isfile(archive_path):
         raise ArchiveInstallError("Archive file was not found.")
     fmt = archive_format(archive_path)

@@ -5452,7 +5452,7 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
-        archive_path = (path or "").strip()
+        archive_path = os.path.expanduser((path or "").strip())
         if not archive_path or not os.path.isfile(archive_path):
             return {"success": False, "error": "Archive file was not found."}
         if archive_format(archive_path) not in ("zip", "7z", "rar"):
@@ -5566,9 +5566,9 @@ class Api:
         )
 
         payload = dict(options or {})
-        archive_path = str(
-            payload.get("archive_path") or payload.get("archive") or ""
-        ).strip()
+        archive_path = os.path.expanduser(
+            str(payload.get("archive_path") or payload.get("archive") or "").strip()
+        )
         game_id_raw = payload.get("game_id", payload.get("gameId"))
         game_id: int | None = None
         if game_id_raw not in (None, ""):
