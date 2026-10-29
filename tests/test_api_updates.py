@@ -4073,6 +4073,51 @@ def test_lookup_thread_details(monkeypatch):
     )
 
 
+def test_lookup_thread_details_does_not_return_unknown_as_a_version(monkeypatch):
+    """A versionless thread must not prefill the archive form with "Unknown".
+
+    The archive modal merges this response over the version guessed from the
+    archive file name. "Unknown" is truthy, so it replaced a good guess and the
+    install stored that placeholder as the game's installed version.
+    """
+    api = Api()
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Game [Dev]",
+            "version": "Unknown",
+            "engine": "",
+            "cover_image": "",
+            "tags": [],
+        },
+    )
+    result = api.lookup_thread_details("https://f95zone.to/threads/game.123/")
+    assert result["success"] is True
+    assert result["version"] == ""
+
+
+def test_lookup_thread_details_uses_actionable_post_version(monkeypatch):
+    """The starter-post version still fills in when the title has none."""
+    api = Api()
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Game",
+            "version": "1.2",
+            "engine": "",
+            "cover_image": "",
+            "tags": [],
+        },
+    )
+    result = api.lookup_thread_details("https://f95zone.to/threads/game.123/")
+    assert result["success"] is True
+    assert result["version"] == "1.2"
+
+
 def test_archive_engine_preview(tmp_path):
     lib = tmp_path / "lib"
     update_setting("library_folder", str(lib))

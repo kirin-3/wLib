@@ -5411,10 +5411,16 @@ class Api:
             title, version, creator = split_thread_title(
                 str(metadata.get("title") or "")
             )
+            # The scraper reports a missing version as "Unknown"; that is not a
+            # version and must not replace the version guessed from the archive
+            # name in the install dialog.
+            scraped_version = metadata.get("version")
+            if not version and self._is_actionable_remote_version(scraped_version):
+                version = str(scraped_version).strip()
             return {
                 "success": True,
                 "title": title,
-                "version": version or metadata.get("version") or "",
+                "version": version,
                 "creator": creator,
                 "engine": metadata.get("engine") or "",
                 "cover_image": metadata.get("cover_image") or "",
