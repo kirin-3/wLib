@@ -2580,6 +2580,28 @@ def test_install_rpgmaker_dependencies_fails_fast_without_winetricks(monkeypatch
     assert "Winetricks is not installed" in str(result["error"])
 
 
+@pytest.mark.parametrize("installer", ["dependencies", "rtp"])
+def test_prefix_installers_report_an_unpreparable_prefix(monkeypatch, installer):
+    api = Api()
+
+    monkeypatch.setattr("shutil.which", lambda command: f"/usr/bin/{command}")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("read-only prefix")
+
+    monkeypatch.setattr(api, "_build_runtime_install_env", fail)
+    install = (
+        api.install_rpgmaker_dependencies
+        if installer == "dependencies"
+        else api.install_rpgmaker_rtp
+    )
+
+    result = install("/prefix", "")
+
+    assert result["success"] is False
+    assert "read-only prefix" in str(result["error"])
+
+
 def test_install_rpgmaker_dependencies_reports_background_failure(
     monkeypatch, tmp_path
 ):
@@ -2814,6 +2836,40 @@ def test_install_rpgmaker_rtp_drops_a_failed_exe_download(monkeypatch, tmp_path)
     assert not (rtp_dir / "xp_rtp104e.exe").exists()
     status = api.get_install_status(str(tmp_path / "prefix"), "")
     assert "install failed" in str(cast(dict[str, object], status["rtps"])["error"])
+
+
+def test_install_rpgmaker_rtp_clears_running_status_after_unexpected_error(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    prefix_path = str(tmp_path / "prefix")
+
+    class RunInline:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            try:
+                self._target()
+            except Exception:
+                # A real background thread reports the exception, it does not
+                # re-raise into install_rpgmaker_rtp's caller.
+                pass
+
+    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
+    monkeypatch.setattr(
+        "core.api.get_rtp_dir",
+        lambda: (_ for _ in ()).throw(OSError("read-only RTP folder")),
+    )
+
+    assert api.install_rpgmaker_rtp(prefix_path, "")["success"] is True
+    status = cast(dict[str, object], api.get_install_status(prefix_path, "")["rtps"])
+    assert status["running"] is False
+    assert status["current"] == ""
+    assert "read-only RTP folder" in str(status["error"])
+    # The stuck running flag used to block every later installer until restart.
+    assert api.install_rpgmaker_rtp(prefix_path, "")["success"] is True
 
 
 def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
