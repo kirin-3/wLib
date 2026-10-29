@@ -88,7 +88,9 @@ def load_names(catalog: CatalogStore, path: str = TAGS_FILE) -> None:
         with open(path, encoding="utf-8") as handle:
             data = cast(object, json.load(handle))
     except FileNotFoundError:
-        data = {}
+        # A missing checkout file must not erase the names already in the
+        # catalog; unknown IDs simply have no name in the next snapshot.
+        return
     tags: dict[int, str] = {}
     prefixes: dict[int, tuple[str, str | None]] = {}
     if isinstance(data, dict):

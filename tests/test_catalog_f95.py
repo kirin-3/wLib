@@ -2,7 +2,14 @@
 import json
 import re
 
-from catalog_fakes import fixture_bytes, fixture_json, json_response, make_context, rows
+from catalog_fakes import (
+    FakeTransport,
+    fixture_bytes,
+    fixture_json,
+    json_response,
+    make_context,
+    rows,
+)
 from catalog_server.net import RateLimited, Response
 from catalog_server.runner import run_source
 from catalog_server.sources.f95 import F95Source, load_names
@@ -178,6 +185,16 @@ def test_tag_map_names_known_ids_and_keeps_unknown_ones(tmp_path):
     assert named[known_tag] == "2dcg"
     assert any(name is None for name in named.values())
     assert rows(ctx.catalog, "SELECT name, category FROM f95_prefix_names") == [("Ren'Py", "Engine")]
+
+
+def test_a_missing_tag_map_keeps_the_names_already_in_the_catalog(tmp_path):
+    ctx, _ = make_context(tmp_path, FakeTransport())
+    ctx.catalog.replace_names({1: "Known"}, {2: ("Engine", "Engine")})
+    load_names(ctx.catalog, str(tmp_path / "missing.json"))
+    assert rows(ctx.catalog, "SELECT id, name FROM f95_tag_names") == [(1, "Known")]
+    assert rows(ctx.catalog, "SELECT id, name, category FROM f95_prefix_names") == [
+        (2, "Engine", "Engine")
+    ]
 
 
 def test_import_tool_converts_latest_updates_object(tmp_path):
