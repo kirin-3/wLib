@@ -58,6 +58,13 @@ const WLIB_PLAY_STATUS_TONE_CLASS_MAP = {
 
 const wlibTileCheckCache = new Map();
 const wlibPendingTileChecks = new Set();
+// A failed tile check (wLib closed or still starting) is retried on a timer
+// instead of being cached, backing off so a closed app is not polled hard.
+const WLIB_TILE_RETRY_MIN_MS = 5000;
+const WLIB_TILE_RETRY_MAX_MS = 60000;
+let wlibTileRetryDelay = 0;
+let wlibTileRetryAt = 0;
+let wlibTileRetryTimer = 0;
 
 let wlibLatestAlphaObserver = null;
 let wlibLatestAlphaScanTimer = 0;
@@ -175,17 +182,17 @@ function checkGameInWLib(url, links = []) {
         }, (error, response) => {
             if (error) {
                 console.warn('wLib extension: Could not connect to background wLib service.', error);
-                resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false });
+                resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false, reachable: false });
                 return;
             }
 
             if (response && response.success && response.data) {
-                resolve(normalizeCheckResult(response.data));
+                resolve({ ...normalizeCheckResult(response.data), reachable: true });
                 return;
             }
 
             console.warn('wLib extension: Check request failed.', response?.error || response);
-            resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false });
+            resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false, reachable: false });
         });
     });
 }
@@ -309,13 +316,18 @@ function processLatestAlphaTile(tileLink) {
         return;
     }
 
-    if (wlibPendingTileChecks.has(threadIdentity.canonicalUrl)) {
+    if (wlibPendingTileChecks.has(threadIdentity.canonicalUrl) || Date.now() < wlibTileRetryAt) {
         return;
     }
 
     wlibPendingTileChecks.add(threadIdentity.canonicalUrl);
     checkGameInWLib(threadIdentity.canonicalUrl)
         .then((checkResult) => {
+            if (!checkResult.reachable) {
+                scheduleLatestAlphaTileRetry();
+                return;
+            }
+            wlibTileRetryDelay = 0;
             const existsInWLib = checkResult.exists;
             wlibTileCheckCache.set(threadIdentity.canonicalUrl, existsInWLib);
             if (!document.contains(thumb)) {
@@ -335,6 +347,24 @@ function processLatestAlphaTile(tileLink) {
         .finally(() => {
             wlibPendingTileChecks.delete(threadIdentity.canonicalUrl);
         });
+}
+
+function scheduleLatestAlphaTileRetry() {
+    // One timer covers every tile that failed in the same scan. After an
+    // extension reload nothing can answer, so stop retrying.
+    if (wlibTileRetryTimer || isExtensionContextInvalidated()) {
+        return;
+    }
+
+    wlibTileRetryDelay = wlibTileRetryDelay
+        ? Math.min(wlibTileRetryDelay * 2, WLIB_TILE_RETRY_MAX_MS)
+        : WLIB_TILE_RETRY_MIN_MS;
+    wlibTileRetryAt = Date.now() + wlibTileRetryDelay;
+    wlibTileRetryTimer = window.setTimeout(() => {
+        wlibTileRetryTimer = 0;
+        wlibTileRetryAt = 0;
+        scheduleLatestAlphaTileScan();
+    }, wlibTileRetryDelay);
 }
 
 function ensureLibraryBadge(thumb) {

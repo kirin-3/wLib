@@ -120,6 +120,7 @@ test('thread check survives a reload that invalidated the extension context', as
     playStatus: '',
     wishlisted: false,
     appOutdated: false,
+    reachable: false,
   });
 });
 
@@ -138,6 +139,7 @@ test('thread check treats a missing background receiver as a failed check', asyn
     playStatus: '',
     wishlisted: false,
     appOutdated: false,
+    reachable: false,
   });
 });
 
@@ -164,7 +166,115 @@ test('thread check still normalizes a successful response', async () => {
     playStatus: 'Playing',
     wishlisted: false,
     appOutdated: false,
+    reachable: true,
   });
+});
+
+const tileHelpers = source.slice(0, source.indexOf('function ensureLibraryBadge'));
+
+const createTilePage = (urls) => {
+  let clock = 1000;
+  let nextTimer = 1;
+  const timers = new Map();
+  const badges = new Set();
+  const requests = [];
+  let respond = () => ({ success: false, error: 'Failed to fetch' });
+  class FakeElement {
+    constructor() { this.dataset = {}; this.classList = { add() {} }; }
+  }
+  class FakeAnchor extends FakeElement {
+    constructor(href) {
+      super();
+      this.href = href;
+      this.thumb = new FakeElement();
+      this.thumb.url = href;
+    }
+    querySelector(selector) { return selector === '.resource-tile_thumb' ? this.thumb : null; }
+  }
+  const tiles = urls.map(url => new FakeAnchor(url));
+  const context = {
+    console: { warn() {}, error() {} },
+    URL,
+    Date: { now: () => clock },
+    HTMLAnchorElement: FakeAnchor,
+    HTMLElement: FakeElement,
+    window: {
+      location: { href: 'https://f95zone.to/sam/latest_alpha/', origin: 'https://f95zone.to', pathname: '/sam/latest_alpha/' },
+      setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, at: clock + delay, delay }); return id; },
+      clearTimeout(id) { timers.delete(id); },
+    },
+    document: { contains: () => true, querySelectorAll: () => tiles },
+    chrome: {
+      runtime: {
+        id: 'test',
+        lastError: null,
+        sendMessage(message, callback) {
+          requests.push(message.url);
+          callback(respond(message));
+        },
+      },
+    },
+    ensureLibraryBadge: (thumb) => badges.add(thumb.url),
+    removeLibraryBadge: (thumb) => badges.delete(thumb.url),
+  };
+  vm.createContext(context);
+  vm.runInContext(tileHelpers, context);
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const runNextTimer = async () => {
+    const [id, timer] = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    timers.delete(id);
+    clock = Math.max(clock, timer.at);
+    timer.fn();
+    await flush();
+  };
+  return {
+    badges,
+    requests,
+    pendingDelays: () => [...timers.values()].map(timer => timer.delay),
+    setResponse(fn) { respond = fn; },
+    async scan() { vm.runInContext('scanLatestAlphaTiles()', context); await flush(); },
+    runNextTimer,
+    async runTimers() { while (timers.size) await runNextTimer(); },
+  };
+};
+
+test('latest-alpha badges appear once wLib starts after the page', async () => {
+  const urls = ['https://f95zone.to/threads/one.1/', 'https://f95zone.to/threads/two.2/'];
+  const page = createTilePage(urls);
+
+  await page.scan();
+  assert.equal(page.badges.size, 0);
+  assert.deepEqual(page.pendingDelays(), [5000]);
+
+  // Mutations while wLib is still down must not re-check every tile.
+  await page.scan();
+  assert.equal(page.requests.length, 2);
+
+  // The retry timer queues the normal 60 ms scan, which re-checks the tiles.
+  page.setResponse(() => ({ success: true, data: { exists: true } }));
+  await page.runTimers();
+  assert.deepEqual([...page.badges].sort(), urls);
+
+  // Successful answers are cached, so a later scan sends nothing new.
+  const sent = page.requests.length;
+  await page.scan();
+  assert.equal(page.requests.length, sent);
+});
+
+test('latest-alpha retries back off while wLib stays closed', async () => {
+  const page = createTilePage(['https://f95zone.to/threads/one.1/']);
+  await page.scan();
+  assert.deepEqual(page.pendingDelays(), [5000]);
+  // Each round is the retry timer followed by the scan timer it queues.
+  await page.runNextTimer();
+  await page.runNextTimer();
+  assert.deepEqual(page.pendingDelays(), [10000]);
+  for (let round = 0; round < 8; round += 1) {
+    await page.runNextTimer();
+    await page.runNextTimer();
+  }
+  assert.deepEqual(page.pendingDelays(), [60000]);
+  assert.equal(page.badges.size, 0);
 });
 
 const runPageHelper = (code, pathname = '/') => {
