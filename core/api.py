@@ -1683,17 +1683,34 @@ class Api:
         if not folder_str or not os.path.isdir(folder_str):
             return {"success": False, "error": "Folder not found"}
         try:
-            known = {
-                self._normalize_compare_path(game.get("exe_path"))
-                for game in get_all_games()
-                if str(game.get("exe_path") or "").strip()
-            }
+            known: set[str] = set()
+            folded: dict[str, list[str]] = {}
+            for game in get_all_games():
+                normalized = self._normalize_compare_path(game.get("exe_path"))
+                if not normalized:
+                    continue
+                known.add(normalized)
+                folded.setdefault(normalized.casefold(), []).append(normalized)
+
+            def in_library(exe_path: object) -> bool:
+                normalized = self._normalize_compare_path(exe_path)
+                if not normalized:
+                    return False
+                if normalized in known:
+                    return True
+                # A case-insensitive mount (ntfs3, exFAT) resolves a path whose
+                # case differs from the stored row, but the strings never
+                # compare equal. Confirm the case-folded candidates by inode.
+                for candidate in folded.get(normalized.casefold(), []):
+                    try:
+                        if os.path.samefile(normalized, candidate):
+                            return True
+                    except (OSError, ValueError):
+                        continue
+                return False
+
             games = [
-                {
-                    **game,
-                    "in_library": self._normalize_compare_path(game["exe_path"])
-                    in known,
-                }
+                {**game, "in_library": in_library(game["exe_path"])}
                 for game in scan_games_folder(folder_str)
             ]
         except (OSError, ValueError) as e:

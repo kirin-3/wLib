@@ -238,6 +238,31 @@ def test_scan_skips_leftover_old_version_backups(tmp_path):
     assert find_launcher(str(wrapper)) == ""
 
 
+def test_scan_in_library_matches_case_variant_paths(tmp_path, monkeypatch):
+    # On a case-insensitive mount (ntfs3) a stored exe path with a different
+    # case still points at the scanned file; a string compare alone does not
+    # see that and Import Folder offered the game again.
+    import os
+
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    folder = tmp_path / "Games" / "Game"
+    folder.mkdir(parents=True)
+    (folder / "Game.exe").write_bytes(b"MZ")
+    game_id = add_game("Game", str(folder / "game.exe"))  # case variant
+    assert game_id is not None
+
+    def fake_samefile(left, right):
+        return os.path.normcase(str(left)).casefold() == os.path.normcase(
+            str(right)
+        ).casefold()
+
+    monkeypatch.setattr("core.api.os.path.samefile", fake_samefile)
+
+    scanned = Api().scan_games_folder(str(tmp_path / "Games"))["games"]
+
+    assert [game["in_library"] for game in scanned] == [True]
+
+
 def test_inspect_relative_exe_path_returns_absolute_path(tmp_path, monkeypatch):
     folder = tmp_path / "Game"
     folder.mkdir()
