@@ -1119,6 +1119,26 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         ):
             raise sqlite3.IntegrityError("duplicate f95_url")
 
+        if "f95_url" in safe_fields:
+            _ = cursor.execute("SELECT f95_url FROM games WHERE id = ?", (game_id,))
+            stored_url_row = cast(sqlite3.Row | None, cursor.fetchone())
+            stored_url = (
+                str(stored_url_row[0] or "") if stored_url_row is not None else ""
+            )
+            # The stored thread metadata, latest/skipped versions, completion
+            # flag, and screenshots describe the old thread, not a new one.
+            # Keep them when the URL is only an equivalent variant of the
+            # same thread (slug, page, query, or fragment).
+            if normalize_thread_url(stored_url) and not thread_urls_match(
+                stored_url, safe_fields["f95_url"]
+            ):
+                safe_fields["latest_version"] = ""
+                safe_fields["skipped_version"] = ""
+                safe_fields["thread_main_post_last_edit_at"] = None
+                safe_fields["thread_main_post_checked_at"] = None
+                safe_fields["thread_completed"] = 0
+                safe_fields["screenshots"] = "[]"
+
         if "version" in safe_fields:
             _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))
             stored_version = cast(sqlite3.Row | None, cursor.fetchone())
@@ -1136,10 +1156,14 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             )
             stored = cast(sqlite3.Row | None, cursor.fetchone())
             if stored is not None and stored["play_status"] != "Completed":
-                incoming_version = str(safe_fields.get("version") or "").strip()
-                safe_fields["finished_version"] = incoming_version or str(
-                    stored["version"] or ""
-                )
+                # An explicitly sent version wins even when it is empty: the
+                # finished version must match the installed version this call
+                # stores, not the one it replaced.
+                if "version" in safe_fields:
+                    finished_version = str(safe_fields.get("version") or "").strip()
+                else:
+                    finished_version = str(stored["version"] or "").strip()
+                safe_fields["finished_version"] = finished_version
 
         set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)
@@ -1474,6 +1498,9 @@ def _rewrite_game_collection_memberships(
 def create_collection(name: object, game_id: int | None = None) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        # Read the list under the write lock: two creates that both read the
+        # old list would otherwise commit one after the other and lose one.
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         normalized = _validate_new_collection_name(name, collections)
@@ -1493,6 +1520,7 @@ def create_collection(name: object, game_id: int | None = None) -> list[str]:
 def rename_collection(old_name: object, new_name: object) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         old_key = str(old_name or "").strip().casefold()
@@ -1532,6 +1560,7 @@ def delete_collection(name: object) -> list[str]:
     key = str(name or "").strip().casefold()
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         if not any(name.casefold() == key for name in collections):
@@ -1548,6 +1577,7 @@ def delete_collection(name: object) -> list[str]:
 
 def reorder_collections(names: Sequence[object]) -> list[str]:
     with closing(get_connection()) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         canonical_by_key = {name.casefold(): name for name in collections}
@@ -1570,6 +1600,7 @@ def reorder_collections(names: Sequence[object]) -> list[str]:
 def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         if _read_game_collections(cursor, game_id) is None:
             raise ValueError("Game not found")
