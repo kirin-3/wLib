@@ -4038,6 +4038,8 @@ class Api:
             ]
             if result["skipped"]:
                 parts.append(f"skipped {result['skipped']}")
+            if result["failed"]:
+                parts.append(f"{result['failed']} failed")
             unsupported = cast(list[str], result["unsupported"])
             if unsupported:
                 parts.append("unsupported: " + ", ".join(unsupported))

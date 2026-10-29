@@ -759,6 +759,7 @@ export interface GameToolResult extends ApiBasicResponse {
   skipped?: number;
   skipped_scripts?: number;
   skipped_existing?: number;
+  failed?: number;
   unsupported?: string[];
   // decryption
   decrypted?: number;
