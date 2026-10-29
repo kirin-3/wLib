@@ -284,6 +284,23 @@ def test_backup_refuses_when_saves_folder_contains_backups(tmp_path):
         _ = backup_saves(str(saves), str(saves / "inner"), 1, None, now=NOW)
 
 
+def test_save_operations_refuse_a_folder_inside_the_backups_root(tmp_path):
+    # An imported save_path_override can point here; never treat a backup as
+    # a saves folder (it would copy or overwrite the backups themselves).
+    root = tmp_path / "backups"
+    backup = root / "1" / "2026-10-23_12-00-00"
+    _ = _write(backup / "a.save", "x")
+    source = tmp_path / "source"
+    _ = _write(source / "b.save", "y")
+
+    with pytest.raises(GameSavesError, match="inside"):
+        _ = backup_saves(str(backup), str(root), 1, None, now=NOW)
+    with pytest.raises(GameSavesError, match="inside"):
+        _ = import_saves(str(source), str(backup), str(root), 1, None, now=NOW)
+
+    assert _tree(backup) == {"a.save": "x"}
+
+
 # ── 2.5 Import ───────────────────────────────────────────────────────────
 
 
@@ -357,6 +374,47 @@ def test_import_type_conflict_stops_before_any_write(tmp_path, direction):
     assert not root.exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_import_replaces_a_file_symlink_instead_of_writing_through_it(tmp_path):
+    saves = tmp_path / "saves"
+    _ = _write(saves / "a.save", "old")
+    victim = _write(tmp_path / "victim.txt", "ORIGINAL")
+    try:
+        os.symlink(victim, saves / "linked.save")
+    except OSError:
+        pytest.skip("symlinks not permitted")
+    source = tmp_path / "source"
+    _ = _write(source / "linked.save", "PWNED")
+
+    info = import_saves(str(source), str(saves), str(tmp_path / "b"), 1, None)
+
+    assert victim.read_text() == "ORIGINAL"
+    assert not (saves / "linked.save").is_symlink()
+    assert (saves / "linked.save").read_text() == "PWNED"
+    assert info.backup is not None
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_import_refuses_a_directory_symlink_that_leaves_the_saves_folder(tmp_path):
+    saves = tmp_path / "saves"
+    _ = _write(saves / "a.save", "old")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        os.symlink(outside, saves / "sub")
+    except OSError:
+        pytest.skip("symlinks not permitted")
+    source = tmp_path / "source"
+    _ = _write(source / "sub" / "evil.txt", "PWNED")
+
+    with pytest.raises(GameSavesError, match="symbolic link outside"):
+        _ = import_saves(str(source), str(saves), str(tmp_path / "b"), 1, None)
+
+    assert list(outside.iterdir()) == []
+    assert not (tmp_path / "b").exists()
+    assert _tree(saves) == {"a.save": "old"}
+
+
 def test_import_creates_missing_target_without_backup(tmp_path):
     source = tmp_path / "source"
     _ = _write(source / "a.save", "a")
@@ -369,6 +427,14 @@ def test_import_creates_missing_target_without_backup(tmp_path):
     assert _tree(saves) == {"a.save": "a", "sub/b.save": "b"}
     assert info.backup is None
     assert not root.exists()
+
+
+def test_import_reports_an_invalid_saves_path(tmp_path):
+    source = tmp_path / "source"
+    _ = _write(source / "a.save")
+
+    with pytest.raises(GameSavesError, match="not valid"):
+        _ = import_saves(str(source), "/tmp/\0bad", str(tmp_path / "b"), 1, None)
 
 
 def test_import_rejects_missing_or_empty_source(tmp_path):
@@ -414,6 +480,8 @@ def test_override_validation(tmp_path):
 
     with pytest.raises(GameSavesError, match="absolute"):
         _ = validate_save_override("relative/path", root)
+    with pytest.raises(GameSavesError, match="not valid"):
+        _ = validate_save_override("/tmp/\0bad", root)
     with pytest.raises(GameSavesError, match="backups folder"):
         _ = validate_save_override(os.path.join(root, "1", "x"), root)
     with pytest.raises(GameSavesError, match="backups folder"):

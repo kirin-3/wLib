@@ -11,6 +11,7 @@ import glob
 import os
 import re
 import shutil
+import tempfile
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -469,6 +470,10 @@ def validate_save_override(path: str, backups_root: str) -> str:
     if not raw:
         return ""
     expanded = os.path.expanduser(raw)
+    if "\0" in expanded:
+        # realpath() (inside is_within) raises ValueError for an embedded NUL;
+        # report it as a bad path instead of letting it escape the API.
+        raise GameSavesError("The saves folder path is not valid")
     if not os.path.isabs(expanded):
         raise GameSavesError("The saves folder must be an absolute path")
     normalized = os.path.normpath(expanded)
@@ -601,13 +606,37 @@ def _scan_tree(root: str) -> _Tree:
 
 
 def _copy_tree(source: str, destination: str, tree: _Tree) -> None:
+    """Copy the scanned tree, never writing through a link in `destination`."""
     os.makedirs(destination, exist_ok=True)
+    root_real = os.path.realpath(destination)
     for rel in tree.dirs:
-        os.makedirs(os.path.join(destination, rel), exist_ok=True)
+        target = os.path.join(destination, rel)
+        if not is_within(os.path.realpath(target), root_real):
+            raise OSError(
+                f"'{rel}' is a symbolic link that points outside the saves folder"
+            )
+        os.makedirs(target, exist_ok=True)
     for rel in tree.files:
         target = os.path.join(destination, rel)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        _ = shutil.copy2(os.path.join(source, rel), target)
+        parent = os.path.dirname(target)
+        if not is_within(os.path.realpath(parent), root_real):
+            raise OSError(
+                f"'{rel}' is under a symbolic link that points outside the saves folder"
+            )
+        os.makedirs(parent, exist_ok=True)
+        # copy2() would follow a symlink already at `target` and overwrite the
+        # file it points at. Copy to a fresh file and rename over the entry so
+        # only the saves folder is touched.
+        descriptor, temporary = tempfile.mkstemp(prefix=".wlib-save-", dir=parent)
+        os.close(descriptor)
+        try:
+            _ = shutil.copy2(os.path.join(source, rel), temporary)
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def copy_folder_contents(source: str, destination: str) -> int:
@@ -648,6 +677,10 @@ def backup_saves(
     if is_within(backups_root, saves_dir):
         raise GameSavesError(
             "The saves folder contains wLib's save backups folder, so it cannot be backed up"
+        )
+    if is_within(saves_dir, backups_root):
+        raise GameSavesError(
+            "The saves folder is inside wLib's save backups folder, so it cannot be backed up"
         )
 
     tree = _scan_tree(saves_dir)
@@ -703,6 +736,9 @@ def import_saves(
     """
     if not os.path.isdir(source):
         raise GameSavesError("The folder to import does not exist")
+    if "\0" in saves_dir:
+        # realpath() raises ValueError for an embedded NUL; keep it a clean error.
+        raise GameSavesError("The saves folder path is not valid")
     if paths_overlap(source, saves_dir):
         raise GameSavesError(
             "The folder to import cannot be the saves folder, inside it, or contain it"
@@ -713,8 +749,19 @@ def import_saves(
     tree = _scan_tree(source)
     if not tree.files:
         raise GameSavesError("The folder to import has no files")
+    if is_within(saves_dir, backups_root):
+        raise GameSavesError(
+            "The saves folder cannot be inside wLib's save backups folder"
+        )
+    saves_real = os.path.realpath(saves_dir)
     for rel in tree.dirs:
         target = os.path.join(saves_dir, rel)
+        if os.path.islink(target) and not is_within(
+            os.path.realpath(target), saves_real
+        ):
+            raise GameSavesError(
+                f"Cannot import: '{rel}' is a symbolic link outside the saves folder"
+            )
         if os.path.lexists(target) and not os.path.isdir(target):
             raise GameSavesError(
                 f"Cannot import: '{rel}' is a folder in the import but a file in the saves folder"
