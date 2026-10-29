@@ -629,7 +629,6 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (open) {
-      platformCapabilities.value = await loadPlatformCapabilities();
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
@@ -642,14 +641,20 @@ watch(
           collectionOptions.value = collections;
         })
         .catch(console.error);
-      const loaders = [loadExecutableModifiedTime(), loadLaunchTargets(), loadGameExtras()];
-      if (platformCapabilities.value.cheat_engine_injection) {
-        loaders.push(loadCheatEngineStatus());
-      } else {
-        ceInstalled.value = false;
-      }
-      if (platformCapabilities.value.rpgmaker_linux) {
-        loaders.push(loadRpgmakerLinuxRunnerStatus());
+      // Start every read that doesn't depend on the platform at once. The
+      // capability check only decides which controls are shown and gates the
+      // RPGMaker runner status; it must not delay the Cheat Engine check.
+      const loaders = [
+        loadExecutableModifiedTime(),
+        loadLaunchTargets(),
+        loadGameExtras(),
+        loadCheatEngineStatus(),
+      ];
+      void Promise.all(loaders);
+      const capabilities = await loadPlatformCapabilities();
+      platformCapabilities.value = capabilities;
+      if (capabilities.rpgmaker_linux) {
+        void loadRpgmakerLinuxRunnerStatus();
       } else {
         syncRpgmakerLinuxRunnerStatus({
           available: false,
@@ -659,7 +664,6 @@ watch(
           error: "RPGMaker Linux is unavailable on this platform.",
         });
       }
-      void Promise.all(loaders);
     } else {
       executableModifiedRequestId.value++;
       engineMenuOpen.value = false;
