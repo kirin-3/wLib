@@ -1119,6 +1119,26 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         ):
             raise sqlite3.IntegrityError("duplicate f95_url")
 
+        if "f95_url" in safe_fields:
+            _ = cursor.execute("SELECT f95_url FROM games WHERE id = ?", (game_id,))
+            stored_url_row = cast(sqlite3.Row | None, cursor.fetchone())
+            stored_url = (
+                str(stored_url_row[0] or "") if stored_url_row is not None else ""
+            )
+            # The stored thread metadata, latest/skipped versions, completion
+            # flag, and screenshots describe the old thread, not a new one.
+            # Keep them when the URL is only an equivalent variant of the
+            # same thread (slug, page, query, or fragment).
+            if normalize_thread_url(stored_url) and not thread_urls_match(
+                stored_url, safe_fields["f95_url"]
+            ):
+                safe_fields["latest_version"] = ""
+                safe_fields["skipped_version"] = ""
+                safe_fields["thread_main_post_last_edit_at"] = None
+                safe_fields["thread_main_post_checked_at"] = None
+                safe_fields["thread_completed"] = 0
+                safe_fields["screenshots"] = "[]"
+
         if "version" in safe_fields:
             _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))
             stored_version = cast(sqlite3.Row | None, cursor.fetchone())

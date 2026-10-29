@@ -26,6 +26,7 @@ from core.database import (
     update_game,
     update_game_launch_target,
     get_all_games,
+    get_game,
     get_collections,
     get_custom_play_statuses,
     get_library_filter_presets,
@@ -1178,6 +1179,81 @@ def test_completed_status_change_trims_the_recorded_finished_version():
     applied = update_game(game_id, {"play_status": "Completed"})
 
     assert applied["finished_version"] == "0.5"
+
+
+def test_changing_the_f95_thread_clears_old_thread_metadata():
+    """A new thread must not inherit the old thread's state."""
+    game_id = add_game(
+        title="Moved Thread",
+        exe_path="/tmp/moved.exe",
+        f95_url="https://f95zone.to/threads/old.111/",
+    )
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET latest_version = ?, skipped_version = ?, "
+        "thread_main_post_checked_at = ?, thread_main_post_last_edit_at = ?, "
+        "thread_completed = 1, screenshots = ? WHERE id = ?",
+        (
+            "9.9",
+            "9.9",
+            "2026-01-01T00:00:00",
+            "2026-01-02T00:00:00",
+            '["https://example.com/old.png"]',
+            game_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    # The detail modal also sends its current latest version; the new thread
+    # must still start without the old thread's release state.
+    update_game(
+        game_id,
+        {
+            "f95_url": "https://f95zone.to/threads/new.222/",
+            "latest_version": "9.9",
+        },
+    )
+
+    game = get_game(game_id)
+    assert game is not None
+    assert game["f95_url"] == "https://f95zone.to/threads/new.222/"
+    assert game["latest_version"] == ""
+    assert game["skipped_version"] == ""
+    assert game["thread_main_post_checked_at"] is None
+    assert game["thread_main_post_last_edit_at"] is None
+    assert game["thread_completed"] == 0
+    assert game["screenshots"] == "[]"
+
+
+def test_equivalent_f95_thread_variant_keeps_thread_metadata():
+    """Slug, page, query, and fragment changes stay on the same thread."""
+    game_id = add_game(
+        title="Same Thread",
+        exe_path="/tmp/same.exe",
+        f95_url="https://f95zone.to/threads/old.111/",
+    )
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET latest_version = ?, thread_completed = 1, "
+        "thread_main_post_checked_at = ? WHERE id = ?",
+        ("9.9", "2026-01-01T00:00:00", game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    update_game(
+        game_id,
+        {"f95_url": "https://www.f95zone.to/threads/renamed.111/page-2?x=1#post-5"},
+    )
+
+    game = get_game(game_id)
+    assert game is not None
+    assert game["latest_version"] == "9.9"
+    assert game["thread_completed"] == 1
+    assert game["thread_main_post_checked_at"] == "2026-01-01T00:00:00"
 
 
 def test_archive_install_settings_defaults_for_fresh_and_existing_db():
