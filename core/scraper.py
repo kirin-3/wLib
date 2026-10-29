@@ -563,7 +563,19 @@ class Scraper:
             "you must be logged in",
             'action="/login/login"',
         )
-        if any(marker in page_html for marker in login_body_markers) or (
+        # Login walls render outside the starter post, and their page shell can
+        # carry an h1.p-title-value. A rendered starter post, though, may
+        # mention a login requirement in its download notes without gating the
+        # page; ignore phrases that only occur in the head or starter post.
+        login_scope = re.sub(
+            r"<head\b[^>]*>.*?</head>", "", page_html, flags=re.S
+        )
+        starter_html = next(
+            _blocks(html, "article", "message-threadStarterPost"), ("", "")
+        )[1]
+        if starter_html:
+            login_scope = login_scope.replace(starter_html.lower(), "", 1)
+        if any(marker in login_scope for marker in login_body_markers) or (
             not has_thread_heading
             and any(
                 marker in page_title

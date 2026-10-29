@@ -115,6 +115,41 @@ def test_valid_thread_titles_are_not_mistaken_for_login_or_challenge(thread_html
         assert issue is None, (title, issue)
 
 
+def test_post_mentioning_a_login_requirement_is_not_a_login_wall(thread_html):
+    """A rendered thread stays readable even when its post mentions logging in.
+
+    Download sections and update notes often say "you must be logged in".
+    Treating that text as a login wall failed every metadata fetch and update
+    check for the thread, even when the page itself rendered completely.
+    """
+    scraper = Scraper()
+    html = thread_html.replace(
+        "<b>Version</b>: v1.10<br>",
+        "<b>Version</b>: v1.10<br>"
+        "Mirror note: you must be logged in to get the patch file.<br>",
+    ).replace(
+        "</head>",
+        '<meta name="description" content="You must be logged in to download.">'
+        "</head>",
+    )
+    issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+    assert issue is None
+    assert scraper._extract_page(html)["version"] == "1.10"
+
+
+def test_login_page_with_a_rendered_heading_is_still_a_login_wall():
+    """The page-level login prompt is outside the starter post and still counts."""
+    scraper = Scraper()
+    html = (
+        "<title>Log in | F95zone</title>"
+        '<h1 class="p-title-value">Log in</h1>'
+        '<form action="/login/login" method="post"></form>'
+    )
+    issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+    assert issue is not None
+    assert issue["code"] == "login_required"
+
+
 def test_starter_metadata_and_nested_wrapper(thread_html):
     result = Scraper()._extract_page(thread_html)
     assert result["title"] == "Example & Game [v1.10] [Dev]"
