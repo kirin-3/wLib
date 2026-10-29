@@ -344,12 +344,12 @@ async function bridgeGetCanFetch() {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.1.2");
+            return String(chrome.runtime.getManifest().version || "1.2.0");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.1.2";
+    return "1.2.0";
 }
 
 function bridgeClearPing() {
