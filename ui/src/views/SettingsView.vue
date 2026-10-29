@@ -150,7 +150,11 @@ const rpgmakerLinuxRunnerAvailable = computed(
 );
 const rpgmakerLinuxRunnerStatusText = computed(() => {
   if (rpgmakerLinuxRunnerStatus.value.available) {
-    return `Detected: ${rpgmakerLinuxRunnerStatus.value.path}`;
+    const detected = `Detected: ${rpgmakerLinuxRunnerStatus.value.path}`;
+    // A stale saved path falls back to discovery and reports why.
+    return rpgmakerLinuxRunnerStatus.value.error
+      ? `${detected}. ${rpgmakerLinuxRunnerStatus.value.error}`
+      : detected;
   }
   return rpgmakerLinuxRunnerStatus.value.error || "Not detected";
 });

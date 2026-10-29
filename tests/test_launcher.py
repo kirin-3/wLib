@@ -1279,6 +1279,46 @@ def test_rpgmaker_linux_runner_status_detects_path_install(
     assert status["source"] == "path"
 
 
+@patch("core.launcher.host_which")
+@patch("os.path.isfile")
+@patch("os.access")
+def test_rpgmaker_linux_runner_status_falls_back_past_stale_configured_path(
+    mock_access, mock_isfile, mock_which
+):
+    mock_which.return_value = "/usr/local/bin/rpgmaker-linux"
+    mock_isfile.side_effect = lambda path: path == "/usr/local/bin/rpgmaker-linux"
+    mock_access.return_value = True
+
+    status = Launcher().get_rpgmaker_linux_runner_status("/missing/stale-runner")
+
+    assert status["available"] is True
+    assert status["path"] == "/usr/local/bin/rpgmaker-linux"
+    assert status["source"] == "path"
+    assert status["configured_path"] == "/missing/stale-runner"
+    assert "/missing/stale-runner" in status["error"]
+
+
+@patch("core.launcher.host_which")
+@patch("os.path.isfile")
+@patch("os.access")
+def test_rpgmaker_linux_runner_status_reports_stale_configured_path_without_fallback(
+    mock_access, mock_isfile, mock_which, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mock_which.return_value = None
+    mock_isfile.return_value = False
+    mock_access.return_value = True
+
+    status = Launcher().get_rpgmaker_linux_runner_status("/missing/stale-runner")
+
+    assert status["available"] is False
+    assert status["source"] == "configured"
+    assert status["configured_path"] == "/missing/stale-runner"
+    assert status["error"] == (
+        "RPGMaker Linux runner was not found at /missing/stale-runner"
+    )
+
+
 @patch("os.path.exists")
 @patch("os.path.isfile")
 @patch("os.access")

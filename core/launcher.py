@@ -732,18 +732,22 @@ class Launcher:
             configured_path = get_setting(RPGMAKER_LINUX_RUNNER_SETTING)
 
         configured_runner_path = str(configured_path or "").strip()
+        configured_error = ""
         if configured_runner_path:
-            valid, resolved_path, error = self._validate_runner_candidate(
+            valid, resolved_path, configured_error = self._validate_runner_candidate(
                 configured_runner_path
             )
-            return {
-                "available": valid,
-                "path": resolved_path if valid else "",
-                "source": "configured",
-                "configured_path": configured_runner_path,
-                "error": error,
-            }
+            if valid:
+                return {
+                    "available": True,
+                    "path": resolved_path,
+                    "source": "configured",
+                    "configured_path": configured_runner_path,
+                    "error": "",
+                }
 
+        # A stale configured path must not hide a runner on PATH or in a known
+        # location; keep reporting the bad configured value alongside it.
         candidates: list[tuple[str, str]] = []
         path_runner = host_which("rpgmaker-linux")
         if path_runner:
@@ -772,10 +776,22 @@ class Launcher:
                     "available": True,
                     "path": resolved_path,
                     "source": source,
-                    "configured_path": "",
-                    "error": "",
+                    "configured_path": configured_runner_path,
+                    "error": (
+                        f"{configured_error}. Using the detected runner instead."
+                        if configured_error
+                        else ""
+                    ),
                 }
 
+        if configured_error:
+            return {
+                "available": False,
+                "path": "",
+                "source": "configured",
+                "configured_path": configured_runner_path,
+                "error": configured_error,
+            }
         return {
             "available": False,
             "path": "",
