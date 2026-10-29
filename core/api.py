@@ -2856,14 +2856,17 @@ class Api:
             if version_info is None:
                 version_info = {}
 
+            # A thread page can be read successfully even when no version is
+            # extractable; its Completed flag, screenshots, links and edit
+            # metadata are still valid and must be stored either way.
+            newly_finished_ids = self._update_thread_edit_metadata_for_url(
+                url, version_info
+            )
+
             if not version_info.get("success"):
                 return self._build_scraper_error_payload(
                     version_info, "Failed to check for updates"
                 )
-
-            newly_finished_ids = self._update_thread_edit_metadata_for_url(
-                url, version_info
-            )
 
             remote_version = version_info.get("version")
             if not self._is_actionable_remote_version(remote_version):
@@ -3126,20 +3129,9 @@ class Api:
                             key in result_dict
                             for key in ("thread_completed", "screenshots", "store_links")
                         )
-                        if not callback_error and page_metadata:
-                            try:
-                                finished_ids = (
-                                    self._update_thread_edit_metadata_for_url(
-                                        url, result_dict
-                                    )
-                                )
-                                newly_finished = (
-                                    wishlisted and game["id"] in finished_ids
-                                )
-                            except Exception:
-                                pass
-                        elif (
+                        if (
                             not callback_error
+                            and not page_metadata
                             and wishlisted
                             and str(game.get("latest_version") or "").strip()
                             and str(game.get("latest_version") or "").strip()
@@ -3160,6 +3152,25 @@ class Api:
                     elif result_dict.get("success"):
                         callback_error = "Could not extract a version from thread"
                         callback_error_code = "extract_failed"
+
+                    # A page fallback may have read the thread even when its
+                    # version could not be used: keep the Completed flag,
+                    # screenshots, links and edit metadata it found.
+                    if any(
+                        key in result_dict
+                        for key in ("thread_completed", "screenshots", "store_links")
+                    ):
+                        try:
+                            finished_ids = (
+                                self._update_thread_edit_metadata_for_url(
+                                    url, result_dict
+                                )
+                            )
+                            newly_finished = (
+                                wishlisted and game["id"] in finished_ids
+                            )
+                        except Exception:
+                            pass
 
                     with self._update_lock:
                         result_entry: dict[str, object] = {
@@ -5407,10 +5418,16 @@ class Api:
             title, version, creator = split_thread_title(
                 str(metadata.get("title") or "")
             )
+            # The scraper reports a missing version as "Unknown"; that is not a
+            # version and must not replace the version guessed from the archive
+            # name in the install dialog.
+            scraped_version = metadata.get("version")
+            if not version and self._is_actionable_remote_version(scraped_version):
+                version = str(scraped_version).strip()
             return {
                 "success": True,
                 "title": title,
-                "version": version or metadata.get("version") or "",
+                "version": version,
                 "creator": creator,
                 "engine": metadata.get("engine") or "",
                 "cover_image": metadata.get("cover_image") or "",

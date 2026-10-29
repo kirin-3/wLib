@@ -870,6 +870,63 @@ def test_check_for_updates_propagates_structured_scraper_error(monkeypatch):
     assert "Blocked" in str(result.get("error", ""))
 
 
+def test_extract_failed_check_stores_page_metadata_it_read(monkeypatch):
+    """A versionless page is still a successful page read for thread metadata."""
+    api = Api()
+    url = "https://f95zone.to/threads/unversioned.400/"
+    _ = add_game("Unversioned", "", f95_url=url)
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "code": "extract_failed",
+            "error": "Could not extract a version from thread",
+            "thread_completed": True,
+            "thread_main_post_checked_at": "2026-10-28T00:00:00",
+            "screenshots": ["https://example.com/shot.png"],
+        },
+    )
+
+    result = api.check_for_updates(url)
+
+    assert result["success"] is False
+    assert result["error_code"] == "extract_failed"
+    game = get_all_games()[0]
+    assert game["thread_completed"] == 1
+    assert game["thread_main_post_checked_at"] == "2026-10-28T00:00:00"
+    assert game["screenshots"] == ["https://example.com/shot.png"]
+
+
+def test_bulk_extract_failed_page_keeps_completion_and_screenshots(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/unversioned.401/"
+    _ = add_game("Unversioned", "", f95_url=url)
+    page_result = {
+        "success": False,
+        "code": "extract_failed",
+        "error": "Could not extract a version from thread",
+        "thread_completed": True,
+        "thread_main_post_checked_at": "2026-10-28T00:00:00",
+        "screenshots": ["https://example.com/bulk.png"],
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["success"]
+
+    game = get_all_games()[0]
+    assert game["thread_completed"] == 1
+    assert game["screenshots"] == ["https://example.com/bulk.png"]
+    result = api.get_update_status()["results"][0]
+    assert result["error_code"] == "extract_failed"
+    assert result["newly_finished"] is True
+
+
 def test_build_scraper_error_payload_blocked_unavailable():
     api = Api()
     result = api._build_scraper_error_payload(
@@ -4043,6 +4100,51 @@ def test_lookup_thread_details(monkeypatch):
     assert (
         api.lookup_thread_details("https://f95zone.to/threads/123/")["success"] is False
     )
+
+
+def test_lookup_thread_details_does_not_return_unknown_as_a_version(monkeypatch):
+    """A versionless thread must not prefill the archive form with "Unknown".
+
+    The archive modal merges this response over the version guessed from the
+    archive file name. "Unknown" is truthy, so it replaced a good guess and the
+    install stored that placeholder as the game's installed version.
+    """
+    api = Api()
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Game [Dev]",
+            "version": "Unknown",
+            "engine": "",
+            "cover_image": "",
+            "tags": [],
+        },
+    )
+    result = api.lookup_thread_details("https://f95zone.to/threads/game.123/")
+    assert result["success"] is True
+    assert result["version"] == ""
+
+
+def test_lookup_thread_details_uses_actionable_post_version(monkeypatch):
+    """The starter-post version still fills in when the title has none."""
+    api = Api()
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "title": "Game",
+            "version": "1.2",
+            "engine": "",
+            "cover_image": "",
+            "tags": [],
+        },
+    )
+    result = api.lookup_thread_details("https://f95zone.to/threads/game.123/")
+    assert result["success"] is True
+    assert result["version"] == "1.2"
 
 
 def test_archive_engine_preview(tmp_path):

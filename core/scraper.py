@@ -46,8 +46,10 @@ _CHAPTER_VERSION_RE = re.compile(
 _BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
 
 # ponytail: global lock serializes all F95 traffic; use a per-host token bucket
-# if we ever add another host.
-_F95_REQUEST_LOCK = threading.Lock()
+# if we ever add another host. Re-entrant because _fetch_with_fallback holds it
+# across the paced request so a queued caller chooses its transport after the
+# request in front of it has finished, and _f95_get takes it again from there.
+_F95_REQUEST_LOCK = threading.RLock()
 _f95_last_request_finished: float | None = None
 # Extension-first window: set only by a plain-HTTP `blocked` result, kept in
 # memory only, 15 minutes. While active and an eligible extension is connected,
@@ -409,6 +411,11 @@ class Scraper:
     def _fetch_with_fallback(self, url: str) -> tuple[int, str, str | None]:
         """Fetch one F95 URL with a single extension retry.
 
+        Holds the shared F95 lock across the transport choice and the request,
+        so a caller that waited for its turn sees a challenge that another
+        caller hit and goes straight to the extension instead of trying plain
+        HTTP once more.
+
         Returns ``(status, body, browser_fallback)`` where the flag is
         ``None`` on success or when no fallback applied, ``"unavailable"``
         when a blocked/login page had no eligible extension, and ``"failed"``
@@ -416,6 +423,12 @@ class Scraper:
         plain-HTTP ``blocked`` opens the 15-minute extension-first window.
         Timeouts and network errors propagate without fallback.
         """
+        with _F95_REQUEST_LOCK:
+            return self._fetch_with_fallback_locked(url)
+
+    def _fetch_with_fallback_locked(
+        self, url: str
+    ) -> tuple[int, str, str | None]:
         global _prefer_extension_until
         now = time.monotonic()
         prefer_until = _prefer_extension_until
@@ -563,7 +576,19 @@ class Scraper:
             "you must be logged in",
             'action="/login/login"',
         )
-        if any(marker in page_html for marker in login_body_markers) or (
+        # Login walls render outside the starter post, and their page shell can
+        # carry an h1.p-title-value. A rendered starter post, though, may
+        # mention a login requirement in its download notes without gating the
+        # page; ignore phrases that only occur in the head or starter post.
+        login_scope = re.sub(
+            r"<head\b[^>]*>.*?</head>", "", page_html, flags=re.S
+        )
+        starter_html = next(
+            _blocks(html, "article", "message-threadStarterPost"), ("", "")
+        )[1]
+        if starter_html:
+            login_scope = login_scope.replace(starter_html.lower(), "", 1)
+        if any(marker in login_scope for marker in login_body_markers) or (
             not has_thread_heading
             and any(
                 marker in page_title
@@ -800,9 +825,16 @@ class Scraper:
                     if page_result.get("success") and self._is_non_actionable_version(
                         page_result.get("version")
                     ):
-                        page_result = self._error(
-                            "extract_failed", "Could not extract a version from thread"
-                        )
+                        # The page itself was read, so its Completed flag,
+                        # screenshots, links and edit metadata are still valid
+                        # even though no version could be extracted.
+                        page_result = {
+                            **page_result,
+                            "success": False,
+                            "code": "extract_failed",
+                            "error": "Could not extract a version from thread",
+                            "version": "",
+                        }
                     by_id[thread_id] = page_result
                 result = page_result
             results[url] = result

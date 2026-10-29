@@ -115,6 +115,41 @@ def test_valid_thread_titles_are_not_mistaken_for_login_or_challenge(thread_html
         assert issue is None, (title, issue)
 
 
+def test_post_mentioning_a_login_requirement_is_not_a_login_wall(thread_html):
+    """A rendered thread stays readable even when its post mentions logging in.
+
+    Download sections and update notes often say "you must be logged in".
+    Treating that text as a login wall failed every metadata fetch and update
+    check for the thread, even when the page itself rendered completely.
+    """
+    scraper = Scraper()
+    html = thread_html.replace(
+        "<b>Version</b>: v1.10<br>",
+        "<b>Version</b>: v1.10<br>"
+        "Mirror note: you must be logged in to get the patch file.<br>",
+    ).replace(
+        "</head>",
+        '<meta name="description" content="You must be logged in to download.">'
+        "</head>",
+    )
+    issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+    assert issue is None
+    assert scraper._extract_page(html)["version"] == "1.10"
+
+
+def test_login_page_with_a_rendered_heading_is_still_a_login_wall():
+    """The page-level login prompt is outside the starter post and still counts."""
+    scraper = Scraper()
+    html = (
+        "<title>Log in | F95zone</title>"
+        '<h1 class="p-title-value">Log in</h1>'
+        '<form action="/login/login" method="post"></form>'
+    )
+    issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+    assert issue is not None
+    assert issue["code"] == "login_required"
+
+
 def test_starter_metadata_and_nested_wrapper(thread_html):
     result = Scraper()._extract_page(thread_html)
     assert result["title"] == "Example & Game [v1.10] [Dev]"
@@ -242,6 +277,34 @@ def test_no_actionable_page_version(monkeypatch):
         Scraper().get_thread_version("https://f95zone.to/threads/1/")["code"]
         == "extract_failed"
     )
+
+
+def test_extract_failed_page_keeps_the_metadata_it_read(monkeypatch):
+    """A read thread page still carries a valid Completed flag and screenshots."""
+    page = (
+        "<title>Game | F95zone</title>"
+        '<h1 class="p-title-value"><a class="labelLink"><span>Ren\'Py</span></a>'
+        '<span class="label-append">Completed</span>Game [Dev]</h1>'
+        '<article class="message-threadStarterPost"><div class="bbWrapper">'
+        "<b>Version</b>: not announced yet<br>"
+        '<img class="bbImage" src="https://example.com/shot.png">'
+        "</div></article>"
+    )
+    monkeypatch.setattr(
+        scraper_module,
+        "_f95_get",
+        MagicMock(
+            side_effect=[
+                checker_response(["1"], "Unknown"),
+                (200, page),
+            ]
+        ),
+    )
+    result = Scraper().get_thread_version("https://f95zone.to/threads/1/")
+    assert result["code"] == "extract_failed"
+    assert result["thread_completed"] is True
+    assert result["engine"] == "Ren'Py"
+    assert result["thread_main_post_checked_at"]
 
 
 def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
@@ -816,6 +879,56 @@ def test_login_required_does_not_open_window(monkeypatch, thread_html):
     assert scraper.get_thread_metadata("https://f95zone.to/threads/2/")["success"]
     # No window, so the second request still tried urllib first.
     assert get.call_count == 2
+    _reset_scraper_globals()
+
+
+def test_window_opened_while_waiting_for_turn_applies_to_queued_request(monkeypatch):
+    """A caller that waits for its turn must honour a challenge seen meanwhile.
+
+    The transport choice belongs inside the shared F95 lock: otherwise every
+    caller queued behind a slow request has already picked plain HTTP when the
+    first challenge opens the extension-first window, and each of them sends
+    one more avoidable request to F95.
+    """
+    _reset_scraper_globals()
+    url = "https://f95zone.to/threads/1/"
+    plain_requests: list[str] = []
+    extension_requests: list[str] = []
+    reached_plain = threading.Event()
+
+    def fake_get(request_url):
+        reached_plain.set()
+        plain_requests.append(request_url)
+        return (503, "cf-challenge")
+
+    def fake_extension(request_url):
+        extension_requests.append(request_url)
+        return (503, "cf-challenge")
+
+    monkeypatch.setattr(scraper_module, "_f95_get", fake_get)
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", fake_extension)
+    monkeypatch.setattr(
+        scraper_module.extension_bridge, "is_available", lambda: True
+    )
+    results: list[tuple[int, str, str | None]] = []
+    scraper = Scraper()
+
+    # Hold the lock like another F95 request that is already in flight. The
+    # queued caller cannot choose a transport until it gets its turn.
+    with scraper_module._F95_REQUEST_LOCK:
+        worker = threading.Thread(
+            target=lambda: results.append(scraper._fetch_with_fallback(url))
+        )
+        worker.start()
+        # Before the fix the caller reaches the plain transport at once; with
+        # the fix it is still waiting for the lock and this wait times out.
+        _ = reached_plain.wait(1)
+        scraper_module._prefer_extension_until = time.monotonic() + 900
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results
+    assert plain_requests == []
+    assert extension_requests == [url]
     _reset_scraper_globals()
 
 
