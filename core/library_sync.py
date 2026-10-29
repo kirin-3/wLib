@@ -197,7 +197,15 @@ class FolderLocation:
             if self.revision() != expected_revision:
                 raise SyncConflict()
             if expected_revision is not None:
-                _ = shutil.copy2(self.path, self.path.with_name(SYNC_FILENAME + ".bak"))
+                try:
+                    _ = shutil.copy2(
+                        self.path, self.path.with_name(SYNC_FILENAME + ".bak")
+                    )
+                except FileNotFoundError as exc:
+                    # Deleted after the revision check (a cloud client or the
+                    # user): re-evaluate as a conflict instead of failing the
+                    # whole sync. A vanished folder surfaces from revision().
+                    raise SyncConflict() from exc
             if self.revision() != expected_revision:
                 raise SyncConflict()
             os.replace(temporary, self.path)

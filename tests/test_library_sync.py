@@ -252,6 +252,37 @@ def test_folder_atomic_backup_conflict_missing(tmp_path):
     assert not (tmp_path / "missing").exists()
 
 
+def test_folder_backup_copy_delete_race_is_conflict(tmp_path, monkeypatch):
+    import shutil
+
+    location = FolderLocation(str(tmp_path))
+    rev = location.write(b"one", None)
+    real_copy2 = shutil.copy2
+    deleted = False
+
+    def vanish(src, dst, *args, **kwargs):
+        # A cloud client or the user deletes the file between the revision
+        # check and the .bak copy.
+        nonlocal deleted
+        if not deleted:
+            deleted = True
+            src.unlink()
+            raise FileNotFoundError(str(src))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", vanish)
+    with pytest.raises(SyncConflict):
+        location.write(b"two", rev)
+    assert deleted is True
+    assert location.revision() is None
+    assert list(tmp_path.glob("wlib-library.json.tmp.*")) == []
+    # The retry the manager performs next sees a missing file and pushes.
+    assert location.write(b"three", None) == location.revision()
+    assert (tmp_path / "wlib-library.json").read_bytes() == b"three"
+
+
+
+
 def response(payload, headers=None):
     result = MagicMock()
     result.__enter__.return_value = result
