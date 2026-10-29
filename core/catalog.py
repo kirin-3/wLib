@@ -153,10 +153,28 @@ class CatalogClient:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(dict(data), handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(tmp, self.sidecar_path)
+            self._sync_dir()
         except BaseException:
             _remove(tmp)
             raise
+
+    def _sync_dir(self) -> None:
+        """Make a completed rename durable; directory fsync is POSIX-only."""
+        if os.name == "nt":
+            return  # pyright: ignore[reportUnreachable]
+        try:
+            fd = os.open(self.data_dir, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
 
     def status(self) -> dict[str, object]:
         sidecar = self._read_sidecar()
@@ -302,6 +320,12 @@ class CatalogClient:
             if not self._enabled():
                 return False
             os.replace(db_tmp, self.catalog_path)
+            self._sync_dir()
+            if not self._enabled():
+                # The setting was turned off while this check was finishing.
+                # Do not leave a catalog we just installed behind.
+                _remove(self.catalog_path)
+                return False
         finally:
             _remove(xz_tmp)
             _remove(db_tmp)
@@ -333,6 +357,8 @@ class CatalogClient:
                     if written > limit:
                         raise CatalogError("The catalog snapshot is larger than allowed")
                     _ = writer.write(chunk)
+                writer.flush()
+                os.fsync(writer.fileno())
         except lzma.LZMAError as exc:
             raise CatalogError("The catalog snapshot could not be decompressed") from exc
 

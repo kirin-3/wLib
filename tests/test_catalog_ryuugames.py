@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import re
+
+import pytest
 
 from catalog_fakes import FakeTransport, fixture_bytes, make_context, rows
 from catalog_server.net import Response
@@ -33,6 +36,37 @@ def test_posts_store_ids_version_and_categories(tmp_path):
     assert cover.startswith("https://www.ryuugames.com/wp-content/uploads/")
     assert json.loads(stored[169623][4]) == ["RJ01071738"]
     assert json.loads(stored[24446][6]) == ["v2480"]
+
+
+def test_an_empty_page_inside_the_post_list_is_a_failed_step(tmp_path):
+    def transport(request):
+        page = int(re.search(r"[?&]page=(\d+)", request.url).group(1))
+        if page == 1:
+            return Response(
+                200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "3"}
+            )
+        return Response(200, b"[]", {"X-WP-TotalPages": "3"})
+
+    ctx, _ = make_context(tmp_path, transport)
+    source = RyuugamesSource()
+    assert source.sweep_step(ctx) is False
+    with pytest.raises(ValueError, match="empty page"):
+        source.sweep_step(ctx)
+
+
+def test_a_400_on_the_first_page_does_not_empty_the_catalog(tmp_path):
+    ctx, _ = make_context(
+        tmp_path,
+        lambda request: Response(400, b'{"code":"rest_post_invalid_page_number"}'),
+    )
+    ctx.catalog.upsert(
+        "ryuu_posts",
+        "post_id",
+        [{"post_id": 1, "title": "T", "raw_title": "T", "url": "u"}],
+        "2026-01-01T00:00:00Z",
+    )
+    with pytest.raises(ValueError, match="first page"):
+        RyuugamesSource().sweep_step(ctx)
 
 
 def test_download_links_are_never_stored(tmp_path):

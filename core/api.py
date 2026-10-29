@@ -5113,7 +5113,7 @@ class Api:
                 update_setting_fn("save_backup_keep", save_backup_keep)
             if "custom_play_statuses" in settings_map:
                 update_custom_play_statuses(custom_statuses)
-        except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
+        except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}
 

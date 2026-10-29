@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import re
+
+import pytest
 
 from catalog_fakes import FakeTransport, fixture_json, json_response, make_context, rows
 from catalog_server.sources.dlsite import DlsiteSource, parse_listing
@@ -52,6 +55,36 @@ def test_sweep_walks_maniax_then_pro(tmp_path):
     assert done == [[0, 2], [1, 1], [1, 2]]
     listing_urls = [request.url for request in transport.requests if "/fsr/ajax/" in request.url]
     assert [url.split("/")[3] for url in listing_urls] == ["maniax", "maniax", "pro", "pro"]
+
+
+def test_an_empty_listing_page_is_a_failed_step(tmp_path):
+    listing = fixture_json("dlsite_listing.json")
+    listing["page_info"]["count"] = 150
+
+    def transport(request):
+        if "/fsr/ajax/" in request.url:
+            page = int(re.search(r"/page/(\d+)/", request.url).group(1))
+            payload = json.loads(json.dumps(listing))
+            if page == 2:
+                payload["search_result"] = ""
+            return json_response(payload)
+        return json_response(fixture_json("dlsite_product_info.json"))
+
+    ctx, _ = make_context(tmp_path, transport)
+    source = DlsiteSource()
+    assert source.sweep_step(ctx) is False
+    # The listing says page 2 has works, so an empty page is a failed request.
+    with pytest.raises(ValueError, match="empty page"):
+        source.sweep_step(ctx)
+
+
+def test_empty_product_details_are_a_failed_step(tmp_path):
+    transport = FakeTransport()
+    transport.route("/product/info/ajax", json_response({}))
+    transport.route("/fsr/ajax/", json_response(fixture_json("dlsite_listing.json")))
+    ctx, _ = make_context(tmp_path, transport)
+    with pytest.raises(ValueError, match="no details"):
+        DlsiteSource().sweep_step(ctx)
 
 
 def test_incremental_fetches_details_only_for_new_ids(tmp_path):

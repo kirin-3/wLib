@@ -75,6 +75,29 @@ def test_setting_round_trips_and_turning_off_deletes_files(started, tmp_path):
     assert get_setting("catalog_enabled") == "1"
 
 
+def test_a_locked_catalog_file_returns_an_error_payload(started, tmp_path, monkeypatch):
+    import core.catalog as catalog_module
+
+    api = Api()
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    (data / "catalog.db").write_bytes(b"x")
+    (data / "catalog.json").write_text("{}")
+
+    real_remove = os.remove
+
+    def locked(path):
+        if os.path.basename(str(path)) == "catalog.db":
+            raise PermissionError(13, "file is locked")
+        real_remove(path)
+
+    monkeypatch.setattr(catalog_module.os, "remove", locked)
+    result = api.save_settings({"catalog_enabled": False})
+    assert result["success"] is False and "locked" in str(result["error"])
+    # The setting still turned off, so the leftover file is never read.
+    assert get_setting("catalog_enabled") == "0"
+
+
 def test_startup_with_unreachable_catalog_does_not_block(monkeypatch, tmp_path):
     import time
 
