@@ -1011,6 +1011,12 @@ def test_check_archive_entry_safe_drive_relative_and_reserved_names():
         "CON ",
         "NUL .txt",
         "dir/aux",
+        # A colon before the first dot bypasses the split-at-dot check and
+        # names a device/stream (COM1:data opens the serial port on Windows).
+        "CON:foo",
+        "dir/prn:stream",
+        "COM1:data",
+        "NUL:$DATA",
     ):
         with pytest.raises(ArchiveSafetyError):
             check_archive_entry_safe(reserved)

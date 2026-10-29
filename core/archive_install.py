@@ -225,7 +225,9 @@ def check_archive_entry_safe(entry: str) -> None:
     if any(p == ".." for p in parts):
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     for part in parts:
-        base = part.split(".")[0].rstrip(" ").upper()
+        # A colon starts a device stream on Windows (CON:foo, COM1:data), so
+        # the reserved-name check must look at the part before it as well.
+        base = part.split(".")[0].split(":")[0].rstrip(" ").upper()
         if base in _WINDOWS_RESERVED_NAMES:
             raise ArchiveSafetyError(
                 f"Archive entry uses reserved device name: {entry!r}"
