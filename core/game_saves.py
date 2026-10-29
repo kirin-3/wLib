@@ -129,9 +129,12 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
     return any(word in entry_lower for word in words)
 
 
-def _nested_game_folders(
-    base: str, title_clean: str, game_name: str
-) -> list[str]:
+# Executable stems shared by many unrelated games (RPG Maker's Game.exe and
+# similar). They can't identify a game folder inside a shared container.
+_GENERIC_EXE_STEMS = frozenset({"game", "start", "launcher", "main", "run"})
+
+
+def _nested_game_folders(base: str, title: str, game_name: str) -> list[str]:
     """Game folders under a container folder (LocalLow/Dev/Game, Documents/My Games/Game).
 
     The match is stricter than for a top-level folder: a container can hold
@@ -152,8 +155,10 @@ def _nested_game_folders(
         entries = os.listdir(base)
     except OSError:
         return []
-    title_key = key(title_clean)
+    title_key = key(title)
     game_key = key(game_name)
+    if game_key in _GENERIC_EXE_STEMS:
+        game_key = ""
     matched: list[str] = []
     for entry in entries:
         entry_key = key(entry)
@@ -301,7 +306,7 @@ def detect_save_locations(
                         # LocalLow/Dev/Game and Documents/My Games/Game hold
                         # the game folder one level down; prefer that folder.
                         children = _nested_game_folders(
-                            candidate, title_clean, game_name
+                            candidate, title.strip(), game_name
                         )
                         if children:
                             for child in children:
@@ -415,7 +420,7 @@ def detect_save_locations(
                             # LocalLow/Dev/Game and Documents/My Games/Game:
                             # prefer the game folder over its container.
                             children = _nested_game_folders(
-                                candidate, title_clean, game_name
+                                candidate, title.strip(), game_name
                             )
                             if children:
                                 for child in children:

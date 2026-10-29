@@ -589,6 +589,25 @@ def test_windows_local_low_does_not_settle_for_the_developer_folder(tmp_path):
     assert str(saves.parent) not in {r["path"] for r in results}
 
 
+def test_windows_local_low_ignores_another_game_named_like_a_generic_exe(tmp_path):
+    other = tmp_path / "home" / "AppData" / "LocalLow" / "OtherDev" / "Game"
+    _write(other / "save.dat")
+
+    assert detect_save_locations("/games/Zelda/Game.exe", "Zelda", windows=True) == []
+    assert detect_save_locations("/games/Zelda/Game.exe", windows=True) == []
+
+
+def test_windows_local_low_matches_an_exact_specific_exe_name(tmp_path):
+    saves = tmp_path / "home" / "AppData" / "LocalLow" / "Studio" / "StarQuest"
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/sq/StarQuest.exe", "Star Quest: Remastered", windows=True
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+
+
 def test_wine_prefix_documents_my_games_prefers_the_game_folder(tmp_path):
     prefix = tmp_path / "prefix"
     container = (
