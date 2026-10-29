@@ -1099,13 +1099,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 raw_payload = cast(object, json.loads(self.rfile.read(content_length).decode("utf-8")))
                 if not isinstance(raw_payload, dict):
                     raise ValueError("Request body must be a JSON object")
-                payload = self._prepare_game_payload(
-                    cast(dict[str, object], raw_payload)
-                )
-                if api_ref is None:
+                # Preparing the payload resolves store links, which reads the
+                # database; wait for startup init_db() so an early wishlist
+                # gets the documented 503 instead of a raw SQLite error.
+                if not self._wait_for_database() or api_ref is None:
                     status = 503
                     wishlist_response = {"success": False, "error": "Application is not ready"}
                 else:
+                    payload = self._prepare_game_payload(
+                        cast(dict[str, object], raw_payload)
+                    )
                     wishlist_response = api_ref.add_game(
                         title=str(payload.get("title") or ""),
                         exe_path="",

@@ -1623,6 +1623,41 @@ def test_store_page_wishlist_check_open_and_thread_links(
         connection.close()
 
 
+def test_wishlist_waits_for_startup_database(
+    monkeypatch, extension_server, tmp_path
+):
+    from core import database
+
+    # The app serves this port before Api() has run init_db(). A wishlist call
+    # in that window must get the documented 503, not a raw SQLite error from
+    # resolving the payload's store links against a schema-less database.
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "not-initialized.db"))
+    monkeypatch.setattr(main, "api_ref", None)
+    monkeypatch.setattr(main, "DATABASE_READY_TIMEOUT", 0.05)
+    extension_server.database_ready = threading.Event()
+    connection = HTTPConnection(*extension_server.server_address, timeout=3)
+    try:
+        connection.request(
+            "POST",
+            "/api/wishlist",
+            json.dumps(
+                {
+                    "title": "Wishlist demo",
+                    "url": "https://f95zone.to/threads/wishlist.555/",
+                }
+            ),
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+        )
+        response = connection.getresponse()
+        assert response.status == 503
+        assert json.loads(response.read()) == {
+            "success": False,
+            "error": "Application is not ready",
+        }
+    finally:
+        connection.close()
+
+
 def test_database_endpoints_wait_until_startup_has_run_init_db(
     monkeypatch, extension_server
 ):
