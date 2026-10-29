@@ -659,6 +659,10 @@ class SyncManager:
         self._error_code: str = ""
         self.server_available: bool = False
         self._remote_encrypted: bool = False
+        # Remote revision a first-connection run read, and the pending
+        # needs_choice/needs_passphrase result it left for that revision.
+        self._first_revision: str | None = None
+        self._first_pending: tuple[str, str] | None = None
         # (state, PKCE verifier, expiry, provider)
         self._pending: tuple[str, str, float, str] | None = None
         self._stop: threading.Event = threading.Event()
@@ -766,6 +770,7 @@ class SyncManager:
             }
         )
         self._state, self._error_code = "idle", ""
+        self._first_pending = None
 
     def set_folder(self, folder: object) -> dict[str, object]:
         selected = folder if isinstance(folder, str) else ""
@@ -924,6 +929,7 @@ class SyncManager:
         # The worker was already reported as "syncing", so it must wait its turn.
         if not self._lock.acquire(blocking=threading.current_thread() is self._worker):
             return self.status()
+        self._first_revision = None
         try:
             if not self._setting("location"):
                 return self.status()
@@ -950,6 +956,12 @@ class SyncManager:
         except Exception as error:
             return self._error(error)
         finally:
+            self._first_pending = (
+                (self._first_revision, self._state)
+                if self._first_revision is not None
+                and self._state in ("needs_choice", "needs_passphrase")
+                else None
+            )
             self._lock.release()
 
     def _run_once(self, choice: str | None, *, push_only: bool) -> None:
@@ -957,6 +969,7 @@ class SyncManager:
         last_revision = self._setting("last_revision") or None
         revision = location.revision()
         first = not self._setting("last_synced_at")
+        self._first_revision = revision if first else None
         if choice is not None and not first:
             raise SyncError("No library choice is needed.", "invalid_sync_choice")
         local_modified = self._setting("local_modified_at")
@@ -967,6 +980,21 @@ class SyncManager:
             return
         if revision is None:
             self._push(location, None)
+            return
+        pending = self._first_pending
+        if (
+            push_only
+            and first
+            and choice is None
+            and pending is not None
+            and pending[0] == revision
+            and (pending[1] != "needs_choice" or database.get_game_count() > 0)
+        ):
+            # The quiet-period watcher and the exit push never apply a
+            # first-connection file. While the remote is unchanged since the
+            # run that asked the user, keep that answer instead of downloading
+            # and decrypting the whole file every minute.
+            self._state = pending[1]
             return
         backup: dict[str, object] | None = None
         if first or remote_changed:
@@ -1072,6 +1100,7 @@ class SyncManager:
                     }
                 )
                 self._state, self._error_code = "idle", ""
+                self._first_pending = None
                 return self.status()
             except Exception as error:
                 return self._error(error)
@@ -1272,6 +1301,7 @@ class SyncManager:
         )
         self._dropbox, self._gdrive, self._pending = None, None, None
         self._state, self._error_code = "idle", ""
+        self._first_pending = None
 
     def disconnect(self) -> dict[str, object]:
         with self._lock:

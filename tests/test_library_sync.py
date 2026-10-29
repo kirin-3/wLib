@@ -625,6 +625,54 @@ def test_push_only_never_pulls_first_or_remote_changes():
     assert database.get_all_games() == before and location.writes == 0
 
 
+def test_auto_push_keeps_a_pending_first_choice_without_rereading():
+    database.add_game("Local", "/local.exe", developer="Dev")
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    assert sync.run()["state"] == "needs_choice"
+    assert location.reads == 1
+
+    # The 60-second watcher keeps firing while the dialog waits; an unchanged
+    # remote must not be downloaded and decrypted again.
+    assert sync.run(push_only=True)["state"] == "needs_choice"
+    assert location.reads == 1 and location.writes == 0
+
+    # A changed remote is read again. If it is now empty, the push proceeds as
+    # the full first-connection contract does.
+    location.change(remote_backup(title=""))
+    assert sync.run(push_only=True)["state"] == "idle"
+    assert location.reads == 2 and location.writes == 1
+    assert [game["title"] for game in database.get_all_games()] == ["Local"]
+
+
+def test_auto_push_on_first_connection_pushes_to_an_empty_remote():
+    database.add_game("Local", "/local.exe", developer="Dev")
+    location = MemoryLocation(remote_backup(title=""))
+    sync = manager(location)
+    assert sync.run(push_only=True)["state"] == "idle"
+    assert location.writes == 1
+
+
+def test_auto_push_keeps_a_pending_passphrase_prompt():
+    database.add_game("Local", "/local.exe", developer="Dev")
+    location = MemoryLocation(encrypt_library_backup(remote_backup(), "phrase"))
+    sync = manager(location)
+    assert sync.run()["state"] == "needs_passphrase"
+    assert location.reads == 1
+
+    # A background push must not swap the unlock prompt for a library choice
+    # it never decrypted, and has no reason to fetch the same file again.
+    result = sync.run(push_only=True)
+    assert result["state"] == "needs_passphrase"
+    assert location.reads == 1 and location.writes == 0
+
+    # Unlocking drops the remembered prompt; the next run decrypts and asks
+    # for the library choice.
+    assert sync.unlock("phrase")["state"] == "idle"
+    assert sync.run(push_only=True)["state"] == "needs_choice"
+    assert location.reads == 3
+
+
 def test_api_sync_methods(tmp_path, monkeypatch):
     api = Api()
     location = MemoryLocation(remote_backup())
