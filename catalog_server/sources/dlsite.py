@@ -120,6 +120,11 @@ class DlsiteSource:
             LISTING_URL.format(site=site, filter=filter_path, order="release_d", page=page),
         )
         items, total = parse_listing(response.json())
+        if not items and total > (page - 1) * PER_PAGE:
+            # A page the listing says exists must have works on it. An empty
+            # one is a failed request; advancing past it would leave its IDs
+            # unseen until the removal marking treats them as gone.
+            raise ValueError(f"DLsite returned an empty page {page} of {total}")
         ids = [str(item["product_id"]) for item in items]
         known = ctx.catalog.existing_keys("dlsite_works", "product_id", ids)
         known |= ctx.state.skipped_dlsite(ids)
@@ -134,6 +139,13 @@ class DlsiteSource:
                 ),
             )
             rows, dropped = merge_details(site, items, info.json())
+            if not rows and not dropped:
+                # An empty details payload is a failed request, not a page of
+                # works to drop. Advancing would hide every listed work from
+                # the sweep and let the removal marking delete them.
+                raise ValueError(
+                    f"DLsite returned no details for {len(items)} listed works"
+                )
             ctx.upsert("dlsite_works", "product_id", rows)
             ctx.state.add_skipped_dlsite(dropped)
         return len([value for value in ids if value not in known]), total

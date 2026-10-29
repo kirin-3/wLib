@@ -101,29 +101,38 @@ def _gmt(value: object) -> str | None:
     return f"{value}Z" if isinstance(value, str) and value else None
 
 
-def parse_posts(response: Response) -> tuple[list[dict[str, object]], int]:
+def parse_posts(response: Response) -> tuple[list[dict[str, object]], int, int]:
+    """Return the stored rows, the total page count and how many posts the page held."""
     payload = response.json()
     if not isinstance(payload, list):
         raise ValueError("Ryuugames response is not a list")
-    rows = [
-        row
-        for post in cast(list[object], payload)
-        if isinstance(post, dict)
-        and (row := parse_post(cast(dict[str, object], post))) is not None
+    posts = [
+        cast(dict[str, object], item)
+        for item in cast(list[object], payload)
+        if isinstance(item, dict)
     ]
+    rows = [row for post in posts if (row := parse_post(post)) is not None]
     total = response.header("X-WP-TotalPages") or "0"
-    return rows, int(total) if total.isdigit() else 0
+    return rows, int(total) if total.isdigit() else 0, len(posts)
 
 
 class RyuugamesSource:
     name: str = "ryuugames"
 
-    def _fetch(self, ctx: SourceContext, url: str) -> int:
+    def _fetch(self, ctx: SourceContext, url: str, *, page: int) -> int:
         # WordPress answers 400 for a page past the end.
         response = ctx.pacer.request(self.name, url, ok_statuses=frozenset({400}))
         if response.status == 400:
+            if page == 1 and ctx.catalog.count(self.name) > 0:
+                # The first page always exists on a working site. A 400 here
+                # is a failed request, not an empty catalog to publish.
+                raise ValueError("Ryuugames answered 400 for the first page")
             return 0
-        rows, total = parse_posts(response)
+        rows, total, post_count = parse_posts(response)
+        if not post_count and total >= page:
+            # The site says this page exists but sent no posts. Treat it as a
+            # failed request so the sweep is not completed with unread pages.
+            raise ValueError(f"Ryuugames returned an empty page {page} of {total}")
         ctx.upsert("ryuu_posts", "post_id", rows)
         return total
 
@@ -136,7 +145,7 @@ class RyuugamesSource:
         while True:
             url = POSTS_URL.format(page=page, orderby="modified", order="asc")
             url += "&modified_after=" + quote(since)
-            total = self._fetch(ctx, url)
+            total = self._fetch(ctx, url, page=page)
             if page >= total:
                 break
             page += 1
@@ -151,7 +160,11 @@ class RyuugamesSource:
         if page == 1:
             ctx.state.put(self.name, "sweep_modified_since", ctx.now())
         # Newest first: posts added mid-sweep shift entries later, never skip them.
-        total = self._fetch(ctx, POSTS_URL.format(page=page, orderby="id", order="desc"))
+        total = self._fetch(
+            ctx,
+            POSTS_URL.format(page=page, orderby="id", order="desc"),
+            page=page,
+        )
         if page >= total:
             return True
         ctx.state.put(self.name, "sweep_page", page + 1)

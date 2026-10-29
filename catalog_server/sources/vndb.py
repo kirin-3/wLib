@@ -113,6 +113,10 @@ class VndbSource:
             raise ValueError("VNDB response is not an object")
         body = cast(dict[str, object], payload)
         items = _dicts(body.get("results"))
+        if body.get("more") is True and not items:
+            # The API promised another page but sent none. Treat it as a
+            # failed request instead of moving on with a half-read sweep.
+            raise ValueError(f"VNDB returned no results for {phase} while more was promised")
         if phase == "vn":
             ctx.upsert("vndb_vns", "vn_id", [parse_vn(item) for item in items])
         else:

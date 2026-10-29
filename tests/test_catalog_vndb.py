@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 
+import pytest
+
 from catalog_fakes import FakeTransport, fixture_json, json_response, make_context, rows
 from catalog_server.runner import run_source
 from catalog_server.sources.vndb import VndbSource
@@ -34,6 +36,14 @@ def test_vns_and_release_store_ids_are_stored(tmp_path):
     assert bodies[0]["filters"] == ["release", "=", ["minage", "=", 18]]
     assert ["minage", "=", 18] in bodies[1]["filters"]
     assert all(request.method == "POST" for request in transport.requests)
+
+
+def test_more_pages_with_no_results_is_a_failed_step(tmp_path):
+    transport = FakeTransport()
+    transport.route("/kana/vn", json_response({"results": [], "more": True}))
+    ctx, _ = make_context(tmp_path, transport)
+    with pytest.raises(ValueError, match="no results"):
+        VndbSource().sweep_step(ctx)
 
 
 def test_refresh_follows_the_weekly_schedule(tmp_path):

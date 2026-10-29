@@ -156,7 +156,12 @@ class F95Source:
             if stamps:
                 ctx.state.put(self.name, "hwm_ts", max(stamps))
         ctx.state.put(self.name, "sweep_total_pages", total)
-        if not rows or page >= total:
+        if not rows and page <= total:
+            # An empty page inside the feed is a failed request, not the end.
+            # Treating it as the end would let two bad runs mark the unread
+            # pages removed and publish a catalog missing most of F95.
+            raise ValueError(f"F95 returned an empty page {page} of {total}")
+        if page >= total:
             return True
         ctx.state.put(self.name, "sweep_page", page + 1)
         return False

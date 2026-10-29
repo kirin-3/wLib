@@ -79,6 +79,46 @@ def test_rate_limit_body_with_200_counts_as_limit(tmp_path):
         raise AssertionError("expected RateLimited")
 
 
+def test_a_truncated_page_does_not_complete_or_wipe_the_sweep(tmp_path):
+    entries = _entries()
+    pages = {1: _page(1, entries[:2]), 2: _page(2, entries[2:4]), 3: _page(3, entries[4:])}
+    truncated = {"on": False}
+
+    def transport(request):
+        number = _page_number(request)
+        if truncated["on"] and number == 2:
+            return _page(2, [], total=3)
+        return pages[number]
+
+    from catalog_server.net import Pacer
+
+    ctx, clock = make_context(tmp_path, transport)
+    seeded = run_source(F95Source(), ctx)
+    assert seeded.status == "ok" and seeded.sweep_completed
+    assert ctx.catalog.count("f95") == 5
+
+    truncated["on"] = True
+    for _ in range(2):
+        clock.now += 3600
+        ctx.pacer = Pacer(ctx.state, transport, clock=clock, sleep=clock.sleep)
+        result = run_source(F95Source(), ctx)
+        # A bad page is a failed run, not the end of the feed.
+        assert result.status == "error" and not result.sweep_completed
+        assert ctx.catalog.count("f95") == 5
+        assert all(
+            row[0] is None
+            for row in rows(ctx.catalog, "SELECT removed_at FROM f95_threads")
+        )
+
+    # The cursor stayed on the bad page, so a later good run finishes the sweep.
+    truncated["on"] = False
+    clock.now += 3600
+    ctx.pacer = Pacer(ctx.state, transport, clock=clock, sleep=clock.sleep)
+    recovered = run_source(F95Source(), ctx)
+    assert recovered.status == "ok" and recovered.sweep_completed
+    assert ctx.catalog.count("f95") == 5
+
+
 def test_incremental_stops_at_known_entries(tmp_path):
     entries = sorted(_entries(), key=lambda entry: -entry["ts"])
     fetched = []
