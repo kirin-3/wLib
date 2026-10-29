@@ -1136,10 +1136,14 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             )
             stored = cast(sqlite3.Row | None, cursor.fetchone())
             if stored is not None and stored["play_status"] != "Completed":
-                incoming_version = str(safe_fields.get("version") or "").strip()
-                safe_fields["finished_version"] = incoming_version or str(
-                    stored["version"] or ""
-                )
+                # An explicitly sent version wins even when it is empty: the
+                # finished version must match the installed version this call
+                # stores, not the one it replaced.
+                if "version" in safe_fields:
+                    finished_version = str(safe_fields.get("version") or "").strip()
+                else:
+                    finished_version = str(stored["version"] or "").strip()
+                safe_fields["finished_version"] = finished_version
 
         set_clause = ", ".join([f"{k} = ?" for k in safe_fields.keys()])
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)

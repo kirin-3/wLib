@@ -1153,6 +1153,33 @@ def test_completed_status_change_without_stored_version_falls_back_to_incoming()
     assert game["finished_version"] == "0.9"
 
 
+def test_completed_status_change_honors_an_explicitly_cleared_version():
+    """Clearing the installed version while completing must not restore the old one."""
+    game_id = add_game(title="Cleared Version", exe_path="/tmp/cleared.exe", version="0.5")
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Playing"})
+
+    applied = update_game(game_id, {"play_status": "Completed", "version": ""})
+
+    assert applied["finished_version"] == ""
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["version"] == ""
+    assert game["finished_version"] == ""
+
+
+def test_completed_status_change_trims_the_recorded_finished_version():
+    """The auto-filled finished version follows the trimmed-save rule."""
+    game_id = add_game(
+        title="Spaced Version", exe_path="/tmp/spaced.exe", version=" 0.5 "
+    )
+    assert game_id is not None
+    update_game(game_id, {"play_status": "Playing"})
+
+    applied = update_game(game_id, {"play_status": "Completed"})
+
+    assert applied["finished_version"] == "0.5"
+
+
 def test_archive_install_settings_defaults_for_fresh_and_existing_db():
     from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
 
