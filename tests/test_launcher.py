@@ -3002,3 +3002,31 @@ def test_stop_skips_wineserver_for_equivalent_prefixes(monkeypatch, other_kill_i
         assert launcher.stop(1)["success"]
     run.assert_not_called()
     killpg.assert_called_with(123, signal.SIGTERM)
+
+
+def test_windows_rejects_linux_launch_mode_before_sandbox_probe(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch(
+            "core.launcher.game_sandbox.get_sandbox_status",
+            return_value={"status": "missing", "reason": "Sandboxie is unavailable"},
+        ),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = Launcher().launch(
+            r"C:\Games\game.exe",
+            launch_mode="wine_proton",
+            sandbox_enabled=True,
+            game_id=1,
+        )
+    assert result["code"] == "unsupported_platform"
+    popen.assert_not_called()
+
+    # A Linux path imported from another host may no longer exist on Windows;
+    # the mode error still wins so the user knows what to change.
+    with patch("os.path.exists", return_value=False):
+        missing = Launcher().launch(
+            "/games/game.sh", launch_mode="wine_proton", game_id=1
+        )
+    assert missing["code"] == "unsupported_platform"

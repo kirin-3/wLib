@@ -819,6 +819,19 @@ class Launcher:
         # A leading ~ is accepted in the path fields; expand it before every
         # existence check so the launcher uses the same path as path checks.
         exe_path = os.path.expanduser(exe_path.strip())
+        launch_mode = normalize_launch_mode(launch_mode)
+
+        # Reject imported Linux-only modes before path checks or sandbox probing
+        # can return a more confusing error on Windows.
+        if is_windows() and launch_mode != "auto":
+            return {
+                "success": False,
+                "error": (
+                    f"Launch mode '{launch_mode}' is only available on Linux. "
+                    "Choose Auto Detect to launch this game directly on Windows."
+                ),
+                "code": "unsupported_platform",
+            }
 
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
@@ -829,7 +842,6 @@ class Launcher:
         # the Linux compatibility path without rewriting POSIX paths.
         path_module = _host_path_module()
         exe_path = path_module.abspath(exe_path)
-        launch_mode = normalize_launch_mode(launch_mode)
 
         env = os.environ.copy()
 
@@ -1361,16 +1373,6 @@ class Launcher:
             return None
 
         if is_windows():
-            if launch_mode != "auto":
-                return {
-                    "success": False,
-                    "error": (
-                        f"Launch mode '{launch_mode}' is only available on Linux. "
-                        "Choose Auto Detect to launch this game directly on Windows."
-                    ),
-                    "code": "unsupported_platform",
-                }
-
             process_env = build_host_tool_env(env)
             if ext == ".exe":
                 return execute_process(build_command([exe_path], args), process_env)
