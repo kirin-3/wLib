@@ -436,6 +436,145 @@ def test_resolve_backup_rejects_traversal_and_missing(tmp_path):
             _ = resolve_backup(str(root), 1, bad)
 
 
+def test_wine_prefix_finds_renpy_saves(tmp_path):
+    # Ren'Py under Wine writes to %APPDATA%\RenPy\<game>-<hash>, one level
+    # below the AppData entry, so the generic folder match never sees it.
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "Roaming"
+        / "RenPy"
+        / "Zelda-1234567890"
+    )
+    _write(saves / "1-1-LT1.save")
+    _write(saves.parent / "OtherApp-42" / "other.save")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert results[0]["type"] == "Ren'Py"
+
+
+def test_wine_prefix_finds_local_low_developer_game(tmp_path):
+    # %LOCALAPPDATA%Low\<developer>\<game> is the layout the save-folder spec
+    # documents for a prefix; the developer folder itself is not the saves.
+    prefix = tmp_path / "prefix"
+    developer = (
+        prefix / "drive_c" / "users" / "steamuser" / "AppData" / "LocalLow" / "Dev"
+    )
+    saves = developer / "Zelda"
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(developer) not in {r["path"] for r in results}
+
+
+def test_wine_prefix_finds_the_spec_local_low_layout(tmp_path):
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "LocalLow"
+        / "Dev"
+        / "Game"
+    )
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Game/Game.exe",
+        "Game",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+
+
+def test_windows_local_low_does_not_settle_for_the_developer_folder(tmp_path):
+    saves = tmp_path / "home" / "AppData" / "LocalLow" / "Dev" / "Zelda"
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe", "Zelda", windows=True
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(saves.parent) not in {r["path"] for r in results}
+
+
+def test_wine_prefix_documents_my_games_prefers_the_game_folder(tmp_path):
+    prefix = tmp_path / "prefix"
+    container = (
+        prefix / "drive_c" / "users" / "steamuser" / "Documents" / "My Games"
+    )
+    saves = container / "Zelda"
+    _write(saves / "save.dat")
+    _write(container / "OtherGame" / "other.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(container) not in {r["path"] for r in results}
+
+
+def test_windows_documents_my_games_container_is_not_a_saves_folder(tmp_path):
+    container = tmp_path / "home" / "Documents" / "My Games"
+    (container / "OtherGame").mkdir(parents=True)
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe", "Zelda", windows=True
+    )
+
+    assert results == []
+
+
+def test_wine_prefix_keeps_a_game_named_appdata_folder(tmp_path):
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "Roaming"
+        / "Game"
+    )
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+
+
 def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     sandbox = tmp_path / "data/sandbox/12/home/.renpy/Story-123"
