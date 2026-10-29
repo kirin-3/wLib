@@ -1498,6 +1498,9 @@ def _rewrite_game_collection_memberships(
 def create_collection(name: object, game_id: int | None = None) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        # Read the list under the write lock: two creates that both read the
+        # old list would otherwise commit one after the other and lose one.
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         normalized = _validate_new_collection_name(name, collections)
@@ -1517,6 +1520,7 @@ def create_collection(name: object, game_id: int | None = None) -> list[str]:
 def rename_collection(old_name: object, new_name: object) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         old_key = str(old_name or "").strip().casefold()
@@ -1556,6 +1560,7 @@ def delete_collection(name: object) -> list[str]:
     key = str(name or "").strip().casefold()
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         if not any(name.casefold() == key for name in collections):
@@ -1572,6 +1577,7 @@ def delete_collection(name: object) -> list[str]:
 
 def reorder_collections(names: Sequence[object]) -> list[str]:
     with closing(get_connection()) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         collections = _read_collections(cursor)
         canonical_by_key = {name.casefold(): name for name in collections}
@@ -1594,6 +1600,7 @@ def reorder_collections(names: Sequence[object]) -> list[str]:
 def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
         cursor = conn.cursor()
         if _read_game_collections(cursor, game_id) is None:
             raise ValueError("Game not found")

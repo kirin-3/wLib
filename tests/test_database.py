@@ -48,6 +48,7 @@ from core.database import (
     set_game_collections,
     set_sandbox_for_all_games,
     _coerce_sort_order,
+    _read_collections,
     find_games_by_links,
     get_game_links,
     replace_game_links,
@@ -1632,6 +1633,50 @@ def test_coerce_sort_order_handles_floats_and_bools():
     assert game_id is not None
     target = add_game_launch_target(game_id, "Float", "/tmp/f.exe", sort_order=2.7)
     assert target["sort_order"] == 2
+
+
+def test_concurrent_collection_creates_keep_both(monkeypatch):
+    """Two creates that read the old list must not overwrite each other."""
+    real_read = _read_collections
+    reads = 0
+    reads_lock = threading.Lock()
+    both_read = threading.Event()
+
+    def slow_read(cursor):
+        nonlocal reads
+        result = real_read(cursor)
+        with reads_lock:
+            reads += 1
+            if reads >= 2:
+                both_read.set()
+        # Without serialization both creates read the old list and then race
+        # their writes; with BEGIN IMMEDIATE the second read waits for the
+        # first commit, so this timeout only fires for the lock holder.
+        both_read.wait(2)
+        return result
+
+    monkeypatch.setattr("core.database._read_collections", slow_read)
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def worker(name: str) -> None:
+        barrier.wait()
+        try:
+            create_collection(name)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=("Alpha",)),
+        threading.Thread(target=worker, args=("Beta",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert set(get_collections()) == {"Alpha", "Beta"}
 
 
 def test_create_collection_dedupes_stale_membership():
