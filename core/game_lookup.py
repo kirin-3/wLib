@@ -154,10 +154,12 @@ def f95_thread_cover(thread_id: str) -> str:
     F95 hides every starter-post attachment, the cover included, from guests,
     so a scrape without the signed-in extension has no cover of its own.
     """
-    if database.get_setting("catalog_enabled") == "0" or not thread_id.isdigit():
+    if not thread_id.isdigit():
         return ""
     path = Path(database.DB_PATH).parent / CATALOG_FILE
     try:
+        if database.get_setting("catalog_enabled") == "0":
+            return ""
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
             row = cast(
                 tuple[object] | None,

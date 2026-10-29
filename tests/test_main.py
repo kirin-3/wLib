@@ -1338,6 +1338,13 @@ def test_packaged_smoke_does_not_create_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
     monkeypatch.setattr(main, "APP_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(main, "get_bundle_root", lambda: str(tmp_path))
+    # Qt WebEngine needs system GL libraries that CI runners do not ship.
+    import_module = main.importlib.import_module
+    monkeypatch.setattr(
+        main.importlib,
+        "import_module",
+        lambda name: MagicMock() if name.startswith("PyQt6.") else import_module(name),
+    )
     for relative in ("ui/dist/index.html", "extension/manifest.json", "wlib.png"):
         asset = tmp_path / relative
         asset.parent.mkdir(parents=True, exist_ok=True)

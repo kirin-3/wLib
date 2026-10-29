@@ -164,3 +164,8 @@ def test_f95_thread_cover_reads_catalog(catalog):
     assert f95_thread_cover("") == ""
     database.update_setting("catalog_enabled", "0")
     assert f95_thread_cover("7") == ""
+
+
+def test_f95_thread_cover_without_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
+    assert f95_thread_cover("7") == ""
