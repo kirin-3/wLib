@@ -564,6 +564,20 @@ def _extract_native_renderer_details(
     return details
 
 
+def _strip_url_query(value: object) -> object:
+    # The window URL carries the extension import/open query, which can hold a
+    # game title and F95 URL. Diagnostics must never expose library content.
+    if not isinstance(value, str) or not value:
+        return value
+    from urllib.parse import unquote, urlsplit, urlunsplit
+
+    parsed = urlsplit(value)
+    # Decode the file path too so redact_paths() can match a home folder that
+    # contains spaces or non-ASCII characters (%20, ...).
+    path = unquote(parsed.path) if parsed.scheme == "file" else parsed.path
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 def _probe_browser_renderer(window: RendererDiagnosticsWindow) -> dict[str, object]:
     probe_script = """
 (() => {
@@ -616,7 +630,7 @@ def _probe_browser_renderer(window: RendererDiagnosticsWindow) -> dict[str, obje
     typed_probe_result = cast(dict[str, object], probe_result)
 
     details: dict[str, object] = {
-        "page_location": typed_probe_result.get("location"),
+        "page_location": _strip_url_query(typed_probe_result.get("location")),
         "js_user_agent": typed_probe_result.get("userAgent"),
         "js_hardware_concurrency": typed_probe_result.get("hardwareConcurrency"),
     }
@@ -689,6 +703,18 @@ def load_webview_module() -> WebviewModule | None:
     return webview
 
 
+def start_runtime_renderer_diagnostics() -> None:
+    # PyWebView runs the ``func`` passed to start() on a non-daemon thread and
+    # Python waits for it at exit. The probe waits up to 30 s + 60 s for window
+    # events, so closing the window before the page loads would keep the
+    # process alive for over a minute. Run the probe on a daemon thread.
+    threading.Thread(
+        target=log_runtime_renderer_diagnostics,
+        name="wlib-renderer-diagnostics",
+        daemon=True,
+    ).start()
+
+
 def start_webview(
     webview_module: WebviewModule, *, dev_mode: bool, icon_path: str | None
 ) -> None:
@@ -696,7 +722,7 @@ def start_webview(
 
     if dev_mode:
         webview_module.start(
-            func=log_runtime_renderer_diagnostics,
+            func=start_runtime_renderer_diagnostics,
             gui="qt",
             debug=False,
             http_server=True,
@@ -707,7 +733,7 @@ def start_webview(
         return
 
     webview_module.start(
-        func=log_runtime_renderer_diagnostics,
+        func=start_runtime_renderer_diagnostics,
         gui="qt",
         debug=False,
         http_server=True,
@@ -1515,6 +1541,14 @@ def main() -> None:
                 extension_server.server_close()
             except Exception as e:
                 print(f"[wLib] Failed to stop extension HTTP server: {e}")
+        # The UI loop has ended. Stop playtime UI events and write the final
+        # playtime delta before the final library sync can take ten seconds;
+        # atexit already does this, but that is too late for the last sync and
+        # can race a playtime tick against a closed window.
+        try:
+            api.launcher.shutdown()
+        except Exception as e:
+            print(f"[wLib] Failed to flush playtime on shutdown: {e}")
         if library_sync_started:
             api.library_sync.finish(timeout=10)
         # Cleanup Vite server when startup fails or the window closes,

@@ -515,6 +515,44 @@ def test_ensure_packaged_webview_cache_fresh_continues_on_marker_write_failure(
     assert not paths["marker_path"].exists()
 
 
+def test_renderer_probe_strips_library_content_from_page_location():
+    window = MagicMock()
+    window.evaluate_js.return_value = {
+        "location": (
+            "file:///opt/wlib/ui/dist/index.html#/?action=import"
+            "&f95url=https%3A%2F%2Ff95zone.to%2Fthreads%2Fsecret-game.123%2F"
+            "&title=Secret+Game"
+        ),
+        "userAgent": "Test agent",
+        "webgl2": None,
+        "webgl": None,
+    }
+
+    details = main._probe_browser_renderer(window)
+
+    assert details["page_location"] == "file:///opt/wlib/ui/dist/index.html"
+    assert "Secret" not in json.dumps(details)
+    assert "f95zone" not in json.dumps(details)
+
+
+def test_renderer_probe_decodes_file_paths_for_home_redaction():
+    window = MagicMock()
+    window.evaluate_js.return_value = {
+        "location": (
+            "file:///home/John%20Doe/wLib/ui/dist/index.html#/?action=import"
+            "&title=Hidden"
+        ),
+        "userAgent": "Test agent",
+        "webgl2": None,
+        "webgl": None,
+    }
+
+    details = main._probe_browser_renderer(window)
+
+    assert details["page_location"] == "file:///home/John Doe/wLib/ui/dist/index.html"
+    assert "Hidden" not in json.dumps(details)
+
+
 def test_extract_native_renderer_details_includes_profile_cache_path():
     class FakeProfile:
         def persistentStoragePath(self):
@@ -555,6 +593,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
 
     class FakeApi:
         library_sync = MagicMock()
+        launcher = MagicMock()
 
         def sync_extension_files(self):
             return {"success": True}
@@ -617,6 +656,7 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
 
     class FakeApi:
         library_sync = MagicMock()
+        launcher = MagicMock()
 
         def sync_extension_files(self):
             return {"success": True}
@@ -698,7 +738,7 @@ def test_start_webview_uses_persistent_storage_for_packaged_runtime(
         str(tmp_path), main.PYWEBVIEW_STORAGE_DIR_NAME
     )
     assert kwargs["icon"] == "/tmp/wlib.png"
-    assert kwargs["func"] is main.log_runtime_renderer_diagnostics
+    assert kwargs["func"] is main.start_runtime_renderer_diagnostics
 
 
 def test_start_webview_preserves_dev_mode_without_fixed_http_port(
@@ -723,7 +763,31 @@ def test_start_webview_preserves_dev_mode_without_fixed_http_port(
     )
     assert "http_port" not in kwargs
     assert kwargs["icon"] is None
-    assert kwargs["func"] is main.log_runtime_renderer_diagnostics
+    assert kwargs["func"] is main.start_runtime_renderer_diagnostics
+
+
+def test_start_webview_runs_renderer_diagnostics_on_a_daemon_thread(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    observed: list[bool] = []
+
+    def probe() -> None:
+        observed.append(threading.current_thread().daemon)
+        started.set()
+        assert release.wait(5)
+
+    monkeypatch.setattr(main, "log_runtime_renderer_diagnostics", probe)
+    webview_module = MagicMock()
+
+    main.start_webview(webview_module, dev_mode=False, icon_path=None)
+
+    func = webview_module.start.call_args.kwargs["func"]
+    assert func is main.start_runtime_renderer_diagnostics
+    assert func is not probe
+    func()
+    assert started.wait(2)
+    assert observed == [True]
+    release.set()
 
 
 def test_renderer_log_targets_include_appimage_log(monkeypatch, tmp_path):
@@ -1379,6 +1443,7 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
 
     class FakeApi:
         library_sync = MagicMock()
+        launcher = MagicMock()
 
         def sync_extension_files(self):
             return {"success": True}
@@ -1413,6 +1478,57 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
     extension_server.server_close.assert_called_once()
 
 
+def test_main_flushes_playtime_before_the_final_sync(monkeypatch):
+    order: list[str] = []
+    fake_webview = MagicMock()
+    fake_webview.create_window.return_value = MagicMock()
+
+    class FakeApi:
+        library_sync = MagicMock()
+        launcher = MagicMock()
+
+        def sync_extension_files(self):
+            return {"success": True}
+
+        def set_startup_extension_sync_status(self, _status):
+            return None
+
+        def set_window(self, _window):
+            return None
+
+    FakeApi.launcher.shutdown.side_effect = lambda: order.append("playtime")
+    FakeApi.library_sync.finish.side_effect = lambda timeout: order.append("sync")
+
+    class FakeThread:
+        def __init__(self, *, target, daemon):
+            self.target = target
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        main, "collect_renderer_environment_snapshot", lambda dev_mode: {}
+    )
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _m: {})
+    monkeypatch.setattr(main, "Api", FakeApi)
+    monkeypatch.setattr(main, "cleanup_legacy_browser_data_async", lambda: None)
+    monkeypatch.setattr(main.threading, "Thread", FakeThread)
+    monkeypatch.setattr(main, "bind_extension_server", lambda: None)
+    monkeypatch.setattr(main, "load_webview_module", lambda: fake_webview)
+    monkeypatch.setattr(main, "start_webview", lambda *_a, **_k: None)
+    monkeypatch.setattr(main, "DEV_MODE", False)
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    main.main()
+
+    assert order == ["playtime", "sync"]
+
+
 def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
     vite_process = MagicMock()
     extension_server = MagicMock()
@@ -1421,6 +1537,7 @@ def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
 
     class FakeApi:
         library_sync = MagicMock()
+        launcher = MagicMock()
 
         def sync_extension_files(self):
             return {"success": True}
