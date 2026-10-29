@@ -103,7 +103,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </button>
     </div>
 
-    <p v-if="enabled && status?.last_error" class="text-xs" role="alert" style="color: var(--danger, #dc2626)">
+    <p v-if="enabled && status?.last_error" class="text-xs" role="alert" style="color: var(--danger-text)">
       Last check failed: {{ status.last_error }}
     </p>
 

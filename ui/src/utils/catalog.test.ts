@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { catalogSourceLines, catalogSummary, formatCatalogTime } from './catalog.ts';
@@ -10,6 +11,13 @@ test('catalog summary covers off, missing, downloading and installed', () => {
   assert.match(catalogSummary({ success: true, enabled: true, installed: false, checking: true }), /Downloading/);
   assert.match(catalogSummary({ success: true, enabled: true, installed: true, built_at: '2026-10-27T05:00:00Z' }), /^Built /);
   assert.equal(catalogSummary({ success: false, error: 'boom' }), 'boom');
+});
+
+test('catalog errors use the themed danger colour', () => {
+  const component = readFileSync(new URL('../components/CatalogSettings.vue', import.meta.url), 'utf8');
+  const alert = component.split('\n').find((line) => line.includes('role="alert"'));
+  assert.ok(alert, 'catalog error alert');
+  assert.match(alert, /var\(--danger-text\)/);
 });
 
 test('source lines keep a fixed order and readable labels', () => {
