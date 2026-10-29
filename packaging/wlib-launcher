@@ -6,8 +6,16 @@ SELF_PATH="$(readlink -f "$0")"
 SELF_DIR="$(dirname "$SELF_PATH")"
 APP_DIR="${WLIB_APP_DIR:-$SELF_DIR}"
 LAUNCHER_NAME="${WLIB_LAUNCHER_NAME:-Release}"
+# Resolve relative paths against the app directory, the same working directory
+# the Python process will see.
+cd "$APP_DIR" || exit 1
 if [ -n "${WLIB_DATA_DIR:-}" ]; then
     DATA_DIR="$WLIB_DATA_DIR"
+    # Match get_data_dir(): expand a leading ~ before using the path.
+    case "$DATA_DIR" in
+        "~") DATA_DIR="$HOME" ;;
+        "~/"*) DATA_DIR="$HOME/${DATA_DIR#\~/}" ;;
+    esac
 elif [ -e "/.flatpak-info" ]; then
     # Inside Flatpak keep the library at the host path so users can switch
     # formats without losing their library (design D6). Flatpak exports the
@@ -42,7 +50,6 @@ mkdir -p "$DATA_DIR"
 if [ -n "$LOG_DIR" ]; then
     mkdir -p "$LOG_DIR"
 fi
-cd "$APP_DIR" || exit 1
 export PATH="$APP_DIR:$PATH"
 export WLIB_LAUNCH_LOG="$LOG_FILE"
 
