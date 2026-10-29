@@ -88,12 +88,20 @@ async (page) => {
       "A failed settings load must not let Save write defaults over stored settings",
     );
 
-    // Retrying with a healthy backend restores the stored values and saving.
-    await discardChanges();
+    // Retrying with a healthy backend restores the stored values and keeps
+    // the edit made after the failed read.
     await page.evaluate(() => { window.__settingsAvailable = true; });
     await page.getByRole("button", { name: "Retry", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#settings-proton-path")?.value === "/opt/wine");
     check(!(await alert.isVisible().catch(() => false)), "A successful retry must clear the load error");
+    check(
+      await folder.inputValue() === "/tmp/typed-after-failure",
+      "Retry must preserve edits typed after the failed read",
+    );
+    await page.getByText("You have unsaved changes.", { exact: true }).waitFor({ timeout: 3000 });
+    await discardChanges();
+
+    // A clean save now carries the loaded values, not empty placeholders.
     await page.getByLabel("Library folder", { exact: true }).fill("/srv/library");
     await page.getByRole("button", { name: "Save Changes", exact: true }).click();
     await page.waitForFunction(() => window.__saved && window.__saved.library_folder === "/srv/library");

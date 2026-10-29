@@ -119,6 +119,9 @@ const saveError = ref("");
 const settingsLoaded = ref(false);
 const settingsLoading = ref(false);
 const settingsLoadError = ref("");
+// The form as it was before the first settings read. Keeping it across failed
+// attempts lets Retry preserve edits typed after that first attempt.
+const settingsLoadBaseline = ref<ReturnType<typeof formValues> | null>(null);
 const platformCapabilities = ref<PlatformCapabilities>({
   ...CONSERVATIVE_PLATFORM_CAPABILITIES,
 });
@@ -333,8 +336,10 @@ const loadSettings = async () => {
   settingsLoadError.value = "";
   // Values typed before the settings read lands must survive it, like edits
   // typed during a save. Keep them and mark them unsaved instead of replacing
-  // them with the persisted values.
-  const beforeLoad = formValues();
+  // them with the persisted values. A failed attempt keeps the original
+  // baseline so Retry can still tell those edits apart from the defaults.
+  const beforeLoad = settingsLoadBaseline.value ?? formValues();
+  if (!settingsLoadBaseline.value) settingsLoadBaseline.value = beforeLoad;
   let settingsApplied = false;
   try {
     platformCapabilities.value = await loadPlatformCapabilities();
@@ -351,6 +356,7 @@ const loadSettings = async () => {
       if (Object.keys(editsDuringLoad).length > 0) {
         applyFormValues({ ...formValues(), ...editsDuringLoad });
       }
+      settingsLoadBaseline.value = null;
       settingsApplied = true;
     }
 
