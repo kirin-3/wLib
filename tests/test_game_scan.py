@@ -214,6 +214,55 @@ def test_scan_skips_leftover_staging_folders(tmp_path):
     assert [game["exe_path"] for game in games] == [str(real / "Demo.exe")]
 
 
+def test_scan_skips_leftover_old_version_backups(tmp_path):
+    from core.game_scan import find_launcher, scan_games_folder
+
+    real = tmp_path / "Game"
+    real.mkdir()
+    (real / "Game.exe").touch()
+    old = tmp_path / "Game.wlib-old-1793249770"
+    old.mkdir()
+    (old / "Game.exe").touch()
+    kept = tmp_path / "Game.wlib-new-1793249771"
+    kept.mkdir()
+    (kept / "Game.exe").touch()
+
+    games = scan_games_folder(str(tmp_path))
+    assert [game["exe_path"] for game in games] == [str(real / "Game.exe")]
+
+    wrapper = tmp_path / "Wrapper"
+    wrapper.mkdir()
+    nested = wrapper / "Game.wlib-old-1793249772"
+    nested.mkdir()
+    (nested / "Game.exe").touch()
+    assert find_launcher(str(wrapper)) == ""
+
+
+def test_scan_in_library_matches_case_variant_paths(tmp_path, monkeypatch):
+    # On a case-insensitive mount (ntfs3) a stored exe path with a different
+    # case still points at the scanned file; a string compare alone does not
+    # see that and Import Folder offered the game again.
+    import os
+
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    folder = tmp_path / "Games" / "Game"
+    folder.mkdir(parents=True)
+    (folder / "Game.exe").write_bytes(b"MZ")
+    game_id = add_game("Game", str(folder / "game.exe"))  # case variant
+    assert game_id is not None
+
+    def fake_samefile(left, right):
+        return os.path.normcase(str(left)).casefold() == os.path.normcase(
+            str(right)
+        ).casefold()
+
+    monkeypatch.setattr("core.api.os.path.samefile", fake_samefile)
+
+    scanned = Api().scan_games_folder(str(tmp_path / "Games"))["games"]
+
+    assert [game["in_library"] for game in scanned] == [True]
+
+
 def test_inspect_relative_exe_path_returns_absolute_path(tmp_path, monkeypatch):
     folder = tmp_path / "Game"
     folder.mkdir()
@@ -238,6 +287,22 @@ def test_scan_ignores_staging_folder(tmp_path):
     (folder / "Inner" / "Inner.exe").touch()
 
     assert find_launcher(str(folder)) == str(folder / "Inner" / "Inner.exe")
+
+
+def test_scan_uses_a_lone_32_bit_launcher(tmp_path):
+    # `-32.exe` is normally the 32-bit twin of the main executable, but some
+    # builds ship only that file; it is still the game, not a helper.
+    from core.game_scan import find_launcher, scan_games_folder
+
+    folder = tmp_path / "Only32"
+    folder.mkdir()
+    exe = folder / "Only32-32.exe"
+    exe.touch()
+
+    assert find_launcher(str(folder)) == str(exe)
+    assert [game["exe_path"] for game in scan_games_folder(str(tmp_path))] == [
+        str(exe)
+    ]
 
 
 def test_scan_prefers_exact_title_over_setup(tmp_path):

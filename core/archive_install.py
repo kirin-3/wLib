@@ -110,6 +110,19 @@ def archive_format(archive_path: str) -> str:
     return ""
 
 
+_PART_SUFFIX_RE = re.compile(r"\.part\d+$", re.IGNORECASE)
+
+
+def archive_stem(archive_path: str) -> str:
+    """File name without the archive extension or multi-part suffix.
+
+    `Game-1.0.part1.rar` is the first part of `Game-1.0.rar`; the part number
+    is not part of the game's name or version.
+    """
+    stem = os.path.splitext(os.path.basename(str(archive_path or "")))[0]
+    return _PART_SUFFIX_RE.sub("", stem)
+
+
 def _is_windows(platform: str | None = None) -> bool:
     if platform is not None:
         return platform.lower().startswith("win")
@@ -211,8 +224,15 @@ def check_archive_entry_safe(entry: str) -> None:
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     if any(p == ".." for p in parts):
         raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
+    # Windows strips trailing dots and spaces from every path component before
+    # it resolves `..`, so ".. " (or "..." / ".. .") leaves the destination
+    # just like "..". Reject components made only of dots and spaces.
+    if any(not p.strip(". ") for p in parts):
+        raise ArchiveSafetyError(f"Archive entry is unsafe: {entry!r}")
     for part in parts:
-        base = part.split(".")[0].rstrip(" ").upper()
+        # A colon starts a device stream on Windows (CON:foo, COM1:data), so
+        # the reserved-name check must look at the part before it as well.
+        base = part.split(".")[0].split(":")[0].rstrip(" ").upper()
         if base in _WINDOWS_RESERVED_NAMES:
             raise ArchiveSafetyError(
                 f"Archive entry uses reserved device name: {entry!r}"
@@ -793,6 +813,20 @@ def _real(path: str) -> str:
         return os.path.abspath(os.path.expanduser(path))
 
 
+def _absolute_game_path(value: object) -> str:
+    """Absolute path for a stored game path, expanding `~` like the launcher.
+
+    Add Game stores the typed value, so a game added as `~/games/Game.exe`
+    keeps the tilde. Every consumer expands it (the launcher, save detection,
+    `in_library` matching); the update path must do the same or it looks for
+    the executable under the app's working directory.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return os.path.abspath(os.path.expanduser(raw))
+
+
 def _is_root(path_real: str) -> bool:
     # Filesystem/drive root: parent == itself (posix "/") or drive root (nt "C:\\").
     parent = os.path.dirname(path_real.rstrip(os.sep))
@@ -827,6 +861,14 @@ def can_remove_old_folder(
         return {"removable": False, "reason": "The previous folder is unknown."}
     if _is_root(cand_real):
         return {"removable": False, "reason": "Refusing to remove a drive root."}
+    # A mounted drive's root is the filesystem root for that drive: deleting it
+    # removes every unrelated file on the mount (rmtree would empty it and then
+    # fail to remove the mount point).
+    if os.path.ismount(cand_real):
+        return {
+            "removable": False,
+            "reason": "Refusing to remove a mounted drive root.",
+        }
     home_real = _real("~")
     if cand_real == home_real:
         return {"removable": False, "reason": "Refusing to remove your home folder."}
@@ -847,9 +889,10 @@ def can_remove_old_folder(
                 "reason": "Refusing to remove a parent of the new install.",
             }
     if old_exe:
-        old_exe_real = _real(old_exe)
+        old_exe_path = _absolute_game_path(old_exe)
+        old_exe_real = _real(old_exe_path)
         try:
-            exe_exists = os.path.isfile(old_exe)
+            exe_exists = os.path.isfile(old_exe_path)
         except OSError:
             exe_exists = False
         if not exe_exists or not _is_within(old_exe_real, cand_real):
@@ -1019,6 +1062,7 @@ def install_archive(
             except Exception:
                 pass
 
+    archive_path = os.path.expanduser(str(archive_path or "").strip())
     if not archive_path or not os.path.isfile(archive_path):
         raise ArchiveInstallError("Archive file was not found.")
     fmt = archive_format(archive_path)
@@ -1039,8 +1083,10 @@ def install_archive(
         for game in get_all_games():
             try:
                 if int(str(game.get("id"))) == int(game_id):
-                    old_exe = str(game.get("exe_path") or "")
-                    old_override = str(game.get("save_path_override") or "").strip()
+                    old_exe = _absolute_game_path(game.get("exe_path"))
+                    old_override = _absolute_game_path(
+                        game.get("save_path_override")
+                    )
                     # Updates keep the stored engine unless the caller sent one.
                     if not engine.strip():
                         engine = str(game.get("engine") or "")
@@ -1192,6 +1238,7 @@ def install_archive(
     # Destination is in place from here on; failures below keep the update.
     kept_reason = ""
     unmoved: list[dict[str, object]] = []
+    library_updated = False
     try:
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
@@ -1225,6 +1272,7 @@ def install_archive(
                 rating=rating,
             )
             game_id = int(str(new_id)) if new_id is not None else None
+            library_updated = game_id is not None
         else:
             fields: dict[str, object] = {
                 "exe_path": exe_path,
@@ -1249,6 +1297,7 @@ def install_archive(
                 if new_override != os.path.normpath(old_override):
                     fields["save_path_override"] = new_override
             _ = _db.update_game(int(game_id), fields)
+            library_updated = True
             if old_root_for_targets and os.path.isdir(destination):
                 try:
                     targets = list_game_launch_targets(int(game_id))
@@ -1315,11 +1364,29 @@ def install_archive(
             "removed_old": removed_old,
             "old_folder": old_root,
         }
-    except Exception:
-        # Step 5/6 failure after the move: the new tree stands (per design a
-        # step-6 failure still counts as success), except the no-launcher and
-        # DB-update cases which must not leave a half-pointing row. For
-        # no-launcher the folder is intentionally kept; re-raise.
+    except Exception as exc:
+        # Step 5 failure after the move: the previous install was renamed aside
+        # for an in-place update and the library still points into it. Restore
+        # it so the game stays usable, and keep the extracted tree beside it
+        # for the manual-executable flow the message offers.
+        if old_backup and not library_updated:
+            kept_new = f"{destination}.wlib-new-{time.time_ns()}"
+            try:
+                os.rename(destination, kept_new)
+                os.rename(old_backup, destination)
+            except OSError:
+                # Put the new tree back so the state matches the original error.
+                try:
+                    if not os.path.lexists(destination):
+                        os.rename(kept_new, destination)
+                except OSError:
+                    pass
+                raise
+            raise ArchiveInstallError(
+                f"{str(exc) or 'The update could not be completed.'} The extracted folder was kept at {kept_new} and the previous version was restored."
+            ) from exc
+        # Step 6 failures are reported in the result, not raised; nothing else
+        # after the library update is allowed to abandon the new version.
         raise
 
 

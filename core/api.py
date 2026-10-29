@@ -1688,17 +1688,34 @@ class Api:
         if not folder_str or not os.path.isdir(folder_str):
             return {"success": False, "error": "Folder not found"}
         try:
-            known = {
-                self._normalize_compare_path(game.get("exe_path"))
-                for game in get_all_games()
-                if str(game.get("exe_path") or "").strip()
-            }
+            known: set[str] = set()
+            folded: dict[str, list[str]] = {}
+            for game in get_all_games():
+                normalized = self._normalize_compare_path(game.get("exe_path"))
+                if not normalized:
+                    continue
+                known.add(normalized)
+                folded.setdefault(normalized.casefold(), []).append(normalized)
+
+            def in_library(exe_path: object) -> bool:
+                normalized = self._normalize_compare_path(exe_path)
+                if not normalized:
+                    return False
+                if normalized in known:
+                    return True
+                # A case-insensitive mount (ntfs3, exFAT) resolves a path whose
+                # case differs from the stored row, but the strings never
+                # compare equal. Confirm the case-folded candidates by inode.
+                for candidate in folded.get(normalized.casefold(), []):
+                    try:
+                        if os.path.samefile(normalized, candidate):
+                            return True
+                    except (OSError, ValueError):
+                        continue
+                return False
+
             games = [
-                {
-                    **game,
-                    "in_library": self._normalize_compare_path(game["exe_path"])
-                    in known,
-                }
+                {**game, "in_library": in_library(game["exe_path"])}
                 for game in scan_games_folder(folder_str)
             ]
         except (OSError, ValueError) as e:
@@ -5473,6 +5490,7 @@ class Api:
         """Read-only preview for the install-from-archive dialog."""
         from core.archive_install import (
             archive_format,
+            archive_stem,
             build_destination,
             can_remove_old_folder,
             detect_archive_tool,
@@ -5482,7 +5500,7 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
-        archive_path = (path or "").strip()
+        archive_path = os.path.expanduser((path or "").strip())
         if not archive_path or not os.path.isfile(archive_path):
             return {"success": False, "error": "Archive file was not found."}
         if archive_format(archive_path) not in ("zip", "7z", "rar"):
@@ -5491,8 +5509,9 @@ class Api:
                 "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
             }
 
-        stem = os.path.splitext(os.path.basename(archive_path))[0]
-        guessed_title, guessed_version = guess_title_and_version(stem)
+        guessed_title, guessed_version = guess_title_and_version(
+            archive_stem(archive_path)
+        )
 
         library_folder = str(get_setting_fn("library_folder") or "")
         _tool, tool_error = detect_archive_tool(
@@ -5517,7 +5536,9 @@ class Api:
                         continue
                 except (TypeError, ValueError):
                     continue
-                old_exe = str(game.get("exe_path") or "")
+                old_exe = str(game.get("exe_path") or "").strip()
+                if old_exe:
+                    old_exe = os.path.abspath(os.path.expanduser(old_exe))
                 if not title.strip():
                     title = str(game.get("title") or "")
                 latest = str(game.get("latest_version") or "").strip()
@@ -5584,7 +5605,7 @@ class Api:
         """Blocking install from an archive; the dialog polls status meanwhile."""
         import sqlite3
 
-        from core.archive_install import ArchiveInstallError
+        from core.archive_install import ArchiveInstallError, archive_stem
         from core.archive_install import install_archive as run_install
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -5593,9 +5614,9 @@ class Api:
         )
 
         payload = dict(options or {})
-        archive_path = str(
-            payload.get("archive_path") or payload.get("archive") or ""
-        ).strip()
+        archive_path = os.path.expanduser(
+            str(payload.get("archive_path") or payload.get("archive") or "").strip()
+        )
         game_id_raw = payload.get("game_id", payload.get("gameId"))
         game_id: int | None = None
         if game_id_raw not in (None, ""):
@@ -5667,9 +5688,7 @@ class Api:
         if (not title or not version) and archive_path:
             from core.game_scan import guess_title_and_version as _guess
 
-            guessed_title, guessed_version = _guess(
-                os.path.splitext(os.path.basename(archive_path))[0]
-            )
+            guessed_title, guessed_version = _guess(archive_stem(archive_path))
             title = title or guessed_title
             version = version or guessed_version
 

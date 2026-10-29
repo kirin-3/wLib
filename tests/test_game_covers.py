@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import os
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,27 @@ def test_delete_rejects_traversal(name):
     assert game_covers.cover_path(name) is None
     game_covers.delete_cover_file(name)
     assert Path(database.DB_PATH).is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX FIFOs need Linux")
+def test_fifo_source_is_rejected_without_blocking(tmp_path):
+    import threading
+
+    fifo = tmp_path / "cover.png"
+    os.mkfifo(str(fifo))
+    errors: list[str] = []
+
+    def run() -> None:
+        try:
+            game_covers.copy_cover_file(fifo)
+        except ValueError as exc:
+            errors.append(str(exc))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(2)
+    assert not thread.is_alive()
+    assert errors and "supported image" in errors[0]
 
 
 def test_symlink_outside_covers(tmp_path):

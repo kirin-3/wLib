@@ -426,6 +426,44 @@ def test_can_remove_old_folder_guards(tmp_path):
     )
 
 
+def test_archive_stem_strips_a_multipart_suffix():
+    from core.archive_install import archive_stem
+    from core.game_scan import guess_title_and_version
+
+    assert archive_stem("/downloads/Eternum-0.8.part1.rar") == "Eternum-0.8"
+    assert archive_stem("Eternum-0.8.PART12.RAR") == "Eternum-0.8"
+    assert archive_stem("Eternum-0.8-pc.zip") == "Eternum-0.8-pc"
+    assert guess_title_and_version(
+        archive_stem("Eternum-0.8.part1.rar")
+    ) == ("Eternum", "0.8")
+
+
+def test_can_remove_old_folder_refuses_a_mounted_drive_root(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    old_exe = drive / "Game.exe"
+    old_exe.write_text("x")
+    # A mounted filesystem's root (an external drive, a tmpfs) is a filesystem
+    # root for that drive even though it is not the OS root.
+    monkeypatch.setattr(
+        ai.os.path, "ismount", lambda value: os.path.abspath(value) == str(drive)
+    )
+
+    result = can_remove_old_folder(
+        str(drive),
+        str(tmp_path / "lib" / "Game" / "2.0"),
+        str(tmp_path / "lib"),
+        "",
+        [],
+        str(old_exe),
+    )
+
+    assert result["removable"] is False
+    assert "mount" in str(result["reason"]).lower()
+
+
 def test_relocate_launch_targets(tmp_path):
     old = tmp_path / "old"
     new = tmp_path / "new"
@@ -554,6 +592,54 @@ def test_install_update_removes_old_and_keeps_when_unticked(tmp_path, monkeypatc
     assert old_dir2.exists()
 
 
+def test_install_update_expands_tilde_in_stored_game_paths(tmp_path, monkeypatch):
+    # Games added with a typed "~/..." path are launched through expanduser, so
+    # the stored value must be resolved the same way when updating; otherwise
+    # the old folder is not recognised, saves are not carried, and the guard
+    # claims the executable is missing.
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    old_dir = home / "games" / "Game" / "1.0"
+    (old_dir / "saves").mkdir(parents=True)
+    (old_dir / "Game.exe").write_text("old")
+    (old_dir / "saves" / "slot1.sav").write_text("keep")
+    (old_dir / "MySaves").mkdir()
+    (old_dir / "MySaves" / "a.save").write_text("override")
+    game_id = db.add_game("Game", "~/games/Game/1.0/Game.exe", version="1.0")
+    assert game_id is not None
+    _ = db.update_game(
+        int(game_id), {"save_path_override": "~/games/Game/1.0/MySaves"}
+    )
+
+    lib = tmp_path / "lib"
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=int(game_id),
+        remove_old=True,
+    )
+
+    assert result["success"] is True
+    assert result["removed_old"] is True
+    assert result["kept_old_folder_reason"] == ""
+    assert not old_dir.exists()
+    assert (lib / "Game" / "2.0" / "saves" / "slot1.sav").read_text() == "keep"
+    assert (lib / "Game" / "2.0" / "MySaves" / "a.save").read_text() == "override"
+    assert db.get_all_games()[0]["save_path_override"] == str(
+        lib / "Game" / "2.0" / "MySaves"
+    )
+
+
 def test_install_same_folder_pattern_replaces_safely(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive
@@ -613,6 +699,78 @@ def test_install_same_folder_pattern_keeps_backup_when_unticked(tmp_path, monkey
     assert len(backups) == 1
     assert (backups[0] / "Game.exe").read_text() == "old"
     assert str(backups[0]) in str(result["kept_old_folder_reason"])
+
+
+def test_install_same_folder_no_launcher_restores_previous_install(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    (dest / "user-notes.txt").write_text("mine")
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"readme.txt": b"no launcher", "data/x.bin": b"x"})
+
+    with pytest.raises(ArchiveInstallError, match="No launchable file"):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+
+    # The failed update must leave the game on its previous, still-usable copy.
+    assert (dest / "Game.exe").read_text() == "old"
+    assert (dest / "user-notes.txt").read_text() == "mine"
+    assert db.get_all_games()[0]["exe_path"] == str(dest / "Game.exe")
+    kept = [path for path in lib.iterdir() if ".wlib-new-" in path.name]
+    assert len(kept) == 1
+    assert (kept[0] / "readme.txt").exists()
+    assert not [path for path in lib.iterdir() if ".wlib-old-" in path.name]
+
+
+def test_install_same_folder_db_failure_restores_previous_install(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+
+    def failing_update(*_args, **_kwargs):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr("core.database.update_game", failing_update)
+    with pytest.raises(ArchiveInstallError, match="database is locked"):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+
+    assert (dest / "Game.exe").read_text() == "old"
+    assert db.get_all_games()[0]["exe_path"] == str(dest / "Game.exe")
+    kept = [path for path in lib.iterdir() if ".wlib-new-" in path.name]
+    assert len(kept) == 1
+    assert (kept[0] / "Game.exe").read_text() == "new"
 
 
 def test_install_save_copy_failure_leaves_db_untouched(tmp_path, monkeypatch):
@@ -854,6 +1012,12 @@ def test_check_archive_entry_safe_drive_relative_and_reserved_names():
         "CON ",
         "NUL .txt",
         "dir/aux",
+        # A colon before the first dot bypasses the split-at-dot check and
+        # names a device/stream (COM1:data opens the serial port on Windows).
+        "CON:foo",
+        "dir/prn:stream",
+        "COM1:data",
+        "NUL:$DATA",
     ):
         with pytest.raises(ArchiveSafetyError):
             check_archive_entry_safe(reserved)
@@ -861,6 +1025,21 @@ def test_check_archive_entry_safe_drive_relative_and_reserved_names():
     for invalid in ("", "   ", "evil\x00file.txt", "sub/\x00/file"):
         with pytest.raises(ArchiveSafetyError):
             check_archive_entry_safe(invalid)
+
+
+def test_check_archive_entry_rejects_parent_with_trailing_spaces():
+    # Windows trims trailing dots/spaces per component, so ".. " is the parent.
+    for bad in (
+        ".. /evil.txt",
+        "dir/..  /evil.txt",
+        "..  /evil.txt",
+        "dir/.. . /evil.txt",
+        ".../evil.txt",
+    ):
+        with pytest.raises(ArchiveSafetyError, match="unsafe"):
+            check_archive_entry_safe(bad)
+    # A normal name with trailing spaces is still allowed on Linux.
+    check_archive_entry_safe("notes.txt ")
 
 
 def test_zip_extract_drive_relative_and_reserved_traversal_aborts(tmp_path):

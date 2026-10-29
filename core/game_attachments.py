@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
+from typing import BinaryIO
 
 from core import database
 
@@ -102,37 +104,64 @@ def _free_attachment_name(folder: str, base_name: str) -> str:
     return candidate
 
 
+def _open_pdf_source(path: str) -> BinaryIO:
+    """Open a regular file for reading; reject FIFOs/devices before touching them.
+
+    A picked source (or a path from a hand-edited library file) can be a FIFO;
+    opening one for reading blocks until a writer appears.
+    """
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotAPdfError("Only PDF files can be attached")
+    except BaseException:
+        os.close(fd)
+        raise
+    return os.fdopen(fd, "rb")
+
+
 def add_attachment(game_id: int, source_path: object) -> dict[str, object]:
     source = os.path.expanduser(str(source_path or "").strip())
     if not source.lower().endswith(".pdf"):
         raise NotAPdfError("Only PDF files can be attached")
     try:
-        with open(source, "rb") as handle:
-            signature = handle.read(5)
+        handle = _open_pdf_source(source)
+    except NotAPdfError:
+        raise
     except OSError as exc:
         raise OSError(str(exc) or "Could not read file") from exc
-    if signature != b"%PDF-":
-        raise NotAPdfError("Only PDF files can be attached")
 
-    base_name = os.path.basename(source)
-    if not base_name or base_name.startswith("."):
-        raise NotAPdfError("Only PDF files can be attached")
-    folder = attachments_dir(game_id)
-    os.makedirs(folder, exist_ok=True)
-    target_name = _free_attachment_name(folder, base_name)
-    tmp_name = f".{target_name}.part"
-    tmp_path = os.path.join(folder, tmp_name)
-    final_path = os.path.join(folder, target_name)
-    try:
-        _ = shutil.copyfile(source, tmp_path)
-        os.replace(tmp_path, final_path)
-    except Exception:
+    with handle:
+        signature = handle.read(5)
+        if signature != b"%PDF-":
+            raise NotAPdfError("Only PDF files can be attached")
+
+        base_name = os.path.basename(source)
+        if not base_name or base_name.startswith("."):
+            raise NotAPdfError("Only PDF files can be attached")
+        folder = attachments_dir(game_id)
+        os.makedirs(folder, exist_ok=True)
+        target_name = _free_attachment_name(folder, base_name)
+        tmp_name = f".{target_name}.part"
+        tmp_path = os.path.join(folder, tmp_name)
+        final_path = os.path.join(folder, target_name)
         try:
-            if os.path.lexists(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
+            _ = handle.seek(0)
+            with open(tmp_path, "wb") as out:
+                _ = shutil.copyfileobj(handle, out)
+            os.replace(tmp_path, final_path)
+        except Exception:
+            try:
+                if os.path.lexists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
     size = os.path.getsize(final_path)
     return {"name": target_name, "size": int(size)}
 

@@ -4147,6 +4147,74 @@ def test_lookup_thread_details_uses_actionable_post_version(monkeypatch):
     assert result["version"] == "1.2"
 
 
+def test_archive_path_fields_expand_tilde(tmp_path, monkeypatch):
+    # The archive field is typed like every other path field; PathStatus expands
+    # "~", so inspect and install must resolve the same file.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    lib = tmp_path / "lib"
+    update_setting("library_folder", str(lib))
+    archive = home / "Game-1.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+
+    api = Api()
+    inspected = api.inspect_archive("~/Game-1.0.zip")
+    assert inspected["success"] is True
+    assert inspected["title"] == "Game"
+    assert inspected["version"] == "1.0"
+
+    installed = api.install_archive(
+        {
+            "archive_path": "~/Game-1.0.zip",
+            "library_folder": str(lib),
+            "title": "Game",
+            "version": "1.0",
+        }
+    )
+    assert installed["success"] is True
+    assert Path(str(installed["exe_path"])).is_file()
+
+
+def test_inspect_archive_strips_multipart_suffix(tmp_path, monkeypatch):
+    # A split rar is offered through its first part; the .part1 suffix is not
+    # part of the guessed title or version.
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    update_setting("library_folder", str(tmp_path / "lib"))
+    archive = tmp_path / "Eternum-0.8.part1.rar"
+    archive.write_bytes(b"first part")
+
+    inspected = Api().inspect_archive(str(archive))
+
+    assert inspected["success"] is True
+    assert inspected["title"] == "Eternum"
+    assert inspected["version"] == "0.8"
+
+
+def test_inspect_archive_expands_tilde_saved_paths(tmp_path, monkeypatch):
+    # A game added with a typed "~/..." executable launches because the
+    # launcher expands it; the update preview must resolve the same folder.
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    lib = tmp_path / "lib"
+    update_setting("library_folder", str(lib))
+    archive = tmp_path / "Game-2.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+    gid = add_game("Game", "~/games/Game/1.0/Game.exe", version="1.0")
+
+    inspected = Api().inspect_archive(str(archive), gid)
+
+    assert inspected["success"] is True
+    assert inspected["old_folder"] == str(home / "games" / "Game" / "1.0")
+
+
 def test_archive_engine_preview(tmp_path):
     lib = tmp_path / "lib"
     update_setting("library_folder", str(lib))
