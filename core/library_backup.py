@@ -840,17 +840,21 @@ def _match_imported_game(
                 "candidate_ids": [game["id"] for game in fallback_matches],
             }
 
-    if title_key and not developer_key and not exe_key and not sync:
-        # The record carries no identity beyond its title (for example an export
-        # without executable paths). Match it when exactly one local game has
-        # that title so re-importing never duplicates the game. Local games with
-        # their own thread URL or developer are never merged on title alone.
+    if title_key and not developer_key and not sync:
+        # The record carries no usable identity beyond its title (for example an
+        # export without executable paths), or its executable matches no local
+        # game while the same-title local copies have none either (for example a
+        # game created by an import that left executable paths unchecked). Match
+        # it when exactly one local game has that title so re-importing never
+        # duplicates the game. Local games with their own thread URL, developer
+        # or a different executable are never merged on title alone.
         title_matches = [
             game
             for game in local_games
             if _normalize_identity_text(game.get("title")) == title_key
             and not _coerce_text(game.get("f95_url")).strip()
             and not _coerce_text(game.get("developer")).strip()
+            and (not exe_key or not _coerce_text(game.get("exe_path")).strip())
         ]
         if len(title_matches) == 1:
             return {

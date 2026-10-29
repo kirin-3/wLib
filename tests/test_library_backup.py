@@ -711,6 +711,48 @@ def test_import_without_identity_sections_matches_unique_title(tmp_path):
     assert len(get_all_games()) == 1
 
 
+def test_reimport_without_executable_paths_does_not_duplicate_manual_game(
+    tmp_path, monkeypatch
+):
+    """A game created without its backup path still matches the same record later."""
+    api = Api()
+    add_game(title="Manual Game", exe_path="/games/manual/game.exe")
+    destination = tmp_path / "backup.json"
+    assert api.export_library_backup({}, str(destination))["success"]
+
+    # Simulate a second machine: an empty library that imports metadata only,
+    # because executable paths are machine-specific and left unchecked.
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "fresh.db"))
+    init_db()
+    options = {"sections": [SECTION_METADATA]}
+    first = api.import_library_backup(str(destination), options)
+    assert (first["created"], first["updated"]) == (1, 0)
+    assert get_all_games()[0]["exe_path"] == ""
+
+    second = api.import_library_backup(str(destination), options)
+    assert (second["created"], second["updated"]) == (0, 1)
+    assert len(get_all_games()) == 1
+
+
+def test_import_matches_exe_less_local_game_when_backup_path_differs(
+    tmp_path, monkeypatch
+):
+    """A path the import will not write must not force a duplicate game."""
+    api = Api()
+    add_game(title="Manual Game", exe_path="/games/manual/game.exe")
+    destination = tmp_path / "backup.json"
+    assert api.export_library_backup({}, str(destination))["success"]
+
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "second.db"))
+    init_db()
+    add_game(title="Manual Game", exe_path="")
+    result = api.import_library_backup(
+        str(destination), {"sections": [SECTION_METADATA]}
+    )
+    assert (result["created"], result["updated"]) == (0, 1)
+    assert len(get_all_games()) == 1
+
+
 def test_import_records_without_identity_and_repeated_title_are_ambiguous(tmp_path):
     api = Api()
     add_game("Manual Game", "/games/manual/game.exe")
