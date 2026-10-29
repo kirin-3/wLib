@@ -433,6 +433,67 @@ test("companion tools persist definitions, overrides, run support and duplicate 
   }
 });
 
+test("browser mock game listings carry additional launch targets", async () => {
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      {
+        id: 9,
+        title: "Seeded",
+        exe_path: "/tmp/seeded.sh",
+        launch_targets: [
+          { id: 90, game_id: 9, label: "Seeded target", exe_path: "/tmp/seeded-target.sh", sort_order: 0 },
+        ],
+      },
+    ])],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const game = await api.addGame("Targets", "/tmp/targets.sh");
+    const first = await api.createLaunchTarget(game.id, "Part 2", "/tmp/part2.sh");
+    const second = await api.createLaunchTarget(game.id, "Extras", "/tmp/extras.sh");
+    if (!first.success || !second.success) throw new Error("Could not create the mock targets");
+
+    // get_all_games() embeds the sorted additional targets, which is what the
+    // library launch-target menu reads.
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === game.id)?.launch_targets?.map((target) => target.label),
+      ["Part 2", "Extras"],
+    );
+    assert.deepEqual(
+      (await api.getLaunchTargets(game.id)).map((target) => target.id),
+      [first.target.id, second.target.id],
+    );
+    // Seeded mock games may carry targets inline instead of the CRUD store.
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === 9)?.launch_targets?.map((target) => target.label),
+      ["Seeded target"],
+    );
+
+    await api.deleteLaunchTarget(first.target?.id);
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === game.id)?.launch_targets?.map((target) => target.label),
+      ["Extras"],
+    );
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
 test("onWebviewReady waits for the injected bridge API", async () => {
   const listeners = new Map();
   const storage = new Map();

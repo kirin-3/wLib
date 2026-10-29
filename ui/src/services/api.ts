@@ -971,6 +971,22 @@ const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
   return targets.reduce((max, target) => Math.max(max, target.id), 0) + 1;
 };
 
+const sortMockLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
+  return [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+};
+
+// get_all_games() embeds every game's additional targets in the same order as
+// get_launch_targets(); game listings (and the library launch menu) read them
+// there. Seeded mock games may embed targets directly, so keep those when the
+// CRUD store has none for the game.
+const mockLaunchTargetsForGame = (
+  gameId: number,
+  embedded: LaunchTarget[] = [],
+): LaunchTarget[] => {
+  const stored = readMockLaunchTargets().filter((target) => target.game_id === gameId);
+  return sortMockLaunchTargets(stored.length ? stored : embedded);
+};
+
 const normalizeMockAttachment = (value: unknown): GameAttachment | null => {
   if (!isRecord(value)) return null;
   const name = typeof value.name === "string" ? value.name : "";
@@ -2253,7 +2269,11 @@ class ApiService {
         return { success: true, mock: true, game };
       }
       case "get_games":
-        return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
+        return readMockGames().map((game) => ({
+          ...game,
+          launch_targets: mockLaunchTargetsForGame(game.id, game.launch_targets || []),
+          ...(this._mockPendingMetadata.has(game.id) ? { metadata_pending: true } : {}),
+        }));
       case "add_game": {
         const games = readMockGames();
         const links = Array.isArray(args[16]) ? args[16] as StoreLink[] : [];
@@ -3180,9 +3200,8 @@ class ApiService {
         return { success: false, modified_at: null, mock: true, error: "Executable timestamps require the desktop app runtime." };
       case "get_launch_targets": {
         const gameId = Number(args[0]);
-        return readMockLaunchTargets()
-          .filter((target) => target.game_id === gameId)
-          .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+        const game = readMockGames().find((entry) => entry.id === gameId);
+        return mockLaunchTargetsForGame(gameId, game?.launch_targets || []);
       }
       case "create_launch_target": {
         const gameId = Number(args[0]);
