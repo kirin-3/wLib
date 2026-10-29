@@ -432,3 +432,183 @@ test("companion tools persist definitions, overrides, run support and duplicate 
     globalThis.CustomEvent = previousCustomEvent;
   }
 });
+
+test("browser mock game listings carry additional launch targets", async () => {
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      {
+        id: 9,
+        title: "Seeded",
+        exe_path: "/tmp/seeded.sh",
+        launch_targets: [
+          { id: 90, game_id: 9, label: "Seeded target", exe_path: "/tmp/seeded-target.sh", sort_order: 0 },
+        ],
+      },
+    ])],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const game = await api.addGame("Targets", "/tmp/targets.sh");
+    const first = await api.createLaunchTarget(game.id, "Part 2", "/tmp/part2.sh");
+    const second = await api.createLaunchTarget(game.id, "Extras", "/tmp/extras.sh");
+    if (!first.success || !second.success) throw new Error("Could not create the mock targets");
+
+    // get_all_games() embeds the sorted additional targets, which is what the
+    // library launch-target menu reads.
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === game.id)?.launch_targets?.map((target) => target.label),
+      ["Part 2", "Extras"],
+    );
+    assert.deepEqual(
+      (await api.getLaunchTargets(game.id)).map((target) => target.id),
+      [first.target.id, second.target.id],
+    );
+    // Seeded mock games may carry targets inline instead of the CRUD store.
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === 9)?.launch_targets?.map((target) => target.label),
+      ["Seeded target"],
+    );
+
+    await api.deleteLaunchTarget(first.target?.id);
+    assert.deepEqual(
+      (await api.getGames()).find((entry) => entry.id === game.id)?.launch_targets?.map((target) => target.label),
+      ["Extras"],
+    );
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
+test("browser mock update checks reject non-actionable versions", async () => {
+  const emptyUrl = "https://f95zone.to/threads/empty.1/";
+  const unknownUrl = "https://f95zone.to/threads/unknown.2/";
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "Empty", exe_path: "/tmp/empty.exe", f95_url: emptyUrl, version: "", latest_version: "" },
+      { id: 2, title: "Unknown", exe_path: "/tmp/unknown.exe", f95_url: unknownUrl, version: "Unknown", latest_version: "Unknown" },
+    ])],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    for (const url of [emptyUrl, unknownUrl]) {
+      const result = await api.checkForUpdates(url);
+      // check_for_updates reports an extraction failure, never a successful
+      // check with a blank/placeholder version (scraper-failure-reporting).
+      assert.equal(result.success, false);
+      assert.equal(result.error_code, "extract_failed");
+    }
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
+test("onWebviewReady waits for the injected bridge API", async () => {
+  const listeners = new Map();
+  const storage = new Map();
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    pywebview: { api: {} },
+    navigator: { userAgent: "Mozilla/5.0 (X11; Linux x86_64) QtWebEngine/6.11.2 Chrome/130" },
+    addEventListener: (type, callback) => listeners.set(type, callback),
+    dispatchEvent() {},
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { onWebviewReady } = await server.ssrLoadModule("/src/services/api.ts");
+    let ready = false;
+    onWebviewReady(() => {
+      ready = true;
+    });
+    // pywebview defines window.pywebview with an empty api before _createApi
+    // runs; that state must not run startup calls against browser mocks.
+    assert.equal(ready, false);
+
+    window.pywebview.api.get_games = () => [];
+    listeners.get("pywebviewready")?.();
+    assert.equal(ready, true);
+
+    // A plain browser has no bridge to wait for, so the mock callbacks still
+    // run immediately.
+    delete window.pywebview;
+    window.navigator.userAgent = "Mozilla/5.0 Chrome/130";
+    let browserReady = false;
+    onWebviewReady(() => {
+      browserReady = true;
+    });
+    assert.equal(browserReady, true);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
+test("browser mock URM detection matches the tools engine label", async () => {
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "RenPy Game", exe_path: "/games/renpy/game.sh", engine: "RenPy" },
+    ])],
+    ["wlib-mock-settings", JSON.stringify({ urm_rpa_path: "/mock/urm.rpa" })],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    assert.equal((await api.getGameToolSupport(1)).engine, "renpy");
+    assert.equal((await api.getUrmStatus(1)).renpy, true);
+    const installed = await api.setUrmInstalled(1, true);
+    assert.equal(installed.success, true);
+    assert.equal((await api.getGameTools(1)).renpy?.urm.installed, true);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});

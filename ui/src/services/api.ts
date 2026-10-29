@@ -972,6 +972,22 @@ const nextMockLaunchTargetId = (targets: LaunchTarget[]): number => {
   return targets.reduce((max, target) => Math.max(max, target.id), 0) + 1;
 };
 
+const sortMockLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
+  return [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+};
+
+// get_all_games() embeds every game's additional targets in the same order as
+// get_launch_targets(); game listings (and the library launch menu) read them
+// there. Seeded mock games may embed targets directly, so keep those when the
+// CRUD store has none for the game.
+const mockLaunchTargetsForGame = (
+  gameId: number,
+  embedded: LaunchTarget[] = [],
+): LaunchTarget[] => {
+  const stored = readMockLaunchTargets().filter((target) => target.game_id === gameId);
+  return sortMockLaunchTargets(stored.length ? stored : embedded);
+};
+
 const normalizeMockAttachment = (value: unknown): GameAttachment | null => {
   if (!isRecord(value)) return null;
   const name = typeof value.name === "string" ? value.name : "";
@@ -1194,6 +1210,13 @@ const writeMockCollections = (collections: string[]): void => {
 
 const isSaveBackupKeep = (value: unknown): value is SaveBackupKeep =>
   value === "all" || (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 99);
+
+// Mirrors Api._is_actionable_remote_version: empty and placeholder versions are
+// extraction failures, not successful checks with no update.
+const isActionableVersion = (value: unknown): boolean => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return !["", "unknown", "n/a", "na", "none", "null"].includes(normalized);
+};
 
 const normalizeMockSettings = (value: unknown): SettingsResponse => {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -2254,7 +2277,11 @@ class ApiService {
         return { success: true, mock: true, game };
       }
       case "get_games":
-        return readMockGames().map((game) => this._mockPendingMetadata.has(game.id) ? { ...game, metadata_pending: true } : game);
+        return readMockGames().map((game) => ({
+          ...game,
+          launch_targets: mockLaunchTargetsForGame(game.id, game.launch_targets || []),
+          ...(this._mockPendingMetadata.has(game.id) ? { metadata_pending: true } : {}),
+        }));
       case "add_game": {
         const games = readMockGames();
         const links = Array.isArray(args[16]) ? args[16] as StoreLink[] : [];
@@ -2364,7 +2391,9 @@ class ApiService {
         const gameId = Number(args[0]);
         const game = readMockGames().find((game) => game.id === gameId);
         if (!game) return { success: false, error: "Game not found" };
-        const renpy = game.engine === "Ren'Py";
+        // Same engine detection as get_game_tools/get_game_tool_support: the
+        // browser mock reads the engine label instead of the game folder.
+        const renpy = this._mockToolEngine(gameId) === "renpy";
         const sourceConfigured = /\.rpa$/i.test(readMockSettings().urm_rpa_path);
         if (method === "set_urm_installed") {
           if (!renpy) return { success: false, error: "This game is not a Ren'Py game" };
@@ -3079,10 +3108,21 @@ class ApiService {
             entry.id === game.id ? { ...entry, thread_completed: completed, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
           )));
         }
+        const version = String(game.latest_version || "").trim() || String(game.version || "").trim();
+        if (!isActionableVersion(version)) {
+          // check_for_updates treats an empty or placeholder scraped version as
+          // an extraction failure; the mock has nothing better to report.
+          return {
+            success: false,
+            mock: true,
+            error: "Could not extract a version from thread",
+            error_code: "extract_failed",
+          };
+        }
         return {
           success: true,
           mock: true,
-          version: game.latest_version || game.version || "",
+          version,
           has_update: hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }),
           skipped: isUpdateSkipped(game),
           newly_finished: newlyFinished,
@@ -3181,9 +3221,8 @@ class ApiService {
         return { success: false, modified_at: null, mock: true, error: "Executable timestamps require the desktop app runtime." };
       case "get_launch_targets": {
         const gameId = Number(args[0]);
-        return readMockLaunchTargets()
-          .filter((target) => target.game_id === gameId)
-          .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+        const game = readMockGames().find((entry) => entry.id === gameId);
+        return mockLaunchTargetsForGame(gameId, game?.launch_targets || []);
       }
       case "create_launch_target": {
         const gameId = Number(args[0]);
@@ -3402,11 +3441,18 @@ class ApiService {
 
 export const api = new ApiService();
 
+// pywebview creates window.pywebview with an empty api object before
+// `_createApi` runs, so the object alone does not mean the bridge is ready.
+const bridgeIsReady = (): boolean => {
+  const api = window.pywebview?.api;
+  return !!api && Object.keys(api).length > 0;
+};
+
 // Let PyWebview inject before we consider it fully ready, though in Vue we usually just call it on mount
 export function onWebviewReady(callback: () => void): void {
-  if (window.pywebview) {
+  if (bridgeIsReady()) {
     callback();
-  } else if (/QtWebEngine\//.test(navigator.userAgent)) {
+  } else if (window.pywebview || /QtWebEngine\//.test(window.navigator?.userAgent ?? "")) {
     // Desktop shell (always gui="qt"): the API is injected after load, so wait
     // instead of running once against mocks and again for real.
     window.addEventListener("pywebviewready", callback, { once: true });
