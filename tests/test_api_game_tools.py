@@ -206,6 +206,23 @@ def test_extract_api_both_modes_and_listing(tmp_path):
     assert (folder / "game" / "bg" / "room.png").read_bytes() == b"png"
 
 
+def test_extract_api_reports_files_that_failed_to_write(tmp_path):
+    api = Api()
+    folder, game_id = renpy_game(tmp_path)
+    # The second entry cannot be written: its parent path is already a file.
+    build_rpa(folder / "game" / "images.rpa", {"a": b"1", "a/b": b"2"})
+    out = tmp_path / "rip"
+    out.mkdir()
+
+    result = api.extract_renpy_archives(game_id, {"mode": "folder", "output": str(out)})
+
+    assert result["success"] is True
+    assert result["files"] == 1
+    assert result["failed"] == 1
+    assert "1 failed" in str(result["message"])
+    assert (out / "images" / "a").read_bytes() == b"1"
+
+
 def test_extract_api_rejects_bad_output_and_non_renpy(tmp_path):
     api = Api()
     folder, game_id = renpy_game(tmp_path)

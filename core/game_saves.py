@@ -11,6 +11,7 @@ import glob
 import os
 import re
 import shutil
+import tempfile
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -92,6 +93,82 @@ def paths_overlap(a: str, b: str) -> bool:
 
 
 # ── Detection ────────────────────────────────────────────────────────────
+
+
+def _renpy_children(base: str, title_clean: str, game_name: str) -> list[str]:
+    """Folders under a Ren'Py save root whose names match the game."""
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return []
+    title_key = (
+        title_clean.lower().replace(" ", "").replace("'", "") if title_clean else ""
+    )
+    matched: list[str] = []
+    for entry in entries:
+        entry_lower = entry.lower()
+        if (
+            title_key and title_key in entry_lower.replace("-", "").replace("_", "")
+        ) or (game_name and game_name.lower() in entry_lower):
+            candidate = os.path.join(base, entry)
+            if os.path.isdir(candidate):
+                matched.append(candidate)
+    return matched
+
+
+def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
+    """The Windows/Wine folder-name match used for AppData and Documents."""
+    entry_lower = entry.lower()
+    if game_name and game_name.lower() in entry_lower:
+        return True
+    words = (
+        [word for word in title_clean.lower().split() if len(word) >= 4]
+        if title_clean
+        else []
+    )
+    return any(word in entry_lower for word in words)
+
+
+def _nested_game_folders(
+    base: str, title_clean: str, game_name: str
+) -> list[str]:
+    """Game folders under a container folder (LocalLow/Dev/Game, Documents/My Games/Game).
+
+    The match is stricter than for a top-level folder: a container can hold
+    many games, so one shared title word or the executable's generic stem
+    must not select every sibling.
+    """
+
+    def key(value: str) -> str:
+        return (
+            value.lower()
+            .replace(" ", "")
+            .replace("'", "")
+            .replace("-", "")
+            .replace("_", "")
+        )
+
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return []
+    title_key = key(title_clean)
+    game_key = key(game_name)
+    matched: list[str] = []
+    for entry in entries:
+        entry_key = key(entry)
+        if (title_key and title_key in entry_key) or (
+            game_key and entry_key == game_key
+        ):
+            candidate = os.path.join(base, entry)
+            if os.path.isdir(candidate):
+                matched.append(candidate)
+    return matched
+
+
+# AppData\LocalLow and Documents usually hold a container (developer or
+# "My Games") one level above the game's own save folder.
+_NESTED_SAVE_ROOTS = frozenset({"AppData LocalLow", "Documents", "My Documents"})
 
 
 def detect_save_locations(
@@ -186,24 +263,12 @@ def detect_save_locations(
     else:
         renpy_base = os.path.join(profile_home, ".renpy")
     if os.path.isdir(renpy_base):
-        try:
-            renpy_entries = os.listdir(renpy_base)
-        except OSError:
-            renpy_entries = []
-        for entry in renpy_entries:
-            entry_lower = entry.lower()
-            if (
-                title_clean
-                and title_clean.lower().replace(" ", "").replace("'", "")
-                in entry_lower.replace("-", "").replace("_", "")
-            ) or (game_name and game_name.lower() in entry_lower):
-                candidate = os.path.join(renpy_base, entry)
-                if os.path.isdir(candidate):
-                    add(
-                        candidate,
-                        "Ren'Py",
-                        f"Ren'Py native save folder: {candidate}",
-                    )
+        for candidate in _renpy_children(renpy_base, title_clean, game_name):
+            add(
+                candidate,
+                "Ren'Py",
+                f"Ren'Py native save folder: {candidate}",
+            )
 
     if windows:
         user_home = profile_home
@@ -229,15 +294,27 @@ def detect_save_locations(
                 continue
             try:
                 for entry in os.listdir(root):
-                    entry_lower = entry.lower()
-                    title_words = title_clean.lower().split() if title_clean else []
-                    significant_words = [w for w in title_words if len(w) >= 4]
-                    matched = bool(
-                        (game_name and game_name.lower() in entry_lower)
-                        or any(word in entry_lower for word in significant_words)
-                    )
                     candidate = os.path.join(root, entry)
-                    if matched and os.path.isdir(candidate):
+                    if not os.path.isdir(candidate):
+                        continue
+                    if label in _NESTED_SAVE_ROOTS:
+                        # LocalLow/Dev/Game and Documents/My Games/Game hold
+                        # the game folder one level down; prefer that folder.
+                        children = _nested_game_folders(
+                            candidate, title_clean, game_name
+                        )
+                        if children:
+                            for child in children:
+                                add(
+                                    child,
+                                    f"Windows ({label})",
+                                    f"{label}/{entry}/{os.path.basename(child)}",
+                                )
+                            continue
+                        if entry.casefold() == "my games":
+                            # Never treat the shared container as one game's saves.
+                            continue
+                    if _name_matches_game(entry, title_clean, game_name):
                         add(candidate, f"Windows ({label})", f"{label}/{entry}")
             except PermissionError:
                 continue
@@ -316,29 +393,46 @@ def detect_save_locations(
                 # Fuzzy-match folders against the game title or exe name
                 try:
                     for entry in os.listdir(appdata_dir):
-                        entry_lower = entry.lower()
-                        title_words = title_clean.lower().split() if title_clean else []
-                        game_name_lower = game_name.lower() if game_name else ""
-
-                        # Match if any significant title word (4+ chars) appears in folder name
-                        matched = False
-                        if game_name_lower and game_name_lower in entry_lower:
-                            matched = True
-                        elif title_words:
-                            significant_words = [w for w in title_words if len(w) >= 4]
-                            if significant_words and any(
-                                w in entry_lower for w in significant_words
+                        candidate = os.path.join(appdata_dir, entry)
+                        if not os.path.isdir(candidate):
+                            continue
+                        if (
+                            label == "AppData Roaming"
+                            and entry.casefold() == "renpy"
+                        ):
+                            # Ren'Py under Wine keeps its saves one level down,
+                            # in %APPDATA%\RenPy\<game>-<hash>, like ~/.renpy.
+                            for child in _renpy_children(
+                                candidate, title_clean, game_name
                             ):
-                                matched = True
-
-                        if matched:
-                            candidate = os.path.join(appdata_dir, entry)
-                            if os.path.isdir(candidate):
                                 add(
-                                    candidate,
-                                    f"Wine Prefix ({label})",
-                                    f"{label}/{entry}",
+                                    child,
+                                    "Ren'Py",
+                                    f"Ren'Py save folder in Wine prefix: {child}",
                                 )
+                            continue
+                        if label in _NESTED_SAVE_ROOTS:
+                            # LocalLow/Dev/Game and Documents/My Games/Game:
+                            # prefer the game folder over its container.
+                            children = _nested_game_folders(
+                                candidate, title_clean, game_name
+                            )
+                            if children:
+                                for child in children:
+                                    add(
+                                        child,
+                                        f"Wine Prefix ({label})",
+                                        f"{label}/{entry}/{os.path.basename(child)}",
+                                    )
+                                continue
+                            if entry.casefold() == "my games":
+                                continue
+                        if _name_matches_game(entry, title_clean, game_name):
+                            add(
+                                candidate,
+                                f"Wine Prefix ({label})",
+                                f"{label}/{entry}",
+                            )
                 except PermissionError:
                     continue
 
@@ -376,6 +470,10 @@ def validate_save_override(path: str, backups_root: str) -> str:
     if not raw:
         return ""
     expanded = os.path.expanduser(raw)
+    if "\0" in expanded:
+        # realpath() (inside is_within) raises ValueError for an embedded NUL;
+        # report it as a bad path instead of letting it escape the API.
+        raise GameSavesError("The saves folder path is not valid")
     if not os.path.isabs(expanded):
         raise GameSavesError("The saves folder must be an absolute path")
     normalized = os.path.normpath(expanded)
@@ -508,13 +606,37 @@ def _scan_tree(root: str) -> _Tree:
 
 
 def _copy_tree(source: str, destination: str, tree: _Tree) -> None:
+    """Copy the scanned tree, never writing through a link in `destination`."""
     os.makedirs(destination, exist_ok=True)
+    root_real = os.path.realpath(destination)
     for rel in tree.dirs:
-        os.makedirs(os.path.join(destination, rel), exist_ok=True)
+        target = os.path.join(destination, rel)
+        if not is_within(os.path.realpath(target), root_real):
+            raise OSError(
+                f"'{rel}' is a symbolic link that points outside the saves folder"
+            )
+        os.makedirs(target, exist_ok=True)
     for rel in tree.files:
         target = os.path.join(destination, rel)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        _ = shutil.copy2(os.path.join(source, rel), target)
+        parent = os.path.dirname(target)
+        if not is_within(os.path.realpath(parent), root_real):
+            raise OSError(
+                f"'{rel}' is under a symbolic link that points outside the saves folder"
+            )
+        os.makedirs(parent, exist_ok=True)
+        # copy2() would follow a symlink already at `target` and overwrite the
+        # file it points at. Copy to a fresh file and rename over the entry so
+        # only the saves folder is touched.
+        descriptor, temporary = tempfile.mkstemp(prefix=".wlib-save-", dir=parent)
+        os.close(descriptor)
+        try:
+            _ = shutil.copy2(os.path.join(source, rel), temporary)
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
 
 
 def copy_folder_contents(source: str, destination: str) -> int:
@@ -555,6 +677,10 @@ def backup_saves(
     if is_within(backups_root, saves_dir):
         raise GameSavesError(
             "The saves folder contains wLib's save backups folder, so it cannot be backed up"
+        )
+    if is_within(saves_dir, backups_root):
+        raise GameSavesError(
+            "The saves folder is inside wLib's save backups folder, so it cannot be backed up"
         )
 
     tree = _scan_tree(saves_dir)
@@ -610,6 +736,9 @@ def import_saves(
     """
     if not os.path.isdir(source):
         raise GameSavesError("The folder to import does not exist")
+    if "\0" in saves_dir:
+        # realpath() raises ValueError for an embedded NUL; keep it a clean error.
+        raise GameSavesError("The saves folder path is not valid")
     if paths_overlap(source, saves_dir):
         raise GameSavesError(
             "The folder to import cannot be the saves folder, inside it, or contain it"
@@ -620,8 +749,19 @@ def import_saves(
     tree = _scan_tree(source)
     if not tree.files:
         raise GameSavesError("The folder to import has no files")
+    if is_within(saves_dir, backups_root):
+        raise GameSavesError(
+            "The saves folder cannot be inside wLib's save backups folder"
+        )
+    saves_real = os.path.realpath(saves_dir)
     for rel in tree.dirs:
         target = os.path.join(saves_dir, rel)
+        if os.path.islink(target) and not is_within(
+            os.path.realpath(target), saves_real
+        ):
+            raise GameSavesError(
+                f"Cannot import: '{rel}' is a symbolic link outside the saves folder"
+            )
         if os.path.lexists(target) and not os.path.isdir(target):
             raise GameSavesError(
                 f"Cannot import: '{rel}' is a folder in the import but a file in the saves folder"

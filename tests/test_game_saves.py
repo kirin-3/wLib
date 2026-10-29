@@ -284,6 +284,23 @@ def test_backup_refuses_when_saves_folder_contains_backups(tmp_path):
         _ = backup_saves(str(saves), str(saves / "inner"), 1, None, now=NOW)
 
 
+def test_save_operations_refuse_a_folder_inside_the_backups_root(tmp_path):
+    # An imported save_path_override can point here; never treat a backup as
+    # a saves folder (it would copy or overwrite the backups themselves).
+    root = tmp_path / "backups"
+    backup = root / "1" / "2026-10-23_12-00-00"
+    _ = _write(backup / "a.save", "x")
+    source = tmp_path / "source"
+    _ = _write(source / "b.save", "y")
+
+    with pytest.raises(GameSavesError, match="inside"):
+        _ = backup_saves(str(backup), str(root), 1, None, now=NOW)
+    with pytest.raises(GameSavesError, match="inside"):
+        _ = import_saves(str(source), str(backup), str(root), 1, None, now=NOW)
+
+    assert _tree(backup) == {"a.save": "x"}
+
+
 # ── 2.5 Import ───────────────────────────────────────────────────────────
 
 
@@ -357,6 +374,47 @@ def test_import_type_conflict_stops_before_any_write(tmp_path, direction):
     assert not root.exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_import_replaces_a_file_symlink_instead_of_writing_through_it(tmp_path):
+    saves = tmp_path / "saves"
+    _ = _write(saves / "a.save", "old")
+    victim = _write(tmp_path / "victim.txt", "ORIGINAL")
+    try:
+        os.symlink(victim, saves / "linked.save")
+    except OSError:
+        pytest.skip("symlinks not permitted")
+    source = tmp_path / "source"
+    _ = _write(source / "linked.save", "PWNED")
+
+    info = import_saves(str(source), str(saves), str(tmp_path / "b"), 1, None)
+
+    assert victim.read_text() == "ORIGINAL"
+    assert not (saves / "linked.save").is_symlink()
+    assert (saves / "linked.save").read_text() == "PWNED"
+    assert info.backup is not None
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
+def test_import_refuses_a_directory_symlink_that_leaves_the_saves_folder(tmp_path):
+    saves = tmp_path / "saves"
+    _ = _write(saves / "a.save", "old")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        os.symlink(outside, saves / "sub")
+    except OSError:
+        pytest.skip("symlinks not permitted")
+    source = tmp_path / "source"
+    _ = _write(source / "sub" / "evil.txt", "PWNED")
+
+    with pytest.raises(GameSavesError, match="symbolic link outside"):
+        _ = import_saves(str(source), str(saves), str(tmp_path / "b"), 1, None)
+
+    assert list(outside.iterdir()) == []
+    assert not (tmp_path / "b").exists()
+    assert _tree(saves) == {"a.save": "old"}
+
+
 def test_import_creates_missing_target_without_backup(tmp_path):
     source = tmp_path / "source"
     _ = _write(source / "a.save", "a")
@@ -369,6 +427,14 @@ def test_import_creates_missing_target_without_backup(tmp_path):
     assert _tree(saves) == {"a.save": "a", "sub/b.save": "b"}
     assert info.backup is None
     assert not root.exists()
+
+
+def test_import_reports_an_invalid_saves_path(tmp_path):
+    source = tmp_path / "source"
+    _ = _write(source / "a.save")
+
+    with pytest.raises(GameSavesError, match="not valid"):
+        _ = import_saves(str(source), "/tmp/\0bad", str(tmp_path / "b"), 1, None)
 
 
 def test_import_rejects_missing_or_empty_source(tmp_path):
@@ -414,6 +480,8 @@ def test_override_validation(tmp_path):
 
     with pytest.raises(GameSavesError, match="absolute"):
         _ = validate_save_override("relative/path", root)
+    with pytest.raises(GameSavesError, match="not valid"):
+        _ = validate_save_override("/tmp/\0bad", root)
     with pytest.raises(GameSavesError, match="backups folder"):
         _ = validate_save_override(os.path.join(root, "1", "x"), root)
     with pytest.raises(GameSavesError, match="backups folder"):
@@ -434,6 +502,145 @@ def test_resolve_backup_rejects_traversal_and_missing(tmp_path):
     for bad in ("../2/2026-10-23_12-00-00", "..", "", "x", "2026-10-23_12-00-01"):
         with pytest.raises(GameSavesError):
             _ = resolve_backup(str(root), 1, bad)
+
+
+def test_wine_prefix_finds_renpy_saves(tmp_path):
+    # Ren'Py under Wine writes to %APPDATA%\RenPy\<game>-<hash>, one level
+    # below the AppData entry, so the generic folder match never sees it.
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "Roaming"
+        / "RenPy"
+        / "Zelda-1234567890"
+    )
+    _write(saves / "1-1-LT1.save")
+    _write(saves.parent / "OtherApp-42" / "other.save")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert results[0]["type"] == "Ren'Py"
+
+
+def test_wine_prefix_finds_local_low_developer_game(tmp_path):
+    # %LOCALAPPDATA%Low\<developer>\<game> is the layout the save-folder spec
+    # documents for a prefix; the developer folder itself is not the saves.
+    prefix = tmp_path / "prefix"
+    developer = (
+        prefix / "drive_c" / "users" / "steamuser" / "AppData" / "LocalLow" / "Dev"
+    )
+    saves = developer / "Zelda"
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(developer) not in {r["path"] for r in results}
+
+
+def test_wine_prefix_finds_the_spec_local_low_layout(tmp_path):
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "LocalLow"
+        / "Dev"
+        / "Game"
+    )
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Game/Game.exe",
+        "Game",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+
+
+def test_windows_local_low_does_not_settle_for_the_developer_folder(tmp_path):
+    saves = tmp_path / "home" / "AppData" / "LocalLow" / "Dev" / "Zelda"
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe", "Zelda", windows=True
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(saves.parent) not in {r["path"] for r in results}
+
+
+def test_wine_prefix_documents_my_games_prefers_the_game_folder(tmp_path):
+    prefix = tmp_path / "prefix"
+    container = (
+        prefix / "drive_c" / "users" / "steamuser" / "Documents" / "My Games"
+    )
+    saves = container / "Zelda"
+    _write(saves / "save.dat")
+    _write(container / "OtherGame" / "other.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
+    assert str(container) not in {r["path"] for r in results}
+
+
+def test_windows_documents_my_games_container_is_not_a_saves_folder(tmp_path):
+    container = tmp_path / "home" / "Documents" / "My Games"
+    (container / "OtherGame").mkdir(parents=True)
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe", "Zelda", windows=True
+    )
+
+    assert results == []
+
+
+def test_wine_prefix_keeps_a_game_named_appdata_folder(tmp_path):
+    prefix = tmp_path / "prefix"
+    saves = (
+        prefix
+        / "drive_c"
+        / "users"
+        / "steamuser"
+        / "AppData"
+        / "Roaming"
+        / "Game"
+    )
+    _write(saves / "save.dat")
+
+    results = detect_save_locations(
+        "/games/Zelda/Game.exe",
+        "Zelda",
+        custom_prefix=str(prefix),
+        windows=False,
+    )
+
+    assert [(r["path"], r["eligible"]) for r in results] == [(str(saves), True)]
 
 
 def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch):
