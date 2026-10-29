@@ -688,6 +688,78 @@ def test_install_same_folder_pattern_keeps_backup_when_unticked(tmp_path, monkey
     assert str(backups[0]) in str(result["kept_old_folder_reason"])
 
 
+def test_install_same_folder_no_launcher_restores_previous_install(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    (dest / "user-notes.txt").write_text("mine")
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"readme.txt": b"no launcher", "data/x.bin": b"x"})
+
+    with pytest.raises(ArchiveInstallError, match="No launchable file"):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+
+    # The failed update must leave the game on its previous, still-usable copy.
+    assert (dest / "Game.exe").read_text() == "old"
+    assert (dest / "user-notes.txt").read_text() == "mine"
+    assert db.get_all_games()[0]["exe_path"] == str(dest / "Game.exe")
+    kept = [path for path in lib.iterdir() if ".wlib-new-" in path.name]
+    assert len(kept) == 1
+    assert (kept[0] / "readme.txt").exists()
+    assert not [path for path in lib.iterdir() if ".wlib-old-" in path.name]
+
+
+def test_install_same_folder_db_failure_restores_previous_install(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+
+    def failing_update(*_args, **_kwargs):
+        raise OSError("database is locked")
+
+    monkeypatch.setattr("core.database.update_game", failing_update)
+    with pytest.raises(ArchiveInstallError, match="database is locked"):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+
+    assert (dest / "Game.exe").read_text() == "old"
+    assert db.get_all_games()[0]["exe_path"] == str(dest / "Game.exe")
+    kept = [path for path in lib.iterdir() if ".wlib-new-" in path.name]
+    assert len(kept) == 1
+    assert (kept[0] / "Game.exe").read_text() == "new"
+
+
 def test_install_save_copy_failure_leaves_db_untouched(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     import core.archive_install as ai

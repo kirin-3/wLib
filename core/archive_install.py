@@ -1217,6 +1217,7 @@ def install_archive(
     # Destination is in place from here on; failures below keep the update.
     kept_reason = ""
     unmoved: list[dict[str, object]] = []
+    library_updated = False
     try:
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
@@ -1250,6 +1251,7 @@ def install_archive(
                 rating=rating,
             )
             game_id = int(str(new_id)) if new_id is not None else None
+            library_updated = game_id is not None
         else:
             fields: dict[str, object] = {
                 "exe_path": exe_path,
@@ -1274,6 +1276,7 @@ def install_archive(
                 if new_override != os.path.normpath(old_override):
                     fields["save_path_override"] = new_override
             _ = _db.update_game(int(game_id), fields)
+            library_updated = True
             if old_root_for_targets and os.path.isdir(destination):
                 try:
                     targets = list_game_launch_targets(int(game_id))
@@ -1340,11 +1343,29 @@ def install_archive(
             "removed_old": removed_old,
             "old_folder": old_root,
         }
-    except Exception:
-        # Step 5/6 failure after the move: the new tree stands (per design a
-        # step-6 failure still counts as success), except the no-launcher and
-        # DB-update cases which must not leave a half-pointing row. For
-        # no-launcher the folder is intentionally kept; re-raise.
+    except Exception as exc:
+        # Step 5 failure after the move: the previous install was renamed aside
+        # for an in-place update and the library still points into it. Restore
+        # it so the game stays usable, and keep the extracted tree beside it
+        # for the manual-executable flow the message offers.
+        if old_backup and not library_updated:
+            kept_new = f"{destination}.wlib-new-{time.time_ns()}"
+            try:
+                os.rename(destination, kept_new)
+                os.rename(old_backup, destination)
+            except OSError:
+                # Put the new tree back so the state matches the original error.
+                try:
+                    if not os.path.lexists(destination):
+                        os.rename(kept_new, destination)
+                except OSError:
+                    pass
+                raise
+            raise ArchiveInstallError(
+                f"{str(exc) or 'The update could not be completed.'} The extracted folder was kept at {kept_new} and the previous version was restored."
+            ) from exc
+        # Step 6 failures are reported in the result, not raised; nothing else
+        # after the library update is allowed to abandon the new version.
         raise
 
 
