@@ -148,15 +148,33 @@ function wlibConnectionStatusMessage() {
         : 'Error: Make sure wLib is open.';
 }
 
+// chrome.runtime.sendMessage throws synchronously once an extension update
+// reload invalidates this content script (and when chrome.runtime is already
+// gone in Firefox). Deliver that as a normal failed request so every caller
+// takes its existing error path instead of leaving a button stuck on
+// "Adding..." / "Opening...".
+function sendRuntimeMessage(message, callback) {
+    let answered = false;
+    try {
+        chrome.runtime.sendMessage(message, (response) => {
+            answered = true;
+            const error = chrome.runtime.lastError;
+            callback(error || null, response);
+        });
+    } catch (error) {
+        if (!answered) callback(error, undefined);
+    }
+}
+
 function checkGameInWLib(url, links = []) {
     return new Promise((resolve) => {
-        chrome.runtime.sendMessage({
+        sendRuntimeMessage({
             action: 'checkGameInWLib',
             url,
             ids: links.map(link => `${link.source}:${link.id}`),
-        }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.warn('wLib extension: Could not connect to background wLib service.', chrome.runtime.lastError);
+        }, (error, response) => {
+            if (error) {
+                console.warn('wLib extension: Could not connect to background wLib service.', error);
                 resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false });
                 return;
             }
@@ -193,7 +211,7 @@ async function initThreadPageExtension() {
     gameInfo.links = links || [];
     const checkResult = await checkGameInWLib(gameInfo.url, gameInfo.links);
     if (checkResult.exists && links !== null && links !== undefined) {
-        chrome.runtime.sendMessage({action:"saveThreadLinks", payload:{url:gameInfo.url, links}}, () => { void chrome.runtime.lastError; });
+        sendRuntimeMessage({action:"saveThreadLinks", payload:{url:gameInfo.url, links}}, () => {});
     }
     gameInfo.existsInWLib = checkResult.exists;
     gameInfo.playStatus = checkResult.playStatus;
@@ -618,12 +636,12 @@ function injectUI(gameInfo) {
 
         if (gameInfo.existsInWLib) {
             setActionButtonContent(btn, 'Opening...', 'externalLink', 'open');
-            chrome.runtime.sendMessage({
+            sendRuntimeMessage({
                 action: 'openWLib',
                 ids: (gameInfo.links || []).map(link => `${link.source}:${link.id}`),
                 url: gameInfo.url
-            }, (response) => {
-                if (chrome.runtime.lastError || !response?.success) {
+            }, (error, response) => {
+                if (error || !response?.success) {
                     statusEl.textContent = wlibConnectionStatusMessage();
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
@@ -638,16 +656,15 @@ function injectUI(gameInfo) {
         } else {
             setActionButtonContent(btn, 'Adding...', 'libraryPlus', 'default');
 
-            chrome.runtime.sendMessage({
+            sendRuntimeMessage({
                 action: 'addGameToWLib',
                 payload: gameInfo
-            }, (response) => {
-                if (chrome.runtime.lastError) {
-                    const err = chrome.runtime.lastError.message;
+            }, (error, response) => {
+                if (error) {
                     statusEl.textContent = wlibConnectionStatusMessage();
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
-                    console.error('wLib Extension Error:', err);
+                    console.error('wLib Extension Error:', error.message);
                     return;
                 }
 
@@ -678,13 +695,12 @@ function injectUI(gameInfo) {
             btn.disabled = true;
             wishlistBtn.textContent = 'Saving...';
             statusEl.textContent = '';
-            chrome.runtime.sendMessage({
+            sendRuntimeMessage({
                 action: 'wishlistGameInWLib',
                 payload: gameInfo,
-            }, (response) => {
-                // Reading lastError marks it handled; a missing response falls through to Retry.
-                if (chrome.runtime.lastError) {
-                    console.error('wLib Extension Error:', chrome.runtime.lastError.message);
+            }, (error, response) => {
+                if (error) {
+                    console.error('wLib Extension Error:', error.message);
                 }
                 if (response?.success) {
                     wishlistBtn.textContent = 'Wishlisted';
@@ -717,8 +733,7 @@ function injectUI(gameInfo) {
         attachBtn.addEventListener('click', () => {
             attachBtn.disabled = true;
             attachBtn.textContent = 'Attaching…';
-            chrome.runtime.sendMessage({action:'wishlistGameInWLib', payload:gameInfo}, response => {
-                const error = chrome.runtime.lastError;
+            sendRuntimeMessage({action:'wishlistGameInWLib', payload:gameInfo}, (error, response) => {
                 if (!error && response?.attached) {
                     attachBtn.textContent = 'Thread attached';
                     statusEl.textContent = 'F95 thread attached to the existing game.';

@@ -779,8 +779,13 @@ class Api:
         if not os.path.isfile(manifest_path):
             return ""
 
-        with open(manifest_path, encoding="utf-8") as f:
-            manifest_data = self._coerce_string_key_dict(cast(object, json.load(f)))
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest_data = self._coerce_string_key_dict(cast(object, json.load(f)))
+        except (OSError, ValueError):
+            # A truncated or hand-edited manifest must read as "unknown" so the
+            # next sync replaces the folder instead of failing forever.
+            return ""
 
         if manifest_data is None:
             return ""

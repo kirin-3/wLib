@@ -1954,6 +1954,35 @@ def test_sync_extension_files_replaces_outdated_install(monkeypatch, tmp_path):
     assert (firefox_dir / "wLib.xpi").is_file()
 
 
+def test_sync_extension_files_repairs_a_corrupt_installed_manifest(
+    monkeypatch, tmp_path
+):
+    api = Api()
+    persistent_dir = tmp_path / "extension"
+    chrome_dir = persistent_dir / "chrome"
+    firefox_dir = persistent_dir / "firefox"
+    _redirect_extension_dir(monkeypatch, persistent_dir)
+
+    chrome_dir.mkdir(parents=True)
+    firefox_dir.mkdir(parents=True)
+    # A truncated or hand-edited manifest must read as a missing version so
+    # the folder is recopied instead of every later sync failing.
+    (chrome_dir / "manifest.json").write_text(
+        '{"manifest_version": 3, "version": "1.0.1"'
+    )
+    (chrome_dir / "content.js").write_text("old-content")
+    (firefox_dir / "wLib.xpi").write_text("outdated")
+
+    result = api.sync_extension_files()
+
+    assert result["success"] is True
+    assert result.get("updated") is True
+    chrome_manifest = json.loads((chrome_dir / "manifest.json").read_text())
+    assert chrome_manifest["version"] == _bundled_extension_version()
+    assert "checkGameInWLib" in (chrome_dir / "content.js").read_text()
+    assert (firefox_dir / "wLib.xpi").is_file()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux in this test")
 def test_sync_extension_files_replaces_symlinked_live_folder(monkeypatch, tmp_path):
     api = Api()
