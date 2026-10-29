@@ -825,9 +825,16 @@ class Scraper:
                     if page_result.get("success") and self._is_non_actionable_version(
                         page_result.get("version")
                     ):
-                        page_result = self._error(
-                            "extract_failed", "Could not extract a version from thread"
-                        )
+                        # The page itself was read, so its Completed flag,
+                        # screenshots, links and edit metadata are still valid
+                        # even though no version could be extracted.
+                        page_result = {
+                            **page_result,
+                            "success": False,
+                            "code": "extract_failed",
+                            "error": "Could not extract a version from thread",
+                            "version": "",
+                        }
                     by_id[thread_id] = page_result
                 result = page_result
             results[url] = result

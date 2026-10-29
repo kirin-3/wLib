@@ -279,6 +279,34 @@ def test_no_actionable_page_version(monkeypatch):
     )
 
 
+def test_extract_failed_page_keeps_the_metadata_it_read(monkeypatch):
+    """A read thread page still carries a valid Completed flag and screenshots."""
+    page = (
+        "<title>Game | F95zone</title>"
+        '<h1 class="p-title-value"><a class="labelLink"><span>Ren\'Py</span></a>'
+        '<span class="label-append">Completed</span>Game [Dev]</h1>'
+        '<article class="message-threadStarterPost"><div class="bbWrapper">'
+        "<b>Version</b>: not announced yet<br>"
+        '<img class="bbImage" src="https://example.com/shot.png">'
+        "</div></article>"
+    )
+    monkeypatch.setattr(
+        scraper_module,
+        "_f95_get",
+        MagicMock(
+            side_effect=[
+                checker_response(["1"], "Unknown"),
+                (200, page),
+            ]
+        ),
+    )
+    result = Scraper().get_thread_version("https://f95zone.to/threads/1/")
+    assert result["code"] == "extract_failed"
+    assert result["thread_completed"] is True
+    assert result["engine"] == "Ren'Py"
+    assert result["thread_main_post_checked_at"]
+
+
 def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
     # Blocked batch with no extension: fails as blocked+unavailable, no page
     # fallback (still one request per batch), next chunk continues.

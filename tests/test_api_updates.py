@@ -870,6 +870,63 @@ def test_check_for_updates_propagates_structured_scraper_error(monkeypatch):
     assert "Blocked" in str(result.get("error", ""))
 
 
+def test_extract_failed_check_stores_page_metadata_it_read(monkeypatch):
+    """A versionless page is still a successful page read for thread metadata."""
+    api = Api()
+    url = "https://f95zone.to/threads/unversioned.400/"
+    _ = add_game("Unversioned", "", f95_url=url)
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "code": "extract_failed",
+            "error": "Could not extract a version from thread",
+            "thread_completed": True,
+            "thread_main_post_checked_at": "2026-10-28T00:00:00",
+            "screenshots": ["https://example.com/shot.png"],
+        },
+    )
+
+    result = api.check_for_updates(url)
+
+    assert result["success"] is False
+    assert result["error_code"] == "extract_failed"
+    game = get_all_games()[0]
+    assert game["thread_completed"] == 1
+    assert game["thread_main_post_checked_at"] == "2026-10-28T00:00:00"
+    assert game["screenshots"] == ["https://example.com/shot.png"]
+
+
+def test_bulk_extract_failed_page_keeps_completion_and_screenshots(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/unversioned.401/"
+    _ = add_game("Unversioned", "", f95_url=url)
+    page_result = {
+        "success": False,
+        "code": "extract_failed",
+        "error": "Could not extract a version from thread",
+        "thread_completed": True,
+        "thread_main_post_checked_at": "2026-10-28T00:00:00",
+        "screenshots": ["https://example.com/bulk.png"],
+    }
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], page_result) or {},
+    )
+    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["success"]
+
+    game = get_all_games()[0]
+    assert game["thread_completed"] == 1
+    assert game["screenshots"] == ["https://example.com/bulk.png"]
+    result = api.get_update_status()["results"][0]
+    assert result["error_code"] == "extract_failed"
+    assert result["newly_finished"] is True
+
+
 def test_build_scraper_error_payload_blocked_unavailable():
     api = Api()
     result = api._build_scraper_error_payload(
