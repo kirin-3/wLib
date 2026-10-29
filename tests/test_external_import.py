@@ -221,6 +221,26 @@ def test_playnite_import_covers_sections_merge_rollback(tmp_path, monkeypatch):
     assert {g["cover_local"] for g in get_all_games() if g["cover_local"]} == names
 
 
+def test_import_succeeds_when_old_cover_cleanup_fails(tmp_path, monkeypatch):
+    """A locked old cover must not turn a committed import into a failure."""
+    from core import database, game_covers
+    from core.library_backup import import_external_library
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    first = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert first["covers_copied"] == 2
+
+    def locked(name):
+        if isinstance(name, str) and name:
+            raise PermissionError("file is locked")
+        return None
+
+    monkeypatch.setattr(game_covers, "delete_cover_file", locked)
+    second = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert second["covers_copied"] == 2
+    assert len(get_all_games()) == 146
+
+
 def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch):
     from core.external_import import _translate_playnite_game
 

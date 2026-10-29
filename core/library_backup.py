@@ -928,6 +928,17 @@ def _plan_cover_files(
     return covers
 
 
+def _discard_cover_files(names: Sequence[str]) -> None:
+    """Delete cover files without letting a locked file mask the import result."""
+    from core.game_covers import delete_cover_file
+
+    for name in names:
+        try:
+            delete_cover_file(name)
+        except OSError as exc:
+            print(f"[wLib] Failed to delete cover file {name!r}: {exc}")
+
+
 def _path_warning(
     warnings: list[dict[str, object]],
     *,
@@ -1831,16 +1842,10 @@ def apply_library_backup(
             conn.commit()
         except Exception:
             conn.rollback()
-            from core.game_covers import delete_cover_file
-
-            for name in copied_covers:
-                delete_cover_file(name)
+            _discard_cover_files(copied_covers)
             raise
 
-    from core.game_covers import delete_cover_file
-
-    for name in replaced_covers:
-        delete_cover_file(name)
+    _discard_cover_files(replaced_covers)
     if deleted > 0:
         try:
             from core.game_attachments import prune_orphan_attachments
