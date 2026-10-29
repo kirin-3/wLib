@@ -4016,6 +4016,21 @@ def test_lookup_thread_details(monkeypatch):
     )
 
 
+def test_inspect_archive_strips_multipart_suffix(tmp_path, monkeypatch):
+    # A split rar is offered through its first part; the .part1 suffix is not
+    # part of the guessed title or version.
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    update_setting("library_folder", str(tmp_path / "lib"))
+    archive = tmp_path / "Eternum-0.8.part1.rar"
+    archive.write_bytes(b"first part")
+
+    inspected = Api().inspect_archive(str(archive))
+
+    assert inspected["success"] is True
+    assert inspected["title"] == "Eternum"
+    assert inspected["version"] == "0.8"
+
+
 def test_inspect_archive_expands_tilde_saved_paths(tmp_path, monkeypatch):
     # A game added with a typed "~/..." executable launches because the
     # launcher expands it; the update preview must resolve the same folder.

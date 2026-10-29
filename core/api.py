@@ -5442,6 +5442,7 @@ class Api:
         """Read-only preview for the install-from-archive dialog."""
         from core.archive_install import (
             archive_format,
+            archive_stem,
             build_destination,
             can_remove_old_folder,
             detect_archive_tool,
@@ -5460,8 +5461,9 @@ class Api:
                 "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
             }
 
-        stem = os.path.splitext(os.path.basename(archive_path))[0]
-        guessed_title, guessed_version = guess_title_and_version(stem)
+        guessed_title, guessed_version = guess_title_and_version(
+            archive_stem(archive_path)
+        )
 
         library_folder = str(get_setting_fn("library_folder") or "")
         _tool, tool_error = detect_archive_tool(
@@ -5555,7 +5557,7 @@ class Api:
         """Blocking install from an archive; the dialog polls status meanwhile."""
         import sqlite3
 
-        from core.archive_install import ArchiveInstallError
+        from core.archive_install import ArchiveInstallError, archive_stem
         from core.archive_install import install_archive as run_install
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -5638,9 +5640,7 @@ class Api:
         if (not title or not version) and archive_path:
             from core.game_scan import guess_title_and_version as _guess
 
-            guessed_title, guessed_version = _guess(
-                os.path.splitext(os.path.basename(archive_path))[0]
-            )
+            guessed_title, guessed_version = _guess(archive_stem(archive_path))
             title = title or guessed_title
             version = version or guessed_version
 

@@ -110,6 +110,19 @@ def archive_format(archive_path: str) -> str:
     return ""
 
 
+_PART_SUFFIX_RE = re.compile(r"\.part\d+$", re.IGNORECASE)
+
+
+def archive_stem(archive_path: str) -> str:
+    """File name without the archive extension or multi-part suffix.
+
+    `Game-1.0.part1.rar` is the first part of `Game-1.0.rar`; the part number
+    is not part of the game's name or version.
+    """
+    stem = os.path.splitext(os.path.basename(str(archive_path or "")))[0]
+    return _PART_SUFFIX_RE.sub("", stem)
+
+
 def _is_windows(platform: str | None = None) -> bool:
     if platform is not None:
         return platform.lower().startswith("win")

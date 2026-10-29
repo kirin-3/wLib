@@ -426,6 +426,18 @@ def test_can_remove_old_folder_guards(tmp_path):
     )
 
 
+def test_archive_stem_strips_a_multipart_suffix():
+    from core.archive_install import archive_stem
+    from core.game_scan import guess_title_and_version
+
+    assert archive_stem("/downloads/Eternum-0.8.part1.rar") == "Eternum-0.8"
+    assert archive_stem("Eternum-0.8.PART12.RAR") == "Eternum-0.8"
+    assert archive_stem("Eternum-0.8-pc.zip") == "Eternum-0.8-pc"
+    assert guess_title_and_version(
+        archive_stem("Eternum-0.8.part1.rar")
+    ) == ("Eternum", "0.8")
+
+
 def test_can_remove_old_folder_refuses_a_mounted_drive_root(tmp_path, monkeypatch):
     import core.archive_install as ai
 
