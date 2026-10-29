@@ -160,6 +160,41 @@ def test_snapshot_data_is_flushed_before_the_replace(tmp_path, server, monkeypat
     assert calls.index("fsync") < calls.index("replace")
 
 
+def test_turning_off_during_the_install_leaves_no_catalog(tmp_path, server, monkeypatch):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    enabled = {"on": True}
+    client = _client(tmp_path, enabled=lambda: enabled["on"])
+    real_replace = os.replace
+    entered = threading.Event()
+    release = threading.Event()
+
+    def replace(source, target):
+        if target == client.catalog_path:
+            entered.set()
+            assert release.wait(5)
+        real_replace(source, target)
+
+    monkeypatch.setattr(catalog_module.os, "replace", replace)
+    outcome = {}
+    thread = threading.Thread(
+        target=lambda: outcome.setdefault("result", client.check(force=True))
+    )
+    thread.start()
+    try:
+        assert entered.wait(5)
+        enabled["on"] = False
+        client.remove()
+        release.set()
+        thread.join(5)
+        assert not thread.is_alive()
+        assert outcome["result"]["success"] is True
+        assert not os.path.exists(client.catalog_path)
+        assert not os.path.exists(client.sidecar_path)
+    finally:
+        release.set()
+        thread.join(5)
+
+
 def test_unchanged_hash_downloads_only_the_manifest(tmp_path, server):
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     client = _client(tmp_path)

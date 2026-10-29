@@ -321,6 +321,11 @@ class CatalogClient:
                 return False
             os.replace(db_tmp, self.catalog_path)
             self._sync_dir()
+            if not self._enabled():
+                # The setting was turned off while this check was finishing.
+                # Do not leave a catalog we just installed behind.
+                _remove(self.catalog_path)
+                return False
         finally:
             _remove(xz_tmp)
             _remove(db_tmp)
