@@ -411,10 +411,14 @@ const loadAppUpdate = async () => {
 // Automatic checks and external imports can start a check after this page has
 // mounted, in which case the mount-time status read saw nothing to poll. The
 // global poll refreshes the library on progress; use that to pick the check up.
+// It shares the poll's request counter so an older snapshot from an earlier
+// refresh cannot replace a newer one that resolved first.
 const adoptBackgroundCheck = async () => {
-  if (status.value.running) return;
+  if (status.value.running || pollInterval) return;
+  const request = ++statusRequest;
   try {
     const s = await api.getUpdateStatus();
+    if (request !== statusRequest) return;
     if (!s || s.success === false) return;
     if (!shouldAdoptBackgroundCheck(status.value.running, s)) return;
     statusError.value = "";
@@ -443,9 +447,12 @@ onMounted(() => {
     await loadAutoCheckSetting();
     await loadDownloadOffers();
     let s: UpdateStatusResponse | null;
+    const request = ++statusRequest;
     try {
       s = await api.getUpdateStatus();
+      if (request !== statusRequest) return;
     } catch (e) {
+      if (request !== statusRequest) return;
       console.error("Poll status failed:", e);
       failPolling("Could not read the update-check status: " + String(e));
       return;
