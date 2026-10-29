@@ -2107,6 +2107,27 @@ def test_import_settings_reads_native_booleans(tmp_path):
     assert settings["update_notifications"] is False
 
 
+def test_import_settings_keeps_blank_download_detection_on(tmp_path):
+    """A blank or null detection toggle means the default (on), not off."""
+    api = Api()
+    for value in (None, ""):
+        api.save_settings({"download_detection_enabled": False})
+        backup_path = write_backup(
+            tmp_path / "blank-detection.json",
+            {
+                **base_backup([]),
+                "settings": {"paths": {"download_detection_enabled": value}},
+            },
+        )
+
+        result = api.import_library_backup(
+            str(backup_path), {"sections": [SECTION_SETTINGS_PATHS]}
+        )
+
+        assert result["success"] is True
+        assert api.get_settings()["download_detection_enabled"] is True
+
+
 def test_import_merges_new_rows_for_one_thread_under_different_slugs(tmp_path):
     """Copies of one non-local thread under old and new slugs import once."""
     api = Api()

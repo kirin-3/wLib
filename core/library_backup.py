@@ -1388,6 +1388,9 @@ def _coerce_setting_value(key: str, raw: object) -> str:
     """
     if isinstance(raw, (list, dict)):
         return json.dumps(raw, ensure_ascii=False)
+    if key == "download_detection_enabled" and not _coerce_text(raw).strip():
+        # The app reads a blank value as the default (on), not as off.
+        return "true"
     if key in BOOLEAN_SETTINGS_KEYS:
         return "true" if _coerce_bool(raw) else "false"
     if key == "update_notifications":
