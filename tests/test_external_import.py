@@ -1001,6 +1001,24 @@ def test_f69_import_creates_games_with_collections(tmp_path, _host_paths):
     assert imported["collections"] == ["Backlog", "Favorites"]
 
 
+def test_import_succeeds_when_collection_registration_fails(
+    tmp_path, monkeypatch, _host_paths
+):
+    """Games are already saved; a collection registry failure is not fatal."""
+    from core import database
+
+    source = tmp_path / "f69.db"
+    _write_f69_db(source, tmp_path / "games")
+
+    def fail(name, game_id=None):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(database, "create_collection", fail)
+    result = import_external_library("f69", str(source))
+    assert result["created"] == 2
+    assert {game["title"] for game in get_all_games()} == {"f69 Game", "My Custom"}
+
+
 def test_locate_f69_library_uses_xdg_data_home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     staged = tmp_path / "data" / "f69" / "f69.db"

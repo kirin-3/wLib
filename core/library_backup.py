@@ -1970,7 +1970,13 @@ def import_external_library(
     backup, stats = read_external_library(source, path)
     result = apply_library_backup(backup, _external_import_options(options), source_covers=True)
     if SECTION_USER_STATE in _coerce_sequence(result.get("selected_sections")):
-        _register_imported_collections(backup)
+        try:
+            _register_imported_collections(backup)
+        except Exception as exc:
+            # The games are already committed; failing the whole call here would
+            # report an import that happened as failed. A later import retries
+            # the registry, and membership stays stored in the meantime.
+            print(f"[wLib] Failed to register imported collections: {exc}")
     skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))
     result["skipped"] = int(str(result.get("skipped", 0))) + skipped_no_identity
     result["skipped_no_identity"] = skipped_no_identity
