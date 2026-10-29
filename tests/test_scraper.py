@@ -854,6 +854,56 @@ def test_login_required_does_not_open_window(monkeypatch, thread_html):
     _reset_scraper_globals()
 
 
+def test_window_opened_while_waiting_for_turn_applies_to_queued_request(monkeypatch):
+    """A caller that waits for its turn must honour a challenge seen meanwhile.
+
+    The transport choice belongs inside the shared F95 lock: otherwise every
+    caller queued behind a slow request has already picked plain HTTP when the
+    first challenge opens the extension-first window, and each of them sends
+    one more avoidable request to F95.
+    """
+    _reset_scraper_globals()
+    url = "https://f95zone.to/threads/1/"
+    plain_requests: list[str] = []
+    extension_requests: list[str] = []
+    reached_plain = threading.Event()
+
+    def fake_get(request_url):
+        reached_plain.set()
+        plain_requests.append(request_url)
+        return (503, "cf-challenge")
+
+    def fake_extension(request_url):
+        extension_requests.append(request_url)
+        return (503, "cf-challenge")
+
+    monkeypatch.setattr(scraper_module, "_f95_get", fake_get)
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", fake_extension)
+    monkeypatch.setattr(
+        scraper_module.extension_bridge, "is_available", lambda: True
+    )
+    results: list[tuple[int, str, str | None]] = []
+    scraper = Scraper()
+
+    # Hold the lock like another F95 request that is already in flight. The
+    # queued caller cannot choose a transport until it gets its turn.
+    with scraper_module._F95_REQUEST_LOCK:
+        worker = threading.Thread(
+            target=lambda: results.append(scraper._fetch_with_fallback(url))
+        )
+        worker.start()
+        # Before the fix the caller reaches the plain transport at once; with
+        # the fix it is still waiting for the lock and this wait times out.
+        _ = reached_plain.wait(1)
+        scraper_module._prefer_extension_until = time.monotonic() + 900
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert results
+    assert plain_requests == []
+    assert extension_requests == [url]
+    _reset_scraper_globals()
+
+
 def test_screenshots_collected_in_post_order(thread_html):
     result = Scraper()._extract_page(thread_html)
     assert result["screenshots"] == [
