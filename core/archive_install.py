@@ -827,6 +827,14 @@ def can_remove_old_folder(
         return {"removable": False, "reason": "The previous folder is unknown."}
     if _is_root(cand_real):
         return {"removable": False, "reason": "Refusing to remove a drive root."}
+    # A mounted drive's root is the filesystem root for that drive: deleting it
+    # removes every unrelated file on the mount (rmtree would empty it and then
+    # fail to remove the mount point).
+    if os.path.ismount(cand_real):
+        return {
+            "removable": False,
+            "reason": "Refusing to remove a mounted drive root.",
+        }
     home_real = _real("~")
     if cand_real == home_real:
         return {"removable": False, "reason": "Refusing to remove your home folder."}

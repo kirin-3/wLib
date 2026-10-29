@@ -426,6 +426,32 @@ def test_can_remove_old_folder_guards(tmp_path):
     )
 
 
+def test_can_remove_old_folder_refuses_a_mounted_drive_root(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    drive = tmp_path / "drive"
+    drive.mkdir()
+    old_exe = drive / "Game.exe"
+    old_exe.write_text("x")
+    # A mounted filesystem's root (an external drive, a tmpfs) is a filesystem
+    # root for that drive even though it is not the OS root.
+    monkeypatch.setattr(
+        ai.os.path, "ismount", lambda value: os.path.abspath(value) == str(drive)
+    )
+
+    result = can_remove_old_folder(
+        str(drive),
+        str(tmp_path / "lib" / "Game" / "2.0"),
+        str(tmp_path / "lib"),
+        "",
+        [],
+        str(old_exe),
+    )
+
+    assert result["removable"] is False
+    assert "mount" in str(result["reason"]).lower()
+
+
 def test_relocate_launch_targets(tmp_path):
     old = tmp_path / "old"
     new = tmp_path / "new"
