@@ -25,6 +25,7 @@ def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     cache_home = tmp_path / "cache"
     monkeypatch.setattr(main, "APP_DATA_DIR", str(app_data_dir))
     monkeypatch.setattr(main, "get_cache_root", lambda: str(cache_home))
+    monkeypatch.setattr(main, "is_linux", lambda: True)
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setattr(main.sys, "frozen", True, raising=False)
     monkeypatch.setattr(main.sys, "executable", "/tmp/wlib-bin")
@@ -33,6 +34,7 @@ def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     return {
         "app_data_dir": app_data_dir,
         "cache_path": cache_home
+        / "wlib-bin"
         / main.QTWEBENGINE_CACHE_DIR_NAME
         / main.PYWEBVIEW_QT_PROFILE_NAME,
         "legacy_cache_path": cache_home / main.PACKAGED_WEBVIEW_CACHE_DIR_NAME,
@@ -191,6 +193,36 @@ def test_configure_qt_runtime_environment_honors_override(monkeypatch):
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
 
 
+def test_configure_ssl_certificates_drops_missing_configured_bundles(
+    monkeypatch, tmp_path
+):
+    missing = str(tmp_path / "missing-bundle.pem")
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        monkeypatch.setenv(name, missing)
+    monkeypatch.setattr(main.os.path, "isfile", lambda _path: False)
+
+    assert main.configure_ssl_certificates() is None
+
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        assert name not in os.environ
+
+
+def test_configure_ssl_certificates_uses_a_valid_requests_bundle(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "corporate-ca.pem"
+    bundle.write_text("certificate", encoding="utf-8")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
+    monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+
+    assert main.configure_ssl_certificates() == str(bundle)
+
+    assert os.environ["SSL_CERT_FILE"] == str(bundle)
+    assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle)
+    assert os.environ["CURL_CA_BUNDLE"] == str(bundle)
+
+
 def test_cleanup_legacy_browser_data_removes_owned_dirs_only(monkeypatch, tmp_path):
     data = tmp_path / "data"
     monkeypatch.setenv("WLIB_DATA_DIR", str(data))
@@ -249,10 +281,27 @@ def test_get_packaged_webview_profile_cache_paths_uses_qt_profile_cache_location
     cache_home = tmp_path / "xdg-cache"
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
     monkeypatch.setattr("core.host_platform.sys.platform", "linux")
+    monkeypatch.setattr(main, "is_linux", lambda: True)
+    monkeypatch.setattr(main.sys, "executable", "/opt/wlib/wlib-bin")
 
     cache_paths = main.get_packaged_webview_profile_cache_paths()
 
     assert cache_paths == [
+        os.path.join(
+            str(cache_home),
+            "wlib-bin",
+            main.QTWEBENGINE_CACHE_DIR_NAME,
+            main.PYWEBVIEW_QT_PROFILE_NAME,
+        )
+    ]
+
+
+def test_get_packaged_webview_profile_cache_paths_on_windows(monkeypatch, tmp_path):
+    cache_home = tmp_path / "cache"
+    monkeypatch.setattr(main, "is_linux", lambda: False)
+    monkeypatch.setattr(main, "get_cache_root", lambda: str(cache_home))
+
+    assert main.get_packaged_webview_profile_cache_paths() == [
         os.path.join(
             str(cache_home),
             main.QTWEBENGINE_CACHE_DIR_NAME,
