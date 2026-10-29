@@ -3087,3 +3087,63 @@ def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path)
             threads[0]()
 
     assert len(popen_calls) == 1
+
+
+@pytest.mark.parametrize("proton", [False, True])
+def test_stop_finds_wineserver_beside_a_symlinked_runner(
+    monkeypatch, tmp_path, proton
+):
+    import signal
+
+    if proton:
+        real_dir = tmp_path / "GE-Proton"
+        real_dir.mkdir()
+        runner = real_dir / "proton"
+        server_dir = real_dir / "files" / "bin"
+    else:
+        real_dir = tmp_path / "wine" / "bin"
+        real_dir.mkdir(parents=True)
+        runner = real_dir / "wine"
+        server_dir = real_dir
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    server_dir.mkdir(parents=True, exist_ok=True)
+    wineserver = server_dir / "wineserver"
+    wineserver.write_text("#!/bin/sh\n")
+    wineserver.chmod(0o755)
+    link_dir = tmp_path / "local-bin"
+    link_dir.mkdir()
+    link = link_dir / runner.name
+    link.symlink_to(runner)
+    game = tmp_path / "game.exe"
+    game.write_bytes(b"MZ")
+
+    with (
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("core.launcher.host_which", return_value=None),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "false" if key == "enable_logging" else "",
+        ),
+        patch("subprocess.Popen", return_value=MagicMock(pid=321)),
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        assert launcher.launch(
+            str(game),
+            proton_version=str(link),
+            custom_prefix=str(tmp_path / "prefix"),
+            launch_mode="wine_proton",
+            game_id=1,
+        )["success"]
+        kill_info = launcher._running[1].kill_info
+        assert kill_info is not None
+        assert kill_info[0] == str(wineserver)
+
+        killpg = MagicMock()
+        monkeypatch.setattr("os.killpg", killpg)
+        with patch("subprocess.run") as run, patch("threading.Thread"):
+            assert launcher.stop(1)["success"]
+        assert run.call_args.args[0] == [str(wineserver), "-k"]
+        killpg.assert_called_with(321, signal.SIGTERM)

@@ -1511,10 +1511,17 @@ class Launcher:
         )
         game_exe_name = path_module.basename(exe_path)
         wineserver = ""
-        if is_proton and proton_path:
+        # Follow a symlinked runner to the build that owns it, so its sibling
+        # wineserver is found instead of a different install on PATH.
+        runner_path = proton_path
+        if proton_path and path_module.sep not in proton_path:
+            runner_path = host_which(proton_path) or proton_path
+        if runner_path:
+            runner_path = os.path.realpath(runner_path)
+        if is_proton and runner_path:
             for layout in ("files", "dist"):
                 candidate = path_module.join(
-                    path_module.dirname(proton_path), layout, "bin", "wineserver"
+                    path_module.dirname(runner_path), layout, "bin", "wineserver"
                 )
                 if os.path.isfile(candidate):
                     wineserver = candidate
@@ -1522,8 +1529,8 @@ class Launcher:
         else:
             # Wine builds ship wineserver beside wine; otherwise use the one on PATH.
             sibling = (
-                path_module.join(path_module.dirname(proton_path), "wineserver")
-                if proton_path and path_module.dirname(proton_path)
+                path_module.join(path_module.dirname(runner_path), "wineserver")
+                if runner_path and path_module.dirname(runner_path)
                 else ""
             )
             wineserver = (
