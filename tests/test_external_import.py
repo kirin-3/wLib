@@ -221,6 +221,26 @@ def test_playnite_import_covers_sections_merge_rollback(tmp_path, monkeypatch):
     assert {g["cover_local"] for g in get_all_games() if g["cover_local"]} == names
 
 
+def test_import_succeeds_when_old_cover_cleanup_fails(tmp_path, monkeypatch):
+    """A locked old cover must not turn a committed import into a failure."""
+    from core import database, game_covers
+    from core.library_backup import import_external_library
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    first = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert first["covers_copied"] == 2
+
+    def locked(name):
+        if isinstance(name, str) and name:
+            raise PermissionError("file is locked")
+        return None
+
+    monkeypatch.setattr(game_covers, "delete_cover_file", locked)
+    second = import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+    assert second["covers_copied"] == 2
+    assert len(get_all_games()) == 146
+
+
 def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch):
     from core.external_import import _translate_playnite_game
 
@@ -393,8 +413,10 @@ def test_parse_timestamp_handles_seconds_millis_and_iso():
 def test_sqlite_snapshot_leaves_source_untouched(tmp_path):
     source = tmp_path / "db.sqlite3"
     conn = sqlite3.connect(str(source))
-    conn.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT)")
-    conn.execute("INSERT INTO games VALUES (1, 'Game')")
+    conn.execute(
+        "CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT, custom INTEGER)"
+    )
+    conn.execute("INSERT INTO games VALUES (1, 'Game', 0)")
     conn.commit()
     conn.close()
     before_bytes = source.read_bytes()
@@ -559,6 +581,21 @@ def test_f95checker_reader_rejects_wrong_file(tmp_path):
     source = tmp_path / "db.sqlite3"
     conn = sqlite3.connect(str(source))
     conn.execute("CREATE TABLE unrelated (id INTEGER)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="not an F95Checker library"):
+        read_external_library("f95checker", str(source))
+
+
+def test_f95checker_reader_rejects_other_game_databases(tmp_path):
+    """A database that merely has a games table is not an F95Checker library."""
+    source = tmp_path / "wlib-like.db"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, title TEXT)")
+    conn.executemany(
+        "INSERT INTO games (id, title) VALUES (?, ?)",
+        [(1, "First local game"), (2, "Second local game")],
+    )
     conn.commit()
     conn.close()
     with pytest.raises(Exception, match="not an F95Checker library"):
@@ -792,6 +829,21 @@ def test_atlas_reader_mapping(tmp_path):
     assert loose["executable_paths"]["exe_path"] == "/games/loose/Play.sh"
 
 
+def test_atlas_reader_rejects_other_game_databases(tmp_path):
+    """A database that merely has a games table is not an Atlas library."""
+    source = tmp_path / "other.db"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE games (record_id INTEGER PRIMARY KEY, title TEXT)")
+    conn.executemany(
+        "INSERT INTO games (record_id, title) VALUES (?, ?)",
+        [(1, "First local game"), (2, "Second local game")],
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="not an Atlas library"):
+        read_external_library("atlas", str(source))
+
+
 # ---------------------------------------------------------------------------
 # f69 reader
 # ---------------------------------------------------------------------------
@@ -947,6 +999,24 @@ def test_f69_import_creates_games_with_collections(tmp_path, _host_paths):
     imported = games["f69 Game"]
     assert imported["play_status"] == "Playing"
     assert imported["collections"] == ["Backlog", "Favorites"]
+
+
+def test_import_succeeds_when_collection_registration_fails(
+    tmp_path, monkeypatch, _host_paths
+):
+    """Games are already saved; a collection registry failure is not fatal."""
+    from core import database
+
+    source = tmp_path / "f69.db"
+    _write_f69_db(source, tmp_path / "games")
+
+    def fail(name, game_id=None):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(database, "create_collection", fail)
+    result = import_external_library("f69", str(source))
+    assert result["created"] == 2
+    assert {game["title"] for game in get_all_games()} == {"f69 Game", "My Custom"}
 
 
 def test_locate_f69_library_uses_xdg_data_home(tmp_path, monkeypatch):

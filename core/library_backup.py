@@ -133,6 +133,9 @@ PATH_SETTINGS_KEYS = (
     "download_detection_enabled",
     "sandboxie_custom_path",
 )
+BOOLEAN_SETTINGS_KEYS = frozenset(
+    {"enable_logging", "download_detection_enabled", "sandbox_new_games"}
+)
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
 
@@ -840,17 +843,21 @@ def _match_imported_game(
                 "candidate_ids": [game["id"] for game in fallback_matches],
             }
 
-    if title_key and not developer_key and not exe_key and not sync:
-        # The record carries no identity beyond its title (for example an export
-        # without executable paths). Match it when exactly one local game has
-        # that title so re-importing never duplicates the game. Local games with
-        # their own thread URL or developer are never merged on title alone.
+    if title_key and not developer_key and not sync:
+        # The record carries no usable identity beyond its title (for example an
+        # export without executable paths), or its executable matches no local
+        # game while the same-title local copies have none either (for example a
+        # game created by an import that left executable paths unchecked). Match
+        # it when exactly one local game has that title so re-importing never
+        # duplicates the game. Local games with their own thread URL, developer
+        # or a different executable are never merged on title alone.
         title_matches = [
             game
             for game in local_games
             if _normalize_identity_text(game.get("title")) == title_key
             and not _coerce_text(game.get("f95_url")).strip()
             and not _coerce_text(game.get("developer")).strip()
+            and (not exe_key or not _coerce_text(game.get("exe_path")).strip())
         ]
         if len(title_matches) == 1:
             return {
@@ -919,6 +926,17 @@ def _plan_cover_files(
         else:
             covers[id(item)] = path
     return covers
+
+
+def _discard_cover_files(names: Sequence[str]) -> None:
+    """Delete cover files without letting a locked file mask the import result."""
+    from core.game_covers import delete_cover_file
+
+    for name in names:
+        try:
+            delete_cover_file(name)
+        except OSError as exc:
+            print(f"[wLib] Failed to delete cover file {name!r}: {exc}")
 
 
 def _path_warning(
@@ -1365,17 +1383,22 @@ def _coerce_setting_value(key: str, raw: object) -> str:
     Exports store every setting as TEXT (JSON-encoded for lists). Foreign
     backups may use native JSON types instead: lists/dicts must be re-encoded
     as JSON (``_coerce_text`` would join a list with ", " and corrupt
-    ``collections`` etc.), and booleans must use the lowercase "true"/"false"
-    strings the app reads (``str(True)`` is "True").
+    ``collections`` etc.), and booleans must use the strings the app reads
+    (``str(True)`` is "True", and the notification toggle wants "on"/"off").
     """
-    if isinstance(raw, bool):
-        return "true" if raw else "false"
     if isinstance(raw, (list, dict)):
         return json.dumps(raw, ensure_ascii=False)
-    if key in ("enable_logging", "download_detection_enabled") and isinstance(raw, str):
-        lowered = raw.strip().lower()
-        if lowered in ("true", "false"):
-            return lowered
+    if key in BOOLEAN_SETTINGS_KEYS:
+        return "true" if _coerce_bool(raw) else "false"
+    if key == "update_notifications":
+        if isinstance(raw, bool | int | float):
+            return "on" if _coerce_bool(raw) else "off"
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered in ("on", "true", "1", "yes"):
+                return "on"
+            if lowered in ("off", "false", "0", "no"):
+                return "off"
     return _coerce_text(raw)
 
 
@@ -1819,16 +1842,10 @@ def apply_library_backup(
             conn.commit()
         except Exception:
             conn.rollback()
-            from core.game_covers import delete_cover_file
-
-            for name in copied_covers:
-                delete_cover_file(name)
+            _discard_cover_files(copied_covers)
             raise
 
-    from core.game_covers import delete_cover_file
-
-    for name in replaced_covers:
-        delete_cover_file(name)
+    _discard_cover_files(replaced_covers)
     if deleted > 0:
         try:
             from core.game_attachments import prune_orphan_attachments
@@ -1953,7 +1970,13 @@ def import_external_library(
     backup, stats = read_external_library(source, path)
     result = apply_library_backup(backup, _external_import_options(options), source_covers=True)
     if SECTION_USER_STATE in _coerce_sequence(result.get("selected_sections")):
-        _register_imported_collections(backup)
+        try:
+            _register_imported_collections(backup)
+        except Exception as exc:
+            # The games are already committed; failing the whole call here would
+            # report an import that happened as failed. A later import retries
+            # the registry, and membership stays stored in the meantime.
+            print(f"[wLib] Failed to register imported collections: {exc}")
     skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))
     result["skipped"] = int(str(result.get("skipped", 0))) + skipped_no_identity
     result["skipped_no_identity"] = skipped_no_identity
