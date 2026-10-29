@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import os
 import subprocess
 import sys
 import threading
@@ -2010,7 +2011,7 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
         return str(path).replace("\\", "/").endswith("lunarengine-x86_64.exe")
 
     game_proc = MagicMock(pid=111)
-    game_proc.poll.return_value = 0
+    game_proc.poll.return_value = None
     ce_proc = MagicMock(pid=222)
     popen_calls: list[list[str]] = []
     waited: list[bool] = []
@@ -2040,6 +2041,7 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
     with (
         patch("os.path.exists", side_effect=exists),
         patch("os.path.isdir", return_value=False),
+        patch("os.killpg", side_effect=ProcessLookupError()),
         patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
         patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
         patch("os.makedirs", return_value=None),
@@ -3030,3 +3032,58 @@ def test_windows_rejects_linux_launch_mode_before_sandbox_probe(monkeypatch):
             "/games/game.sh", launch_mode="wine_proton", game_id=1
         )
     assert missing["code"] == "unsupported_platform"
+
+
+def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    ce_dir = tmp_path / "ce"
+    ce_dir.mkdir()
+    (ce_dir / "lunarengine-x86_64.exe").write_bytes(b"MZ")
+    game_proc = MagicMock(pid=111)
+    game_proc.poll.return_value = None
+    ce_proc = MagicMock(pid=222)
+    popen_calls: list[list[str]] = []
+    real_exists = os.path.exists
+    ce_exe = str(ce_dir / "lunarengine-x86_64.exe")
+
+    def exists(path):
+        if str(path) in ("/games/game.exe", ce_exe):
+            return True
+        return real_exists(path)
+
+    def fake_popen(cmd, **_kwargs):
+        popen_calls.append([str(part) for part in cmd])
+        return game_proc if len(popen_calls) == 1 else ce_proc
+
+    threads: list[object] = []
+
+    def fake_thread(*, target, daemon):
+        assert daemon is True
+        threads.append(target)
+        return MagicMock()
+
+    with (
+        patch("os.path.exists", side_effect=exists),
+        patch("os.access", return_value=True),
+        patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "false" if key == "enable_logging" else "",
+        ),
+        patch("subprocess.Popen", side_effect=fake_popen),
+        patch("threading.Thread", side_effect=fake_thread),
+    ):
+        launcher = Launcher()
+        assert launcher.launch(
+            "/games/game.exe", auto_inject_ce=True, game_id=7
+        )["success"]
+        # The game exits and leaves the running registry before the delayed
+        # Cheat Engine injection runs.
+        game_proc.poll.return_value = 0
+        with launcher._running_lock:
+            del launcher._running[7]
+        with patch("core.launcher.time.sleep", lambda _seconds: None):
+            threads[0]()
+
+    assert len(popen_calls) == 1

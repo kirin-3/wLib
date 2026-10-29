@@ -1105,6 +1105,14 @@ class Launcher:
                     entry.log_file = log_file
                 if is_wine_executable and run_ce:
                     # Spawn CE in a background thread after a delay
+                    def game_still_running() -> bool:
+                        if self.shutting_down:
+                            return False
+                        if game_id is not None:
+                            with self._running_lock:
+                                return self._running.get(game_id) is entry
+                        return game_proc.poll() is None
+
                     def inject_ce():
                         import time
 
@@ -1112,9 +1120,11 @@ class Launcher:
                             "Waiting 5 seconds for game to initialize before attaching Cheat Engine..."
                         )
                         time.sleep(5)
+                        if not game_still_running():
+                            return
 
                         ce_cmd = prepare_ce_command()
-                        if ce_cmd:
+                        if ce_cmd and game_still_running():
                             ce_proc = subprocess.Popen(
                                 host_command(ce_cmd, env=env_vars),
                                 env=env_vars,
