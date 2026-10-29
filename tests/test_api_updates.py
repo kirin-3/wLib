@@ -3703,7 +3703,7 @@ def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_
     assert result["success"] is True
     assert captured, "expected winetricks to run"
     first = captured[0]
-    assert first[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    assert first[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
     assert "--" in first
     assert any(part.startswith("--env=WINEPREFIX=") for part in first)
     assert (

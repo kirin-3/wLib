@@ -1915,7 +1915,7 @@ def test_flatpak_wine_launch_uses_host_spawn_with_supervisor(monkeypatch):
     ):
         assert Launcher().launch("/tmp/game.exe", game_id=7)["success"] is True
     argv = popen.call_args.args[0]
-    assert argv[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    assert argv[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
     assert "--" in argv
     inner = argv[argv.index("--") + 1 :]
     assert inner[0] == "sh"

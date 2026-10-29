@@ -172,6 +172,11 @@ def unsupported_on_host(feature: str) -> dict[str, object]:
 
 FLATPAK_INFO_PATH = "/.flatpak-info"
 
+# PyInstaller points LD_LIBRARY_PATH at the bundled libraries. flatpak-spawn is
+# the runtime's binary, and the bundle's older libmount makes its GIO fail to
+# load, so the variable must not reach it. The host command never sees it.
+_FLATPAK_SPAWN = ("env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host")
+
 # `kill -0 $g` covers the window before the child has called setsid (no group
 # yet). The trap escalates to SIGKILL on the host because flatpak-spawn cannot
 # forward the sandbox-side SIGKILL from Launcher.stop().
@@ -215,8 +220,7 @@ def host_which(name: str) -> str | None:
     try:
         completed = subprocess.run(
             [
-                "flatpak-spawn",
-                "--host",
+                *_FLATPAK_SPAWN,
                 "sh",
                 "-lc",
                 'PATH="$PATH:$HOME/.local/bin:$HOME/.nix-profile/bin:'
@@ -252,8 +256,8 @@ def host_command(
     """Prefix `cmd` so it runs on the host when inside Flatpak (design D4/D5).
 
     Outside Flatpak the command is returned unchanged. Inside, the result is
-    `flatpak-spawn --host --watch-bus [--directory=cwd] [--env=K=V ...] --
-    <cmd>`, where only env vars that differ from `os.environ` are passed and
+    `env -u LD_LIBRARY_PATH flatpak-spawn --host --watch-bus [--directory=cwd]
+    [--env=K=V ...] -- <cmd>`, where only env vars that differ from `os.environ` are passed and
     sandbox-only vars are never forwarded. With `supervise=True` the host-side
     command is wrapped in a small `sh`/`setsid` supervisor so process-group
     tracking keeps working across the sandbox boundary.
@@ -264,7 +268,7 @@ def host_command(
     inner: list[str] = base
     if supervise:
         inner = ["sh", "-c", _HOST_SUPERVISOR_SCRIPT, "sh", *base]
-    argv: list[str] = ["flatpak-spawn", "--host", "--watch-bus"]
+    argv: list[str] = [*_FLATPAK_SPAWN, "--watch-bus"]
     if cwd is not None:
         argv.append(f"--directory={cwd}")
     if env:

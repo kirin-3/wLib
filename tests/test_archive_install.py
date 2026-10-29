@@ -1231,7 +1231,7 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     # Inside Flatpak the extractor runs on the host.
     _simulate_flatpak_archive(monkeypatch, enabled=True)
     assert ai.extract_with_tool("/usr/bin/7z", archive, str(staging)) == 1
-    assert calls[-1][:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+    assert calls[-1][:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
     sep = calls[-1].index("--")
     inner = calls[-1][sep + 1 :]
     assert inner[0] == "/usr/bin/7z"
@@ -1274,7 +1274,7 @@ def test_flatpak_tool_execution_for_listing_extraction_and_size(
             assert "flatpak-spawn" not in argv
             assert kwargs["env"] is None
         else:
-            assert argv[:3] == ["flatpak-spawn", "--host", "--watch-bus"]
+            assert argv[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
             assert argv[argv.index("--") + 1] == tool
             assert "--env=WLIB_TEST=host" in argv
             assert kwargs["env"] == {"WLIB_TEST": "host"}
