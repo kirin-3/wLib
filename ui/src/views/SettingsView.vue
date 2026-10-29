@@ -117,6 +117,11 @@ const systemDeps = ref<SystemDepsCommandResponse | null>(null);
 const copiedCommand = ref(false);
 const saveError = ref("");
 const settingsLoaded = ref(false);
+const settingsLoading = ref(false);
+const settingsLoadError = ref("");
+// The form as it was before the first settings read. Keeping it across failed
+// attempts lets Retry preserve edits typed after that first attempt.
+const settingsLoadBaseline = ref<ReturnType<typeof formValues> | null>(null);
 const platformCapabilities = ref<PlatformCapabilities>({
   ...CONSERVATIVE_PLATFORM_CAPABILITIES,
 });
@@ -326,6 +331,16 @@ const toggleLogging = async () => {
 };
 
 const loadSettings = async () => {
+  if (settingsLoading.value) return;
+  settingsLoading.value = true;
+  settingsLoadError.value = "";
+  // Values typed before the settings read lands must survive it, like edits
+  // typed during a save. Keep them and mark them unsaved instead of replacing
+  // them with the persisted values. A failed attempt keeps the original
+  // baseline so Retry can still tell those edits apart from the defaults.
+  const beforeLoad = settingsLoadBaseline.value ?? formValues();
+  if (!settingsLoadBaseline.value) settingsLoadBaseline.value = beforeLoad;
+  let settingsApplied = false;
   try {
     platformCapabilities.value = await loadPlatformCapabilities();
     // Read the GE-Proton status before the settings snapshot: a download that
@@ -336,7 +351,13 @@ const loadSettings = async () => {
       : null;
     const data = await api.getSettings();
     if (data) {
+      const editsDuringLoad = formValuesChangedSince(formValues(), beforeLoad);
       applySettings(data);
+      if (Object.keys(editsDuringLoad).length > 0) {
+        applyFormValues({ ...formValues(), ...editsDuringLoad });
+      }
+      settingsLoadBaseline.value = null;
+      settingsApplied = true;
     }
 
     if (supportsLinuxRuntimes.value) {
@@ -368,8 +389,18 @@ const loadSettings = async () => {
     }
   } catch (e) {
     console.error("Failed to load settings", e);
+    // A later failure (runners, install status, system deps) leaves the loaded
+    // form valid. Only a read that never produced the settings makes saving
+    // the default/empty form dangerous.
+    if (!settingsApplied) {
+      settingsLoadError.value =
+        "Could not load settings: " +
+        (e instanceof Error ? e.message : String(e)) +
+        ". Retry before changing them.";
+    }
   } finally {
     settingsLoaded.value = true;
+    settingsLoading.value = false;
   }
 };
 
@@ -687,7 +718,7 @@ watch([protonPath, prefixPath], () => {
 });
 
 const saveSettings = async () => {
-  if (saving.value) return;
+  if (saving.value || settingsLoading.value || settingsLoadError.value) return;
   statusError.value = validateCustomPlayStatuses(customStatuses.value);
   if (statusError.value) return;
 
@@ -894,6 +925,24 @@ const browseUrm = async () => {
         Configure launch paths and application behavior. Toggles save right away.
       </p>
     </header>
+
+    <div
+      v-if="settingsLoadError"
+      class="settings-card rounded-xl p-4 mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+      role="alert"
+    >
+      <p class="copyable-feedback text-sm" style="color: var(--danger-text)">
+        {{ settingsLoadError }}
+      </p>
+      <button
+        type="button"
+        class="settings-btn shrink-0 disabled:opacity-50"
+        :disabled="settingsLoading"
+        @click="loadSettings"
+      >
+        {{ settingsLoading ? "Retrying..." : "Retry" }}
+      </button>
+    </div>
 
     <div class="space-y-6">
       <!-- General -->
@@ -1477,7 +1526,7 @@ const browseUrm = async () => {
                 Browse
               </button>
             </div>
-            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="file" />
+            <PathStatus :path="rpgmakerLinuxRunnerPath" kind="runner" />
 
             <p
               class="copyable-feedback text-xs"
@@ -1698,12 +1747,12 @@ const browseUrm = async () => {
           </button>
           <button
             @click="saveSettings"
-            :disabled="saving"
+            :disabled="saving || settingsLoading || !!settingsLoadError"
             class="ui-action-btn px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-wait"
             style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
           >
             <IconDeviceFloppyFilled class="ui-action-icon" />
-            {{ saving ? "Saving..." : "Save Changes" }}
+            {{ settingsLoading ? "Loading..." : saving ? "Saving..." : "Save Changes" }}
           </button>
         </div>
       </div>

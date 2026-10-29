@@ -24,7 +24,6 @@ async function choose(swatch: TagSwatch | null) {
   catch (error) { notifyError(error instanceof Error ? error.message : String(error), "Could not save tag color"); }
 }
 function keydown(event: KeyboardEvent) {
-  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
   const moves: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 4, ArrowUp: -4 };
   if (event.key in moves || event.key === "Home" || event.key === "End") {
     event.preventDefault();
@@ -32,7 +31,16 @@ function keydown(event: KeyboardEvent) {
       : (active.value + (moves[event.key] || 0) + options.length) % options.length;
     buttons()[active.value]?.focus();
   }
-  if (event.key === "Tab") close();
+}
+// The picker is a popup over the library or the game modal, but it is not its
+// own modal layer. Handle Escape and Tab at the document capture phase so they
+// close the picker even after a click leaves focus on the document, instead of
+// reaching the modal keyboard handler and closing the window behind it.
+function captureKeydown(event: KeyboardEvent) {
+  if (event.key !== "Escape" && event.key !== "Tab") return;
+  event.preventDefault();
+  event.stopPropagation();
+  close();
 }
 function outside(event: PointerEvent) {
   if (event.target instanceof Node && !panel.value?.contains(event.target)) close(false);
@@ -44,9 +52,13 @@ onMounted(async () => {
   left.value = Math.max(8, Math.min(rect.left, window.innerWidth - (bounds?.width || 280) - 8));
   top.value = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - (bounds?.height || 200) - 8));
   buttons()[active.value]?.focus();
+  document.addEventListener("keydown", captureKeydown, true);
   document.addEventListener("pointerdown", outside, true);
 });
-onBeforeUnmount(() => document.removeEventListener("pointerdown", outside, true));
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", captureKeydown, true);
+  document.removeEventListener("pointerdown", outside, true);
+});
 </script>
 
 <template>

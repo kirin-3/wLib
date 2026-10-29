@@ -237,7 +237,7 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 | Export destination | parent |
 | Settings Wine prefix, per-game custom prefix | dir |
 | Settings Proton / Wine path | runner |
-| Settings RPGMaker runner | file |
+| Settings RPGMaker runner | runner |
 
 ## Sandbox controls
 

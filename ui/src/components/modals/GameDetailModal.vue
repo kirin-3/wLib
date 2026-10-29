@@ -629,7 +629,6 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (open) {
-      platformCapabilities.value = await loadPlatformCapabilities();
       availableRunners.value = [];
       runnersLoaded.value = false;
       loadingRunners.value = false;
@@ -642,14 +641,20 @@ watch(
           collectionOptions.value = collections;
         })
         .catch(console.error);
-      const loaders = [loadExecutableModifiedTime(), loadLaunchTargets(), loadGameExtras()];
-      if (platformCapabilities.value.cheat_engine_injection) {
-        loaders.push(loadCheatEngineStatus());
-      } else {
-        ceInstalled.value = false;
-      }
-      if (platformCapabilities.value.rpgmaker_linux) {
-        loaders.push(loadRpgmakerLinuxRunnerStatus());
+      // Start every read that doesn't depend on the platform at once. The
+      // capability check only decides which controls are shown and gates the
+      // RPGMaker runner status; it must not delay the Cheat Engine check.
+      const loaders = [
+        loadExecutableModifiedTime(),
+        loadLaunchTargets(),
+        loadGameExtras(),
+        loadCheatEngineStatus(),
+      ];
+      void Promise.all(loaders);
+      const capabilities = await loadPlatformCapabilities();
+      platformCapabilities.value = capabilities;
+      if (capabilities.rpgmaker_linux) {
+        void loadRpgmakerLinuxRunnerStatus();
       } else {
         syncRpgmakerLinuxRunnerStatus({
           available: false,
@@ -659,7 +664,6 @@ watch(
           error: "RPGMaker Linux is unavailable on this platform.",
         });
       }
-      void Promise.all(loaders);
     } else {
       executableModifiedRequestId.value++;
       engineMenuOpen.value = false;
@@ -715,34 +719,36 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => [props.modelValue, showWineProtonControls.value] as const,
-  async ([open, showControls]) => {
-    if (
-      !platformCapabilities.value.wine_proton ||
-      !open ||
-      !showControls ||
-      runnersLoaded.value ||
-      loadingRunners.value
-    ) {
-      return;
+// Keep the modal open cheap: the runner list is fetched the first time the
+// user needs it, not for every game detail open.
+const loadAvailableRunners = async () => {
+  if (
+    !platformCapabilities.value.wine_proton ||
+    runnersLoaded.value ||
+    loadingRunners.value
+  ) {
+    return;
+  }
+  loadingRunners.value = true;
+  try {
+    const res = await api.getAvailableRunners();
+    if (res && res.success === false) {
+      console.error("Failed to get runners:", res.error);
+    } else if (res?.success) {
+      availableRunners.value = res.runners || [];
+      runnersLoaded.value = true;
     }
-    loadingRunners.value = true;
-    try {
-      const res = await api.getAvailableRunners();
-      if (res && res.success === false) {
-        console.error("Failed to get runners:", res.error);
-      } else if (res?.success) {
-        availableRunners.value = res.runners || [];
-        runnersLoaded.value = true;
-      }
-    } catch (e) {
-      console.error("Failed to get runners", e);
-    } finally {
-      loadingRunners.value = false;
-    }
-  },
-);
+  } catch (e) {
+    console.error("Failed to get runners", e);
+  } finally {
+    loadingRunners.value = false;
+  }
+};
+
+// Only an actual user toggle loads the list; seeding a stored value does not.
+const onCustomPrefixToggle = () => {
+  if (useCustomPrefix.value) void loadAvailableRunners();
+};
 
 const selectEngine = (value: EngineOption) => {
   engine.value = value;
@@ -2410,6 +2416,7 @@ const removeAttachment = async (name: string) => {
                     v-model="useCustomPrefix"
                     aria-label="Use Custom Wine Prefix"
                     class="sr-only peer"
+                    @change="onCustomPrefixToggle"
                   />
                   <div class="ui-toggle"></div>
                 </label>
@@ -2417,7 +2424,7 @@ const removeAttachment = async (name: string) => {
 
               <div class="mt-3">
                 <label for="game-runner" class="modal-label">Runner (Wine / Proton)</label>
-                <select id="game-runner" v-model="protonVersion" class="modal-input w-full">
+                <select id="game-runner" v-model="protonVersion" class="modal-input w-full" @focus="loadAvailableRunners">
                   <option value="">{{ loadingRunners ? 'Loading runners...' : '(Use Global Default)' }}</option>
                   <option v-for="runner in runnerOptions" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
                 </select>
