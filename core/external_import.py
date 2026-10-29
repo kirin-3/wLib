@@ -90,6 +90,25 @@ EXTERNAL_IMPORT_FILE_FILTERS = {
 }
 
 F95CHECKER_OS_KEYS = {"windows": ("1", "0", "windows"), "linux": ("2", "linux")}
+#: Columns that identify F95Checker's games table. Other apps (including wLib's
+#: own database) also have a ``games`` table, so table existence alone is not
+#: enough to accept a source file.
+F95CHECKER_GAME_MARKERS = frozenset(
+    {
+        "custom",
+        "url",
+        "installed",
+        "finished",
+        "archived",
+        "executables",
+        "last_launched",
+        "added_on",
+    }
+)
+ATLAS_GAME_COLUMNS = frozenset({"record_id"})
+ATLAS_GAME_MARKERS = frozenset(
+    {"creator", "playstate", "selected_version_id", "total_playtime", "last_played_r"}
+)
 XLIBRARY_FAMILY = "library.games"
 
 XLIBRARY_COMPLETION_MAP = {
@@ -458,6 +477,12 @@ def read_f95checker_library(path: str) -> tuple[dict[str, object], dict[str, obj
                     "The file is not an F95Checker library.", "invalid_source"
                 )
             columns = table_columns(conn, "games")
+            if "name" not in columns or not F95CHECKER_GAME_MARKERS.intersection(
+                columns
+            ):
+                raise _validation_error(
+                    "The file is not an F95Checker library.", "invalid_source"
+                )
             base_dir = _f95checker_base_dir(conn)
             try:
                 rows = _fetch_rows(conn, "SELECT * FROM games")
@@ -998,7 +1023,14 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
         raise _validation_error("Atlas database was not found.", "file_not_found")
     try:
         with open_snapshot(path) as conn:
-            if not table_exists(conn, "games"):
+            columns = (
+                table_columns(conn, "games")
+                if table_exists(conn, "games")
+                else set[str]()
+            )
+            if not ATLAS_GAME_COLUMNS.issubset(
+                columns
+            ) or not ATLAS_GAME_MARKERS.intersection(columns):
                 raise _validation_error(
                     "The file is not an Atlas library.", "invalid_source"
                 )

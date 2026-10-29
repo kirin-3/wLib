@@ -393,8 +393,10 @@ def test_parse_timestamp_handles_seconds_millis_and_iso():
 def test_sqlite_snapshot_leaves_source_untouched(tmp_path):
     source = tmp_path / "db.sqlite3"
     conn = sqlite3.connect(str(source))
-    conn.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT)")
-    conn.execute("INSERT INTO games VALUES (1, 'Game')")
+    conn.execute(
+        "CREATE TABLE games (id INTEGER PRIMARY KEY, name TEXT, custom INTEGER)"
+    )
+    conn.execute("INSERT INTO games VALUES (1, 'Game', 0)")
     conn.commit()
     conn.close()
     before_bytes = source.read_bytes()
@@ -559,6 +561,21 @@ def test_f95checker_reader_rejects_wrong_file(tmp_path):
     source = tmp_path / "db.sqlite3"
     conn = sqlite3.connect(str(source))
     conn.execute("CREATE TABLE unrelated (id INTEGER)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="not an F95Checker library"):
+        read_external_library("f95checker", str(source))
+
+
+def test_f95checker_reader_rejects_other_game_databases(tmp_path):
+    """A database that merely has a games table is not an F95Checker library."""
+    source = tmp_path / "wlib-like.db"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, title TEXT)")
+    conn.executemany(
+        "INSERT INTO games (id, title) VALUES (?, ?)",
+        [(1, "First local game"), (2, "Second local game")],
+    )
     conn.commit()
     conn.close()
     with pytest.raises(Exception, match="not an F95Checker library"):
@@ -790,6 +807,21 @@ def test_atlas_reader_mapping(tmp_path):
     assert "f95_url" not in loose["metadata"]
     assert loose["user_state"]["play_status"] == "Plan to Play"
     assert loose["executable_paths"]["exe_path"] == "/games/loose/Play.sh"
+
+
+def test_atlas_reader_rejects_other_game_databases(tmp_path):
+    """A database that merely has a games table is not an Atlas library."""
+    source = tmp_path / "other.db"
+    conn = sqlite3.connect(str(source))
+    conn.execute("CREATE TABLE games (record_id INTEGER PRIMARY KEY, title TEXT)")
+    conn.executemany(
+        "INSERT INTO games (record_id, title) VALUES (?, ?)",
+        [(1, "First local game"), (2, "Second local game")],
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(Exception, match="not an Atlas library"):
+        read_external_library("atlas", str(source))
 
 
 # ---------------------------------------------------------------------------
