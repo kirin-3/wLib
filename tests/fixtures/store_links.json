@@ -180,6 +180,11 @@
     "id": null
   },
   {
+    "url": "https://[::1]:8080/store/game",
+    "source": "other",
+    "id": "https://[::1]:8080/store/game"
+  },
+  {
     "url": "https://example.com:bad/game",
     "source": null,
     "id": null

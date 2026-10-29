@@ -56,7 +56,10 @@ def parse_store_link(url: str) -> StoreLink | None:
         default_port = (scheme == "http" and port == 80) or (
             scheme == "https" and port == 443
         )
-        netloc = host if port is None or default_port else f"{host}:{port}"
+        # An IPv6 literal needs its brackets in the rebuilt URL; without them
+        # the stored 'other' URL is not a valid address and cannot be opened.
+        netloc_host = f"[{host}]" if ":" in host else host
+        netloc = netloc_host if port is None or default_port else f"{netloc_host}:{port}"
     except ValueError:
         return None
     path = parts.path or "/"
