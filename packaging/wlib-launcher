@@ -8,6 +8,18 @@ APP_DIR="${WLIB_APP_DIR:-$SELF_DIR}"
 LAUNCHER_NAME="${WLIB_LAUNCHER_NAME:-Release}"
 if [ -n "${WLIB_DATA_DIR:-}" ]; then
     DATA_DIR="$WLIB_DATA_DIR"
+    # Match get_data_dir(): expand a leading ~ before using the path.
+    case "$DATA_DIR" in
+        "~") DATA_DIR="$HOME" ;;
+        "~/"*) DATA_DIR="$HOME/${DATA_DIR#\~/}" ;;
+    esac
+    # Resolve a relative path from the caller's directory before the cd below,
+    # so the shell and Python use the same folder. The app directory can be a
+    # read-only AppImage mount, so it is not a usable base.
+    case "$DATA_DIR" in
+        /*) ;;
+        *) DATA_DIR="$PWD/$DATA_DIR" ;;
+    esac
 elif [ -e "/.flatpak-info" ]; then
     # Inside Flatpak keep the library at the host path so users can switch
     # formats without losing their library (design D6). Flatpak exports the

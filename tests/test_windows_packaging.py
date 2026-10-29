@@ -99,3 +99,41 @@ def test_source_smoke_mode_uses_isolated_data_directory(tmp_path):
     assert payload["success"] is True
     assert payload["data_dir"] == str(smoke_data)
     assert (smoke_data / "wlib.db").is_file()
+
+
+def test_smoke_mode_without_data_override_uses_a_temporary_directory(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    local_app_data = tmp_path / "local-app-data"
+    local_app_data.mkdir()
+    env = os.environ.copy()
+    for name in ("WLIB_DATA_DIR", "XDG_DATA_HOME"):
+        env.pop(name, None)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    env["LOCALAPPDATA"] = str(local_app_data)
+
+    process = subprocess.run(
+        [sys.executable, str(REPOSITORY_ROOT / "main.py"), "--smoke-test"],
+        cwd=REPOSITORY_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    output = process.stdout + process.stderr
+    payloads = [
+        json.loads(line)
+        for line in output.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert payloads
+    payload = payloads[-1]
+    data_dir = Path(str(payload["data_dir"]))
+
+    assert data_dir != home / ".local" / "share" / "wLib"
+    assert data_dir != local_app_data / "wLib"
+    assert not (home / ".local" / "share" / "wLib").exists()
+    assert not (local_app_data / "wLib").exists()

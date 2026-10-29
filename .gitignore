@@ -26,6 +26,8 @@ node_modules/
 .pnp/
 .pnp.js
 .venv/
+# wlib.sh creates its own environment here on writable checkouts.
+venv/
 
 # Environment variables
 .env

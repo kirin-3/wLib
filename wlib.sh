@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 if [ -n "${WLIB_DATA_DIR:-}" ]; then
     DATA_DIR="$WLIB_DATA_DIR"
+    # Match get_data_dir(): expand a leading ~ before using the path.
+    case "$DATA_DIR" in
+        "~") DATA_DIR="$HOME" ;;
+        "~/"*) DATA_DIR="$HOME/${DATA_DIR#\~/}" ;;
+    esac
 else
     DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wLib"
     # Same fallback as get_data_dir(): keep a pre-XDG library. Resolve before the
@@ -25,16 +30,20 @@ else
 fi
 PYTHON=""
 
-# Find a suitable Python 3.x, preferring the supported 3.12 toolchain.
-for candidate in python3.12 python3.13 python3.14 python3.11 python3; do
-    if command -v "$candidate" &>/dev/null; then
+# Find a supported Python (3.12 or newer, matching CI and releases). Older
+# interpreters cannot import modules such as typing.override.
+for candidate in python3.12 python3.13 python3.14 python3; do
+    if ! command -v "$candidate" &>/dev/null; then
+        continue
+    fi
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
         PYTHON="$candidate"
         break
     fi
 done
 
 if [ -z "$PYTHON" ]; then
-    echo "❌ Error: No Python 3 installation found."
+    echo "❌ Error: No supported Python installation found (3.12 or newer)."
     echo "   Please install Python 3.12+ and the venv module using your system package manager."
     exit 1
 fi
@@ -75,12 +84,12 @@ if [ ! -d "$SCRIPT_DIR/ui/dist" ]; then
     if command -v npm &>/dev/null; then
         echo "🔨 Building frontend..."
         cd "$SCRIPT_DIR/ui"
-        npm install --silent
+        npm ci --silent
         npm run build
         cd "$SCRIPT_DIR"
     else
         echo "⚠️  Warning: npm not found, cannot build frontend."
-        echo "   Install Node.js 22.12+ or pre-build with: cd ui && npm install && npm run build"
+        echo "   Install Node.js 22.12+ or pre-build with: cd ui && npm ci && npm run build"
     fi
 fi
 

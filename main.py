@@ -11,19 +11,29 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import IO, TYPE_CHECKING, Callable, Protocol, cast, override
 from collections.abc import Sequence
 
-from core.api import APP_VERSION, Api
-from core.app_log import setup_app_log
-from core.diagnostics import record_renderer_stage
-from core.f95zone import extract_thread_id, normalize_thread_url
-from core.host_platform import (
+# --smoke-test must never touch the user's real library. core.database resolves
+# the data directory at import time, so pick an isolated temporary one before
+# importing it when the caller did not provide WLIB_DATA_DIR.
+_smoke_data_dir = ""
+if "--smoke-test" in sys.argv and not (os.environ.get("WLIB_DATA_DIR") or "").strip():
+    _smoke_data_dir = tempfile.mkdtemp(prefix="wlib-smoke-")
+    os.environ["WLIB_DATA_DIR"] = _smoke_data_dir
+
+from core.api import APP_VERSION, Api  # noqa: E402
+from core.app_log import setup_app_log  # noqa: E402
+from core.diagnostics import record_renderer_stage  # noqa: E402
+from core.f95zone import extract_thread_id, normalize_thread_url  # noqa: E402
+from core.host_platform import (  # noqa: E402
     get_cache_root,
     get_data_dir,
     get_legacy_browser_dirs,
+    is_linux,
 )
 
 APP_DATA_DIR = get_data_dir()
@@ -145,6 +155,20 @@ def get_webview_storage_path(*, create: bool = True) -> str:
 
 
 def get_packaged_webview_profile_cache_paths() -> list[str]:
+    if is_linux():
+        # Qt puts the cache under $XDG_CACHE_HOME/<application name> on Linux.
+        # PyWebView leaves Qt's application name as the executable basename
+        # (wlib-bin in packaged builds), so the profile cache is
+        # ~/.cache/wlib-bin/QtWebEngine/pywebview, not ~/.cache/QtWebEngine.
+        application_name = os.path.splitext(os.path.basename(sys.executable))[0]
+        return [
+            os.path.join(
+                get_cache_root(),
+                application_name,
+                QTWEBENGINE_CACHE_DIR_NAME,
+                PYWEBVIEW_QT_PROFILE_NAME,
+            ),
+        ]
     return [
         os.path.join(get_qtwebengine_cache_root(), PYWEBVIEW_QT_PROFILE_NAME),
     ]
@@ -258,14 +282,27 @@ def configure_ssl_certificates() -> str | None:
     )
     existing_cert_file = (os.environ.get("SSL_CERT_FILE") or "").strip()
     existing_requests_bundle = (os.environ.get("REQUESTS_CA_BUNDLE") or "").strip()
+    existing_curl_bundle = (os.environ.get("CURL_CA_BUNDLE") or "").strip()
     selected_cert_file: str | None = None
 
-    if existing_cert_file and os.path.isfile(existing_cert_file):
+    # A stale path in one of these variables overrides OpenSSL's built-in CA
+    # locations (a missing SSL_CERT_FILE leaves zero trusted roots), so drop
+    # values that do not point at a readable file instead of only logging them.
+    for env_name, value in (
+        ("SSL_CERT_FILE", existing_cert_file),
+        ("REQUESTS_CA_BUNDLE", existing_requests_bundle),
+        ("CURL_CA_BUNDLE", existing_curl_bundle),
+    ):
+        if value and not os.path.isfile(value):
+            print(f"[wLib] Ignoring missing {env_name}: {value}")
+            _ = os.environ.pop(env_name, None)
+    existing_cert_file = (os.environ.get("SSL_CERT_FILE") or "").strip()
+    existing_requests_bundle = (os.environ.get("REQUESTS_CA_BUNDLE") or "").strip()
+    existing_curl_bundle = (os.environ.get("CURL_CA_BUNDLE") or "").strip()
+
+    if existing_cert_file:
         selected_cert_file = existing_cert_file
     else:
-        if existing_cert_file:
-            print(f"[wLib] Ignoring missing SSL_CERT_FILE: {existing_cert_file}")
-
         certifi_path = ""
         try:
             certifi_module = importlib.import_module("certifi")
@@ -279,6 +316,7 @@ def configure_ssl_certificates() -> str | None:
 
         candidate_paths = [
             existing_requests_bundle,
+            existing_curl_bundle,
             bundled_certifi_path,
             certifi_path,
             "/etc/ssl/certs/ca-certificates.crt",
@@ -314,6 +352,7 @@ def configure_qt_runtime_environment() -> dict[str, str]:
 
     override_platform = (os.environ.get("WLIB_QPA_PLATFORM") or "").strip()
     existing_platform = (os.environ.get("QT_QPA_PLATFORM") or "").strip()
+    linux_host = is_linux()
 
     if override_platform:
         os.environ["QT_QPA_PLATFORM"] = override_platform
@@ -322,16 +361,17 @@ def configure_qt_runtime_environment() -> dict[str, str]:
     elif existing_platform:
         selected_platform = existing_platform
         source = "existing"
-    elif session_type == "wayland" or wayland_display:
+    elif linux_host and (session_type == "wayland" or wayland_display):
         selected_platform = ""
         source = "auto-wayland"
-    elif session_type == "x11" or display:
+    elif linux_host and (session_type == "x11" or display):
         selected_platform = "xcb"
         os.environ["QT_QPA_PLATFORM"] = selected_platform
         source = "auto-x11"
     else:
         selected_platform = ""
-        source = "auto-default"
+        # Windows and other hosts keep Qt's native platform selection.
+        source = "auto-default" if linux_host else "auto-native"
 
     platform_label = selected_platform or "<unset>"
     print(
@@ -524,6 +564,20 @@ def _extract_native_renderer_details(
     return details
 
 
+def _strip_url_query(value: object) -> object:
+    # The window URL carries the extension import/open query, which can hold a
+    # game title and F95 URL. Diagnostics must never expose library content.
+    if not isinstance(value, str) or not value:
+        return value
+    from urllib.parse import unquote, urlsplit, urlunsplit
+
+    parsed = urlsplit(value)
+    # Decode the file path too so redact_paths() can match a home folder that
+    # contains spaces or non-ASCII characters (%20, ...).
+    path = unquote(parsed.path) if parsed.scheme == "file" else parsed.path
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 def _probe_browser_renderer(window: RendererDiagnosticsWindow) -> dict[str, object]:
     probe_script = """
 (() => {
@@ -576,7 +630,7 @@ def _probe_browser_renderer(window: RendererDiagnosticsWindow) -> dict[str, obje
     typed_probe_result = cast(dict[str, object], probe_result)
 
     details: dict[str, object] = {
-        "page_location": typed_probe_result.get("location"),
+        "page_location": _strip_url_query(typed_probe_result.get("location")),
         "js_user_agent": typed_probe_result.get("userAgent"),
         "js_hardware_concurrency": typed_probe_result.get("hardwareConcurrency"),
     }
@@ -649,6 +703,18 @@ def load_webview_module() -> WebviewModule | None:
     return webview
 
 
+def start_runtime_renderer_diagnostics() -> None:
+    # PyWebView runs the ``func`` passed to start() on a non-daemon thread and
+    # Python waits for it at exit. The probe waits up to 30 s + 60 s for window
+    # events, so closing the window before the page loads would keep the
+    # process alive for over a minute. Run the probe on a daemon thread.
+    threading.Thread(
+        target=log_runtime_renderer_diagnostics,
+        name="wlib-renderer-diagnostics",
+        daemon=True,
+    ).start()
+
+
 def start_webview(
     webview_module: WebviewModule, *, dev_mode: bool, icon_path: str | None
 ) -> None:
@@ -656,7 +722,7 @@ def start_webview(
 
     if dev_mode:
         webview_module.start(
-            func=log_runtime_renderer_diagnostics,
+            func=start_runtime_renderer_diagnostics,
             gui="qt",
             debug=False,
             http_server=True,
@@ -667,7 +733,7 @@ def start_webview(
         return
 
     webview_module.start(
-        func=log_runtime_renderer_diagnostics,
+        func=start_runtime_renderer_diagnostics,
         gui="qt",
         debug=False,
         http_server=True,
@@ -1258,8 +1324,14 @@ def focus_running_instance() -> bool:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with cast(IO[bytes], opener.open(request, timeout=3)) as response:
-            return "success" in json.loads(response.read())
-    except (OSError, ValueError):
+            payload = cast(object, json.loads(response.read()))
+            return isinstance(payload, dict) and "success" in cast(
+                dict[str, object], payload
+            )
+    except Exception:
+        # A stale or foreign process may hold the port and answer with
+        # something other than HTTP/JSON (BadStatusLine, truncated body, ...).
+        # Treat every failure as "not wLib" so this launch can start normally.
         return False
 
 
@@ -1363,6 +1435,9 @@ def run_packaged_smoke_test() -> int:
         diagnostics["error"] = str(error)
         print(json.dumps(diagnostics, ensure_ascii=False), file=sys.stderr)
         return 1
+    finally:
+        if _smoke_data_dir:
+            shutil.rmtree(_smoke_data_dir, ignore_errors=True)
 
 
 def main() -> None:
@@ -1469,6 +1544,14 @@ def main() -> None:
                 extension_server.server_close()
             except Exception as e:
                 print(f"[wLib] Failed to stop extension HTTP server: {e}")
+        # The UI loop has ended. Stop playtime UI events and write the final
+        # playtime delta before the final library sync can take ten seconds;
+        # atexit already does this, but that is too late for the last sync and
+        # can race a playtime tick against a closed window.
+        try:
+            api.launcher.shutdown()
+        except Exception as e:
+            print(f"[wLib] Failed to flush playtime on shutdown: {e}")
         if library_sync_started:
             api.library_sync.finish(timeout=10)
         # Cleanup Vite server when startup fails or the window closes,
