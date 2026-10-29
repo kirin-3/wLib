@@ -2076,6 +2076,37 @@ def test_import_settings_normalizes_boolean_strings(tmp_path):
     assert api.get_settings()["download_detection_enabled"] is False
 
 
+def test_import_settings_reads_native_booleans(tmp_path):
+    """Native JSON booleans and 0/1 values must keep their meaning."""
+    api = Api()
+    backup_path = write_backup(
+        tmp_path / "native-bools.json",
+        {
+            **base_backup([]),
+            "settings": {
+                "general": {
+                    "enable_logging": 1,
+                    "sandbox_new_games": 1,
+                    "update_notifications": False,
+                },
+                "paths": {"download_detection_enabled": 1},
+            },
+        },
+    )
+
+    result = api.import_library_backup(
+        str(backup_path),
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]},
+    )
+
+    assert result["success"] is True
+    settings = api.get_settings()
+    assert settings["enable_logging"] is True
+    assert settings["download_detection_enabled"] is True
+    assert settings["sandbox_new_games"] is True
+    assert settings["update_notifications"] is False
+
+
 def test_import_merges_new_rows_for_one_thread_under_different_slugs(tmp_path):
     """Copies of one non-local thread under old and new slugs import once."""
     api = Api()

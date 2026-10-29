@@ -133,6 +133,9 @@ PATH_SETTINGS_KEYS = (
     "download_detection_enabled",
     "sandboxie_custom_path",
 )
+BOOLEAN_SETTINGS_KEYS = frozenset(
+    {"enable_logging", "download_detection_enabled", "sandbox_new_games"}
+)
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
 
@@ -1369,17 +1372,22 @@ def _coerce_setting_value(key: str, raw: object) -> str:
     Exports store every setting as TEXT (JSON-encoded for lists). Foreign
     backups may use native JSON types instead: lists/dicts must be re-encoded
     as JSON (``_coerce_text`` would join a list with ", " and corrupt
-    ``collections`` etc.), and booleans must use the lowercase "true"/"false"
-    strings the app reads (``str(True)`` is "True").
+    ``collections`` etc.), and booleans must use the strings the app reads
+    (``str(True)`` is "True", and the notification toggle wants "on"/"off").
     """
-    if isinstance(raw, bool):
-        return "true" if raw else "false"
     if isinstance(raw, (list, dict)):
         return json.dumps(raw, ensure_ascii=False)
-    if key in ("enable_logging", "download_detection_enabled") and isinstance(raw, str):
-        lowered = raw.strip().lower()
-        if lowered in ("true", "false"):
-            return lowered
+    if key in BOOLEAN_SETTINGS_KEYS:
+        return "true" if _coerce_bool(raw) else "false"
+    if key == "update_notifications":
+        if isinstance(raw, bool | int | float):
+            return "on" if _coerce_bool(raw) else "off"
+        if isinstance(raw, str):
+            lowered = raw.strip().lower()
+            if lowered in ("on", "true", "1", "yes"):
+                return "on"
+            if lowered in ("off", "false", "0", "no"):
+                return "off"
     return _coerce_text(raw)
 
 
