@@ -4102,3 +4102,34 @@ def test_ryuugames_only_catalog_update_pass(monkeypatch, enabled):
     else:
         assert status["results"] == []
     assert not get_game(dlsite)["latest_version"]
+
+
+def test_api_launch_game_expands_home_path_before_target_fallback(
+    monkeypatch, tmp_path
+):
+    home = tmp_path / "home"
+    canonical = home / "Games" / "Main.sh"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("#!/bin/sh\n")
+    part2 = tmp_path / "Part2.sh"
+    part2.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    game_id = add_game("Tilde", "~/Games/Main.sh")
+    assert game_id is not None
+    _ = add_game_launch_target(game_id, "Part 2", str(part2))
+
+    api = Api()
+    launched: list[str] = []
+
+    def fake_launch(target_path, *_args, **_kwargs):
+        launched.append(target_path)
+        return {"success": True}
+
+    monkeypatch.setattr(api.launcher, "launch", fake_launch)
+
+    result = api.launch_game(game_id, "~/Games/Main.sh")
+
+    assert result["success"]
+    assert launched == [str(canonical)]

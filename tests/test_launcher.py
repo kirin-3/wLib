@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import os
 import subprocess
 import sys
 import threading
@@ -2010,7 +2011,7 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
         return str(path).replace("\\", "/").endswith("lunarengine-x86_64.exe")
 
     game_proc = MagicMock(pid=111)
-    game_proc.poll.return_value = 0
+    game_proc.poll.return_value = None
     ce_proc = MagicMock(pid=222)
     popen_calls: list[list[str]] = []
     waited: list[bool] = []
@@ -2040,6 +2041,7 @@ def test_cheat_engine_helper_is_reaped(monkeypatch, tmp_path):
     with (
         patch("os.path.exists", side_effect=exists),
         patch("os.path.isdir", return_value=False),
+        patch("os.killpg", side_effect=ProcessLookupError()),
         patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
         patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
         patch("os.makedirs", return_value=None),
@@ -2956,3 +2958,192 @@ def test_companion_sandbox_launch_has_no_wine_context(monkeypatch, tmp_path):
             custom_prefix="/prefix",
         )["success"]
         assert launcher._running[1].wine_context is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX home expansion")
+def test_launch_expands_home_in_executable_path(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    script = home / "Games" / "run.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/sh\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    with (
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch("~/Games/run.sh")
+    assert result["success"], result
+    assert popen.call_args.args[0] == [str(script)]
+
+
+@pytest.mark.parametrize(
+    "other_kill_info",
+    [
+        None,
+        ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix/pfx"}),
+    ],
+)
+def test_stop_skips_wineserver_for_equivalent_prefixes(monkeypatch, other_kill_info):
+    import signal
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(
+        MagicMock(pid=123),
+        ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix-link/pfx"}),
+        prefix="/prefix",
+    )
+    launcher._running[2] = RunningGame(
+        MagicMock(pid=456), other_kill_info, prefix="/prefix"
+    )
+    killpg = MagicMock()
+    monkeypatch.setattr("os.killpg", killpg, raising=False)
+    with patch("subprocess.run") as run, patch("threading.Thread"):
+        assert launcher.stop(1)["success"]
+    run.assert_not_called()
+    killpg.assert_called_with(123, signal.SIGTERM)
+
+
+def test_windows_rejects_linux_launch_mode_before_sandbox_probe(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with (
+        patch("os.path.exists", return_value=True),
+        patch(
+            "core.launcher.game_sandbox.get_sandbox_status",
+            return_value={"status": "missing", "reason": "Sandboxie is unavailable"},
+        ),
+        patch("subprocess.Popen") as popen,
+    ):
+        result = Launcher().launch(
+            r"C:\Games\game.exe",
+            launch_mode="wine_proton",
+            sandbox_enabled=True,
+            game_id=1,
+        )
+    assert result["code"] == "unsupported_platform"
+    popen.assert_not_called()
+
+    # A Linux path imported from another host may no longer exist on Windows;
+    # the mode error still wins so the user knows what to change.
+    with patch("os.path.exists", return_value=False):
+        missing = Launcher().launch(
+            "/games/game.sh", launch_mode="wine_proton", game_id=1
+        )
+    assert missing["code"] == "unsupported_platform"
+
+
+def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    (tmp_path / "data").mkdir()
+    ce_dir = tmp_path / "ce"
+    ce_dir.mkdir()
+    (ce_dir / "lunarengine-x86_64.exe").write_bytes(b"MZ")
+    game_proc = MagicMock(pid=111)
+    game_proc.poll.return_value = None
+    ce_proc = MagicMock(pid=222)
+    popen_calls: list[list[str]] = []
+    real_exists = os.path.exists
+    ce_exe = str(ce_dir / "lunarengine-x86_64.exe")
+
+    def exists(path):
+        if str(path) in ("/games/game.exe", ce_exe):
+            return True
+        return real_exists(path)
+
+    def fake_popen(cmd, **_kwargs):
+        popen_calls.append([str(part) for part in cmd])
+        return game_proc if len(popen_calls) == 1 else ce_proc
+
+    threads: list[object] = []
+
+    def fake_thread(*, target, daemon):
+        assert daemon is True
+        threads.append(target)
+        return MagicMock()
+
+    with (
+        patch("os.path.exists", side_effect=exists),
+        patch("os.access", return_value=True),
+        patch("core.launcher.get_cheat_engine_dir", return_value=str(ce_dir)),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "false" if key == "enable_logging" else "",
+        ),
+        patch("subprocess.Popen", side_effect=fake_popen),
+        patch("threading.Thread", side_effect=fake_thread),
+    ):
+        launcher = Launcher()
+        assert launcher.launch(
+            "/games/game.exe", auto_inject_ce=True, game_id=7
+        )["success"]
+        # The game exits and leaves the running registry before the delayed
+        # Cheat Engine injection runs.
+        game_proc.poll.return_value = 0
+        with launcher._running_lock:
+            del launcher._running[7]
+        with patch("core.launcher.time.sleep", lambda _seconds: None):
+            threads[0]()
+
+    assert len(popen_calls) == 1
+
+
+@pytest.mark.parametrize("proton", [False, True])
+def test_stop_finds_wineserver_beside_a_symlinked_runner(
+    monkeypatch, tmp_path, proton
+):
+    import signal
+
+    if proton:
+        real_dir = tmp_path / "GE-Proton"
+        real_dir.mkdir()
+        runner = real_dir / "proton"
+        server_dir = real_dir / "files" / "bin"
+    else:
+        real_dir = tmp_path / "wine" / "bin"
+        real_dir.mkdir(parents=True)
+        runner = real_dir / "wine"
+        server_dir = real_dir
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    server_dir.mkdir(parents=True, exist_ok=True)
+    wineserver = server_dir / "wineserver"
+    wineserver.write_text("#!/bin/sh\n")
+    wineserver.chmod(0o755)
+    link_dir = tmp_path / "local-bin"
+    link_dir.mkdir()
+    link = link_dir / runner.name
+    link.symlink_to(runner)
+    game = tmp_path / "game.exe"
+    game.write_bytes(b"MZ")
+
+    with (
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("core.launcher.host_which", return_value=None),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "false" if key == "enable_logging" else "",
+        ),
+        patch("subprocess.Popen", return_value=MagicMock(pid=321)),
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        assert launcher.launch(
+            str(game),
+            proton_version=str(link),
+            custom_prefix=str(tmp_path / "prefix"),
+            launch_mode="wine_proton",
+            game_id=1,
+        )["success"]
+        kill_info = launcher._running[1].kill_info
+        assert kill_info is not None
+        assert kill_info[0] == str(wineserver)
+
+        killpg = MagicMock()
+        monkeypatch.setattr("os.killpg", killpg)
+        with patch("subprocess.run") as run, patch("threading.Thread"):
+            assert launcher.stop(1)["success"]
+        assert run.call_args.args[0] == [str(wineserver), "-k"]
+        killpg.assert_called_with(321, signal.SIGTERM)

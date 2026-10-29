@@ -583,17 +583,23 @@ class Launcher:
         with self._running_lock:
             running = self._running.get(game_id)
             proc = running.proc if running is not None else None
-            prefix = (
-                running.kill_info[1].get("WINEPREFIX")
-                if running and running.kill_info
-                else None
-            )
-            # wineserver -k ends every process in the prefix, so spare games that share it.
-            prefix_shared = any(
-                other.kill_info is not None
-                and other.kill_info[1].get("WINEPREFIX") == prefix
+            # wineserver -k ends every process in the prefix, so spare games that
+            # share it. Compare normalized prefixes and include games that have no
+            # resolved wineserver (for example a Proton runner in a directory
+            # without files/bin or dist/bin).
+            def shareable_prefix(entry: RunningGame) -> str:
+                if entry.prefix:
+                    return entry.prefix
+                if entry.kill_info is not None:
+                    return game_sandbox.normalize_prefix(
+                        str(entry.kill_info[1].get("WINEPREFIX") or "")
+                    )
+                return ""
+
+            running_prefix = shareable_prefix(running) if running is not None else ""
+            prefix_shared = bool(running_prefix) and any(
+                other_id != game_id and shareable_prefix(other) == running_prefix
                 for other_id, other in self._running.items()
-                if other_id != game_id and prefix is not None
             )
         if running is None:
             return {
@@ -810,7 +816,22 @@ class Launcher:
                 "error": "Executable path must be a non-empty string",
             }
 
-        exe_path = exe_path.strip()
+        # A leading ~ is accepted in the path fields; expand it before every
+        # existence check so the launcher uses the same path as path checks.
+        exe_path = os.path.expanduser(exe_path.strip())
+        launch_mode = normalize_launch_mode(launch_mode)
+
+        # Reject imported Linux-only modes before path checks or sandbox probing
+        # can return a more confusing error on Windows.
+        if is_windows() and launch_mode != "auto":
+            return {
+                "success": False,
+                "error": (
+                    f"Launch mode '{launch_mode}' is only available on Linux. "
+                    "Choose Auto Detect to launch this game directly on Windows."
+                ),
+                "code": "unsupported_platform",
+            }
 
         if not os.path.exists(exe_path):
             print(f"Error: Executable not found at {exe_path}")
@@ -821,7 +842,6 @@ class Launcher:
         # the Linux compatibility path without rewriting POSIX paths.
         path_module = _host_path_module()
         exe_path = path_module.abspath(exe_path)
-        launch_mode = normalize_launch_mode(launch_mode)
 
         env = os.environ.copy()
 
@@ -1085,6 +1105,14 @@ class Launcher:
                     entry.log_file = log_file
                 if is_wine_executable and run_ce:
                     # Spawn CE in a background thread after a delay
+                    def game_still_running() -> bool:
+                        if self.shutting_down:
+                            return False
+                        if game_id is not None:
+                            with self._running_lock:
+                                return self._running.get(game_id) is entry
+                        return game_proc.poll() is None
+
                     def inject_ce():
                         import time
 
@@ -1092,9 +1120,11 @@ class Launcher:
                             "Waiting 5 seconds for game to initialize before attaching Cheat Engine..."
                         )
                         time.sleep(5)
+                        if not game_still_running():
+                            return
 
                         ce_cmd = prepare_ce_command()
-                        if ce_cmd:
+                        if ce_cmd and game_still_running():
                             ce_proc = subprocess.Popen(
                                 host_command(ce_cmd, env=env_vars),
                                 env=env_vars,
@@ -1353,16 +1383,6 @@ class Launcher:
             return None
 
         if is_windows():
-            if launch_mode != "auto":
-                return {
-                    "success": False,
-                    "error": (
-                        f"Launch mode '{launch_mode}' is only available on Linux. "
-                        "Choose Auto Detect to launch this game directly on Windows."
-                    ),
-                    "code": "unsupported_platform",
-                }
-
             process_env = build_host_tool_env(env)
             if ext == ".exe":
                 return execute_process(build_command([exe_path], args), process_env)
@@ -1491,10 +1511,17 @@ class Launcher:
         )
         game_exe_name = path_module.basename(exe_path)
         wineserver = ""
-        if is_proton and proton_path:
+        # Follow a symlinked runner to the build that owns it, so its sibling
+        # wineserver is found instead of a different install on PATH.
+        runner_path = proton_path
+        if proton_path and path_module.sep not in proton_path:
+            runner_path = host_which(proton_path) or proton_path
+        if runner_path:
+            runner_path = os.path.realpath(runner_path)
+        if is_proton and runner_path:
             for layout in ("files", "dist"):
                 candidate = path_module.join(
-                    path_module.dirname(proton_path), layout, "bin", "wineserver"
+                    path_module.dirname(runner_path), layout, "bin", "wineserver"
                 )
                 if os.path.isfile(candidate):
                     wineserver = candidate
@@ -1502,8 +1529,8 @@ class Launcher:
         else:
             # Wine builds ship wineserver beside wine; otherwise use the one on PATH.
             sibling = (
-                path_module.join(path_module.dirname(proton_path), "wineserver")
-                if proton_path and path_module.dirname(proton_path)
+                path_module.join(path_module.dirname(runner_path), "wineserver")
+                if runner_path and path_module.dirname(runner_path)
                 else ""
             )
             wineserver = (

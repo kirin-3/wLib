@@ -3591,7 +3591,7 @@ class Api:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
-        target_path = (exe_path or "").strip()
+        target_path = os.path.expanduser((exe_path or "").strip())
         if game_id is not None and not (target_path and os.path.exists(target_path)):
             # Missing/empty path: fall back to the default exe, then other targets.
             # Only the default launch (empty request or the canonical path
@@ -3610,11 +3610,18 @@ class Api:
                 ),
                 "",
             )
-            candidates = [canonical_path] + [
-                str(t.get("exe_path") or "").strip()
-                for t in list_game_launch_targets(game_id)
+            candidates = [
+                os.path.expanduser(canonical_path),
+                *[
+                    os.path.expanduser(str(t.get("exe_path") or "").strip())
+                    for t in list_game_launch_targets(game_id)
+                ],
             ]
-            existing = [c for c in candidates if c and os.path.exists(c)]
+            existing = [
+                candidate
+                for candidate in candidates
+                if candidate and os.path.exists(candidate)
+            ]
             is_default_request = not target_path or (
                 canonical_path
                 and self._normalize_compare_path(target_path)
@@ -3627,7 +3634,7 @@ class Api:
                 }
             target_path = next(
                 iter(existing),
-                target_path or canonical_path,
+                target_path or os.path.expanduser(canonical_path),
             )
 
         print(
