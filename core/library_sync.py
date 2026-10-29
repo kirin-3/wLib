@@ -968,6 +968,15 @@ class SyncManager:
         if revision is None:
             self._push(location, None)
             return
+        if push_only and first and choice is None:
+            # A push-only run (the quiet-period watcher or the exit push) must
+            # not read the remote: it never applies it, and decrypting every
+            # minute while the first-connection choice waits is wasted work.
+            # It would also fail an encrypted remote with a passphrase error
+            # and replace the pending needs_choice state.
+            if database.get_game_count() > 0:
+                self._state = "needs_choice"
+            return
         backup: dict[str, object] | None = None
         if first or remote_changed:
             backup, revision = self._remote(location)
@@ -976,10 +985,6 @@ class SyncManager:
             local_games, remote_games = database.get_all_games(), cast(
                 list[object], backup["games"]
             )
-            if push_only and remote_games and choice is None:
-                if local_games:
-                    self._state = "needs_choice"
-                return
             if local_games and remote_games and choice is None:
                 self._state = "needs_choice"
                 return

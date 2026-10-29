@@ -625,6 +625,33 @@ def test_push_only_never_pulls_first_or_remote_changes():
     assert database.get_all_games() == before and location.writes == 0
 
 
+def test_auto_push_keeps_the_first_connection_choice_and_skips_the_read():
+    database.add_game("Local", "/local.exe", developer="Dev")
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    assert sync.run()["state"] == "needs_choice"
+    assert location.reads == 1
+
+    # The 60-second watcher keeps running while the dialog waits. It must not
+    # download and decrypt the whole file again for a run that never applies it.
+    assert sync.run(push_only=True)["state"] == "needs_choice"
+    assert location.reads == 1
+    assert location.writes == 0
+    assert [game["title"] for game in database.get_all_games()] == ["Local"]
+
+    # If another machine encrypts the file meanwhile, a background push must not
+    # turn the pending choice into a passphrase prompt for a file it ignores.
+    encrypting = encrypt_library_backup(remote_backup(), "phrase")
+    location.change(encrypting)
+    result = sync.run(push_only=True)
+    assert result["state"] == "needs_choice"
+    assert result["success"]
+    assert location.reads == 1 and location.writes == 0
+    # A full run still asks for the passphrase when it has to read the file.
+    assert sync.run()["state"] == "needs_passphrase"
+
+
+
 def test_api_sync_methods(tmp_path, monkeypatch):
     api = Api()
     location = MemoryLocation(remote_backup())
