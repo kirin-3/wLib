@@ -210,6 +210,43 @@ export const normalizeFilterStatuses = (
   return statuses.filter((status) => allowed.has(status.toLowerCase()));
 };
 
+// Tag names are case-insensitive (see tag colors and search), so a saved
+// filter is matched case-insensitively and rewritten to the library's current
+// spelling. Without a list the values survive, so a restore that runs before
+// games load still applies.
+export const normalizeFilterTags = (
+  value: unknown,
+  validTags?: Iterable<string>,
+): string[] => {
+  const tags = normalizeStringArray(value);
+  if (!validTags) return tags;
+
+  let allowed: Map<string, string>;
+  try {
+    allowed = new Map<string, string>();
+    for (const tag of validTags) {
+      if (typeof tag === "string" && tag.trim()) {
+        const label = tag.trim();
+        const key = label.toLowerCase();
+        if (!allowed.has(key)) allowed.set(key, label);
+      }
+    }
+  } catch {
+    return tags;
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  tags.forEach((tag) => {
+    const label = allowed.get(tag.toLowerCase());
+    if (label && !seen.has(label.toLowerCase())) {
+      seen.add(label.toLowerCase());
+      result.push(label);
+    }
+  });
+  return result;
+};
+
 // A restored filter can keep a spelling that differs in case from the status
 // option (imported preset, renamed custom status). Matching is case-insensitive
 // everywhere else, so the sidebar checkbox must agree with the applied filter
@@ -240,11 +277,13 @@ const readStorageItem = (storage: Storage, key: string): string | null => {
   }
 };
 
-const writeStorageItem = (storage: Storage, key: string, value: string): void => {
+const writeStorageItem = (storage: Storage, key: string, value: string): boolean => {
   try {
     storage.setItem(key, value);
+    return true;
   } catch (error) {
     console.warn(`Failed to write localStorage key '${key}'`, error);
+    return false;
   }
 };
 
@@ -321,7 +360,7 @@ export const normalizeFilterAndSort = (
     options.validEngines,
   );
 
-  const filterTags = filterAllowedValues(normalizeStringArray(source.filterTags), options.validTags);
+  const filterTags = normalizeFilterTags(source.filterTags, options.validTags);
 
   return {
     filterCollection,
@@ -483,12 +522,29 @@ export const readLibraryViewState = (
   };
 };
 
-export const saveLibraryViewState = (storage: Storage, state: LibraryViewState): void => {
-  writeStorageItem(
+export const saveLibraryViewState = (storage: Storage, state: LibraryViewState): boolean => {
+  return writeStorageItem(
     storage,
     LIBRARY_VIEW_STATE_STORAGE_KEY,
     JSON.stringify(normalizeLibraryViewState(state)),
   );
+};
+
+// Migrates the old separate keys into the current blob. The old keys are only
+// removed once the blob was written: when storage is full or unavailable the
+// migration is retried on the next launch instead of silently losing the
+// user's layout and filters.
+export const restoreSavedLibraryViewState = (
+  storage: Storage,
+  options: NormalizeLibraryViewStateOptions = {},
+): LibraryViewState => {
+  const restored = readLibraryViewState(storage, options);
+
+  if (restored.source === "legacy" && saveLibraryViewState(storage, restored.state)) {
+    clearLegacyLibraryViewState(storage);
+  }
+
+  return restored.state;
 };
 
 export const clearLegacyLibraryViewState = (storage: Storage): void => {

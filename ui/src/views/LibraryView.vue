@@ -46,14 +46,13 @@ import {
 import {
   DEFAULT_FILTER_SECTIONS,
   DEFAULT_LIBRARY_VIEW_STATE,
-  clearLegacyLibraryViewState,
   hasStatusFilter,
   normalizeActiveCollection,
   normalizeFilterAndSort,
   normalizeFilterPreset,
   normalizeLibraryViewState,
-  readLibraryViewState,
   readPresetsForSave,
+  restoreSavedLibraryViewState,
   saveLibraryViewState,
   toggleStatusFilter,
   type FilterCollection,
@@ -71,15 +70,18 @@ import { notify, notifyError } from "../utils/toast";
 import { sandboxLaunchError } from "../utils/sandbox";
 import { openInstallArchive } from "../utils/installArchive";
 import {
+  buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
-  gameTags,
   hasAvailableUpdate,
+  hasTagFilter,
   hasUnplayedUpdate,
   isUpdateSkipped,
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
+  matchesTagFilter,
+  toggleTagFilter,
 } from "../utils/libraryGames";
 
 interface UpdateNotice {
@@ -355,6 +357,16 @@ const toggleFilter = (arr: string[], val: string) => {
   else arr.splice(idx, 1);
 };
 
+// Tags are case-insensitive, so the pill's spelling may differ from a saved
+// filter. Toggle every spelling and keep the visible one when selecting.
+const toggleTag = (tag: string) => {
+  filterTags.value = toggleTagFilter(
+    filterTags.value,
+    tag,
+    !hasTagFilter(filterTags.value, tag),
+  );
+};
+
 // Status filters keep the spelling they were restored with, so the checkbox
 // matches case-insensitively and toggling it clears every spelling of the name.
 const statusFilterActive = (status: string): boolean =>
@@ -381,16 +393,11 @@ const uniqueEngines = computed(() => {
   return [...set].sort();
 });
 
-const tagCounts = computed(() => {
-  const counts = new Map<string, number>();
-  games.value.forEach((game) =>
-    gameTags(game).forEach((tag) =>
-      counts.set(tag, (counts.get(tag) || 0) + 1),
-    ),
-  );
-  return counts;
-});
-const uniqueTags = computed(() => [...tagCounts.value.keys()].sort());
+const tagOptions = computed(() => buildTagFilterOptions(games.value));
+const tagCounts = computed(
+  () => new Map(tagOptions.value.map((option) => [option.label, option.count])),
+);
+const uniqueTags = computed(() => tagOptions.value.map((option) => option.label));
 const visibleTags = computed(() =>
   uniqueTags.value.filter((tag) =>
     tag.toLowerCase().includes(tagSearchQuery.value.trim().toLowerCase()),
@@ -457,13 +464,7 @@ const persistLibraryViewState = () => {
 };
 
 const restoreLibraryViewState = () => {
-  const restored = readLibraryViewState(localStorage);
-  applyLibraryViewState(restored.state);
-
-  if (restored.source === "legacy") {
-    persistLibraryViewState();
-    clearLegacyLibraryViewState(localStorage);
-  }
+  applyLibraryViewState(restoreSavedLibraryViewState(localStorage));
 };
 
 const filteredGames = computed(() => {
@@ -512,10 +513,7 @@ const filteredGames = computed(() => {
     );
   }
   if (filterTags.value.length) {
-    result = result.filter((game) => {
-      const tags = new Set(gameTags(game));
-      return filterTags.value.every((tag) => tags.has(tag));
-    });
+    result = result.filter((game) => matchesTagFilter(game, filterTags.value));
   }
   result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
@@ -924,25 +922,41 @@ const loadGames = async () => {
   }
 };
 
+let runningGamesRequest = 0;
+const loadRunningGames = async () => {
+  const request = ++runningGamesRequest;
+  try {
+    const ids = await api.getRunningGames();
+    if (request !== runningGamesRequest) return;
+    runningGameIds.value = new Set(ids);
+  } catch (error) {
+    console.error("Failed to load running games", error);
+  }
+};
+
 // Sync and imports can replace the collection list and presets, not just games.
+let settingsRequest = 0;
+const loadLibrarySettings = async () => {
+  const request = ++settingsRequest;
+  try {
+    const settings = await api.getSettings();
+    // A slow older read must not overwrite collections or presets that a
+    // newer sync/import refresh already applied.
+    if (request !== settingsRequest) return;
+    customStatuses.value = settings.custom_play_statuses || [];
+    customStatusesLoaded.value = true;
+    applyCollectionsFromPayload(settings.collections);
+    savedPresets.value = settings.library_filter_presets || [];
+    presetsLoaded.value = true;
+  } catch (error) {
+    console.error("Failed to load library settings", error);
+  }
+};
+
 const handleLibraryRefresh = () => {
   void loadGames();
-  void api
-    .getRunningGames()
-    .then((ids) => {
-      runningGameIds.value = new Set(ids);
-    })
-    .catch(console.error);
-  void api
-    .getSettings()
-    .then((settings) => {
-      customStatuses.value = settings.custom_play_statuses || [];
-      customStatusesLoaded.value = true;
-      applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
-      presetsLoaded.value = true;
-    })
-    .catch(console.error);
+  void loadRunningGames();
+  void loadLibrarySettings();
 };
 
 const openDetail = (game: GameRecord) => {
@@ -1040,7 +1054,7 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       else notifyError(`Failed to launch game:\n\n${result.error}`);
     } else if (result?.success) {
       // Reconcile with the registry: HTML is untracked and short commands may already have exited.
-      runningGameIds.value = new Set(await api.getRunningGames());
+      await loadRunningGames();
     }
   } catch (e) {
     console.error("Launch failed", e);
@@ -1487,19 +1501,15 @@ onMounted(() => {
   onWebviewReady(() => {
     void loadTagColors().catch(console.error);
     void loadGames();
-    void api.getRunningGames().then((ids) => { runningGameIds.value = new Set(ids); }).catch(console.error);
-    void api.getSettings().then((settings) => {
-      customStatuses.value = settings.custom_play_statuses || [];
-      customStatusesLoaded.value = true;
-      applyCollectionsFromPayload(settings.collections);
-      savedPresets.value = settings.library_filter_presets || [];
-      presetsLoaded.value = true;
-    }).catch(console.error);
+    void loadRunningGames();
+    void loadLibrarySettings();
   });
 });
 
 onUnmounted(() => {
   gamesRequest++;
+  runningGamesRequest++;
+  settingsRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
   document.removeEventListener("click", handleDocumentClick);
@@ -1749,19 +1759,19 @@ onUnmounted(() => {
               <button
                 v-for="tag in visibleTags"
                 :key="tag"
-                @click="toggleFilter(filterTags, tag)"
+                @click="toggleTag(tag)"
                 @contextmenu="openTagColorPicker($event, tag)"
                 @keydown.shift.f10.prevent="openTagColorPicker($event, tag)"
                 :data-tag-color="colorForTag(tag)"
-                :aria-pressed="filterTags.includes(tag)"
+                :aria-pressed="hasTagFilter(filterTags, tag)"
                 class="tag-pill filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
                 :style="
-                  colorForTag(tag) ? undefined : filterTags.includes(tag)
+                  colorForTag(tag) ? undefined : hasTagFilter(filterTags, tag)
                     ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
                     : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
                 "
               >
-                <IconCheck v-if="colorForTag(tag) && filterTags.includes(tag)" class="inline w-3 h-3 mr-1" aria-hidden="true" />
+                <IconCheck v-if="colorForTag(tag) && hasTagFilter(filterTags, tag)" class="inline w-3 h-3 mr-1" aria-hidden="true" />
                 {{ tag }}
                 <span class="ml-1 opacity-70">{{ tagCounts.get(tag) }}</span>
               </button>

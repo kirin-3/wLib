@@ -2,16 +2,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
   gameTags,
   hasAvailableUpdate,
+  hasTagFilter,
   hasUnplayedUpdate,
   isUpdateSkipped,
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
+  matchesTagFilter,
   normalizeVersion,
+  toggleTagFilter,
 } from "./libraryGames.ts";
 import type { GameRecord } from "../services/api.ts";
 
@@ -107,6 +111,37 @@ test("search includes title, developer, engine and normalized tags in both stora
     "fantasy",
     "sci-fi",
   ]);
+});
+
+test("tag filters treat names case-insensitively and merge casing variants", () => {
+  const games = [
+    { tags: "Sandbox, RPG" },
+    { tags: "sandbox, rpg" },
+    { tags: "Other" },
+  ];
+  const options = buildTagFilterOptions(games);
+  assert.deepEqual(options, [
+    { label: "Other", count: 1 },
+    { label: "RPG", count: 2 },
+    { label: "Sandbox", count: 2 },
+  ]);
+  // One game carrying both spellings still counts once.
+  assert.deepEqual(buildTagFilterOptions([{ tags: "Sandbox, sandbox" }]), [
+    { label: "Sandbox", count: 1 },
+  ]);
+
+  assert.equal(matchesTagFilter({ tags: "Sandbox" }, ["sandbox"]), true);
+  assert.equal(matchesTagFilter({ tags: "sandbox" }, ["Sandbox"]), true);
+  assert.equal(matchesTagFilter({ tags: "Sandbox" }, ["Sandbox", "rpg"]), false);
+  assert.equal(matchesTagFilter({ tags: "Sandbox, RPG" }, ["sandbox", "rpg"]), true);
+  assert.equal(matchesTagFilter({ tags: "Sandbox" }, []), true);
+
+  assert.equal(hasTagFilter(["sandbox"], "Sandbox"), true);
+  assert.equal(hasTagFilter(["Sandbox"], "sandbox"), true);
+  assert.equal(hasTagFilter(["Other"], "Sandbox"), false);
+  assert.deepEqual(toggleTagFilter(["sandbox", "Other"], "Sandbox", false), ["Other"]);
+  assert.deepEqual(toggleTagFilter(["sandbox"], "Sandbox", true), ["Sandbox"]);
+  assert.deepEqual(toggleTagFilter([], "Sandbox", true), ["Sandbox"]);
 });
 
 test("versions normalize the same way the Python mirror does, including non-strings", () => {

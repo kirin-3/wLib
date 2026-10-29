@@ -13,9 +13,11 @@ import {
   hasStatusFilter,
   normalizeFilterAndSort,
   normalizeFilterPreset,
+  normalizeFilterTags,
   normalizeLibraryViewState,
   readLibraryViewState,
   readPresetsForSave,
+  restoreSavedLibraryViewState,
   saveLibraryViewState,
   toggleStatusFilter,
   type LibraryFilterPreset,
@@ -148,6 +150,52 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
   assert.equal(storage.getItem(LEGACY_FILTERS_PANE_STORAGE_KEY), null);
   assert.equal(storage.getItem(LEGACY_FILTER_SECTIONS_STORAGE_KEY), null);
   assert.notEqual(storage.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+});
+
+test("a failed write reports failure instead of silently dropping the state", () => {
+  const storage = new MemoryStorage();
+  const state = normalizeLibraryViewState({ layoutMode: "list", sortBy: "rating" });
+  assert.equal(saveLibraryViewState(storage, state), true);
+
+  class QuotaStorage extends MemoryStorage {
+    override setItem(key: string, value: string): void {
+      if (key === LIBRARY_VIEW_STATE_STORAGE_KEY) {
+        throw new Error("QuotaExceededError");
+      }
+      super.setItem(key, value);
+    }
+  }
+  assert.equal(saveLibraryViewState(new QuotaStorage(), state), false);
+});
+
+test("legacy keys are only removed once the migrated blob was written", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(LEGACY_LAYOUT_MODE_STORAGE_KEY, "compact");
+  storage.setItem(LEGACY_FILTERS_PANE_STORAGE_KEY, "false");
+
+  const migrated = restoreSavedLibraryViewState(storage);
+  assert.equal(migrated.layoutMode, "compact");
+  assert.equal(migrated.isFiltersCollapsed, false);
+  assert.notEqual(storage.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+  assert.equal(storage.getItem(LEGACY_LAYOUT_MODE_STORAGE_KEY), null);
+  assert.equal(storage.getItem(LEGACY_FILTERS_PANE_STORAGE_KEY), null);
+
+  class QuotaStorage extends MemoryStorage {
+    override setItem(key: string, value: string): void {
+      if (key === LIBRARY_VIEW_STATE_STORAGE_KEY) {
+        throw new Error("QuotaExceededError");
+      }
+      super.setItem(key, value);
+    }
+  }
+  const failing = new QuotaStorage();
+  failing.setItem(LEGACY_LAYOUT_MODE_STORAGE_KEY, "list");
+  const restored = restoreSavedLibraryViewState(failing);
+  // The in-memory state still applies, but the old keys stay so the migration
+  // is retried next launch instead of losing the saved preferences.
+  assert.equal(restored.layoutMode, "list");
+  assert.equal(failing.getItem(LIBRARY_VIEW_STATE_STORAGE_KEY), null);
+  assert.equal(failing.getItem(LEGACY_LAYOUT_MODE_STORAGE_KEY), "list");
 });
 
 test("readLibraryViewState prefers current blob and prunes unsupported engines and tags", () => {
@@ -384,6 +432,32 @@ test("status filters match and toggle case-insensitively", () => {
   assert.deepEqual(toggleStatusFilter(["Completed"], "Playing", false), ["Completed"]);
   // Toggling a spelling that was not selected only affects the matching name.
   assert.deepEqual(toggleStatusFilter(["backlog", "BACKLOG", "Playing"], "Backlog", false), ["Playing"]);
+});
+
+test("tag filters canonicalize casing and drop tags the library no longer has", () => {
+  // No list yet: keep the saved spelling so a restore before games load applies.
+  assert.deepEqual(normalizeFilterTags(["  Sandbox  ", "sandbox", ""]), ["Sandbox", "sandbox"]);
+
+  // With the live list, use its spelling and collapse case variants.
+  assert.deepEqual(
+    normalizeFilterTags(["sandbox", "SANDBOX", "Ghost"], ["Sandbox", "Other"]),
+    ["Sandbox"],
+  );
+  assert.deepEqual(normalizeFilterTags(["Sandbox"], []), []);
+  assert.deepEqual(
+    normalizeFilterAndSort(
+      { filterTags: ["sandbox"] },
+      { validTags: ["Sandbox"] },
+    ).filterTags,
+    ["Sandbox"],
+  );
+  assert.deepEqual(
+    normalizeFilterPreset(
+      { name: "Sandbox", filterTags: ["sandbox", "Ghost"] },
+      { validTags: ["Sandbox"] },
+    )?.filterTags,
+    ["Sandbox"],
+  );
 });
 
 test("saving presets reloads the stored list when settings have not loaded", async () => {
