@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import builtins
 from concurrent.futures import ThreadPoolExecutor
+import http.client
 from http.client import HTTPConnection
 from io import BytesIO
 from email.message import Message
@@ -153,6 +154,7 @@ def test_dropbox_callback_origin_rules_unchanged():
 
 
 def test_configure_qt_runtime_environment_prefers_wayland(monkeypatch):
+    monkeypatch.setattr(main, "is_linux", lambda: True)
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("DISPLAY", ":0")
@@ -167,6 +169,7 @@ def test_configure_qt_runtime_environment_prefers_wayland(monkeypatch):
 
 
 def test_configure_qt_runtime_environment_sets_xcb_for_x11(monkeypatch):
+    monkeypatch.setattr(main, "is_linux", lambda: True)
     monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setenv("DISPLAY", ":0")
@@ -180,7 +183,25 @@ def test_configure_qt_runtime_environment_sets_xcb_for_x11(monkeypatch):
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
 
 
+def test_configure_qt_runtime_environment_keeps_native_platform_on_windows(
+    monkeypatch,
+):
+    monkeypatch.setattr(main, "is_linux", lambda: False)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.delenv("WLIB_QPA_PLATFORM", raising=False)
+
+    result = main.configure_qt_runtime_environment()
+
+    assert result["qt_qpa_platform"] == ""
+    assert result["source"] == "auto-native"
+    assert "QT_QPA_PLATFORM" not in os.environ
+
+
 def test_configure_qt_runtime_environment_honors_override(monkeypatch):
+    monkeypatch.setattr(main, "is_linux", lambda: True)
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("WLIB_QPA_PLATFORM", "xcb")
@@ -1289,7 +1310,9 @@ def test_start_vite_dev_server_uses_platform_npm_command(monkeypatch):
         (b'{"success": true}', True),
         (b'{"success": false, "error": "Application window is not ready"}', True),
         (b"<html>other app</html>", False),
+        (b'["success"]', False),
         (URLError("refused"), False),
+        (http.client.BadStatusLine("garbage"), False),
     ],
 )
 def test_focus_running_instance_only_trusts_wlib_replies(monkeypatch, reply, expected):
@@ -1304,6 +1327,17 @@ def test_focus_running_instance_only_trusts_wlib_replies(monkeypatch, reply, exp
     request = opener.open.call_args.args[0]
     assert request.full_url == "http://127.0.0.1:8183/api/open"
     assert request.get_header("X-wlib-extension") == "1"
+
+
+def test_focus_running_instance_treats_a_truncated_reply_as_not_wlib(monkeypatch):
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.side_effect = http.client.IncompleteRead(b"partial")
+    opener = MagicMock()
+    opener.open.return_value = response
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: opener)
+
+    assert main.focus_running_instance() is False
 
 
 def test_log_renderer_diagnostics_does_not_kill_startup_when_data_dir_unwritable(

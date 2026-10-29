@@ -352,6 +352,7 @@ def configure_qt_runtime_environment() -> dict[str, str]:
 
     override_platform = (os.environ.get("WLIB_QPA_PLATFORM") or "").strip()
     existing_platform = (os.environ.get("QT_QPA_PLATFORM") or "").strip()
+    linux_host = is_linux()
 
     if override_platform:
         os.environ["QT_QPA_PLATFORM"] = override_platform
@@ -360,16 +361,17 @@ def configure_qt_runtime_environment() -> dict[str, str]:
     elif existing_platform:
         selected_platform = existing_platform
         source = "existing"
-    elif session_type == "wayland" or wayland_display:
+    elif linux_host and (session_type == "wayland" or wayland_display):
         selected_platform = ""
         source = "auto-wayland"
-    elif session_type == "x11" or display:
+    elif linux_host and (session_type == "x11" or display):
         selected_platform = "xcb"
         os.environ["QT_QPA_PLATFORM"] = selected_platform
         source = "auto-x11"
     else:
         selected_platform = ""
-        source = "auto-default"
+        # Windows and other hosts keep Qt's native platform selection.
+        source = "auto-default" if linux_host else "auto-native"
 
     platform_label = selected_platform or "<unset>"
     print(
@@ -1293,8 +1295,14 @@ def focus_running_instance() -> bool:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with cast(IO[bytes], opener.open(request, timeout=3)) as response:
-            return "success" in json.loads(response.read())
-    except (OSError, ValueError):
+            payload = cast(object, json.loads(response.read()))
+            return isinstance(payload, dict) and "success" in cast(
+                dict[str, object], payload
+            )
+    except Exception:
+        # A stale or foreign process may hold the port and answer with
+        # something other than HTTP/JSON (BadStatusLine, truncated body, ...).
+        # Treat every failure as "not wLib" so this launch can start normally.
         return False
 
 
