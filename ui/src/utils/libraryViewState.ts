@@ -210,6 +210,43 @@ export const normalizeFilterStatuses = (
   return statuses.filter((status) => allowed.has(status.toLowerCase()));
 };
 
+// Tag names are case-insensitive (see tag colors and search), so a saved
+// filter is matched case-insensitively and rewritten to the library's current
+// spelling. Without a list the values survive, so a restore that runs before
+// games load still applies.
+export const normalizeFilterTags = (
+  value: unknown,
+  validTags?: Iterable<string>,
+): string[] => {
+  const tags = normalizeStringArray(value);
+  if (!validTags) return tags;
+
+  let allowed: Map<string, string>;
+  try {
+    allowed = new Map<string, string>();
+    for (const tag of validTags) {
+      if (typeof tag === "string" && tag.trim()) {
+        const label = tag.trim();
+        const key = label.toLowerCase();
+        if (!allowed.has(key)) allowed.set(key, label);
+      }
+    }
+  } catch {
+    return tags;
+  }
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  tags.forEach((tag) => {
+    const label = allowed.get(tag.toLowerCase());
+    if (label && !seen.has(label.toLowerCase())) {
+      seen.add(label.toLowerCase());
+      result.push(label);
+    }
+  });
+  return result;
+};
+
 // A restored filter can keep a spelling that differs in case from the status
 // option (imported preset, renamed custom status). Matching is case-insensitive
 // everywhere else, so the sidebar checkbox must agree with the applied filter
@@ -323,7 +360,7 @@ export const normalizeFilterAndSort = (
     options.validEngines,
   );
 
-  const filterTags = filterAllowedValues(normalizeStringArray(source.filterTags), options.validTags);
+  const filterTags = normalizeFilterTags(source.filterTags, options.validTags);
 
   return {
     filterCollection,

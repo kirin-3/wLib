@@ -64,6 +64,63 @@ export const gameTags = (game: Pick<GameRecord, "tags">): string[] => [
   ),
 ];
 
+// Tag identity is case-insensitive and ignores surrounding spaces everywhere
+// else in the app (tag colors, search), so the library filter must agree or the
+// same tag shows up twice and selecting one hides the other casing.
+export const tagFilterKey = (tag: string): string =>
+  String(tag ?? "").trim().toLowerCase();
+
+export const hasTagFilter = (values: readonly string[], tag: string): boolean => {
+  const key = tagFilterKey(tag);
+  return values.some((value) => tagFilterKey(value) === key);
+};
+
+export const toggleTagFilter = (
+  values: readonly string[],
+  tag: string,
+  checked: boolean,
+): string[] => {
+  const key = tagFilterKey(tag);
+  const remaining = values.filter((value) => tagFilterKey(value) !== key);
+  return checked ? [...remaining, tag] : remaining;
+};
+
+export const matchesTagFilter = (
+  game: Pick<GameRecord, "tags">,
+  selectedTags: readonly string[],
+): boolean => {
+  if (!selectedTags.length) return true;
+  const keys = new Set(gameTags(game).map(tagFilterKey));
+  return selectedTags.every((tag) => keys.has(tagFilterKey(tag)));
+};
+
+export interface TagFilterOption {
+  label: string;
+  count: number;
+}
+
+// One option per logical tag, with the first spelling seen as the label.
+export const buildTagFilterOptions = (
+  games: readonly Pick<GameRecord, "tags">[],
+): TagFilterOption[] => {
+  const byKey = new Map<string, TagFilterOption>();
+  games.forEach((game) => {
+    const seenInGame = new Set<string>();
+    gameTags(game).forEach((tag) => {
+      const key = tagFilterKey(tag);
+      // A game carrying both "Sandbox" and "sandbox" is still one game.
+      if (seenInGame.has(key)) return;
+      seenInGame.add(key);
+      const existing = byKey.get(key);
+      if (existing) existing.count += 1;
+      else byKey.set(key, { label: tag, count: 1 });
+    });
+  });
+  return [...byKey.values()].sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { numeric: true }),
+  );
+};
+
 const normalizeSearchText = (text: unknown): string =>
   String(text ?? "")
     .normalize("NFD")

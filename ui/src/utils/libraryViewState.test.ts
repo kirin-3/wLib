@@ -13,6 +13,7 @@ import {
   hasStatusFilter,
   normalizeFilterAndSort,
   normalizeFilterPreset,
+  normalizeFilterTags,
   normalizeLibraryViewState,
   readLibraryViewState,
   readPresetsForSave,
@@ -431,6 +432,32 @@ test("status filters match and toggle case-insensitively", () => {
   assert.deepEqual(toggleStatusFilter(["Completed"], "Playing", false), ["Completed"]);
   // Toggling a spelling that was not selected only affects the matching name.
   assert.deepEqual(toggleStatusFilter(["backlog", "BACKLOG", "Playing"], "Backlog", false), ["Playing"]);
+});
+
+test("tag filters canonicalize casing and drop tags the library no longer has", () => {
+  // No list yet: keep the saved spelling so a restore before games load applies.
+  assert.deepEqual(normalizeFilterTags(["  Sandbox  ", "sandbox", ""]), ["Sandbox", "sandbox"]);
+
+  // With the live list, use its spelling and collapse case variants.
+  assert.deepEqual(
+    normalizeFilterTags(["sandbox", "SANDBOX", "Ghost"], ["Sandbox", "Other"]),
+    ["Sandbox"],
+  );
+  assert.deepEqual(normalizeFilterTags(["Sandbox"], []), []);
+  assert.deepEqual(
+    normalizeFilterAndSort(
+      { filterTags: ["sandbox"] },
+      { validTags: ["Sandbox"] },
+    ).filterTags,
+    ["Sandbox"],
+  );
+  assert.deepEqual(
+    normalizeFilterPreset(
+      { name: "Sandbox", filterTags: ["sandbox", "Ghost"] },
+      { validTags: ["Sandbox"] },
+    )?.filterTags,
+    ["Sandbox"],
+  );
 });
 
 test("saving presets reloads the stored list when settings have not loaded", async () => {
