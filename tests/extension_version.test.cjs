@@ -90,6 +90,83 @@ const pageHelpers = source.slice(
   source.indexOf('function normalizeCheckResult'),
 );
 
+const messageHelpers = source.slice(
+  source.indexOf('function normalizeCheckResult'),
+  source.indexOf('function initWLibExtension()'),
+);
+
+const runThreadCheck = (runtime) => {
+  const context = { console, chrome: { runtime } };
+  vm.createContext(context);
+  vm.runInContext(messageHelpers, context);
+  return vm.runInContext(
+    'checkGameInWLib("https://f95zone.to/threads/game.123/", [])',
+    context,
+  );
+};
+
+test('thread check survives a reload that invalidated the extension context', async () => {
+  // Chrome throws synchronously when the auto-update reload invalidated the
+  // content script. The check must resolve (so the widget still injects and
+  // can show "extension updated. Refresh this page.") instead of rejecting.
+  const result = await runThreadCheck({
+    id: undefined,
+    sendMessage() {
+      throw new Error('Extension context invalidated.');
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    exists: false,
+    playStatus: '',
+    wishlisted: false,
+    appOutdated: false,
+  });
+});
+
+test('thread check treats a missing background receiver as a failed check', async () => {
+  const result = await runThreadCheck({
+    id: 'test',
+    get lastError() {
+      return { message: 'Receiving end does not exist.' };
+    },
+    sendMessage(_message, callback) {
+      callback(undefined);
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    exists: false,
+    playStatus: '',
+    wishlisted: false,
+    appOutdated: false,
+  });
+});
+
+test('thread check still normalizes a successful response', async () => {
+  const result = await runThreadCheck({
+    id: 'test',
+    lastError: null,
+    sendMessage(_message, callback) {
+      callback({
+        success: true,
+        data: {
+          exists: true,
+          canAttachThread: true,
+          wishlisted: false,
+          playStatus: 'Playing',
+          appOutdated: false,
+        },
+      });
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    exists: true,
+    canAttachThread: true,
+    playStatus: 'Playing',
+    wishlisted: false,
+    appOutdated: false,
+  });
+});
+
 const runPageHelper = (code, pathname = '/') => {
   const context = {
     window: { location: { href: `https://f95zone.to${pathname}`, origin: 'https://f95zone.to', pathname } },
