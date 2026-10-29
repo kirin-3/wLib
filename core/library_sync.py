@@ -767,19 +767,29 @@ class SyncManager:
         )
         self._state, self._error_code = "idle", ""
 
-    def set_folder(self, folder: str) -> dict[str, object]:
+    def set_folder(self, folder: object) -> dict[str, object]:
+        selected = folder if isinstance(folder, str) else ""
+        rejected = {
+            "success": False,
+            "error": "Choose an existing writable sync folder.",
+            "error_code": "invalid_sync_folder",
+        }
         with self._lock:
-            location = FolderLocation(folder)
             try:
-                if (
-                    not folder.strip()
-                    or not location.folder.is_dir()
-                    or not os.access(location.folder, os.W_OK)
-                ):
-                    raise SyncError(
-                        "Choose an existing writable sync folder.",
-                        "invalid_sync_folder",
-                    )
+                location = FolderLocation(selected)
+                usable = (
+                    bool(selected.strip())
+                    and location.folder.is_dir()
+                    and os.access(location.folder, os.W_OK)
+                )
+            except (OSError, ValueError):
+                usable = False
+                location = None
+            if not usable or location is None:
+                # A rejected pick must not report the connection in use as
+                # failed; keep its state and only return the pick error.
+                return {**self.status(), **rejected}
+            try:
                 resolved = str(location.folder.resolve())
                 # Re-selecting the folder already in use must not forget the
                 # sync state (revision, last sync time, encryption key) and

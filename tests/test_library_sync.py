@@ -1272,3 +1272,25 @@ def test_expired_pending_signin_is_not_connecting():
     assert pending is not None
     sync._pending = (pending[0], pending[1], time.monotonic() - 1, pending[3])
     assert sync.status()["connecting"] is False
+
+
+def test_rejected_folder_pick_keeps_the_working_connection(tmp_path):
+    location = MemoryLocation()
+    sync = manager(location)
+    assert sync.run()["state"] == "idle"
+    before = sync.status()
+
+    not_a_folder = tmp_path / "not-a-folder.txt"
+    not_a_folder.write_text("x", encoding="utf-8")
+    result = sync.set_folder(str(not_a_folder))
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_sync_folder"
+
+    after = sync.status()
+    assert before["state"] == after["state"] == "idle"
+    assert after["location"] == "folder"
+    assert after["last_error"] == ""
+    assert not database.get_setting("sync_last_error")
+    # A malformed bridge argument answers with the same payload, never raises.
+    assert sync.set_folder(None)["error_code"] == "invalid_sync_folder"  # type: ignore[arg-type]
+    assert sync.status()["state"] == "idle"
