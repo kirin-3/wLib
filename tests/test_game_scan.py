@@ -264,6 +264,22 @@ def test_scan_ignores_staging_folder(tmp_path):
     assert find_launcher(str(folder)) == str(folder / "Inner" / "Inner.exe")
 
 
+def test_scan_uses_a_lone_32_bit_launcher(tmp_path):
+    # `-32.exe` is normally the 32-bit twin of the main executable, but some
+    # builds ship only that file; it is still the game, not a helper.
+    from core.game_scan import find_launcher, scan_games_folder
+
+    folder = tmp_path / "Only32"
+    folder.mkdir()
+    exe = folder / "Only32-32.exe"
+    exe.touch()
+
+    assert find_launcher(str(folder)) == str(exe)
+    assert [game["exe_path"] for game in scan_games_folder(str(tmp_path))] == [
+        str(exe)
+    ]
+
+
 def test_scan_prefers_exact_title_over_setup(tmp_path):
     from core.game_scan import find_launcher
 

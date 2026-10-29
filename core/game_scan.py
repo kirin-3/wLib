@@ -29,10 +29,12 @@ _VERSION_SUFFIX_RE = re.compile(
 )
 _SKIPPED_EXECUTABLES_RE = re.compile(
     r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|crashreport\w*|"
-    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*)(?:\.exe)?$|"
-    + r"^.*-32\.exe$",
+    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*)(?:\.exe)?$",
     re.I,
 )
+# `<Game>-32.exe` is the 32-bit twin of `<Game>.exe` when both exist, but it
+# is the only launcher some builds ship; it loses to a sibling, not to nothing.
+_SKIPPED_32BIT_EXECUTABLE_RE = re.compile(r"^.*-32\.exe$", re.I)
 _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 # Archive installs keep their temporary and backup trees next to the game.
 # They are internal state, not games: `.wlib-staging-*` during extraction,
@@ -161,7 +163,7 @@ def find_launcher(
         entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
     except OSError:
         return ""
-    files = [
+    candidates = [
         entry.name
         for entry in entries
         if not entry.is_symlink()
@@ -172,6 +174,11 @@ def find_launcher(
         )
         and not _SKIPPED_EXECUTABLES_RE.match(entry.name)
     ]
+    # Prefer the 64-bit build, but use a lone -32.exe rather than report that
+    # the folder has no launchable file.
+    files = [
+        name for name in candidates if not _SKIPPED_32BIT_EXECUTABLE_RE.match(name)
+    ] or candidates
     # Native Ren'Py/NW.js scripts run without Wine on Linux; elsewhere prefer the .exe.
     native = [
         name for name in files
