@@ -1189,3 +1189,26 @@ def test_hidden_attachments_keep_guest_page_without_extension(monkeypatch):
     assert result["success"]
     assert result["screenshots"] == []
     _reset_scraper_globals()
+
+
+def test_guest_page_cover_falls_back_to_catalog(monkeypatch):
+    from core import game_lookup
+
+    _reset_scraper_globals()
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE))
+    )
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: False)
+    lookup = MagicMock(return_value="https://preview.f95zone.to/2026/01/cover.png")
+    monkeypatch.setattr(game_lookup, "f95_thread_cover", lookup)
+    result = Scraper()._get_page("1")
+    assert result["success"]
+    assert result["cover_image"] == "https://preview.f95zone.to/2026/01/cover.png"
+    lookup.assert_called_once_with("1")
+
+    # A cover found on the page itself wins over the catalog.
+    monkeypatch.setattr(
+        scraper_module, "_f95_get", MagicMock(return_value=(200, _SIGNED_IN_PAGE))
+    )
+    assert Scraper()._get_page("1")["cover_image"] == "https://example.com/cover.png"
+    _reset_scraper_globals()

@@ -758,7 +758,12 @@ class Scraper:
                 html = self._reload_signed_in(
                     f"https://f95zone.to/threads/{thread_id}/", html
                 )
-            return self._extract_page(html)
+            result = self._extract_page(html)
+            if result.get("success") and not result.get("cover_image"):
+                from core.game_lookup import f95_thread_cover
+
+                return {**result, "cover_image": f95_thread_cover(thread_id)}
+            return result
         except _F95RequestError as exc:
             return self._error(exc.code, str(exc))
         except Exception as exc:

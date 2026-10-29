@@ -146,3 +146,27 @@ def resolve_page(url: str, ids: Sequence[str] = ()) -> PageResolution:
         [int(str(f95_game["id"]))] if f95_game else database.find_games_by_links(links)
     )
     return {"ids": links, "catalog_entry": entry, "matches": matches}
+
+
+def f95_thread_cover(thread_id: str) -> str:
+    """The catalog's cover for an F95 thread, or "".
+
+    F95 hides every starter-post attachment, the cover included, from guests,
+    so a scrape without the signed-in extension has no cover of its own.
+    """
+    if database.get_setting("catalog_enabled") == "0" or not thread_id.isdigit():
+        return ""
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            row = cast(
+                tuple[object] | None,
+                conn.execute(
+                    "SELECT cover_url FROM f95_threads WHERE thread_id = ?",
+                    (int(thread_id),),
+                ).fetchone(),
+            )
+    except (sqlite3.Error, OSError, ValueError):
+        return ""
+    cover = str(row[0] or "").strip() if row else ""
+    return cover if cover.startswith("https://") else ""

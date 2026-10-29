@@ -6,7 +6,7 @@ import pytest
 
 from catalog_server.store import CATALOG_SCHEMA
 from core import database
-from core.game_lookup import resolve_page
+from core.game_lookup import f95_thread_cover, resolve_page
 
 
 @pytest.fixture
@@ -147,3 +147,20 @@ def test_ryuu_store_code_is_never_a_version(catalog):
     result = resolve_page("https://www.ryuugames.com/?p=43")
     assert result["catalog_entry"]["title"] == "Work"
     assert result["catalog_entry"]["version"] == ""
+
+
+def test_f95_thread_cover_reads_catalog(catalog):
+    catalog.executemany(
+        "INSERT INTO f95_threads (thread_id,title,cover_url,url,first_seen,last_seen) VALUES (?,?,?,?,'','')",
+        [
+            (7, "Game", "https://preview.f95zone.to/2026/01/cover.png", "https://f95zone.to/threads/7/"),
+            (8, "No cover", None, "https://f95zone.to/threads/8/"),
+        ],
+    )
+    catalog.commit()
+    assert f95_thread_cover("7") == "https://preview.f95zone.to/2026/01/cover.png"
+    assert f95_thread_cover("8") == ""
+    assert f95_thread_cover("9") == ""
+    assert f95_thread_cover("") == ""
+    database.update_setting("catalog_enabled", "0")
+    assert f95_thread_cover("7") == ""
