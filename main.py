@@ -1404,6 +1404,9 @@ def run_packaged_smoke_test() -> int:
         for module_name in (
             "certifi",
             "webview",
+            # Loads the Qt WebEngine binaries; a Qt core / WebEngine version
+            # mismatch only fails here, not on `import webview`.
+            "PyQt6.QtWebEngineWidgets",
             "cryptography.hazmat.primitives.ciphers.aead",
         ):
             _ = importlib.import_module(module_name)

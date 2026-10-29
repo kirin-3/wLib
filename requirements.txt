@@ -1,4 +1,12 @@
 pywebview[qt]>=5.0
+# PyQt6-WebEngine ships its Qt binaries separately from PyQt6 and lags behind
+# its releases. Unpinned, pip pairs a newer Qt core with an older WebEngine and
+# QtWebEngineCore fails to load ("procedure could not be found" on Windows).
+# Bump all four together, to versions built for the same Qt release.
+PyQt6==6.11.0
+PyQt6-Qt6==6.11.2
+PyQt6-WebEngine==6.11.0
+PyQt6-WebEngine-Qt6==6.11.2
 pyinstaller>=6.0.0
 certifi>=2024.0.0
 cryptography>=44.0.0
