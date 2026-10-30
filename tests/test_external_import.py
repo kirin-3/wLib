@@ -7,6 +7,7 @@ import os
 import sqlite3
 import hashlib
 import shutil
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ def _force_linux_paths(monkeypatch):
 
 
 PLAYNITE_FIXTURE = Path(__file__).parent / "fixtures/playnite/library"
+SMALL_PLAYNITE = PLAYNITE_FIXTURE.parent / "small-library"
 
 
 def _fingerprints(folder):
@@ -56,6 +58,151 @@ def _fingerprints(folder):
         for p in folder.rglob("*")
         if p.is_file()
     }
+
+
+@pytest.mark.parametrize("merge_mode", ["overwrite", "fill_missing"])
+def test_playnite_missing_lookups_preserve_local_fields(tmp_path, monkeypatch, merge_mode):
+    from core import database
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    game_id = add_game("Local", "", "https://f95zone.to/threads/12345/")
+    database.create_collection("Keep", game_id)
+    database.update_game(game_id, {
+        "developer": "Local studio", "engine": "Ren'Py", "thread_completed": 1,
+        "play_status": "Completed",
+    })
+    result = import_external_library("playnite", str(SMALL_PLAYNITE / "games.db"), {
+        "merge_mode": merge_mode,
+    })
+    assert result["created"] == 1
+    game = database.get_game(game_id)
+    assert game["developer"] == "Local studio"
+    assert game["engine"] == "Ren'Py"
+    assert game["thread_completed"] == 1
+    assert game["play_status"] == "Completed"
+    assert json.loads(game["collections"]) == ["Keep"]
+
+
+@pytest.mark.parametrize("present", [False, True])
+def test_playnite_requires_game_collection_but_allows_zero_games(tmp_path, present):
+    from core.backup_format import BackupValidationError
+
+    source = SMALL_PLAYNITE.parent / "empty-games.db" if present else SMALL_PLAYNITE / "categories.db"
+    shutil.copy2(source, tmp_path / "games.db")
+    if present:
+        preview = inspect_external_library("playnite", str(tmp_path / "games.db"))
+        assert preview["counts"]["total_games"] == 0
+    else:
+        with pytest.raises(BackupValidationError, match="not a Playnite library"):
+            import_external_library("playnite", str(tmp_path / "games.db"))
+    assert not get_all_games()
+
+
+@pytest.mark.parametrize("optional_file", [
+    "completionstatuses", "companies", "categories", "tags", "features", "genres",
+])
+def test_playnite_missing_optional_file(tmp_path, optional_file):
+    library = tmp_path / "library"
+    shutil.copytree(SMALL_PLAYNITE, library)
+    (library / f"{optional_file}.db").unlink()
+    backup, _ = read_external_library("playnite", str(library / "games.db"))
+    assert len(backup["games"]) == 2
+
+
+@pytest.mark.parametrize("mutation,message", [
+    ("signature", "not a Playnite library"), ("version", "not a Playnite library"),
+    ("directory", "not a Playnite library"), ("present", "not a Playnite library"),
+    ("encrypted", "Encrypted"), ("locked", "Close Playnite"),
+    ("newer", "newer than wLib"), ("older", "Update Playnite"),
+])
+def test_playnite_invalid_optional_is_not_ignored(tmp_path, monkeypatch, mutation, message):
+    from core import database, game_covers
+    from core.backup_format import BackupValidationError
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    library = tmp_path / "library"
+    shutil.copytree(SMALL_PLAYNITE, library)
+    data = bytearray((library / "categories.db").read_bytes())
+    if mutation == "signature":
+        data[25] = 0
+    elif mutation == "version":
+        data[52] = 8
+    elif mutation == "directory":
+        data[101] = 1
+        struct.pack_into("<i", data, 102, 4096)
+    elif mutation == "present":
+        data = bytearray((PLAYNITE_FIXTURE / "categories.db").read_bytes())
+        data[2 * 4096 + 4] = 0  # Expected collection exists, but its page is corrupt.
+    elif mutation == "encrypted":
+        data[65] = 1
+    elif mutation == "locked":
+        data[4095] = 1
+    else:
+        (library / "database.json").write_text(json.dumps({"Version": 5 if mutation == "newer" else 3}))
+    (library / "categories.db").write_bytes(data)
+    before = _fingerprints(library)
+    for operation in (inspect_external_library, import_external_library):
+        with pytest.raises(BackupValidationError, match=message):
+            operation("playnite", str(library / "games.db"))
+    assert not get_all_games()
+    assert not game_covers.covers_dir().exists()
+    assert _fingerprints(library) == before
+
+
+def test_playnite_avif_preview_import_merge_and_rollback(tmp_path, monkeypatch):
+    from core import database, game_covers
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    source = str(SMALL_PLAYNITE / "games.db")
+    before = _fingerprints(SMALL_PLAYNITE)
+    preview = inspect_external_library("playnite", source)
+    assert preview["counts"]["new_games"] == 2
+    assert preview["counts"]["covers_to_copy"] == 2
+    assert preview["warnings"] == []
+    result = import_external_library("playnite", source, {"sections": []})
+    assert result["created"] == 2
+    assert not game_covers.covers_dir().exists()
+    result = import_external_library("playnite", source)
+    assert result["covers_copied"] == 2
+    expected = (SMALL_PLAYNITE.parent / "avif/cover.png").read_bytes()
+    for game in get_all_games():
+        assert game["cover_local"].endswith(".avif")
+        assert game_covers.cover_path(game["cover_local"]).read_bytes() == expected
+    old_names = {g["cover_local"] for g in get_all_games()}
+    assert import_external_library("playnite", source, {"merge_mode": "fill_missing"})["covers_copied"] == 0
+    assert {p.name for p in game_covers.covers_dir().iterdir()} == old_names
+    assert import_external_library("playnite", source)["covers_copied"] == 2
+    assert all(not game_covers.cover_path(name).exists() for name in old_names)
+    previous = get_all_games()
+    original = database.set_game_local_cover
+
+    def fail_after_copy(*a, **k):
+        original(*a, **k)
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(database, "set_game_local_cover", fail_after_copy)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        import_external_library("playnite", source)
+    assert get_all_games() == previous
+    assert {p.name for p in game_covers.covers_dir().iterdir()} == {g["cover_local"] for g in previous}
+    assert _fingerprints(SMALL_PLAYNITE) == before
+
+
+def test_playnite_avif_invalid_cover_is_per_game_warning(tmp_path, monkeypatch):
+    from core import database
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
+    library = tmp_path / "library"
+    shutil.copytree(SMALL_PLAYNITE, library)
+    next((library / "files").rglob("*.png")).write_bytes(b"not an image")
+    before = _fingerprints(library)
+    preview = inspect_external_library("playnite", str(library / "games.db"))
+    assert preview["counts"]["covers_to_copy"] == 1
+    assert [w["type"] for w in preview["warnings"]] == ["invalid_cover"]
+    result = import_external_library("playnite", str(library / "games.db"))
+    assert result["created"] == 2
+    assert result["covers_copied"] == 1
+    assert _fingerprints(library) == before
 
 
 def test_playnite_fixture_mapping_and_unchanged():
@@ -278,7 +425,8 @@ def test_playnite_action_working_dir_windows_and_fallback(tmp_path, monkeypatch)
     assert game["executable_paths"]["exe_path"] == str(tmp_path / "run.sh")
 
 
-def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize("fixture", [PLAYNITE_FIXTURE, SMALL_PLAYNITE])
+def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatch, fixture):
     from core import database, game_covers
 
     monkeypatch.setattr(database, "DATA_DIR", str(tmp_path / "data"))
@@ -290,7 +438,7 @@ def test_playnite_failed_new_import_removes_copies_and_rows(tmp_path, monkeypatc
 
     monkeypatch.setattr(database, "set_game_local_cover", write_then_fail)
     with pytest.raises(RuntimeError, match="write failed"):
-        import_external_library("playnite", str(PLAYNITE_FIXTURE / "games.db"))
+        import_external_library("playnite", str(fixture / "games.db"))
     assert get_all_games() == []
     assert list(game_covers.covers_dir().iterdir()) == []
 

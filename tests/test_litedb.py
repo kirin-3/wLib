@@ -10,6 +10,48 @@ from core.backup_format import BackupValidationError
 from core.litedb import LiteDBReader, MAX_DOCUMENT_SIZE, decode_bson
 
 FIXTURE = Path(__file__).parent / "fixtures/playnite/library/games.db"
+SMALL = FIXTURE.parent.parent / "small-library"
+
+
+@pytest.mark.parametrize(
+    "file,collection",
+    [
+        ("completionstatuses", "CompletionStatus"),
+        ("companies", "Company"),
+        ("categories", "Category"),
+        ("tags", "Tag"),
+        ("features", "GameFeature"),
+        ("genres", "Genre"),
+    ],
+)
+def test_missing_collection_is_explicitly_optional(file, collection):
+    reader = LiteDBReader(SMALL / f"{file}.db")
+    assert reader.read_collection(collection, allow_missing=True) == []
+    with pytest.raises(BackupValidationError, match="not a Playnite library"):
+        reader.read_collection(collection)
+
+
+def test_required_game_collection_and_present_empty_collection():
+    with pytest.raises(BackupValidationError, match="not a Playnite library"):
+        LiteDBReader(SMALL / "categories.db").read_collection("Game")
+    assert LiteDBReader(SMALL.parent / "empty-games.db").read_collection("Game") == []
+
+
+@pytest.mark.parametrize("mutation", ["length", "duplicate", "page", "alias"])
+def test_missing_collection_still_validates_directory(tmp_path, mutation):
+    data = bytearray((SMALL / "games.db").read_bytes())
+    if mutation == "length":
+        struct.pack_into("<i", data, 102, 4096)
+    elif mutation == "page":
+        struct.pack_into("<I", data, 110, 9999)
+    else:
+        data[101] = 2
+        entry = struct.pack("<i", 4) + (b"Game" if mutation == "duplicate" else b"Else")
+        data[114:126] = entry + struct.pack("<I", 2 if mutation == "alias" else 3)
+    path = tmp_path / "optional.db"
+    path.write_bytes(data)
+    with pytest.raises(BackupValidationError):
+        LiteDBReader(path).read_collection("Category", allow_missing=True)
 
 
 def test_real_litedb_fixture():

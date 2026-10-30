@@ -1592,7 +1592,9 @@ def read_playnite_library(path: str) -> tuple[dict[str, object], dict[str, objec
                 if file.is_file():
                     related[collection] = {
                         _as_str(row.get("_id")): _as_str(row.get("Name"))
-                        for row in LiteDBReader(file).read_collection(model)
+                        for row in LiteDBReader(file).read_collection(
+                            model, allow_missing=True
+                        )
                     }
             records = LiteDBReader(Path(temp, "games.db")).read_collection("Game")
             games: list[dict[str, object]] = []

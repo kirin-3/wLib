@@ -312,6 +312,10 @@ duplicate/attachment rules as the backend.
 The backend supplies the local URL. The game detail cover field offers
 “Choose image file…” and “Remove local cover”, which apply immediately, refresh
 the library and show inline errors without saving other form edits.
+The picker includes JPEG, PNG, WebP, GIF and AVIF. The backend detects image
+content even when an AVIF source has a `.png` name, stores it as `.avif`, and
+serves `image/avif` for direct browser rendering through the same image and
+fallback flow.
 `services/api.ts` mirrors `chooseGameCover`, `setGameCoverFile` and
 `clearGameCover`, with browser mocks.
 

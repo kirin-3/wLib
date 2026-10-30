@@ -14,12 +14,15 @@ from uuid import uuid4
 from core import database
 
 MAX_COVER_SIZE = 20 * 1024 * 1024
-COVER_NAME_RE = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp|gif)\Z")
+MAX_TYPE_BOX_SIZE = 64 * 1024
+UNSUPPORTED_IMAGE = "The file is not a supported image (JPEG, PNG, WebP, GIF or AVIF)."
+COVER_NAME_RE = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp|gif|avif)\Z")
 COVER_TYPES = {
     "jpg": "image/jpeg",
     "png": "image/png",
     "webp": "image/webp",
     "gif": "image/gif",
+    "avif": "image/avif",
 }
 
 
@@ -46,7 +49,43 @@ def _image_type(header: bytes) -> str:
         return "gif"
     if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
         return "webp"
-    raise ValueError("The file is not a supported image (JPEG, PNG, WebP or GIF).")
+    if header[4:8] == b"ftyp":
+        box_size = int.from_bytes(header[:4], "big")
+        payload = 8
+        if box_size == 1:
+            box_size = int.from_bytes(header[8:16], "big")
+            payload = 16
+        if (
+            box_size == len(header)
+            and payload + 8 <= box_size <= MAX_TYPE_BOX_SIZE
+            and (box_size - payload) % 4 == 0
+        ):
+            # The minor version between major and compatible brands is not a brand.
+            brands = [header[payload : payload + 4]] + [
+                header[i : i + 4] for i in range(payload + 8, box_size, 4)
+            ]
+            if any(brand in (b"avif", b"avis") for brand in brands):
+                return "avif"
+    raise ValueError(UNSUPPORTED_IMAGE)
+
+
+def _inspect_image(stream: BinaryIO) -> tuple[str, bytes]:
+    """Read a bounded prefix once, shared by validation and byte-preserving copy."""
+    source_size = os.fstat(stream.fileno()).st_size
+    if source_size > MAX_COVER_SIZE:
+        raise ValueError("The image is larger than 20 MiB.")
+    header = stream.read(12)
+    if header[4:8] == b"ftyp":
+        size = int.from_bytes(header[:4], "big")
+        if size == 1:
+            header += stream.read(4)
+            if len(header) != 16:
+                raise ValueError(UNSUPPORTED_IMAGE)
+            size = int.from_bytes(header[8:16], "big")
+        if not len(header) <= size <= min(source_size, MAX_TYPE_BOX_SIZE):
+            raise ValueError(UNSUPPORTED_IMAGE)
+        header += stream.read(size - len(header))
+    return _image_type(header), header
 
 
 def _open_image_source(path: str | Path) -> BinaryIO:
@@ -65,9 +104,7 @@ def _open_image_source(path: str | Path) -> BinaryIO:
     fd = os.open(os.fspath(path), flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ValueError(
-                "The file is not a supported image (JPEG, PNG, WebP or GIF)."
-            )
+            raise ValueError(UNSUPPORTED_IMAGE)
     except BaseException:
         os.close(fd)
         raise
@@ -76,9 +113,8 @@ def _open_image_source(path: str | Path) -> BinaryIO:
 
 def validate_cover_file(path: str | Path) -> str:
     with _open_image_source(path) as stream:
-        if os.fstat(stream.fileno()).st_size > MAX_COVER_SIZE:
-            raise ValueError("The image is larger than 20 MiB.")
-        return _image_type(stream.read(12))
+        extension, _ = _inspect_image(stream)
+        return extension
 
 
 def copy_cover_file(path: str | Path) -> str:
@@ -87,10 +123,7 @@ def copy_cover_file(path: str | Path) -> str:
     temp_name: str | None = None
     try:
         with _open_image_source(path) as source:
-            if os.fstat(source.fileno()).st_size > MAX_COVER_SIZE:
-                raise ValueError("The image is larger than 20 MiB.")
-            header = source.read(12)
-            extension = _image_type(header)
+            extension, header = _inspect_image(source)
             name = f"{uuid4().hex}.{extension}"
             with tempfile.NamedTemporaryFile(
                 dir=folder, prefix=".cover-", delete=False

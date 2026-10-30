@@ -231,7 +231,7 @@ This module handles native host launching and Linux compatibility runtimes.
 - `core/game_scan.py`: `inspect_game_path` and `scan_games_folder` guess titles, versions, engines, and launch files from install folders for Add Game and Import Folder.
 - `core/store_links.py`: normalizes store URLs, validates source/ID pairs, and supplies the exact store identities used by link storage, extension checks, and backup matching.
 - `core/game_lookup.py`: resolves a page's supplied IDs through the read-only catalog, expands one hop of catalog links, and returns matching local game IDs.
-- `core/game_covers.py`: validates JPEG, PNG, WebP and GIF magic bytes, enforces the 20 MiB limit, and atomically stores device-local cover files.
+- `core/game_covers.py`: recognizes JPEG, PNG, WebP, GIF and AVIF content, enforces the 20 MiB limit, and atomically stores device-local cover files.
 - `core/litedb.py`: dependency-free LiteDB 4 reader used by Playnite import.
 - `core/catalog_format.py`: shared catalog schema version, manifest field names, and `meta` keys (see [Game Catalog](catalog.md)).
 - `core/f95zone.py`: host-limited thread-ID extraction, thread URL normalization, and equivalent-thread matching used by the database, scraper, and backup import.
@@ -348,6 +348,11 @@ reader in `core/litedb.py`. Pick `games.db` with its sibling database files,
 picked or copied library. Database format 4 is supported. Close Playnite first:
 journal files and sharing failures return `source_locked`. Only the seven
 library collections are snapshotted, and add-on settings are never read.
+Missing optional database files or expected collections in valid metadata
+databases are empty lookups (statuses, companies, categories, tags, features,
+genres). Unresolved references omit those fields and preserve local values in
+both merge modes. The Game collection remains required, even if empty;
+corrupt, encrypted, locked, and unsupported databases still fail validation.
 
 Playnite links, F95 plugin versions and prefixes, completion status, notes,
 collections, seconds of playtime, dates and user scores are translated into the
@@ -356,14 +361,22 @@ launch targets; foreign-OS paths are dropped. An F95 thread, adult store/catalog
 link (DLsite, Fanza, VNDB, Ryuugames), or host executable qualifies a game for
 import. Steam or itch.io alone does not.
 
-`core/game_covers.py` validates JPEG, PNG, WebP and GIF magic bytes and enforces
-20 MiB before and during copying. Atomic copies use UUID filenames under
+`core/game_covers.py` recognizes JPEG, PNG, WebP, GIF and AVIF by content and
+enforces 20 MiB before and during copying. AVIF detection inspects the complete
+initial `ftyp` box (up to 64 KiB), including normal/extended lengths and `avif`
+or `avis` major/compatible brands. Filename extensions are ignored, so AVIF
+named `.png` is stored as `.avif`. This is type recognition rather than full
+image decoding. Atomic, byte-preserving copies use UUID filenames under
 `<data dir>/covers/`. `choose_game_cover(game_id)` opens the image picker;
 `set_game_cover_file(game_id, path)` copies a chosen image, and
 `clear_game_cover(game_id)` removes it. Successful set/clear responses include
 `game`; cancelling the picker returns `cancelled: true`. Game payloads include
 `cover_local_url` only when the file exists and the extension server is bound.
 Replacement, removal and game deletion clean up the old file.
+The read-only cover route serves AVIF as `image/avif` with `nosniff` and the
+existing private immutable caching policy. The embedded browser decodes it
+directly; no conversion dependency is needed. Undecodable images use the
+existing remote-cover fallback.
 
 External previews expose `covers` only when source games carry `cover_file`,
 and report `covers_to_copy`. Invalid images become per-game warnings. Covers

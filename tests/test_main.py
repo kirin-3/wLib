@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import threading
+from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock
 from urllib.error import URLError
@@ -59,25 +60,32 @@ def _make_extension_handler(path, matching_game=None, headers=None):
     return handler
 
 
-def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch):
-    from core import database
+@pytest.mark.parametrize("extension", ["png", "avif"])
+def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch, extension):
+    from core import database, game_covers
 
     monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
     folder = tmp_path / "covers"
-    folder.mkdir()
-    name = "a" * 32 + ".png"
-    (folder / name).write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    source = tmp_path / "source.png"
+    data = (
+        (Path(__file__).parent / "fixtures/playnite/avif/cover.png").read_bytes()
+        if extension == "avif" else b"\x89PNG\r\n\x1a\nimage"
+    )
+    source.write_bytes(data)
+    name = game_covers.copy_cover_file(source)
+    assert name.endswith("." + extension)
     handler = _make_extension_handler(
         "/covers/" + name, headers={"Origin": "https://untrusted.example"}
     )
     handler.do_GET()
     handler.send_response.assert_called_once_with(200)
     headers = dict(call.args for call in handler.send_header.call_args_list)
-    assert headers["Content-Type"] == "image/png"
+    assert headers["Content-Type"] == "image/" + extension
     assert headers["X-Content-Type-Options"] == "nosniff"
     assert "immutable" in headers["Cache-Control"]
     assert "Access-Control-Allow-Origin" not in headers
     assert handler.wfile.getvalue() == (folder / name).read_bytes()
+    assert handler.wfile.getvalue() == data
 
 
 @pytest.mark.parametrize(

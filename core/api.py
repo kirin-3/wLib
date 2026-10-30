@@ -1488,7 +1488,7 @@ class Api:
             selected = picker(
                 "file",
                 file_types=(
-                    "Images (*.jpg;*.jpeg;*.png;*.webp;*.gif)",
+                    "Images (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif)",
                     "All files (*.*)",
                 ),
             )

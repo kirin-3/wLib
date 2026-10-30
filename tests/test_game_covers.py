@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import struct
 from pathlib import Path
 
 import pytest
@@ -20,10 +21,13 @@ def isolated_db(tmp_path, monkeypatch):
     database.init_db()
 
 
-@pytest.fixture
-def image(tmp_path):
+@pytest.fixture(params=["png", "avif"])
+def image(tmp_path, request):
     file = tmp_path / "image.txt"
-    file.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    file.write_bytes(
+        (Path(__file__).parent / "fixtures/playnite/avif/cover.png").read_bytes()
+        if request.param == "avif" else b"\x89PNG\r\n\x1a\nfixture"
+    )
     return file
 
 
@@ -69,10 +73,11 @@ def test_delete_rejects_traversal(name):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX FIFOs need Linux")
-def test_fifo_source_is_rejected_without_blocking(tmp_path):
+@pytest.mark.parametrize("extension", ["png", "avif"])
+def test_fifo_source_is_rejected_without_blocking(tmp_path, extension):
     import threading
 
-    fifo = tmp_path / "cover.png"
+    fifo = tmp_path / f"cover.{extension}"
     os.mkfifo(str(fifo))
     errors: list[str] = []
 
@@ -89,9 +94,10 @@ def test_fifo_source_is_rejected_without_blocking(tmp_path):
     assert errors and "supported image" in errors[0]
 
 
-def test_symlink_outside_covers(tmp_path):
+@pytest.mark.parametrize("extension", ["png", "avif"])
+def test_symlink_outside_covers(tmp_path, extension):
     game_covers.covers_dir().mkdir()
-    name = "a" * 32 + ".png"
+    name = "a" * 32 + "." + extension
     (game_covers.covers_dir() / name).symlink_to(database.DB_PATH)
     assert game_covers.cover_path(name) is None
     game_covers.delete_cover_file(name)
@@ -120,8 +126,12 @@ def test_replacement_clear_and_sync(image):
 def test_api_choose_set_payload_clear_delete(image, monkeypatch):
     api = Api()
     game_id = database.add_game("Cover", "/game.sh", "")
-    monkeypatch.setattr(api, "_browse_linux_dialog", lambda *a, **k: str(image))
-    monkeypatch.setattr(api, "_browse_qt_dialog", lambda *a, **k: str(image))
+    def picker(*a, **k):
+        assert "*.avif" in k["file_types"][0]
+        return str(image)
+
+    monkeypatch.setattr(api, "_browse_linux_dialog", picker)
+    monkeypatch.setattr(api, "_browse_qt_dialog", picker)
     api.library_sync.server_available = False
     result = api.choose_game_cover(game_id)
     assert result["success"]
@@ -213,3 +223,132 @@ def test_sync_deletion_removes_cover_after_commit_and_preserves_it_on_rollback(i
     apply_library_backup(backup, mirror=True)
     assert database.get_game(game_id) is None
     assert not (game_covers.covers_dir() / name).exists()
+
+
+def _ftyp(major=b"avif", minor=b"\0" * 4, compatible=b"mif1", *, extended=False):
+    body = major + minor + compatible
+    return (
+        struct.pack(">I4sQ", 1, b"ftyp", 16 + len(body)) if extended
+        else struct.pack(">I4s", 8 + len(body), b"ftyp")
+    ) + body
+
+
+@pytest.mark.parametrize("brand", [b"avif", b"avis"])
+@pytest.mark.parametrize("compatible", [False, True])
+@pytest.mark.parametrize("extended", [False, True])
+def test_avif_brands_and_box_sizes(tmp_path, brand, compatible, extended):
+    data = _ftyp(
+        b"mif1" if compatible else brand,
+        compatible=brand if compatible else b"mif1", extended=extended,
+    ) + b"image payload"
+    file = tmp_path / "misnamed.png"
+    file.write_bytes(data)
+    before = (file.stat().st_mtime_ns, file.read_bytes())
+    assert game_covers.validate_cover_file(file) == "avif"
+    name = game_covers.copy_cover_file(file)
+    assert game_covers.COVER_NAME_RE.fullmatch(name)
+    assert name.endswith(".avif")
+    assert game_covers.cover_path(name).read_bytes() == data
+    assert (file.stat().st_mtime_ns, file.read_bytes()) == before
+
+
+@pytest.mark.parametrize("data", [
+    _ftyp(b"mif1", compatible=b"heic"),
+    _ftyp(b"mp42", compatible=b"isom") + b"avif",
+    _ftyp(b"mif1", minor=b"avif", compatible=b"heic"),
+    _ftyp()[:-1],
+    _ftyp(compatible=b"avifx"),
+    struct.pack(">I4s", 0, b"ftyp") + b"avif\0\0\0\0",
+    struct.pack(">I4s", 12, b"ftyp") + b"avif",
+    struct.pack(">I4s", 0xffffffff, b"ftyp") + b"avif\0\0\0\0",
+    struct.pack(">I4sQ", 1, b"ftyp", 20) + b"avif",
+    struct.pack(">I4sQ", 1, b"ftyp", 2**63) + b"avif\0\0\0\0",
+    struct.pack(">I4s", 1, b"ftyp") + b"avif",
+    struct.pack(">I4s", 65540, b"ftyp") + b"avif\0\0\0\0" + b"mif1" * 16381,
+])
+def test_invalid_avif_does_not_replace_existing_cover(tmp_path, image, data):
+    game_id = database.add_game("Keep cover", "", "")
+    old = game_covers.set_cover(game_id, str(image))
+    file = tmp_path / "candidate.avif"
+    file.write_bytes(data)
+    with pytest.raises(ValueError, match="supported image.*AVIF"):
+        game_covers.validate_cover_file(file)
+    with pytest.raises(ValueError, match="supported image.*AVIF"):
+        game_covers.set_cover(game_id, str(file))
+    assert database.get_game(game_id)["cover_local"] == old
+    assert [p.name for p in game_covers.covers_dir().iterdir()] == [old]
+
+
+def test_avif_inspection_budget(tmp_path, monkeypatch):
+    file = tmp_path / "oversized-ftyp.avif"
+    data = struct.pack(">I4s", 65540, b"ftyp") + b"avif\0\0\0\0" + b"mif1" * 16381
+    file.write_bytes(data)
+    original = game_covers._open_image_source
+    reads = []
+
+    class TrackedSource:
+        def __enter__(self):
+            self.stream = original(file)
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def fileno(self):
+            return self.stream.fileno()
+
+        def read(self, size):
+            reads.append(size)
+            return self.stream.read(size)
+
+    monkeypatch.setattr(game_covers, "_open_image_source", lambda _: TrackedSource())
+    with pytest.raises(ValueError, match="supported image"):
+        game_covers.validate_cover_file(file)
+    assert sum(reads) <= game_covers.MAX_TYPE_BOX_SIZE
+
+
+def test_size_limit_and_growth_cleanup(image, monkeypatch):
+    with image.open("r+b") as stream:
+        stream.truncate(game_covers.MAX_COVER_SIZE + 1)
+    for action in (game_covers.validate_cover_file, game_covers.copy_cover_file):
+        with pytest.raises(ValueError, match="20 MiB"):
+            action(image)
+    with image.open("r+b") as stream:
+        stream.truncate(1024)
+    original = game_covers._inspect_image
+
+    def grow_after_inspection(stream):
+        result = original(stream)
+        with image.open("r+b") as writer:
+            writer.truncate(game_covers.MAX_COVER_SIZE + 1)
+        return result
+
+    monkeypatch.setattr(game_covers, "_inspect_image", grow_after_inspection)
+    with pytest.raises(ValueError, match="20 MiB"):
+        game_covers.copy_cover_file(image)
+    assert not list(game_covers.covers_dir().iterdir())
+
+
+def test_cover_database_failure_cleans_copy(image, monkeypatch):
+    def fail(*a):
+        raise RuntimeError("database write failed")
+
+    monkeypatch.setattr(database, "set_game_local_cover", fail)
+    with pytest.raises(RuntimeError, match="database write failed"):
+        game_covers.set_cover(1, str(image))
+    assert not list(game_covers.covers_dir().iterdir())
+
+
+def test_avif_replaces_png_without_changing_source_or_remote(tmp_path):
+    png = tmp_path / "old.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+    avif = Path(__file__).parent / "fixtures/playnite/avif/cover.png"
+    before = (avif.stat().st_mtime_ns, avif.read_bytes())
+    game_id = database.add_game("Replace cover", "", "", cover_image="https://example.com/remote.png")
+    old = game_covers.set_cover(game_id, str(png))
+    new = game_covers.set_cover(game_id, str(avif))
+    assert new.endswith(".avif")
+    assert game_covers.cover_path(new).read_bytes() == before[1]
+    assert not game_covers.cover_path(old).exists()
+    assert database.get_game(game_id)["cover_image_path"] == "https://example.com/remote.png"
+    assert (avif.stat().st_mtime_ns, avif.read_bytes()) == before

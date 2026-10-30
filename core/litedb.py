@@ -220,7 +220,9 @@ class LiteDBReader:
             extend = struct.unpack_from("<I", page, 9)[0]
         return bytes(data)
 
-    def read_collection(self, name: str) -> list[dict[str, object]]:
+    def read_collection(
+        self, name: str, *, allow_missing: bool = False
+    ) -> list[dict[str, object]]:
         try:
             if self.path.stat().st_size % PAGE_SIZE:
                 raise _invalid()
@@ -240,13 +242,23 @@ class LiteDBReader:
             _ = cursor.take(16)
             collections: dict[str, int] = {}
             for _ in range(cursor.number("<B")):
-                collection_name = cursor.string()
-                collections[collection_name.casefold()] = cursor.number("<I")
+                collection_name = cursor.string().casefold()
+                page_id = cursor.number("<I")
+                if (
+                    not collection_name
+                    or collection_name in collections
+                    or not 0 < page_id < self.page_count
+                    or page_id in collections.values()
+                ):
+                    raise _invalid()
+                collections[collection_name] = page_id
             if header[-1]:
                 raise BackupValidationError(
                     "Close Playnite and try again.", "source_locked"
                 )
             if name.casefold() not in collections:
+                if allow_missing:
+                    return []
                 raise _invalid()
             cursor = _Cursor(self._page(collections[name.casefold()], 2), 25)
             if cursor.string().casefold() != name.casefold():

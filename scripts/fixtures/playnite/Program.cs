@@ -1,7 +1,8 @@
 using LiteDB;
 using System.Reflection;
 
-var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../tests/fixtures/playnite/library"));
+var small = args.Contains("--small");
+var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../tests/fixtures/playnite/", small ? "small-library" : "library"));
 Directory.CreateDirectory(root);
 Guid Id(int n) => Guid.Parse($"00112233-4455-6677-8899-{n:000000000000}");
 BsonArray Ids(params int[] ns) => new BsonArray(ns.Select(n => new BsonValue(Id(n))));
@@ -25,6 +26,35 @@ void Write(string name, IEnumerable<BsonDocument> rows, bool delete = false) {
     foreach (var row in rows) col.Insert(row);
     if (name == "completionstatuses") db.GetCollection("CompletionStatusSettings").Insert(new BsonDocument { ["_id"] = 0, ["DefaultStatus"] = Id(2002) });
     if (delete) { col.Insert(new BsonDocument { ["_id"] = Id(9999), ["Name"] = "Deleted game" }); col.Delete(Id(9999)); }
+}
+if (small) {
+    Write("games", Enumerable.Range(1, 2).Select(i => new BsonDocument {
+        ["_id"] = Id(i), ["Name"] = $"Small fixture {i}",
+        ["Links"] = Arr(Link($"https://f95zone.to/threads/{12345 * i}/")),
+        ["CoverImage"] = Id(i) + "/cover.png", ["DeveloperIds"] = Ids(1001),
+        ["CategoryIds"] = Ids(3001), ["GenreIds"] = Ids(6001),
+        ["FeatureIds"] = Ids(4001), ["TagIds"] = Ids(5001), ["CompletionStatusId"] = Id(2001)
+    }));
+    foreach (var name in new[] { "companies", "completionstatuses", "categories", "features", "tags", "genres" })
+        Write(name, Array.Empty<BsonDocument>());
+    File.WriteAllText(Path.Combine(root, "database.json"), "{\"Version\":4}\n");
+    foreach (var i in Enumerable.Range(1, 2)) {
+        var dir = Path.Combine(root, "files", Id(i).ToString());
+        Directory.CreateDirectory(dir);
+        File.Copy(Path.Combine(root, "../avif/cover.png"), Path.Combine(dir, "cover.png"), true);
+    }
+    // Keep an explicitly created but empty Game collection as a strict-reader case.
+    var empty = Path.Combine(root, "../empty-games.db");
+    if (File.Exists(empty)) File.Delete(empty);
+    using (var db = new LiteDatabase(empty)) {
+        var indexer = db.Engine.GetType().GetField("_indexer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(db.Engine)!;
+        indexer.GetType().GetField("_rand", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(indexer, new Random(42));
+        var col = db.GetCollection("Game");
+        col.Insert(new BsonDocument { ["_id"] = Id(1) });
+        col.Delete(Id(1));
+    }
+    Console.WriteLine(root);
+    return;
 }
 var games = new List<BsonDocument> {
     new BsonDocument {
