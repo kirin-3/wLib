@@ -779,7 +779,31 @@ def test_extension_fetch_records_signed_in_state(monkeypatch, body, expected):
         "https://f95zone.to/threads/1/"
     )
     assert status == 200
-    assert recorded == [(200, expected)]
+    assert recorded == [(200, expected, "")]
+    _reset_scraper_globals()
+
+
+def test_extension_fetch_records_cloudflare_challenge(monkeypatch):
+    _reset_scraper_globals()
+    recorded: list[tuple[object, ...]] = []
+    body = (
+        "<title>Just a moment...</title>"
+        '<script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1">'
+    )
+    monkeypatch.setattr(
+        scraper_module.extension_bridge,
+        "fetch",
+        lambda url, timeout=30: scraper_module.extension_bridge.BridgeResponse(
+            status=403, final_url=url, body=body
+        ),
+    )
+    monkeypatch.setattr(
+        scraper_module.extension_bridge,
+        "record_fetch_outcome",
+        lambda *args: recorded.append(args),
+    )
+    _ = scraper_module._f95_get_via_extension("https://f95zone.to/threads/1/")
+    assert recorded == [(403, None, "Cloudflare challenge")]
     _reset_scraper_globals()
 
 

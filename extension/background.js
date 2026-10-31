@@ -219,9 +219,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---- Extension fetch fallback (bridge client) ----
-// Background-only fetch proxy: allowlisted F95 URLs, credentialed GET,
-// 25-second abort, 4 MiB streamed cap, off-site redirect guard. No tabs,
-// windows, offscreen, or cookies API use.
+// Fetch proxy: allowlisted F95 URLs, credentialed GET, 25-second abort,
+// 4 MiB streamed cap, off-site redirect guard. Tabs are only queried for an
+// open F95 tab to repeat a guest fetch in; no windows, offscreen, or cookies
+// API use.
 const F95_THREAD_FETCH_RE = /^https:\/\/f95zone\.to\/threads\/\d+\/$/;
 const F95_BATCH_FETCH_RE = /^https:\/\/f95zone\.to\/sam\/checker\.php\?threads=\d+(,\d+){0,99}$/;
 const BRIDGE_URL = "ws://localhost:8183/api/bridge";
@@ -317,6 +318,116 @@ async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
     }
 }
 
+// Firefox sends no F95 cookies with background-page fetches, so F95 answers
+// as a guest and Cloudflare challenges them without the browser's clearance.
+// The same request from inside an open F95 tab is first-party and carries the
+// browser's login and clearance. Once a background fetch came back as a guest
+// or challenge page, later fetches use a tab first while one is open.
+const F95_GUEST_PAGE_RE = /\bdata-logged-in=["']false["']/;
+// The managed challenge loads /h/ scripts; signed-out pages only carry the
+// passive /scripts/jsd/ probe.
+const F95_CHALLENGE_PAGE_RE = /<title>\s*Just a moment|\/cdn-cgi\/challenge-platform\/h\//i;
+let bridgePreferTabFetch = false;
+
+function bridgeNeedsBrowserSession(body) {
+    if (typeof body !== "string") {
+        return false;
+    }
+    return F95_GUEST_PAGE_RE.test(body.slice(0, 4096)) || F95_CHALLENGE_PAGE_RE.test(body.slice(0, 65536));
+}
+
+// Runs inside the F95 tab as a content script. It must stay self-contained.
+async function bridgeTabFetch(url, maxBytes, timeoutMs) {
+    // Firefox's content.fetch runs as the page; Chrome content scripts already do.
+    const hasPageFetch = typeof content !== "undefined" && content && typeof content.fetch === "function";
+    const pageFetch = async (target, init) => {
+        if (hasPageFetch) {
+            try {
+                return await content.fetch(target, init);
+            } catch (_pageError) {
+                // Fall back to the content script's own fetch.
+            }
+        }
+        return fetch(target, init);
+    };
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ ok: false, error: "timeout" }), timeoutMs);
+    });
+    const request = (async () => {
+        try {
+            const response = await pageFetch(url, {
+                method: "GET",
+                credentials: "include",
+                redirect: "follow",
+                cache: "no-store",
+            });
+            const finalUrl = response.url || url;
+            if (new URL(finalUrl).hostname !== "f95zone.to") {
+                return { ok: false, error: "offsite_redirect" };
+            }
+            const body = await response.text();
+            if (new TextEncoder().encode(body).length > maxBytes) {
+                return { ok: false, error: "too_large" };
+            }
+            return { ok: true, status: response.status || 200, final_url: finalUrl, body };
+        } catch (_error) {
+            return { ok: false, error: "network" };
+        }
+    })();
+    try {
+        return await Promise.race([request, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// Returns null when no F95 tab can run the fetch.
+async function bridgeFetchViaTab(url) {
+    if (!isBridgeUrlAllowed(url)) {
+        return { ok: false, error: "refused" };
+    }
+    try {
+        if (typeof chrome === "undefined" || !chrome.tabs || !chrome.scripting) {
+            return null;
+        }
+        const tabs = await chrome.tabs.query({ url: "https://f95zone.to/*" });
+        const tab = (tabs || []).find((item) => item && typeof item.id === "number" && !item.discarded);
+        if (!tab) {
+            return null;
+        }
+        const injected = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: bridgeTabFetch,
+            args: [url, BRIDGE_MAX_BODY_BYTES, BRIDGE_FETCH_TIMEOUT_MS],
+        });
+        const result = injected && injected[0] ? injected[0].result : null;
+        return result && typeof result.ok === "boolean" ? result : null;
+    } catch (error) {
+        console.warn("wLib extension: tab fetch failed.", error);
+        return null;
+    }
+}
+
+async function bridgeFetchPreferringLogin(url) {
+    if (bridgePreferTabFetch) {
+        const viaTab = await bridgeFetchViaTab(url);
+        if (viaTab) {
+            return viaTab;
+        }
+    }
+    const fetched = await bridgeFetchUrl(url);
+    if (bridgePreferTabFetch || !fetched.ok || !bridgeNeedsBrowserSession(fetched.body)) {
+        return fetched;
+    }
+    const viaTab = await bridgeFetchViaTab(url);
+    if (!viaTab || !viaTab.ok) {
+        return fetched;
+    }
+    bridgePreferTabFetch = true;
+    return viaTab;
+}
+
 // Bridge WebSocket client: persistent connection to the running app, hello
 // with can_fetch, 20-second ping, 1-minute alarm reconnect, 5-60s backoff,
 // console-only errors.
@@ -351,6 +462,38 @@ function bridgeGetVersion() {
     }
     return "1.2.1";
 }
+
+// Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
+// does not count as activity, so the bridge would drop every half minute. An
+// extension event does count: while connected, each ping also writes a
+// storage key whose onChanged event lands in this background page.
+const BRIDGE_KEEPALIVE_KEY = "wlibBridgeKeepalive";
+
+function bridgeNeedsKeepAlive() {
+    return typeof browser !== "undefined" && !!browser.runtime
+        && typeof browser.runtime.getBrowserInfo === "function";
+}
+
+function bridgeKeepAlive() {
+    try {
+        if (!bridgeNeedsKeepAlive() || !chrome.storage || !chrome.storage.local) {
+            return;
+        }
+        const pending = chrome.storage.local.set({ [BRIDGE_KEEPALIVE_KEY]: Date.now() });
+        if (pending && typeof pending.catch === "function") {
+            pending.catch(() => {});
+        }
+    } catch (error) {
+        console.warn("wLib extension: keepalive failed.", error);
+    }
+}
+
+try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+        // The listener only has to exist for the event to reach this page.
+        chrome.storage.onChanged.addListener(() => {});
+    }
+} catch (_keepaliveListenerError) {}
 
 function bridgeClearPing() {
     if (bridgePingTimer !== null) {
@@ -413,7 +556,7 @@ async function bridgeHandleFetchMessage(message) {
     }
     let result;
     try {
-        const fetched = await bridgeFetchUrl(url);
+        const fetched = await bridgeFetchPreferringLogin(url);
         if (fetched.ok) {
             result = {
                 type: "fetch_result",
@@ -464,11 +607,13 @@ function ensureBridge() {
             }
             bridgeSendHello();
             bridgeClearPing();
+            bridgeKeepAlive();
             try {
                 bridgePingTimer = setInterval(() => {
                     try {
                         if (bridgeSocket && bridgeSocket.readyState === 1) {
                             bridgeSocket.send(JSON.stringify({ type: "ping" }));
+                            bridgeKeepAlive();
                         }
                     } catch (error) {
                         console.warn("wLib extension: ping failed.", error);

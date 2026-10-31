@@ -154,12 +154,24 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
         except extension_bridge.BridgeFailed as exc:
             extension_bridge.record_fetch_outcome(None, None, str(exc))
             raise
+        signed_in = _xenforo_signed_in(response.body)
         extension_bridge.record_fetch_outcome(
-            response.status, _xenforo_signed_in(response.body)
+            response.status,
+            signed_in,
+            "Cloudflare challenge"
+            if signed_in is None and _CLOUDFLARE_CHALLENGE_RE.search(response.body[:65536])
+            else "",
         )
         return response.status, response.body
 
     return _run_paced_f95_request(_transport)
+
+
+# A managed challenge loads /h/ scripts; rendered pages only carry the passive
+# /scripts/jsd/ probe.
+_CLOUDFLARE_CHALLENGE_RE = re.compile(
+    r"<title>\s*Just a moment|/cdn-cgi/challenge-platform/h/", re.I
+)
 
 
 def _xenforo_signed_in(html: str) -> bool | None:

@@ -6,6 +6,7 @@ from http.client import HTTPConnection
 from io import BytesIO
 from email.message import Message
 import os
+import socket
 import sys
 import json
 import threading
@@ -1718,6 +1719,26 @@ def test_bridge_upgrades_for_firefox_origin(extension_server, monkeypatch):
         extension_server, origin="moz-extension://wlib"
     )
     assert status == 101
+
+
+def test_bridge_handshake_uses_http_1_1_status_line(extension_server, monkeypatch):
+    monkeypatch.setattr(
+        "core.extension_bridge.serve_bridge_connection",
+        lambda *_args, **_kwargs: None,
+    )
+    with socket.create_connection(extension_server.server_address, timeout=3) as sock:
+        sock.sendall(
+            b"GET /api/bridge HTTP/1.1\r\n"
+            b"Host: localhost:8183\r\n"
+            b"Origin: moz-extension://wlib\r\n"
+            b"Upgrade: websocket\r\n"
+            b"Connection: keep-alive, Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        status_line = sock.makefile("rb").readline()
+    # Firefox rejects a WebSocket handshake answered with HTTP/1.0.
+    assert status_line == b"HTTP/1.1 101 Switching Protocols\r\n"
 
 
 def test_bridge_rejects_web_origin(extension_server):

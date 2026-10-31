@@ -2665,8 +2665,8 @@ class Api:
             elif browser_fallback == "logged_out":
                 result["error"] = (
                     f"{message}. The wLib extension loaded it without an F95Zone "
-                    "login. Log in to F95Zone in that browser; in Firefox, "
-                    "Strict tracking protection can also block the login."
+                    "login. Log in to F95Zone in that browser and keep an "
+                    "F95Zone tab open."
                 )
             elif browser_fallback == "failed":
                 result["error"] = (

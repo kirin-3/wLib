@@ -484,9 +484,11 @@ test('bridge refuses non-allowlisted URLs without fetching', async () => {
   assert.equal(refused.ok, false);
   assert.equal(refused.error, 'refused');
   assert.equal(fetched, false);
-  // The F95 fetch bridge must not touch tabs; optional-site registration may
-  // inject into already-open pages after an explicit permission grant.
-  assert.ok(!backgroundSource.slice(backgroundSource.indexOf('// ---- Extension fetch fallback'), backgroundSource.indexOf('// Optional sites')).includes('chrome.tabs'));
+  // The F95 fetch bridge only looks up F95 tabs for its logged-in fallback;
+  // optional-site registration may inject into already-open pages after an
+  // explicit permission grant.
+  const bridgeSource = backgroundSource.slice(backgroundSource.indexOf('// ---- Extension fetch fallback'), backgroundSource.indexOf('// Optional sites'));
+  assert.deepEqual(bridgeSource.match(/chrome\.tabs\.\w+\([^)]*\)/g), ['chrome.tabs.query({ url: "https://f95zone.to/*" })']);
   assert.ok(!backgroundSource.includes('chrome.windows'));
   assert.ok(!backgroundSource.includes('chrome.offscreen'));
   assert.ok(!backgroundSource.includes('chrome.cookies'));
@@ -589,7 +591,9 @@ test('bridge fetch aborts on timeout', async () => {
   assert.equal(result.error, 'timeout');
 });
 
-const makeBridgeHarness = ({ canFetch = true } = {}) => {
+const makeBridgeHarness = ({ canFetch = true, firefox = false } = {}) => {
+  const storageWrites = [];
+  const storageListeners = [];
   const sent = [];
   const instances = [];
   const timeouts = [];
@@ -625,9 +629,14 @@ const makeBridgeHarness = ({ canFetch = true } = {}) => {
       onAdded: { addListener: () => {} },
       onRemoved: { addListener: () => {} },
     },
+    storage: {
+      local: { set: async (items) => { storageWrites.push(items); } },
+      onChanged: { addListener: (fn) => storageListeners.push(fn) },
+    },
   };
   const context = {
     chrome: chromeStub,
+    ...(firefox ? { browser: { runtime: { getBrowserInfo: async () => ({ name: 'Firefox' }) } } } : {}),
     WebSocket: FakeWebSocket,
     fetch: async () => ({
       status: 200,
@@ -652,8 +661,34 @@ const makeBridgeHarness = ({ canFetch = true } = {}) => {
   };
   vm.createContext(context);
   vm.runInContext(backgroundSource, context);
-  return { context, sent, instances, timeouts, intervals };
+  return { context, sent, instances, timeouts, intervals, storageWrites, storageListeners };
 };
+
+test('bridge keeps the Firefox event page alive only while connected', () => {
+  const { context, instances, intervals, storageWrites, storageListeners } = makeBridgeHarness({ firefox: true });
+  assert.equal(storageListeners.length, 1);
+  vm.runInContext('ensureBridge()', context);
+  assert.equal(storageWrites.length, 0);
+  instances[0].readyState = 1;
+  instances[0].onopen();
+  assert.equal(storageWrites.length, 1);
+  assert.ok(intervals[0].ms < 30000);
+  intervals[0].fn();
+  assert.equal(storageWrites.length, 2);
+  assert.ok(typeof storageWrites[1].wlibBridgeKeepalive === 'number');
+  instances[0].readyState = 3;
+  intervals[0].fn();
+  assert.equal(storageWrites.length, 2);
+});
+
+test('bridge skips the storage keepalive outside Firefox', () => {
+  const { context, instances, intervals, storageWrites } = makeBridgeHarness();
+  vm.runInContext('ensureBridge()', context);
+  instances[0].readyState = 1;
+  instances[0].onopen();
+  intervals[0].fn();
+  assert.equal(storageWrites.length, 0);
+});
 
 test('bridge hello carries protocol and can_fetch', async () => {
   const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
@@ -708,4 +743,110 @@ test('bridge reconnects after close with backoff and no storm', async () => {
   // ensureBridge with a pending reconnect timer must not create sockets in a loop.
   assert.ok(instances.length <= 2);
   assert.ok(timeouts.length - timersAfterFirstClose <= 1);
+});
+
+test('manifest CSP keeps the localhost bridge on plain ws', () => {
+  const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
+  const policy = manifest.content_security_policy && manifest.content_security_policy.extension_pages;
+  assert.ok(policy && policy.includes("script-src 'self'"));
+  // Firefox's MV3 default includes this directive, which turns ws://localhost into wss://.
+  assert.ok(!policy.includes('upgrade-insecure-requests'));
+});
+
+const GUEST_PAGE = '<html id="XF" data-logged-in="false"><title>Log in</title></html>';
+const MEMBER_PAGE = '<html id="XF" data-logged-in="true"><h1>Game</h1></html>';
+
+const makeTabFetchHarness = ({ backgroundBody, tabBody, tabs = [{ id: 7 }] }) => {
+  const calls = { background: 0, tab: 0, injected: [] };
+  const context = runBackground({
+    fetch: async (url) => {
+      calls.background += 1;
+      return { status: 200, url, text: async () => backgroundBody };
+    },
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  context.chrome.tabs = { query: async () => tabs };
+  context.chrome.scripting = {
+    executeScript: async (options) => {
+      calls.tab += 1;
+      calls.injected.push(options);
+      return [{ result: { ok: true, status: 200, final_url: options.args[0], body: tabBody } }];
+    },
+  };
+  return { context, calls };
+};
+
+test('guest background fetch is repeated from an open F95 tab, which is then preferred', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE });
+  const first = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/61053/")', context);
+  assert.equal(first.body, MEMBER_PAGE);
+  assert.deepEqual([calls.background, calls.tab], [1, 1]);
+  assert.equal(calls.injected[0].target.tabId, 7);
+  assert.equal(calls.injected[0].args[0], 'https://f95zone.to/threads/61053/');
+
+  const second = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/1/")', context);
+  assert.equal(second.body, MEMBER_PAGE);
+  // The tab goes first now; the background is not asked again.
+  assert.deepEqual([calls.background, calls.tab], [1, 2]);
+});
+
+test('challenged background fetch is repeated from an open F95 tab', async () => {
+  const challenge = '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></body></html>';
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: challenge, tabBody: MEMBER_PAGE });
+  const result = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/321017/")', context);
+  assert.equal(result.body, MEMBER_PAGE);
+  assert.deepEqual([calls.background, calls.tab], [1, 1]);
+});
+
+test('passive Cloudflare probe on a member page does not trigger the tab retry', async () => {
+  const page = '<html id="XF" data-logged-in="true"><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></html>';
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: page, tabBody: MEMBER_PAGE });
+  await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/1/")', context);
+  assert.equal(calls.tab, 0);
+});
+
+test('guest background fetch is kept when no F95 tab is open', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE, tabs: [] });
+  const result = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/61053/")', context);
+  assert.equal(result.body, GUEST_PAGE);
+  assert.equal(calls.tab, 0);
+  assert.equal(vm.runInContext('bridgePreferTabFetch', context), false);
+});
+
+test('logged-in background fetch never touches tabs', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: MEMBER_PAGE, tabBody: GUEST_PAGE });
+  const result = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/1/")', context);
+  assert.equal(result.body, MEMBER_PAGE);
+  assert.equal(calls.tab, 0);
+});
+
+test('tab fetch refuses non-allowlisted URLs without injecting', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: MEMBER_PAGE, tabBody: MEMBER_PAGE });
+  const result = await vm.runInContext('bridgeFetchViaTab("https://example.com/")', context);
+  assert.deepEqual({ ...result }, { ok: false, error: 'refused' });
+  assert.equal(calls.tab, 0);
+});
+
+test('injected tab fetch prefers the page fetch and guards redirects and size', async () => {
+  const pageCalls = [];
+  const context = runBackground({ URL, TextEncoder, TextDecoder });
+  context.content = {
+    fetch: async (url, init) => {
+      pageCalls.push({ url, init });
+      return { status: 200, url, text: async () => MEMBER_PAGE };
+    },
+  };
+  const ok = await vm.runInContext('bridgeTabFetch("https://f95zone.to/threads/1/", 1024, 1000)', context);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.body, MEMBER_PAGE);
+  assert.equal(pageCalls[0].init.credentials, 'include');
+
+  const small = await vm.runInContext('bridgeTabFetch("https://f95zone.to/threads/1/", 10, 1000)', context);
+  assert.deepEqual({ ...small }, { ok: false, error: 'too_large' });
+
+  context.content.fetch = async () => ({ status: 200, url: 'https://example.com/', text: async () => '' });
+  const offsite = await vm.runInContext('bridgeTabFetch("https://f95zone.to/threads/1/", 1024, 1000)', context);
+  assert.deepEqual({ ...offsite }, { ok: false, error: 'offsite_redirect' });
 });

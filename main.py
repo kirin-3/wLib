@@ -947,6 +947,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._discard_request_body()
+        # RFC 6455 requires an HTTP/1.1 status line; Firefox drops the socket
+        # on BaseHTTPRequestHandler's default "HTTP/1.0 101" while Chromium
+        # accepts it.
+        self.protocol_version: str = "HTTP/1.1"
         self.send_response(101, "Switching Protocols")
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")

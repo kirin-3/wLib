@@ -3174,7 +3174,7 @@ class ApiService {
           return {
             success: false,
             mock: true,
-            error: "Login is required to access this thread. The wLib extension loaded it without an F95Zone login. Log in to F95Zone in that browser; in Firefox, Strict tracking protection can also block the login.",
+            error: "Login is required to access this thread. The wLib extension loaded it without an F95Zone login. Log in to F95Zone in that browser and keep an F95Zone tab open.",
             error_code: "login_required",
             browser_fallback: "logged_out" as const,
           };
