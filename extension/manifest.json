@@ -58,7 +58,10 @@
                 "external-link.svg"
             ],
             "matches": [
-                "*://f95zone.to/*"
+                "*://f95zone.to/*",
+                "https://www.dlsite.com/*",
+                "https://vndb.org/*",
+                "https://www.ryuugames.com/*"
             ]
         }
     ],

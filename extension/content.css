@@ -52,6 +52,37 @@
     transform: none;
 }
 
+/* Store sites (DLsite, VNDB, Ryuugames) style bare elements; keep their line
+   heights, margins and button resets out of the widget. */
+.wlib-site-widget,
+.wlib-site-widget * {
+    box-sizing: border-box;
+    line-height: 1.4;
+    letter-spacing: normal;
+    text-transform: none;
+}
+
+.wlib-site-widget p,
+.wlib-site-widget button,
+.wlib-site-widget img {
+    margin: 0;
+}
+
+.wlib-site-widget button {
+    font-family: inherit;
+    min-width: 0;
+    min-height: 0;
+}
+
+.wlib-site-widget .wlib-collapse-btn,
+.wlib-site-widget .wlib-collapsed-toggle {
+    padding: 0;
+}
+
+.wlib-site-widget img {
+    max-width: none;
+}
+
 .wlib-header-row {
     display: flex;
     align-items: center;
