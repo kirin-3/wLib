@@ -214,7 +214,9 @@ storage under `<data dir>/sandbox/<game id>/` is excluded from JSON backups and
 sync. Missing sandbox fields in older backups preserve a matched game's local
 value.
 
-Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder`, `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), `catalog_enabled` (`"1"`/`"0"`, missing means on, local-only), and `urm_rpa_path` (empty by default).
+Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder` (default), `library_folders` (JSON array of paths, seeded from the existing default), `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), `catalog_enabled` (`"1"`/`"0"`, missing means on, local-only), and `urm_rpa_path` (empty by default).
+
+`get_library_folders()` returns `(folders, default)` and repairs drift: a missing default is prepended, or the first listed folder becomes the default when none is set. A non-empty list always contains exactly one default. Settings strip paths and deduplicate by realpath; both keys can be cleared together.
 
 `custom_play_statuses` stores a JSON list of user-defined names (default `[]`). Removing a name through Settings resets affected games to `Not Started` atomically with the setting update. `urm_rpa_path` stores the optional URM source archive path (default empty). Neither requires a schema change. Backups include the status list under general settings and URM under machine-specific paths; game statuses survive imports without settings.
 

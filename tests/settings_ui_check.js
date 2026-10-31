@@ -13,17 +13,18 @@ async (page) => {
       localStorage.setItem("wlib-mock-games", "[]");
       localStorage.setItem("wlib-mock-platform", "linux");
       localStorage.setItem("wlib-theme", "dark");
-      localStorage.removeItem("wlib-mock-settings");
+      localStorage.setItem("wlib-mock-settings", JSON.stringify({ library_folders: ["/tmp/initial-folder", "/tmp/first-folder", "/tmp/second-folder"], library_folder: "/tmp/initial-folder" }));
     });
     const url = new URL(previousUrl); url.hash = "/settings";
     await page.goto(url.toString());
     await page.reload();
     await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
-    const folder = page.getByLabel("Library folder", { exact: true });
-    await folder.waitFor();
+    const folderRow = path => page.getByLabel(path, { exact: true }).locator("..");
+    await folderRow("/tmp/first-folder").waitFor();
+    check(await folderRow("/tmp/initial-folder").getByRole("button", { name: "Remove", exact: true }).isDisabled(), "Default cannot be removed while other folders exist");
 
     // 1. Settings typed while a save is in flight must not be replaced by the response.
-    await folder.fill("/tmp/first-folder");
+    await folderRow("/tmp/first-folder").getByRole("button", { name: "Make default", exact: true }).click();
     await page.evaluate(() => {
       window.__settingsBase = JSON.parse(localStorage.getItem("wlib-mock-settings") || "{}");
       window.pywebview = {
@@ -34,6 +35,7 @@ async (page) => {
               resolve({ success: true, mock: true });
             }, 900);
           }),
+          list_library_folders: () => ["/tmp/initial-folder", "/tmp/first-folder", "/tmp/second-folder"].map(path => ({path, is_default: path === window.__settingsBase.library_folder, available: true, free_bytes: 1024 ** 4})),
           get_settings: () => ({
             ...window.__settingsBase,
             rpgmaker_linux_runner_status: {
@@ -46,10 +48,10 @@ async (page) => {
     const save = page.getByRole("button", { name: "Save Changes", exact: true });
     await save.click();
     await page.waitForFunction(() => document.querySelector(".save-bar")?.textContent.includes("Saving"));
-    await folder.fill("/tmp/second-folder");
+    await folderRow("/tmp/second-folder").getByRole("button", { name: "Make default", exact: true }).click();
     await page.waitForFunction(() => window.__settingsBase?.library_folder === "/tmp/first-folder");
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    check(await folder.inputValue() === "/tmp/second-folder", "Edits typed during a settings save must stay in the form");
+    check(await folderRow("/tmp/second-folder").getByText("Default", { exact: true }).isVisible(), "Edits typed during a settings save must stay in the form");
     check(await page.getByText("You have unsaved changes.", { exact: true }).isVisible(), "Edits typed during a settings save must stay marked unsaved");
     check(await save.isVisible(), "Edits typed during a settings save must leave Save available");
 
@@ -57,7 +59,7 @@ async (page) => {
     await page.evaluate(() => { delete window.pywebview; });
     await save.click();
     await page.waitForFunction(() => !document.querySelector(".save-bar") || !document.querySelector(".save-bar").textContent.includes("Saving"));
-    check(await folder.inputValue() === "/tmp/second-folder", "The retry must persist the newer settings value");
+    check(await folderRow("/tmp/second-folder").getByText("Default", { exact: true }).isVisible(), "The retry must persist the newer settings value");
     check(
       await page.evaluate(() => JSON.parse(localStorage.getItem("wlib-mock-settings") || "{}").library_folder === "/tmp/second-folder"),
       "The newer settings value must reach the backend",

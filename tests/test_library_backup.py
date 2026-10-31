@@ -2856,3 +2856,69 @@ def test_empty_backup_title_does_not_replace_matched_title():
     assert result["created"] == 1
     titles = {game["title"] for game in get_all_games()}
     assert titles == {"Real Title", "Imported Game"}
+
+
+@pytest.mark.parametrize("mode", ["overwrite", "fill_missing"])
+@pytest.mark.parametrize(
+    "legacy,foreign_default", [(False, False), (False, True), (True, False)]
+)
+def test_library_folder_backup_roundtrip_and_host_filter(
+    tmp_path, mode, legacy, foreign_default
+):
+    from core.database import get_library_folders
+
+    first = str(tmp_path / "first")
+    second = str(tmp_path / "second")
+    update_setting("library_folders", json.dumps([first, second]))
+    update_setting("library_folder", first)
+    backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
+    paths = backup["settings"]["paths"]
+    assert paths["library_folders"] == [first, second]
+    if legacy:
+        del paths["library_folders"]
+    else:
+        paths["library_folders"].append("Z:\\Games")
+    if foreign_default:
+        paths["library_folder"] = "Z:\\Games"
+    local = str(tmp_path / "local")
+    update_setting("library_folder", local if mode == "fill_missing" else "")
+    update_setting(
+        "library_folders", json.dumps([local]) if mode == "fill_missing" else "[]"
+    )
+    report = apply_library_backup(
+        backup, {"sections": [SECTION_SETTINGS_PATHS], "merge_mode": mode}
+    )
+    assert get_library_folders() == (
+        ([local], local)
+        if mode == "fill_missing"
+        else ([first] if legacy else [first, second], first)
+    )
+    if not legacy:
+        assert any(
+            w["type"] == "foreign_path" and w["field"] == "library_folders"
+            for w in report["warning_records"]
+        )
+
+
+def test_library_folder_import_with_only_foreign_folders_keeps_local(tmp_path):
+    from core.database import get_library_folders
+
+    local = str(tmp_path / "local")
+    update_setting("library_folders", json.dumps([local]))
+    update_setting("library_folder", local)
+    backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
+    paths = backup["settings"]["paths"]
+    paths["library_folders"] = ["Z:\\Games", "Y:\\More"]
+    paths["library_folder"] = "Z:\\Games"
+
+    report = apply_library_backup(
+        backup, {"sections": [SECTION_SETTINGS_PATHS], "merge_mode": "overwrite"}
+    )
+
+    assert get_library_folders() == ([local], local)
+    folder_warnings = [
+        w
+        for w in report["warning_records"]
+        if w["type"] == "foreign_path" and w["field"].startswith("library_folder")
+    ]
+    assert [w["path"] for w in folder_warnings] == ["Z:\\Games", "Y:\\More"]

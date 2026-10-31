@@ -6,11 +6,12 @@ import {
   api,
   type ArchiveInstallResponse,
   type GameRecord,
+  type LibraryFolder,
   type InstallDestinationOptions,
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { createInstallPreview, mergeArchiveFields, type InstallArchiveSeed } from "../../utils/installArchive";
+import { createInstallPreview, mergeArchiveFields, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
@@ -52,6 +53,10 @@ const removeReason = ref("");
 const removeOld = ref(true);
 const deleteArchive = ref(false);
 const libraryFolder = ref("");
+const libraryFolders = ref<LibraryFolder[]>([]);
+const folderEdited = ref(false);
+const targetId = ref<number | null>(null);
+const ownTargetsInside = ref<string[]>([]);
 const libraryFolderMissing = ref(false);
 const inspectError = ref("");
 const installError = ref("");
@@ -66,6 +71,9 @@ const inspecting = ref(false);
 const target = ref<GameRecord | null>(null);
 const seededArchive = ref("");
 const isUpdate = computed(() => !!target.value);
+const selectedFolderUnavailable = computed(() =>
+  libraryFolders.value.some((folder) => folder.path === libraryFolder.value && !folder.available),
+);
 const canInstall = computed(
   () =>
     phase.value === "ready" &&
@@ -73,6 +81,7 @@ const canInstall = computed(
     title.value.trim() !== "" &&
     !toolError.value &&
     !libraryFolderMissing.value &&
+    libraryFolders.value.some((folder) => folder.path === libraryFolder.value && folder.available) &&
     !inspecting.value &&
     !lookupLoading.value,
 );
@@ -118,6 +127,10 @@ const reset = () => {
   removeOld.value = true;
   deleteArchive.value = false;
   libraryFolder.value = "";
+  libraryFolders.value = [];
+  folderEdited.value = false;
+  targetId.value = null;
+  ownTargetsInside.value = [];
   libraryFolderMissing.value = false;
   inspectError.value = "";
   installError.value = "";
@@ -143,7 +156,7 @@ const updatePreview = () => {
   if (!props.modelValue || phase.value === "installing" || phase.value === "done") return;
   preview.schedule({
     title: title.value, version: version.value, creator: creator.value,
-    engine: engine.value, game_id: target.value?.id,
+    engine: engine.value, game_id: target.value?.id, library_folder: libraryFolder.value,
   });
 };
 watch([title, version, creator, engine, libraryFolder], updatePreview);
@@ -192,9 +205,10 @@ watch(f95Url, () => {
 
 const loadLibraryFolder = async () => {
   try {
-    const settings = await api.getSettings();
+    const [settings, folders] = await Promise.all([api.getSettings(), api.listLibraryFolders()]);
     if (!props.modelValue) return;
-    libraryFolder.value = settings?.library_folder || "";
+    libraryFolders.value = folders;
+    if (!libraryFolder.value) libraryFolder.value = settings?.library_folder || "";
     libraryFolderMissing.value = !libraryFolder.value.trim();
   } catch (e) {
     console.error("Failed to load library folder", e);
@@ -212,7 +226,7 @@ const inspect = async () => {
   installError.value = "";
   duplicateGameId.value = null;
   try {
-    const info = await api.inspectArchive(path, target.value?.id ?? null);
+    const info = await api.inspectArchive(path, target.value?.id ?? null, targetId.value, folderEdited.value ? libraryFolder.value : null);
     if (requestId !== inspectRequestId || !props.modelValue) return;
     // The field was edited without committing; wait for its change event.
     if (archive.value.trim() !== path) {
@@ -236,6 +250,8 @@ const inspect = async () => {
     archiveGuess = { title: info.title || "", version: info.version || "" };
     if (!engine.value.trim() && !edited.has("engine")) engine.value = info.engine || "";
     if (!creator.value.trim() && !edited.has("creator")) creator.value = isUpdate.value ? (target.value?.developer || info.creator || "") : (info.creator || "");
+    libraryFolder.value = preselectLibraryFolder(libraryFolder.value, info.library_folder, folderEdited.value);
+    ownTargetsInside.value = info.own_targets_inside || [];
     destination.value = info.destination || "";
     enginePending.value = !!info.engine_pending;
     toolError.value = info.tool_error || "";
@@ -273,10 +289,11 @@ const browseLibraryFolder = async () => {
   try {
     const path = await api.browseDirectory(libraryFolder.value);
     if (!path || !props.modelValue) return;
-    const res = await api.saveSettings({ library_folder: path });
+    const res = await api.saveSettings({ library_folder: path, library_folders: [path] });
     if (!props.modelValue) return;
     if (res?.success === false) throw new Error(res.error || "Could not save library folder");
     libraryFolder.value = path;
+    libraryFolders.value = await api.listLibraryFolders();
     libraryFolderMissing.value = false;
     if (archive.value.trim()) await inspect();
   } catch (e) {
@@ -347,6 +364,7 @@ const install = async () => {
       f95_url: f95Url.value.trim(),
       links: requestSeed.value?.links,
       library_folder: libraryFolder.value || undefined,
+      target_id: targetId.value,
       remove_old: removeOld.value,
       delete_archive: deleteArchive.value,
     });
@@ -484,6 +502,23 @@ watch(phase, (next, prev) => {
           Choose a library folder first — installs are placed inside it.
           <button @click="browseLibraryFolder" class="link-btn ml-2 font-semibold">Choose folder</button>
         </div>
+
+        <div v-if="libraryFolders.length" class="space-y-2">
+          <label for="install-library-folder" class="text-sm">Library folder</label>
+          <select v-if="libraryFolders.length > 1" id="install-library-folder" v-model="libraryFolder" @change="folderEdited = true; inspect()" :disabled="phase === 'installing'" class="modal-input w-full text-sm">
+            <option v-for="folder in libraryFolders" :key="folder.path" :value="folder.path" :disabled="!folder.available">{{ folder.path }} — {{ formatLibraryFreeSpace(folder.available ? folder.free_bytes : null) }}</option>
+          </select>
+          <p v-else class="text-sm font-mono break-all">{{ libraryFolders[0]?.path }} — {{ formatLibraryFreeSpace(libraryFolders[0]?.available ? libraryFolders[0]?.free_bytes ?? null : null) }}</p>
+          <p v-if="selectedFolderUnavailable" class="text-xs" style="color: var(--warning-text)">This library folder is unavailable. Mount its drive or choose another folder.</p>
+        </div>
+        <div v-if="target?.launch_targets?.length" class="space-y-2">
+          <label for="install-part" class="text-sm">Part to update</label>
+          <select id="install-part" v-model="targetId" @change="inspect()" :disabled="phase === 'installing'" class="modal-input w-full text-sm">
+            <option :value="null">Default</option>
+            <option v-for="part in target.launch_targets" :key="part.id" :value="part.id">{{ part.label }}</option>
+          </select>
+        </div>
+        <p v-if="ownTargetsInside.length" class="text-sm" style="color: var(--warning-text)">The old folder is kept if these targets are not found in the new version: {{ ownTargetsInside.join(', ') }}.</p>
 
         <div class="flex gap-2">
           <input

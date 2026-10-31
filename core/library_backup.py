@@ -128,6 +128,7 @@ PATH_SETTINGS_KEYS = (
     RPGMAKER_LINUX_RUNNER_SETTING,
     "urm_rpa_path",
     "library_folder",
+    "library_folders",
     "library_folder_pattern",
     "downloads_folder",
     "download_detection_enabled",
@@ -459,6 +460,9 @@ def build_library_backup(
         settings["general"] = _get_settings_payload(GENERAL_SETTINGS_KEYS)
     if SECTION_SETTINGS_PATHS in sections:
         paths: dict[str, object] = dict(_get_settings_payload(PATH_SETTINGS_KEYS))
+        folders, default = database.get_library_folders()
+        paths["library_folders"] = folders
+        paths["library_folder"] = default
         paths["companion_tools"] = [
             {key: value for key, value in tool.items() if key != "id"}
             for tool in database.list_companion_tools()
@@ -1019,25 +1023,29 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
     for key in PATH_SETTINGS_KEYS:
         if key in NON_PATH_SETTINGS_KEYS:
             continue
-        path_text = _coerce_text(path_settings.get(key)).strip()
-        if not _is_host_path_setting(path_text):
-            warnings.append(
-                {
-                    "type": "foreign_path",
-                    "scope": "setting",
-                    "field": key,
-                    "title": "",
-                    "path": path_text,
-                    "message": f"{key} is not a valid path on this system and will not be imported: {path_text}",
-                }
-            )
+        # The default is one of the listed folders; warn about it once.
+        if key == "library_folder" and "library_folders" in path_settings:
             continue
-        _path_warning(
-            warnings,
-            scope="setting",
-            field=key,
-            path=path_text,
+        values = (
+            _folder_entries(path_settings.get(key))
+            if key == "library_folders"
+            else [path_settings.get(key)]
         )
+        for value in values:
+            path_text = _coerce_text(value).strip()
+            if not _is_host_path_setting(path_text):
+                warnings.append(
+                    {
+                        "type": "foreign_path",
+                        "scope": "setting",
+                        "field": key,
+                        "title": "",
+                        "path": path_text,
+                        "message": f"{key} is not a valid path on this system and will not be imported: {path_text}",
+                    }
+                )
+                continue
+            _path_warning(warnings, scope="setting", field=key, path=path_text)
 
     for raw in _coerce_sequence(path_settings.get("companion_tools")):
         tool = _backup_companion_tool(raw)
@@ -1484,6 +1492,62 @@ def _import_companion_overrides(
             )
 
 
+def _folder_entries(raw: object) -> list[object]:
+    if isinstance(raw, str):
+        try:
+            raw = cast(object, json.loads(raw))
+        except ValueError:
+            return []
+    return list(cast(list[object], raw)) if isinstance(raw, list) else []
+
+
+def _import_library_folders(
+    cursor: sqlite3.Cursor, group: Mapping[str, object], merge_mode: str
+) -> int:
+    if "library_folders" not in group and "library_folder" not in group:
+        return 0
+    rows = dict(
+        cursor.execute(
+            "SELECT key, value FROM settings WHERE key IN ('library_folder', 'library_folders')"
+        ).fetchall()
+    )
+    if merge_mode == "fill_missing" and (
+        str(rows.get("library_folders") or "[]") not in ("", "[]")
+        or rows.get("library_folder")
+    ):
+        return 0
+    raw_default = _coerce_text(group.get("library_folder")).strip()
+    raw_folders = (
+        _folder_entries(group.get("library_folders"))
+        if "library_folders" in group
+        else [raw_default]
+    )
+    folders = database.normalize_library_folders(
+        [
+            p.strip()
+            for p in raw_folders
+            if isinstance(p, str) and p.strip() and _is_host_path_setting(p.strip())
+        ]
+    )
+    # Every entry was foreign: keep the local folders, as for other path settings.
+    if not folders and any(isinstance(p, str) and p.strip() for p in raw_folders):
+        return 0
+    identity = os.path.realpath(os.path.expanduser(raw_default)) if raw_default else ""
+    default = next(
+        (p for p in folders if os.path.realpath(os.path.expanduser(p)) == identity),
+        folders[0] if folders else "",
+    )
+    for key, value in (
+        ("library_folders", json.dumps(folders)),
+        ("library_folder", default),
+    ):
+        _ = cursor.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+    return 2
+
+
 def _import_setting_groups(
     cursor: sqlite3.Cursor,
     backup: Mapping[str, object],
@@ -1500,7 +1564,11 @@ def _import_setting_groups(
     updated = 0
     for group_name, allowed_keys in groups:
         group = _coerce_mapping(settings.get(group_name))
+        if group_name == "paths":
+            updated += _import_library_folders(cursor, group, merge_mode)
         for key in allowed_keys:
+            if key in ("library_folder", "library_folders"):
+                continue
             if key not in group:
                 continue
             value = _coerce_setting_value(key, group.get(key))

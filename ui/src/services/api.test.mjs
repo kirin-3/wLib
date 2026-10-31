@@ -176,6 +176,22 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
       (await api.inspectArchive("/tmp/Eternum-0.6.7z")).tool_error,
       "Install 7-Zip (7z) or bsdtar to extract .7z archives.",
     );
+    // Inspect must read the target CRUD store after embedded targets migrate.
+    const beforePartCheck = new Map(storage);
+    storage.set("wlib-mock-settings", JSON.stringify({library_folder: "/one", library_folders: ["/one", "/two"]}));
+    storage.set("wlib-mock-games", JSON.stringify([{
+      id: 1, title: "Multipart", exe_path: "/one/Multipart/Ep1/Game.sh",
+      launch_targets: [{id: 2, game_id: 1, label: "Ep2", exe_path: "/two/Multipart/Ep2/Game.sh", sort_order: 0}],
+    }]));
+    await api.getGames();
+    const partPreview = await api.inspectArchive("/tmp/Multipart-2.0.zip", 1, 2);
+    assert.equal(partPreview.success, true);
+    assert.equal(partPreview.old_folder, "/two/Multipart/Ep2");
+    assert.equal(partPreview.library_folder, "/two");
+    assert.equal((await api.inspectArchive("/tmp/Multipart-2.0.zip", 1, 999)).success, false);
+    storage.clear();
+    for (const [key, value] of beforePartCheck) storage.set(key, value);
+
     const added = await api.addGame("Eternum", "/tmp/Eternum-0.6-pc/Eternum.exe");
     assert.equal(added.title, "Eternum");
 

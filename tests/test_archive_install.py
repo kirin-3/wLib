@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import json
 import os
 import sys
 import zipfile
@@ -369,7 +370,7 @@ def test_can_remove_old_folder_guards(tmp_path):
     allowed = can_remove_old_folder(
         str(old),
         str(new_dest),
-        str(lib),
+        [str(lib)],
         str(tmp_path / "Downloads"),
         [str(other_exe)],
         str(old / "Game.exe"),
@@ -389,18 +390,18 @@ def test_can_remove_old_folder_guards(tmp_path):
         is False
     )
     assert (
-        can_remove_old_folder(str(lib), str(new_dest), str(lib))["removable"] is False
+        can_remove_old_folder(str(lib), str(new_dest), [str(lib)])["removable"] is False
     )
     downloads = tmp_path / "Downloads"
     downloads.mkdir(exist_ok=True)
     assert (
-        can_remove_old_folder(str(downloads), str(new_dest), str(lib), str(downloads))[
-            "removable"
-        ]
+        can_remove_old_folder(
+            str(downloads), str(new_dest), [str(lib)], str(downloads)
+        )["removable"]
         is False
     )
     assert (
-        can_remove_old_folder(str(lib / "Game"), str(new_dest), str(lib))["removable"]
+        can_remove_old_folder(str(lib / "Game"), str(new_dest), [str(lib)])["removable"]
         is False
     )
     shared = tmp_path / "shared"
@@ -411,7 +412,7 @@ def test_can_remove_old_folder_guards(tmp_path):
         can_remove_old_folder(
             str(shared),
             str(new_dest),
-            str(lib),
+            [str(lib)],
             "",
             [str(shared / "Other.exe")],
             str(shared / "Game.exe"),
@@ -420,7 +421,7 @@ def test_can_remove_old_folder_guards(tmp_path):
     )
     assert (
         can_remove_old_folder(
-            str(old), str(new_dest), str(lib), "", [], str(old / "Missing.exe")
+            str(old), str(new_dest), [str(lib)], "", [], str(old / "Missing.exe")
         )["removable"]
         is False
     )
@@ -454,7 +455,7 @@ def test_can_remove_old_folder_refuses_a_mounted_drive_root(tmp_path, monkeypatc
     result = can_remove_old_folder(
         str(drive),
         str(tmp_path / "lib" / "Game" / "2.0"),
-        str(tmp_path / "lib"),
+        [str(tmp_path / "lib")],
         "",
         [],
         str(old_exe),
@@ -1846,3 +1847,137 @@ def test_bundled_tool_used_when_library_folder_not_created_yet(monkeypatch, tmp_
         str(archive), library_folder=str(tmp_path / "missing" / "library")
     )
     assert (tool, error) == (str(bundled), None)
+
+
+def test_non_default_library_folder_cannot_be_removed(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    second.mkdir()
+    result = can_remove_old_folder(
+        str(second), str(first / "Game"), [str(first), str(second)]
+    )
+    assert result["removable"] is False
+    assert "library folder" in result["reason"]
+
+
+@pytest.mark.parametrize("nested_default", [False, True])
+def test_update_selected_part_preserves_or_relocates_default(
+    tmp_path, monkeypatch, nested_default
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    old = tmp_path / "old"
+    part = old / "Ep2"
+    part.mkdir(parents=True)
+    default = part / "Default.exe" if nested_default else old / "Ep1" / "Game.exe"
+    default.parent.mkdir(exist_ok=True)
+    default.write_bytes(b"ep1")
+    (part / "Game.exe").write_bytes(b"ep2")
+    (part / "saves").mkdir()
+    (part / "saves" / "slot.sav").write_bytes(b"saved")
+    gid = db.add_game("Title", str(default))
+    tid = db.add_game_launch_target(gid, "Ep2", str(part / "Game.exe"))
+    archive = tmp_path / "update.zip"
+    _write_game_zip(archive, {"Game.exe": b"new", "Default.exe": b"new default"})
+    lib = tmp_path / "second"
+    db.update_setting(
+        "library_folders", json.dumps([str(tmp_path / "first"), str(lib)])
+    )
+    db.update_setting("library_folder", str(tmp_path / "first"))
+    stages = []
+    checks = []
+    import core.archive_install as ai
+
+    original = ai.create_staging_dir
+    monkeypatch.setattr(
+        ai,
+        "create_staging_dir",
+        lambda folder: stages.append(folder) or original(folder),
+    )
+    monkeypatch.setattr(
+        ai, "ensure_free_space", lambda folder, size: checks.append(folder)
+    )
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Title",
+        version="2",
+        game_id=gid,
+        target_id=tid["id"],
+    )
+    destination = lib / "Title" / "2"
+    assert result["success"] is True
+    assert stages == checks == [str(lib)]
+    assert db.list_game_launch_targets(gid)[0]["exe_path"] == str(
+        destination / "Game.exe"
+    )
+    assert (destination / "saves" / "slot.sav").read_bytes() == b"saved"
+    assert db.get_game(gid)["exe_path"] == str(
+        destination / "Default.exe" if nested_default else default
+    )
+    assert not part.exists()
+    if not nested_default:
+        assert default.read_bytes() == b"ep1"
+
+
+@pytest.mark.parametrize("helper_present,update_fails", [(False, False), (True, False), (True, True)])
+def test_cleanup_waits_for_own_target_relocation(tmp_path, monkeypatch, helper_present, update_fails):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "Game.exe").write_bytes(b"old")
+    helper = old / "Config.exe" if helper_present else old / "Ep2" / "Game.exe"
+    helper.parent.mkdir(exist_ok=True)
+    helper.write_bytes(b"helper")
+    gid = db.add_game("Title", str(old / "Game.exe"))
+    db.add_game_launch_target(gid, "Config" if helper_present else "Ep2", str(helper))
+    archive = tmp_path / "update.zip"
+    _write_game_zip(
+        archive,
+        {
+            "Game.exe": b"new",
+            **({"Config.exe": b"new config"} if helper_present else {}),
+        },
+    )
+    if update_fails:
+        def fail_update(*_args, **_kwargs):
+            raise OSError("Cannot update target")
+        monkeypatch.setattr(db, "update_game_launch_target", fail_update)
+    result = install_archive(
+        str(archive),
+        library_folder=str(tmp_path / "lib"),
+        pattern="{title}",
+        title="Title",
+        game_id=gid,
+    )
+    removed = helper_present and not update_fails
+    assert result["removed_old"] is removed
+    assert old.exists() is not removed
+    if not removed:
+        assert ('"Config"' if helper_present else '"Ep2"') in result["kept_old_folder_reason"]
+        assert helper.read_bytes() == b"helper"
+
+
+def test_install_rejects_target_owned_by_another_game(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    gid = db.add_game("Title", "")
+    other = db.add_game("Other", "")
+    tid = db.add_game_launch_target(other, "Other", str(tmp_path / "Other.exe"))
+    archive = tmp_path / "update.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    with pytest.raises(ArchiveInstallError, match="does not belong"):
+        install_archive(
+            str(archive),
+            library_folder=str(tmp_path / "lib"),
+            pattern="{title}",
+            title="Title",
+            game_id=gid,
+            target_id=tid["id"],
+        )
+    assert not (tmp_path / "lib").exists()

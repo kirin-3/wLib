@@ -6,6 +6,8 @@ import {
   INSTALL_ARCHIVE_EVENT,
   openInstallArchive,
   mergeArchiveFields,
+  preselectLibraryFolder,
+  formatLibraryFreeSpace,
   createInstallPreview,
   type InstallArchiveRequest,
 } from "./installArchive.ts";
@@ -110,4 +112,12 @@ test("preview debounces edits, discards stale responses immediately and cancels 
   requests[3]!.reject(new Error("offline"));
   await Promise.resolve();
   assert.equal(errors.length, 1);
+});
+
+test("folder preselection follows inspection until the user chooses a disk", () => {
+  assert.equal(preselectLibraryFolder("/default", "/second", false), "/second");
+  assert.equal(preselectLibraryFolder("/chosen", "/second", true), "/chosen");
+  assert.equal(preselectLibraryFolder("/default", undefined, false), "/default");
+  assert.equal(formatLibraryFreeSpace(null), "Unavailable");
+  assert.equal(formatLibraryFreeSpace(1024 ** 3), "1.0 GiB free");
 });

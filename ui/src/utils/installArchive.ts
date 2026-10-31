@@ -72,3 +72,15 @@ export function createInstallPreview<T, R>(
     },
   };
 }
+
+/** Preserve the user's disk choice when later inspections suggest a folder. */
+export function preselectLibraryFolder(current: string, suggested: string | undefined, edited: boolean): string {
+  return edited ? current : suggested || current;
+}
+
+export function formatLibraryFreeSpace(bytes: number | null): string {
+  if (bytes === null) return "Unavailable";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const power = Math.min(4, Math.floor(Math.log(Math.max(1, bytes)) / Math.log(1024)));
+  return `${(bytes / 1024 ** power).toFixed(1)} ${units[power]} free`;
+}

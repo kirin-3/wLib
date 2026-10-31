@@ -3500,6 +3500,7 @@ def test_api_install_archive_new_game(tmp_path):
     api = Api()
     library = tmp_path / "lib"
     library.mkdir()
+    update_setting("library_folder", str(library))
     archive = tmp_path / "Eternum-0.8-pc.zip"
     _write_archive(archive, {"Eternum.exe": b"new"})
 
@@ -3528,6 +3529,7 @@ def test_api_install_archive_new_game(tmp_path):
 def test_api_install_archive_update_changes_exe_and_version(tmp_path):
     api = Api()
     library = tmp_path / "lib"
+    update_setting("library_folder", str(library))
     old_dir = library / "Game" / "1.0"
     old_dir.mkdir(parents=True)
     old_exe = old_dir / "Game.exe"
@@ -3557,6 +3559,7 @@ def test_api_install_archive_update_changes_exe_and_version(tmp_path):
 def test_api_install_archive_update_keeps_finished_version(tmp_path):
     api = Api()
     library = tmp_path / "lib"
+    update_setting("library_folder", str(library))
     old_dir = library / "Game" / "0.5"
     old_dir.mkdir(parents=True)
     old_exe = old_dir / "Game.exe"
@@ -3643,6 +3646,7 @@ def test_api_install_archive_refuses_concurrent_install(tmp_path):
     api = Api()
     api._archive_install_status["running"] = True
     library = tmp_path / "lib"
+    update_setting("library_folder", str(library))
     staging = library / ".wlib-staging-busy"
     staging.mkdir(parents=True)
     archive = tmp_path / "Game-1.0.zip"
@@ -4278,6 +4282,7 @@ def test_archive_engine_preview(tmp_path):
 
 
 def test_api_install_archive_passes_seed_metadata(tmp_path):
+    update_setting("library_folder", str(tmp_path / "lib"))
     archive = tmp_path / "Seeded-1.0.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("Game.exe", b"new")
@@ -4366,3 +4371,94 @@ def test_api_launch_game_expands_home_path_before_target_fallback(
 
     assert result["success"]
     assert [os.path.normpath(path) for path in launched] == [str(canonical)]
+
+
+def test_library_folder_settings_validate_identity_and_default(tmp_path):
+    api = Api()
+    folder = tmp_path / "games"
+    folder.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(folder, target_is_directory=True)
+    assert api.save_settings(
+        {"library_folders": [f" {folder} ", "", str(link)], "library_folder": str(link)}
+    )["success"]
+    settings = api.get_settings()
+    assert settings["library_folders"] == [str(folder)]
+    assert settings["library_folder"] == str(folder)
+    assert (
+        api.save_settings(
+            {"library_folders": [str(folder)], "library_folder": "/other"}
+        )["success"]
+        is False
+    )
+    assert api.get_settings()["library_folder"] == str(folder)
+    assert api.save_settings({"library_folders": [], "library_folder": ""})["success"]
+    assert api.get_settings()["library_folders"] == []
+
+
+def test_library_folder_availability(tmp_path, monkeypatch):
+    folder = tmp_path / "games"
+    folder.mkdir()
+    missing = tmp_path / "missing"
+    update_setting("library_folder", str(folder))
+    update_setting("library_folders", json.dumps([str(folder), str(missing)]))
+    monkeypatch.setattr(
+        "core.archive_install._writable_in_sandbox", lambda path: path == str(folder)
+    )
+    rows = Api().list_library_folders()
+    assert rows[0]["available"] is True
+    assert rows[0]["free_bytes"] > 0
+    assert rows[1] == {
+        "path": str(missing),
+        "is_default": False,
+        "available": False,
+        "free_bytes": None,
+    }
+
+
+def test_inspect_folder_preselection_and_part_preview(tmp_path):
+    api = Api()
+    first = tmp_path / "first"
+    nested = first / "nested"
+    second = tmp_path / "second"
+    ep1 = nested / "Title" / "Game.exe"
+    ep2 = second / "Title" / "Game.exe"
+    for exe in (ep1, ep2):
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"old")
+    update_setting("library_folder", str(first))
+    update_setting(
+        "library_folders", json.dumps([str(first), str(nested), str(second)])
+    )
+    gid = add_game("Title", str(ep1))
+    tid = add_game_launch_target(gid, "Ep2", str(ep2))
+    archive = tmp_path / "Title-2.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    assert api.inspect_archive(str(archive), gid)["library_folder"] == str(nested)
+    info = api.inspect_archive(str(archive), gid, tid["id"])
+    assert info["library_folder"] == str(second)
+    assert info["old_folder"] == str(ep2.parent)
+    assert api.inspect_archive(str(archive), gid, -1)["success"] is False
+    update_game(gid, {"exe_path": str(tmp_path / "outside" / "Game.exe")})
+    assert api.inspect_archive(str(archive), gid)["library_folder"] == str(first)
+    result = api.install_archive(
+        {"archive_path": str(archive), "library_folder": str(tmp_path / "unlisted")}
+    )
+    assert result["success"] is False
+    assert "listed library folder" in result["error"]
+    assert api.preview_install_destination(
+        {"title": "Title", "library_folder": str(second)}
+    )["destination"].startswith(str(second))
+
+
+@pytest.mark.parametrize("label", ["Config", "Default"])
+def test_inspect_names_other_targets_even_when_label_is_default(tmp_path, label):
+    old = tmp_path / "old"
+    old.mkdir()
+    exe = old / "Game.exe"
+    exe.write_bytes(b"old")
+    gid = add_game("Title", str(exe))
+    add_game_launch_target(gid, label, str(old / "Config.exe"))
+    archive = tmp_path / "Title-2.0.zip"
+    _write_archive(archive, {"Game.exe": b"new"})
+    assert Api().inspect_archive(str(archive), gid)["own_targets_inside"] == [label]

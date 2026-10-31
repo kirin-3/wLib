@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { formatLibraryFreeSpace } from "../utils/installArchive";
+import type { LibraryFolder } from "../services/api";
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import {
@@ -75,6 +77,20 @@ const urmPath = ref("");
 const prefixPath = ref("");
 const rpgmakerLinuxRunnerPath = ref("");
 const libraryFolder = ref("");
+const libraryFolders = ref<string[]>([]);
+const libraryFolderStatus = ref<LibraryFolder[]>([]);
+const refreshFolderStatus = async () => {
+  libraryFolderStatus.value = await api.listLibraryFolders();
+};
+const folderFreeSpace = (path: string) => {
+  const status = libraryFolderStatus.value.find((entry) => entry.path === path);
+  return status ? formatLibraryFreeSpace(status.available ? status.free_bytes : null) : "Save to check free space";
+};
+const removeLibraryFolder = (path: string) => {
+  if (path === libraryFolder.value && libraryFolders.value.length > 1) return;
+  libraryFolders.value = libraryFolders.value.filter((entry) => entry !== path);
+  if (!libraryFolders.value.length) libraryFolder.value = "";
+};
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
 const downloadDetectionEnabled = ref(true);
@@ -213,6 +229,8 @@ const applySettings = (data: SettingsResponse) => {
   protonPath.value = data.proton_path || "";
   prefixPath.value = data.wine_prefix_path || "";
   libraryFolder.value = data.library_folder || "";
+  libraryFolders.value = [...(data.library_folders || (libraryFolder.value ? [libraryFolder.value] : []))];
+  void refreshFolderStatus();
   libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
   downloadsFolder.value = data.downloads_folder || "";
   downloadDetectionEnabled.value = data.download_detection_enabled !== false;
@@ -232,6 +250,7 @@ const formValues = () => ({
   customStatuses: [...customStatuses.value],
   urmPath: urmPath.value,
   libraryFolder: libraryFolder.value,
+  libraryFolders: [...libraryFolders.value],
   libraryFolderPattern: libraryFolderPattern.value,
   downloadsFolder: downloadsFolder.value,
   downloadDetectionEnabled: downloadDetectionEnabled.value,
@@ -248,6 +267,7 @@ const applyFormValues = (values: ReturnType<typeof formValues>) => {
   customStatuses.value = [...values.customStatuses];
   urmPath.value = values.urmPath;
   libraryFolder.value = values.libraryFolder;
+  libraryFolders.value = [...values.libraryFolders];
   libraryFolderPattern.value = values.libraryFolderPattern;
   downloadsFolder.value = values.downloadsFolder;
   downloadDetectionEnabled.value = values.downloadDetectionEnabled;
@@ -453,7 +473,12 @@ const browseLibraryFolder = async () => {
   try {
     const p = await api.browseDirectory(libraryFolder.value || "");
     if (p) {
-      libraryFolder.value = p;
+      if (libraryFolders.value.includes(p)) {
+        notifyError("That folder is already a library folder.");
+        return;
+      }
+      libraryFolders.value = [...libraryFolders.value, p];
+      if (!libraryFolder.value) libraryFolder.value = p;
     }
   } catch (e) {
     console.error("Browse library folder error", e);
@@ -703,7 +728,7 @@ onUnmounted(() => {
 
 const saving = ref(false);
 
-watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath, libraryFolder, libraryFolderPattern, downloadsFolder, downloadDetectionEnabled], () => {
+watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath, libraryFolder, libraryFolders, libraryFolderPattern, downloadsFolder, downloadDetectionEnabled], () => {
   if (!saving.value) saveError.value = "";
 });
 
@@ -736,6 +761,7 @@ const saveSettings = async () => {
       custom_play_statuses: submittedValues.customStatuses,
       urm_rpa_path: submittedValues.urmPath,
       library_folder: submittedValues.libraryFolder,
+      library_folders: submittedValues.libraryFolders,
       library_folder_pattern: submittedValues.libraryFolderPattern.trim() || "{creator}/{title}/{version}",
       downloads_folder: submittedValues.downloadsFolder,
       download_detection_enabled: submittedValues.downloadDetectionEnabled,
@@ -750,6 +776,10 @@ const saveSettings = async () => {
     if (!persistedSettings) {
       saveError.value = "Settings were saved but could not be reloaded.";
       return;
+    }
+
+    if (persistedSettings.library_folders.length < submittedValues.libraryFolders.length) {
+      notifyError("A duplicate folder was removed: that folder is already a library folder.");
     }
 
     // Keep values typed during the save, and leave them marked unsaved.
@@ -789,6 +819,7 @@ const discardChanges = () => {
   customStatuses.value = [...saved.customStatuses];
   urmPath.value = saved.urmPath;
   libraryFolder.value = saved.libraryFolder;
+  libraryFolders.value = [...saved.libraryFolders];
   libraryFolderPattern.value = saved.libraryFolderPattern;
   downloadsFolder.value = saved.downloadsFolder;
   downloadDetectionEnabled.value = saved.downloadDetectionEnabled;
@@ -1152,22 +1183,25 @@ const browseUrm = async () => {
 
         <div class="space-y-3">
           <div>
-            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folder</h4>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folders</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
-              New installs from archives are placed inside this folder.
+              Choose the folders available for archive installs. New installs preselect the default.
             </p>
           </div>
-          <div class="flex gap-3">
-            <input
-              v-model="libraryFolder"
-              type="text"
-              class="settings-input flex-1 font-mono"
-              placeholder="/path/to/games"
-              aria-label="Library folder"
-            />
-            <button @click="browseLibraryFolder" class="settings-btn ui-action-btn">Browse</button>
+          <div v-for="path in libraryFolders" :key="path" class="space-y-2 rounded-lg p-3" style="border: 1px solid var(--border-color)">
+            <div class="flex items-center gap-3">
+              <span class="font-mono text-sm break-all flex-1" :aria-label="path">{{ path }}</span>
+              <span v-if="path === libraryFolder" class="text-xs">Default</span>
+              <button v-else @click="libraryFolder = path" class="settings-btn">Make default</button>
+              <button @click="removeLibraryFolder(path)" :disabled="path === libraryFolder && libraryFolders.length > 1" :title="path === libraryFolder && libraryFolders.length > 1 ? 'Choose another default first' : 'Remove from list'" class="settings-btn disabled:opacity-50">Remove</button>
+            </div>
+            <div class="flex gap-3 text-xs" style="color: var(--text-muted)">
+              <PathStatus :path="path" kind="dir" />
+              <span>{{ folderFreeSpace(path) }}</span>
+            </div>
           </div>
-          <PathStatus :path="libraryFolder" kind="dir" />
+          <p v-if="libraryFolders.length > 1" class="text-xs" style="color: var(--text-muted)">Choose another default before removing the default folder.</p>
+          <button @click="browseLibraryFolder" class="settings-btn ui-action-btn">Add library folder</button>
         </div>
 
         <div class="space-y-3">

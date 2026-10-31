@@ -4837,7 +4837,9 @@ class Api:
         rpgmaker_linux_runner_path = str(
             get_setting_fn(RPGMAKER_LINUX_RUNNER_SETTING) or ""
         )
+        from core.database import get_library_folders
 
+        folders, default_folder = get_library_folders()
         return {
             "proton_path": str(get_setting_fn("proton_path") or ""),
             "wine_prefix_path": str(get_setting_fn("wine_prefix_path") or ""),
@@ -4855,7 +4857,8 @@ class Api:
             "rpgmaker_linux_runner_status": self.launcher.get_rpgmaker_linux_runner_status(
                 rpgmaker_linux_runner_path
             ),
-            "library_folder": str(get_setting_fn("library_folder") or ""),
+            "library_folder": default_folder,
+            "library_folders": folders,
             "library_folder_pattern": str(
                 get_setting_fn("library_folder_pattern")
                 or DEFAULT_LIBRARY_FOLDER_PATTERN
@@ -4977,6 +4980,35 @@ class Api:
             return {"success": False, "error": "Settings must be an object"}
 
         settings_map = cast(Mapping[str, object], settings)
+        from core.database import get_library_folders, normalize_library_folders
+
+        folder_pair: tuple[list[str], str] | None = None
+        if "library_folders" in settings_map or "library_folder" in settings_map:
+            _existing, existing_default = get_library_folders()
+            default = str(
+                settings_map.get("library_folder", existing_default) or ""
+            ).strip()
+            try:
+                folders = normalize_library_folders(
+                    settings_map.get("library_folders", [default] if default else [])
+                )
+            except ValueError as exc:
+                return {"success": False, "error": str(exc)}
+            identity = os.path.realpath(os.path.expanduser(default)) if default else ""
+            canonical = next(
+                (
+                    p
+                    for p in folders
+                    if os.path.realpath(os.path.expanduser(p)) == identity
+                ),
+                "",
+            )
+            if (folders and not canonical) or (default and not folders):
+                return {
+                    "success": False,
+                    "error": "The default library folder must be in the library folder list.",
+                }
+            folder_pair = folders, canonical
         custom_statuses: list[str] = []
         if "custom_play_statuses" in settings_map:
             raw_statuses = settings_map["custom_play_statuses"]
@@ -5106,11 +5138,9 @@ class Api:
             update_setting_fn(
                 "urm_rpa_path", get_payload_or_existing("urm_rpa_path").strip()
             )
-            if "library_folder" in settings_map:
-                update_setting_fn(
-                    "library_folder",
-                    str(settings_map.get("library_folder") or "").strip(),
-                )
+            if folder_pair is not None:
+                update_setting_fn("library_folders", json.dumps(folder_pair[0]))
+                update_setting_fn("library_folder", folder_pair[1])
             if "library_folder_pattern" in settings_map:
                 raw_pattern = str(
                     settings_map.get("library_folder_pattern") or ""
@@ -5488,6 +5518,13 @@ class Api:
                 "error": str(exc) or "Could not load thread details.",
             }
 
+    def list_library_folders(self) -> list[dict[str, object]]:
+        from core.archive_install import library_folder_status
+        from core.database import get_library_folders
+
+        folders, default = get_library_folders()
+        return [library_folder_status(path, path == default) for path in folders]
+
     def preview_install_destination(
         self, options: Mapping[str, object] | None = None
     ) -> dict[str, object]:
@@ -5496,7 +5533,9 @@ class Api:
         from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN, get_setting
 
         payload = dict(options or {})
-        folder = get_setting("library_folder") or ""
+        folder = str(
+            payload.get("library_folder") or get_setting("library_folder") or ""
+        )
         pattern = (
             get_setting("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
         )
@@ -5517,7 +5556,11 @@ class Api:
         }
 
     def inspect_archive(
-        self, path: str, game_id: int | None = None
+        self,
+        path: str,
+        game_id: int | None = None,
+        target_id: int | None = None,
+        library_folder: str | None = None,
     ) -> dict[str, object]:
         """Read-only preview for the install-from-archive dialog."""
         from core.archive_install import (
@@ -5545,10 +5588,12 @@ class Api:
             archive_stem(archive_path)
         )
 
-        library_folder = str(get_setting_fn("library_folder") or "")
-        _tool, tool_error = detect_archive_tool(
-            archive_path, library_folder=os.path.expanduser(library_folder)
-        )
+        from core.database import get_library_folders, list_game_launch_targets
+        from core.game_saves import is_within
+
+        folders, default = get_library_folders()
+        requested_folder = library_folder
+        library_folder = library_folder or default
         pattern = str(
             get_setting_fn("library_folder_pattern") or DEFAULT_LIBRARY_FOLDER_PATTERN
         )
@@ -5582,6 +5627,48 @@ class Api:
             if old_exe:
                 old_folder = os.path.dirname(os.path.abspath(old_exe))
 
+        targets = list_game_launch_targets(game_id) if game_id is not None else []
+        if target_id is not None:
+            chosen = next((t for t in targets if t["id"] == target_id), None)
+            if chosen is None:
+                return {
+                    "success": False,
+                    "error": "The launch target does not belong to this game.",
+                }
+            old_exe = os.path.abspath(os.path.expanduser(str(chosen["exe_path"])))
+            old_folder = os.path.dirname(old_exe)
+        if not requested_folder:
+            matches = [p for p in folders if old_folder and is_within(old_folder, os.path.expanduser(p))]
+            library_folder = max(
+                matches,
+                key=lambda p: len(os.path.realpath(os.path.expanduser(p))),
+                default=default,
+            )
+        own_targets: list[dict[str, str]] = []
+        if target_id is not None and game_id is not None:
+            from core.database import get_game
+
+            row = get_game(game_id)
+            own_targets = (
+                [{"label": "Default", "exe_path": str(row.get("exe_path") or "")}]
+                if row
+                else []
+            )
+        own_targets.extend(
+            {"label": t["label"], "exe_path": t["exe_path"]}
+            for t in targets
+            if t["id"] != target_id
+        )
+        own_inside = [
+            t["label"]
+            for t in own_targets
+            if t["exe_path"]
+            and old_folder
+            and is_within(os.path.expanduser(str(t["exe_path"])), old_folder)
+        ]
+        _tool, tool_error = detect_archive_tool(
+            archive_path, library_folder=os.path.expanduser(library_folder)
+        )
         destination = ""
         if library_folder.strip() and title.strip():
             destination = build_destination(
@@ -5596,7 +5683,7 @@ class Api:
             guard = can_remove_old_folder(
                 old_folder,
                 destination,
-                library_folder,
+                folders,
                 downloads_folder,
                 other_game_paths(int(game_id) if game_id is not None else None),
                 old_exe,
@@ -5612,6 +5699,8 @@ class Api:
             "destination": destination,
             "tool_error": tool_error or "",
             "old_folder": old_folder,
+            "library_folder": library_folder,
+            "own_targets_inside": own_inside,
             "removable": guard.get("removable", False),
             "remove_reason": guard.get("reason", ""),
         }
@@ -5696,11 +5785,26 @@ class Api:
         version = str(payload.get("version") or "").strip()
         creator = str(payload.get("creator") or payload.get("developer") or "").strip()
         engine = str(payload.get("engine") or "").strip()
-        library_folder = str(
-            payload.get("library_folder")
-            if "library_folder" in payload
-            else (get_setting_fn("library_folder") or "")
-        )
+        from core.database import get_library_folders
+
+        folders, default = get_library_folders()
+        library_folder = str(payload.get("library_folder") or "").strip() or default
+        if not library_folder:
+            return {"success": False, "error": "Choose a library folder first."}
+        if not any(
+            os.path.realpath(os.path.expanduser(p))
+            == os.path.realpath(os.path.expanduser(library_folder))
+            for p in folders
+        ):
+            return {
+                "success": False,
+                "error": "Choose a listed library folder. The selected folder is no longer configured.",
+            }
+        target_id_raw = payload.get("target_id")
+        try:
+            target_id = int(str(target_id_raw)) if target_id_raw is not None else None
+        except ValueError:
+            return {"success": False, "error": "Invalid launch target id."}
         pattern = str(
             payload.get("pattern")
             if "pattern" in payload
@@ -5756,6 +5860,7 @@ class Api:
                 tags=self._normalize_tags_csv(payload.get("tags")),
                 rating=str(payload.get("rating") or ""),
                 game_id=game_id,
+                target_id=target_id,
                 remove_old=remove_old,
                 delete_archive=delete_archive,
                 progress_cb=_on_stage,

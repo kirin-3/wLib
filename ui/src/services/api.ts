@@ -252,7 +252,15 @@ export interface ThreadDetailsResponse extends ApiBasicResponse {
   tags?: string[] | string;
 }
 
+export interface LibraryFolder {
+  path: string;
+  is_default: boolean;
+  available: boolean;
+  free_bytes: number | null;
+}
+
 export interface InstallDestinationOptions {
+  library_folder?: string | undefined;
   title: string;
   version: string;
   creator: string;
@@ -277,9 +285,12 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
   old_folder?: string;
   removable?: boolean;
   remove_reason?: string;
+  library_folder?: string;
+  own_targets_inside?: string[];
 }
 
 export interface ArchiveInstallOptions {
+  target_id?: number | null | undefined;
   links?: StoreLink[] | undefined;
   archive_path: string;
   game_id?: number | null | undefined;
@@ -701,6 +712,7 @@ export interface SettingsPayload {
   enable_logging?: boolean;
   rpgmaker_linux_runner_path?: string;
   library_folder?: string;
+  library_folders?: string[];
   library_folder_pattern?: string;
   downloads_folder?: string;
   download_detection_enabled?: boolean;
@@ -810,6 +822,7 @@ export interface SettingsResponse {
   rpgmaker_linux_runner_path: string;
   rpgmaker_linux_runner_status: RpgmakerLinuxRunnerStatus;
   library_folder: string;
+  library_folders: string[];
   library_folder_pattern: string;
   downloads_folder: string;
   downloads_folder_exists: boolean;
@@ -916,6 +929,7 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
     error: "RPGMaker Linux runner is not installed or configured.",
   },
   library_folder: "",
+  library_folders: [],
   library_folder_pattern: "{creator}/{title}/{version}",
   downloads_folder: "",
   downloads_folder_exists: true,
@@ -1302,6 +1316,9 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
       typeof source.library_folder === "string"
         ? source.library_folder
         : DEFAULT_MOCK_SETTINGS.library_folder,
+    library_folders: Array.isArray(source.library_folders)
+      ? source.library_folders.filter((p): p is string => typeof p === "string")
+      : typeof source.library_folder === "string" && source.library_folder ? [source.library_folder] : [],
     library_folder_pattern:
       typeof source.library_folder_pattern === "string" && source.library_folder_pattern.trim()
         ? source.library_folder_pattern
@@ -2116,8 +2133,12 @@ class ApiService {
     return this.invoke<InstallDestinationResponse>("preview_install_destination", options);
   }
 
-  async inspectArchive(archivePath: string, gameId: number | null = null): Promise<ArchiveInspectResponse> {
-    return this.invoke<ArchiveInspectResponse>("inspect_archive", archivePath, gameId);
+  async listLibraryFolders(): Promise<LibraryFolder[]> {
+    return this.invoke<LibraryFolder[]>("list_library_folders");
+  }
+
+  async inspectArchive(archivePath: string, gameId: number | null = null, targetId: number | null = null, libraryFolder: string | null = null): Promise<ArchiveInspectResponse> {
+    return this.invoke<ArchiveInspectResponse>("inspect_archive", archivePath, gameId, targetId, libraryFolder);
   }
 
   async installArchive(options: ArchiveInstallOptions): Promise<ArchiveInstallResponse> {
@@ -2992,6 +3013,10 @@ class ApiService {
         }
         return { success: true, mock: true, title: "Eternum", version: "0.8", creator: "Caribdis", engine: "Ren'Py", cover_image: "", tags: ["3d"] };
       }
+      case "list_library_folders": {
+        const settings = readMockSettings();
+        return settings.library_folders.map((path) => ({ path, is_default: path === settings.library_folder, available: true, free_bytes: 500 * 1024 ** 3 }));
+      }
       case "preview_install_destination": {
         const options = isRecord(args[0]) ? args[0] : {};
         const settings = readMockSettings();
@@ -3002,9 +3027,10 @@ class ApiService {
           }
           return part.replace(/\{[^{}]*\}/g, "").replace(/[<>:"|?*\x00-\x1f]/g, "_").trim();
         }).filter(Boolean);
+        const folder = String(options.library_folder || settings.library_folder);
         return {
-          destination: settings.library_folder && String(options.title || "").trim()
-            ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [String(options.title || "game")]).join("/")}` : "",
+          destination: folder && String(options.title || "").trim()
+            ? `${folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [String(options.title || "game")]).join("/")}` : "",
           engine_pending: pattern.includes("{engine}") && !String(options.engine || "").trim(),
         };
       }
@@ -3017,6 +3043,14 @@ class ApiService {
         const settings = readMockSettings();
         const gameId = typeof args[1] === "number" ? args[1] : null;
         const game = gameId !== null ? readMockGames().find((entry) => entry.id === gameId) : undefined;
+        const targetId = typeof args[2] === "number" ? args[2] : null;
+        const gameTargets = readMockLaunchTargets().filter((t) => t.game_id === gameId);
+        const chosen = gameTargets.find((t) => t.id === targetId);
+        if (targetId !== null && !chosen) return { success: false, error: "The launch target does not belong to this game." };
+        const oldFolder = (chosen?.exe_path || game?.exe_path || "").split(/[/\\]/).slice(0, -1).join("/");
+        const matches = settings.library_folders.filter((p) => oldFolder === p || oldFolder.startsWith(`${p.replace(/[/\\]+$/, "")}/`)).sort((a, b) => b.length - a.length);
+        const folder = typeof args[3] === "string" && args[3] ? args[3] : matches[0] || settings.library_folder;
+        const ownTargets = [...gameTargets.filter((t) => t.id !== targetId), ...(targetId !== null && game ? [{ label: "Default", exe_path: game.exe_path }] : [])];
         // Mirrors inspect_archive: the archive name is the primary guess, the
         // stored game only fills blanks (and overwrites the version when it has
         // a known latest_version).
@@ -3037,8 +3071,8 @@ class ApiService {
             .replace(/\{[^{}]*\}/g, "")
             .trim())
           .filter(Boolean);
-        const destination = settings.library_folder
-          ? `${settings.library_folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [title || "game"]).join("/")}`
+        const destination = folder
+          ? `${folder.replace(/[/\\]+$/, "")}/${(segments.length ? segments : [title || "game"]).join("/")}`
           : "";
         const archiveFormat = /\.7z$/i.test(fileName) ? "7z" : /\.rar$/i.test(fileName) ? "rar" : "zip";
         const toolError = archiveFormat === "7z"
@@ -3056,7 +3090,9 @@ class ApiService {
           engine_pending: pattern.includes("{engine}") && !engine.trim(),
           destination,
           tool_error: toolError,
-          old_folder: game ? game.exe_path.split(/[/\\]/).slice(0, -1).join("/") : "",
+          old_folder: oldFolder,
+          library_folder: folder,
+          own_targets_inside: ownTargets.filter((t) => oldFolder && t.exe_path.startsWith(`${oldFolder}/`)).map((t) => t.label),
           removable: !!game,
           remove_reason: game ? "" : "No previous install.",
         };

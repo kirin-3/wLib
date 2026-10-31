@@ -473,6 +473,14 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder', '')"
         )
         _ = cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folders', '[]')"
+        )
+        _ = cursor.execute(
+            """UPDATE settings SET value = json_array((SELECT value FROM settings WHERE key = 'library_folder'))
+            WHERE key = 'library_folders' AND value = '[]'
+            AND COALESCE((SELECT value FROM settings WHERE key = 'library_folder'), '') != ''"""
+        )
+        _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder_pattern', ?)",
             (DEFAULT_LIBRARY_FOLDER_PATTERN,),
         )
@@ -1287,6 +1295,52 @@ def get_all_play_sessions() -> dict[int, list[dict[str, object]]]:
 
 
 # Settings Operations
+def normalize_library_folders(raw: object) -> list[str]:
+    """Strip and deduplicate folders by identity, preserving the first spelling."""
+    if not isinstance(raw, list):
+        raise ValueError("Library folders must be a list of paths")
+    folders: list[str] = []
+    seen: set[str] = set()
+    for entry in cast(list[object], raw):
+        if not isinstance(entry, str):
+            raise ValueError("Library folders must be a list of paths")
+        path = entry.strip()
+        identity = os.path.realpath(os.path.expanduser(path))
+        if path and identity not in seen:
+            folders.append(path)
+            seen.add(identity)
+    return folders
+
+
+def get_library_folders() -> tuple[list[str], str]:
+    """Read and repair the additive folder-list/default setting pair."""
+    default = (get_setting("library_folder") or "").strip()
+    try:
+        folders = normalize_library_folders(
+            cast(object, json.loads(get_setting("library_folders") or "[]"))
+        )
+    except (ValueError, TypeError):
+        folders = []
+    if default:
+        identity = os.path.realpath(os.path.expanduser(default))
+        match = next(
+            (p for p in folders if os.path.realpath(os.path.expanduser(p)) == identity),
+            None,
+        )
+        if match is None:
+            folders.insert(0, default)
+        else:
+            default = match
+    elif folders:
+        default = folders[0]
+    encoded = json.dumps(folders)
+    if get_setting("library_folders") != encoded:
+        update_setting("library_folders", encoded)
+    if get_setting("library_folder") != default:
+        update_setting("library_folder", default)
+    return folders, default
+
+
 def get_setting(key: str) -> str | None:
     with closing(get_connection()) as conn:
         cursor = conn.cursor()

@@ -1894,3 +1894,23 @@ def test_companion_file_kinds(tmp_path):
         assert save_companion_tool(dict(name=name, kind=kind, path=str(path)))[
             "path"
         ] == str(path)
+
+
+@pytest.mark.parametrize(
+    "folders,default,expected",
+    [
+        ([], "", ([], "")),
+        ([], "/games", (["/games"], "/games")),
+        (["/second"], "/first", (["/first", "/second"], "/first")),
+        (["/second"], "", (["/second"], "/second")),
+    ],
+)
+def test_library_folder_migration_and_read_repair(folders, default, expected):
+    from core.database import get_library_folders
+
+    update_setting("library_folders", json.dumps(folders))
+    update_setting("library_folder", default)
+    init_db()
+    assert get_library_folders() == expected
+    assert json.loads(get_setting("library_folders")) == expected[0]
+    assert get_setting("library_folder") == expected[1]

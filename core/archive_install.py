@@ -143,6 +143,25 @@ def _writable_in_sandbox(folder: str) -> bool:
     return os.access(current, os.W_OK)
 
 
+def library_folder_status(path: str, is_default: bool) -> dict[str, object]:
+    available = _writable_in_sandbox(path)
+    free: int | None = None
+    if available:
+        parent = os.path.abspath(os.path.expanduser(path))
+        while not os.path.exists(parent):
+            parent = os.path.dirname(parent)
+        try:
+            free = shutil.disk_usage(parent).free
+        except OSError:
+            available = False
+    return {
+        "path": path,
+        "is_default": is_default,
+        "available": available,
+        "free_bytes": free,
+    }
+
+
 def detect_archive_tool(
     archive_path: str, *, platform: str | None = None, library_folder: str = ""
 ) -> tuple[str | None, str | None]:
@@ -847,7 +866,7 @@ def _is_within(child_real: str, parent_real: str) -> bool:
 def can_remove_old_folder(
     candidate: str,
     new_destination: str,
-    library_folder: str = "",
+    library_folders: list[str] | None = None,
     downloads_folder: str = "",
     other_paths: list[str] | tuple[str, ...] | None = None,
     old_exe: str = "",
@@ -872,7 +891,7 @@ def can_remove_old_folder(
     home_real = _real("~")
     if cand_real == home_real:
         return {"removable": False, "reason": "Refusing to remove your home folder."}
-    if library_folder and cand_real == _real(library_folder):
+    if any(cand_real == _real(folder) for folder in library_folders or []):
         return {"removable": False, "reason": "Refusing to remove the library folder."}
     if downloads_folder and cand_real == _real(downloads_folder):
         return {
@@ -1036,6 +1055,7 @@ def install_archive(
     tags: str | list[str] = "",
     rating: str = "",
     game_id: int | None = None,
+    target_id: int | None = None,
     remove_old: bool = True,
     delete_archive: bool = False,
     progress_cb: Callable[[str], None] | None = None,
@@ -1075,6 +1095,7 @@ def install_archive(
     if not library_folder.strip():
         raise ArchiveInstallError("Choose a library folder first.")
 
+    default_exe = ""
     old_exe = ""
     old_root = ""
     old_override = ""
@@ -1096,11 +1117,27 @@ def install_archive(
                 continue
         if not game_found:
             raise ArchiveInstallError("The game to update was not found.")
+        default_exe = old_exe
+        if target_id is not None:
+            chosen = next(
+                (t for t in list_game_launch_targets(game_id) if t["id"] == target_id),
+                None,
+            )
+            if chosen is None:
+                raise ArchiveInstallError(
+                    "The launch target does not belong to this game."
+                )
+            old_exe = _absolute_game_path(chosen["exe_path"])
         if old_exe:
             old_root = os.path.dirname(os.path.abspath(old_exe))
+    elif target_id is not None:
+        raise ArchiveInstallError("A game is required when choosing a launch target.")
 
-    from core.database import get_setting
+    from core.database import get_setting, get_library_folders
 
+    library_folders, _default = get_library_folders()
+    if library_folder not in library_folders:
+        library_folders.append(library_folder)
     downloads_folder = ""
     try:
         downloads_folder = str(get_setting("downloads_folder") or "")
@@ -1122,7 +1159,7 @@ def install_archive(
             can_remove_old_folder(
                 old_root,
                 destination,
-                library_folder,
+                library_folders,
                 downloads_folder,
                 other_game_paths(game_id),
                 old_exe,
@@ -1274,10 +1311,11 @@ def install_archive(
             game_id = int(str(new_id)) if new_id is not None else None
             library_updated = game_id is not None
         else:
-            fields: dict[str, object] = {
-                "exe_path": exe_path,
-                "version": version.strip(),
-            }
+            fields: dict[str, object] = {"version": version.strip()}
+            if target_id is None:
+                fields["exe_path"] = exe_path
+            else:
+                _ = update_game_launch_target(target_id, {"exe_path": exe_path})
             if engine.strip():
                 fields["engine"] = engine.strip()
             elif detected_engine:
@@ -1306,20 +1344,46 @@ def install_archive(
                 target_dicts: list[dict[str, object]] = [
                     {"label": t["label"], "exe_path": t["exe_path"], "id": t["id"]}
                     for t in targets
+                    if t["id"] != target_id
                 ]
+                if target_id is not None and default_exe:
+                    target_dicts.append(
+                        {"id": None, "label": "Default", "exe_path": default_exe}
+                    )
                 updated_targets, unmoved = relocate_launch_targets(
                     old_root, new_install_dir, target_dicts
                 )
-                for before, after in zip(targets, updated_targets):
-                    if str(before.get("exe_path") or "") != str(
-                        after.get("exe_path") or ""
-                    ):
+                for before, after in zip(target_dicts, updated_targets):
+                    if before["exe_path"] != after["exe_path"]:
                         try:
-                            _ = update_game_launch_target(
-                                int(before["id"]), {"exe_path": str(after["exe_path"])}
-                            )
+                            if before["id"] is None:
+                                _ = _db.update_game(
+                                    int(game_id), {"exe_path": str(after["exe_path"])}
+                                )
+                            else:
+                                _ = update_game_launch_target(
+                                    int(str(before["id"])),
+                                    {"exe_path": str(after["exe_path"])},
+                                )
                         except (OSError, ValueError):
                             unmoved.append(dict(before))
+                # Only unresolved targets block cleanup. In-place updates retain
+                # their old backup when a target was absent from the new tree.
+                remaining = unmoved if old_backup else updated_targets + unmoved
+                inside = next(
+                    (
+                        t
+                        for t in remaining
+                        if str(t.get("exe_path") or "")
+                        and _is_within(_real(str(t["exe_path"])), _real(old_root))
+                    ),
+                    None,
+                )
+                if inside is not None:
+                    guard = {
+                        "removable": False,
+                        "reason": f'The folder still contains this game\'s "{inside["label"]}" target.',
+                    }
 
         _progress("cleaning up")
         removed_old = False
