@@ -2858,6 +2858,13 @@ def test_empty_backup_title_does_not_replace_matched_title():
     assert titles == {"Real Title", "Imported Game"}
 
 
+def _foreign_folder(name: str) -> str:
+    """A library folder written for the other OS, so this host rejects it."""
+    from core.host_platform import is_windows
+
+    return f"/mnt/other/{name}" if is_windows() else f"Z:\\{name}"
+
+
 @pytest.mark.parametrize("mode", ["overwrite", "fill_missing"])
 @pytest.mark.parametrize(
     "legacy,foreign_default", [(False, False), (False, True), (True, False)]
@@ -2877,9 +2884,9 @@ def test_library_folder_backup_roundtrip_and_host_filter(
     if legacy:
         del paths["library_folders"]
     else:
-        paths["library_folders"].append("Z:\\Games")
+        paths["library_folders"].append(_foreign_folder("Games"))
     if foreign_default:
-        paths["library_folder"] = "Z:\\Games"
+        paths["library_folder"] = _foreign_folder("Games")
     local = str(tmp_path / "local")
     update_setting("library_folder", local if mode == "fill_missing" else "")
     update_setting(
@@ -2908,8 +2915,9 @@ def test_library_folder_import_with_only_foreign_folders_keeps_local(tmp_path):
     update_setting("library_folder", local)
     backup = build_library_backup({"sections": [SECTION_SETTINGS_PATHS]})
     paths = backup["settings"]["paths"]
-    paths["library_folders"] = ["Z:\\Games", "Y:\\More"]
-    paths["library_folder"] = "Z:\\Games"
+    foreign = [_foreign_folder("Games"), _foreign_folder("More")]
+    paths["library_folders"] = foreign
+    paths["library_folder"] = foreign[0]
 
     report = apply_library_backup(
         backup, {"sections": [SECTION_SETTINGS_PATHS], "merge_mode": "overwrite"}
@@ -2921,4 +2929,4 @@ def test_library_folder_import_with_only_foreign_folders_keeps_local(tmp_path):
         for w in report["warning_records"]
         if w["type"] == "foreign_path" and w["field"].startswith("library_folder")
     ]
-    assert [w["path"] for w in folder_warnings] == ["Z:\\Games", "Y:\\More"]
+    assert [w["path"] for w in folder_warnings] == foreign
