@@ -313,3 +313,15 @@ test("skipping hides exactly one normalized release", () => {
   assert.equal(isUpdateSkipped({ ...game, skipped_version: "" }), false);
   assert.equal(isUpdateSkipped({ ...game, exe_path: "" }), false);
 });
+
+
+test("library display state waits for the first load even with restored filters", async () => {
+  const { libraryDisplayState } = await import("./libraryGames.ts");
+  assert.equal(libraryDisplayState(false, null, 0, 0), "loading");
+  assert.equal(libraryDisplayState(false, null, 25, 0), "loading");
+  assert.equal(libraryDisplayState(false, "Failed", 0, 0), "error");
+  assert.equal(libraryDisplayState(true, null, 0, 0), "empty");
+  assert.equal(libraryDisplayState(true, null, 25, 0), "no-results");
+  assert.equal(libraryDisplayState(true, null, 25, 25), "list");
+  assert.equal(libraryDisplayState(true, "Refresh failed", 25, 25), "list");
+});

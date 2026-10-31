@@ -7,7 +7,7 @@ import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const props = defineProps<{
   images: string[];
-  coverGame?: { cover_local_url?: string; cover_image_path?: string };
+  coverGame?: { cover_local_url?: string; cover_cache_url?: string; cover_image_path?: string };
   startIndex: number | null;
 }>();
 

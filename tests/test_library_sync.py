@@ -1342,3 +1342,22 @@ def test_rejected_folder_pick_keeps_the_working_connection(tmp_path):
     # A malformed bridge argument answers with the same payload, never raises.
     assert sync.set_folder(None)["error_code"] == "invalid_sync_folder"  # type: ignore[arg-type]
     assert sync.status()["state"] == "idle"
+
+
+def test_cached_covers_never_export_or_import():
+    from core import database
+    from core.library_backup import build_library_backup, build_sync_backup, apply_library_backup
+
+    database.init_db()
+    url = "https://attachments.f95zone.to/cache.png"
+    game_id = database.add_game("Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url)
+    name = "b" * 32 + ".png"
+    assert database.set_game_cover_cache(game_id, url, name)
+    before = database.get_setting("sync_local_modified_at")
+    for payload in (build_library_backup(), build_sync_backup("now", "device")):
+        assert "cover_cache" not in str(payload)
+        assert name not in str(payload)
+        apply_library_backup(payload, {"sections": ["metadata"]})
+        assert database.get_game(game_id)["cover_cache"] == name
+        assert database.get_game(game_id)["cover_cache_url"] == url
+    assert database.get_setting("sync_local_modified_at") == before

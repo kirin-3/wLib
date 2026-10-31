@@ -327,6 +327,7 @@ def test_challenge_does_not_fallback_and_next_chunk_continues(monkeypatch):
     assert get.call_count == 2
     scraper_module._prefer_extension_until = None
     scraper_module._f95_last_request_finished = None
+    scraper_module._f95_last_foreground_finished = None
 
 
 def test_rate_limited_chunk_does_not_fallback_to_pages(monkeypatch):
@@ -1306,3 +1307,109 @@ def test_guest_page_cover_falls_back_to_catalog(monkeypatch):
     )
     assert Scraper()._get_page("1")["cover_image"] == "https://example.com/cover.png"
     _reset_scraper_globals()
+
+
+@pytest.mark.parametrize("status,body,accepted", [(200, b"image", True), (403, b"blocked", False), (200, b"x" * 11, False)])
+def test_binary_cover_fetch_bounded_without_fallback(monkeypatch, status, body, accepted):
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    response = MagicMock()
+    response.status = status
+    response.read.return_value = body
+    response.__enter__.return_value = response
+    monkeypatch.setattr(scraper_module, "urlopen", lambda *a, **k: response)
+    fallback = MagicMock(side_effect=AssertionError("No extension for covers"))
+    monkeypatch.setattr(scraper_module.extension_bridge, "fetch", fallback)
+    if accepted:
+        assert scraper_module.f95_get_bytes("https://attachments.f95zone.to/a.png", 10) == body
+    else:
+        with pytest.raises(ValueError):
+            scraper_module.f95_get_bytes("https://attachments.f95zone.to/a.png", 10)
+    if status == 200:
+        response.read.assert_called_once_with(11)
+    fallback.assert_not_called()
+
+
+def test_cover_and_foreground_requests_paced_with_foreground_priority(monkeypatch):
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    monkeypatch.setattr(scraper_module, "_f95_last_foreground_finished", None)
+    monkeypatch.setattr(scraper_module, "get_request_interval_seconds", lambda: 0.03)
+    entered, release = threading.Event(), threading.Event()
+    events = []
+    def urlopen(request, **kwargs):
+        kind = "cover" if "attachments" in request.full_url else "page"
+        events.append((kind + "-start", time.monotonic()))
+        if len(events) == 1:
+            entered.set()
+            assert release.wait(3)
+        response = MagicMock()
+        response.status = 200
+        response.headers.get_content_charset.return_value = "utf-8"
+        def read(*args):
+            events.append((kind + "-finish", time.monotonic()))
+            return b"image"
+        response.read.side_effect = read
+        response.__enter__.return_value = response
+        return response
+    monkeypatch.setattr(scraper_module, "urlopen", urlopen)
+    first = threading.Thread(target=scraper_module.f95_get_bytes, args=("https://attachments.f95zone.to/1.png", 100))
+    next_cover = threading.Thread(target=scraper_module.f95_get_bytes, args=("https://attachments.f95zone.to/2.png", 100))
+    foreground = threading.Thread(target=scraper_module._f95_get, args=("https://f95zone.to/threads/1/",))
+    first.start()
+    assert entered.wait(3)
+    next_cover.start()
+    foreground.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        with scraper_module._F95_PRIORITY_LOCK:
+            waiting = scraper_module._f95_foreground_waiters
+        if waiting:
+            break
+        time.sleep(0.001)
+    assert waiting
+    release.set()
+    for thread in (first, next_cover, foreground):
+        thread.join(3)
+        assert not thread.is_alive()
+    assert [kind for kind, _ in events] == ["cover-start", "cover-finish", "page-start", "page-finish", "cover-start", "cover-finish"]
+    assert events[2][1] - events[1][1] >= 0.03
+    assert events[4][1] - events[3][1] >= 0.03
+
+
+def test_cover_waits_for_back_to_back_foreground_requests(monkeypatch):
+    monkeypatch.setattr(scraper_module, "_f95_last_request_finished", None)
+    monkeypatch.setattr(scraper_module, "_f95_last_foreground_finished", None)
+    monkeypatch.setattr(scraper_module, "get_request_interval_seconds", lambda: 0.05)
+    events = []
+    first_page = threading.Event()
+
+    def urlopen(request, **kwargs):
+        kind = "cover" if "attachments" in request.full_url else "page"
+        events.append(kind)
+        if kind == "page":
+            first_page.set()
+        response = MagicMock()
+        response.status = 200
+        response.headers.get_content_charset.return_value = "utf-8"
+        response.read.return_value = b"image"
+        response.__enter__.return_value = response
+        return response
+
+    monkeypatch.setattr(scraper_module, "urlopen", urlopen)
+
+    def bulk_check():
+        for thread_id in range(3):
+            _ = scraper_module._f95_get(f"https://f95zone.to/threads/{thread_id}/")
+            time.sleep(0.01)  # caller handles the result before its next request
+
+    foreground = threading.Thread(target=bulk_check)
+    foreground.start()
+    assert first_page.wait(3)
+    cover = threading.Thread(
+        target=scraper_module.f95_get_bytes,
+        args=("https://attachments.f95zone.to/1.png", 100),
+    )
+    cover.start()
+    for thread in (foreground, cover):
+        thread.join(5)
+        assert not thread.is_alive()
+    assert events == ["page", "page", "page", "cover"]

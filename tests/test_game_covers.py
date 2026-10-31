@@ -352,3 +352,111 @@ def test_avif_replaces_png_without_changing_source_or_remote(tmp_path):
     assert not game_covers.cover_path(old).exists()
     assert database.get_game(game_id)["cover_image_path"] == "https://example.com/remote.png"
     assert (avif.stat().st_mtime_ns, avif.read_bytes()) == before
+
+
+@pytest.mark.parametrize("data", [b"<html>challenge</html>", b"x" * (game_covers.MAX_COVER_SIZE + 1)])
+def test_cached_cover_rejects_invalid_data(data):
+    with pytest.raises(ValueError):
+        game_covers.store_cached_cover(data)
+    assert not list(game_covers.cache_covers_dir().iterdir())
+
+
+def test_cached_avif_and_path_isolation():
+    data = _ftyp() + b"image"
+    name = game_covers.store_cached_cover(data)
+    assert name.endswith(".avif")
+    assert game_covers.cached_cover_path(name).read_bytes() == data
+    assert game_covers.cover_path("cache/" + name) is None
+    for invalid in ("../" + name, "/" + name, "cache/" + name, "a" * 64 + ".png"):
+        assert game_covers.cached_cover_path(invalid) is None
+
+
+def test_cache_fill_replace_remove_failure_and_sweep(monkeypatch):
+    from core import scraper
+
+    url = "https://attachments.f95zone.to/first.png"
+    game_id = database.add_game("Cache", "", "", cover_image=url)
+    calls = []
+    def fetch(url, limit):
+        calls.append(url)
+        if "fail" in url:
+            raise ValueError("challenge")
+        return b"\x89PNG\r\n\x1a\nimage"
+    monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
+    service = game_covers.CoverCacheService()
+    orphan = game_covers.store_cached_cover(fetch(url, 1))
+    service._sweep()
+    assert not game_covers.cached_cover_path(orphan).exists()
+    service._fill()
+    first = database.get_game(game_id)["cover_cache"]
+    assert game_covers.cached_cover_path(first).is_file()
+    calls.clear()
+    service._fill()
+    assert not calls
+    game_covers.delete_cached_cover(first)
+    service._fill()
+    first = database.get_game(game_id)["cover_cache"]
+    database.update_game(game_id, {"cover_image_path": url + "2"})
+    service._fill()
+    assert not game_covers.cached_cover_path(first).exists()
+    second = database.get_game(game_id)["cover_cache"]
+    database.update_game(game_id, {"cover_image_path": ""})
+    service._fill()
+    assert not game_covers.cached_cover_path(second).exists()
+    assert database.get_game(game_id)["cover_cache"] is None
+    database.update_game(game_id, {"cover_image_path": url + "fail"})
+    calls.clear()
+    service._fill()
+    service._fill()
+    assert calls == [url + "fail"]
+
+
+@pytest.mark.parametrize("action", ["purge", "change", "delete", "stop"])
+def test_cache_inflight_download_is_discarded(monkeypatch, action):
+    import threading
+    from core import scraper
+
+    game_id = database.add_game("Race", "", "", cover_image="https://f95zone.to/one.png")
+    entered, release = threading.Event(), threading.Event()
+    def fetch(*args):
+        entered.set()
+        assert release.wait(3)
+        return b"\x89PNG\r\n\x1a\nimage"
+    monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
+    service = game_covers.CoverCacheService()
+    thread = threading.Thread(target=service._fill)
+    thread.start()
+    assert entered.wait(3)
+    if action == "purge":
+        service.purge()
+    elif action == "change":
+        database.update_game(game_id, {"cover_image_path": "https://f95zone.to/new.png"})
+    elif action == "delete":
+        service.delete_game(game_id)
+    else:
+        service.stop()
+    release.set()
+    thread.join(3)
+    assert not thread.is_alive()
+    assert not game_covers.cache_covers_dir().exists() or not list(game_covers.cache_covers_dir().iterdir())
+    if action == "purge":
+        service.wake()
+        service._fill()
+        assert not service._wake.is_set()
+
+
+def test_cache_purge_preserves_local_covers_and_resets_api(image, monkeypatch):
+    from core import scraper
+
+    monkeypatch.setattr(scraper, "f95_get_bytes", lambda *args: image.read_bytes())
+    api = Api()
+    game_id = database.add_game("Cache", "", "", cover_image="https://f95zone.to/image.png")
+    local = game_covers.set_cover(game_id, str(image))
+    api.cover_cache._fill()
+    status = api.get_cover_cache_status()
+    assert status == {"success": True, "count": 1, "bytes": len(image.read_bytes()), "running": False}
+    assert api.purge_cover_cache()["count"] == 0
+    assert database.get_game(game_id)["cover_cache"] is None
+    assert game_covers.cover_path(local).is_file()
+    api.cover_cache._fill()
+    assert api.get_cover_cache_status()["bytes"] == 0

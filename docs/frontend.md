@@ -324,3 +324,10 @@ fallback flow.
 shows a checked Covers option only when offered by the source, plus the number
 of covers to copy. Locked libraries ask the user to close Playnite. The
 Playnite browser mock provides the committed fixture's preview counts.
+
+
+### Startup and cover display
+
+Inter Variable (weights 400–800) ships through `@fontsource-variable/inter` and is imported once in `main.ts`. Interface fonts, scripts, styles and icons load from the bundle. Before the first library response, `libraryDisplayState` selects skeletons for the active layout; a failed first load offers Retry. Later refreshes retain the current games. Skeleton animation follows the motion preference and reduced motion.
+
+All cover views try the local cover, then `cover_cache_url`, then the remote `cover_image_path`, falling back on image errors. Settings → Library & Downloads shows the device-local cache count and size (KB below 1 MB), with a confirmed purge that suspends caching until next launch.

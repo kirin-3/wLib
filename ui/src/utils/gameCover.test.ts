@@ -18,3 +18,13 @@ test("missing local cover uses remote; empty game uses placeholder", () => {
   assert.equal(gameCoverSrc(null), "");
   assert.equal(gameCoverSrc({}), "");
 });
+
+
+test("cache precedes remote and follows local, with error fallback", () => {
+  const game = { cover_local_url: "local-cache-priority.png", cover_cache_url: "cached-priority.png", cover_image_path: "remote-priority.png" };
+  assert.equal(gameCoverSrc(game), game.cover_local_url);
+  assert.equal(gameCoverError({} as Event, game), true);
+  assert.equal(gameCoverSrc(game), game.cover_cache_url);
+  assert.equal(gameCoverError({} as Event, game), true);
+  assert.equal(gameCoverSrc(game), game.cover_image_path);
+});

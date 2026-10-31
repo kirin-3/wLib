@@ -210,3 +210,12 @@ export const gameFolder = (path: string): string => {
   if (separator < 0) return "";
   return path.slice(0, separator + 1);
 };
+
+
+export function libraryDisplayState(
+  gamesLoaded: boolean, loadError: string | null, gameCount: number, filteredCount: number,
+): "loading" | "error" | "empty" | "no-results" | "list" {
+  if (!gamesLoaded) return loadError ? "error" : "loading";
+  if (!gameCount) return "empty";
+  return filteredCount ? "list" : "no-results";
+}

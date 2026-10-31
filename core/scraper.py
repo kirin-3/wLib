@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import logging
 import os
 import re
 import socket
 import ssl
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from datetime import datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -50,7 +52,12 @@ _BARE_VERSION_RE = re.compile(r"\bv(\d+[\d.]*[a-zA-Z]?)(?:\s|$|\[)", re.I)
 # across the paced request so a queued caller chooses its transport after the
 # request in front of it has finished, and _f95_get takes it again from there.
 _F95_REQUEST_LOCK = threading.RLock()
+_F95_PRIORITY_LOCK = threading.Lock()
+_f95_foreground_waiters = 0
 _f95_last_request_finished: float | None = None
+# Background cover downloads wait one interval after a foreground request, so a
+# bulk check or import that sends its next request right away keeps its turn.
+_f95_last_foreground_finished: float | None = None
 # Extension-first window: set only by a plain-HTTP `blocked` result, kept in
 # memory only, 15 minutes. While active and an eligible extension is connected,
 # F95 requests go straight to the extension without trying plain HTTP first.
@@ -89,16 +96,48 @@ def _trim_post_version(token: str) -> str:
     return value
 
 
-def _run_paced_f95_request(
-    transport: Callable[[], tuple[int, str]],
-) -> tuple[int, str]:
+def _background_may_start() -> bool:
+    with _F95_PRIORITY_LOCK:
+        if _f95_foreground_waiters:
+            return False
+    last = _f95_last_foreground_finished
+    return last is None or time.monotonic() - last >= get_request_interval_seconds()
+
+
+@contextmanager
+def _f95_request_slot(*, background: bool = False) -> Generator[None]:
+    global _f95_foreground_waiters
+    if not background:
+        with _F95_PRIORITY_LOCK:
+            _f95_foreground_waiters += 1
+        try:
+            _ = _F95_REQUEST_LOCK.acquire()
+        finally:
+            with _F95_PRIORITY_LOCK:
+                _f95_foreground_waiters -= 1
+    else:
+        while True:
+            if _background_may_start() and _F95_REQUEST_LOCK.acquire(blocking=False):
+                if _background_may_start():
+                    break
+                _F95_REQUEST_LOCK.release()
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        _F95_REQUEST_LOCK.release()
+
+
+def _run_paced_f95_request[T](
+    transport: Callable[[], T], *, background: bool = False,
+) -> T:
     """Run one F95 transport inside the global lock and minimum interval.
 
     Both plain HTTP and extension fetches go through here, so a urllib
     request followed by an extension request never overlap and stay spaced.
     """
-    global _f95_last_request_finished
-    with _F95_REQUEST_LOCK:
+    global _f95_last_request_finished, _f95_last_foreground_finished
+    with _f95_request_slot(background=background):
         if _f95_last_request_finished is not None:
             remaining = get_request_interval_seconds() - (
                 time.monotonic() - _f95_last_request_finished
@@ -109,6 +148,8 @@ def _run_paced_f95_request(
             return transport()
         finally:
             _f95_last_request_finished = time.monotonic()
+            if not background:
+                _f95_last_foreground_finished = _f95_last_request_finished
 
 
 def _urllib_f95_get(url: str) -> tuple[int, str]:
@@ -464,7 +505,7 @@ class Scraper:
         plain-HTTP ``blocked`` opens the 15-minute extension-first window.
         Timeouts and network errors propagate without fallback.
         """
-        with _F95_REQUEST_LOCK:
+        with _f95_request_slot():
             return self._fetch_with_fallback_locked(url)
 
     def _fetch_with_fallback_locked(
@@ -914,3 +955,17 @@ class Scraper:
         if not thread_id:
             return self._error("invalid_url", "A valid F95Zone thread URL is required")
         return self._get_page(thread_id)
+
+
+def f95_get_bytes(url: str, max_bytes: int) -> bytes:
+    def transport() -> bytes:
+        logging.getLogger(__name__).info("Downloading cover image")
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with cast(HTTPResponse, urlopen(request, timeout=30, context=ssl.create_default_context())) as response:
+            if response.status != 200:
+                raise ValueError("Cover request did not return HTTP 200")
+            data = response.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError("The image is larger than 20 MiB.")
+            return data
+    return _run_paced_f95_request(transport, background=True)

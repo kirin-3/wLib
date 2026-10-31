@@ -394,3 +394,12 @@ copy inside the database import transaction, roll back on failure and remove
 replaced files only after commit. Fill-missing keeps existing local covers.
 Remote cover URLs remain metadata; local covers and their references never
 export or sync, and F95 metadata refreshes leave them alone.
+
+
+### Remote cover cache
+
+`Api` owns `CoverCacheService` in `core/game_covers.py`. After the window's loaded event it sweeps orphan files and fills `<data dir>/covers/cache/` in one daemon thread. Remote images share local-cover content validation (JPEG, PNG, WebP, GIF, AVIF; 20 MiB maximum) and atomic random-name storage. `f95_get_bytes` uses bounded plain HTTP reads without extension fallback, sharing the global F95 request lock and interval with page requests. Foreground waiters take priority over further background acquisitions, and a background download starts only after one interval with no foreground request, so bulk checks and imports keep their turn. Failed URLs are skipped for the rest of the session.
+
+The device-only `games.cover_cache` filename and `games.cover_cache_url` source URL are written only through dedicated database helpers. Guarded writes discard downloads if the source URL changed or the game was removed. Adds, edits, metadata checks, backup imports and sync pulls wake the service. API reads expose a localhost `cover_cache_url` only for a current source URL and an existing file while port 8183 is available. `/covers/cache/<random name>` serves immutable images without directory listing.
+
+`get_cover_cache_status()` returns `{success, count, bytes, running}`. `purge_cover_cache()` disables downloads for this session, clears the columns and deletes cache files under the same lock used to store them, then dispatches `wlib-refresh-library`. In-flight reads are discarded. Local user covers survive. Shutdown stops the service. Cached files and references are excluded from exports, backups and sync and never modify the sync timestamp.

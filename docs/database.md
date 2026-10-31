@@ -76,6 +76,8 @@ Stores the library records and their associated configuration flags.
 | `skipped_version` | `TEXT DEFAULT ''` | Latest release the user chose to skip. `update_game` accepts it and clears it when the installed version changes after normalization. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |
 | `cover_image_path` | `TEXT` | Remote cover image URL. |
+| `cover_cache` | `TEXT` | Device-only random filename in `<data dir>/covers/cache/`; nullable. |
+| `cover_cache_url` | `TEXT` | Remote URL used to create the cached file; nullable. |
 | `cover_local` | `TEXT` | Device-only random filename under `<data dir>/covers/`; NULL when unset. |
 | `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
 | `rating` | `TEXT` | Overall user rating. |
@@ -248,3 +250,8 @@ wLib's import/export flow uses a semantic JSON file rather than copying `wlib.db
 it. Changes to this column do not advance `sync_local_modified_at`. The
 `covers/` folder is created on first use. Files and references are excluded
 from exports and sync; applying backups or sync preserves existing covers.
+
+
+### Device-local remote cover cache
+
+`init_db()` adds nullable `cover_cache` and `cover_cache_url` columns. Dedicated helpers read the work list, list referenced names, clear one/all rows, and set both fields guarded by the current `cover_image_path`. Neither column is in `SYNC_GAME_COLUMNS` or the generic `update_game` allowlist. Cache writes and purge never change the sync timestamp. JSON exports, semantic backups and sync omit both columns and all files in `covers/cache/`; imports preserve existing cache columns. The background downloader shares F95 pacing, and purge removes only this cache while disabling downloads until the next launch.

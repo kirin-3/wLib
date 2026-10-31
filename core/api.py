@@ -286,6 +286,9 @@ class Api:
         self.library_sync: SyncManager = SyncManager(
             on_pull=self._refresh_synced_library
         )
+        from core.game_covers import CoverCacheService
+
+        self.cover_cache: CoverCacheService = CoverCacheService()
         self.scraper: Scraper = Scraper()
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
@@ -1442,11 +1445,31 @@ class Api:
         return games
 
     def _add_local_cover_url(self, game: dict[str, object]) -> None:
-        from core.game_covers import cover_path
+        from core.game_covers import cover_path, cached_cover_path
 
+        cached_url = game.pop("cover_cache_url", None)
+        name = game.pop("cover_cache", None)
+        cached = cached_cover_path(name)
+        if (self.library_sync.server_available and cached_url == game.get("cover_image_path")
+                and cached is not None and cached.is_file()):
+            game["cover_cache_url"] = f"http://127.0.0.1:8183/covers/cache/{cached.name}"
         path = cover_path(game.get("cover_local"))
         if self.library_sync.server_available and path is not None and path.is_file():
             game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
+
+    def get_cover_cache_status(self) -> dict[str, object]:
+        try:
+            return self.cover_cache.status()
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def purge_cover_cache(self) -> dict[str, object]:
+        try:
+            self.cover_cache.purge()
+            self._refresh_synced_library()
+            return self.cover_cache.status()
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     def set_game_cover_file(
         self, game_id: object = None, path: object = ""
@@ -1733,6 +1756,7 @@ class Api:
         return {"success": True, "games": games}
 
     def _refresh_synced_library(self) -> None:
+        self.cover_cache.wake()
         if self.window is not None:
             try:
                 _ = cast(
@@ -1882,6 +1906,7 @@ class Api:
         except Exception as exc:
             return self._backup_error_payload(exc)
 
+        self.cover_cache.wake()
         return {"success": True, **payload}
 
     def detect_external_library(self, source: str) -> dict[str, object]:
@@ -2099,6 +2124,7 @@ class Api:
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not add game"}
 
+        self.cover_cache.wake()
         metadata_pending = bool(normalized_url) and game_id is not None
         if metadata_pending:
             assert game_id is not None
@@ -2148,6 +2174,7 @@ class Api:
         except Exception as e:
             print(f"Failed to fetch metadata for game {game_id}: {e}")
         finally:
+            self.cover_cache.wake()
             with self._metadata_lock:
                 self._metadata_pending.discard(game_id)
             if self.window:
@@ -2171,7 +2198,7 @@ class Api:
     def delete_game(self, game_id: object = None) -> dict[str, object]:
         import sqlite3
 
-        from core.database import delete_game, get_connection, get_game
+        from core.database import get_connection, get_game
 
         coerced_id = self._coerce_db_id(game_id)
         if coerced_id is None:
@@ -2196,8 +2223,7 @@ class Api:
                     "error": "Game was not found",
                     "error_code": "game_not_found",
                 }
-            delete_game_fn = cast(Callable[[int], None], delete_game)
-            delete_game_fn(coerced_id)
+            self.cover_cache.delete_game(coerced_id)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not delete game"}
         try:
@@ -2309,6 +2335,7 @@ class Api:
             and updated_fields.get("finished_version") is None
         ):
             response["finished_version"] = applied_fields["finished_version"]
+        self.cover_cache.wake()
         return response
 
     def list_companion_tools(self) -> dict[str, object]:
@@ -2771,6 +2798,8 @@ class Api:
             if updated_rows:
                 conn.commit()
 
+        if updated_rows:
+            self.cover_cache.wake()
         return updated_rows
 
     def _update_thread_edit_metadata_for_url(
@@ -3407,6 +3436,7 @@ class Api:
                     )
                     self._update_error = "" if self._update_cancelled else error
                     self._update_current = ""
+                    self.cover_cache.wake()
                     self._update_running = False
 
         thread = threading.Thread(target=run_checks, daemon=True)

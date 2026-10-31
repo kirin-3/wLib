@@ -3,6 +3,7 @@ import { reactive } from "vue";
 
 interface CoverGame {
   cover_local_url?: string;
+  cover_cache_url?: string;
   cover_image_path?: string;
 }
 
@@ -11,7 +12,7 @@ interface CoverGame {
 const failedSources = reactive(new Set<string>());
 
 export function gameCoverSrc(game: CoverGame | null | undefined): string {
-  return [game?.cover_local_url, game?.cover_image_path]
+  return [game?.cover_local_url, game?.cover_cache_url, game?.cover_image_path]
     .find((url): url is string => !!url && !failedSources.has(url)) || "";
 }
 

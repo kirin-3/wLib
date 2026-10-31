@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { libraryDisplayState } from "../utils/libraryGames";
 import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { toCssPx } from "../utils/interfaceScalePreference";
@@ -135,6 +136,9 @@ const readQueryValue = (value: unknown): string => {
 const route = useRoute();
 const router = useRouter();
 const games = ref<GameRecord[]>([]);
+const gamesLoaded = ref(false);
+const loadError = ref<string | null>(null);
+const displayState = computed(() => libraryDisplayState(gamesLoaded.value, loadError.value, games.value.length, filteredGames.value.length));
 const runningGameIds = ref(new Set<number>());
 const customStatuses = ref<string[]>([]);
 // True once Settings has answered, so the custom status list is authoritative.
@@ -906,11 +910,14 @@ const toggleLaunchTargetMenu = (game: GameRecord) => {
 let gamesRequest = 0;
 const loadGames = async () => {
   const request = ++gamesRequest;
+  if (!gamesLoaded.value) loadError.value = null;
   try {
     const data = await api.getGames();
     if (request !== gamesRequest) return;
     if (data) {
       games.value = data;
+      gamesLoaded.value = true;
+      loadError.value = null;
       if (selectedGame.value) {
         const selectedId = selectedGame.value.id;
         const updated = data.find((g) => g.id === selectedId);
@@ -918,6 +925,7 @@ const loadGames = async () => {
       }
     }
   } catch (e) {
+    if (request === gamesRequest && !gamesLoaded.value) loadError.value = "Your library could not be loaded.";
     console.error("Failed to load games", e);
   }
 };
@@ -2128,7 +2136,17 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="games.length === 0" class="empty-state flex-1">
+      <div v-if="displayState === 'error'" class="empty-state flex-1" role="alert">
+        <h3 class="empty-state-title">{{ loadError }}</h3>
+        <button class="ui-action-btn px-3 py-2 rounded-lg" @click="loadGames">Retry</button>
+      </div>
+      <div v-else-if="displayState === 'loading'" class="library-skeletons grid gap-5 pb-12"
+        :class="layoutMode === 'list' ? 'library-skeletons--list' : `library-cards--${layoutMode}`"
+        role="status" aria-label="Loading library" aria-busy="true">
+        <div v-for="n in 12" :key="n" class="library-skeleton rounded-xl"
+          :class="`library-skeleton--${layoutMode}`" aria-hidden="true"></div>
+      </div>
+      <div v-else-if="displayState === 'empty'" class="empty-state flex-1">
         <IconDeviceGamepad2Filled class="empty-state-icon" />
         <h3 class="empty-state-title">Your library is empty</h3>
         <p class="empty-state-subtext">Add your first game to get started</p>
@@ -2137,7 +2155,7 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <div v-else-if="filteredGames.length === 0" class="empty-state flex-1">
+      <div v-else-if="displayState === 'no-results'" class="empty-state flex-1">
         <IconZoom class="empty-state-icon" />
         <h3 class="empty-state-title">No games found</h3>
         <p class="empty-state-subtext">Try adjusting your search or filters</p>
@@ -2807,6 +2825,16 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.library-skeletons--list { grid-template-columns: 1fr; gap: 8px; }
+.library-skeleton { background: var(--bg-surface); border: 1px solid var(--border); animation: skeleton-pulse 1.5s ease-in-out infinite alternate; }
+.library-skeleton--grid { height: 340px; }
+.library-skeleton--compact { aspect-ratio: 3/4; }
+.library-skeleton--banner { aspect-ratio: 16/7; }
+.library-skeleton--list { height: 64px; }
+@keyframes skeleton-pulse { to { opacity: 0.5; } }
+:global(.motion-off .library-skeleton) { animation: none; }
+@media (prefers-reduced-motion: reduce) { .library-skeleton { animation: none; } }
+
 .card-size-control { accent-color: var(--brand); }
 .card-size-control:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 

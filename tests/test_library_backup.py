@@ -2930,3 +2930,22 @@ def test_library_folder_import_with_only_foreign_folders_keeps_local(tmp_path):
         if w["type"] == "foreign_path" and w["field"].startswith("library_folder")
     ]
     assert [w["path"] for w in folder_warnings] == foreign
+
+
+def test_cached_covers_never_export_or_import():
+    from core import database
+    from core.library_backup import build_library_backup, build_sync_backup, apply_library_backup
+
+    database.init_db()
+    url = "https://attachments.f95zone.to/cache.png"
+    game_id = database.add_game("Device cache", "", "https://f95zone.to/threads/987654/", cover_image=url)
+    name = "b" * 32 + ".png"
+    assert database.set_game_cover_cache(game_id, url, name)
+    before = database.get_setting("sync_local_modified_at")
+    for payload in (build_library_backup(), build_sync_backup("now", "device")):
+        assert "cover_cache" not in str(payload)
+        assert name not in str(payload)
+        apply_library_backup(payload, {"sections": ["metadata"]})
+        assert database.get_game(game_id)["cover_cache"] == name
+        assert database.get_game(game_id)["cover_cache_url"] == url
+    assert database.get_setting("sync_local_modified_at") == before

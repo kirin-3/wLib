@@ -581,6 +581,7 @@ export interface GameRecord {
   cover_image_path?: string;
   cover_local?: string | null;
   cover_local_url?: string;
+  cover_cache_url?: string;
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
@@ -1580,6 +1581,14 @@ class ApiService {
     return this._mockResponse(method, args) as T;
   }
 
+  async getCoverCacheStatus(): Promise<ApiBasicResponse & { count?: number; bytes?: number; running?: boolean }> {
+    return this.invoke("get_cover_cache_status");
+  }
+
+  async purgeCoverCache(): Promise<ApiBasicResponse & { count?: number; bytes?: number; running?: boolean }> {
+    return this.invokeLibraryChange("purge_cover_cache");
+  }
+
   async getGames(): Promise<GameRecord[]> {
     return this.invoke<GameRecord[]>("get_games");
   }
@@ -2345,6 +2354,12 @@ class ApiService {
         localStorage.setItem("wlib-mock-games", JSON.stringify(games));
         return { success: true, mock: true, game };
       }
+      case "get_cover_cache_status":
+        return { success: true, count: Number(sessionStorage.getItem("wlib-mock-cover-count") ?? 25), bytes: Number(sessionStorage.getItem("wlib-mock-cover-bytes") ?? 12582912), running: false };
+      case "purge_cover_cache":
+        sessionStorage.setItem("wlib-mock-cover-count", "0");
+        sessionStorage.setItem("wlib-mock-cover-bytes", "0");
+        return { success: true, count: 0, bytes: 0, running: false };
       case "get_games": {
         // get_all_games() embeds every game's additional targets in the same
         // order as get_launch_targets(); the library launch menu reads them there.

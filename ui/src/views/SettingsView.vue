@@ -597,6 +597,29 @@ const startProtonDownloadPolling = () => {
   protonDownloadTimer = setInterval(pollProtonDownload, 500);
 };
 
+const coverCache = ref({ count: 0, bytes: 0 });
+const coverCacheBusy = ref(false);
+const coverCacheError = ref("");
+const loadCoverCache = async () => {
+  try {
+    const result = await api.getCoverCacheStatus();
+    if (!result.success) throw new Error(result.error || "Could not read cover cache");
+    coverCache.value = { count: result.count || 0, bytes: result.bytes || 0 };
+  } catch (error) { coverCacheError.value = String(error); }
+};
+const purgeCoverCache = async () => {
+  if (!confirm("Delete all cached covers? Cover downloads will resume next launch. Your local covers will be kept.")) return;
+  coverCacheBusy.value = true;
+  coverCacheError.value = "";
+  try {
+    const result = await api.purgeCoverCache();
+    if (!result.success) throw new Error(result.error || "Could not purge cover cache");
+    await loadCoverCache();
+  } catch (error) { coverCacheError.value = String(error); }
+  finally { coverCacheBusy.value = false; }
+};
+onMounted(() => { void loadCoverCache(); });
+const formatCoverCacheSize = (bytes: number) => bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : formatMegabytes(bytes);
 const formatMegabytes = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
 const downloadProton = async () => {
@@ -1180,6 +1203,14 @@ const browseUrm = async () => {
           <IconDownloadFilled class="ui-section-icon" />
           Library &amp; Downloads
         </h3>
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <p class="text-sm">Cover cache: {{ coverCache.count ? `${coverCache.count} covers, ${formatCoverCacheSize(coverCache.bytes)}` : 'Empty' }}</p>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">Cached covers stay on this device. After purging, downloads resume next launch.</p>
+            <p v-if="coverCacheError" class="text-xs" role="alert">{{ coverCacheError }}</p>
+          </div>
+          <button class="settings-btn disabled:opacity-50" :disabled="coverCacheBusy || !coverCache.count" @click="purgeCoverCache">Purge</button>
+        </div>
 
         <div class="space-y-3">
           <div>

@@ -504,6 +504,8 @@ def init_db() -> None:
 
         new_columns = [
             ("cover_local", "TEXT"),
+            ("cover_cache", "TEXT"),
+            ("cover_cache_url", "TEXT"),
             ("tags", "TEXT DEFAULT ''"),
             ("rating", "TEXT DEFAULT ''"),
             ("command_line_args", "TEXT DEFAULT ''"),
@@ -1029,6 +1031,41 @@ def set_game_local_cover(
 
 def clear_game_local_cover(game_id: int) -> str:
     return set_game_local_cover(game_id, None)
+
+
+def get_cover_cache_work() -> list[dict[str, object]]:
+    # Include valid rows too so missing files are repaired on the next wake.
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(list[sqlite3.Row], conn.execute(
+            "SELECT id, cover_image_path, cover_cache, cover_cache_url FROM games WHERE COALESCE(cover_image_path, '') != '' OR cover_cache IS NOT NULL"
+        ).fetchall())
+        return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+
+
+def set_game_cover_cache(game_id: int, url: str, name: str) -> bool:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            "UPDATE games SET cover_cache = ?, cover_cache_url = ? WHERE id = ? AND cover_image_path = ?",
+            (name, url, game_id, url),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+
+def clear_game_cover_cache(game_id: int | None = None) -> None:
+    with closing(get_connection()) as conn:
+        if game_id is None:
+            _ = conn.execute("UPDATE games SET cover_cache = NULL, cover_cache_url = NULL")
+        else:
+            _ = conn.execute("UPDATE games SET cover_cache = NULL, cover_cache_url = NULL WHERE id = ?", (game_id,))
+        conn.commit()
+
+
+def referenced_cover_cache_names() -> set[str]:
+    with closing(get_connection()) as conn:
+        rows = cast(list[tuple[str]], conn.execute("SELECT cover_cache FROM games WHERE cover_cache IS NOT NULL").fetchall())
+        return {row[0] for row in rows}
 
 
 def set_sandbox_for_all_games(enabled: bool) -> int:

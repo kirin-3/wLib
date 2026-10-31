@@ -974,10 +974,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         from urllib.parse import urlparse as _urlparse
 
         if _urlparse(self.path).path.startswith("/covers/"):
-            from core.game_covers import COVER_TYPES, cover_path
+            from core.game_covers import COVER_TYPES, cover_path, cached_cover_path
 
             name = _urlparse(self.path).path.removeprefix("/covers/")
-            path = cover_path(name)
+            path = (cached_cover_path(name.removeprefix("cache/"))
+                    if name.startswith("cache/") else cover_path(name))
             try:
                 if path is None:
                     raise FileNotFoundError
@@ -1530,6 +1531,11 @@ def main() -> None:
             cast(ExtensionServer, extension_server).sync_api = api
             api.library_sync.server_available = True
 
+        def start_cover_cache() -> None:
+            if cast(RendererDiagnosticsWindow, cast(object, window)).events.loaded.wait(60):
+                api.cover_cache.start()
+
+        threading.Thread(target=start_cover_cache, daemon=True).start()
         api.library_sync.start()
         library_sync_started = True
 
@@ -1542,6 +1548,7 @@ def main() -> None:
             icon_path=icon_path if os.path.exists(icon_path) else None,
         )
     finally:
+        api.cover_cache.stop()
         # Release the port before the final sync can take up to 10 seconds:
         # relaunching wLib while it shuts down must be able to bind it instead
         # of finding this closing instance and exiting.

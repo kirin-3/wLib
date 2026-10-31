@@ -147,7 +147,13 @@ const localCoverUrl = ref("");
 const localCoverName = ref("");
 const coverBusy = ref(false);
 const coverError = ref("");
-const coverGame = computed(() => ({ cover_local_url: localCoverUrl.value, cover_image_path: coverImage.value }));
+// The cached copy belongs to the saved remote URL, so an edited URL skips it.
+const cachedCover = ref({ url: "", source: "" });
+const coverGame = computed(() => ({
+  cover_local_url: localCoverUrl.value,
+  cover_cache_url: coverImage.value === cachedCover.value.source ? cachedCover.value.url : "",
+  cover_image_path: coverImage.value,
+}));
 const displayedCover = computed(() => gameCoverSrc(coverGame.value));
 const changeLocalCover = async (remove = false) => {
   if (!props.game || coverBusy.value) return;
@@ -556,6 +562,7 @@ watch(
     if (isOpen && g && typeof g.id === "number") {
       localCoverUrl.value = g.cover_local_url || "";
       localCoverName.value = g.cover_local || "";
+      cachedCover.value = { url: g.cover_cache_url || "", source: g.cover_image_path || "" };
       if (g.id !== lastSyncedId.value) {
         lastSyncedId.value = g.id;
         coverError.value = "";

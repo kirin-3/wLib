@@ -601,6 +601,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     fake_webview.create_window.return_value = fake_window
 
     class FakeApi:
+        cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -664,6 +665,7 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
     fake_webview.create_window.return_value = MagicMock()
 
     class FakeApi:
+        cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1458,6 +1460,7 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
     monkeypatch.setattr(main.sys, "argv", ["main.py"])
 
     class FakeApi:
+        cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1500,6 +1503,7 @@ def test_main_flushes_playtime_before_the_final_sync(monkeypatch):
     fake_webview.create_window.return_value = MagicMock()
 
     class FakeApi:
+        cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1552,6 +1556,7 @@ def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
     fake_webview.create_window.side_effect = RuntimeError("no display")
 
     class FakeApi:
+        cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1945,3 +1950,27 @@ def test_database_endpoints_wait_until_startup_has_run_init_db(
         assert find_calls == ["https://f95zone.to/threads/123/"]
     finally:
         connection.close()
+
+
+def test_cached_cover_route(tmp_path, monkeypatch):
+    from core import database, game_covers
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    data = b"\x89PNG\r\n\x1a\nimage"
+    name = game_covers.store_cached_cover(data)
+    handler = _make_extension_handler("/covers/cache/" + name)
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    headers = dict(call.args for call in handler.send_header.call_args_list)
+    assert headers["Content-Type"] == "image/png"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert "immutable" in headers["Cache-Control"]
+    assert handler.wfile.getvalue() == data
+
+
+@pytest.mark.parametrize("name", ["", "../wlib.db", "%2e%2e/wlib.db", "a" * 64 + ".png", "a" * 32 + ".png"])
+def test_cached_cover_route_rejects_invalid_names(name):
+    handler = _make_extension_handler("/covers/cache/" + name)
+    handler.send_error = MagicMock()
+    handler.do_GET()
+    handler.send_error.assert_called_once_with(404)

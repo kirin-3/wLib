@@ -1914,3 +1914,27 @@ def test_library_folder_migration_and_read_repair(folders, default, expected):
     assert get_library_folders() == expected
     assert json.loads(get_setting("library_folders")) == expected[0]
     assert get_setting("library_folder") == expected[1]
+
+
+def test_cover_cache_migration_guard_and_sync():
+    from core import database
+
+    init_db()
+    with closing(get_connection()) as conn:
+        conn.execute("ALTER TABLE games DROP COLUMN cover_cache")
+        conn.execute("ALTER TABLE games DROP COLUMN cover_cache_url")
+        conn.commit()
+    init_db()
+    game_id = add_game("Cached", "", "", cover_image="https://f95zone.to/old.png")
+    before = get_setting("sync_local_modified_at")
+    assert database.set_game_cover_cache(game_id, "https://f95zone.to/old.png", "a" * 32 + ".png")
+    assert get_setting("sync_local_modified_at") == before
+    update_game(game_id, {"cover_image_path": "https://f95zone.to/new.png", "cover_cache": "forbidden"})
+    assert not database.set_game_cover_cache(game_id, "https://f95zone.to/old.png", "stale.png")
+    assert get_game(game_id)["cover_cache"] == "a" * 32 + ".png"
+    assert "cover_cache" not in SYNC_GAME_COLUMNS
+    assert "cover_cache_url" not in SYNC_GAME_COLUMNS
+    before = get_setting("sync_local_modified_at")
+    database.clear_game_cover_cache(game_id)
+    assert get_setting("sync_local_modified_at") == before
+    assert database.referenced_cover_cache_names() == set()

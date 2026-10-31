@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -277,7 +276,7 @@ html { zoom: var(--ui-scale, 1); }
 body {
   margin: 0;
   min-height: var(--app-vh);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-base);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;

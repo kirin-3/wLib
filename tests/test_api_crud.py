@@ -483,3 +483,26 @@ def test_ambiguous_add_does_not_attach_or_change_links(monkeypatch):
         == "duplicate_url"
     )
     assert get_all_games() == before
+
+
+def test_cover_cache_api_validity_and_delete(tmp_path, monkeypatch):
+    from core import database, game_covers
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    api = Api()
+    url = "https://attachments.f95zone.to/image.png"
+    game_id = add_game("Cache", "", "", cover_image=url)
+    name = game_covers.store_cached_cover(b"\x89PNG\r\n\x1a\nimage")
+    assert database.set_game_cover_cache(game_id, url, name)
+    assert "cover_cache_url" not in api.get_games()[0]
+    api.library_sync.server_available = True
+    assert api.get_games()[0]["cover_cache_url"].endswith("/covers/cache/" + name)
+    database.update_game(game_id, {"cover_image_path": url + "new"})
+    assert "cover_cache_url" not in api.get_games()[0]
+    database.update_game(game_id, {"cover_image_path": url})
+    game_covers.delete_cached_cover(name)
+    assert "cover_cache_url" not in api.get_games()[0]
+    name = game_covers.store_cached_cover(b"\x89PNG\r\n\x1a\nimage")
+    assert database.set_game_cover_cache(game_id, url, name)
+    assert api.delete_game(game_id)["success"]
+    assert not game_covers.cached_cover_path(name).exists()
