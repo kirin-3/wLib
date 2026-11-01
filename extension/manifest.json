@@ -48,6 +48,7 @@
             ],
             "js": [
                 "store-links.js",
+                "widget-placement.js",
                 "content.js"
             ]
         }
@@ -57,6 +58,7 @@
             "resources": [
                 "icon.svg",
                 "arrow-down-left.svg",
+                "arrow-right.svg",
                 "library-plus.svg",
                 "external-link.svg"
             ],

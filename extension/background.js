@@ -707,10 +707,15 @@ async function syncSiteScripts() {
     for (const [site, origin] of Object.entries(WLIB_OPTIONAL_SITES)) {
         const id = `wlib-${site}`;
         const allowed = await siteApi.permissions.contains({origins:[origin]});
-        const exists = registered.some(script => script.id === id);
+        const existing = registered.find(script => script.id === id);
+        const files = ['store-links.js','widget-placement.js','site-widget.js',`sites/${site}.js`];
+        // Browsers may report registered paths with a leading slash or as full extension URLs.
+        const registeredFiles = (existing?.js || []).map(file => String(file).replace(/^[a-z-]+:\/\/[^/]+\//i,'').replace(/^\//,''));
+        const stale = existing && JSON.stringify(registeredFiles) !== JSON.stringify(files);
+        const exists = Boolean(existing) && !stale;
+        if (stale) await siteApi.scripting.unregisterContentScripts({ids:[id]});
         if (!allowed && exists) await siteApi.scripting.unregisterContentScripts({ids:[id]});
         if (allowed && !exists) {
-            const files = ['store-links.js','site-widget.js',`sites/${site}.js`];
             await siteApi.scripting.registerContentScripts([{
                 id, matches:[origin], js:files, css:['content.css'], runAt:'document_idle',
             }]);

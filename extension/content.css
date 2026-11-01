@@ -6,11 +6,13 @@
     --wlib-widget-bottom-gap: 1.5rem;
     --wlib-widget-width: min(17.5rem, calc(100vw - (var(--wlib-widget-left) * 2)));
     --wlib-widget-collapsed-size: 2.25rem;
+    --wlib-widget-current-width: var(--wlib-widget-width);
+    box-sizing: border-box;
     position: fixed;
     top: var(--wlib-widget-top);
     left: var(--wlib-widget-left);
     z-index: 999999;
-    width: var(--wlib-widget-width);
+    width: var(--wlib-widget-current-width);
     background:
         linear-gradient(180deg, rgba(32, 39, 54, 0.96) 0%, rgba(18, 23, 35, 0.96) 100%),
         radial-gradient(circle at top left, rgba(209, 82, 209, 0.16), transparent 52%);
@@ -27,6 +29,7 @@
     overflow: hidden;
     will-change: top, width, opacity, transform;
     transition:
+        left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
         top 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
         width 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
         padding 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -38,9 +41,18 @@
         transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.wlib-add-container[data-side="right"] {
+    left: calc(100% - var(--wlib-widget-current-width) - var(--wlib-widget-left));
+}
+
+.wlib-add-container.is-placement-instant,
+.wlib-add-container.is-placement-instant * {
+    transition: none !important;
+}
+
 .wlib-add-container.is-collapsed {
     top: calc(100vh - var(--wlib-widget-bottom-gap) - var(--wlib-widget-collapsed-size));
-    width: var(--wlib-widget-collapsed-size);
+    --wlib-widget-current-width: var(--wlib-widget-collapsed-size);
     height: var(--wlib-widget-collapsed-size);
     padding: 0;
     gap: 0;
@@ -74,6 +86,7 @@
     min-height: 0;
 }
 
+.wlib-site-widget .wlib-side-btn,
 .wlib-site-widget .wlib-collapse-btn,
 .wlib-site-widget .wlib-collapsed-toggle {
     padding: 0;
@@ -97,12 +110,24 @@
         margin 220ms ease;
 }
 
+.wlib-header-actions {
+    display: inline-flex;
+    gap: 0.25rem;
+}
+
+.wlib-side-btn img, .wlib-collapse-btn img {
+    transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.wlib-add-container[data-side="right"] .wlib-side-btn img { transform: rotate(180deg); }
+.wlib-add-container[data-side="right"] .wlib-collapse-btn img { transform: scaleX(-1); }
+
 .wlib-brand {
     display: inline-flex;
     align-items: center;
     justify-content: center;
 }
 
+.wlib-side-btn,
 .wlib-collapse-btn,
 .wlib-collapsed-toggle {
     display: inline-flex;
@@ -119,18 +144,21 @@
         opacity 180ms ease;
 }
 
+.wlib-side-btn,
 .wlib-collapse-btn {
     width: 1.9rem;
     height: 1.9rem;
     flex: 0 0 auto;
 }
 
+.wlib-side-btn:hover,
 .wlib-collapse-btn:hover,
 .wlib-collapsed-toggle:hover {
     background: rgba(255, 255, 255, 0.12);
     transform: translateY(-1px);
 }
 
+.wlib-side-btn:active,
 .wlib-collapse-btn:active,
 .wlib-collapsed-toggle:active {
     transform: translateY(0);
@@ -365,9 +393,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+    .wlib-side-btn img,
+    .wlib-collapse-btn img { transition-duration: 0.01ms !important; }
     .wlib-add-container,
     .wlib-header-row,
     .wlib-widget-body,
+    .wlib-side-btn,
     .wlib-collapse-btn,
     .wlib-collapsed-toggle,
     .wlib-add-btn {

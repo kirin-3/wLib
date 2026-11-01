@@ -21,7 +21,17 @@ test('optional sites register, inject into existing tabs, and unregister on perm
     listeners.added.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
     assert.deepEqual([...registered.keys()],['wlib-dlsite']);
-    assert.equal(injections[0].files[2],'sites/dlsite.js');
+    assert.equal(injections[0].files.at(-1),'sites/dlsite.js');
+    assert.deepEqual(Array.from(injections[0].files),['store-links.js','widget-placement.js','site-widget.js','sites/dlsite.js']);
+    registered.get('wlib-dlsite').js = ['store-links.js','site-widget.js','sites/dlsite.js'];
+    listeners.added.forEach(fn=>fn());
+    await vm.runInContext('siteRegistrationQueue',context);
+    assert.deepEqual(Array.from(registered.get('wlib-dlsite').js),['store-links.js','widget-placement.js','site-widget.js','sites/dlsite.js']);
+    const current = registered.get('wlib-dlsite');
+    current.js = current.js.map(file=>`moz-extension://uuid/${file}`);
+    listeners.added.forEach(fn=>fn());
+    await vm.runInContext('siteRegistrationQueue',context);
+    assert.equal(registered.get('wlib-dlsite'),current);
     granted.clear(); listeners.removed.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
     assert.equal(registered.size,0);
@@ -51,5 +61,6 @@ test('new sites remain optional and F95 scripts load the shared URL rules first'
         assert.ok(!manifest.host_permissions.includes(origin));
         assert.ok(!manifest.content_scripts.some(script=>script.matches.includes(origin)));
     }
-    assert.equal(manifest.content_scripts[0].js[0],'store-links.js');
+    assert.deepEqual(manifest.content_scripts[0].js,['store-links.js','widget-placement.js','content.js']);
+    assert.ok(manifest.web_accessible_resources[0].resources.includes('arrow-right.svg'));
 });

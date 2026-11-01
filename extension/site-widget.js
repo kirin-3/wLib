@@ -6,7 +6,10 @@
         try { chrome.runtime.sendMessage(message,response => { const error = chrome.runtime.lastError; resolve(error ? {success:false,error:error.message} : response || {success:false}); }); }
         catch (error) { resolve({success:false,error:error.message}); }
     });
-    const icons = {arrowDownLeft:'arrow-down-left.svg',libraryPlus:'library-plus.svg',externalLink:'external-link.svg'};
+    const placementHelper = globalThis.WLibWidgetPlacement;
+    const placementPromise = placementHelper ? placementHelper.load() : Promise.resolve({side:'right',collapsed:false});
+    let showing = false;
+    const icons = {arrowRight:'arrow-right.svg',arrowDownLeft:'arrow-down-left.svg',libraryPlus:'library-plus.svg',externalLink:'external-link.svg'};
     function image(file, className, size, alt = '') {
         const img = document.createElement('img'); img.className = className; img.src = chrome.runtime.getURL(file); img.alt = alt;
         img.width = size; img.height = size; img.decoding = 'async'; if (!alt) img.setAttribute('aria-hidden','true');
@@ -16,8 +19,9 @@
     const icon = name => image(icons[name],'wlib-icon',16);
     const toneClasses = {'plan to play':'plan-to-play',playing:'playing','waiting for update':'waiting','on hold':'on-hold',completed:'completed',abandoned:'abandoned'};
     const playStatusClass = status => `wlib-play-status--${toneClasses[String(status || '').trim().toLowerCase()] || 'not-started'}`;
-    function show(page, extra = [], metadata = {}) {
-        if (!page || document.getElementById('wlib-store-widget')) return;
+    async function show(page, extra = [], metadata = {}) {
+        if (!page || showing || document.getElementById('wlib-store-widget')) return;
+        showing = true;
         const links = [...new Map([page,...extra].filter(Boolean).map(link => [`${link.source}:${link.id}`,link])).values()];
         const payload = {url:'',pageUrl:location.href,links,title:document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.textContent?.trim() || document.title,coverImage:document.querySelector('meta[property="og:image"]')?.content || '',tags:[]};
         Object.assign(payload, metadata);
@@ -26,7 +30,9 @@
         const header = document.createElement('div'); header.className = 'wlib-header-row';
         const brand = document.createElement('div'); brand.className = 'wlib-brand'; brand.append(logo());
         const collapse = document.createElement('button'); collapse.type = 'button'; collapse.className = 'wlib-collapse-btn'; collapse.setAttribute('aria-label','Collapse wLib widget'); collapse.append(icon('arrowDownLeft'));
-        header.append(brand,collapse);
+        const side = document.createElement('button'); side.type = 'button'; side.className = 'wlib-side-btn'; side.append(icon('arrowRight'));
+        const headerActions = document.createElement('div'); headerActions.className = 'wlib-header-actions'; headerActions.append(side,collapse);
+        header.append(brand,headerActions);
         const body = document.createElement('div'); body.className = 'wlib-widget-body';
         const warning = document.createElement('p'); warning.className = 'wlib-outdated-warning'; warning.hidden = true; warning.textContent = 'Your wLib app is out of date. Some actions may not work.';
         const actions = document.createElement('div'); actions.className = 'wlib-action-row';
@@ -34,13 +40,26 @@
         const status = document.createElement('p'); status.className = 'wlib-status'; status.setAttribute('aria-live','polite');
         body.append(warning,actions,library,status);
         const expand = document.createElement('button'); expand.type = 'button'; expand.className = 'wlib-collapsed-toggle'; expand.setAttribute('aria-label','Expand wLib widget'); expand.append(logo());
-        const setCollapsed = collapsed => {
-            root.classList.toggle('is-collapsed',collapsed); root.dataset.state = collapsed ? 'collapsed' : 'expanded';
-            collapse.tabIndex = collapsed ? -1 : 0; expand.tabIndex = collapsed ? 0 : -1;
+        root.append(header,body,expand);
+        let placement = await placementPromise;
+        const apply = (state, animate = true) => {
+            if (placementHelper) placementHelper.apply(root,state,{animate});
+            else {
+                root.dataset.side = state.side; root.dataset.state = state.collapsed ? 'collapsed' : 'expanded';
+                root.classList.toggle('is-collapsed',state.collapsed);
+                side.setAttribute('aria-label',`Move wLib widget to the ${state.side === 'left' ? 'right' : 'left'}`);
+                side.tabIndex = collapse.tabIndex = state.collapsed ? -1 : 0; expand.tabIndex = state.collapsed ? 0 : -1;
+            }
         };
-        collapse.addEventListener('click',() => setCollapsed(true));
-        expand.addEventListener('click',() => setCollapsed(false));
-        root.append(header,body,expand); setCollapsed(false);
+        const update = next => { placement = next; apply(next); placementHelper?.save(next); };
+        side.addEventListener('click',() => update({...placement,side:placement.side === 'left' ? 'right' : 'left'}));
+        collapse.addEventListener('click',() => update({...placement,collapsed:true}));
+        expand.addEventListener('click',() => update({...placement,collapsed:false}));
+        placementHelper?.watch(next => {
+            if (next.side === placement.side && next.collapsed === placement.collapsed) return;
+            placement = next; apply(next);
+        });
+        apply(placement,false);
         document.body.append(root);
         function button(label, handler, {iconName = '', variant = ''} = {}) {
             const button = document.createElement('button'); button.type = 'button';

@@ -176,11 +176,11 @@ On Windows, Chromium-based browsers load `%LOCALAPPDATA%\wLib\extension\chrome` 
 
 ## Thread Widget Behavior
 
-On F95 thread pages, the content script injects a floating widget near the upper-left viewport edge using rem-based offsets instead of anchoring it into the page rails.
+On F95 thread pages, the content script injects a floating widget near the upper-right viewport edge by default using rem-based offsets instead of anchoring it into the page rails.
 
-- The expanded widget shows the wLib logo, a collapse control, `Add to wLib` and `Wishlist` for an unsaved thread, or `Open in wLib` for a saved thread. It shows transient feedback for each action, including duplicate and connection errors for Wishlist.
+- The expanded widget shows the wLib logo, side and collapse controls, `Add to wLib` and `Wishlist` for an unsaved thread, or `Open in wLib` for a saved thread. It shows transient feedback for each action, including duplicate and connection errors for Wishlist.
 - When the thread already matches a library entry, the widget also renders a non-interactive status line beneath the action. An exe-less game says `Wishlisted`; an installed game shows its play status.
-- Collapse state is ephemeral to the current page runtime. Collapsing compresses the card into a logo-only affordance that rests near the lower-left viewport edge; expanding reverses that transition.
+- The side arrow moves the widget between edges. Collapse compresses it into a logo button in the bottom corner on the current side; expanding reverses that transition. Side and collapse state are saved locally, shared across F95 and supported store pages, and updated live in open tabs.
 - The latest-alpha page continues to reuse `GET /api/check` for its `In wLib` tile badges, but it only reads the `exists` field and ignores `playStatus`. Answers are cached per thread for the page's lifetime; a failed check (wLib closed or not ready) is not cached and is retried on a timer that backs off from 5 s to 60 s.
 - Reduced-motion preferences are respected by shortening the collapse/expand transition to an effectively instant state change.
 

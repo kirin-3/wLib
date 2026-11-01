@@ -3,6 +3,7 @@ const WLIB_UPDATES_PAGE_PATH = '/sam/latest_alpha/';
 const WLIB_THREAD_ROOT_ID = 'wlib-extension-root';
 const WLIB_TILE_BADGE_SELECTOR = '.wlib-library-badge';
 const WLIB_DEFAULT_PLAY_STATUS = 'Not Started';
+const wlibPlacementPromise = globalThis.WLibWidgetPlacement?.load();
 
 function getLogoUrl() {
     return getAssetUrl('icon.svg');
@@ -29,6 +30,7 @@ function createLogoImage() {
 
 const WLIB_ICON_FILES = {
     arrowDownLeft: 'arrow-down-left.svg',
+    arrowRight: 'arrow-right.svg',
     libraryPlus: 'library-plus.svg',
     externalLink: 'external-link.svg',
 };
@@ -588,7 +590,7 @@ function setActionButtonContent(button, label, iconName, variant) {
     button.classList.toggle('is-success-action', variant === 'success');
 }
 
-function injectUI(gameInfo) {
+async function injectUI(gameInfo) {
     const container = document.createElement('div');
     container.id = WLIB_THREAD_ROOT_ID;
     container.className = 'wlib-add-container';
@@ -607,8 +609,14 @@ function injectUI(gameInfo) {
     collapseBtn.setAttribute('aria-label', 'Collapse wLib widget');
     collapseBtn.appendChild(createIconImage('arrowDownLeft'));
 
-    headerRow.appendChild(brandEl);
-    headerRow.appendChild(collapseBtn);
+    const sideBtn = document.createElement('button');
+    sideBtn.type = 'button';
+    sideBtn.className = 'wlib-side-btn';
+    sideBtn.appendChild(createIconImage('arrowRight'));
+    const headerActions = document.createElement('div');
+    headerActions.className = 'wlib-header-actions';
+    headerActions.append(sideBtn, collapseBtn);
+    headerRow.append(brandEl, headerActions);
 
     const body = document.createElement('div');
     body.className = 'wlib-widget-body';
@@ -656,19 +664,19 @@ function injectUI(gameInfo) {
     collapsedToggle.setAttribute('aria-label', 'Expand wLib widget');
     collapsedToggle.appendChild(createLogoImage());
 
-    const setCollapsed = (collapsed) => {
-        container.classList.toggle('is-collapsed', collapsed);
-        container.setAttribute('data-state', collapsed ? 'collapsed' : 'expanded');
-        collapseBtn.tabIndex = collapsed ? -1 : 0;
-        collapsedToggle.tabIndex = collapsed ? 0 : -1;
+    let placement = await wlibPlacementPromise;
+    const updatePlacement = next => {
+        placement = next;
+        WLibWidgetPlacement.apply(container, placement);
+        WLibWidgetPlacement.save(placement);
     };
-
-    collapseBtn.addEventListener('click', () => {
-        setCollapsed(true);
-    });
-
-    collapsedToggle.addEventListener('click', () => {
-        setCollapsed(false);
+    sideBtn.addEventListener('click', () => updatePlacement({...placement, side: placement.side === 'left' ? 'right' : 'left'}));
+    collapseBtn.addEventListener('click', () => updatePlacement({...placement, collapsed: true}));
+    collapsedToggle.addEventListener('click', () => updatePlacement({...placement, collapsed: false}));
+    WLibWidgetPlacement.watch(next => {
+        if (next.side === placement.side && next.collapsed === placement.collapsed) return;
+        placement = next;
+        WLibWidgetPlacement.apply(container, placement);
     });
 
     btn.addEventListener('click', () => {
@@ -804,7 +812,7 @@ function injectUI(gameInfo) {
     container.appendChild(body);
     container.appendChild(collapsedToggle);
 
-    setCollapsed(false);
+    WLibWidgetPlacement.apply(container, placement, {animate: false});
 
     document.body.appendChild(container);
 }
