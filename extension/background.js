@@ -32,7 +32,7 @@ function readWLibResponse({ response, data }) {
 
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
-const MIN_APP_VERSION = "0.4.2";
+const MIN_APP_VERSION = "0.4.4";
 
 // Compare dot-separated numeric release components, treating missing parts as
 // zero. A leading `v` and any `-suffix` (e.g. `-rc1`) are ignored, so
@@ -455,12 +455,12 @@ async function bridgeGetCanFetch() {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.1");
+            return String(chrome.runtime.getManifest().version || "1.2.2");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.1";
+    return "1.2.2";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
