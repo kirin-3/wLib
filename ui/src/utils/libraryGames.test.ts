@@ -5,6 +5,8 @@ import {
   buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
+  gameSources,
+  matchesSourceFilter,
   gameTags,
   hasAvailableUpdate,
   hasTagFilter,
@@ -324,4 +326,21 @@ test("library display state waits for the first load even with restored filters"
   assert.equal(libraryDisplayState(true, null, 25, 0), "no-results");
   assert.equal(libraryDisplayState(true, null, 25, 25), "list");
   assert.equal(libraryDisplayState(true, "Refresh failed", 25, 25), "list");
+});
+
+
+test("game sources derive from F95 and supported store links", () => {
+  const link = (source: string) => ({ source, id: "1", url: "https://example.com" });
+  assert.deepEqual([...gameSources({ f95_url: " https://f95zone.to/thread ", links: [link("dlsite")] })], ["f95", "dlsite"]);
+  assert.deepEqual([...gameSources({ links: [link("ryuugames"), link("dlsite"), link("vndb")] })], ["ryuugames", "dlsite", "vndb"]);
+  assert.equal(gameSources({ f95_url: "   " }).size, 0);
+  assert.equal(gameSources({ links: [link("patreon"), link("steam")] }).size, 0);
+});
+
+test("source filters match any selected source or all games when empty", () => {
+  const game = { f95_url: "thread", links: [{ source: "dlsite", id: "1", url: "url" }] };
+  assert.equal(matchesSourceFilter(game, []), true);
+  assert.equal(matchesSourceFilter(game, ["dlsite"]), true);
+  assert.equal(matchesSourceFilter(game, ["vndb", "f95"]), true);
+  assert.equal(matchesSourceFilter(game, ["vndb", "ryuugames"]), false);
 });

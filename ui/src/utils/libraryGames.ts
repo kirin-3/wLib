@@ -3,6 +3,33 @@ import type { GameRecord } from "../services/api.ts";
 import type { SortDir, SortField } from "./libraryViewState.ts";
 import { normalizePlayStatus } from "./playStatus.ts";
 
+export const LIBRARY_SOURCES = [
+  { key: "f95", label: "F95Zone" },
+  { key: "dlsite", label: "DLsite" },
+  { key: "vndb", label: "VNDB" },
+  { key: "ryuugames", label: "Ryuugames" },
+] as const;
+
+export const gameSources = (game: Pick<GameRecord, "f95_url" | "links">): Set<string> => {
+  const sources = new Set<string>();
+  if (game.f95_url?.trim()) sources.add("f95");
+  for (const link of game.links || []) {
+    if (LIBRARY_SOURCES.some(({ key }) => key !== "f95" && key === link.source)) {
+      sources.add(link.source);
+    }
+  }
+  return sources;
+};
+
+export const matchesSourceFilter = (
+  game: Pick<GameRecord, "f95_url" | "links">,
+  selected: readonly string[],
+): boolean => {
+  if (!selected.length) return true;
+  const sources = gameSources(game);
+  return selected.some((source) => sources.has(source));
+};
+
 // "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
 // normalize_version() in core/api.py. String() matches the Python mirror, which
 // coerces whatever a hand-edited or imported library row holds instead of

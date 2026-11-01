@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { LIBRARY_SOURCES } from "./libraryGames.ts";
 import { PLAY_STATUSES } from "./playStatus.ts";
 
 export type CardSize = 0 | 1 | 2 | 3 | 4;
@@ -27,6 +28,7 @@ export interface FilterSections {
   presets: boolean;
   collections: boolean;
   status: boolean;
+  sources: boolean;
   engines: boolean;
   tags: boolean;
 }
@@ -40,6 +42,7 @@ export interface LibraryViewState {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
   isFiltersCollapsed: boolean;
@@ -56,6 +59,7 @@ export interface LibraryFilterPreset {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
   sortBy: SortField;
@@ -67,6 +71,7 @@ export type NormalizedFilterAndSort = Pick<
   | "filterCollection"
   | "filterStatuses"
   | "filterInstallState"
+  | "filterSources"
   | "filterEngines"
   | "filterTags"
   | "sortBy"
@@ -99,6 +104,7 @@ export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   presets: true,
   collections: true,
   status: true,
+  sources: true,
   engines: true,
   tags: true,
 };
@@ -112,6 +118,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   filterCollection: "All",
   filterStatuses: [],
   filterInstallState: "",
+  filterSources: [],
   filterEngines: [],
   filterTags: [],
   isFiltersCollapsed: true,
@@ -314,6 +321,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
       typeof source?.status === "boolean"
         ? source.status
         : DEFAULT_FILTER_SECTIONS.status,
+    sources:
+      typeof source?.sources === "boolean"
+        ? source.sources
+        : DEFAULT_FILTER_SECTIONS.sources,
     engines:
       typeof source?.engines === "boolean"
         ? source.engines
@@ -355,6 +366,11 @@ export const normalizeFilterAndSort = (
       ? source.filterInstallState
       : "";
 
+  const filterSources = filterAllowedValues(
+    normalizeStringArray(source.filterSources),
+    LIBRARY_SOURCES.map(({ key }) => key),
+  );
+
   const filterEngines = filterAllowedValues(
     normalizeStringArray(source.filterEngines),
     options.validEngines,
@@ -366,6 +382,7 @@ export const normalizeFilterAndSort = (
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterSources,
     filterEngines,
     filterTags,
     sortBy,

@@ -1223,6 +1223,9 @@ const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[] => {
         source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
           ? source.filterInstallState
           : "",
+      filterSources: Array.isArray(source.filterSources)
+        ? source.filterSources.filter((item): item is string => typeof item === "string")
+        : [],
       filterEngines: Array.isArray(source.filterEngines)
         ? source.filterEngines.filter((engine): engine is string => typeof engine === "string")
         : [],

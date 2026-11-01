@@ -384,6 +384,7 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
                 "filterCollection": "Favorites",
                 "filterStatuses": ["Playing"],
                 "filterInstallState": "installed",
+                "filterSources": ["dlsite"],
                 "filterEngines": ["Ren'Py"],
                 "filterTags": ["dating-sim"],
                 "sortBy": "rating",
@@ -404,6 +405,7 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterSources": ["dlsite"],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
             "sortBy": "rating",
@@ -414,9 +416,9 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
     update_setting("library_filter_presets", "[]")
     result = api.import_library_backup(str(destination), {"sections": sections})
     assert result["success"]
-    assert [
-        preset["name"] for preset in api.get_settings()["library_filter_presets"]
-    ] == ["Ren'Py now"]
+    restored = api.get_settings()["library_filter_presets"]
+    assert [preset["name"] for preset in restored] == ["Ren'Py now"]
+    assert restored[0]["filterSources"] == ["dlsite"]
 
 
 def test_collections_and_membership_round_trip(tmp_path):
@@ -2042,6 +2044,7 @@ def test_import_settings_preserves_json_types(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterSources": [],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
             "sortBy": "rating",

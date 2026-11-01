@@ -218,11 +218,12 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 - Membership is edited from the game right-click menu (Collections checklist view with toggles, New collection that also adds the game, and Back) and from the Collections chip picker in `GameDetailModal.vue` (saved with the modal's Save; closing without saving changes nothing).
 - Settings lists Collections next to custom play statuses with add, inline rename, move up/down, and delete with confirmation; the tab order follows Settings.
 - The filters pane heading is "Quick filters" (not "Smart Collections") so "collection" only means user-made groups.
+- The Sources section always lists F95Zone, DLsite, VNDB and Ryuugames (`LIBRARY_SOURCES` in `utils/libraryGames.ts`). `gameSources()` gives a game `f95` for a non-empty `f95_url` plus each matching `links[].source`; selected sources match any-of. Stored as keys in `filterSources`.
 
 ### Saved filter presets
 
-- The filters pane top "Saved filters" block lists presets (`{name, filterCollection, filterStatuses, filterInstallState, filterEngines, filterTags, sortBy, sortDir}`) from the `library_filter_presets` setting. Clicking applies the preset; the delete button removes it without changing current filters; the name field saves the current filters and sort, asking before replacing an existing name.
-- Applying replaces the built-in collection filter, statuses, install state, engines, tags, sort field and direction, after normalising through `normalizeFilterPreset` (unknown engines/tags dropped). It keeps the collection tab, layout, and search text. Search text is never stored in a preset.
+- The filters pane top "Saved filters" block lists presets (`{name, filterCollection, filterStatuses, filterInstallState, filterSources, filterEngines, filterTags, sortBy, sortDir}`) from the `library_filter_presets` setting. Clicking applies the preset; the delete button removes it without changing current filters; the name field saves the current filters and sort, asking before replacing an existing name.
+- Applying replaces the built-in collection filter, statuses, install state, sources, engines, tags, sort field and direction, after normalising through `normalizeFilterPreset` (unknown sources/engines/tags dropped). It keeps the collection tab, layout, and search text. Search text is never stored in a preset.
 
 ### Path field indicators
 

@@ -71,6 +71,7 @@ import { notify, notifyError } from "../utils/toast";
 import { sandboxLaunchError } from "../utils/sandbox";
 import { openInstallArchive } from "../utils/installArchive";
 import {
+  LIBRARY_SOURCES,
   buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
@@ -81,6 +82,7 @@ import {
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
+  matchesSourceFilter,
   matchesTagFilter,
   toggleTagFilter,
 } from "../utils/libraryGames";
@@ -243,6 +245,7 @@ const filterStatuses = ref<string[]>([
 const filterCollection = ref<FilterCollection>(
   DEFAULT_LIBRARY_VIEW_STATE.filterCollection,
 );
+const filterSources = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterSources]);
 const filterEngines = ref<string[]>([
   ...DEFAULT_LIBRARY_VIEW_STATE.filterEngines,
 ]);
@@ -413,6 +416,7 @@ const activeFilterCount = computed(
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
     (filterInstallState.value ? 1 : 0) +
+    (filterSources.value.length > 0 ? 1 : 0) +
     (filterEngines.value.length > 0 ? 1 : 0) +
     (filterTags.value.length > 0 ? 1 : 0),
 );
@@ -420,6 +424,7 @@ const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
   filterInstallState.value = "";
+  filterSources.value = [];
   filterEngines.value = [];
   filterTags.value = [];
   filterCollection.value = "All";
@@ -433,6 +438,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   filterCollection.value = state.filterCollection;
   filterStatuses.value = [...state.filterStatuses];
   filterInstallState.value = state.filterInstallState;
+  filterSources.value = [...state.filterSources];
   filterEngines.value = [...state.filterEngines];
   filterTags.value = [...state.filterTags];
   isFiltersCollapsed.value = state.isFiltersCollapsed;
@@ -449,6 +455,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterCollection: filterCollection.value,
     filterStatuses: filterStatuses.value,
     filterInstallState: filterInstallState.value,
+    filterSources: filterSources.value,
     filterEngines: filterEngines.value,
     filterTags: filterTags.value,
     isFiltersCollapsed: isFiltersCollapsed.value,
@@ -511,6 +518,7 @@ const filteredGames = computed(() => {
     result = result.filter(isWishlisted);
   if (filterInstallState.value === "installed")
     result = result.filter((game) => !isWishlisted(game));
+  result = result.filter((game) => matchesSourceFilter(game, filterSources.value));
   if (filterEngines.value.length) {
     result = result.filter((g) =>
       filterEngines.value.includes(normalizeEngineFilterValue(g.engine)),
@@ -768,6 +776,7 @@ const applyFilterPreset = (preset: LibraryFilterPreset) => {
   filterCollection.value = normalized.filterCollection;
   filterStatuses.value = [...normalized.filterStatuses];
   filterInstallState.value = normalized.filterInstallState;
+  filterSources.value = [...normalized.filterSources];
   filterEngines.value = [...normalized.filterEngines];
   filterTags.value = [...normalized.filterTags];
   sortBy.value = normalized.sortBy;
@@ -803,6 +812,7 @@ const saveFilterPreset = async () => {
     filterCollection: filterCollection.value,
     filterStatuses: [...filterStatuses.value],
     filterInstallState: filterInstallState.value,
+    filterSources: [...filterSources.value],
     filterEngines: [...filterEngines.value],
     filterTags: [...filterTags.value],
     sortBy: sortBy.value,
@@ -1421,6 +1431,7 @@ watch(
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterSources,
     filterEngines,
     filterTags,
     isFiltersCollapsed,
@@ -1686,6 +1697,35 @@ onUnmounted(() => {
               <option value="wishlist">Wishlist</option>
             </select>
           </label>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('sources')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Sources</span>
+            <span class="text-sm">{{ filterSections.sources ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="filterSections.sources" class="mt-3">
+            <div class="mb-2 flex justify-end">
+              <button v-if="filterSources.length" @click="filterSources = []"
+                class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
+                style="color: var(--text-muted)">Clear</button>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button v-for="source in LIBRARY_SOURCES" :key="source.key"
+                @click="toggleFilter(filterSources, source.key)"
+                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
+                :aria-pressed="filterSources.includes(source.key)"
+                :style="filterSources.includes(source.key)
+                  ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
+                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'">
+                {{ source.label }}
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="p-6 pb-2 pt-4">

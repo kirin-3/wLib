@@ -1744,6 +1744,7 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
         "filterInstallState": (
             install_state if install_state in FILTER_PRESET_INSTALL_STATES else ""
         ),
+        "filterSources": string_list(source.get("filterSources")),
         "filterEngines": string_list(source.get("filterEngines")),
         "filterTags": string_list(source.get("filterTags")),
         "sortBy": str(source.get("sortBy") or ""),

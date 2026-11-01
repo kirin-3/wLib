@@ -1466,6 +1466,7 @@ def test_library_filter_presets_drop_invalid_entries_and_duplicates():
                     "filterCollection": "Favorites",
                     "filterStatuses": ["Playing"],
                     "filterInstallState": "installed",
+                    "filterSources": ["dlsite"],
                     "filterEngines": ["Ren'Py"],
                     "filterTags": ["dating-sim"],
                     "sortBy": "rating",
@@ -1488,6 +1489,7 @@ def test_library_filter_presets_drop_invalid_entries_and_duplicates():
     presets = get_library_filter_presets()
     assert [preset["name"] for preset in presets] == ["Ren'Py now", "Broken enums"]
     assert presets[0]["filterStatuses"] == ["Playing"]
+    assert presets[0]["filterSources"] == ["dlsite"]
     assert presets[0]["sortBy"] == "rating"
     assert presets[1]["filterInstallState"] == ""
     assert presets[1]["sortDir"] == ""

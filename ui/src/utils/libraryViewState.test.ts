@@ -139,6 +139,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
     presets: true,
     collections: false,
     status: true,
+    sources: true,
     engines: true,
     tags: false,
   });
@@ -234,6 +235,7 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
     presets: true,
     collections: true,
     status: false,
+    sources: true,
     engines: false,
     tags: true,
   });
@@ -277,6 +279,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
   );
   assert.deepEqual(valid, {
     name: "Ren'Py now",
+    filterSources: [],
     filterCollection: "Favorites",
     filterStatuses: ["Playing"],
     filterInstallState: "installed",
@@ -302,6 +305,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
   );
   assert.deepEqual(pruned, {
     name: "Pruned",
+    filterSources: [],
     filterCollection: "All",
     filterStatuses: ["Playing", "Ghost"],
     filterInstallState: "",
@@ -467,6 +471,7 @@ test("saving presets reloads the stored list when settings have not loaded", asy
       filterCollection: "All",
       filterStatuses: [],
       filterInstallState: "",
+      filterSources: [],
       filterEngines: [],
       filterTags: [],
       sortBy: "title",
@@ -508,4 +513,13 @@ test("saving presets reloads the stored list when settings have not loaded", asy
     false,
   );
   assert.deepEqual(failed, { presets: stored, loaded: false });
+});
+
+
+test("source filters validate fixed keys and default for older state and presets", () => {
+  assert.deepEqual(normalizeLibraryViewState({ filterSources: ["f95", "dlsite", "unknown", "vndb", "ryuugames"] }).filterSources, ["f95", "dlsite", "vndb", "ryuugames"]);
+  assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterSources, []);
+  assert.deepEqual(normalizeFilterPreset({ name: "New", filterSources: ["dlsite", "unknown"] })?.filterSources, ["dlsite"]);
+  assert.deepEqual(normalizeLibraryViewState({ filterSections: { presets: false, collections: false, status: true, engines: false, tags: true } }).filterSections,
+    { presets: false, collections: false, status: true, sources: true, engines: false, tags: true });
 });
