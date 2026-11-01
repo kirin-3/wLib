@@ -5330,10 +5330,10 @@ class Api:
             "file", directory=start_path, file_types=file_types
         )
 
-    def browse_pdf_file(self, start_path: str = "") -> str:
-        """Opens a native file dialog to select a PDF file for attachments."""
+    def browse_attachment_file(self, start_path: str = "") -> str:
+        """Opens a native file dialog to select a document for attachments."""
         file_types = (
-            "PDF Files (*.pdf)",
+            "Documents (*.pdf *.txt *.md)",
             "All files (*.*)",
         )
 
@@ -5389,7 +5389,7 @@ class Api:
         self, game_id: object = None, source_path: object = ""
     ) -> dict[str, object]:
         from core.game_attachments import (
-            NotAPdfError,
+            UnsupportedAttachmentError,
             add_attachment,
             list_attachments,
         )
@@ -5409,11 +5409,11 @@ class Api:
             }
         try:
             attachment = add_attachment(coerced_id, source_path)
-        except NotAPdfError as exc:
+        except UnsupportedAttachmentError as exc:
             return {
                 "success": False,
-                "error": str(exc) or "Only PDF files can be attached",
-                "error_code": "not_a_pdf",
+                "error": str(exc) or "Only PDF, TXT and MD files can be attached",
+                "error_code": "unsupported_attachment",
             }
         except (OSError, ValueError) as exc:
             return {"success": False, "error": str(exc) or "Could not attach file"}
@@ -5459,7 +5459,7 @@ class Api:
             return {"success": False, "error": str(exc) or "Invalid attachment name"}
         except Exception as exc:
             return {"success": False, "error": str(exc) or "Could not open attachment"}
-        result = self._open_with_system_handler(resolved, "No PDF viewer opener found")
+        result = self._open_with_system_handler(resolved, "No application found to open this file")
         if not result.get("success"):
             return {
                 "success": False,

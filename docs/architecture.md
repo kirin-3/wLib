@@ -114,8 +114,10 @@ flowchart TD
 | Local covers | `~/.local/share/wLib/covers/` | `%LOCALAPPDATA%\wLib\covers\` |
 | Sandbox storage | `~/.local/share/wLib/sandbox/<game id>/` | `%LOCALAPPDATA%\wLib\sandbox\<game id>\` |
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
-| PDF attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
+| PDF, TXT and MD attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
 | Sync snapshot | `~/.local/share/wLib/sync/last-local.json` | `%LOCALAPPDATA%\wLib\sync\last-local.json` |
+
+Attachment copies are limited to PDF, TXT and MD. PDF files must start with `%PDF-`; text files must contain no NUL in their first 8 KiB. The bridge exposes `browse_attachment_file` and reports rejected types as `unsupported_attachment`.
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
 

@@ -32,13 +32,14 @@ import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { getSafeNotesLinkUrl } from "../../utils/notesLinks";
+import { getSafeNotesLinkUrl, noteLinkUrl, noteLinkLabel, noteLinkHost, hasNoteLink } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import type {
   GameAttachment,
+  NoteLink,
   GameRecord,
   LaunchTarget,
   PlatformCapabilities,
@@ -199,10 +200,14 @@ const toolEngine = ref<GameToolEngine>("");
 const detailTabs = computed<DetailTab[]>(() => (toolEngine.value ? [...baseTabs, "Tools"] : [...baseTabs]));
 const activeTab = ref<DetailTab>("Overview");
 const notes = ref("");
+const noteLinks = ref<NoteLink[]>([]);
+const newNoteLinkUrl = ref("");
+const newNoteLinkLabel = ref("");
+const noteLinkError = ref("");
 const notesEditing = ref(false);
 const attachments = ref<GameAttachment[]>([]);
 const loadingAttachments = ref(false);
-const attachingPdf = ref(false);
+const attachingFile = ref(false);
 const removingAttachment = ref<string | null>(null);
 let attachmentsRequestId = 0;
 const coverImageFailed = ref(false);
@@ -535,6 +540,7 @@ const formSnapshot = (): string =>
     launch_mode: launchMode.value,
     collections: collectionMembership.value,
     progress: notes.value,
+    note_links: noteLinks.value,
   });
 const savedSnapshot = ref("");
 const quickFields = (): Record<string, unknown> => ({
@@ -589,6 +595,10 @@ watch(
         useCustomPrefix.value = !!g.custom_prefix;
         activeTab.value = "Overview";
         notes.value = g.progress || "";
+        noteLinks.value = (g.note_links || []).map(link => ({ ...link }));
+        newNoteLinkUrl.value = "";
+        newNoteLinkLabel.value = "";
+        noteLinkError.value = "";
         notesEditing.value = false;
         newTag.value = "";
         collectionMembership.value = [...(g.collections || [])];
@@ -617,7 +627,7 @@ watch(
         attachments.value = [];
         attachmentsRequestId++;
         loadingAttachments.value = false;
-        attachingPdf.value = false;
+        attachingFile.value = false;
         removingAttachment.value = null;
         savedSnapshot.value = formSnapshot();
         savedQuickFields.value = quickFields();
@@ -685,7 +695,7 @@ watch(
       attachments.value = [];
       attachmentsRequestId++;
       loadingAttachments.value = false;
-      attachingPdf.value = false;
+      attachingFile.value = false;
       removingAttachment.value = null;
       collectionRequestId++;
       collectionOptions.value = [];
@@ -797,7 +807,7 @@ const close = () => {
   attachments.value = [];
   attachmentsRequestId++;
   loadingAttachments.value = false;
-  attachingPdf.value = false;
+  attachingFile.value = false;
   removingAttachment.value = null;
   emit("update:modelValue", false);
 };
@@ -1291,6 +1301,7 @@ const save = async () => {
       cover_image_path: coverImage.value,
       ...submittedQuickFields,
       progress: notes.value,
+      note_links: noteLinks.value.map(link => ({ ...link })),
       engine: normalizeEngine(engine.value),
       sandbox_enabled: sandboxEnabled.value,
       run_japanese_locale: platformCapabilities.value.wine_proton
@@ -1588,6 +1599,31 @@ const onNotesLinkClick = async (event: MouseEvent) => {
   }
 };
 
+const addNoteLink = () => {
+  const url = noteLinkUrl(newNoteLinkUrl.value);
+  if (!url) {
+    noteLinkError.value = "Only http and https links can be added (up to 2048 characters).";
+    return;
+  }
+  if (hasNoteLink(noteLinks.value, url)) {
+    noteLinkError.value = "This link is already listed.";
+    return;
+  }
+  noteLinks.value.push({ url, label: newNoteLinkLabel.value.trim().slice(0, 200) });
+  newNoteLinkUrl.value = "";
+  newNoteLinkLabel.value = "";
+  noteLinkError.value = "";
+};
+
+const openNoteLink = async (url: string) => {
+  try {
+    const result = await api.openInBrowser(url);
+    if (result?.success === false) notifyError("Failed to open browser: " + (result.error || "Unknown error"));
+  } catch (error) {
+    notifyError("Error opening browser: " + String(error));
+  }
+};
+
 const formatAttachmentSize = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes < 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -1628,18 +1664,18 @@ const loadAttachments = async () => {
   }
 };
 
-const attachPdf = async () => {
-  if (attachingPdf.value || !props.game || typeof props.game.id !== "number") return;
+const attachFile = async () => {
+  if (attachingFile.value || !props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
-  attachingPdf.value = true;
+  attachingFile.value = true;
   try {
-    const picked = await api.browsePdfFile("");
+    const picked = await api.browseAttachmentFile("");
     if (!picked) return;
     if (!isCurrentGame(gameId)) return;
     const res = await api.addGameAttachment(gameId, picked);
     if (!isCurrentGame(gameId)) return;
     if (res && res.success === false) {
-      notifyError("Failed to attach PDF: " + (res.error || "Unknown error"));
+      notifyError("Failed to attach file: " + (res.error || "Unknown error"));
       if ((res as { error_code?: string }).error_code === "attachment_missing") {
         await loadAttachments();
       }
@@ -1650,12 +1686,12 @@ const attachPdf = async () => {
       : attachments.value;
     await loadAttachments();
   } catch (e) {
-    console.error("Failed to attach PDF", e);
+    console.error("Failed to attach file", e);
     if (isCurrentGame(gameId)) {
-      notifyError("Error attaching PDF: " + String(e));
+      notifyError("Error attaching file: " + String(e));
     }
   } finally {
-    attachingPdf.value = false;
+    attachingFile.value = false;
   }
 };
 
@@ -2652,16 +2688,36 @@ const removeAttachment = async (name: string) => {
             </div>
           </div>
 
+          <div class="min-w-0">
+            <h3 class="modal-label">Links</h3>
+            <form class="flex flex-wrap gap-2 mb-2" @submit.prevent="addNoteLink">
+              <input v-model="newNoteLinkUrl" aria-label="Link URL" @input="noteLinkError = ''" placeholder="https://example.com/guide" class="modal-input flex-1 min-w-0" />
+              <input v-model="newNoteLinkLabel" aria-label="Link label" placeholder="Label (optional)" maxlength="200" class="modal-input flex-1 min-w-0" />
+              <button type="submit" class="modal-btn">Add</button>
+            </form>
+            <p v-if="noteLinkError" class="text-xs mb-2" role="alert" style="color: var(--danger-text)">{{ noteLinkError }}</p>
+            <p v-if="!noteLinks.length" class="text-xs" style="color: var(--text-muted)">No links added.</p>
+            <ul v-else class="space-y-2 min-w-0">
+              <li v-for="(link, index) in noteLinks" :key="link.url" class="flex items-center gap-2 min-w-0 rounded-lg p-2" style="background: var(--bg-raised); border: 1px solid var(--border)">
+                <button type="button" class="flex-1 min-w-0 text-left" :title="link.url" @click="openNoteLink(link.url)">
+                  <span class="block truncate text-sm" style="color: var(--text-primary)">{{ noteLinkLabel(link) }}</span>
+                  <span class="block truncate text-xs" style="color: var(--text-muted)">{{ noteLinkHost(link) }}</span>
+                </button>
+                <button type="button" class="modal-btn !py-1 !text-xs" @click="noteLinks.splice(index, 1)">Remove</button>
+              </li>
+            </ul>
+          </div>
+
           <div>
             <div class="flex items-center justify-between mb-3">
               <h3 class="modal-label !mb-0">Attachments</h3>
               <button
                 type="button"
                 class="modal-btn ui-action-btn disabled:opacity-50"
-                :disabled="attachingPdf"
-                @click="attachPdf"
+                :disabled="attachingFile"
+                @click="attachFile"
               >
-                {{ attachingPdf ? "Attaching..." : "Attach PDF" }}
+                {{ attachingFile ? "Attaching..." : "Attach file" }}
               </button>
             </div>
             <div
@@ -2676,7 +2732,7 @@ const removeAttachment = async (name: string) => {
               class="text-xs"
               style="color: var(--text-muted)"
             >
-              No PDFs attached.
+              No files attached.
             </p>
             <ul v-else class="space-y-2">
               <li

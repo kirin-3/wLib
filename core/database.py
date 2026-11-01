@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime
 from typing import TypedDict, cast
+from urllib.parse import urlsplit
 
 from core.f95zone import normalize_thread_url, thread_urls_match
 from core.host_platform import get_data_dir
@@ -73,6 +74,7 @@ SYNC_GAME_COLUMNS = (
     "rating_fappability",
     "rating_gameplay",
     "progress",
+    "note_links",
     "playtime_seconds",
     "last_played",
     "date_added",
@@ -535,6 +537,7 @@ def init_db() -> None:
             ("last_played_version", "TEXT DEFAULT ''"),
             ("skipped_version", "TEXT DEFAULT ''"),
             ("collections", "TEXT DEFAULT '[]'"),
+            ("note_links", "TEXT DEFAULT '[]'"),
             ("screenshots", "TEXT DEFAULT '[]'"),
             ("save_path_override", "TEXT DEFAULT ''"),
         ]
@@ -977,6 +980,7 @@ def get_all_games() -> list[dict[str, object]]:
             for name in _decode_game_collections(game_dict.get("collections"))
             if name.casefold() in canonical_collections
         ]
+        game_dict["note_links"] = normalize_note_links(game_dict.get("note_links"))
         game_dict["screenshots"] = _decode_game_screenshots(game_dict.get("screenshots"))
         game_id = int(str(game_dict["id"]))
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
@@ -1080,6 +1084,42 @@ def set_sandbox_for_all_games(enabled: bool) -> int:
         return cursor.rowcount
 
 
+def normalize_note_links(value: object) -> list[dict[str, str]]:
+    if isinstance(value, str):
+        try:
+            value = cast(object, json.loads(value))
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in cast(list[object], value):
+        if not isinstance(item, dict):
+            continue
+        entry = cast(dict[object, object], item)
+        raw_url = entry.get("url")
+        if not isinstance(raw_url, str):
+            continue
+        url = raw_url.strip()
+        try:
+            parsed = urlsplit(url)
+            valid = (
+                parsed.scheme.lower() in ("http", "https")
+                and bool(parsed.hostname)
+                and not any(char.isspace() or ord(char) < 32 for char in url)
+            )
+            _ = parsed.port
+        except ValueError:
+            valid = False
+        if not valid or len(url) > 2048 or url in seen:
+            continue
+        label = entry.get("label")
+        result.append({"url": url, "label": label.strip()[:200] if isinstance(label, str) else ""})
+        seen.add(url)
+    return result
+
+
 def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]:
     """Update arbitrary fields on a game row. `fields` is a dict of column->value.
 
@@ -1094,6 +1134,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "f95_url",
         "version",
         "progress",
+        "note_links",
         "developer",
         "cover_image_path",
         "tags",
@@ -1125,6 +1166,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     }
     if not safe_fields:
         return {}
+
+    if "note_links" in safe_fields:
+        safe_fields["note_links"] = json.dumps(normalize_note_links(safe_fields["note_links"]))
 
     raw_tags = safe_fields.get("tags")
     if isinstance(raw_tags, list):

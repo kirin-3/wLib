@@ -1940,3 +1940,23 @@ def test_cover_cache_migration_guard_and_sync():
     database.clear_game_cover_cache(game_id)
     assert get_setting("sync_local_modified_at") == before
     assert database.referenced_cover_cache_names() == set()
+
+
+def test_note_links_migration_validation_and_sync_time():
+    game_id = add_game("Note links", "")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN note_links")
+        conn.commit()
+    init_db()
+    assert next(game for game in get_all_games() if game["id"] == game_id)["note_links"] == []
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_game(game_id, {"note_links": [
+        {"url": " https://example.com/guide ", "label": " " + "x" * 201 + " "},
+        {"url": "https://example.com/guide", "label": "duplicate"},
+        {"url": "file:///tmp/a"}, {"url": "javascript:alert(1)"}, {"url": "example.com"},
+        {"url": "https://bad host/"}, {"url": "https://example.com:bad/"},
+    ]})
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["note_links"] == [{"url": "https://example.com/guide", "label": "x" * 200}]
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"

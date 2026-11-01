@@ -2952,3 +2952,25 @@ def test_cached_covers_never_export_or_import():
         assert database.get_game(game_id)["cover_cache"] == name
         assert database.get_game(game_id)["cover_cache_url"] == url
     assert database.get_setting("sync_local_modified_at") == before
+
+
+def test_note_links_backup_round_trip_and_old_backup_preserves_local():
+    game_id = add_game("Note link backup", "")
+    links = [{"url": "https://example.com/guide", "label": "Guide"}]
+    update_game(game_id, {"note_links": links})
+    backup = build_library_backup()
+    assert backup["games"][0]["user_state"]["note_links"] == links
+    old = base_backup([{"metadata": {"title": "Note link backup"}, "user_state": {"progress": "old"}}])
+    apply_library_backup(old)
+    assert get_all_games()[0]["note_links"] == links
+    update_game(game_id, {"note_links": []})
+    apply_library_backup(backup)
+    assert get_all_games()[0]["note_links"] == links
+
+
+def test_note_links_fill_missing():
+    game_id = add_game("Fill links", "")
+    links = [{"url": "https://example.com", "label": ""}]
+    backup = base_backup([{"metadata": {"title": "Fill links"}, "user_state": {"note_links": links}}])
+    apply_library_backup(backup, merge_mode="fill_missing")
+    assert next(g for g in get_all_games() if g["id"] == game_id)["note_links"] == links

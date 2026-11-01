@@ -6,7 +6,7 @@ import pytest
 from core import database
 from core.game_attachments import (
     AttachmentMissingError,
-    NotAPdfError,
+    UnsupportedAttachmentError,
     add_attachment,
     attachments_dir,
     list_attachments,
@@ -50,7 +50,12 @@ def test_list_attachments_filters_and_sorts(data_dir):
     os.makedirs(os.path.join(folder, "folder.pdf"), exist_ok=True)
 
     listed = list_attachments(7)
-    assert [item["name"] for item in listed] == ["A.pdf", "b.pdf"]
+    with open(os.path.join(folder, "guide.md"), "w") as handle:
+        handle.write("guide")
+    with open(os.path.join(folder, "other.exe"), "w") as handle:
+        handle.write("ignored")
+    listed = list_attachments(7)
+    assert [item["name"] for item in listed] == ["A.pdf", "b.pdf", "guide.md", "notes.txt"]
     assert all(set(item.keys()) == {"name", "size"} for item in listed)
     assert listed[0]["size"] == 5 + len(b"%PDF-1.4\n")
 
@@ -90,7 +95,7 @@ def test_fifo_source_is_rejected_without_blocking(tmp_path, data_dir):
     def run() -> None:
         try:
             add_attachment(3, str(fifo))
-        except NotAPdfError as exc:
+        except UnsupportedAttachmentError as exc:
             errors.append(str(exc))
 
     thread = threading.Thread(target=run, daemon=True)
@@ -102,13 +107,14 @@ def test_fifo_source_is_rejected_without_blocking(tmp_path, data_dir):
 
 
 def test_add_attachment_rejects_extension_and_signature(tmp_path, data_dir):
-    notes = tmp_path / "notes.txt"
-    notes.write_bytes(b"%PDF-1.4\ncontent")
-    with pytest.raises(NotAPdfError):
-        add_attachment(4, str(notes))
+    for name in ("bad.exe", "bad.desktop", "bad.md"):
+        source = tmp_path / name
+        source.write_bytes(b"binary\x00data")
+        with pytest.raises(UnsupportedAttachmentError):
+            add_attachment(4, str(source))
     fake = tmp_path / "fake.pdf"
     fake.write_bytes(b"not a pdf")
-    with pytest.raises(NotAPdfError):
+    with pytest.raises(UnsupportedAttachmentError):
         add_attachment(4, str(fake))
     assert list_attachments(4) == []
 
@@ -152,6 +158,8 @@ def test_resolve_and_remove_guards(data_dir):
         resolve_attachment(8, "..")
     with pytest.raises(ValueError):
         resolve_attachment(8, "bad\x00.pdf")
+    with pytest.raises(UnsupportedAttachmentError):
+        resolve_attachment(8, "unsafe.desktop")
     with pytest.raises(AttachmentMissingError):
         resolve_attachment(8, "missing.pdf")
     # Successful remove deletes the file.
@@ -173,3 +181,11 @@ def test_prune_orphan_attachments(data_dir):
     assert not os.path.exists(os.path.join(base, "2"))
     assert os.path.isdir(os.path.join(base, "notes"))
     assert os.path.isfile(os.path.join(base, "loose.txt"))
+
+
+def test_text_attachments_and_collision(tmp_path, data_dir):
+    for name, content in (("routes.txt", "日本語".encode("shift_jis")), ("empty.txt", b""), ("guide.md", b"# Guide")):
+        source = tmp_path / name
+        source.write_bytes(content)
+        assert add_attachment(9, source)["name"] == name
+    assert add_attachment(9, tmp_path / "guide.md")["name"] == "guide (2).md"

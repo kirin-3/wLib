@@ -246,7 +246,7 @@ test("browser mock persists notes progress and attachment round-trip", async () 
     const games = await api.getGames();
     assert.equal(games.find((game) => game.id === gameId).progress, "# Notes\nHello");
 
-    assert.equal(await api.browsePdfFile(""), "/mock/guide.pdf");
+    assert.equal(await api.browseAttachmentFile(""), "/mock/guide.md");
 
     const empty = await api.listGameAttachments(gameId);
     assert.deepEqual(empty.attachments, []);
@@ -259,7 +259,7 @@ test("browser mock persists notes progress and attachment round-trip", async () 
     const removed = await api.removeGameAttachment(gameId, "guide.pdf");
     assert.equal(removed.success, true);
     assert.deepEqual((await api.listGameAttachments(gameId)).attachments, []);
-    assert.equal((await api.addGameAttachment(gameId, "/tmp/notes.txt")).error_code, "not_a_pdf");
+    assert.equal((await api.addGameAttachment(gameId, "/tmp/notes.exe")).error_code, "unsupported_attachment");
     assert.equal((await api.listGameAttachments(4242)).error_code, "game_not_found");
   } finally {
     await server.close();

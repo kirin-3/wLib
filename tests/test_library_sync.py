@@ -1361,3 +1361,15 @@ def test_cached_covers_never_export_or_import():
         assert database.get_game(game_id)["cover_cache"] == name
         assert database.get_game(game_id)["cover_cache_url"] == url
     assert database.get_setting("sync_local_modified_at") == before
+
+
+def test_note_links_round_trip_between_libraries(tmp_path, monkeypatch):
+    location = MemoryLocation()
+    game_id = database.add_game("Links synced", "")
+    links = [{"url": "https://example.com/guide", "label": "Guide"}]
+    database.update_game(game_id, {"note_links": links})
+    assert manager(location).run()["state"] == "idle"
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-links.db"))
+    database.init_db()
+    assert manager(location).run()["state"] == "idle"
+    assert database.get_all_games()[0]["note_links"] == links

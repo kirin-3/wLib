@@ -103,6 +103,7 @@ USER_STATE_FIELDS = (
     "rating_fappability",
     "rating_gameplay",
     "progress",
+    "note_links",
     "playtime_seconds",
     "last_played",
     "date_added",
@@ -1197,6 +1198,8 @@ def _normalize_game_field(field: str, value: object) -> object:
         return normalize_launch_mode(value)
     if field == "collections":
         return _collections_json_text(value)
+    if field == "note_links":
+        return json.dumps(database.normalize_note_links(value))
     if field == "screenshots":
         return _screenshots_json_text(value)
     if field in BOOLEAN_GAME_FIELDS:
@@ -1649,8 +1652,8 @@ def _filter_fill_missing(
 
 def _is_fill_missing_empty(field: str, local_value: object) -> bool:
     """True when a local value counts as missing for fill-missing merges."""
-    if field == "collections":
-        # Membership is stored as a JSON list; "[]" means no collections yet.
+    if field in ("collections", "note_links"):
+        # Membership and note links are JSON lists; "[]" means none yet.
         return _coerce_text(local_value).strip() in ("", "[]")
     if field == "screenshots":
         return _coerce_text(local_value).strip() in ("", "[]")

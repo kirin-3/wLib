@@ -79,6 +79,7 @@ Stores the library records and their associated configuration flags.
 | `cover_cache` | `TEXT` | Device-only random filename in `<data dir>/covers/cache/`; nullable. |
 | `cover_cache_url` | `TEXT` | Remote URL used to create the cached file; nullable. |
 | `cover_local` | `TEXT` | Device-only random filename under `<data dir>/covers/`; NULL when unset. |
+| `note_links` | `TEXT DEFAULT '[]'` | Ordered JSON array of `{url, label}` objects, decoded on read and carried by backups and sync. URLs must be absolute HTTP(S), at most 2048 characters and unique by exact value; labels are trimmed and capped at 200 characters. |
 | `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
 | `rating` | `TEXT` | Overall user rating. |
 | `rating_graphics` | `REAL` | Graphics rating (0-5). |

@@ -34,3 +34,21 @@ export const renderedLinkHref = (target: unknown): string | null => {
   const anchor = element.closest("a[href]");
   return anchor ? anchor.getAttribute("href") : null;
 };
+
+export interface NoteLinkValue { url: string; label: string }
+
+export const noteLinkUrl = (value: string): string | null => {
+  const url = getSafeNotesLinkUrl(value);
+  return url && /^https?:\/\//i.test(url) && url.length <= 2048 ? url : null;
+};
+
+export const noteLinkLabel = (link: NoteLinkValue): string => link.label || link.url;
+export const noteLinkHost = (link: NoteLinkValue): string => {
+  try {
+    return new URL(link.url).host;
+  } catch {
+    return "";
+  }
+};
+export const hasNoteLink = (links: NoteLinkValue[], url: string): boolean =>
+  links.some((link) => link.url === url);

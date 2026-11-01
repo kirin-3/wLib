@@ -71,15 +71,15 @@ def test_add_attachment_rejects_non_pdf(tmp_path):
     api = Api()
     game_id = add_game("Game", "/game.exe")
     assert game_id is not None
-    notes = tmp_path / "notes.txt"
+    notes = tmp_path / "notes.exe"
     notes.write_bytes(b"%PDF-1.4\ncontent")
     result = api.add_game_attachment(game_id, str(notes))
     assert result["success"] is False
-    assert result["error_code"] == "not_a_pdf"
+    assert result["error_code"] == "unsupported_attachment"
     fake = tmp_path / "fake.pdf"
     fake.write_bytes(b"nope")
     result = api.add_game_attachment(game_id, str(fake))
-    assert result["error_code"] == "not_a_pdf"
+    assert result["error_code"] == "unsupported_attachment"
     json.dumps(result)
 
 
@@ -123,7 +123,7 @@ def test_open_uses_system_handler_error(tmp_path, monkeypatch):
     assert "no viewer" in result["error"]
 
 
-def test_browse_pdf_file_passes_file_types(monkeypatch):
+def test_browse_attachment_file_passes_file_types(monkeypatch):
     api = Api()
     seen = {}
 
@@ -134,9 +134,9 @@ def test_browse_pdf_file_passes_file_types(monkeypatch):
 
     monkeypatch.setattr(api, "_browse_linux_dialog", fake_linux_dialog)
     monkeypatch.setattr("sys.platform", "linux")
-    assert api.browse_pdf_file("") == "/picked/guide.pdf"
+    assert api.browse_attachment_file("") == "/picked/guide.pdf"
     assert seen["kind"] == "file"
-    assert seen["file_types"] == ("PDF Files (*.pdf)", "All files (*.*)")
+    assert seen["file_types"] == ("Documents (*.pdf *.txt *.md)", "All files (*.*)")
 
 
 def test_delete_game_removes_attachments_folder(tmp_path):
@@ -199,3 +199,16 @@ def test_api_init_prunes_orphans_and_survives_errors(tmp_path, monkeypatch):
     # Construction must not raise even when pruning fails.
     Api()
     assert os.path.isdir(orphan_again)
+
+
+def test_markdown_opens_with_system_handler(tmp_path, monkeypatch):
+    api = Api()
+    game_id = add_game("Markdown", "")
+    source = tmp_path / "guide.md"
+    source.write_text("# Guide")
+    assert api.add_game_attachment(game_id, str(source))["success"]
+    opened = []
+    monkeypatch.setattr(api, "_open_with_system_handler", lambda target, error: opened.append((target, error)) or {"success": True})
+    assert api.open_game_attachment(game_id, "guide.md")["success"]
+    assert opened[0][0].endswith("guide.md")
+    assert opened[0][1] == "No application found to open this file"

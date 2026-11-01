@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getSafeNotesLinkUrl, renderedLinkHref } from "./notesLinks.ts";
+import { getSafeNotesLinkUrl, renderedLinkHref, noteLinkUrl, noteLinkLabel, noteLinkHost, hasNoteLink } from "./notesLinks.ts";
 
 test("notes links allow only absolute http and https hrefs", () => {
   assert.equal(
@@ -38,4 +38,15 @@ test("rendered links resolve from the clicked element and only to safe URLs", ()
   assert.equal(getSafeNotesLinkUrl(renderedLinkHref(scriptTarget)), null);
   const noHref = { getAttribute: () => null };
   assert.equal(getSafeNotesLinkUrl(renderedLinkHref({ closest: () => noHref })), null);
+});
+
+
+test("listed note links validate and display", () => {
+  const link = { url: "https://example.com/guide", label: "" };
+  assert.equal(noteLinkUrl(link.url), link.url);
+  assert.equal(noteLinkLabel(link), link.url);
+  assert.equal(noteLinkHost(link), "example.com");
+  assert.equal(hasNoteLink([link], link.url), true);
+  assert.equal(noteLinkLabel({ ...link, label: "x".repeat(200) }), "x".repeat(200));
+  for (const invalid of ["example.com", "https:example.com", "file:///tmp/a", "javascript:alert(1)"]) assert.equal(noteLinkUrl(invalid), null);
 });

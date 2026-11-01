@@ -569,7 +569,13 @@ export interface StoreLink {
   url: string;
 }
 
+export interface NoteLink {
+  url: string;
+  label: string;
+}
+
 export interface GameRecord {
+  note_links?: NoteLink[];
   links?: StoreLink[];
   sandbox_enabled?: boolean;
   id: number;
@@ -2095,8 +2101,8 @@ class ApiService {
     return this.invoke<string>("browse_backup_file", startPath);
   }
 
-  async browsePdfFile(startPath = ""): Promise<string> {
-    return this.invoke<string>("browse_pdf_file", startPath);
+  async browseAttachmentFile(startPath = ""): Promise<string> {
+    return this.invoke<string>("browse_attachment_file", startPath);
   }
 
   async listGameAttachments(gameId: number): Promise<GameAttachmentsResponse> {
@@ -2893,8 +2899,8 @@ class ApiService {
       case "browse_external_library_file":
       case "browse_directory":
         return "";
-      case "browse_pdf_file":
-        return "/mock/guide.pdf";
+      case "browse_attachment_file":
+        return "/mock/guide.md";
       // Bridges with no browser-side equivalent. Actions that need no host
       // still answer with the real payload shape so the view flow works;
       // download/install actions explain that they need the desktop app.
@@ -3489,18 +3495,19 @@ class ApiService {
         if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
           return { success: false, mock: true, error: "Game not found", error_code: "game_not_found" };
         }
-        if (!/\.pdf$/i.test(sourcePath.trim())) {
-          return { success: false, mock: true, error: "Only PDF files can be attached", error_code: "not_a_pdf" };
+        if (!/\.(pdf|txt|md)$/i.test(sourcePath.trim())) {
+          return { success: false, mock: true, error: "Only PDF, TXT and MD files can be attached", error_code: "unsupported_attachment" };
         }
         const baseName = sourcePath.split(/[/\\]/).pop() || "guide.pdf";
         const store = readMockAttachments();
         const existing = store[String(gameId)] || [];
-        const stem = baseName.replace(/\.pdf$/i, "");
+        const extension = baseName.match(/\.[^.]+$/)?.[0] || "";
+        const stem = baseName.slice(0, -extension.length);
         let candidate = baseName;
         let counter = 2;
         const names = new Set(existing.map((item) => item.name.toLowerCase()));
         while (names.has(candidate.toLowerCase())) {
-          candidate = `${stem} (${counter}).pdf`;
+          candidate = `${stem} (${counter})${extension}`;
           counter += 1;
         }
         const attachment = { name: candidate, size: 1024 };

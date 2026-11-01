@@ -13,8 +13,19 @@ class AttachmentMissingError(FileNotFoundError):
     """Raised when an attachment file does not exist in the game folder."""
 
 
-class NotAPdfError(ValueError):
-    """Raised when a file is not an attachable PDF."""
+class UnsupportedAttachmentError(ValueError):
+    """Raised when a file is not an attachable document."""
+
+
+def _is_pdf(handle: BinaryIO) -> bool:
+    return handle.read(5) == b"%PDF-"
+
+
+def _is_text(handle: BinaryIO) -> bool:
+    return b"\x00" not in handle.read(8192)
+
+
+ATTACHMENT_TYPES = {".pdf": _is_pdf, ".txt": _is_text, ".md": _is_text}
 
 
 def attachments_dir(game_id: int) -> str:
@@ -33,7 +44,7 @@ def list_attachments(game_id: int) -> list[dict[str, object]]:
     for name in entries:
         if name.startswith("."):
             continue
-        if not name.lower().endswith(".pdf"):
+        if os.path.splitext(name)[1].lower() not in ATTACHMENT_TYPES:
             continue
         full_path = os.path.join(folder, name)
         try:
@@ -74,6 +85,8 @@ def _check_attachment_name(name: object) -> str:
 
 def resolve_attachment(game_id: int, name: object) -> str:
     safe_name = _check_attachment_name(name)
+    if os.path.splitext(safe_name)[1].lower() not in ATTACHMENT_TYPES:
+        raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
     folder = attachments_dir(game_id)
     folder_real = os.path.realpath(folder)
     candidate = os.path.realpath(os.path.join(folder, safe_name))
@@ -93,18 +106,18 @@ def remove_attachment(game_id: int, name: object) -> None:
 
 
 def _free_attachment_name(folder: str, base_name: str) -> str:
-    stem = base_name[:-4] if base_name.lower().endswith(".pdf") else base_name
+    stem, extension = os.path.splitext(base_name)
     candidate = base_name
     counter = 2
     while os.path.lexists(os.path.join(folder, candidate)) or os.path.lexists(
         os.path.join(folder, f".{candidate}.part")
     ):
-        candidate = f"{stem} ({counter}).pdf"
+        candidate = f"{stem} ({counter}){extension}"
         counter += 1
     return candidate
 
 
-def _open_pdf_source(path: str) -> BinaryIO:
+def _open_attachment_source(path: str) -> BinaryIO:
     """Open a regular file for reading; reject FIFOs/devices before touching them.
 
     A picked source (or a path from a hand-edited library file) can be a FIFO;
@@ -118,7 +131,7 @@ def _open_pdf_source(path: str) -> BinaryIO:
     fd = os.open(path, flags)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise NotAPdfError("Only PDF files can be attached")
+            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
     except BaseException:
         os.close(fd)
         raise
@@ -127,23 +140,23 @@ def _open_pdf_source(path: str) -> BinaryIO:
 
 def add_attachment(game_id: int, source_path: object) -> dict[str, object]:
     source = os.path.expanduser(str(source_path or "").strip())
-    if not source.lower().endswith(".pdf"):
-        raise NotAPdfError("Only PDF files can be attached")
+    check = ATTACHMENT_TYPES.get(os.path.splitext(source)[1].lower())
+    if check is None:
+        raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
     try:
-        handle = _open_pdf_source(source)
-    except NotAPdfError:
+        handle = _open_attachment_source(source)
+    except UnsupportedAttachmentError:
         raise
     except OSError as exc:
         raise OSError(str(exc) or "Could not read file") from exc
 
     with handle:
-        signature = handle.read(5)
-        if signature != b"%PDF-":
-            raise NotAPdfError("Only PDF files can be attached")
+        if not check(handle):
+            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
 
         base_name = os.path.basename(source)
         if not base_name or base_name.startswith("."):
-            raise NotAPdfError("Only PDF files can be attached")
+            raise UnsupportedAttachmentError("Only PDF, TXT and MD files can be attached")
         folder = attachments_dir(game_id)
         os.makedirs(folder, exist_ok=True)
         target_name = _free_attachment_name(folder, base_name)
