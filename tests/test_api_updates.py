@@ -72,10 +72,14 @@ def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
     runners = result["runners"]
     assert {runner["name"] for runner in runners} == {
         "System Wine",
+        "GE-Proton (latest)",
+        "UMU-Proton",
         *locations.values(),
     }
     assert {runner["path"] for runner in runners} == {
         "wine",
+        "GE-Proton",
+        "UMU-Proton",
         *(str(tmp_path / relative) for relative in locations),
     }
     assert len({os.path.realpath(runner["path"]) for runner in runners}) == len(runners)
@@ -103,7 +107,7 @@ def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
         )
         assert result.returncode == 0
     runners = Api().get_available_runners()["runners"]
-    assert len(runners) == len(locations) + 1
+    assert len(runners) == len(locations) + 3
 
 
 def test_api_running_and_stop_bridge(monkeypatch):
@@ -2992,7 +2996,10 @@ def test_install_rpgmaker_rtp_clears_running_status_after_unexpected_error(
     assert api.install_rpgmaker_rtp(prefix_path, "")["success"] is True
 
 
-def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
+def test_runtime_install_env_targets_proton_pfx_with_umu(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.umu.locate_umu", lambda: ("/usr/bin/umu-run", "system"))
+    monkeypatch.setattr("core.umu.runtime_status", lambda _: {"ready": True})
+    monkeypatch.setattr("core.umu._wrapper_path", lambda: "/tmp/wrapper")
     api = Api()
     proton = tmp_path / "GE-Proton" / "proton"
     (proton.parent / "files" / "bin").mkdir(parents=True)
@@ -3004,14 +3011,14 @@ def test_runtime_install_env_targets_proton_pfx_with_protons_wine(tmp_path):
 
     env, target = api._build_runtime_install_env(str(fresh), str(proton))
     # A fresh prefix gets Proton's layout, so the launcher later runs in the same pfx.
-    assert env["WINEPREFIX"] == target["resolved_prefix"] == str(fresh / "pfx")
-    assert env["STEAM_COMPAT_DATA_PATH"] == str(fresh)
-    assert env["WINE"] == str(proton.parent / "files" / "bin" / "wine")
+    assert env["WINEPREFIX"] == str(fresh)
+    assert target["resolved_prefix"] == str(fresh / "pfx")
+    assert env["PROTONPATH"] == str(proton.parent)
+    assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
 
     env, _ = api._build_runtime_install_env(str(plain_wine), str(proton))
     # Same isolation rule as the launcher for an existing plain Wine prefix.
-    assert env["STEAM_COMPAT_DATA_PATH"] == str(plain_wine / "proton_compat")
-    assert env["WINEPREFIX"] == str(plain_wine / "proton_compat" / "pfx")
+    assert env["WINEPREFIX"] == str(plain_wine / "proton_compat")
 
 
 def test_check_all_updates_stays_running_until_cancelled_worker_exits(monkeypatch):
@@ -3710,6 +3717,7 @@ def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_
     monkeypatch.setattr(os.path, "isfile", _isfile)
     monkeypatch.setattr(host_platform.os.path, "isfile", _isfile)
     monkeypatch.setattr("core.api.is_linux", lambda: True)
+    monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine" if name == "wine" else None)
     monkeypatch.setattr(
         "core.api.host_which",
         lambda name: (

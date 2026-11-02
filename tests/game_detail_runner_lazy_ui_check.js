@@ -39,6 +39,8 @@ async (page) => {
               success: true,
               runners: [
                 { name: "System Wine", path: "wine" },
+                { name: "GE-Proton (latest)", path: "GE-Proton" },
+                { name: "UMU-Proton", path: "UMU-Proton" },
                 { name: "GE-Proton", path: "/runners/GE-Proton/proton" },
               ],
             });
@@ -76,6 +78,8 @@ async (page) => {
       .getByLabel("Runner (Wine / Proton)")
       .locator("option", { hasText: "System Wine" })
       .waitFor({ state: "attached" });
+    check(await dialog.locator('#game-runner option[value="GE-Proton"]').count() === 1, "GE-Proton codename must be offered");
+    check(await dialog.locator('#game-runner option[value="UMU-Proton"]').count() === 1, "UMU-Proton codename must be offered");
 
     // 3. Disabling and re-enabling the toggle reuses the loaded list.
     await customPrefix.evaluate(element => element.click());

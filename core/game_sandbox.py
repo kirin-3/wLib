@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ntpath
+import glob
 import os
 import subprocess
 from threading import Lock
@@ -200,6 +201,9 @@ def build_bwrap_argv(
     environment: dict[str, str] | None = None,
     nixos: bool = False,
     bwrap: str = "bwrap",
+    umu_data: str = "",
+    umu_runtime: str = "",
+    umu_var: str = "",
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
@@ -262,6 +266,32 @@ def build_bwrap_argv(
         argv += ["--setenv", key, home + suffix]
     for path in readonly_paths:
         argv += ["--ro-bind", path, path]
+    if umu_data and umu_runtime and umu_var:
+        check_readonly_mounts((umu_data,), home)
+        runtime_root = os.path.realpath(umu_data)
+        for writable in (game_dir, prefix):
+            if writable:
+                candidate = os.path.realpath(writable)
+                if os.path.commonpath((candidate, runtime_root)) in (
+                    candidate,
+                    runtime_root,
+                ):
+                    raise ValueError(
+                        "The game folder or prefix overlaps the shared umu runtime."
+                    )
+        argv += [
+            "--ro-bind",
+            umu_data,
+            umu_data,
+            "--setenv",
+            "XDG_DATA_HOME",
+            os.path.dirname(umu_data),
+        ]
+        argv += ["--bind", umu_var, os.path.join(umu_runtime, "var")]
+        for ref in glob.glob(
+            os.path.join(umu_runtime, "*_platform_*", "files", ".ref")
+        ):
+            argv += ["--bind", ref, ref]
     # Writable mounts follow runtime mounts, so game files remain writable even
     # if the executable and a runtime happen to share a parent directory.
     argv += ["--bind", game_dir, game_dir]

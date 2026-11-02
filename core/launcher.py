@@ -9,11 +9,13 @@ import sys
 import tempfile
 import atexit
 import signal
+import glob
+import shutil
 import threading
 import time
 from urllib.parse import quote
 from collections.abc import Callable
-from _thread import LockType
+from _thread import LockType, start_new_thread
 from dataclasses import dataclass
 from typing import IO, Protocol, TypedDict, cast, final
 
@@ -32,6 +34,7 @@ from .host_platform import (
     host_which,
     is_windows,
     open_windows_system_target,
+    proton_compat_data_path as proton_compat_data_path,
 )
 
 
@@ -82,20 +85,6 @@ def ensure_executable(path: str) -> bool:
             pass
     # chmod "succeeds" without effect on some NTFS/exFAT mounts, so re-check.
     return os.access(path, os.X_OK)
-
-
-def proton_compat_data_path(prefix: str) -> str:
-    """STEAM_COMPAT_DATA_PATH for a configured prefix (Proton's Wine prefix is <it>/pfx).
-
-    A plain Wine prefix (drive_c without pfx) is never reused by Proton, which
-    gets an isolated proton_compat subdirectory instead.
-    """
-    path_module = _host_path_module()
-    if os.path.isdir(path_module.join(prefix, "drive_c")) and not os.path.isdir(
-        path_module.join(prefix, "pfx")
-    ):
-        return path_module.join(prefix, "proton_compat")
-    return prefix
 
 
 def _split_windows_command_line(command_line: str) -> list[str]:
@@ -393,6 +382,36 @@ class RunningGame:
     wine_context: WineContext | None = None
     game_exe: str = ""
     host_native: bool = True
+    umu: bool = False
+
+
+def _spawn_sandbox_process(
+    start: Callable[[], subprocess.Popen[bytes]],
+) -> subprocess.Popen[bytes]:
+    """Keep bwrap's parent thread alive while its parent-death guard is active."""
+    ready = threading.Event()
+    processes: list[subprocess.Popen[bytes]] = []
+    errors: list[BaseException] = []
+
+    def parent() -> None:
+        try:
+            process = start()
+            processes.append(process)
+        except BaseException as exc:
+            errors.append(exc)
+            ready.set()
+            return
+        ready.set()
+        try:
+            _ = process.wait()
+        except (OSError, ChildProcessError):
+            pass
+
+    _ = start_new_thread(parent, ())
+    _ = ready.wait()
+    if errors:
+        raise errors[0]
+    return processes[0]
 
 
 class Launcher:
@@ -542,6 +561,18 @@ class Launcher:
                         args if tool["kind"] == "command" else [tool["path"], *args]
                     )
                 env.update(extra_env)
+                if tool["kind"] == "wine" and run.umu and run.wine_context is not None:
+                    for key in (
+                        "WINEPREFIX",
+                        "PROTONPATH",
+                        "GAMEID",
+                        "UMU_CONTAINER_NSENTER",
+                        "WLIB_UMU_RUN",
+                    ):
+                        if key in run.wine_context.env:
+                            env[key] = run.wine_context.env[key]
+                        else:
+                            _ = env.pop(key, None)
                 if not command:
                     raise ValueError("Command line must contain a command")
                 if tool["kind"] != "command" and not os.path.isfile(tool["path"]):
@@ -583,6 +614,7 @@ class Launcher:
         with self._running_lock:
             running = self._running.get(game_id)
             proc = running.proc if running is not None else None
+
             # wineserver -k ends every process in the prefix, so spare games that
             # share it. Compare normalized prefixes and include games that have no
             # resolved wineserver (for example a Proton runner in a directory
@@ -950,6 +982,7 @@ class Launcher:
             cwd_override: str | None = None,
             runtime_paths: tuple[str, ...] = (),
             wine_context: WineContext | None = None,
+            umu_run: bool = False,
         ) -> dict[str, object]:
             def prepare_ce_command() -> list[str]:
                 ce_dir = get_cheat_engine_dir()
@@ -976,16 +1009,22 @@ class Launcher:
                     path_module.join(autorun_dir, "wlib_autoattach.lua"), "w"
                 ) as script:
                     _ = script.write(f'OpenProcess("{safe_name}")\n')
-                command = [proton_path] if proton_path else ["wine"]
-                if is_proton:
-                    command.append("run")
+                command = (
+                    wine_context.command
+                    if umu_run and wine_context
+                    else ([proton_path] if proton_path else ["wine"])
+                )
                 return [*command, ce_exe]
 
             log_file = None
             effective_cwd = cwd_override or game_dir
             prefix = ""
             mount_prefix = ""
-            if is_wine_executable or user_env.get("WINEPREFIX") or user_env.get("STEAM_COMPAT_DATA_PATH"):
+            if (
+                is_wine_executable
+                or user_env.get("WINEPREFIX")
+                or user_env.get("STEAM_COMPAT_DATA_PATH")
+            ):
                 raw_prefix = env_vars.get("WINEPREFIX") or env_vars.get(
                     "STEAM_COMPAT_DATA_PATH", ""
                 )
@@ -1007,6 +1046,7 @@ class Launcher:
                 wine_context=wine_context if not sandboxed else None,
                 game_exe=path_module.abspath(exe_path),
                 host_native=not is_wine_executable,
+                umu=umu_run,
             )
             with self._running_lock:
                 if game_id in self._running:
@@ -1019,7 +1059,7 @@ class Launcher:
                     if (
                         prefix
                         and prefix == other.prefix
-                        and (sandboxed or other.sandboxed)
+                        and (sandboxed or other.sandboxed or umu_run or other.umu)
                     ):
                         return {
                             "success": False,
@@ -1045,7 +1085,26 @@ class Launcher:
                     if mount_prefix:
                         os.makedirs(mount_prefix, exist_ok=True)
                     readonly = runtime_paths
-                    if is_wine_executable and run_ce:
+                    umu_data = umu_runtime = umu_var = ""
+                    if umu_run:
+                        from core.umu import umu_data_dir, runtime_status
+
+                        umu_data = umu_data_dir()
+                        umu_runtime = str(runtime_status(proton_path)["path"])
+                        umu_var = os.path.join(
+                            game_sandbox.sandbox_folder(game_id), "umu-var"
+                        )
+                        os.makedirs(umu_var, exist_ok=True)
+                        readonly += (
+                            os.path.dirname(env_vars["WLIB_UMU_RUN"]),
+                            os.path.dirname(wine_context.command[1])
+                            if wine_context
+                            else "",
+                        )
+                        concrete_runner = env_vars.get("PROTONPATH", "")
+                        if concrete_runner and os.path.isabs(concrete_runner):
+                            readonly += (concrete_runner,)
+                    if is_wine_executable and run_ce and not umu_run:
                         ce_command = prepare_ce_command()
                         if ce_command:
                             readonly += (get_cheat_engine_dir(),)
@@ -1073,6 +1132,9 @@ class Launcher:
                         environment=env_vars,
                         nixos=os.path.isdir("/nix/store"),
                         bwrap=sandbox_status["path"],
+                        umu_data=umu_data,
+                        umu_runtime=umu_runtime,
+                        umu_var=umu_var,
                     )
                     entry.kill_info = None
                 if enable_logging:
@@ -1088,19 +1150,29 @@ class Launcher:
                     print(f"Debug logging enabled. Outputting to {log_path}")
 
                 try:
-                    game_proc = subprocess.Popen(
-                        host_command(
-                            cmd, env=env_vars, cwd=effective_cwd, supervise=True
-                        ),
-                        env=env_vars,
-                        stdout=log_file if log_file is not None else subprocess.DEVNULL,
-                        stderr=(
-                            subprocess.STDOUT
+
+                    def start_game() -> "subprocess.Popen[bytes]":
+                        return subprocess.Popen(
+                            host_command(
+                                cmd, env=env_vars, cwd=effective_cwd, supervise=True
+                            ),
+                            env=env_vars,
+                            stdout=log_file
                             if log_file is not None
-                            else subprocess.DEVNULL
-                        ),
-                        cwd=effective_cwd,
-                        start_new_session=not is_windows(),
+                            else subprocess.DEVNULL,
+                            stderr=(
+                                subprocess.STDOUT
+                                if log_file is not None
+                                else subprocess.DEVNULL
+                            ),
+                            cwd=effective_cwd,
+                            start_new_session=not is_windows(),
+                        )
+
+                    game_proc = (
+                        _spawn_sandbox_process(start_game)
+                        if sandboxed and not is_windows()
+                        else start_game()
                     )
                 except OSError as exc:
                     if not is_windows() or getattr(exc, "winerror", None) != 740:
@@ -1119,7 +1191,7 @@ class Launcher:
                     entry.proc = game_proc
                     entry.last_saved_time = start_time
                     entry.log_file = log_file
-                if is_wine_executable and run_ce:
+                if is_wine_executable and run_ce and not (sandboxed and umu_run):
                     # Spawn CE in a background thread after a delay
                     def game_still_running() -> bool:
                         if self.shutting_down:
@@ -1223,6 +1295,19 @@ class Launcher:
                                 except Exception as exc:
                                     print(f"Failed to record playtime: {exc}")
                     finally:
+                        exit_code = game_proc.returncode
+                        if isinstance(exit_code, int) and exit_code != 0:
+                            print(f"Game process exited with status {exit_code}.")
+                        if sandboxed and umu_run and game_id is not None:
+                            for path in glob.glob(
+                                os.path.join(
+                                    game_sandbox.sandbox_folder(game_id),
+                                    "umu-var",
+                                    "tmp-*",
+                                )
+                            ):
+                                if os.path.isdir(path) and not os.path.islink(path):
+                                    shutil.rmtree(path, ignore_errors=True)
                         tools: list[ToolProcess] = []
                         with self._running_lock:
                             if game_id is not None:
@@ -1249,6 +1334,11 @@ class Launcher:
 
                 threading.Thread(target=track_playtime_thread, daemon=True).start()
 
+                if sandboxed and umu_run and run_ce:
+                    return {
+                        "success": True,
+                        "notice": "Cheat Engine injection is unavailable for sandboxed Proton games.",
+                    }
                 return {"success": True}
             except Exception as e:
                 with self._running_lock:
@@ -1452,6 +1542,15 @@ class Launcher:
         if proton_path and path_module.sep in proton_path:
             proton_path = path_module.abspath(proton_path)
 
+        from core.umu import (
+            build_umu_invocation,
+            locate_umu,
+            resolve_runner,
+            runtime_status,
+        )
+
+        proton_path = resolve_runner(proton_path)
+
         wine_prefix = path_module.expanduser(
             (custom_prefix or get_setting("wine_prefix_path") or "").strip()
         )
@@ -1468,11 +1567,7 @@ class Launcher:
             proton_path and "proton" in path_module.basename(proton_path).lower()
         )
 
-        base_cmd = [proton_path] if proton_path else ["wine"]
-        if is_proton:
-            base_cmd.append("run")
-
-        base_cmd.append(exe_path)
+        base_cmd = [proton_path, exe_path]
         command = build_command(base_cmd, args)
 
         # Global DLL overrides required for various titles. Defaults go first:
@@ -1497,18 +1592,37 @@ class Launcher:
 
         # Proton and Wine prefix handling
         if is_proton:
-            compat_path = proton_compat_data_path(wine_prefix)
-            if compat_path != wine_prefix:
-                print(
-                    "Warning: Standard Wine prefix detected. Creating isolated proton directory."
+            if not locate_umu()[0]:
+                return {
+                    "success": False,
+                    "code": "umu_missing",
+                    "error": "umu-launcher is missing. Install it in Settings.",
+                }
+            if not runtime_status(proton_path)["ready"]:
+                return {
+                    "success": False,
+                    "code": "umu_runtime_missing",
+                    "error": "Prepare the Steam Linux Runtime in Settings before launching.",
+                }
+            try:
+                base_cmd, env = build_umu_invocation(
+                    exe_path,
+                    prefix=wine_prefix,
+                    runner=proton_path,
+                    game_id=game_id,
+                    game_dir=game_dir,
+                    environment=env,
+                    sandboxed=sandboxed,
+                    log_dir=game_dir if enable_logging else "",
                 )
-                wine_prefix = compat_path
-                os.makedirs(wine_prefix, exist_ok=True)
-
-            env["STEAM_COMPAT_DATA_PATH"] = wine_prefix
-            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/tmp/wlib"
-            env["STEAM_COMPAT_INSTALL_PATH"] = game_dir
-            _ = env.setdefault("UMU_ID", "wlib")
+            except (ValueError, OSError) as exc:
+                return {"success": False, "error": str(exc)}
+            wine_prefix = env["WINEPREFIX"]
+            command = build_command(base_cmd, args)
+            if os.path.exists(path_module.join(game_dir, "nw.dll")) and os.path.exists(
+                path_module.join(game_dir, "www")
+            ):
+                command.extend(["--disable-gpu-sandbox", "--no-sandbox"])
         else:
             # If the selected prefix is actually a Proton prefix (contains pfx subfolder),
             # standard Wine must point directly to the pfx subfolder
@@ -1565,6 +1679,7 @@ class Launcher:
             env,
             is_wine_executable=True,
             wine_context=WineContext(base_cmd[:-1], env.copy()),
+            umu_run=bool(is_proton),
             run_ce=auto_inject_ce,
             game_exe=game_exe_name,
             kill_info=(wineserver, kill_env) if wineserver else None,

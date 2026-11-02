@@ -27,6 +27,8 @@ async (page) => {
     await page.goto(new URL("/#/settings", previousUrl).toString());
     await page.reload();
     await page.getByRole("heading", { name: "RPGMaker Linux Runner", exact: true }).waitFor({ timeout: 10000 });
+    check(await page.locator('#runner-paths option[value="GE-Proton"]').count() === 1, "GE-Proton codename must be offered");
+    check(await page.locator('#runner-paths option[value="UMU-Proton"]').count() === 1, "UMU-Proton codename must be offered");
 
     await page.evaluate(() => {
       window.pywebview = {

@@ -109,6 +109,25 @@ export interface RunnerInfo {
   path: string;
 }
 
+export interface UmuStatus extends ApiBasicResponse {
+  source?: string;
+  path?: string;
+  version?: string;
+  python3?: boolean;
+}
+
+export interface UmuJobStatus extends ApiBasicResponse {
+  running?: boolean;
+  stage?: string;
+  done?: number;
+  total?: number;
+  error_class?: string;
+  cancelled?: boolean;
+  runtime?: string;
+  path?: string;
+  ready?: boolean;
+}
+
 export interface GetAvailableRunnersResponse extends ApiBasicResponse {
   success: boolean;
   runners: RunnerInfo[];
@@ -116,6 +135,7 @@ export interface GetAvailableRunnersResponse extends ApiBasicResponse {
 
 export interface LaunchGameResponse extends ApiBasicResponse {
   success: boolean;
+  notice?: string;
 }
 
 export interface UpdateCheckResponse extends ApiBasicResponse {
@@ -2197,6 +2217,13 @@ class ApiService {
     return this.invoke<DownloadProtonResponse>("download_proton_ge");
   }
 
+  async getUmuStatus(): Promise<UmuStatus> { return this.invoke<UmuStatus>("get_umu_status"); }
+  async downloadUmu(): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("download_umu"); }
+  async getUmuDownloadStatus(): Promise<UmuJobStatus> { return this.invoke<UmuJobStatus>("get_umu_download_status"); }
+  async prepareUmuRuntime(): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("prepare_umu_runtime"); }
+  async getUmuRuntimeStatus(): Promise<UmuJobStatus> { return this.invoke<UmuJobStatus>("get_umu_runtime_status"); }
+  async cancelUmuRuntimePrepare(): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("cancel_umu_runtime_prepare"); }
+
   async getProtonDownloadStatus(): Promise<ProtonDownloadStatus> {
     return this.invoke<ProtonDownloadStatus>("get_proton_download_status");
   }
@@ -3169,6 +3196,8 @@ class ApiService {
       case "get_available_runners":
         return { success: true, mock: true, runners: localStorage.getItem("wlib-mock-platform") === "linux" ? [
           { name: "System Wine", path: "wine" },
+          { name: "GE-Proton (latest)", path: "GE-Proton" },
+          { name: "UMU-Proton", path: "UMU-Proton" },
           { name: "GE-Proton (Steam)", path: "/home/user/.local/share/Steam/compatibilitytools.d/GE-Proton/proton" },
           { name: "wine-ge (Lutris)", path: "/home/user/.local/share/lutris/runners/wine/wine-ge/bin/wine" },
         ] : [] };
@@ -3259,6 +3288,16 @@ class ApiService {
         return { triggered: false, reason: "mock" };
       case "get_proton_download_status":
         return { running: false, stage: "", done: 0, total: 0 };
+      case "get_umu_status":
+        return { success: true, source: "", path: "", version: "", python3: true };
+      case "get_umu_download_status":
+        return { success: true, running: false, stage: "", done: 0, total: 0, error: "" };
+      case "get_umu_runtime_status":
+        return { success: true, runtime: "steamrt4", path: "", ready: false, running: false, stage: "", done: 0, error: "", error_class: "", cancelled: false };
+      case "download_umu":
+      case "prepare_umu_runtime":
+      case "cancel_umu_runtime_prepare":
+        return { success: true, mock: true };
       case "get_install_status":
         return {
           // The backend always reports success for the status read itself; only

@@ -2093,6 +2093,7 @@ const removeAttachment = async (name: string) => {
               <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(exePath, sandboxStatus).disabled" />
             </label>
             <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }}</p>
+            <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
             <div class="flex flex-wrap gap-2">
               <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="closeAndNavigate('/settings#sandbox')">Open Sandbox settings</button>
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>

@@ -107,6 +107,12 @@ def collect_tools(
     if is_linux():
         tools["wine"] = host_which("wine")
         tools["runners"] = runner_lookup().get("runners", [])
+        from core.umu import get_umu_status, runtime_status
+
+        tools["umu"] = {
+            **get_umu_status(),
+            "runtime": runtime_status(str(database.get_setting("proton_path") or "")),
+        }
     tools["extension"] = extension_lookup()
     return tools
 

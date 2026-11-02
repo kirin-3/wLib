@@ -104,6 +104,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       <button class="sandbox-button" :disabled="installing" @click="recheck().catch(e => notifyError(String(e)))">Recheck</button>
     </div>
     <p class="text-sm" style="color:var(--text-secondary)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
+    <p v-if="platform === 'linux'" class="text-sm" style="color:var(--text-secondary)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
     <div v-if="status?.status === 'missing' && info" class="space-y-3">
       <div v-if="info.command" class="flex flex-wrap items-center gap-2">
         <code class="text-sm break-all">{{ info.command }}</code>

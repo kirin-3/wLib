@@ -505,3 +505,79 @@ def test_bwrap_refuses_read_only_mounts_that_expose_home(tmp_path):
     assert ["--ro-bind", "/opt/proton", "/opt/proton"] in [
         argv[i : i + 3] for i in range(len(argv) - 2)
     ]
+
+def test_umu_runtime_mounts_are_restricted(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / ".local" / "share" / "umu"
+    runtime = data / "steamrt4"
+    ref = runtime / "steamrt4_platform_1" / "files" / ".ref"
+    ref.parent.mkdir(parents=True)
+    ref.touch()
+    (runtime / "var").mkdir()
+    var = tmp_path / "umu-var"
+    var.mkdir()
+    game = tmp_path / "game"
+    game.mkdir()
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    argv = sandbox.build_bwrap_argv(
+        ["umu-run", "game.exe"],
+        game_dir=str(game),
+        home=str(home),
+        sandbox_home=str(sandbox_home),
+        cwd=str(game),
+        umu_data=str(data),
+        umu_runtime=str(runtime),
+        umu_var=str(var),
+    )
+
+    def has_sequence(parts):
+        return any(argv[i : i + len(parts)] == parts for i in range(len(argv)))
+
+    assert has_sequence(["--ro-bind", str(data), str(data)])
+    assert has_sequence(["--bind", str(ref), str(ref)])
+    assert has_sequence(["--bind", str(var), str(runtime / "var")])
+    assert has_sequence(["--setenv", "XDG_DATA_HOME", str(data.parent)])
+
+
+def test_umu_runtime_cannot_overlap_writable_game_or_prefix(tmp_path):
+    home = tmp_path / 'home'
+    data = home / '.local' / 'share' / 'umu'
+    runtime = data / 'steamrt4'
+    var = tmp_path / 'var'
+    game = tmp_path / 'game'
+    home.mkdir()
+    game.mkdir()
+    var.mkdir()
+    runtime.mkdir(parents=True)
+    common = dict(home=str(home), sandbox_home=str(tmp_path / 'sandbox'), cwd=str(game), umu_data=str(data), umu_runtime=str(runtime), umu_var=str(var))
+    with pytest.raises(ValueError, match='overlaps'):
+        sandbox.build_bwrap_argv(['game'], game_dir=str(data), **common)
+    with pytest.raises(ValueError, match='overlaps'):
+        sandbox.build_bwrap_argv(['game'], game_dir=str(game), prefix=str(runtime), **common)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='bubblewrap is Linux-only')
+def test_sandbox_parent_thread_outlives_bridge_thread():
+    import threading
+    import time
+    from core.launcher import _spawn_sandbox_process
+
+    if sandbox.get_sandbox_status(platform='linux')['status'] != 'ready':
+        pytest.skip('bubblewrap is unavailable')
+    processes = []
+    def bridge_call():
+        processes.append(_spawn_sandbox_process(lambda: subprocess.Popen(['bwrap', '--die-with-parent', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', 'sh', '-c', 'sleep 2'], start_new_session=True)))
+    bridge = threading.Thread(target=bridge_call)
+    bridge.start()
+    bridge.join(timeout=5)
+    assert not bridge.is_alive() and processes
+    try:
+        time.sleep(0.2)
+        assert processes[0].poll() is None
+        assert processes[0].wait(timeout=5) == 0
+    finally:
+        if processes[0].poll() is None:
+            processes[0].terminate()
+            processes[0].wait(timeout=5)

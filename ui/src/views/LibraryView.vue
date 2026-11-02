@@ -1067,10 +1067,15 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       game.launch_mode || "auto",
     );
     if (result && !result.success) {
+      if (result.code === 'umu_missing' || result.code === 'umu_runtime_missing') {
+        notify(result.error || 'Proton needs umu setup.', 'error', 'Could not launch game', { label: 'Open Proton settings', run: () => { void router.push('/settings#umu'); } });
+        return;
+      }
       const sandboxError = sandboxLaunchError(result.code || result.error_code, result.error);
       if (sandboxError) notify(sandboxError.message, "error", "Could not launch game", sandboxError.openSettings ? { label: "Open Sandbox settings", run: () => { void router.push('/settings#sandbox'); } } : undefined);
       else notifyError(`Failed to launch game:\n\n${result.error}`);
     } else if (result?.success) {
+      if (result.notice) notify(result.notice, "info", "Game launched");
       // Reconcile with the registry: HTML is untracked and short commands may already have exited.
       await loadRunningGames();
     }

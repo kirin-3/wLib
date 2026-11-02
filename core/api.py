@@ -303,6 +303,10 @@ class Api:
         self._update_lock: threading.Lock = threading.Lock()
         self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
+        from core.umu import UmuDownload, UmuRuntimePrepare
+
+        self._umu_download: UmuDownload = UmuDownload()
+        self._umu_prepare: UmuRuntimePrepare = UmuRuntimePrepare()
         self._app_release: dict[str, object] | None = None
         self._app_release_lock: threading.Lock = threading.Lock()
         # Polled by Settings while download_proton_ge runs; done/total are bytes.
@@ -530,6 +534,10 @@ class Api:
         base_prefix = os.path.abspath(os.path.expanduser(base_prefix))
 
         proton_path_to_use = os.path.expanduser(str(proton_source or "").strip())
+        if is_linux() and not proton_path_to_use:
+            from core.umu import resolve_runner
+
+            proton_path_to_use = resolve_runner("")
         is_proton = bool(
             proton_path_to_use
             and "proton" in os.path.basename(proton_path_to_use).lower()
@@ -554,21 +562,24 @@ class Api:
     ) -> tuple[dict[str, str], RuntimeInstallTarget]:
         target = self._resolve_runtime_install_target(prefix_path, proton_path)
         env = os.environ.copy()
-        env["WINEPREFIX"] = target["resolved_prefix"]
         if target["is_proton"]:
-            env["STEAM_COMPAT_DATA_PATH"] = os.path.dirname(target["resolved_prefix"])
-            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = "/tmp/wlib"
-            # winetricks must drive Proton's own Wine, not whatever `wine` is on PATH.
-            for layout in ("files", "dist"):
-                bin_dir = os.path.join(
-                    os.path.dirname(target["proton_path"]), layout, "bin"
-                )
-                if os.path.isfile(os.path.join(bin_dir, "wine")):
-                    env["WINE"] = os.path.join(bin_dir, "wine")
-                    env["WINESERVER"] = os.path.join(bin_dir, "wineserver")
-                    break
+            from core.umu import build_umu_invocation, locate_umu, runtime_status
 
-        os.makedirs(env["WINEPREFIX"], exist_ok=True)
+            _ = env.pop("WINE", None)
+            _ = env.pop("WINESERVER", None)
+            if not locate_umu()[0]:
+                raise ValueError("umu-launcher is missing. Install it in Settings.")
+            if not runtime_status(target["proton_path"])["ready"]:
+                raise ValueError("Prepare the Steam Linux Runtime in Settings first.")
+            _, env = build_umu_invocation(
+                "winetricks",
+                prefix=target["base_prefix"],
+                runner=target["proton_path"],
+                environment=env,
+            )
+        else:
+            env["WINEPREFIX"] = target["resolved_prefix"]
+            os.makedirs(env["WINEPREFIX"], exist_ok=True)
         return env, target
 
     def _create_download_ssl_context(
@@ -1450,9 +1461,15 @@ class Api:
         cached_url = game.pop("cover_cache_url", None)
         name = game.pop("cover_cache", None)
         cached = cached_cover_path(name)
-        if (self.library_sync.server_available and cached_url == game.get("cover_image_path")
-                and cached is not None and cached.is_file()):
-            game["cover_cache_url"] = f"http://127.0.0.1:8183/covers/cache/{cached.name}"
+        if (
+            self.library_sync.server_available
+            and cached_url == game.get("cover_image_path")
+            and cached is not None
+            and cached.is_file()
+        ):
+            game["cover_cache_url"] = (
+                f"http://127.0.0.1:8183/covers/cache/{cached.name}"
+            )
         path = cover_path(game.get("cover_local"))
         if self.library_sync.server_available and path is not None and path.is_file():
             game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
@@ -1667,6 +1684,8 @@ class Api:
         expanded = os.path.expanduser(value)
 
         if kind == "runner":
+            if is_linux() and expanded in ("GE-Proton", "UMU-Proton"):
+                return {"ok": True, "reason": ""}
             has_separator = "/" in expanded or os.sep in expanded
             if not has_separator and os.altsep is not None:
                 has_separator = os.altsep in expanded
@@ -2079,9 +2098,10 @@ class Api:
                     attach_id = linked_ids[0]
                     # Adding with an executable installs a wishlisted match
                     # instead of dropping the path the user just chose.
-                    if exe_path.strip() and not str(
-                        linked_game.get("exe_path") or ""
-                    ).strip():
+                    if (
+                        exe_path.strip()
+                        and not str(linked_game.get("exe_path") or "").strip()
+                    ):
                         attach_fields["exe_path"] = exe_path
                         if version.strip():
                             attach_fields["version"] = version
@@ -3104,7 +3124,9 @@ class Api:
             for g, nxt in zip(games_with_url, games_with_url[1:])
         }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
-        previous_latest_versions = {g["id"]: g.get("latest_version", "") for g in games_with_url}
+        previous_latest_versions = {
+            g["id"]: g.get("latest_version", "") for g in games_with_url
+        }
         previous_latest_versions.update(
             {
                 int(str(game["id"])): str(game.get("latest_version") or "")
@@ -3205,7 +3227,11 @@ class Api:
                         # found for this game too, not only wishlist prefixes.
                         page_metadata = any(
                             key in result_dict
-                            for key in ("thread_completed", "screenshots", "store_links")
+                            for key in (
+                                "thread_completed",
+                                "screenshots",
+                                "store_links",
+                            )
                         )
                         if (
                             not callback_error
@@ -3239,14 +3265,10 @@ class Api:
                         for key in ("thread_completed", "screenshots", "store_links")
                     ):
                         try:
-                            finished_ids = (
-                                self._update_thread_edit_metadata_for_url(
-                                    url, result_dict
-                                )
+                            finished_ids = self._update_thread_edit_metadata_for_url(
+                                url, result_dict
                             )
-                            newly_finished = (
-                                wishlisted and game["id"] in finished_ids
-                            )
+                            newly_finished = wishlisted and game["id"] in finished_ids
                         except Exception:
                             pass
 
@@ -3409,7 +3431,9 @@ class Api:
                         if result.get("has_update")
                         and not result.get("error")
                         and normalize_version(result.get("latest_version"))
-                        != normalize_version(previous_latest_versions.get(int(str(result["id"])), ""))
+                        != normalize_version(
+                            previous_latest_versions.get(int(str(result["id"])), "")
+                        )
                     ]
                     completed_titles = [
                         str(result["title"])
@@ -3626,6 +3650,12 @@ class Api:
         system_wine = host_which("wine")
         if system_wine:
             add_runner("System Wine", "wine", system_wine)
+        runners.extend(
+            [
+                {"name": "GE-Proton (latest)", "path": "GE-Proton"},
+                {"name": "UMU-Proton", "path": "UMU-Proton"},
+            ]
+        )
 
         proton_dir = get_proton_dir()
         if os.path.exists(proton_dir):
@@ -3745,7 +3775,10 @@ class Api:
 
         empty_game: dict[str, object] = {}
         stored_game = (
-            next((game for game in get_all_games() if game.get("id") == game_id), empty_game)
+            next(
+                (game for game in get_all_games() if game.get("id") == game_id),
+                empty_game,
+            )
             if game_id is not None
             else empty_game
         )
@@ -3814,7 +3847,11 @@ class Api:
             # contract: report a failure payload instead of rejecting the call.
             print(f"Failed to launch game {game_id}: {exc}")
             return {"success": False, "error": str(exc) or "Could not launch the game."}
-        if result.get("success") and result.get("tracks_playtime", True) and game_id is not None:
+        if (
+            result.get("success")
+            and result.get("tracks_playtime", True)
+            and game_id is not None
+        ):
             with session_lock:
                 try:
                     session_id = start_play_session(game_id, launch_version)
@@ -4204,13 +4241,6 @@ class Api:
 
         import subprocess
 
-        winetricks_path = host_which("winetricks")
-        if not winetricks_path:
-            return {
-                "success": False,
-                "error": "Winetricks is not installed. Install it first, then try again.",
-            }
-
         try:
             env, target = self._build_runtime_install_env(prefix_path, proton_path)
         except (OSError, ValueError) as exc:
@@ -4218,6 +4248,34 @@ class Api:
                 "success": False,
                 "error": f"Could not prepare the Wine prefix: {exc}",
             }
+        if target["is_proton"]:
+            from core.umu import build_umu_invocation, resolve_codename
+
+            try:
+                runner = resolve_codename(target["proton_path"])
+                folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
+                if not os.path.isfile(
+                    os.path.join(folder, "protonfixes", "winetricks")
+                ):
+                    raise ValueError(
+                        "Pick GE-Proton or UMU-Proton with Winetricks installed."
+                    )
+                winetricks_command, env = build_umu_invocation(
+                    "winetricks",
+                    prefix=target["base_prefix"],
+                    runner=runner,
+                    environment=env,
+                )
+            except (OSError, ValueError) as exc:
+                return {"success": False, "error": str(exc)}
+        else:
+            winetricks_path = host_which("winetricks")
+            if not winetricks_path:
+                return {
+                    "success": False,
+                    "error": "Winetricks is not installed. Install it first, then try again.",
+                }
+            winetricks_command = [winetricks_path]
 
         verbs = [
             "corefonts",
@@ -4247,7 +4305,7 @@ class Api:
             "vcrun2010",
             "dotnetcoredesktop3",
         ]
-        command = [winetricks_path, "-q"] + verbs
+        command = [*winetricks_command, "-q", *verbs]
         print(
             f"Running winetricks command in {env.get('WINEPREFIX')}: {' '.join(command)}"
         )
@@ -4280,7 +4338,7 @@ class Api:
                         self._deps_install_status["current"] = verb
                     print(f"Installing winetricks verb {i + 1}/{len(verbs)}: {verb}")
                     result = subprocess.run(
-                        host_command([winetricks_path, "-q", verb], env=env),
+                        host_command([*winetricks_command, "-q", verb], env=env),
                         env=env,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -4334,12 +4392,18 @@ class Api:
 
         runner_command: list[str]
         if target["is_proton"]:
-            if not target["proton_path"] or not os.path.exists(target["proton_path"]):
-                return {
-                    "success": False,
-                    "error": "Selected Proton executable was not found. Update the path and try again.",
-                }
-            runner_command = [target["proton_path"], "run"]
+            from core.umu import build_umu_invocation
+
+            try:
+                command, env = build_umu_invocation(
+                    "placeholder.exe",
+                    prefix=target["base_prefix"],
+                    runner=target["proton_path"],
+                    environment=env,
+                )
+                runner_command = command[:-1]
+            except (OSError, ValueError) as exc:
+                return {"success": False, "error": str(exc)}
         else:
             wine_binary = host_which("wine")
             if not wine_binary:
@@ -4637,6 +4701,46 @@ class Api:
     # ==========================
     # Settings & Utils API
     # ==========================
+    def get_umu_status(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        from core.umu import get_umu_status
+
+        return {"success": True, **get_umu_status()}
+
+    def download_umu(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        return self._umu_download.start()
+
+    def get_umu_download_status(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        return {"success": True, **self._umu_download.status()}
+
+    def prepare_umu_runtime(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        target = self._resolve_runtime_install_target()
+        return self._umu_prepare.start(target["base_prefix"], target["proton_path"])
+
+    def get_umu_runtime_status(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        from core.umu import runtime_status
+
+        target = self._resolve_runtime_install_target()
+        preparation = self._umu_prepare.status()
+        runtime = runtime_status(target["proton_path"])
+        if preparation["cancelled"] or preparation["error"]:
+            runtime["ready"] = False
+        return {"success": True, **runtime, **preparation}
+
+    def cancel_umu_runtime_prepare(self) -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("umu-launcher")
+        return self._umu_prepare.cancel()
+
     def download_proton_ge(self) -> dict[str, object]:
         """
         Downloads the latest Proton-GE release and extracts it to the local share directory.
@@ -4745,9 +4849,7 @@ class Api:
 
             # A predictable name in the shared temp directory can be pre-created
             # as a symlink by another local user, so create the file exclusively.
-            tar_fd, tar_path = tempfile.mkstemp(
-                prefix="wlib-proton-", suffix=".tar.gz"
-            )
+            tar_fd, tar_path = tempfile.mkstemp(prefix="wlib-proton-", suffix=".tar.gz")
             os.close(tar_fd)
 
             # The .sha512sum file reads "<hash>  <tarball name>".
@@ -5459,7 +5561,9 @@ class Api:
             return {"success": False, "error": str(exc) or "Invalid attachment name"}
         except Exception as exc:
             return {"success": False, "error": str(exc) or "Could not open attachment"}
-        result = self._open_with_system_handler(resolved, "No application found to open this file")
+        result = self._open_with_system_handler(
+            resolved, "No application found to open this file"
+        )
         if not result.get("success"):
             return {
                 "success": False,
@@ -5500,7 +5604,10 @@ class Api:
         except ValueError as exc:
             return {"success": False, "error": str(exc) or "Invalid attachment name"}
         except Exception as exc:
-            return {"success": False, "error": str(exc) or "Could not remove attachment"}
+            return {
+                "success": False,
+                "error": str(exc) or "Could not remove attachment",
+            }
         try:
             attachments = list_attachments(coerced_id)
         except Exception:
@@ -5668,7 +5775,11 @@ class Api:
             old_exe = os.path.abspath(os.path.expanduser(str(chosen["exe_path"])))
             old_folder = os.path.dirname(old_exe)
         if not requested_folder:
-            matches = [p for p in folders if old_folder and is_within(old_folder, os.path.expanduser(p))]
+            matches = [
+                p
+                for p in folders
+                if old_folder and is_within(old_folder, os.path.expanduser(p))
+            ]
             library_folder = max(
                 matches,
                 key=lambda p: len(os.path.realpath(os.path.expanduser(p))),

@@ -133,6 +133,8 @@ The frontend hides unavailable actions, while backend guards reject unsupported 
 
 On Flatpak, `core/host_platform.py` keeps game processes and external tools on the host through `flatpak-spawn --host`, with process supervision for tracked launches. Sandbox-only environment variables such as `LD_LIBRARY_PATH` are not forwarded. The same lookup and command helpers cover runner discovery, archive tools, runtime installers, and notifications.
 
+On Linux, `core/umu.py` discovers or installs umu-launcher, checks the shared Steam Linux Runtime, and constructs Proton invocations. Proton games, Wine companion tools, Cheat Engine and prefix installers run through umu; plain Wine keeps its existing host path. Existing Proton compatibility-data folders remain in place. A small host-Python wrapper skips umu's runtime update request when its runtime is already installed; preparation in Settings performs updates separately. Sandboxed Proton launches expose the shared runtime read-only with a per-game writable working directory, and do not support Cheat Engine injection. Proton games sharing a prefix cannot run simultaneously.
+
 ## Process Isolation & Communication
 
 wLib operates across two distinct contexts that never directly share memory:

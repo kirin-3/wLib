@@ -169,3 +169,25 @@ def test_report_marks_missing_tools_and_empty_stages():
     assert "  7zz: Not found" in report
     assert "  runners: Not found" in report
     assert "  bsdtar: /usr/bin/bsdtar" in report
+
+
+def test_tools_include_umu_and_runtime(monkeypatch):
+    monkeypatch.setattr(diagnostics, "is_linux", lambda: True)
+    monkeypatch.setattr(diagnostics, "host_which", lambda _: None)
+    monkeypatch.setattr(database, "get_setting", lambda _: "GE-Proton")
+    monkeypatch.setattr(
+        "core.umu.get_umu_status",
+        lambda: {
+            "path": "/host/umu-run",
+            "source": "system",
+            "version": "1.4.4",
+            "python3": True,
+        },
+    )
+    monkeypatch.setattr(
+        "core.umu.runtime_status",
+        lambda runner: {"runtime": "steamrt4", "ready": True, "path": "/runtime"},
+    )
+    result = diagnostics.collect_tools(lambda: {"runners": []}, lambda: {})
+    assert result["umu"]["path"] == "/host/umu-run"
+    assert result["umu"]["runtime"]["ready"] is True

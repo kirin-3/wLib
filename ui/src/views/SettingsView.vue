@@ -56,6 +56,7 @@ import { validateCustomPlayStatuses } from "../utils/playStatus";
 import PathStatus from "../components/PathStatus.vue";
 import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
 import SandboxSettings from "../components/SandboxSettings.vue";
+import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
@@ -1520,7 +1521,7 @@ const browseUrm = async () => {
             </div>
           </div>
           <p id="settings-proton-help" class="text-xs mt-2" style="color: var(--text-muted)">
-            Leave empty to use the system default `wine` command.
+            Leave empty for system Wine, or UMU-Proton if Wine is unavailable. GE-Proton (latest) may check for updates when launching.
           </p>
           <p v-if="protonError" class="copyable-feedback text-xs text-red-400 mt-1">
             {{ protonError }}
@@ -1607,6 +1608,8 @@ const browseUrm = async () => {
           </div>
         </div>
       </section>
+
+      <UmuSettings v-if="supportsLinuxRuntimes" />
 
       <CompanionToolsSettings v-if="platformCapabilities.companion_tools" />
 

@@ -282,9 +282,12 @@ def test_launcher_command_substitution_multiple_occurrences():
                 assert args[0].count("/tmp/test.sh") == 2
 
 
-def test_launcher_proton_path_with_special_characters():
+def test_launcher_proton_path_with_special_characters(monkeypatch):
     """Test launcher with proton path containing special characters."""
     launcher = Launcher()
+    monkeypatch.setattr("core.umu.locate_umu", lambda: ("/usr/bin/umu-run", "system"))
+    monkeypatch.setattr("core.umu.runtime_status", lambda _: {"ready": True})
+    monkeypatch.setattr("core.umu._wrapper_path", lambda: "/umu/wrapper")
 
     special_paths = [
         "/path/with spaces/proton",

@@ -38,12 +38,22 @@ class _ThreadScopedClock:
 
 
 @pytest.fixture(autouse=True)
-def _linux_launcher_by_default(monkeypatch):
+def _linux_launcher_by_default(monkeypatch, tmp_path):
     # Mocked processes must never escape a test through atexit callbacks.
     monkeypatch.setattr("core.launcher.atexit.register", lambda _callback: None)
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     # Tests that don't patch settings must not read the user's real database.
     monkeypatch.setattr("core.launcher.get_setting", lambda _key: None)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(
+        "core.umu.host_which", lambda name: "/usr/bin/wine" if name == "wine" else None
+    )
+    monkeypatch.setattr("core.umu.locate_umu", lambda: ("/usr/bin/umu-run", "system"))
+    monkeypatch.setattr(
+        "core.umu.runtime_status",
+        lambda _runner: {"ready": True, "path": "/umu/steamrt4", "runtime": "steamrt4"},
+    )
+    monkeypatch.setattr("core.umu._wrapper_path", lambda: "/umu/umu-run-wlib")
 
 
 @pytest.mark.parametrize(
@@ -146,6 +156,7 @@ def test_running_registry_duplicate_and_exit(monkeypatch, tmp_path, logging, cal
         patch("core.launcher.get_setting", return_value="true" if logging else "false"),
         patch("builtins.open", mock_open()),
         patch("threading.Thread") as thread,
+        patch("os.killpg", side_effect=ProcessLookupError),
     ):
         launcher = Launcher()
         assert launcher.launch(str(target), game_id=1, on_exit_callback=on_exit)[
@@ -167,6 +178,7 @@ def test_registry_cleanup_preserves_new_process(monkeypatch):
         patch("core.launcher.get_setting", return_value="false"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread") as thread,
+        patch("os.killpg", side_effect=ProcessLookupError),
     ):
         popen.return_value.poll.return_value = 0
         launcher = Launcher()
@@ -200,6 +212,7 @@ def test_stop_wine_prefix_and_process_group(
         patch("os.path.exists", return_value=True),
         patch("os.path.isdir", return_value=False),
         patch("os.path.isfile", side_effect=lambda path: path == expected_server),
+        patch("os.makedirs"),
         patch("core.launcher.host_which", return_value="/usr/bin/wineserver"),
         patch(
             "core.launcher.get_setting",
@@ -519,8 +532,8 @@ def test_launch_proton_prefix_isolation(mock_get_setting, mock_popen, mock_exist
         env = kwargs["env"]
 
         # It should append "proton_compat" to avoid colliding with the standard wine prefix
-        assert "proton_compat" in env["STEAM_COMPAT_DATA_PATH"]
-        assert env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] == "/tmp/wlib"
+        assert "proton_compat" in env["WINEPREFIX"]
+        assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env
         assert kwargs["cwd"] == "/tmp"
 
 
@@ -530,6 +543,7 @@ def test_launch_logging_limits_wine_debug_output(monkeypatch, proton_version):
     with (
         patch("os.path.exists", return_value=True),
         patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
         patch(
             "core.launcher.get_setting",
             side_effect=lambda key: "true" if key == "enable_logging" else "",
@@ -1186,18 +1200,19 @@ def test_launch_wine_proton_mode_uses_host_environment(
     mock_get_setting.side_effect = get_setting_side_effect
     mock_popen.return_value = MagicMock()
 
-    result = Launcher().launch("/opt/game/game.exe", launch_mode="wine_proton")
+    with patch("os.makedirs"):
+        result = Launcher().launch("/opt/game/game.exe", launch_mode="wine_proton")
 
     assert result["success"] is True
     args, kwargs = mock_popen.call_args
-    assert args[0] == ["/opt/GE-Proton/proton", "run", "/opt/game/game.exe"]
+    assert args[0] == ["python3", "/umu/umu-run-wlib", "/opt/game/game.exe"]
     env = kwargs["env"]
     assert "APPIMAGE" not in env
     assert env["LD_LIBRARY_PATH"] == "/usr/lib"
     assert "LD_LIBRARY_PATH_ORIG" not in env
-    assert env["STEAM_COMPAT_DATA_PATH"] == "/tmp/wlib-prefix"
+    assert env["WINEPREFIX"] == "/tmp/wlib-prefix"
     assert env["STEAM_COMPAT_INSTALL_PATH"] == "/opt/game"
-    assert env["UMU_ID"] == "wlib"
+    assert env["GAMEID"] == "umu-default"
 
 
 @patch("os.path.exists")
@@ -1696,6 +1711,7 @@ def test_launch_proton_strips_stale_wineprefix_and_wine_strips_steam_compat(
     with (
         patch("os.path.exists", return_value=True),
         patch("os.access", return_value=False),
+        patch("os.makedirs"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
     ):
@@ -1707,8 +1723,8 @@ def test_launch_proton_strips_stale_wineprefix_and_wine_strips_steam_compat(
         )
         assert res_proton["success"] is True
         env_proton = popen.call_args.kwargs["env"]
-        assert "WINEPREFIX" not in env_proton
-        assert env_proton.get("STEAM_COMPAT_CLIENT_INSTALL_PATH") == "/tmp/wlib"
+        assert env_proton["WINEPREFIX"] != "/stale/prefix"
+        assert "STEAM_COMPAT_CLIENT_INSTALL_PATH" not in env_proton
 
         # 2. Wine launch: should strip stale host STEAM_COMPAT_* and UMU_ID
         res_wine = Launcher().launch(
@@ -1746,6 +1762,7 @@ def test_launch_cmd_file_not_treated_as_linux_native(monkeypatch):
     with (
         patch("os.path.exists", return_value=True),
         patch("os.access", return_value=True),
+        patch("os.makedirs"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
     ):
@@ -1915,7 +1932,14 @@ def test_flatpak_wine_launch_uses_host_spawn_with_supervisor(monkeypatch):
     ):
         assert Launcher().launch("/tmp/game.exe", game_id=7)["success"] is True
     argv = popen.call_args.args[0]
-    assert argv[:6] == ["env", "-u", "LD_LIBRARY_PATH", "flatpak-spawn", "--host", "--watch-bus"]
+    assert argv[:6] == [
+        "env",
+        "-u",
+        "LD_LIBRARY_PATH",
+        "flatpak-spawn",
+        "--host",
+        "--watch-bus",
+    ]
     assert "--" in argv
     inner = argv[argv.index("--") + 1 :]
     assert inner[0] == "sh"
@@ -2176,7 +2200,10 @@ def test_sandbox_refuses_game_folder_that_is_home(monkeypatch, tmp_path):
         patch("subprocess.Popen") as popen,
     ):
         result = launcher.launch(
-            str(home / "game.sh"), game_id=12, sandbox_enabled=True, launch_mode="native"
+            str(home / "game.sh"),
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode="native",
         )
     assert not result["success"]
     assert "whole home folder" in str(result["error"])
@@ -2390,7 +2417,10 @@ def test_sandbox_stop_skips_host_wineserver(monkeypatch, tmp_path):
     ):
         popen.return_value.pid = 123
         assert launcher.launch(
-            "/games/game.exe", game_id=12, sandbox_enabled=True, launch_mode="wine_proton"
+            "/games/game.exe",
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode="wine_proton",
         )["success"]
         assert launcher.stop(12)["success"]
         run.assert_not_called()
@@ -2583,7 +2613,10 @@ def test_sandbox_different_prefixes_allowed(monkeypatch):
         patch("threading.Thread"),
     ):
         assert launcher.launch(
-            "/games/game.exe", custom_prefix="/two", game_id=2, launch_mode="wine_proton"
+            "/games/game.exe",
+            custom_prefix="/two",
+            game_id=2,
+            launch_mode="wine_proton",
         )["success"]
 
 
@@ -2667,25 +2700,49 @@ def test_sandbox_proton_runtime_survives_command_wrapper(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
-def test_sandbox_custom_wine_environment_mounts_and_reserves_prefix(monkeypatch,tmp_path):
-    monkeypatch.setenv('WLIB_DATA_DIR',str(tmp_path))
-    monkeypatch.setattr('core.launcher.is_windows',lambda:False)
-    monkeypatch.setattr('core.launcher.game_sandbox.prepare_sandbox_home',lambda _:str(tmp_path/'home'))
-    monkeypatch.setattr('core.launcher.game_sandbox.get_sandbox_status',lambda:{'status':'ready','path':'bwrap'})
-    with patch('os.path.exists',return_value=True),patch('os.path.isdir',return_value=False),patch('os.makedirs'),patch('core.launcher.get_setting',return_value=''),patch('subprocess.Popen') as popen,patch('threading.Thread'):
-        launcher=Launcher()
-        result=launcher.launch('/games/Game.exe',command_line_args='WINEPREFIX=/prefix wine %command%',game_id=12,sandbox_enabled=True,launch_mode='custom')
-    assert result['success'],result
-    command=popen.call_args.args[0]
-    assert ['--bind','/prefix','/prefix'] in [command[i:i+3] for i in range(len(command)-2)]
+def test_sandbox_custom_wine_environment_mounts_and_reserves_prefix(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("core.launcher.get_setting", return_value=""),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        result = launcher.launch(
+            "/games/Game.exe",
+            command_line_args="WINEPREFIX=/prefix wine %command%",
+            game_id=12,
+            sandbox_enabled=True,
+            launch_mode="custom",
+        )
+    assert result["success"], result
+    command = popen.call_args.args[0]
+    assert ["--bind", "/prefix", "/prefix"] in [
+        command[i : i + 3] for i in range(len(command) - 2)
+    ]
     from core.game_sandbox import normalize_prefix
-    assert launcher._running[12].prefix==normalize_prefix('/prefix')
+
+    assert launcher._running[12].prefix == normalize_prefix("/prefix")
 
 
 @pytest.mark.parametrize(
     "runner, prefix_key, expected",
     [
-        ("/proton", "STEAM_COMPAT_DATA_PATH", ["/proton", "run"]),
+        ("/proton", "WINEPREFIX", ["python3", "/umu/umu-run-wlib"]),
         ("/wine", "WINEPREFIX", ["/wine"]),
     ],
 )
@@ -2751,12 +2808,14 @@ def test_companion_launch_environment_and_duplicate(monkeypatch, kind):
     monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/.mount_wlib/lib")
     launcher = Launcher()
     context = WineContext(
-        ["/old/proton", "run"],
+        ["python3", "/umu/umu-run-wlib"],
         {
             "WINEPREFIX": "/exact/pfx",
             "STEAM_COMPAT_DATA_PATH": "/exact",
             "LC_ALL": "ja_JP.UTF-8",
             "WINEDLLOVERRIDES": "game=n",
+            "GAMEID": "umu-wlib1",
+            "UMU_CONTAINER_NSENTER": "1",
         },
     )
     launcher._running[1] = RunningGame(
@@ -2790,9 +2849,10 @@ def test_companion_launch_environment_and_duplicate(monkeypatch, kind):
         env = call.kwargs["env"]
         assert env["MODE"] == "fast"
         if kind == "wine":
-            assert call.args[0][:2] == ["/old/proton", "run"]
+            assert call.args[0][:2] == ["python3", "/umu/umu-run-wlib"]
             assert env["WINEPREFIX"] == "/exact/pfx"
             assert env["LC_ALL"] == "ja_JP.UTF-8"
+            assert env["GAMEID"] == "umu-wlib1" and env["UMU_CONTAINER_NSENTER"] == "1"
         else:
             assert "APPIMAGE" not in env
             assert "WINEPREFIX" not in env
@@ -3115,9 +3175,9 @@ def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path)
         patch("threading.Thread", side_effect=fake_thread),
     ):
         launcher = Launcher()
-        assert launcher.launch(
-            "/games/game.exe", auto_inject_ce=True, game_id=7
-        )["success"]
+        assert launcher.launch("/games/game.exe", auto_inject_ce=True, game_id=7)[
+            "success"
+        ]
         # The game exits and leaves the running registry before the delayed
         # Cheat Engine injection runs.
         game_proc.poll.return_value = 0
@@ -3131,9 +3191,7 @@ def test_cheat_engine_is_not_started_after_the_game_exits(monkeypatch, tmp_path)
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks and realpath")
 @pytest.mark.parametrize("proton", [False, True])
-def test_stop_finds_wineserver_beside_a_symlinked_runner(
-    monkeypatch, tmp_path, proton
-):
+def test_stop_finds_wineserver_beside_a_symlinked_runner(monkeypatch, tmp_path, proton):
     import signal
 
     if proton:
@@ -3188,3 +3246,106 @@ def test_stop_finds_wineserver_beside_a_symlinked_runner(
             assert launcher.stop(1)["success"]
         assert run.call_args.args[0] == [str(wineserver), "-k"]
         killpg.assert_called_with(321, signal.SIGTERM)
+
+
+def test_umu_refusals_and_wrapped_command(monkeypatch, tmp_path):
+    import core.umu as umu
+
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    runner = "/fake/proton"
+    monkeypatch.setattr(umu, "locate_umu", lambda: ("", ""))
+    assert Launcher().launch(str(exe), proton_version=runner)["code"] == "umu_missing"
+    monkeypatch.setattr(umu, "locate_umu", lambda: ("/host/umu-run", "system"))
+    monkeypatch.setattr(umu, "runtime_status", lambda _: {"ready": False})
+    assert (
+        Launcher().launch(str(exe), proton_version=runner)["code"]
+        == "umu_runtime_missing"
+    )
+    monkeypatch.setattr(umu, "runtime_status", lambda _: {"ready": True})
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(exe), "gamemoderun %command%", proton_version=runner, game_id=7
+        )
+    assert result["success"]
+    assert popen.call_args.args[0] == [
+        "gamemoderun",
+        "python3",
+        "/umu/umu-run-wlib",
+        str(exe),
+    ]
+    assert popen.call_args.kwargs["env"]["GAMEID"] == "umu-wlib7"
+
+
+def test_umu_refuses_shared_prefix_and_allows_different_prefix(tmp_path):
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    with patch("subprocess.Popen"), patch("threading.Thread"):
+        launcher = Launcher()
+        assert launcher.launch(
+            str(exe), proton_version="/fake/proton", game_id=1, game_title="First"
+        )["success"]
+        blocked = launcher.launch(str(exe), proton_version="/fake/proton", game_id=2)
+        assert blocked["code"] == "prefix_in_use" and "First" in blocked["error"]
+        assert launcher.launch(
+            str(exe),
+            proton_version="/fake/proton",
+            game_id=2,
+            custom_prefix=str(tmp_path / "other"),
+        )["success"]
+
+
+def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
+    game_dir = tmp_path / "game"
+    game_dir.mkdir()
+    exe = game_dir / "game.exe"
+    exe.touch()
+    ce = tmp_path / "ce"
+    ce.mkdir()
+    (ce / "lunarengine-x86_64.exe").touch()
+    monkeypatch.setattr("core.launcher.get_cheat_engine_dir", lambda: str(ce))
+    monkeypatch.setattr("core.launcher.time.sleep", lambda _: None)
+    threads = []
+    monkeypatch.setattr(
+        "threading.Thread",
+        lambda *, target, daemon: threads.append(target) or MagicMock(),
+    )
+    calls = []
+
+    def popen(command, **kwargs):
+        calls.append((command, kwargs))
+        return MagicMock(pid=111, poll=MagicMock(return_value=None))
+
+    monkeypatch.setattr("subprocess.Popen", popen)
+    launcher = Launcher()
+    assert launcher.launch(
+        str(exe), proton_version="/fake/proton", auto_inject_ce=True, game_id=7
+    )["success"]
+    threads[0]()
+    assert calls[1][0] == [
+        "python3",
+        "/umu/umu-run-wlib",
+        str(ce / "lunarengine-x86_64.exe"),
+    ]
+    assert calls[1][1]["env"]["GAMEID"] == "umu-wlib7"
+    assert calls[1][1]["env"]["UMU_CONTAINER_NSENTER"] == "1"
+    calls.clear()
+    threads.clear()
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.build_bwrap_argv",
+        lambda command, **kwargs: ["bwrap", *command],
+    )
+    result = Launcher().launch(
+        str(exe),
+        proton_version="/fake/proton",
+        custom_prefix=str(tmp_path / "sandbox-prefix"),
+        auto_inject_ce=True,
+        game_id=8,
+        sandbox_enabled=True,
+    )
+    assert result["success"] and "Cheat Engine" in result["notice"]
+    assert len(calls) == 1 and len(threads) == 1
