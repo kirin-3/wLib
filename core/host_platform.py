@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import ntpath
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -129,7 +130,7 @@ def get_default_wine_prefix() -> str:
 
 def proton_compat_data_path(prefix: str) -> str:
     """Keep Proton data separate when the configured prefix is plain Wine."""
-    path_module = ntpath if is_windows() else os.path
+    path_module = ntpath if is_windows() else posixpath
     if os.path.isdir(path_module.join(prefix, "drive_c")) and not os.path.isdir(
         path_module.join(prefix, "pfx")
     ):

@@ -156,7 +156,7 @@ def test_running_registry_duplicate_and_exit(monkeypatch, tmp_path, logging, cal
         patch("core.launcher.get_setting", return_value="true" if logging else "false"),
         patch("builtins.open", mock_open()),
         patch("threading.Thread") as thread,
-        patch("os.killpg", side_effect=ProcessLookupError),
+        patch("os.killpg", side_effect=ProcessLookupError, create=True),
     ):
         launcher = Launcher()
         assert launcher.launch(str(target), game_id=1, on_exit_callback=on_exit)[
@@ -178,7 +178,7 @@ def test_registry_cleanup_preserves_new_process(monkeypatch):
         patch("core.launcher.get_setting", return_value="false"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread") as thread,
-        patch("os.killpg", side_effect=ProcessLookupError),
+        patch("os.killpg", side_effect=ProcessLookupError, create=True),
     ):
         popen.return_value.poll.return_value = 0
         launcher = Launcher()
@@ -3248,6 +3248,7 @@ def test_stop_finds_wineserver_beside_a_symlinked_runner(monkeypatch, tmp_path, 
         killpg.assert_called_with(321, signal.SIGTERM)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
 def test_umu_refusals_and_wrapped_command(monkeypatch, tmp_path):
     import core.umu as umu
 
@@ -3277,6 +3278,7 @@ def test_umu_refusals_and_wrapped_command(monkeypatch, tmp_path):
     assert popen.call_args.kwargs["env"]["GAMEID"] == "umu-wlib7"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
 def test_umu_refuses_shared_prefix_and_allows_different_prefix(tmp_path):
     exe = tmp_path / "game.exe"
     exe.touch()
@@ -3295,6 +3297,7 @@ def test_umu_refuses_shared_prefix_and_allows_different_prefix(tmp_path):
         )["success"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
 def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
     game_dir = tmp_path / "game"
     game_dir.mkdir()
@@ -3399,6 +3402,7 @@ def test_offline_proton_uses_local_build(monkeypatch, tmp_path):
     assert popen.call_args.kwargs["env"]["UMU_RUNTIME_UPDATE"] == "0"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
 def test_offline_wine_preserves_context_and_kill_info(monkeypatch, tmp_path):
     monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "bwrap", "version": ""})
     wine = tmp_path / "wine"

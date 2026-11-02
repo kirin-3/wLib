@@ -1,5 +1,8 @@
 import os
+import sys
 from unittest.mock import patch
+
+import pytest
 
 from core import launcher, umu
 
@@ -53,6 +56,7 @@ def test_status_uses_host_lookup_and_command(monkeypatch):
         ]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu runs only on Linux hosts")
 def test_download_archive_validation(tmp_path, monkeypatch):
     import hashlib
     import io
@@ -269,6 +273,7 @@ def test_proton_path_value():
     assert umu.proton_path_value("/runners/GE-Proton11/proton") == "/runners/GE-Proton11"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu runs only on Linux hosts")
 def test_prepare_cancel_terminates_process(tmp_path, monkeypatch):
     monkeypatch.setattr(umu, "host_command", lambda cmd, **kwargs: cmd)
     monkeypatch.setattr(umu, "umu_data_dir", lambda: str(tmp_path / "umu"))
@@ -297,6 +302,7 @@ def test_prepare_cancel_terminates_process(tmp_path, monkeypatch):
     assert signals == [(123, umu.signal.SIGTERM)]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu runs only on Linux hosts")
 def test_umu_invocation_prefix_environment_and_guard(tmp_path, monkeypatch):
     import pytest
 

@@ -2594,7 +2594,9 @@ def test_resolve_runtime_install_target_empty_overrides_use_global_settings(tmp_
     assert target["resolved_prefix"] == str(global_prefix / "proton_compat" / "pfx")
 
 
-def test_get_install_status_derives_from_requested_prefix(tmp_path):
+def test_get_install_status_derives_from_requested_prefix(tmp_path, monkeypatch):
+    # An empty runner means system Wine when it is installed.
+    monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine")
     api = Api()
     resolved_prefix = tmp_path / "prefix"
 
@@ -2633,7 +2635,9 @@ def test_get_install_status_derives_from_requested_prefix(tmp_path):
     assert status["rtps_installed"] is True
 
 
-def test_get_install_status_requires_all_rtp_sentinels(tmp_path):
+def test_get_install_status_requires_all_rtp_sentinels(tmp_path, monkeypatch):
+    # An empty runner means system Wine when it is installed.
+    monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine")
     api = Api()
     resolved_prefix = tmp_path / "prefix"
     partial_rtp_paths = [
@@ -2663,7 +2667,9 @@ def test_get_install_status_requires_all_rtp_sentinels(tmp_path):
     assert full_status["rtps_installed"] is True
 
 
-def test_get_install_status_detects_rpgmaker_2003_in_user_appdata(tmp_path):
+def test_get_install_status_detects_rpgmaker_2003_in_user_appdata(tmp_path, monkeypatch):
+    # An empty runner means system Wine when it is installed.
+    monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine")
     api = Api()
     resolved_prefix = tmp_path / "prefix"
     required_paths = [
