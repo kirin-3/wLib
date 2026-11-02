@@ -96,6 +96,29 @@ const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
 const downloadDetectionEnabled = ref(true);
 const enableLogging = ref(false);
+const gamemodeEnabled = ref(false);
+const mangohudEnabled = ref(false);
+const performanceTools = ref({ gamemode: false, mangohud: false });
+const savePerformanceTool = async (tool: "gamemode" | "mangohud", event: Event) => {
+  const value = (event.target as HTMLInputElement).checked;
+  const state = tool === "gamemode" ? gamemodeEnabled : mangohudEnabled;
+  const previous = state.value;
+  state.value = value;
+  try {
+    const result = await api.saveSettings({ [`${tool}_enabled`]: value });
+    if (!result.success) throw new Error(result.error || "Unknown error");
+  } catch (error) {
+    state.value = previous;
+    notifyError(`Failed to save ${tool}: ${String(error)}`);
+  }
+};
+const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
+  try {
+    const result = await api.openWinePrefixTool(tool, prefixPath.value, protonPath.value);
+    if (!result.success) throw new Error(result.error || "Unknown error");
+    notify(`Opening ${tool === "winecfg" ? "Winecfg" : "Winetricks"}…`, "success");
+  } catch (error) { notifyError(String(error)); }
+};
 // Save backups to keep per game: a preset, or "custom" with its own number.
 const KEEP_PRESETS = [1, 3, 5, 10, 20];
 const keepChoice = ref("all");
@@ -239,6 +262,8 @@ const applySettings = (data: SettingsResponse) => {
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
   enableLogging.value = !!data.enable_logging;
+  gamemodeEnabled.value = !!data.gamemode_enabled;
+  mangohudEnabled.value = !!data.mangohud_enabled;
   applyKeepSetting(data.save_backup_keep);
   savedValues.value = formValues();
 };
@@ -382,6 +407,7 @@ const loadSettings = async () => {
     }
 
     if (supportsLinuxRuntimes.value) {
+      performanceTools.value = await api.getPerformanceTools().catch(() => ({ gamemode: false, mangohud: false }));
       const runners = await api.getAvailableRunners();
       availableRunners.value = runners.runners || [];
       const ceCheck = await api.isCheatEngineInstalled();
@@ -1554,6 +1580,27 @@ const browseUrm = async () => {
           <p id="settings-prefix-help" class="text-xs mt-2" style="color: var(--text-muted)">
             The location where game dependencies and save files will be isolated.
           </p>
+        </div>
+
+        <div v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
+          <div class="flex flex-wrap gap-2">
+            <button class="settings-btn" @click="openPrefixTool('winecfg')">Winecfg</button>
+            <button class="settings-btn" @click="openPrefixTool('winetricks')">Winetricks</button>
+          </div>
+          <div class="flex items-center justify-between text-sm" :class="{ 'opacity-50': !performanceTools.gamemode }">
+            <span>GameMode <span v-if="!performanceTools.gamemode" style="color: var(--text-muted)">(not installed)</span></span>
+            <label class="relative inline-flex items-center shrink-0" :class="performanceTools.gamemode ? 'cursor-pointer' : 'cursor-not-allowed'">
+              <input type="checkbox" role="switch" aria-label="GameMode" class="sr-only peer" :checked="gamemodeEnabled" :disabled="!performanceTools.gamemode" @change="savePerformanceTool('gamemode', $event)" />
+              <div class="ui-toggle"></div>
+            </label>
+          </div>
+          <div class="flex items-center justify-between text-sm" :class="{ 'opacity-50': !performanceTools.mangohud }">
+            <span>MangoHud <span v-if="!performanceTools.mangohud" style="color: var(--text-muted)">(not installed)</span></span>
+            <label class="relative inline-flex items-center shrink-0" :class="performanceTools.mangohud ? 'cursor-pointer' : 'cursor-not-allowed'">
+              <input type="checkbox" role="switch" aria-label="MangoHud" class="sr-only peer" :checked="mangohudEnabled" :disabled="!performanceTools.mangohud" @change="savePerformanceTool('mangohud', $event)" />
+              <div class="ui-toggle"></div>
+            </label>
+          </div>
         </div>
 
         <div v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">

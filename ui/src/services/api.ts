@@ -597,6 +597,8 @@ export interface NoteLink {
 export interface GameRecord {
   note_links?: NoteLink[];
   links?: StoreLink[];
+  gamemode?: "default" | "on" | "off";
+  mangohud?: "default" | "on" | "off";
   sandbox_enabled?: boolean;
   block_network?: boolean;
   id: number;
@@ -728,6 +730,8 @@ export interface PlatformCapabilities {
 }
 
 export interface SettingsPayload {
+  gamemode_enabled?: boolean;
+  mangohud_enabled?: boolean;
   sandbox_new_games?: boolean;
   sandboxie_custom_path?: string;
   update_notifications?: boolean;
@@ -836,6 +840,8 @@ interface MockToolRun {
 }
 
 export interface SettingsResponse {
+  gamemode_enabled: boolean;
+  mangohud_enabled: boolean;
   sandbox_new_games: boolean;
   sandboxie_custom_path: string;
   tag_colors: Record<string, string>;
@@ -938,6 +944,8 @@ const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 const MOCK_LAUNCH_TARGETS_STORAGE_KEY = "wlib-mock-launch-targets";
 const MOCK_ATTACHMENTS_STORAGE_KEY = "wlib-mock-attachments";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
+  gamemode_enabled: false,
+  mangohud_enabled: false,
   sandbox_new_games: false,
   sandboxie_custom_path: "",
   tag_colors: {},
@@ -1324,6 +1332,8 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
 
   return {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
+    gamemode_enabled: source.gamemode_enabled === true,
+    mangohud_enabled: source.mangohud_enabled === true,
     sandbox_new_games: source.sandbox_new_games === true,
     sandboxie_custom_path: typeof source.sandboxie_custom_path === "string" ? source.sandboxie_custom_path : "",
     tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
@@ -1998,6 +2008,14 @@ class ApiService {
     return this.invoke("open_log_folder");
   }
 
+  async getPerformanceTools(refresh = false): Promise<{ gamemode: boolean; mangohud: boolean }> {
+    return this.invoke("get_performance_tools", refresh);
+  }
+
+  async openWinePrefixTool(tool: "winecfg" | "winetricks", prefix: string, runner: string): Promise<ApiBasicResponse> {
+    return this.invoke("open_wine_prefix_tool", tool, prefix, runner);
+  }
+
   async getSandboxStatus(): Promise<SandboxStatus> {
     return this.invoke<SandboxStatus>("get_sandbox_status");
   }
@@ -2433,7 +2451,7 @@ class ApiService {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
+          gamemode: "default", mangohud: "default", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -3309,6 +3327,10 @@ class ApiService {
           dlls_installed: false,
           rtps_installed: false,
         };
+      case "get_performance_tools":
+        return { gamemode: false, mangohud: false };
+      case "open_wine_prefix_tool":
+        return { success: false, error: "Wine prefix tools require the desktop app." };
       case "get_sandbox_status":
       case "recheck_sandbox_status":
         return { status: "missing", tool: "bwrap", path: "", version: "", reason: "Sandbox tools require the desktop app." };

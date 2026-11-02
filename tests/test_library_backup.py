@@ -2988,3 +2988,25 @@ def test_block_network_backup_and_sync_roundtrip():
     old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {}}])
     apply_library_backup(old)
     assert next(g for g in get_all_games() if g["title"] == "Old")["block_network"] == 0
+
+
+def test_performance_tools_backup_and_old_import():
+    game_id = add_game("Tools", "/game")
+    update_game(game_id, {"mangohud": "off"})
+    update_setting("gamemode_enabled", "true")
+    update_setting("mangohud_enabled", "true")
+    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    assert backup["games"][0]["launch_config"]["mangohud"] == "off"
+    assert backup["settings"]["general"]["gamemode_enabled"] == "true"
+    assert backup["settings"]["general"]["mangohud_enabled"] == "true"
+    update_game(game_id, {"mangohud": "on"})
+    update_setting("gamemode_enabled", "false")
+    update_setting("mangohud_enabled", "false")
+    apply_library_backup(backup)
+    assert get_all_games()[0]["mangohud"] == "off"
+    assert get_setting("gamemode_enabled") == "true"
+    assert get_setting("mangohud_enabled") == "true"
+    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}])
+    apply_library_backup(old)
+    imported = next(game for game in get_all_games() if game["title"] == "Old")
+    assert imported["gamemode"] == imported["mangohud"] == "default"

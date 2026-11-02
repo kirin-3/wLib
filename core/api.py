@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import ssl
+import subprocess
 import sys
 import threading
 from collections.abc import Callable, Generator, Mapping, Sequence
@@ -303,6 +304,12 @@ class Api:
         self._update_lock: threading.Lock = threading.Lock()
         self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
+        self._performance_tools: dict[str, bool] | None = None
+        self._prefix_tool: subprocess.Popen[bytes] | None = None
+        self._prefix_tool_prefix: str = ""
+        self._prefix_tool_name: str = ""
+        self.launcher.prefix_guard_lock = self._status_lock
+        self.launcher.prefix_guard = self._prefix_tool_conflict
         from core.umu import UmuDownload, UmuRuntimePrepare
 
         self._umu_download: UmuDownload = UmuDownload()
@@ -3701,6 +3708,11 @@ class Api:
 
         return {"success": True, "runners": runners}
 
+    def get_performance_tools(self, refresh: bool = False) -> dict[str, bool]:
+        if self._performance_tools is None or refresh:
+            self._performance_tools = {name: bool(not is_windows() and host_which(binary)) for name, binary in (("gamemode", "gamemoderun"), ("mangohud", "mangohud"))}
+        return dict(self._performance_tools)
+
     def launch_game(
         self,
         game_id: int | None = None,
@@ -3782,6 +3794,12 @@ class Api:
             if game_id is not None
             else empty_game
         )
+        from core.database import get_setting, normalize_tool_override
+
+        def tool_enabled(name: str) -> bool:
+            override = normalize_tool_override(stored_game.get(name))
+            return override == "on" or (override == "default" and get_setting(f"{name}_enabled") == "true")
+
         launch_version = str(stored_game.get("version") or "")
         session_id: int | None = None
         session_failed = False
@@ -3841,6 +3859,8 @@ class Api:
                 sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
                 block_network=bool(stored_game.get("block_network")),
                 game_title=str(stored_game.get("title") or ""),
+                gamemode=tool_enabled("gamemode"),
+                mangohud=tool_enabled("mangohud"),
             )
         except Exception as exc:
             # Launcher setup can still fail outside its own error paths (for
@@ -4231,6 +4251,70 @@ class Api:
 
         return self._run_game_tool(game_id, "rpgm", "switch", body)
 
+    def _winetricks_command(
+        self, target: RuntimeInstallTarget, env: dict[str, str]
+    ) -> tuple[list[str], dict[str, str]]:
+        if target["is_proton"]:
+            from core.umu import build_umu_invocation, resolve_codename
+
+            runner = resolve_codename(target["proton_path"])
+            folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
+            if not os.path.isfile(os.path.join(folder, "protonfixes", "winetricks")):
+                raise ValueError("Pick GE-Proton or UMU-Proton with Winetricks installed.")
+            return build_umu_invocation("winetricks", prefix=target["base_prefix"], runner=runner, environment=env)
+        path = host_which("winetricks")
+        if not path:
+            raise ValueError("Winetricks is not installed. Install it first, then try again.")
+        return [path], env
+
+    def _prefix_tool_conflict(self, prefix: str) -> str | None:
+        # The caller holds _status_lock while reserving the game in Launcher.
+        if self._prefix_tool_running() and prefix == self._prefix_tool_prefix:
+            return f"{self._prefix_tool_name} is open on this Wine prefix. Close it first."
+        return None
+
+    def _prefix_tool_running(self) -> bool:
+        return self._prefix_tool is not None and self._prefix_tool.poll() is None
+
+    def open_wine_prefix_tool(self, tool: str, prefix_path: str = "", proton_path: str = "") -> dict[str, object]:
+        if not is_linux():
+            return unsupported_on_host("Wine prefix tools")
+        if tool not in ("winecfg", "winetricks"):
+            return {"success": False, "error": "Unknown Wine prefix tool."}
+        try:
+            env, target = self._build_runtime_install_env(prefix_path, proton_path)
+            if tool == "winetricks":
+                if not target["is_proton"] and not host_which("wine"):
+                    raise ValueError("Wine is not installed. Install Wine first, then try again.")
+                if not (host_which("zenity") or host_which("kdialog")):
+                    raise ValueError("Winetricks requires zenity or kdialog for its interface.")
+                cmd, env = self._winetricks_command(target, env)
+                cmd.append("--gui")
+            elif target["is_proton"]:
+                from core.umu import build_umu_invocation
+                cmd, env = build_umu_invocation("winecfg", prefix=target["base_prefix"], runner=target["proton_path"], environment=env)
+            else:
+                wine = host_which("wine")
+                if not wine:
+                    raise ValueError("Wine is not installed. Install Wine first, then try again.")
+                cmd = [wine, "winecfg"]
+            from core.game_sandbox import normalize_prefix
+            prefix = normalize_prefix(env["WINEPREFIX"])
+            with self._status_lock:
+                if self._deps_install_status["running"] or self._rtp_install_status["running"]:
+                    return {"success": False, "error": "Another install is running. Wait for it to finish."}
+                if self._prefix_tool_running():
+                    return {"success": False, "error": "Close the open Wine prefix tool first."}
+                title = self.launcher.game_using_prefix(prefix)
+                if title:
+                    return {"success": False, "error": f"{title} is already running on this Wine prefix."}
+                self._prefix_tool = subprocess.Popen(host_command(cmd, env=env, supervise=True), env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._prefix_tool_prefix = prefix
+                self._prefix_tool_name = "Winecfg" if tool == "winecfg" else "Winetricks"
+            return {"success": True}
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+
     def install_rpgmaker_dependencies(
         self, prefix_path: str | None = None, proton_path: str | None = None
     ) -> dict[str, object]:
@@ -4249,34 +4333,10 @@ class Api:
                 "success": False,
                 "error": f"Could not prepare the Wine prefix: {exc}",
             }
-        if target["is_proton"]:
-            from core.umu import build_umu_invocation, resolve_codename
-
-            try:
-                runner = resolve_codename(target["proton_path"])
-                folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
-                if not os.path.isfile(
-                    os.path.join(folder, "protonfixes", "winetricks")
-                ):
-                    raise ValueError(
-                        "Pick GE-Proton or UMU-Proton with Winetricks installed."
-                    )
-                winetricks_command, env = build_umu_invocation(
-                    "winetricks",
-                    prefix=target["base_prefix"],
-                    runner=runner,
-                    environment=env,
-                )
-            except (OSError, ValueError) as exc:
-                return {"success": False, "error": str(exc)}
-        else:
-            winetricks_path = host_which("winetricks")
-            if not winetricks_path:
-                return {
-                    "success": False,
-                    "error": "Winetricks is not installed. Install it first, then try again.",
-                }
-            winetricks_command = [winetricks_path]
+        try:
+            winetricks_command, env = self._winetricks_command(target, env)
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
         verbs = [
             "corefonts",
@@ -4312,6 +4372,8 @@ class Api:
         )
 
         with self._status_lock:
+            if self._prefix_tool_running():
+                return {"success": False, "error": "Close the open Wine prefix tool first."}
             # winetricks verbs run wineserver -k/-w, which would break a parallel install.
             if (
                 self._deps_install_status["running"]
@@ -4563,6 +4625,8 @@ class Api:
                 print(f"RTP installation stopped unexpectedly: {message}")
 
         with self._status_lock:
+            if self._prefix_tool_running():
+                return {"success": False, "error": "Close the open Wine prefix tool first."}
             if (
                 self._deps_install_status["running"]
                 or self._rtp_install_status["running"]
@@ -4984,6 +5048,8 @@ class Api:
             "urm_rpa_path": str(get_setting_fn("urm_rpa_path") or ""),
             "enable_logging": get_setting_fn("enable_logging") == "true",
             "sandbox_new_games": get_setting_fn("sandbox_new_games") == "true",
+            "gamemode_enabled": get_setting_fn("gamemode_enabled") == "true",
+            "mangohud_enabled": get_setting_fn("mangohud_enabled") == "true",
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -5252,6 +5318,9 @@ class Api:
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
             update_setting_fn("enable_logging", enable_logging)
+            for tool_key in ("gamemode_enabled", "mangohud_enabled"):
+                if tool_key in settings_map:
+                    update_setting_fn(tool_key, "true" if settings_map[tool_key] is True else "false")
             if "sandbox_new_games" in settings_map:
                 update_setting_fn(
                     "sandbox_new_games",

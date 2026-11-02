@@ -41,6 +41,8 @@ GENERAL_SETTINGS_KEYS = (
     "tag_colors",
     "save_backup_keep",
     "sandbox_new_games",
+    "gamemode_enabled",
+    "mangohud_enabled",
 )
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
@@ -165,6 +167,11 @@ def normalize_launch_mode(launch_mode: object) -> str:
     if normalized in _CANONICAL_LAUNCH_MODE_SET:
         return normalized
     return DEFAULT_LAUNCH_MODE
+
+
+def normalize_tool_override(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"default", "on", "off"} else "default"
 
 
 def normalize_play_status(
@@ -454,6 +461,8 @@ def init_db() -> None:
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
         )
+        for key in ("gamemode_enabled", "mangohud_enabled"):
+            _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
         _ = cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
         )
@@ -522,6 +531,8 @@ def init_db() -> None:
             ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
             ("run_wayland", "BOOLEAN DEFAULT 0"),
             ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
+            ("gamemode", "TEXT DEFAULT 'default'"),
+            ("mangohud", "TEXT DEFAULT 'default'"),
             ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
             ("block_network", "BOOLEAN DEFAULT 0"),
             ("custom_prefix", "TEXT DEFAULT ''"),
@@ -1155,6 +1166,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "auto_inject_ce",
         "sandbox_enabled",
         "block_network",
+        "gamemode",
+        "mangohud",
         "custom_prefix",
         "proton_version",
         "save_path_override",
@@ -1200,6 +1213,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
     if "finished_version" in safe_fields:
         safe_fields["finished_version"] = str(safe_fields["finished_version"]).strip()
+    for tool in ("gamemode", "mangohud"):
+        if tool in safe_fields:
+            safe_fields[tool] = normalize_tool_override(safe_fields[tool])
     if "launch_mode" in safe_fields:
         safe_fields["launch_mode"] = normalize_launch_mode(safe_fields["launch_mode"])
 

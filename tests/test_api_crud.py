@@ -507,3 +507,40 @@ def test_cover_cache_api_validity_and_delete(tmp_path, monkeypatch):
     assert database.set_game_cover_cache(game_id, url, name)
     assert api.delete_game(game_id)["success"]
     assert not game_covers.cached_cover_path(name).exists()
+
+
+def test_performance_settings_round_trip():
+    api = Api()
+    assert api.save_settings({"gamemode_enabled": True, "mangohud_enabled": True})["success"]
+    settings = api.get_settings()
+    assert settings["gamemode_enabled"] is True
+    assert settings["mangohud_enabled"] is True
+
+
+def test_performance_tool_detection_cache(monkeypatch):
+    api = Api()
+    calls = []
+    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    monkeypatch.setattr("core.api.host_which", lambda name: calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None))
+    assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
+    assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
+    assert len(calls) == 2
+    api.get_performance_tools(True)
+    assert len(calls) == 4
+
+
+def test_performance_overrides_passed_to_launcher(monkeypatch):
+    api = Api()
+    game_id = add_game("Tools", "/game")
+    from core.database import update_game, update_setting
+    update_game(game_id, {"gamemode": "off", "mangohud": "on"})
+    update_setting("gamemode_enabled", "true")
+    update_setting("mangohud_enabled", "false")
+    captured = {}
+    def launch(*args, **kwargs):
+        captured.update(kwargs)
+        return {"success": True, "tracks_playtime": False}
+    monkeypatch.setattr(api.launcher, "launch", launch)
+    assert api.launch_game(game_id, "/game")["success"]
+    assert captured["gamemode"] is False
+    assert captured["mangohud"] is True

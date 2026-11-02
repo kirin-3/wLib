@@ -112,6 +112,8 @@ USER_STATE_FIELDS = (
 )
 LAUNCH_CONFIG_FIELDS = (
     "command_line_args",
+    "gamemode",
+    "mangohud",
     "launch_mode",
     "run_japanese_locale",
     "run_wayland",
@@ -138,7 +140,7 @@ PATH_SETTINGS_KEYS = (
     "sandboxie_custom_path",
 )
 BOOLEAN_SETTINGS_KEYS = frozenset(
-    {"enable_logging", "download_detection_enabled", "sandbox_new_games"}
+    {"enable_logging", "download_detection_enabled", "sandbox_new_games", "gamemode_enabled", "mangohud_enabled"}
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
@@ -1197,6 +1199,8 @@ def _normalize_game_field(field: str, value: object) -> object:
         return _coerce_text(value)
     if field == "play_status":
         return normalize_play_status(value)
+    if field in {"gamemode", "mangohud"}:
+        return database.normalize_tool_override(value)
     if field == "launch_mode":
         return normalize_launch_mode(value)
     if field == "collections":

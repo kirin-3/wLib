@@ -14,6 +14,7 @@ import shutil
 import threading
 import time
 from urllib.parse import quote
+from contextlib import nullcontext
 from collections.abc import Callable
 from _thread import LockType, start_new_thread
 from dataclasses import dataclass
@@ -36,6 +37,11 @@ from .host_platform import (
     open_windows_system_target,
     proton_compat_data_path as proton_compat_data_path,
 )
+
+
+def wrap_performance_tools(cmd: list[str], tools: list[str], user_args: list[str]) -> list[str]:
+    existing = {os.path.basename(arg) for arg in user_args}
+    return [*(tool for tool in tools if os.path.basename(tool) not in existing), *cmd]
 
 
 def _host_path_module():
@@ -419,9 +425,18 @@ class Launcher:
         self._running: dict[int, RunningGame] = {}
         self._tools: dict[int, dict[int, ToolProcess]] = {}
         self._running_lock: LockType = threading.Lock()
+        self.prefix_guard_lock: LockType | None = None
+        self.prefix_guard: Callable[[str], str | None] | None = None
         # Set while shutting down so exit callbacks skip the (closed) UI window.
         self.shutting_down: bool = False
         _ = atexit.register(self.shutdown)
+
+    def game_using_prefix(self, prefix: str) -> str | None:
+        normalized = game_sandbox.normalize_prefix(prefix)
+        if not normalized:
+            return None
+        with self._running_lock:
+            return next((entry.title for entry in self._running.values() if game_sandbox.normalize_prefix(entry.prefix) == normalized), None)
 
     def shutdown(self) -> None:
         """Flush accumulated playtime and close logs for all running games upon exit."""
@@ -847,6 +862,8 @@ class Launcher:
         sandbox_enabled: bool = False,
         game_title: str = "",
         block_network: bool = False,
+        gamemode: bool = False,
+        mangohud: bool = False,
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -940,6 +957,22 @@ class Launcher:
             is_windows() or launch_mode in ("auto", "native")
         )
         sandboxed = bool(sandbox_enabled and not browser_launch)
+        performance_tools: list[str] = []
+        performance_notes: list[str] = []
+        for enabled, binary, name in ((gamemode, "gamemoderun", "GameMode"), (mangohud, "mangohud", "MangoHud")):
+            if not enabled:
+                continue
+            reason = "Windows" if is_windows() else "browser launch" if browser_launch else "sandboxed" if binary == "gamemoderun" and sandboxed else ""
+            if not reason:
+                tool_path = host_which(binary)
+                if tool_path:
+                    performance_tools.append(tool_path)
+                else:
+                    reason = "not installed"
+            if reason:
+                note = f"{name} skipped: {reason}"
+                performance_notes.append(note)
+                print(note)
         block = bool(block_network and not browser_launch)
         if block and is_windows() and not sandboxed:
             return {
@@ -1002,6 +1035,8 @@ class Launcher:
             wine_context: WineContext | None = None,
             umu_run: bool = False,
         ) -> dict[str, object]:
+            cmd = wrap_performance_tools(cmd, performance_tools, args)
+
             def prepare_ce_command() -> list[str]:
                 ce_dir = get_cheat_engine_dir()
                 ce_exe = path_module.join(
@@ -1066,26 +1101,33 @@ class Launcher:
                 host_native=not is_wine_executable,
                 umu=umu_run,
             )
-            with self._running_lock:
-                if game_id in self._running:
-                    return {
-                        "success": False,
-                        "code": "already_running",
-                        "error": "Game is already running",
-                    }
-                for other in self._running.values():
-                    if (
-                        prefix
-                        and prefix == other.prefix
-                        and (sandboxed or other.sandboxed or umu_run or other.umu)
-                    ):
+            # Serialize the prefix-tool check and running-game reservation.
+            # Prefix tools take these locks in the same order.
+            with self.prefix_guard_lock or nullcontext():
+                if prefix and self.prefix_guard:
+                    error = self.prefix_guard(prefix)
+                    if error:
+                        return {"success": False, "code": "prefix_in_use", "error": error}
+                with self._running_lock:
+                    if game_id in self._running:
                         return {
                             "success": False,
-                            "code": "prefix_in_use",
-                            "error": f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games.",
+                            "code": "already_running",
+                            "error": "Game is already running",
                         }
-                if game_id is not None:
-                    self._running[game_id] = entry
+                    for other in self._running.values():
+                        if (
+                            prefix
+                            and prefix == other.prefix
+                            and (sandboxed or other.sandboxed or umu_run or other.umu)
+                        ):
+                            return {
+                                "success": False,
+                                "code": "prefix_in_use",
+                                "error": f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games.",
+                            }
+                    if game_id is not None:
+                        self._running[game_id] = entry
             try:
                 if sandboxed and sandbox_status is not None and is_windows():
                     assert game_id is not None
@@ -1172,6 +1214,9 @@ class Launcher:
                         )
                         log_file = open(log_path, "w")
                     print(f"Debug logging enabled. Outputting to {log_path}")
+                    for note in performance_notes:
+                        _ = log_file.write(note + "\n")
+                    log_file.flush()
 
                 try:
 

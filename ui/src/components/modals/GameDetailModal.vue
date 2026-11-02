@@ -59,6 +59,7 @@ import {
   usesWineProtonControls,
 } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
+import { performanceToolState } from "../../utils/performanceTools";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import {
   DEFAULT_PLAY_STATUS,
@@ -134,6 +135,17 @@ const emit = defineEmits<{
 
 const sandboxRouter = useRouter();
 const sandboxEnabled = ref(false);
+const gamemode = ref<"default" | "on" | "off">("default");
+const mangohud = ref<"default" | "on" | "off">("default");
+const performanceTools = ref({ gamemode: false, mangohud: false });
+const performanceDefaults = ref({ gamemode: false, mangohud: false });
+const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
+  try {
+    const result = await api.openWinePrefixTool(tool, customPrefix.value, protonVersion.value);
+    if (!result.success) throw new Error(result.error || "Unknown error");
+    notify(`Opening ${tool === "winecfg" ? "Winecfg" : "Winetricks"}…`, "success");
+  } catch (error) { notifyError(String(error)); }
+};
 const blockNetwork = ref(false);
 const sandboxStatus = ref<SandboxStatus | null>(null);
 
@@ -523,6 +535,8 @@ const ratingCategories = [
 // be patched without wiping the dirty state of the others.
 const formSnapshot = (): string =>
   JSON.stringify({
+    gamemode: gamemode.value,
+    mangohud: mangohud.value,
     sandbox_enabled: sandboxEnabled.value,
     block_network: blockNetwork.value,
     title: title.value,
@@ -588,6 +602,8 @@ watch(
         runJapaneseLocale.value = g.run_japanese_locale ? true : false;
         runWayland.value = g.run_wayland ? true : false;
         autoInjectCe.value = g.auto_inject_ce ? true : false;
+        gamemode.value = g.gamemode || "default";
+        mangohud.value = g.mangohud || "default";
         sandboxEnabled.value = !!g.sandbox_enabled;
         blockNetwork.value = !!g.block_network;
         sandboxStatus.value = null;
@@ -673,6 +689,10 @@ watch(
       void Promise.all(loaders);
       const capabilities = await loadPlatformCapabilities();
       platformCapabilities.value = capabilities;
+      if (capabilities.platform === "linux") {
+        void api.getPerformanceTools().then(value => { performanceTools.value = value; }).catch(console.error);
+        void api.getSettings().then(value => { performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled }; }).catch(console.error);
+      }
       if (capabilities.rpgmaker_linux) {
         void loadRpgmakerLinuxRunnerStatus();
       } else {
@@ -1306,6 +1326,8 @@ const save = async () => {
       progress: notes.value,
       note_links: noteLinks.value.map(link => ({ ...link })),
       engine: normalizeEngine(engine.value),
+      gamemode: gamemode.value,
+      mangohud: mangohud.value,
       sandbox_enabled: sandboxEnabled.value,
       block_network: blockNetwork.value,
       run_japanese_locale: platformCapabilities.value.wine_proton
@@ -2110,6 +2132,15 @@ const removeAttachment = async (name: string) => {
             </label>
             <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(exePath, platformCapabilities.platform, sandboxEnabled).note }}</p>
           </div>
+          <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-2 gap-4">
+            <div v-for="tool in (['gamemode', 'mangohud'] as const)" :key="tool">
+              <label :for="`detail-${tool}`" class="modal-label">{{ tool === 'gamemode' ? 'GameMode' : 'MangoHud' }}</label>
+              <select :id="`detail-${tool}`"  :value="tool === 'gamemode' ? gamemode : mangohud" @change="tool === 'gamemode' ? gamemode = ($event.target as HTMLSelectElement).value as typeof gamemode : mangohud = ($event.target as HTMLSelectElement).value as typeof mangohud" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled).disabled">
+                <option value="default">Default ({{ performanceDefaults[tool] ? 'On' : 'Off' }})</option><option value="on">On</option><option value="off">Off</option>
+              </select>
+              <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled).note }}</p>
+            </div>
+          </div>
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">
               <label for="detail-exe" class="modal-label">Executable Path</label>
@@ -2502,6 +2533,7 @@ const removeAttachment = async (name: string) => {
                   <PathStatus :path="customPrefix" kind="dir" />
                 </div>
 
+                <div class="flex gap-2"><button class="modal-btn" @click="openPrefixTool('winecfg')">Winecfg</button><button class="modal-btn" @click="openPrefixTool('winetricks')">Winetricks</button></div>
                 <div class="pt-2 border-t border-gray-700/50">
                   <button
                     @click="installRtpsToPrefix"

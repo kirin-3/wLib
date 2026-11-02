@@ -470,3 +470,9 @@ export or sync, and F95 metadata refreshes leave them alone.
 The device-only `games.cover_cache` filename and `games.cover_cache_url` source URL are written only through dedicated database helpers. Guarded writes discard downloads if the source URL changed or the game was removed. Adds, edits, metadata checks, backup imports and sync pulls wake the service. API reads expose a localhost `cover_cache_url` only for a current source URL and an existing file while port 8183 is available. `/covers/cache/<random name>` serves immutable images without directory listing.
 
 `get_cover_cache_status()` returns `{success, count, bytes, running}`. `purge_cover_cache()` disables downloads for this session, clears the columns and deletes cache files under the same lock used to store them, then dispatches `wlib-refresh-library`. In-flight reads are discarded. Local user covers survive. Shutdown stops the service. Cached files and references are excluded from exports, backups and sync and never modify the sync timestamp.
+
+### Performance and prefix tools
+
+On Linux, launch options resolve GameMode and MangoHud per game against their global defaults. Enabled, available wrappers surround the complete game command before Cheat Engine, sandbox, network isolation, and Flatpak host wrapping. GameMode is skipped in the sandbox; MangoHud remains available. Browser and Windows launches skip both. Skip reasons are printed and written to the per-game debug log when enabled. Companion tools and Wine cleanup commands are not wrapped.
+
+Winecfg and Winetricks use the same prefix and runner resolution as the runtime installers. Proton tools run through umu; Wine tools use host binaries. Winetricks requires zenity or kdialog. Only one prefix tool can run at a time; it cannot run alongside an installer or a game using the same prefix, and installers and games on that prefix refuse while it remains open.

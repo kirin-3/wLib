@@ -1974,3 +1974,18 @@ def test_block_network_migrates_and_marks_sync():
     update_game(game_id, {"block_network": True})
     assert get_game(game_id)["block_network"] == 1
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_performance_tool_migration_and_overrides():
+    game_id = add_game("Older game", "/game")
+    with closing(get_connection()) as conn:
+        conn.execute("ALTER TABLE games DROP COLUMN gamemode")
+        conn.execute("ALTER TABLE games DROP COLUMN mangohud")
+        conn.commit()
+    init_db()
+    assert get_game(game_id)["gamemode"] == "default"
+    assert get_game(game_id)["mangohud"] == "default"
+    for value, expected in [("on", "on"), ("off", "off"), ("default", "default"), ("unknown", "default")]:
+        update_game(game_id, {"gamemode": value, "mangohud": value})
+        assert get_game(game_id)["gamemode"] == expected
+        assert get_game(game_id)["mangohud"] == expected

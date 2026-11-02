@@ -3431,3 +3431,129 @@ def test_offline_sandbox_adds_network_namespace(monkeypatch, tmp_path):
     assert result["success"], result
     assert "--unshare-net" in popen.call_args.args[0]
     assert "--unshare-pid" in popen.call_args.args[0]
+
+
+def test_performance_tool_wrapping_order_and_existing_user_wrapper():
+    from core.launcher import wrap_performance_tools
+
+    assert wrap_performance_tools(["game", "-windowed"], ["/bin/gamemoderun", "/bin/mangohud"], ["%command%", "-windowed"]) == ["/bin/gamemoderun", "/bin/mangohud", "game", "-windowed"]
+    assert wrap_performance_tools(["gamemoderun", "game"], ["/bin/gamemoderun", "/bin/mangohud"], ["gamemoderun", "%command%"]) == ["/bin/mangohud", "gamemoderun", "game"]
+
+
+def test_game_using_prefix_normalizes_compat_pfx(tmp_path):
+    from core.launcher import Launcher, RunningGame
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(None, None, prefix=str(tmp_path), title="Example")
+    assert launcher.game_using_prefix(str(tmp_path / "pfx")) == "Example"
+    assert launcher.game_using_prefix(str(tmp_path / "other")) is None
+
+
+@pytest.mark.parametrize("mode,args,expected", [
+    ("native", "", ["/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh"]),
+    ("custom", "PROTON_LOG=1 %command% -windowed", ["/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh", "-windowed"]),
+])
+def test_performance_tools_wrap_launch(mode, args, expected):
+    with (patch("os.path.exists", return_value=True),
+          patch("os.access", return_value=True),
+          patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
+          patch("subprocess.Popen") as popen, patch("threading.Thread")):
+        result = Launcher().launch("/opt/game/game.sh", args, launch_mode=mode, gamemode=True, mangohud=True)
+    assert result["success"]
+    assert popen.call_args.args[0] == expected
+
+
+def test_missing_performance_tool_logged(tmp_path, monkeypatch):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: None)
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    with patch("subprocess.Popen"), patch("threading.Thread"):
+        assert Launcher().launch(str(game), gamemode=True)["success"]
+    assert "GameMode skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
+
+
+def test_sandbox_performance_tools_and_browser(tmp_path, monkeypatch):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
+    monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", lambda cmd, **kwargs: ["bwrap", *cmd])
+    monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
+    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(str(game), game_id=1, sandbox_enabled=True, gamemode=True, mangohud=True)["success"]
+        assert popen.call_args.args[0] == ["bwrap", "/usr/bin/mangohud", str(game)]
+        html = tmp_path / "game.html"
+        html.touch()
+        assert Launcher().launch(str(html), gamemode=True, mangohud=True)["success"]
+        assert popen.call_args.args[0][0] == "xdg-open"
+
+
+@pytest.mark.parametrize("runner", ["/usr/bin/wine", "/fake/proton"])
+def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    monkeypatch.setattr("core.umu.resolve_runner", lambda _: runner)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        launcher = Launcher()
+        result = launcher.launch(str(exe), proton_version=runner, custom_prefix=str(tmp_path / "prefix"), game_id=42, gamemode=True, mangohud=True)
+    assert result["success"]
+    command = popen.call_args.args[0]
+    assert command[:2] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud"]
+    assert command[2] == ("python3" if "proton" in runner else runner)
+    entry = launcher._running[42]
+    assert entry.wine_context is not None
+    assert "gamemoderun" not in " ".join(entry.wine_context.command)
+    assert "mangohud" not in " ".join(entry.wine_context.command)
+    if entry.kill_info:
+        assert "gamemoderun" not in entry.kill_info[0]
+        assert "mangohud" not in entry.kill_info[0]
+
+
+def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch):
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    runner = tmp_path / "rpgmaker-linux"
+    runner.touch()
+    runner.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(str(exe), launch_mode="rpgmaker_linux", gamemode=True, mangohud=True)
+    assert result["success"]
+    assert popen.call_args.args[0][:3] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud", str(runner)]
+
+
+def test_companion_tool_does_not_inherit_performance_wrappers(tmp_path, monkeypatch):
+    from core.database import CompanionTool
+
+    game = tmp_path / "game.exe"
+    game.touch()
+    tool_path = tmp_path / "tool.exe"
+    tool_path.touch()
+    monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/usr/bin/wine")
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    tool = CompanionTool(
+        id=1, name="Helper", kind="wine", path=str(tool_path), arguments="",
+        show_on_all_games=True, sort_order=0,
+    )
+    launcher = Launcher()
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert launcher.launch(
+            str(game), proton_version="/usr/bin/wine", custom_prefix=str(tmp_path / "prefix"),
+            game_id=42, gamemode=True, mangohud=True,
+        )["success"]
+        assert popen.call_args.args[0][:2] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud"]
+        assert launcher.launch_companion_tool(42, tool)["success"]
+        assert popen.call_args.args[0] == ["/usr/bin/wine", str(tool_path)]
+
+
+def test_windows_launch_skips_performance_tools(monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(r"C:\games\game.exe", gamemode=True, mangohud=True)["success"]
+        assert popen.call_args.args[0] == [r"C:\games\game.exe"]
