@@ -76,7 +76,8 @@ The UI runs inside PyWebView and calls backend methods via `window.pywebview.api
 - **Desktop notifications**: Updates > Automatic Checking places a Desktop notifications checkbox next to frequency controls on Linux, hidden on Windows through platform capabilities. It defaults on and follows general settings through backup/sync. App reports focus, blur, and visibility changes through the typed bridge. Browser mocks support sessions via `wlib-mock-play-sessions`, skip changes, focus reporting, and the persisted toggle.
 - **Library list view**: cells are single-line; engine and status cells truncate with a `title` tooltip. `.library-table-wrap` is a container query context that hides `.col-engine` and then `.col-last-played` as it narrows, so there is no horizontal scroll at 1200×800 with filters open. Games without a cover get a placeholder thumbnail so titles align.
 - **Running Games**: `getRunningGames()` seeds Library's running IDs on mount and reconciles successful launches. Cards in every layout and Game Detail replace Play with Stop; target choices are hidden while running. `stopGame()` requests termination, and the final playtime tick clears state even with zero seconds. HTML launches remain untracked.
-- **Runner Selection**: Game Detail shows Runner (Wine / Proton) independently of the custom prefix toggle, preserving undiscovered stored paths as custom options. The Settings global runner field uses a native datalist while accepting free text.
+- **Runner Selection**: Game Detail shows Runner (Wine / Proton) independently of the custom prefix toggle, preserving undiscovered stored paths as custom options. The Settings global runner field uses a native datalist while accepting free text; choices include `GE-Proton` (latest) and `UMU-Proton` alongside system Wine and Steam/Lutris Proton builds.
+- **Proton and umu bridge**: `services/api.ts` mirrors `getUmuStatus`, `getUmuDownloadStatus`, `getUmuRuntimeStatus`, `downloadUmu`, `prepareUmuRuntime`, and `cancelUmuRuntimePrepare` with typed responses and browser mocks.
 - **Banner view**: the fourth layout (`layoutMode === "banner"`, persisted like the others) reuses compact's image-only tile branch through the `isImageTileLayout` flag. Tiles are 2:1 with a centered cover in columns of at least `420px * var(--card-scale)` (315px to 630px across the card-size slider, `.library-cards--banner`). The overlay gradient, title, and Play/launch-target controls (`.banner-reveal`) sit at `opacity: 0` at rest and show on `.game-card:hover`, `:focus-within`, `.is-running`, an open launch-target menu (`.is-menu-open`), or `@media (hover: none)`. Opacity keeps Play clickable and focusable while hidden. Tiles show no rating, developer, version, playtime, status, or update-check button; the card `aria-label` carries the title.
 - **Custom Statuses**: Settings adds/removes `custom_play_statuses`, validates names inline, and confirms the number of affected games before removal. Filters combine canonical choices, Settings names, then values found on games. Detail chips and badges use `IconTag` plus `ui-status-tone-custom`; compact cards still omit status metadata. Custom filters persist across navigation.
 - **URM**: Settings selects `urm_rpa_path` through `browseUrmFile()`. The Tools tab uses `getUrmStatus()` (through `getGameTools()`) and `setUrmInstalled()` for the Ren'Py-only toggle, with a Settings hint if no valid source exists.
@@ -242,6 +243,31 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 | Settings Proton / Wine path | runner |
 | Settings RPGMaker runner | runner |
 
+## Proton settings (umu-launcher)
+
+Settings includes `UmuSettings.vue` at `/settings#umu` when `supportsLinuxRuntimes`
+is true. It displays umu-launcher availability (system binary or wLib download),
+detected version, and whether Python 3 is installed on the host. It also reports
+Steam Linux Runtime readiness ("Ready" or "Not prepared"), and download /
+runtime preparation background job progress with downloaded MiB.
+
+Preparation failure reasons are classified with user-friendly messages for
+insufficient disk space, lack of internet connection, missing host Python, or
+general errors, with a collapsible "Details" disclosure showing the raw error
+log tail.
+
+Actions include:
+- **Download umu**: downloads the verified zipapp for non-system installations.
+- **Prepare runtime** / **Update runtime**: runs `umu-run createprefix` in the
+  background for the selected global runner.
+- **Cancel**: aborts in-progress runtime preparation.
+- **Recheck**: refreshes umu and runtime status.
+
+Status is polled every 1 second while a download or runtime preparation job runs.
+`services/api.ts` mirrors `getUmuStatus`, `getUmuDownloadStatus`,
+`getUmuRuntimeStatus`, `downloadUmu`, `prepareUmuRuntime`, and
+`cancelUmuRuntimePrepare` with typed responses and browser mocks.
+
 ## Sandbox controls
 
 Settings includes `SandboxSettings.vue` at `/settings#sandbox`. It shows tool
@@ -260,6 +286,16 @@ stored preference visible and editable, with a link to Settings → Sandbox.
 toast; `prefix_in_use` preserves the backend explanation naming the running game.
 `utils/sandbox.ts` centralizes status, switch-state and error-code presentation.
 All controls use the existing theme variables and work in light and dark themes.
+
+Game Detail's Launch tab also offers a "No internet" switch (`block_network`) to
+disconnect network access for the game, preserved across backup and sync. On
+Linux it runs in a private network namespace using bubblewrap (`--unshare-net`
+in the sandbox, or a lightweight root-loopback wrapper when unsandboxed). On
+Windows it requires Sandboxie. Launch failure codes formatted by
+`utils/sandbox.ts` include `network_block_unavailable` (missing bubblewrap on
+Linux), `network_block_needs_sandbox` (Windows without Sandboxie), and
+`proton_missing_offline` (Proton runner codename not resolved to an installed build
+before an offline launch).
 
 `services/api.ts` mirrors `get_sandbox_status`, `recheck_sandbox_status`,
 `get_sandbox_install_info`, `install_sandbox_tool`, `get_sandbox_install_status`,

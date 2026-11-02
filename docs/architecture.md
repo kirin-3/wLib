@@ -81,7 +81,7 @@ flowchart TD
 | Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/litedb.py`, `core/backup_format.py` |
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py` |
-| Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/desktop_notify.py` |
+| Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
 | Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
 
@@ -112,9 +112,11 @@ flowchart TD
 | App log | `~/.local/share/wLib/logs/wlib.log` | `%LOCALAPPDATA%\wLib\logs\wlib.log` |
 | Game catalog cache | `~/.local/share/wLib/catalog.db` + `catalog.json` | `%LOCALAPPDATA%\wLib\catalog.db` + `catalog.json` |
 | Local covers | `~/.local/share/wLib/covers/` | `%LOCALAPPDATA%\wLib\covers\` |
+| Remote cover cache | `~/.local/share/wLib/covers/cache/` | `%LOCALAPPDATA%\wLib\covers\cache\` |
 | Sandbox storage | `~/.local/share/wLib/sandbox/<game id>/` | `%LOCALAPPDATA%\wLib\sandbox\<game id>\` |
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
 | PDF, TXT and MD attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
+| Downloaded umu-launcher | `~/.local/share/wLib/umu/umu-run` | Unavailable (Linux only) |
 | Sync snapshot | `~/.local/share/wLib/sync/last-local.json` | `%LOCALAPPDATA%\wLib\sync\last-local.json` |
 
 Attachment copies are limited to PDF, TXT and MD. PDF files must start with `%PDF-`; text files must contain no NUL in their first 8 KiB. The bridge exposes `browse_attachment_file` and reports rejected types as `unsupported_attachment`.
@@ -134,6 +136,8 @@ The frontend hides unavailable actions, while backend guards reject unsupported 
 On Flatpak, `core/host_platform.py` keeps game processes and external tools on the host through `flatpak-spawn --host`, with process supervision for tracked launches. Sandbox-only environment variables such as `LD_LIBRARY_PATH` are not forwarded. The same lookup and command helpers cover runner discovery, archive tools, runtime installers, and notifications.
 
 On Linux, `core/umu.py` discovers or installs umu-launcher, checks the shared Steam Linux Runtime, and constructs Proton invocations. Proton games, Wine companion tools, Cheat Engine and prefix installers run through umu; plain Wine keeps its existing host path. Existing Proton compatibility-data folders remain in place. A small host-Python wrapper skips umu's runtime update request when its runtime is already installed; preparation in Settings performs updates separately. Sandboxed Proton launches expose the shared runtime read-only with a per-game writable working directory, and do not support Cheat Engine injection. Proton games sharing a prefix cannot run simultaneously.
+
+Both platforms support per-game network isolation (**No internet** / `block_network`), carried across backup and sync. Linux runs network-blocked games in a private network namespace using bubblewrap (`--unshare-net` inside the sandbox, or a thin root-loopback wrapper when sandboxing is off). Windows requires Sandboxie-Plus to isolate network access. On Linux, offline Proton launches resolve runner codenames to an installed build before launching.
 
 ## Process Isolation & Communication
 

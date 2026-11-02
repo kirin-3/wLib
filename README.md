@@ -26,7 +26,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 ### Your library
 
-- Add games with cover art (from F95Zone or an image of your own), tags, ratings, Markdown notes, PDF attachments and a play status. wLib tracks how long you've played each one.
+- Add games with cover art (from F95Zone or an image of your own), tags, ratings, Markdown notes, PDF, TXT and MD attachments and a play status. wLib tracks how long you've played each one.
 - Point wLib at a folder of game installs and import several at once. It guesses titles, versions and engines from what it finds, so you can correct them after importing.
 - Browse the library as a grid, a list, compact tiles, or wide 2:1 banners, and pick a card size with the slider in the toolbar.
 - See a game's screenshots from its F95Zone thread in the detail window. Screenshots that F95Zone only shows to logged-in users load through the browser extension.
@@ -65,7 +65,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
 - Works with Ren'Py, Unity, Unreal, Godot, RPG Maker (XP, VX, MV, MZ), Wolf RPG and native Linux games. wLib works out the engine from the thread or the game folder.
 - On Windows, `.exe`, `.bat` and `.cmd` files run directly, `.jar` games run through Java, and HTML games open in your browser. Playtime isn't tracked for HTML games.
-- On Linux you can pick native, Wine, Proton, an RPG Maker Linux runner or your own command for each game. wLib also has:
+- On Linux you can pick native, Wine, Proton (launched through umu-launcher with the Steam Linux Runtime), an RPG Maker Linux runner or your own command for each game. wLib also has:
   - automatic fixes for common black screens in RPG Maker and NW.js games
   - a Japanese locale option for games that need it
   - a Wayland toggle
@@ -74,6 +74,7 @@ It started as an open-source answer to Windows-only managers like XLibrary. On L
 
   None of these options appear on Windows. If you bring a library over from Linux, switch any game that uses a Linux-only mode back to Auto Detect.
 - Run a game in a sandbox by turning on **Run in sandbox** in its Launch tab, or turn on **Sandbox new games** in **Settings > Sandbox**. Linux uses bubblewrap for every launch mode: the game gets its own private home folder and can only write to its own folder and its Wine prefix. Windows uses Sandboxie-Plus with a separate box per game. Settings shows whether the tool is ready and can install it. If the tool is missing, the game doesn't launch, rather than running unsandboxed.
+- Disconnect internet access for any game with the **No internet** switch in its Launch tab. Linux isolates the game in a private network namespace using bubblewrap, and Windows isolates it using Sandboxie-Plus.
 - On Linux, add your own Wine programs, native programs or commands in **Settings > Custom tools**, then open them from a running game's right-click menu. Wine tools use the game's own Wine or Proton prefix and close when the game exits. Choose which tools appear on every game, and change that for any single game.
 
 ### On F95Zone and store pages

@@ -93,7 +93,7 @@ The core strength of wLib relies on its native Python backend, divided primarily
 3. **App Log**: Calls `setup_app_log()` so `<data dir>/logs/wlib.log` captures console output, Python logging, and uncaught exceptions before the rest of startup runs.
 4. **Qt Runtime and WebView Cache**: Detects the Linux session type (X11/Wayland) and configures Qt platform plugins; on Windows, leaves native platform selection to Qt unless explicitly overridden (`configure_qt_runtime_environment()`). Both platforms start PyWebView with `gui="qt"`. Packaged runs refresh the WebView cache when the app version or bundled UI changes.
 5. **WebView Load and Startup Diagnostics**: Imports `pywebview`, then records the Qt and renderer startup snapshot.
-6. **API and Database Initialization**: Constructs `core.api.Api`, which calls `core.database.init_db()` to create/migrate the SQLite schema, prunes orphan PDF attachment folders, and creates the sync, scraper, and launcher services.
+6. **API and Database Initialization**: Constructs `core.api.Api`, which calls `core.database.init_db()` to create/migrate the SQLite schema, prunes orphan attachment folders (PDF, TXT, MD), and creates the sync, scraper, and launcher services.
 7. **Extension Sync**: Copies bundled extension assets into the platform user-data directory when files are missing or the bundled manifest version changed.
 8. **Window and Background Services**: Creates the PyWebView window, starts legacy browser-data cleanup and the extension server daemon thread, and starts the library sync watcher.
 9. **UI Loop**: Enters the blocking UI loop, then allows a final sync push on exit.
@@ -127,9 +127,9 @@ The `Api` class acts as the single point of entry for the Vue frontend. All meth
 - **Concurrency**: UI calls are technically asynchronous on the JS side but block the pywebview worker pool on the Python side. The `Api` class heavily uses background thread spawning (`threading.Thread`) for long tasks (like downloading updates or mass-scraping metadata) so the UI doesn't freeze.
 - **Event Emitter**: Contains wrapper helpers to dispatch Global UI Events back to Vue using `webview.evaluate_js()`.
 - **Extension Sync Metadata**: Tracks whether startup extension synchronization actually updated the installed browser files so the frontend can show a toast prompting the user to reload the addon.
-- **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or invalid values normalize to `auto`; supported values are `auto`, `native`, `wine_proton`, `rpgmaker_linux`, and Linux-only `custom`. Add calls also accept `command_line_args`.
+- **Launch Mode Contract**: Carries each game's `launch_mode` through add, update, list, and launch calls. Missing or invalid values normalize to `auto`; supported values are `auto`, `native`, `wine_proton`, `rpgmaker_linux`, and Linux-only `custom`. Add and update calls also accept `command_line_args` and `block_network` (the per-game No internet preference).
 - **Launch Target Contract**: Exposes CRUD and reordering methods for additional game launch targets. `get_games()` returns each game's extra `launch_targets`, while the canonical default executable remains `games.exe_path`.
-- **Store Links and Local Covers**: `add_game` accepts `links: [{source, id, url}]`; `get_games()` returns normalized `links`, and the extension can replace F95-post links through `POST /api/thread-links`. `choose_game_cover`, `set_game_cover_file`, and `clear_game_cover` manage device-local cover files; game payloads include `cover_local_url` while the extension server is bound.
+- **Store Links and Local Covers**: `add_game` accepts `links: [{source, id, url}]`; `get_games()` returns normalized `links`, and the extension can replace F95-post links through `POST /api/thread-links`. `choose_game_cover`, `set_game_cover_file`, and `clear_game_cover` manage device-local cover files; game payloads include `cover_local_url` while the extension server is bound. `get_cover_cache_status()` and `purge_cover_cache()` report and flush the remote cover cache.
 - **Finished Version Contract**: `update_game` accepts a free-text `finished_version` next to `version`; the value is trimmed and empty means not finished. When a call moves `play_status` to `Completed` from another status without sending `finished_version`, the backend fills it with the call's `version` — or the stored `version` when none was sent — in the same write. Re-saving `Completed` and leaving `Completed` both keep the stored value, and an explicit `finished_version` in the same call wins. The success response includes `finished_version` only when the backend filled it; unrelated edits return just `{"success": True}`. Version-only updates ("Mark updated"), archive installs, and metadata refreshes never touch the field.
 - **Library Migration Contract**: Exposes `export_library_backup`, `inspect_library_backup`, and `import_library_backup` for one-file JSON migration. Import uses an inspect-before-write flow and backup-wins field merges for selected sections.
 - **External Library Import Contract**: Exposes `detect_external_library(source)`, `inspect_external_library(source, path)`, `import_external_library(source, path, options)`, and `browse_external_library_file(source, start_path)` for bringing a library in from F95Checker, Atlas, XLibrary, f69, or Playnite (`source` is `"f95checker"`, `"atlas"`, `"xlibrary"`, `"f69"`, or `"playnite"`). Detection reports the found path plus the default locations checked; the file picker falls back to per-source filters when nothing is found. Inspect previews new/matched/ambiguous counts plus skipped games without an F95 thread, a qualifying store link (DLsite, Fanza, VNDB or Ryuugames), or a usable executable, dropped cross-OS executable paths, optional local-cover copies, and the source schema version. Import accepts `sections` (`user_state`, `executable_paths`, `launch_targets`, `covers`; game identity and metadata always apply to matches) and `merge_mode` (`"overwrite"` or `"fill_missing"`, defaulting to overwrite; fill-missing only sets fields that are empty locally and keeps existing launch targets). Results include `created_ids`/`updated_ids`, and imports that touch games with F95 URLs start `check_all_updates(game_ids=...)`, returning `metadata_check` as `"started"`, `"busy"`, or `"none"`. Failures return `{"success": False, "error": ...}`. The readers live in `core/external_import.py` (`read_external_library`, `locate_external_library`); SQLite sources are read from a temporary copy opened read-only so the source app can keep running.
@@ -204,7 +204,7 @@ This module serializes and imports semantic library backups without copying the 
 - **Always-included metadata**: Every exported game includes title, developer, engine, tags, F95 URL, version fields, thread completion flag, store links, screenshot URLs, and cover reference so records remain identifiable after migration.
 - **Import matching**: Matches games by normalized F95 thread identity first, then by a shared exact store identity, then by normalized title/developer only when there is exactly one local match. Records carrying only a title match a unique same-title local game without an F95 URL or developer, and a record whose thread URL is unknown locally merges into a unique URL-less local game with the same title/developer. Ambiguous fallback matches are skipped and reported. Backups without a `selected_sections` manifest offer every game section the records actually carry.
 - **Merge behavior**: Matched games receive backup values for always-included metadata and selected optional sections. Unselected sections preserve local values. Playtime is overwritten from the backup when user state is imported, never summed.
-- **Safety boundaries**: The JSON export excludes cookies, webview storage, downloaded runtimes, extension copies, caches, save backups, PDF attachments, and diagnostics.
+- **Safety boundaries**: The JSON export excludes cookies, webview storage, downloaded runtimes, extension copies, caches, local cover files, cover cache files, save backups, game attachments (PDF, TXT, MD), and diagnostics.
 - **Cross-platform paths**: Inspection reports missing executable paths and foreign global path settings. Import skips global settings whose path syntax belongs to the other OS; per-game paths and launch options remain available to edit after migration.
 
 ### `core/launcher.py` (Process Management)
@@ -212,9 +212,9 @@ This module handles native host launching and Linux compatibility runtimes.
 - **Environment Overrides (Linux)**: Per-game Japanese locale and Wayland settings modify the `env` dictionary passed to `subprocess`. Windows ignores these flags and removes Wine/Proton environment variables from native launch environments.
 - **Launch Modes**: Windows exposes `auto`: `.exe` runs directly, `.bat`/`.cmd` uses `cmd.exe`, `.jar` uses `java -jar` with Java on `PATH`, and `.html`/`.htm` opens in the default browser. Linux additionally supports `native`, `wine_proton`, `rpgmaker_linux`, and `custom`. Custom Command uses `command_line_args` as the full command, substitutes `%command%` tokens with the absolute target, and runs in the game folder with a clean host environment. Leading `NAME=value` assignments are applied without a shell. Empty commands are rejected. Windows command-line arguments use Windows quoting rules.
 - **Launch Targets**: Alternate targets reuse the same launcher entrypoint as the default executable; only the selected executable path changes. Playtime remains keyed to the parent `game_id`.
-- **Wine & Proton**: Prepends the configured `proton_path` or `wine` binary when compatibility mode is selected or auto-detection falls through to a Windows-style target, ensuring the proper `WINEPREFIX` or Proton compatibility path is enforced.
-- **Capability Boundary**: Windows rejects Linux-only launch modes and runtime installation/injection APIs before runtime actions. Imported per-game options remain stored; Windows launches ignore Linux-only flags, prefixes, and Proton paths. An imported Linux launch mode must be changed to `auto` before launching.
-- **Cheat Engine Integration (Linux)**: Starts `lunarengine-x86_64.exe` through Wine/Proton, passing a Lua injection script to map directly to the game's PID.
+- **Wine & Proton**: Plain Wine launches prepend the configured `wine` binary with the target's `WINEPREFIX`. Proton launches execute through `umu-run` (with the shared Steam Linux Runtime container) via `core/umu.py` and `core/umu_launch_wrapper.py`. Direct invocation of `proton run` is deprecated because modern Proton builds require the runtime container. If umu-launcher or the required runtime is missing, launches are refused with `umu_missing` or `umu_runtime_missing`. Existing Proton compatibility directories (`proton_compat`) are preserved, and symlinked `pfx` targets that umu would overwrite are rejected.
+- **Network Isolation**: When `block_network` is enabled, Linux launches execute inside a private network namespace with only a loopback interface (`--unshare-net` inside bubblewrap sandbox, or a thin root-loopback `bwrap` wrapper when unsandboxed). A missing or unusable bubblewrap refuses launch with `network_block_unavailable`; on Windows, network isolation requires Sandboxie (`network_block_needs_sandbox`). For offline launches, Proton runner codenames are resolved to an installed build before launch, refusing with `proton_missing_offline` if none exists. The umu launch wrapper skips rewriting the runtime install marker so read-only mounts in the sandbox do not fail.
+- **Cheat Engine Integration (Linux)**: Starts `lunarengine-x86_64.exe` through Wine/Proton, passing a Lua injection script to map directly to the game's PID. Sandboxed Proton launches skip Cheat Engine injection, while unsandboxed Proton launches join the running game's container.
 - **Download Verification**: GE-Proton tarballs are checked against the release's `.sha512sum` asset (releases without one are refused). The Lunar Engine zip must match the pinned `LUNAR_ENGINE_SHA256` in `core/api.py`; update it together with the download URL.
 - **Update Checks**: `check_app_updates()` caches a successful GitHub release lookup for the session (GitHub allows 60 anonymous API calls an hour). Bulk game checks save `last_update_check` only after a run finishes without being cancelled, so a run cut short is retried at the next startup.
 - **RPGMaker Tooling**: Implements enhanced Wine/NW.js fixes for RPGMaker MV/MZ and can optionally launch through the external `rpgmakermlinux-cicpoffs` runner when users install/configure it themselves. wLib links to the upstream project but does not bundle, install, update, export, bug-report, or run mutation-oriented upstream commands automatically.
@@ -249,6 +249,8 @@ This module handles native host launching and Linux compatibility runtimes.
 - `core/versions.py`: normalized version comparison mirrored by `normalizeVersion()` in `ui/src/utils/libraryGames.ts`.
 - `core/backup_format.py`: leaf module with shared backup format identifiers, the SQLite integer bound, and `BackupValidationError`; `core.library_backup` re-exports these names.
 - `core/extension_ws.py`: minimal RFC 6455 handshake, frame encoding, strict masked-frame reading, and the 8 MiB message limit for `GET /api/bridge`.
+- `core/umu.py`: discovery, release downloading, runtime preparation, and invocation construction for Proton launches via `umu-launcher`.
+- `core/umu_launch_wrapper.py`: host-Python wrapper skipping umu's runtime update and install-marker rewrite when the Steam Linux Runtime is already prepared.
 
 ## Backend Verification Workflow
 
@@ -344,6 +346,56 @@ box `user/current`/profile roots with AppData, Documents and Saved Games. Overri
 continue to work when sandboxing is switched off. Removing a game or switching
 sandboxing off does not delete its sandbox storage. JSON backups carry the
 preference and selected settings, while sandbox files remain local.
+
+
+## Proton and umu-launcher
+
+Upstream Proton builds require the Steam Linux Runtime container (`sniper` or
+`steamrt4`). `core/umu.py` manages `umu-launcher` (`umu-run`) on Linux so Proton
+games, Wine companion tools, Cheat Engine, and prefix/RTP/Winetricks installers
+execute inside the proper container environment.
+
+- **Discovery**: `locate_umu()` checks for system `umu-run` on `PATH` via
+  `host_which("umu-run")`, falling back to wLib's downloaded copy under
+  `<data dir>/umu/umu-run`. `get_umu_status()` reports path, source (`system` or
+  `wlib`), version string, and whether `python3` is available on the host.
+- **Zipapp download**: `download_release()` and the `UmuDownload` worker fetch
+  the latest verified zipapp from the GitHub release
+  (`Open-Wine-Components/umu-launcher`). The download verifies SHA-256 and SHA-512
+  checksums, ensures member paths stay safe, and extracts only the single
+  executable member `umu/umu-run` into `<data dir>/umu/umu-run` (capped at 8 MiB)
+  with mode 0755.
+- **Steam Linux Runtime**: Runtimes reside in `~/.local/share/umu/<runtime>`
+  (`XDG_DATA_HOME/umu`). `runtime_status(runner)` checks for `.installed.ok` or
+  `_v2-entry-point` plus platform directories. `UmuRuntimePrepare` runs
+  `umu-run createprefix` in the background with `GAMEID=umu-default` and the
+  selected runner's `PROTONPATH`. The UI polls status and progress (installed folder
+  size in MiB), and supports cancellation via SIGTERM/SIGKILL to the process group.
+  Failures classify into `disk`, `network`, `python`, or `other`, alongside raw
+  stderr log tails.
+- **Invocation construction**: `build_umu_invocation()` produces
+  `["python3", "<data dir>/umu/umu-run-wlib", executable]` with environment:
+  `WINEPREFIX` pointing to `proton_compat`, `GAMEID` set to `umu-wlib<id>` for
+  tracked games or `umu-default` for installers, `PROTONPATH` set for custom
+  runners and omitted for UMU-Proton, `STEAM_COMPAT_INSTALL_PATH` set to the game
+  directory, and `UMU_RUNTIME_UPDATE="0"`. When not sandboxed,
+  `UMU_CONTAINER_NSENTER="1"` allows companion tools and Cheat Engine to join the
+  running game's container. Launches are refused if the `pfx` symlink inside
+  `proton_compat` points elsewhere and would be replaced by umu.
+- **Launch wrapper (`core/umu_launch_wrapper.py`)**: A small script deployed to
+  `<data dir>/umu/umu-run-wlib`. When `UMU_RUNTIME_UPDATE=0`, it patches umu's
+  `setup_umu` and `write_install_marker` at runtime. Skipping the update request
+  and preventing rewrite of an existing install marker allows umu to launch
+  reliably when the runtime is mounted read-only (in bubblewrap sandboxes or
+  offline launches).
+- **Offline codename resolution**: Offline Proton launches resolve runner codenames
+  (`GE-Proton`, `UMU-Proton`) to an installed build before launching; if no
+  matching build is installed, launch is refused with `proton_missing_offline`.
+- **Sandbox integration**: Sandboxed Proton launches mount the shared Steam Linux
+  Runtime read-only, with a per-game writable working directory
+  (`<data dir>/sandbox/<game id>/umu-var`) for umu's state. Cheat Engine injection
+  is disabled for sandboxed Proton launches. Proton games sharing a prefix cannot
+  run concurrently.
 
 
 ## Companion tools

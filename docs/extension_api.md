@@ -22,15 +22,10 @@ Because of that restriction, the extension does not call `GET /api/check` direct
 
 ## REST API Endpoints
 
-### Local cover images
-**`GET /covers/<name>`** serves a file from `<data dir>/covers/`. Names must match
-`^[0-9a-f]{32}\.(jpg|png|webp|gif)$`; invalid names, missing files, traversal
-attempts and `/covers/` receive 404. The Host check still applies. This read-only
-route precedes the Origin gate to allow image loading in both packaged and dev
-views; it adds no CORS headers. Responses include the image Content-Type,
-`X-Content-Type-Options: nosniff` and
-`Cache-Control: private, max-age=31536000, immutable`. Replacement uses a fresh
-random name. No listing endpoint exists.
+### Local cover images and remote cover cache
+**`GET /covers/<name>`** serves a user-selected local cover file from `<data dir>/covers/`. Names must match `^[0-9a-f]{32}\.(jpg|png|webp|gif|avif)$`; invalid names, missing files, traversal attempts and `/covers/` receive 404. The Host check still applies. This read-only route precedes the Origin gate to allow image loading in both packaged and dev views; it adds no CORS headers. Responses include the image Content-Type (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, or `image/avif`), `X-Content-Type-Options: nosniff` and `Cache-Control: private, max-age=31536000, immutable`. Replacement uses a fresh random name. No listing endpoint exists.
+
+**`GET /covers/cache/<name>`** serves a cached remote cover from `<data dir>/covers/cache/`. It shares the same random-name regex, content type mapping, nosniff protection, and private immutable cache header as `/covers/<name>`.
 
 ### 1. Check if Game Exists 
 **`GET /api/check?url={page_url}&id={source:id}`**
@@ -157,7 +152,7 @@ The bundled manifest is currently `1.2.2`, and its `MIN_APP_VERSION` floor is `0
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
-Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also warns without blocking when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
+Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also introduced an update warning when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9` originally, raised to `0.4.4` in extension `1.2.2`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
 
 Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
 
