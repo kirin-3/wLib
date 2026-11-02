@@ -197,7 +197,7 @@ def test_bwrap_mounts_and_ordering():
         ["--bind", "/data/sandbox/1/home", "/home/u"],
         ["--ro-bind", "/proton", "/proton"],
         ["--ro-bind", "/runner", "/runner"],
-        ["--ro-bind-try", "/lib", "/lib"],
+        ["--dev-bind-try", "/dev/ntsync", "/dev/ntsync"],
     ]:
         assert triple in triples
     assert argv.index("--tmpfs") < argv.index("/tmp/.X11-unix")
@@ -394,6 +394,7 @@ def test_sandboxie_configuration_replaces_passthrough(monkeypatch, tmp_path):
         [ini, "set", "wLib_12", "Enabled", "y"],
         [ini, "set", "wLib_12", "FileRootPath", str(tmp_path / "sandbox/12")],
         [ini, "set", "wLib_12", "AutoDelete", "n"],
+        [ini, "set", "wLib_12", "ClosedFilePath", ""],
         [ini, "set", "wLib_12", "OpenFilePath", r"D:\Games\Story" + chr(92)],
         [start, "/reload"],
     ]
@@ -581,3 +582,26 @@ def test_sandbox_parent_thread_outlives_bridge_thread():
         if processes[0].poll() is None:
             processes[0].terminate()
             processes[0].wait(timeout=5)
+
+
+def test_system_symlinks_and_network_argv(monkeypatch):
+    monkeypatch.setattr(sandbox.os.path, "islink", lambda path: path in ("/bin", "/lib"))
+    monkeypatch.setattr(sandbox.os, "readlink", lambda path: "usr" + path)
+    argv = sandbox.build_bwrap_argv(["game"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games", network=True)
+    triples = [argv[i:i+3] for i in range(len(argv)-2)]
+    assert ["--symlink", "usr/lib", "/lib"] in triples
+    assert ["--symlink", "usr/bin", "/bin"] in triples
+    assert ["--ro-bind-try", "/lib64", "/lib64"] in triples
+    assert "--unshare-net" in argv
+    assert sandbox.build_network_bwrap_argv(["game", "arg"], cwd="/games") == ["bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--chdir", "/games", "--", "game", "arg"]
+
+
+def test_sandboxie_network_setting(monkeypatch, tmp_path):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    call = Mock(return_value="")
+    monkeypatch.setattr(sandbox, "_sandboxie_call", call)
+    sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", True)
+    assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", "!<InternetAccess>,InternetAccessDevices"] for args in call.call_args_list)
+    call.reset_mock()
+    sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", False)
+    assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", ""] for args in call.call_args_list)

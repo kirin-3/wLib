@@ -204,11 +204,14 @@ def build_bwrap_argv(
     umu_data: str = "",
     umu_runtime: str = "",
     umu_var: str = "",
+    network: bool = False,
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
     check_readonly_mounts(readonly_paths, home)
     argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
+    if network:
+        argv.append("--unshare-net")
     system = ["/usr", "/bin", "/sbin", "/opt"]
     system += ["/nix"] if nixos else ["/lib", "/lib64", "/lib32"]
     system += [
@@ -240,11 +243,21 @@ def build_bwrap_argv(
         "/sys/bus/pci",
     ]
     for path in system:
-        argv += ["--ro-bind-try", path, path]
+        # Merged-/usr hosts link /lib to usr/lib; a bind would break the
+        # relative ../lib32 target of 32-bit loaders.
+        if (
+            not nixos
+            and path in ("/bin", "/sbin", "/lib", "/lib64", "/lib32")
+            and os.path.islink(path)
+        ):
+            argv += ["--symlink", os.readlink(path), path]
+        else:
+            argv += ["--ro-bind-try", path, path]
     argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"]
     if nixos:
         argv += ["--ro-bind-try", "/run/current-system", "/run/current-system"]
     for path in (
+        "/dev/ntsync",
         "/dev/dri",
         "/dev/snd",
         "/dev/shm",
@@ -369,7 +382,27 @@ def _sandboxie_call(tool: str, args: list[str]) -> str:
     return result.stdout.strip()
 
 
-def configure_sandboxie_box(start: str, game_id: int, game_dir: str) -> str:
+def build_network_bwrap_argv(
+    command: list[str], *, cwd: str, bwrap: str = "bwrap"
+) -> list[str]:
+    """Net-only wrapper: the host filesystem and processes stay as they are."""
+    return [
+        bwrap,
+        "--unshare-user",
+        "--unshare-net",
+        "--dev-bind",
+        "/",
+        "/",
+        "--chdir",
+        cwd,
+        "--",
+        *command,
+    ]
+
+
+def configure_sandboxie_box(
+    start: str, game_id: int, game_dir: str, block_network: bool = False
+) -> str:
     box = f"wLib_{game_id}"
     root = sandbox_folder(game_id)
     os.makedirs(root, exist_ok=True)
@@ -378,6 +411,11 @@ def configure_sandboxie_box(start: str, game_id: int, game_dir: str) -> str:
         ("Enabled", "y"),
         ("FileRootPath", root),
         ("AutoDelete", "n"),
+        # The box is reused, so an empty value clears an earlier block.
+        (
+            "ClosedFilePath",
+            "!<InternetAccess>,InternetAccessDevices" if block_network else "",
+        ),
         # Sandboxie appends '*': the separator prevents matching sibling
         # folders whose names merely start with the game's directory name.
         ("OpenFilePath", ntpath.normpath(game_dir).rstrip("\\/") + "\\"),

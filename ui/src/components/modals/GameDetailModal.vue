@@ -3,7 +3,7 @@
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
-import { sandboxSwitchState } from "../../utils/sandbox";
+import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
 import type { SandboxStatus } from "../../services/api";
 import GameCompanionTools from "../GameCompanionTools.vue";
 import TagColorPicker from "../TagColorPicker.vue";
@@ -134,6 +134,7 @@ const emit = defineEmits<{
 
 const sandboxRouter = useRouter();
 const sandboxEnabled = ref(false);
+const blockNetwork = ref(false);
 const sandboxStatus = ref<SandboxStatus | null>(null);
 
 // Editable fields
@@ -523,6 +524,7 @@ const ratingCategories = [
 const formSnapshot = (): string =>
   JSON.stringify({
     sandbox_enabled: sandboxEnabled.value,
+    block_network: blockNetwork.value,
     title: title.value,
     exe_path: exePath.value,
     f95_url: f95Url.value,
@@ -587,6 +589,7 @@ watch(
         runWayland.value = g.run_wayland ? true : false;
         autoInjectCe.value = g.auto_inject_ce ? true : false;
         sandboxEnabled.value = !!g.sandbox_enabled;
+        blockNetwork.value = !!g.block_network;
         sandboxStatus.value = null;
         void api.getSandboxStatus().then(status => { sandboxStatus.value = status; }).catch(console.error);
         customPrefix.value = g.custom_prefix || "";
@@ -1304,6 +1307,7 @@ const save = async () => {
       note_links: noteLinks.value.map(link => ({ ...link })),
       engine: normalizeEngine(engine.value),
       sandbox_enabled: sandboxEnabled.value,
+      block_network: blockNetwork.value,
       run_japanese_locale: platformCapabilities.value.wine_proton
         ? runJapaneseLocale.value
         : !!props.game.run_japanese_locale,
@@ -2098,6 +2102,13 @@ const removeAttachment = async (name: string) => {
               <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="closeAndNavigate('/settings#sandbox')">Open Sandbox settings</button>
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
             </div>
+          </div>
+          <div class="space-y-2">
+            <label class="flex items-center justify-between text-sm">
+              <span>No internet</span>
+              <input v-model="blockNetwork" type="checkbox" role="switch" class="sandbox-switch" :disabled="networkSwitchState(exePath, platformCapabilities.platform, sandboxEnabled).disabled" />
+            </label>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(exePath, platformCapabilities.platform, sandboxEnabled).note }}</p>
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">

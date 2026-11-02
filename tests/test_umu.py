@@ -390,6 +390,50 @@ def test_resolve_runner_and_sandbox_codename(tmp_path, monkeypatch):
     assert umu.resolve_codename("GE-Proton") == str(build)
 
 
+def test_wrapper_keeps_existing_install_marker_offline(tmp_path):
+    import subprocess
+    import sys
+
+    package = tmp_path / "umu"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "umu_util.py").write_text(
+        "import os\ndef has_runtime_installed(local):\n return os.environ.get('INSTALLED') == '1'\n"
+    )
+    (package / "umu_run.py").write_text(
+        "def setup_umu(local, *args):\n pass\n"
+        "def write_install_marker(path):\n print('marker written')\n"
+    )
+    entry = tmp_path / "umu-run"
+    entry.write_text("from umu import umu_run\numu_run.write_install_marker('rt')\n")
+    wrapper = tmp_path / "wrapper.py"
+    wrapper.write_text(
+        (
+            __import__("pathlib").Path(umu.__file__).parent / "umu_launch_wrapper.py"
+        ).read_text()
+    )
+    env = dict(
+        os.environ,
+        WLIB_UMU_RUN=str(entry),
+        PYTHONPATH=str(tmp_path),
+        UMU_RUNTIME_UPDATE="0",
+        INSTALLED="1",
+    )
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert "marker written" not in run()
+    env["INSTALLED"] = "0"
+    assert "marker written" in run()
+
+
 def test_wrapper_uses_runtime_check_when_available(tmp_path):
     import subprocess
     import sys

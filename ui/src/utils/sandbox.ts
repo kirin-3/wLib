@@ -20,7 +20,13 @@ export const sandboxSwitchState = (target: string, status: SandboxStatus | null)
   };
 };
 
+export const networkSwitchState = (target: string, platform: string, sandboxEnabled: boolean) => {
+  if (/\.html?$/i.test(target.trim())) return { disabled: true, note: 'Browser games cannot be blocked from the network.' };
+  if (platform === 'windows' && !sandboxEnabled) return { disabled: true, note: 'No internet needs Run in sandbox on Windows.' };
+  return { disabled: false, note: 'In-game online features, including online translation, stop working.' };
+};
+
 export const sandboxLaunchError = (code: string | undefined, message: string | undefined) => {
-  if (!['sandbox_missing', 'sandbox_unusable', 'prefix_in_use'].includes(code || '')) return null;
+  if (!['sandbox_missing', 'sandbox_unusable', 'network_block_unavailable', 'network_block_needs_sandbox', 'proton_missing_offline', 'prefix_in_use'].includes(code || '')) return null;
   return { message: message || 'The game could not be launched.', openSettings: code !== 'prefix_in_use' };
 };

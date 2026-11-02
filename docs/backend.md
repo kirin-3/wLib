@@ -284,10 +284,24 @@ The launcher wraps the final mode-specific argv before `host_command`. bwrap
 uses private user/PID/IPC/UTS namespaces, a private `/tmp` and `/run`, read-only
 system and runtime mounts, selected display/audio sockets, a writable game
 folder and Wine prefix, and `<data dir>/sandbox/<id>/home` at the real HOME
-path. It does not expose the session D-Bus. An in-namespace shell supervises
-launcher stubs until their detached descendants exit. Stop terminates the outer
-bwrap process group and skips the host wineserver. Automatic Cheat Engine
-injection, when enabled, runs inside that same sandbox after its usual delay.
+path. On non-NixOS hosts, `/bin`, `/sbin` and `/lib*` entries that are symlinks
+on the host are recreated as symlinks, so 32-bit loaders resolve, and
+`/dev/ntsync` is passed through when present. It does not expose the session
+D-Bus. An in-namespace shell supervises launcher stubs until their detached
+descendants exit. Stop terminates the outer bwrap process group and skips the
+host wineserver. Automatic Cheat Engine injection, when enabled, runs inside
+that same sandbox after its usual delay.
+
+No internet adds `--unshare-net` to the sandbox. With sandboxing off it uses a
+thin `bwrap --unshare-user --unshare-net --dev-bind / /` wrapper with the
+original working directory, so files, Stop, playtime and the host wineserver
+behave as unsandboxed; only a private loopback remains. A missing or unusable
+bubblewrap refuses the launch with `network_block_unavailable`; Windows requires
+the sandbox (`network_block_needs_sandbox`). Proton codenames resolve to
+installed builds before offline launches, otherwise `proton_missing_offline`
+refuses the launch. Offline, umu rewrites its runtime install marker; the launch
+wrapper skips that when the marker already exists, because the sandbox mounts
+the shared runtime read-only.
 
 Windows configures `wLib_<id>` with `SbieIni.exe set` and `/reload`, preserving
 sandbox storage and replacing the game-folder pass-through path each launch.

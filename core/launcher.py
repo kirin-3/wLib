@@ -846,6 +846,7 @@ class Launcher:
         game_id: int | None = None,
         sandbox_enabled: bool = False,
         game_title: str = "",
+        block_network: bool = False,
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -939,6 +940,23 @@ class Launcher:
             is_windows() or launch_mode in ("auto", "native")
         )
         sandboxed = bool(sandbox_enabled and not browser_launch)
+        block = bool(block_network and not browser_launch)
+        if block and is_windows() and not sandboxed:
+            return {
+                "success": False,
+                "code": "network_block_needs_sandbox",
+                "error": "No internet needs Run in sandbox on Windows.",
+            }
+        network_status: game_sandbox.SandboxStatus | None = None
+        if block and not is_windows():
+            # Results that were not Ready are never cached, so this re-probes them.
+            network_status = game_sandbox.get_sandbox_status()
+            if network_status["status"] != "ready":
+                return {
+                    "success": False,
+                    "code": "network_block_unavailable",
+                    "error": f"Cannot block network: {network_status['reason']}",
+                }
         sandbox_status: game_sandbox.SandboxStatus | None = None
         if sandboxed:
             if game_id is None or game_id <= 0:
@@ -1076,7 +1094,7 @@ class Launcher:
                         (game_dir,), os.path.expanduser("~")
                     )
                     entry.sandbox_box = game_sandbox.configure_sandboxie_box(
-                        sandbox_status["path"], game_id, game_dir
+                        sandbox_status["path"], game_id, game_dir, block_network=block
                     )
                     entry.sandbox_tool = sandbox_status["path"]
                     cmd = [entry.sandbox_tool, f"/box:{entry.sandbox_box}", *cmd]
@@ -1135,8 +1153,14 @@ class Launcher:
                         umu_data=umu_data,
                         umu_runtime=umu_runtime,
                         umu_var=umu_var,
+                        network=block,
                     )
                     entry.kill_info = None
+                elif block and not is_windows():
+                    assert network_status is not None
+                    cmd = game_sandbox.build_network_bwrap_argv(
+                        cmd, cwd=effective_cwd, bwrap=network_status["path"]
+                    )
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     try:
@@ -1546,6 +1570,7 @@ class Launcher:
             build_umu_invocation,
             locate_umu,
             resolve_runner,
+            resolve_codename,
             runtime_status,
         )
 
@@ -1592,6 +1617,17 @@ class Launcher:
 
         # Proton and Wine prefix handling
         if is_proton:
+            if block and proton_path in ("GE-Proton", "UMU-Proton"):
+                try:
+                    proton_path = resolve_codename(proton_path)
+                except ValueError:
+                    proton_path = ""
+                if not os.path.isabs(proton_path):
+                    return {
+                        "success": False,
+                        "code": "proton_missing_offline",
+                        "error": "Install or select a local Proton build before launching with No internet.",
+                    }
             if not locate_umu()[0]:
                 return {
                     "success": False,

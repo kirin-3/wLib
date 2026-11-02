@@ -355,7 +355,7 @@ def test_saves_api_busy_guard_released_after_exception(saves_api, tmp_path):
 
 
 def test_launch_uses_stored_sandbox_flag_for_extra_target(monkeypatch):
-    game_id = add_game("Sandbox game", "/game.exe", sandbox_enabled=True)
+    game_id = add_game("Sandbox game", "/game.exe", sandbox_enabled=True, block_network=True)
     api = Api()
     captured = {}
 
@@ -366,6 +366,7 @@ def test_launch_uses_stored_sandbox_flag_for_extra_target(monkeypatch):
     monkeypatch.setattr(api.launcher, "launch", launch)
     assert api.launch_game(game_id, exe_path="/extra.exe")["success"]
     assert captured["sandbox_enabled"] is True
+    assert captured["block_network"] is True
     assert captured["game_title"] == "Sandbox game"
 
 

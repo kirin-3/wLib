@@ -2974,3 +2974,17 @@ def test_note_links_fill_missing():
     backup = base_backup([{"metadata": {"title": "Fill links"}, "user_state": {"note_links": links}}])
     apply_library_backup(backup, merge_mode="fill_missing")
     assert next(g for g in get_all_games() if g["id"] == game_id)["note_links"] == links
+
+
+def test_block_network_backup_and_sync_roundtrip():
+    game_id = add_game("Offline", "", block_network=True)
+    backup = build_library_backup()
+    assert backup["games"][0]["launch_config"]["block_network"] == 1
+    sync = build_sync_backup("2026-10-25T00:00:00Z", "device")
+    assert sync["games"][0]["user_state"]["block_network"] == 1
+    update_game(game_id, {"block_network": False})
+    apply_library_backup(backup)
+    assert get_all_games()[0]["block_network"] == 1
+    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {}}])
+    apply_library_backup(old)
+    assert next(g for g in get_all_games() if g["title"] == "Old")["block_network"] == 0

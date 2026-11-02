@@ -1960,3 +1960,17 @@ def test_note_links_migration_validation_and_sync_time():
     game = next(game for game in get_all_games() if game["id"] == game_id)
     assert game["note_links"] == [{"url": "https://example.com/guide", "label": "x" * 200}]
     assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"
+
+
+def test_block_network_migrates_and_marks_sync():
+    game_id = add_game("Old", "")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TRIGGER IF EXISTS sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN block_network")
+        conn.commit()
+    init_db()
+    assert get_game(game_id)["block_network"] == 0
+    update_setting("sync_local_modified_at", "2000-01-01T00:00:00Z")
+    update_game(game_id, {"block_network": True})
+    assert get_game(game_id)["block_network"] == 1
+    assert get_setting("sync_local_modified_at") != "2000-01-01T00:00:00Z"

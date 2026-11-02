@@ -2434,7 +2434,7 @@ def test_sandboxie_launch_tracks_box_after_start_exits(monkeypatch):
         lambda: {"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
     )
     monkeypatch.setattr(
-        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args: "wLib_12"
+        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
     )
     launcher = Launcher()
     calls = []
@@ -3349,3 +3349,80 @@ def test_umu_cheat_engine_joins_and_sandbox_skips(tmp_path, monkeypatch):
     )
     assert result["success"] and "Cheat Engine" in result["notice"]
     assert len(calls) == 1 and len(threads) == 1
+
+
+def test_network_block_refuses_unavailable_and_windows_without_sandbox(monkeypatch):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "missing", "reason": "missing bwrap", "path": "", "version": ""})
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
+        result = Launcher().launch("/game/game", block_network=True)
+        assert result["code"] == "network_block_unavailable"
+        assert "missing bwrap" in result["error"]
+        popen.assert_not_called()
+        monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+        assert Launcher().launch("C:/game/game.exe", block_network=True)["code"] == "network_block_needs_sandbox"
+
+
+def test_network_block_wraps_unsandboxed_game(monkeypatch):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    with patch("os.path.exists", return_value=True), patch("os.access", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch("/games/game.sh", launch_mode="native", block_network=True)
+    assert result["success"]
+    assert popen.call_args.args[0] == ["/usr/bin/bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--chdir", "/games", "--", "/games/game.sh"]
+
+
+def test_offline_proton_requires_local_build(monkeypatch):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    monkeypatch.setattr("core.umu.resolve_codename", MagicMock(side_effect=ValueError("No build")))
+    with patch("os.path.exists", return_value=True), patch("os.makedirs"), patch("subprocess.Popen") as popen:
+        result = Launcher().launch("/games/game.exe", proton_version="GE-Proton", block_network=True)
+    assert result["code"] == "proton_missing_offline"
+    popen.assert_not_called()
+
+
+def test_browser_ignores_network_preference(monkeypatch):
+    probe = MagicMock()
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", probe)
+    with patch("os.path.exists", return_value=True), patch("subprocess.Popen"), patch("threading.Thread"):
+        assert Launcher().launch("/tmp/game.html", game_id=1, block_network=True)["success"]
+    probe.assert_not_called()
+
+
+def test_offline_proton_uses_local_build(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    runner = tmp_path / "GE-Proton-11"
+    runner.mkdir()
+    monkeypatch.setattr("core.umu.resolve_codename", lambda name: str(runner))
+    with patch("os.path.exists", return_value=True), patch("os.makedirs"), patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch("/games/game.exe", proton_version="GE-Proton", block_network=True)
+    assert result["success"]
+    assert popen.call_args.kwargs["env"]["PROTONPATH"] == str(runner)
+    assert popen.call_args.kwargs["env"]["UMU_RUNTIME_UPDATE"] == "0"
+
+
+def test_offline_wine_preserves_context_and_kill_info(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "bwrap", "version": ""})
+    wine = tmp_path / "wine"
+    wine.write_text("#!/bin/sh\n")
+    wine.chmod(0o755)
+    wineserver = tmp_path / "wineserver"
+    wineserver.write_text("#!/bin/sh\n")
+    wineserver.chmod(0o755)
+    exe = tmp_path / "game.exe"
+    exe.write_bytes(b"MZ")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        launcher = Launcher()
+        result = launcher.launch(str(exe), proton_version=str(wine), custom_prefix=str(tmp_path / "prefix"), launch_mode="wine_proton", game_id=1, block_network=True)
+    assert result["success"], result
+    assert popen.call_args.args[0][:3] == ["bwrap", "--unshare-user", "--unshare-net"]
+    assert launcher._running[1].wine_context is not None
+    assert launcher._running[1].kill_info is not None
+
+
+def test_offline_sandbox_adds_network_namespace(monkeypatch, tmp_path):
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "bwrap", "version": ""})
+    monkeypatch.setattr("core.launcher.game_sandbox.prepare_sandbox_home", lambda _: str(tmp_path / "home"))
+    with patch("os.path.exists", return_value=True), patch("os.access", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch("/games/game.sh", launch_mode="native", game_id=1, sandbox_enabled=True, block_network=True)
+    assert result["success"], result
+    assert "--unshare-net" in popen.call_args.args[0]
+    assert "--unshare-pid" in popen.call_args.args[0]

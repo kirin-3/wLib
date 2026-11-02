@@ -513,6 +513,7 @@ def test_api_launch_game_passes_normalized_launch_mode(monkeypatch):
         game_id=None,
         sandbox_enabled=False,
         game_title="",
+        block_network=False,
     ):
         captured["exe_path"] = exe_path
         captured["launch_mode"] = launch_mode
@@ -547,6 +548,7 @@ def test_api_launch_game_passes_rpgmaker_linux_launch_mode(monkeypatch):
         game_id=None,
         sandbox_enabled=False,
         game_title="",
+        block_network=False,
     ):
         captured["exe_path"] = exe_path
         captured["launch_mode"] = launch_mode
@@ -784,6 +786,7 @@ def test_api_launch_game_uses_selected_target_path_and_parent_playtime(monkeypat
         game_id=None,
         sandbox_enabled=False,
         game_title="",
+        block_network=False,
     ):
         captured["exe_path"] = exe_path
         captured["command_line_args"] = command_line_args

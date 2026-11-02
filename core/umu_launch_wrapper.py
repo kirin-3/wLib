@@ -36,6 +36,25 @@ def main() -> None:
             setattr(umu_run, "setup_umu", setup)
         except Exception:
             print("[wLib] umu runtime patch unavailable", flush=True)
+        try:
+            umu_run = importlib.import_module("umu.umu_run")
+            installed = cast(
+                Callable[[object], bool],
+                getattr(importlib.import_module("umu.umu_util"), "has_runtime_installed"),
+            )
+            write_marker = cast(
+                Callable[[object], None], getattr(umu_run, "write_install_marker")
+            )
+
+            # Offline, umu rewrites the existing install marker, which fails on
+            # the sandbox's read-only shared runtime.
+            def mark(runtime_dir: object) -> None:
+                if not installed(runtime_dir):
+                    write_marker(runtime_dir)
+
+            setattr(umu_run, "write_install_marker", mark)
+        except Exception:
+            pass
     sys.argv[0] = target
     _ = runpy.run_path(target, run_name="__main__")
 

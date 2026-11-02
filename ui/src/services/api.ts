@@ -598,6 +598,7 @@ export interface GameRecord {
   note_links?: NoteLink[];
   links?: StoreLink[];
   sandbox_enabled?: boolean;
+  block_network?: boolean;
   id: number;
   title: string;
   exe_path: string;
@@ -2432,7 +2433,7 @@ class ApiService {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          sandbox_enabled: readMockSettings().sandbox_new_games, play_status: "Not Started", thread_completed: false };
+          sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {

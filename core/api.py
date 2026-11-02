@@ -3839,6 +3839,7 @@ class Api:
                 on_exit_callback=on_exit,
                 game_id=game_id,
                 sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
+                block_network=bool(stored_game.get("block_network")),
                 game_title=str(stored_game.get("title") or ""),
             )
         except Exception as exc:

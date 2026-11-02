@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sandboxStatusMessage, sandboxSwitchState, sandboxLaunchError } from './sandbox.ts';
+import { sandboxStatusMessage, sandboxSwitchState, sandboxLaunchError, networkSwitchState } from './sandbox.ts';
 
 const ready = { status: 'ready' as const, tool: 'bwrap', path: '/usr/bin/bwrap', version: '0.13', reason: '' };
 const missing = { ...ready, status: 'missing' as const, path: '', reason: 'Install bubblewrap.' };
@@ -43,7 +43,14 @@ test('HTML is unavailable while missing tools preserve an editable switch', () =
   assert.equal(sandboxSwitchState('/game/Game.exe', ready).needsSettings, false);
 });
 test('sandbox launch errors link to settings and prefix conflicts keep their explanation', () => {
-  for (const code of ['sandbox_missing','sandbox_unusable']) assert.equal(sandboxLaunchError(code,'Unavailable')?.openSettings, true);
+  for (const code of ['sandbox_missing','sandbox_unusable','network_block_unavailable','network_block_needs_sandbox','proton_missing_offline']) assert.equal(sandboxLaunchError(code,'Unavailable')?.openSettings, true);
   assert.deepEqual(sandboxLaunchError('prefix_in_use','Story is already running.'), {message:'Story is already running.',openSettings:false});
   assert.equal(sandboxLaunchError('other','Failure'), null);
+});
+
+test('network switch respects browser games and Windows sandbox', () => {
+  assert.equal(networkSwitchState('/game/index.html', 'linux', true).disabled, true);
+  assert.equal(networkSwitchState('/game/game.exe', 'windows', false).disabled, true);
+  assert.equal(networkSwitchState('/game/game.exe', 'windows', true).disabled, false);
+  assert.equal(networkSwitchState('/game/game.exe', 'linux', false).disabled, false);
 });

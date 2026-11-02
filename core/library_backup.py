@@ -92,6 +92,7 @@ METADATA_FIELDS = (
     "links",
 )
 USER_STATE_FIELDS = (
+    "block_network",
     "play_status",
     "finished_version",
     "last_played_version",
@@ -116,6 +117,7 @@ LAUNCH_CONFIG_FIELDS = (
     "run_wayland",
     "auto_inject_ce",
     "sandbox_enabled",
+    "block_network",
     "custom_prefix",
     "proton_version",
     "save_path_override",
@@ -147,6 +149,7 @@ BOOLEAN_GAME_FIELDS = (
     "run_wayland",
     "auto_inject_ce",
     "sandbox_enabled",
+    "block_network",
     "is_favorite",
 )
 INTEGER_GAME_FIELDS = ("playtime_seconds",)
@@ -160,7 +163,7 @@ TIMESTAMP_GAME_FIELDS = ("last_played", "date_added")
 IMPORTABLE_GAME_FIELDS = (
     *(field for field in METADATA_FIELDS if field != "links"),
     *USER_STATE_FIELDS,
-    *LAUNCH_CONFIG_FIELDS,
+    *(field for field in LAUNCH_CONFIG_FIELDS if field not in USER_STATE_FIELDS),
     *EXECUTABLE_PATH_FIELDS,
 )
 

@@ -54,6 +54,7 @@ TAG_COLOR_SWATCHES = (
     "pink",
 )
 SYNC_GAME_COLUMNS = (
+    "block_network",
     "title",
     "developer",
     "engine",
@@ -522,6 +523,7 @@ def init_db() -> None:
             ("run_wayland", "BOOLEAN DEFAULT 0"),
             ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
             ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
+            ("block_network", "BOOLEAN DEFAULT 0"),
             ("custom_prefix", "TEXT DEFAULT ''"),
             ("proton_version", "TEXT DEFAULT ''"),
             ("playtime_seconds", "INTEGER DEFAULT 0"),
@@ -638,6 +640,7 @@ def add_game(
     launch_mode: str = DEFAULT_LAUNCH_MODE,
     command_line_args: str = "",
     sandbox_enabled: bool | None = None,
+    block_network: bool = False,
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
@@ -659,7 +662,7 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
@@ -680,6 +683,7 @@ def add_game(
                 DEFAULT_PLAY_STATUS,
                 command_line_args,
                 _coerce_bool_int(sandbox_enabled),
+                _coerce_bool_int(block_network),
             ),
         )
         game_id = cursor.lastrowid
@@ -1150,6 +1154,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "run_wayland",
         "auto_inject_ce",
         "sandbox_enabled",
+        "block_network",
         "custom_prefix",
         "proton_version",
         "save_path_override",
@@ -1183,6 +1188,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "run_wayland",
         "auto_inject_ce",
         "sandbox_enabled",
+        "block_network",
     ):
         if bool_column in safe_fields:
             safe_fields[bool_column] = _coerce_bool_int(safe_fields[bool_column])

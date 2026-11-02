@@ -90,6 +90,7 @@ Stores the library records and their associated configuration flags.
 | `run_japanese_locale` | `BOOLEAN` | Overrides `LC_ALL` to Japanese on Linux; preserved but ignored on Windows. |
 | `run_wayland` | `BOOLEAN` | Applies Linux Wayland compatibility settings; preserved but ignored on Windows. |
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
+| `block_network` | `BOOLEAN DEFAULT 0` | Per-game No internet preference, shared by all launch targets and carried by backup and sync. |
 | `sandbox_enabled` | `BOOLEAN DEFAULT 0` | Per-game sandbox preference, shared by all launch targets. Added additively with sandboxing off for existing games. New games follow `sandbox_new_games` unless explicitly set. Machine-specific launch configuration: exported when selected, never synced. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
 | `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
