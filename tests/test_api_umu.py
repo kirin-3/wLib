@@ -1,3 +1,7 @@
+import sys
+
+import pytest
+
 from core.api import Api
 from core.database import init_db
 
@@ -109,6 +113,7 @@ def test_runner_codenames_are_available_and_valid(tmp_path, monkeypatch):
     assert api.check_path("UMU-Proton", "runner")["ok"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Wine prefix tools and Wine launches run only on Linux hosts")
 def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     from core.database import add_game

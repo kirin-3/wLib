@@ -3463,6 +3463,7 @@ def test_performance_tools_wrap_launch(mode, args, expected):
     assert popen.call_args.args[0] == expected
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
 def test_missing_performance_tool_logged(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
@@ -3474,6 +3475,7 @@ def test_missing_performance_tool_logged(tmp_path, monkeypatch):
     assert "GameMode skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
 def test_sandbox_performance_tools_and_browser(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
@@ -3492,6 +3494,7 @@ def test_sandbox_performance_tools_and_browser(tmp_path, monkeypatch):
         assert popen.call_args.args[0][0] == "xdg-open"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
 @pytest.mark.parametrize("runner", ["/usr/bin/wine", "/fake/proton"])
 def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
     exe = tmp_path / "game.exe"
@@ -3514,6 +3517,7 @@ def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
         assert "mangohud" not in entry.kill_info[0]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
 def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch):
     exe = tmp_path / "game.exe"
     exe.touch()
