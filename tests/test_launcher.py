@@ -492,6 +492,7 @@ def test_launch_java_archive(mock_get_setting, mock_popen, mock_exists):
     assert kwargs["cwd"] == "/home/user"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="umu and Wine launches run only on Linux hosts")
 @patch("os.path.exists")
 @patch("subprocess.Popen")
 @patch("core.launcher.get_setting")
