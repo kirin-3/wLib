@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +20,7 @@ def test_script_formats(options, expected):
     assert subprocess.run(['sh', '-n'], input=script, text=True, check=False).returncode == 0
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX exec bits')
 def test_script_written_executable(tmp_path):
     path = ensure_launch_script(str(tmp_path))
     assert path.is_file()

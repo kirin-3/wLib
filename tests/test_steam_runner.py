@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import sys
 import time
 import pytest
 
@@ -115,6 +116,7 @@ def test_error_reporting_window_and_child(monkeypatch, tmp_path):
     assert called[1][0][0] == ['wlib', '--show-launch-error', '8']
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows uppercases environment names')
 def test_flatpak_host_command_forwards_steam_environment(monkeypatch):
     from core import host_platform
     monkeypatch.setattr(host_platform, 'is_flatpak', lambda: True)
@@ -127,6 +129,7 @@ def test_flatpak_host_command_forwards_steam_environment(monkeypatch):
     assert '--env=SteamGameId=99' in command
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='flock is POSIX-only')
 def test_launch_lock_is_exclusive_until_released():
     from core.game_run_lock import acquire_launch_lock
     first = acquire_launch_lock(1)
