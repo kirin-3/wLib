@@ -35,7 +35,7 @@ Snapshot from 2026-11-03
 | Bulk folder import | ✅ | ✅ (with undo) | ✅ (folder-scheme regex) | ✅ |
 | Thread screenshots | ✅ | ✅ | ✅ (+ custom previews) | ✅ |
 | Browse full catalog (not just library) | ❌ | ✅ Showcase | ✅ Browse mode | ❌ |
-| Gamepad / Steam Deck UI | ❌ | ✅ | ❌ | ❌ |
+| Gamepad / Steam Deck UI | ✅ controller navigation, TV mode | ✅ | ❌ | ❌ |
 | Themes | Light/dark, accent, 80–150% scale | ✅ | Theme builder, banner editor | Presets, accent |
 
 ## Sources and metadata
