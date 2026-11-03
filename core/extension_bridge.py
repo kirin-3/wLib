@@ -56,6 +56,7 @@ class BridgeConnection:
         self._send_lock = threading.Lock()
         self._hello_ok = False
         self.can_fetch = False
+        self.can_resolve = False
         self.eligible = False
         self.closed = False
         self.extension_version = ""
@@ -69,10 +70,12 @@ class BridgeConnection:
             fn(message)
 
     def note_hello(
-        self, protocol: object, can_fetch: object, extension_version: object = ""
+        self, protocol: object, can_fetch: object, extension_version: object = "",
+        can_resolve: object = False
     ) -> None:
-        self._hello_ok = protocol == 1
+        self._hello_ok = protocol in (1, 2)
         self.can_fetch = bool(can_fetch) if isinstance(can_fetch, bool) else False
+        self.can_resolve = can_resolve is True
         self.eligible = self._hello_ok and self.can_fetch
         if isinstance(extension_version, str):
             self.extension_version = extension_version.strip()[:32]
@@ -86,6 +89,21 @@ class BridgeConnection:
 _lock = threading.Lock()
 _connections: list[BridgeConnection] = []
 _pending: dict[str, _Pending] = {}
+
+
+@final
+class _PendingResolve:
+    def __init__(self, connection: BridgeConnection) -> None:
+        self.connection = connection
+        self.event = threading.Event()
+        self.result: dict[str, object] | None = None
+        self.error = "pending"
+        self.needs_user_at: float | None = None
+        self.on_progress: Callable[[str], None] | None = None
+
+
+_resolve_lock = threading.Lock()
+_pending_resolves: dict[str, _PendingResolve] = {}
 # Connection history for diagnostics. A browser that suspends the extension's
 # background page shows up as many short connections.
 _disconnects = 0
@@ -100,6 +118,7 @@ def reset_for_tests() -> None:
     with _lock:
         _connections.clear()
         _pending.clear()
+        _pending_resolves.clear()
         _disconnects = 0
         _last_disconnect_at = None
         _last_connection_seconds = None
@@ -133,6 +152,10 @@ def _remove_connection(conn: BridgeConnection) -> None:
             item = _pending.pop(key)
             item.error = "disconnected"
             item.event.set()
+        for key in [key for key, item in _pending_resolves.items() if item.connection is conn]:
+            pending_resolve = _pending_resolves.pop(key)
+            pending_resolve.error = "disconnected"
+            pending_resolve.event.set()
     if was_open:
         logger.info("Browser extension disconnected after %.0f s", duration)
 
@@ -226,6 +249,7 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             message.get("protocol"),
             message.get("can_fetch"),
             message.get("extension_version"),
+            message.get("can_resolve"),
         )
         logger.info(
             "Browser extension connected (version %s, protocol %s, can fetch: %s)",
@@ -243,6 +267,25 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             conn.send_text(json.dumps({"type": "pong"}))
         except BridgeFailed:
             pass
+    elif raw_type in ("resolve_progress", "resolve_result"):
+        request_id = message.get("id")
+        if not isinstance(request_id, str):
+            return
+        with _lock:
+            pending_resolve = _pending_resolves.get(request_id)
+            if pending_resolve is None or pending_resolve.connection is not conn:
+                return
+            if raw_type == "resolve_result":
+                _ = _pending_resolves.pop(request_id)
+                pending_resolve.result = message
+                pending_resolve.event.set()
+                return
+            stage = message.get("stage")
+            if stage == "needs_user":
+                pending_resolve.needs_user_at = time.monotonic()
+            callback = pending_resolve.on_progress
+        if isinstance(stage, str) and callback:
+            callback(stage)
     elif raw_type == "fetch_result":
         request_id = message.get("id")
         if not isinstance(request_id, str) or not request_id:
@@ -308,6 +351,60 @@ def fetch(url: str, timeout: float = 30) -> BridgeResponse:
         return item.response
     raise BridgeFailed(item.error or "extension fetch failed")
 
+
+
+def resolve(
+    url: str, host: str, timeout: float = 35,
+    on_progress: Callable[[str], None] | None = None,
+    start: Callable[[Callable[[], None]], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> dict[str, object]:
+    """Resolve one link, releasing the F95 pacing slot after sending it."""
+    with _resolve_lock:
+        with _lock:
+            conn = next((c for c in _connections if c.eligible and c.can_resolve and not c.closed), None)
+        if conn is None:
+            raise BridgeUnavailable("no extension with download resolution connected")
+        request_id = uuid.uuid4().hex
+        item = _PendingResolve(conn)
+        item.on_progress = on_progress
+        with _lock:
+            _pending_resolves[request_id] = item
+        try:
+            payload = json.dumps({"type": "resolve", "id": request_id, "url": url, "host": host})
+            send = lambda: conn.send_text(payload)  # noqa: E731
+            if start is None:
+                send()
+            else:
+                start(send)
+            deadline = time.monotonic() + timeout
+            def abandon() -> None:
+                # The extension closes the window it opened for this request.
+                try:
+                    conn.send_text(json.dumps({"type": "resolve_cancel", "id": request_id}))
+                except (BridgeFailed, OSError, ValueError):
+                    pass
+
+            while not item.event.is_set():
+                if cancel is not None and cancel.is_set():
+                    abandon()
+                    raise BridgeFailed("cancelled")
+                if item.needs_user_at is not None:
+                    # A little past the extension's own 5-minute limit, so its answer wins.
+                    deadline = item.needs_user_at + 305
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    abandon()
+                    raise BridgeFailed("extension did not resolve in time")
+                _ = item.event.wait(min(remaining, 0.1))
+            if item.result is None:
+                raise BridgeFailed(item.error)
+            return item.result
+        except (OSError, ValueError) as exc:
+            raise BridgeFailed("failed to send resolve") from exc
+        finally:
+            with _lock:
+                _ = _pending_resolves.pop(request_id, None)
 
 def _send_raw(wfile: BinaryIO | BufferedIOBase, data: bytes) -> None:
     _ = wfile.write(data)

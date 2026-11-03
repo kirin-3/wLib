@@ -29,6 +29,9 @@ export const openInstallArchive = (request: InstallArchiveRequest = {}): void =>
   );
 };
 
+/** Select deletion only for archives staged by wLib. */
+export const defaultDeleteArchive = (downloadedByWlib: boolean | undefined): boolean => downloadedByWlib === true;
+
 /** Apply automatic fills only to fields the user has left untouched. */
 export function mergeArchiveFields<T extends Record<string, string>>(
   current: T, incoming: Partial<T>, edited: ReadonlySet<keyof T>,

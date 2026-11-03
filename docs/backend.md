@@ -478,3 +478,8 @@ On Linux, launch options resolve GameMode and MangoHud per game against their gl
 
 Winecfg and Winetricks use the same prefix and runner resolution as the runtime installers. Proton tools run through umu; Wine tools use host binaries. Winetricks requires zenity or kdialog. Only one prefix tool can run at a time; it cannot run alongside an installer or a game using the same prefix, and installers and games on that prefix refuse while it remains open.
 
+
+
+### Update downloads
+
+`core/download_links.py` parses fresh first-post mirrors fetched through the signed-in extension session. `core/update_downloads.py` holds link addresses only in memory, behind opaque IDs, for at most five minutes or until the picker closes; they are never written to the database, exports, sync, or logs. `core/downloads/` contains the job manager, transfer loop, and Pixeldrain, MEGA and Buzzheavier adapters. Transfers run in the background into `<data dir>/downloads/`, use temporary `.part` files and verify archive signatures before publishing the result. Staging is device-local and excluded from backups and sync; startup removes partial files and old unused archives.

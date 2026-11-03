@@ -375,3 +375,8 @@ All cover views try the local cover, then `cover_cache_url`, then the remote `co
 
 On Linux, Settings offers Winecfg and Winetricks for the prefix and runner currently in the form, plus global GameMode and MangoHud switches. The game Launch tab offers per-game Default, On, and Off choices and provides prefix-tool buttons when a custom prefix is enabled. Unavailable tools are disabled with a note; GameMode is also disabled for sandboxed games.
 
+
+
+### Update downloads
+
+`UpdateDownloadModal.vue` presents thread builds and mirrors, patch guidance, browser fallback, and job progress. `useUpdateDownloads.ts` keeps download jobs and game-running state available across views, polls active work, and hands finished archives to the existing install dialog. The Updates view and the game detail dialog offer the action for eligible games. `updateDownloads.ts` owns platform ordering, mirror preference and next-step messages.

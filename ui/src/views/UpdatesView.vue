@@ -7,7 +7,9 @@ import {
   IconArrowUp,
   IconClockUp,
   IconCheck,
+  IconDownload,
   IconExternalLink,
+  IconFileZip,
   IconInfoCircle,
   IconLoader2,
   IconReload,
@@ -16,6 +18,8 @@ import {
 import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
 import { openInstallArchive } from "../utils/installArchive";
+import {useUpdateDownloads} from "../composables/useUpdateDownloads";
+const updateDownloads = useUpdateDownloads();
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
 import { libraryOpenQuery } from "../utils/storeLinks";
@@ -52,6 +56,21 @@ const loadDownloadOffers = async () => {
   } catch (e) {
     console.error("Failed to load download offers", e);
   }
+};
+
+const DOWNLOAD_STAGE_LABELS: Record<string, string> = {
+  resolving: "Getting link…",
+  needs_user: "Check your browser",
+  downloading: "Downloading",
+  verifying: "Verifying…",
+};
+const downloadProgressLabel = (gameId: number): string => {
+  const job = updateDownloads.jobFor(gameId);
+  if (!job) return "";
+  const label = DOWNLOAD_STAGE_LABELS[job.stage] || job.stage;
+  if (job.stage !== "downloading") return label;
+  if (job.total) return `${label} ${Math.floor((job.bytes / job.total) * 100)}%`;
+  return `${label} ${Math.round(job.bytes / 1048576)} MiB`;
 };
 
 const installUpdate = (game: GameRecord) => {
@@ -742,7 +761,7 @@ onUnmounted(() => {
           <div
             v-for="game in persistedUpdates"
             :key="game.id"
-            class="flex items-center justify-between gap-3 rounded-lg px-4 py-3"
+            class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg px-4 py-3"
             style="
               background: var(--bg-raised);
               border: 1px solid var(--border);
@@ -750,7 +769,7 @@ onUnmounted(() => {
           >
             <button
               @click="openGame(game)"
-              class="update-entry flex items-center gap-3 min-w-0 flex-1 text-left rounded-md"
+              class="update-entry flex items-center gap-3 min-w-[12rem] flex-1 text-left rounded-md"
               :title="`Open ${game.title}`"
             >
               <img
@@ -782,34 +801,46 @@ onUnmounted(() => {
                 >
                   {{ game.title }}
                 </p>
-                <p class="text-xs" style="color: var(--text-muted)">
+                <p class="text-xs truncate" style="color: var(--text-muted)">
                   {{ game.developer }}
                 </p>
               </div>
             </button>
-            <div class="flex items-center gap-3 shrink-0">
+            <div class="flex flex-wrap items-center justify-end gap-2">
+              <span
+                v-if="updateDownloads.jobFor(game.id)"
+                class="text-xs font-medium tabular-nums"
+                style="color: var(--brand)"
+                aria-live="polite"
+              >
+                {{ downloadProgressLabel(game.id) }}
+              </span>
               <button
-                @click="installUpdate(game)"
-                :disabled="status.running"
+                v-if="game.f95_url"
+                @click="updateDownloads.open(game)"
+                :disabled="updateDownloads.runningGames.value.includes(game.id) || !!updateDownloads.jobFor(game.id)"
                 class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
                 style="
                   background: var(--brand-glow);
                   color: var(--brand);
                   border: 1px solid var(--brand-deep);
                 "
+                title="Choose a build from the F95Zone thread and download it"
+              >
+                <IconDownload class="ui-action-icon" />
+                Download update
+              </button>
+              <button
+                @click="installUpdate(game)"
+                :disabled="status.running"
+                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
+                :class="downloadOffers.get(game.id) ? '' : 'update-btn'"
+                :style="downloadOffers.get(game.id) ? 'background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);' : ''"
                 :title="downloadOffers.get(game.id) ? `Install from ${downloadOffers.get(game.id)?.archive_path}` : 'Install the new version from a downloaded archive'"
               >
-                <IconArrowUp class="ui-action-icon" />
-                Install update
+                <IconFileZip class="ui-action-icon" />
+                {{ downloadOffers.get(game.id) ? "Install found archive" : "Install from file" }}
               </button>
-              <span
-                v-if="downloadOffers.get(game.id)"
-                class="text-xs font-semibold"
-                style="color: var(--brand)"
-                title="A matching archive was found in your Downloads folder"
-              >
-                Archive found
-              </span>
               <button
                 @click="markAsUpdated(game)"
                 :disabled="markingUpdatedIds.has(game.id) || status.running"

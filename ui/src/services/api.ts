@@ -307,7 +307,14 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
   remove_reason?: string;
   library_folder?: string;
   own_targets_inside?: string[];
+  downloaded_by_wlib?: boolean;
 }
+
+export interface UpdateMirror { link_id: string; host: string; label: string; part: string; split: boolean }
+export interface UpdateBuild { label: string; section: string; platform: string; kind: string; mirrors: UpdateMirror[] }
+export interface UpdateDownloadLinks extends ApiBasicResponse { version?: string; builds?: UpdateBuild[] }
+export interface UpdateDownloadJob { job_id: string; game_id: number; stage: string; bytes: number; total: number | null; speed: number; error: string; archive_path: string }
+export interface UpdateDownloadStatus extends ApiBasicResponse { jobs?: UpdateDownloadJob[] }
 
 export interface ArchiveInstallOptions {
   target_id?: number | null | undefined;
@@ -2223,12 +2230,35 @@ class ApiService {
     return this.invoke<LibraryFolder[]>("list_library_folders");
   }
 
+  async getUpdateDownloadLinks(gameId: number): Promise<UpdateDownloadLinks> {
+    return this.invoke<UpdateDownloadLinks>("get_update_download_links", gameId);
+  }
+  async closeUpdateDownloadLinks(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("close_update_download_links", gameId);
+  }
+  async startUpdateDownload(gameId: number, linkId: string): Promise<ApiBasicResponse & {job_id?: string}> {
+    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_update_download", gameId, linkId);
+  }
+  async getUpdateDownloadStatus(): Promise<UpdateDownloadStatus> {
+    return this.invoke<UpdateDownloadStatus>("get_update_download_status");
+  }
+  async cancelUpdateDownload(jobId: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("cancel_update_download", jobId);
+  }
+  async openUpdateDownloadInBrowser(gameId: number, linkId: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("open_update_download_in_browser", gameId, linkId);
+  }
+
   async inspectArchive(archivePath: string, gameId: number | null = null, targetId: number | null = null, libraryFolder: string | null = null): Promise<ArchiveInspectResponse> {
     return this.invoke<ArchiveInspectResponse>("inspect_archive", archivePath, gameId, targetId, libraryFolder);
   }
 
   async installArchive(options: ArchiveInstallOptions): Promise<ArchiveInstallResponse> {
     return this.invokeLibraryChange<ArchiveInstallResponse>("install_archive", options);
+  }
+
+  async releaseDownloadArchive(path: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("release_download_archive", path);
   }
 
   async getArchiveInstallStatus(): Promise<ArchiveInstallStatus> {
@@ -3160,6 +3190,18 @@ class ApiService {
           engine_pending: pattern.includes("{engine}") && !String(options.engine || "").trim(),
         };
       }
+      case "get_update_download_links":
+        return {success:true, version:"v1.2", builds:[{label:"Windows/Linux",section:"",platform:"windows/linux",kind:"full",mirrors:[{link_id:"mock-pixeldrain",host:"pixeldrain",label:"Pixeldrain",part:"",split:false},{link_id:"mock-other",host:"gofile",label:"Gofile",part:"",split:false}]}]};
+      case "close_update_download_links":
+        return {success:true};
+      case "start_update_download":
+        return {success:false,error:"Downloads are available in the desktop app"};
+      case "get_update_download_status":
+        return {success:true,jobs:[]};
+      case "cancel_update_download":
+        return {success:false,error:"Download is not running"};
+      case "open_update_download_in_browser":
+        return {success:true,mock:true};
       case "inspect_archive": {
         const fileName = String(args[0]).split(/[/\\]/).pop() || "";
         const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");
@@ -3213,6 +3255,7 @@ class ApiService {
           version,
           creator,
           engine,
+          downloaded_by_wlib: false,
           engine_pending: pattern.includes("{engine}") && !engine.trim(),
           destination,
           tool_error: toolError,
@@ -3242,6 +3285,8 @@ class ApiService {
           old_folder: "",
         };
       }
+      case "release_download_archive":
+        return {success:true};
       case "get_archive_install_status":
         return { ...this._mockArchiveStatus };
       case "find_download_offers":

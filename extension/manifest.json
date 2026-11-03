@@ -51,6 +51,15 @@
                 "widget-placement.js",
                 "content.js"
             ]
+        },
+        {
+            "matches": [
+                "https://f95zone.to/dl/*"
+            ],
+            "js": [
+                "dl-resolve.js"
+            ],
+            "run_at": "document_start"
         }
     ],
     "web_accessible_resources": [
@@ -81,7 +90,11 @@
     "optional_host_permissions": [
         "https://www.dlsite.com/*",
         "https://vndb.org/*",
-        "https://www.ryuugames.com/*"
+        "https://www.ryuugames.com/*",
+        "https://bzzhr.to/*",
+        "https://www.bzzhr.to/*",
+        "https://buzzheavier.com/*",
+        "https://www.buzzheavier.com/*"
     ],
     "options_ui": {
         "page": "options.html",

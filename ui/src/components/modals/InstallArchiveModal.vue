@@ -11,7 +11,7 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { createInstallPreview, mergeArchiveFields, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
@@ -114,6 +114,7 @@ const reset = () => {
   lookupLoading.value = false;
   previewError.value = "";
   phase.value = "pick";
+  if (archive.value) void api.releaseDownloadArchive(archive.value);
   archive.value = "";
   title.value = "";
   version.value = "";
@@ -227,9 +228,13 @@ const inspect = async () => {
   duplicateGameId.value = null;
   try {
     const info = await api.inspectArchive(path, target.value?.id ?? null, targetId.value, folderEdited.value ? libraryFolder.value : null);
-    if (requestId !== inspectRequestId || !props.modelValue) return;
+    if (requestId !== inspectRequestId || !props.modelValue) {
+      if (info.downloaded_by_wlib) void api.releaseDownloadArchive(path);
+      return;
+    }
     // The field was edited without committing; wait for its change event.
     if (archive.value.trim() !== path) {
+      if (info.downloaded_by_wlib) void api.releaseDownloadArchive(path);
       phase.value = "pick";
       return;
     }
@@ -238,6 +243,7 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
+    deleteArchive.value = defaultDeleteArchive(info.downloaded_by_wlib);
     // A guess from a previously picked archive is replaced; thread, seed and typed values are kept.
     const replaceable = (field: "title" | "version", value: string) =>
       !edited.has(field) && (!value.trim() || value === archiveGuess[field]);
@@ -277,6 +283,7 @@ const browseArchive = async () => {
   try {
     const path = await api.browseArchiveFile(archive.value);
     if (path && props.modelValue) {
+      if (archive.value && archive.value !== path) void api.releaseDownloadArchive(archive.value);
       archive.value = path;
       await inspect();
     }

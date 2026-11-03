@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""In-memory, short-lived download links exposed only through opaque IDs."""
+from __future__ import annotations
+
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Callable, final
+
+from core import database, scraper
+from core.downloads.manager import DownloadManager
+from core.downloads.transfer import DownloadError
+
+
+@dataclass
+class _Link:
+    game_id: int
+    key: tuple[str, str, str, str, str]
+    url: str
+    created: float
+
+
+@final
+class UpdateDownloads:
+    def __init__(self, manager: DownloadManager) -> None:
+        self.manager = manager
+        self.lock = threading.RLock()
+        self.links: dict[str, _Link] = {}
+        self.generations: dict[int, int] = {}
+
+    def get_links(self, game_id: int) -> dict[str, object]:
+        game = database.get_game(game_id)
+        if not game:
+            return {'success':False, 'error':'Game not found'}
+        f95_url = str(game.get('f95_url') or '')
+        if not f95_url:
+            return {'success':False, 'error':'Game has no F95Zone thread'}
+        with self.lock:
+            generation = self.generations.get(game_id, 0) + 1
+            self.generations[game_id] = generation
+        result = scraper.fetch_thread_download_links(f95_url)
+        if not result.get('success'):
+            return {'success':False, 'error':str(result.get('error') or 'Could not load download links')}
+        from core.download_links import Build
+        from typing import cast
+        builds = cast(list[Build], result['builds'])
+        output: list[dict[str, object]] = []
+        now = time.monotonic()
+        new_links: dict[str, _Link] = {}
+        for build in builds:
+            mirrors: list[dict[str, object]] = []
+            for mirror in build['mirrors']:
+                identifier = uuid.uuid4().hex
+                key = (build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
+                new_links[identifier] = _Link(game_id, key, mirror['url'], now)
+                mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split']})
+            output.append({**{k:v for k,v in build.items() if k != 'mirrors'}, 'mirrors':mirrors})
+        with self.lock:
+            if self.generations.get(game_id) != generation:
+                return {'success':False, 'error':'Download picker was closed'}
+            # Retain stale identities for refresh matching, but discard their URLs.
+            for link in self.links.values():
+                if link.game_id == game_id:
+                    link.url = ''
+            self.links.update(new_links)
+        identifiers = tuple(new_links)
+        def expire() -> None:
+            with self.lock:
+                for identifier in identifiers:
+                    item = self.links.get(identifier)
+                    if item is not None:
+                        item.url = ''
+        timer = threading.Timer(300, expire)
+        timer.daemon = True
+        timer.start()
+        return {'success':True, 'version':result['version'], 'builds':output}
+
+    def clear(self, game_id: int) -> None:
+        with self.lock:
+            self.generations[game_id] = self.generations.get(game_id, 0) + 1
+            for link in self.links.values():
+                if link.game_id == game_id:
+                    link.url = ""
+            self.links = {key: link for key, link in self.links.items() if link.game_id != game_id}
+
+    def _find(self, game_id: int, link_id: str) -> _Link:
+        with self.lock:
+            link = self.links.get(link_id)
+            if not link or link.game_id != game_id:
+                raise DownloadError('Download link is unavailable; reload the picker')
+            if link.url and time.monotonic() - link.created < 300:
+                return link
+            key = link.key
+            link.url = ''
+        result = self.get_links(game_id)
+        if not result.get('success'):
+            raise DownloadError(str(result.get('error') or 'Could not reload links'))
+        with self.lock:
+            match = next((candidate for candidate in self.links.values() if candidate.game_id == game_id and candidate.key == key and candidate.url), None)
+            if match is None:
+                raise DownloadError('Mirror no longer available; choose another mirror')
+            return match
+
+    def start(self, game_id: int, link_id: str) -> str:
+        link = self._find(game_id, link_id)
+        if link.key[4]:
+            raise DownloadError('Split archives are not supported yet; open in browser')
+        url, host = link.url, link.key[3]
+        def resolve(progress: Callable[[str], None], cancel: threading.Event) -> dict[str, object]:
+            if url.startswith('https://f95zone.to/dl/'):
+                return scraper.resolve_download_link(url, host, progress, cancel)
+            return {'ok':True, 'url':url, 'host':host}
+        return self.manager.start(game_id, resolve)
+
+    def browser_link(self, game_id: int, link_id: str) -> str:
+        return self._find(game_id, link_id).url

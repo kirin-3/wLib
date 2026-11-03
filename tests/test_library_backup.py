@@ -3010,3 +3010,14 @@ def test_performance_tools_backup_and_old_import():
     apply_library_backup(old)
     imported = next(game for game in get_all_games() if game["title"] == "Old")
     assert imported["gamemode"] == imported["mangohud"] == "default"
+
+
+def test_download_staging_not_exported(tmp_path, monkeypatch):
+    monkeypatch.setattr('core.database.DATA_DIR', str(tmp_path))
+    stage = tmp_path / 'downloads'
+    stage.mkdir()
+    (stage / 'private-update.zip').write_bytes(b'PRIVATE_DOWNLOAD_CONTENT')
+    backup = json.dumps(build_library_backup({'sections': [SECTION_METADATA]}))
+    sync = json.dumps(build_sync_backup('2026-11-03T00:00:00Z', 'device'))
+    assert 'private-update.zip' not in backup + sync
+    assert 'PRIVATE_DOWNLOAD_CONTENT' not in backup + sync

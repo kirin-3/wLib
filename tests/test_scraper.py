@@ -1413,3 +1413,54 @@ def test_cover_waits_for_back_to_back_foreground_requests(monkeypatch):
         thread.join(5)
         assert not thread.is_alive()
     assert events == ["page", "page", "page", "cover"]
+
+
+def test_fetch_thread_download_links_extension_only(monkeypatch, caplog):
+    from pathlib import Path
+    from core import scraper as module
+
+    calls = []
+    monkeypatch.setattr(module.extension_bridge, "is_available", lambda: False)
+    monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: calls.append(url))
+    result = module.fetch_thread_download_links("https://f95zone.to/threads/example.123/")
+    assert result["code"] == "extension_unavailable"
+    assert not calls
+    monkeypatch.setattr(module.extension_bridge, "is_available", lambda: True)
+    fixtures = Path(__file__).parent / "fixtures" / "f95_download_links"
+    monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: (200, (fixtures / "guest.html").read_text()))
+    assert module.fetch_thread_download_links("https://f95zone.to/threads/123/")["code"] == "login_required"
+    monkeypatch.setattr(module, "_f95_get_via_extension", lambda url: (200, (fixtures / "signed_in.html").read_text()))
+    with caplog.at_level("INFO", logger="wlib.scraper"):
+        result = module.fetch_thread_download_links("https://f95zone.to/threads/example.123/")
+    assert result["success"] is True
+    assert "Thread 123: found 7 download links" in caplog.text
+    assert "https://" not in caplog.text
+
+
+def test_download_resolve_releases_pacing_while_waiting(monkeypatch):
+    import threading
+    from core import scraper as module
+    from core import extension_bridge as bridge
+
+    sent = threading.Event()
+    conn = bridge.BridgeConnection(send_text=lambda _: sent.set())
+    bridge.reset_for_tests()
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    monkeypatch.setattr(module, "get_request_interval_seconds", lambda: 0)
+    errors = []
+    def run():
+        try:
+            module.resolve_download_link("https://f95zone.to/dl/1/?fake", "mega")
+        except bridge.BridgeFailed as exc:
+            errors.append(str(exc))
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert sent.wait(1)
+        assert module._run_paced_f95_request(lambda: "update check") == "update check"
+    finally:
+        bridge._remove_connection(conn)
+        thread.join(1)
+        bridge.reset_for_tests()
+    assert errors == ["disconnected"]

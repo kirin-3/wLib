@@ -642,3 +642,19 @@ test("browser mock URM detection matches the tools engine label", async () => {
     delete globalThis.localStorage;
   }
 });
+
+test('update downloads expose browser mock payloads', async () => {
+  const storage = {getItem:()=>null,setItem(){},removeItem(){}};
+  globalThis.localStorage = storage;
+  globalThis.window = {localStorage:storage,dispatchEvent(){},addEventListener(){},navigator:{userAgent:'node'}};
+  const server = await createServer({server:{middlewareMode:true},appType:'custom'});
+  try {
+    const {api} = await server.ssrLoadModule('/src/services/api.ts');
+    const links = await api.getUpdateDownloadLinks(1);
+    assert.equal(links.success,true);
+    assert.equal(links.builds[0].mirrors[0].link_id,'mock-pixeldrain');
+    assert.deepEqual((await api.getUpdateDownloadStatus()).jobs,[]);
+    assert.equal((await api.startUpdateDownload(1,'mock-pixeldrain')).success,false);
+    assert.equal((await api.openUpdateDownloadInBrowser(1,'mock-other')).success,true);
+  } finally { await server.close(); delete globalThis.window; delete globalThis.localStorage; }
+});

@@ -144,6 +144,29 @@ function pageQuery(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "dl-owned?") {
+        const entry = resolveEntryFor(sender, message.url);
+        sendResponse(entry ? {owned:true, host:entry.host, buzzAllowed:entry.buzzAllowed} : {owned:false});
+        return;
+    }
+    if (message.type === "dl-progress" || message.type === "dl-result") {
+        const entry = resolveWindows.get(sender.tab?.id);
+        if (!entry) return;
+        if (message.type === "dl-progress" && message.stage === "needs_user") {
+            resolveNeedsUser(entry);
+        } else if (message.type === "dl-result") {
+            finishResolve(entry, message);
+        }
+        return;
+    }
+    if (message.type === "dl-buzz-permission") {
+        const entry = resolveWindows.get(sender.tab?.id);
+        if (!entry) { sendResponse({allowed:false}); return; }
+        const origin = safeBuzzOrigin(message.url);
+        if (!origin) { sendResponse({allowed:false}); return; }
+        Promise.resolve(chrome.permissions.contains({origins:[origin]})).then(allowed => sendResponse({allowed})).catch(() => sendResponse({allowed:false}));
+        return true;
+    }
     if (message.action === "saveThreadLinks") {
         fetchWLibJson("http://localhost:8183/api/thread-links", { method:"POST", headers:{"Content-Type":"application/json", ...WLIB_HEADERS}, body:JSON.stringify(message.payload) })
             .then(readWLibResponse).then(data => sendResponse({success:true,data}))
@@ -527,7 +550,8 @@ async function bridgeSendHello() {
         const canFetch = await bridgeGetCanFetch();
         bridgeSocket.send(JSON.stringify({
             type: "hello",
-            protocol: 1,
+            protocol: 2,
+            can_resolve: true,
             extension_version: bridgeGetVersion(),
             can_fetch: canFetch,
         }));
@@ -636,10 +660,16 @@ function ensureBridge() {
             if (message.type === "fetch") {
                 bridgeHandleFetchMessage(message);
             }
+            if (message.type === "resolve") bridgeHandleResolve(message);
+            if (message.type === "resolve_cancel") {
+                resolveOpening.get(message.id)?.abort();
+                for (const entry of resolveWindows.values()) if (entry.id === message.id) finishResolve(entry,{ok:false,error:'cancelled'});
+            }
             // pong and unknown types are ignored.
         };
         const handleClose = () => {
             bridgeClearPing();
+            for (const entry of [...resolveWindows.values()]) finishResolve(entry, {ok:false,error:"disconnected"});
             if (bridgeSocket === socket) {
                 bridgeSocket = null;
             }
@@ -704,6 +734,15 @@ async function syncSiteScripts() {
     const siteApi = globalThis.browser || chrome;
     if (!siteApi.scripting || !siteApi.permissions) return;
     const registered = await siteApi.scripting.getRegisteredContentScripts();
+    for (let i = 0; i < buzzOrigins.length; i++) {
+        const id = `wlib-buzz-resolve-${i}`;
+        const origin = buzzOrigins[i];
+        const allowed = await siteApi.permissions.contains({origins:[origin]});
+        const exists = registered.some(script=>script.id === id);
+        if (allowed && !exists) await siteApi.scripting.registerContentScripts([{id,matches:[origin],js:['bzzhr-resolve.js'],runAt:'document_start'}]);
+        if (!allowed && exists) await siteApi.scripting.unregisterContentScripts({ids:[id]});
+    }
+
     for (const [site, origin] of Object.entries(WLIB_OPTIONAL_SITES)) {
         const id = `wlib-${site}`;
         const allowed = await siteApi.permissions.contains({origins:[origin]});
@@ -736,10 +775,157 @@ function queueSiteSync() {
     return siteRegistrationQueue;
 }
 if (chrome.permissions && chrome.scripting) {
-    void queueSiteSync();
+    void Promise.resolve().then(queueSiteSync);
     chrome.permissions.onAdded.addListener(queueSiteSync);
     chrome.permissions.onRemoved.addListener(queueSiteSync);
     chrome.runtime.onStartup?.addListener(queueSiteSync);
     chrome.runtime.onInstalled?.addListener(queueSiteSync);
 }
 chrome.action?.onClicked?.addListener(() => chrome.runtime.openOptionsPage());
+
+
+// Resolve windows are the sole source of authority for content-script actions.
+const resolveWindows = new Map();
+const resolveOpening = new Map();
+const RESOLVE_STORAGE_KEY = 'wlibResolveWindows';
+const buzzOrigins = ['https://bzzhr.to/*','https://www.bzzhr.to/*','https://buzzheavier.com/*','https://www.buzzheavier.com/*'];
+function safeBuzzOrigin(value) {
+    try {
+        const url = new URL(value);
+        const origin = `${url.protocol}//${url.hostname}/*`;
+        return buzzOrigins.includes(origin) ? origin : '';
+    } catch (_) { return ''; }
+}
+function saveResolveWindows() {
+    try { const p = chrome.storage?.session?.set({[RESOLVE_STORAGE_KEY]: [...resolveWindows.values()].map(({tabId,windowId,id})=>({tabId,windowId,id}))}); p?.catch?.(()=>{}); } catch (_) {}
+}
+function sameUrl(a, b) {
+    try { return new URL(a).href === new URL(b).href; } catch (_) { return false; }
+}
+// Ownership follows the tab that actually loaded the requested /dl/ URL. Some
+// browsers (Zen, Firefox) load the URL in a different tab from the one the new
+// window reports, so the created window's tab id alone cannot be trusted.
+// Zen can also load the same URL a second time as a tab in the user's window.
+// Only the first tab to ask does the work; every other copy is closed.
+const resolveFinishedUrls = new Map();
+function closeTab(tabId) {
+    try { const p = chrome.tabs?.remove(tabId); p?.catch?.(()=>{}); } catch (_) {}
+}
+function resolveEntryFor(sender, url) {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return null;
+    const known = resolveWindows.get(tabId);
+    if (known) {
+        known.bound = true;
+        return known;
+    }
+    if (typeof url !== 'string') return null;
+    for (const [finishedUrl, expires] of resolveFinishedUrls) {
+        if (expires < Date.now()) resolveFinishedUrls.delete(finishedUrl);
+        else if (sameUrl(finishedUrl, url)) { closeTab(tabId); return null; }
+    }
+    for (const entry of new Set(resolveWindows.values())) {
+        if (entry.finished || !sameUrl(entry.url, url)) continue;
+        if (entry.bound) {
+            entry.duplicates.add(tabId);
+            closeTab(tabId);
+            return null;
+        }
+        resolveWindows.delete(entry.tabId);
+        entry.tabId = tabId;
+        entry.tabWindowId = sender.tab.windowId;
+        entry.bound = true;
+        resolveWindows.set(tabId, entry);
+        saveResolveWindows();
+        return entry;
+    }
+    return null;
+}
+function sendResolveMessage(message) {
+    try { if (bridgeSocket?.readyState === 1) bridgeSocket.send(JSON.stringify(message)); } catch (_) {}
+}
+function finishResolve(entry, result) {
+    if (!entry || entry.finished) return;
+    entry.finished = true;
+    clearTimeout(entry.timer);
+    resolveWindows.delete(entry.tabId);
+    saveResolveWindows();
+    const answer = {type:'resolve_result', id:entry.id, ok:result.ok === true};
+    for (const field of ['url','host','error','needs_permission','share_url']) {
+        if (typeof result[field] === 'string') answer[field] = result[field];
+    }
+    sendResolveMessage(answer);
+    // A copy of this URL that loads after the request ends is closed on sight.
+    resolveFinishedUrls.set(entry.url, Date.now() + 60000);
+    for (const tabId of entry.duplicates) closeTab(tabId);
+    if (entry.tabWindowId != null && entry.tabWindowId !== entry.windowId) {
+        try { const p = chrome.tabs.remove(entry.tabId); p?.catch?.(()=>{}); } catch (_) {}
+    }
+    try { const p = chrome.windows.remove(entry.windowId); p?.catch?.(()=>{}); } catch (_) {}
+}
+function resolveNeedsUser(entry) {
+    if (entry.finished || entry.needsUser) return;
+    entry.needsUser = true;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(()=>finishResolve(entry,{ok:false,error:'timed out'}),300000);
+    sendResolveMessage({type:'resolve_progress',id:entry.id,stage:'needs_user'});
+    try { const p = chrome.windows.update(entry.tabWindowId ?? entry.windowId,{state:'normal',focused:true}); p?.catch?.(()=>{}); } catch (_) {}
+    try { const p = chrome.tabs.update(entry.tabId,{active:true}); p?.catch?.(()=>{}); } catch (_) {}
+}
+async function bridgeHandleResolve(message) {
+    const id = typeof message.id === 'string' ? message.id : '';
+    const url = typeof message.url === 'string' ? message.url : '';
+    if (!id || !/^https:\/\/f95zone\.to\/dl\/\d+\/\?[^#]+/.test(url)) {
+        if (id) sendResolveMessage({type:'resolve_result',id,ok:false,error:'invalid download URL'});
+        return;
+    }
+    let win;
+    const socket = bridgeSocket;
+    const opening = new AbortController();
+    resolveOpening.set(id, opening);
+    try {
+        await resolveRecovery;
+        const buzzChecks = await Promise.all(buzzOrigins.map(origin => Promise.resolve(chrome.permissions.contains({origins:[origin]}))));
+        const buzzAllowed = buzzOrigins.filter((_, index) => buzzChecks[index]);
+        if (opening.signal.aborted || !socket || bridgeSocket !== socket || socket.readyState !== 1) return;
+        // Firefox-based browsers may refuse `focused` or `state` on create.
+        for (const options of [{url,state:'minimized',focused:false},{url,state:'minimized'},{url}]) {
+            try { win = await chrome.windows.create(options); break; } catch (_) {}
+        }
+        if (!win) throw new Error('window unavailable');
+        if (win.state !== 'minimized') { try { await chrome.windows.update(win.id,{state:'minimized'}); } catch (_) {} }
+        if (opening.signal.aborted || !socket || bridgeSocket !== socket || socket.readyState !== 1) {
+            await chrome.windows.remove(win.id);
+            return;
+        }
+        const tabId = win.tabs?.[0]?.id;
+        if (!Number.isInteger(tabId) || !Number.isInteger(win.id)) throw new Error('window unavailable');
+        const entry = {id,url,host:message.host,buzzAllowed,tabId,windowId:win.id,tabWindowId:win.id,bound:false,duplicates:new Set(),finished:false,needsUser:false};
+        resolveWindows.set(tabId,entry);
+        entry.timer = setTimeout(()=>finishResolve(entry,{ok:false,error:'timed out'}),30000);
+        saveResolveWindows();
+        sendResolveMessage({type:'resolve_progress',id,stage:'opened'});
+    } catch (_) {
+        if (win?.id != null) { try { await chrome.windows.remove(win.id); } catch (_) {} }
+        sendResolveMessage({type:'resolve_result',id,ok:false,error:'could not open resolve window'});
+    } finally {
+        resolveOpening.delete(id);
+    }
+}
+chrome.windows?.onRemoved?.addListener(windowId => {
+    for (const entry of [...resolveWindows.values()]) if ((entry.tabWindowId ?? entry.windowId) === windowId) finishResolve(entry,{ok:false,error:'cancelled'});
+});
+chrome.tabs?.onRemoved?.addListener(tabId => {
+    const entry = resolveWindows.get(tabId);
+    if (entry?.bound) finishResolve(entry,{ok:false,error:'cancelled'});
+});
+// A worker restart loses the bridge request; close any windows it left behind.
+const resolveRecovery = (async () => {
+    try {
+        const stored = await chrome.storage?.session?.get(RESOLVE_STORAGE_KEY);
+        for (const entry of stored?.[RESOLVE_STORAGE_KEY] || []) {
+            try { await chrome.windows.remove(entry.windowId); } catch (_) {}
+        }
+        await chrome.storage?.session?.remove(RESOLVE_STORAGE_KEY);
+    } catch (_) {}
+})();

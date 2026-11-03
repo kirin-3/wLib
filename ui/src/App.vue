@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, watch, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   IconBrandGithub,
@@ -29,6 +29,9 @@ import {
   type InstallArchiveSeed,
 } from "./utils/installArchive";
 import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
+import UpdateDownloadModal from "./components/modals/UpdateDownloadModal.vue";
+import {useUpdateDownloads} from "./composables/useUpdateDownloads";
+const updateDownloads = useUpdateDownloads();
 
 import { extensionAddQuery, extensionOpenQuery, type ExtensionGameDetail } from "./utils/storeLinks";
 
@@ -58,6 +61,7 @@ const notifiedFinishedIds = new Set<number>();
 
 // Install-from-archive dialog (global so any view or toast can open it).
 const showInstallModal = ref(false);
+watch(showInstallModal, value => updateDownloads.setInstallDialogOpen(value));
 const installGame = ref<GameRecord | null>(null);
 const installArchivePath = ref("");
 const installSeed = ref<InstallArchiveSeed | undefined>();
@@ -240,6 +244,7 @@ onMounted(() => {
   // Check for App Updates on Startup
   onWebviewReady(async () => {
     void refreshUpdateCount();
+    updateDownloads.startPolling();
     void scanDownloadOffers();
     // Listen only once the backend is injected: a focus event at startup would
     // otherwise scan the mocks and the 60 s throttle would skip this real scan.
@@ -285,6 +290,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  updateDownloads.stopPolling();
   updateCountRequest++;
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
@@ -590,6 +596,7 @@ onUnmounted(() => {
         </transition>
       </router-view>
 
+      <UpdateDownloadModal />
       <InstallArchiveModal
         v-model="showInstallModal"
         :game="installGame"

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   INSTALL_ARCHIVE_EVENT,
   openInstallArchive,
+  defaultDeleteArchive,
   mergeArchiveFields,
   preselectLibraryFolder,
   formatLibraryFreeSpace,
@@ -120,4 +121,10 @@ test("folder preselection follows inspection until the user chooses a disk", () 
   assert.equal(preselectLibraryFolder("/default", undefined, false), "/default");
   assert.equal(formatLibraryFreeSpace(null), "Unavailable");
   assert.equal(formatLibraryFreeSpace(1024 ** 3), "1.0 GiB free");
+});
+
+test("only staged archives default to deletion", () => {
+  assert.equal(defaultDeleteArchive(true), true);
+  assert.equal(defaultDeleteArchive(false), false);
+  assert.equal(defaultDeleteArchive(undefined), false);
 });

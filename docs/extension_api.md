@@ -209,3 +209,16 @@ only for granted sites and reconciles them on startup, update and permission
 changes. Widgets appear only on work/VN/post pages, offer Open or Add/Wishlist,
 show wishlisted and outdated-app states, and offer Retry when wLib is offline.
 Page data is sent only to the local app; page scripts fetch no other pages.
+
+### Download resolution bridge messages
+
+Extensions implementing download resolution send `can_resolve: true` in their
+`hello` message (protocol 2). The app sends `{ "type": "resolve", "id":
+"...", "url": "https://f95zone.to/dl/…", "host": "mega" }`. Progress is
+`{ "type": "resolve_progress", "id": "...", "stage": "opened" }` or
+`stage: "needs_user"`. The final response is `{ "type": "resolve_result",
+"id": "...", "ok": true, "url": "...", "host": "..." }`; failures use
+`ok: false` and `error`, and a missing optional site permission is indicated by
+`needs_permission`. Buzzheavier results also include `share_url` for the file request's Referer. The app sends `{ "type": "resolve_cancel", "id": "..." }` to cancel a pending resolve. Addresses retain their fragments. Resolve requests are
+serialized and time out after 30 seconds, extended to five minutes when user
+interaction is needed.

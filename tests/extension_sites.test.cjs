@@ -32,6 +32,10 @@ test('optional sites register, inject into existing tabs, and unregister on perm
     listeners.added.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
     assert.equal(registered.get('wlib-dlsite'),current);
+    for (const origin of ['https://bzzhr.to/*','https://www.bzzhr.to/*','https://buzzheavier.com/*','https://www.buzzheavier.com/*']) granted.add(origin);
+    listeners.added.forEach(fn=>fn());
+    await vm.runInContext('siteRegistrationQueue',context);
+    assert.equal([...registered.keys()].filter(id=>id.startsWith('wlib-buzz-resolve-')).length,4);
     granted.clear(); listeners.removed.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
     assert.equal(registered.size,0);
@@ -56,7 +60,7 @@ test('optional site settings reset a declined request and revoke granted permiss
 test('new sites remain optional and F95 scripts load the shared URL rules first', () => {
     const manifest = JSON.parse(readFileSync(path.join(__dirname,'../extension/manifest.json'),'utf8'));
     assert.ok(manifest.permissions.includes('scripting'));
-    assert.equal(manifest.optional_host_permissions.length,3);
+    assert.equal(manifest.optional_host_permissions.length,7);
     for (const origin of manifest.optional_host_permissions) {
         assert.ok(!manifest.host_permissions.includes(origin));
         assert.ok(!manifest.content_scripts.some(script=>script.matches.includes(origin)));

@@ -349,3 +349,108 @@ def test_bridge_records_fetch_outcome_and_logs_state_changes(caplog):
     last_fetch = bridge.status_snapshot()["last_fetch"]
     assert isinstance(last_fetch, dict)
     assert last_fetch["error"] == "extension did not answer in time"
+
+
+def test_resolve_requires_capable_extension_and_preserves_fragment():
+    sent = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
+    with pytest.raises(BridgeUnavailable):
+        bridge.resolve("https://f95zone.to/dl/1/?fake", "mega")
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    results = []
+    thread = threading.Thread(target=lambda: results.append(bridge.resolve("https://f95zone.to/dl/1/?fake", "mega", timeout=1)))
+    thread.start()
+    deadline = time.monotonic() + 1
+    while not sent and time.monotonic() < deadline:
+        time.sleep(0.005)
+    request = json.loads(sent[0])
+    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True, "url": "https://mega.nz/file/a#key"})
+    thread.join(1)
+    assert results[0]["url"].endswith("#key")
+
+
+def test_resolve_disconnect_wakes_waiter():
+    sent = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    errors = []
+    def run():
+        try:
+            bridge.resolve("https://f95zone.to/dl/1/?fake", "mega")
+        except BridgeFailed as exc:
+            errors.append(str(exc))
+    thread = threading.Thread(target=run)
+    thread.start()
+    deadline = time.monotonic() + 1
+    while not sent and time.monotonic() < deadline:
+        time.sleep(0.005)
+    bridge._remove_connection(conn)
+    thread.join(1)
+    assert errors == ["disconnected"]
+
+
+def test_resolves_serialize_and_needs_user_extends_deadline():
+    sent = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 2, "can_fetch": True, "can_resolve": True})
+    results = []
+    stages = []
+    def run():
+        results.append(bridge.resolve("https://f95zone.to/dl/1/?fake", "mega", timeout=0.1, on_progress=stages.append))
+    first = threading.Thread(target=run)
+    second = threading.Thread(target=run)
+    first.start()
+    deadline = time.monotonic() + 1
+    while not sent and time.monotonic() < deadline:
+        time.sleep(0.005)
+    second.start()
+    request = json.loads(sent[0])
+    bridge._handle_message(conn, {"type": "resolve_progress", "id": request["id"], "stage": "needs_user"})
+    time.sleep(0.15)
+    assert len(sent) == 1 and stages == ["needs_user"]
+    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True})
+    deadline = time.monotonic() + 1
+    while len(sent) < 2 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    request = json.loads(sent[1])
+    bridge._handle_message(conn, {"type": "resolve_result", "id": request["id"], "ok": True})
+    first.join(1)
+    second.join(1)
+    assert len(results) == 2
+
+
+def test_resolve_cancel_sends_cancellation():
+    sent = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {'type':'hello','protocol':2,'can_fetch':True,'can_resolve':True})
+    cancelled = threading.Event()
+    errors = []
+    def run():
+        try:
+            bridge.resolve('https://f95zone.to/dl/1/?u=fake', 'mega', cancel=cancelled)
+        except BridgeFailed as exc:
+            errors.append(str(exc))
+    thread = threading.Thread(target=run)
+    thread.start()
+    deadline = time.monotonic() + 1
+    while not sent and time.monotonic() < deadline:
+        time.sleep(.005)
+    cancelled.set()
+    thread.join(1)
+    assert errors == ['cancelled']
+    assert json.loads(sent[-1]) == {'type':'resolve_cancel','id':json.loads(sent[0])['id']}
+
+
+def test_resolve_timeout_asks_extension_to_close_its_window():
+    sent = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {'type':'hello','protocol':2,'can_fetch':True,'can_resolve':True})
+    with pytest.raises(BridgeFailed, match='in time'):
+        bridge.resolve('https://f95zone.to/dl/1/?u=fake', 'mega', timeout=0.05)
+    assert json.loads(sent[-1])['type'] == 'resolve_cancel'

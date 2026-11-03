@@ -34,6 +34,8 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { getSafeNotesLinkUrl, noteLinkUrl, noteLinkLabel, noteLinkHost, hasNoteLink } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
+import {useUpdateDownloads} from "../../composables/useUpdateDownloads";
+const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
@@ -1849,6 +1851,11 @@ const removeAttachment = async (name: string) => {
             >
               <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
               {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
+            </button>
+            <button v-if="hasUpdate && props.game?.f95_url" @click="updateDownloads.open(props.game)"
+              :disabled="props.isRunning || !!updateDownloads.jobFor(props.game.id)"
+              class="modal-toolbar-action ui-action-btn disabled:opacity-50" style="color:var(--text-primary)">
+              Download update
             </button>
             <button
               v-if="hasUpdate && props.game"

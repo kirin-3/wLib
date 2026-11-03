@@ -290,6 +290,11 @@ class Api:
         from core.game_covers import CoverCacheService
 
         self.cover_cache: CoverCacheService = CoverCacheService()
+        from core.downloads.manager import manager as download_manager
+        from core.update_downloads import UpdateDownloads
+
+        self._update_downloads: UpdateDownloads = UpdateDownloads(download_manager)
+        download_manager.cleanup()
         self.scraper: Scraper = Scraper()
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
@@ -5885,6 +5890,40 @@ class Api:
             "engine_pending": "{engine}" in pattern and not engine,
         }
 
+    def get_update_download_links(self, game_id: int) -> dict[str, object]:
+        return self._update_downloads.get_links(game_id)
+
+    def close_update_download_links(self, game_id: int) -> dict[str, object]:
+        self._update_downloads.clear(game_id)
+        return {"success": True}
+
+    def start_update_download(self, game_id: int, link_id: str) -> dict[str, object]:
+        from core.downloads.transfer import DownloadError
+
+        if game_id in self.get_running_games():
+            return {"success": False, "error": "Close the game before downloading an update"}
+        try:
+            return {"success": True, "job_id": self._update_downloads.start(game_id, link_id)}
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+
+    def get_update_download_status(self) -> dict[str, object]:
+        return {"success": True, "jobs": self._update_downloads.manager.status()}
+
+    def cancel_update_download(self, job_id: str) -> dict[str, object]:
+        if not self._update_downloads.manager.cancel(job_id):
+            return {"success": False, "error": "Download is not running"}
+        return {"success": True}
+
+    def open_update_download_in_browser(self, game_id: int, link_id: str) -> dict[str, object]:
+        from core.downloads.transfer import DownloadError
+
+        try:
+            url = self._update_downloads.browser_link(game_id, link_id)
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+        return dict(self.open_in_browser(url))
+
     def inspect_archive(
         self,
         path: str,
@@ -6023,8 +6062,15 @@ class Api:
                 old_exe,
             )
 
+        from pathlib import Path
+        from core.downloads.transfer import staging_dir
+
+        downloaded_by_wlib = Path(archive_path).resolve().is_relative_to(staging_dir().resolve())
+        if downloaded_by_wlib:
+            self._update_downloads.manager.mark_open(archive_path)
         return {
             "success": True,
+            "downloaded_by_wlib": downloaded_by_wlib,
             "title": title,
             "version": version,
             "creator": creator,
@@ -6038,6 +6084,10 @@ class Api:
             "removable": guard.get("removable", False),
             "remove_reason": guard.get("reason", ""),
         }
+
+    def release_download_archive(self, path: str) -> dict[str, object]:
+        self._update_downloads.manager.release(path)
+        return {"success": True}
 
     def get_archive_install_status(self) -> dict[str, object]:
         with self._status_lock:
@@ -6072,6 +6122,7 @@ class Api:
         archive_path = os.path.expanduser(
             str(payload.get("archive_path") or payload.get("archive") or "").strip()
         )
+        self._update_downloads.manager.release(archive_path)
         game_id_raw = payload.get("game_id", payload.get("gameId"))
         game_id: int | None = None
         if game_id_raw not in (None, ""):

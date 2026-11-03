@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-const origins = {dlsite:'https://www.dlsite.com/*',vndb:'https://vndb.org/*',ryuugames:'https://www.ryuugames.com/*'};
+const origins = {dlsite:'https://www.dlsite.com/*',vndb:'https://vndb.org/*',ryuugames:'https://www.ryuugames.com/*',buzzheavier:['https://bzzhr.to/*','https://www.bzzhr.to/*','https://buzzheavier.com/*','https://www.buzzheavier.com/*']};
 for (const input of document.querySelectorAll('input[data-site]')) {
-    const permission = {origins:[origins[input.dataset.site]]};
+    const siteOrigins = origins[input.dataset.site];
+    const permission = {origins:Array.isArray(siteOrigins) ? siteOrigins : [siteOrigins]};
     chrome.permissions.contains(permission, granted => { input.checked = granted; });
     input.addEventListener('change', () => {
         input.disabled = true;

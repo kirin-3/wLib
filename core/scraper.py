@@ -969,3 +969,41 @@ def f95_get_bytes(url: str, max_bytes: int) -> bytes:
                 raise ValueError("The image is larger than 20 MiB.")
             return data
     return _run_paced_f95_request(transport, background=True)
+
+
+def fetch_thread_download_links(f95_url: str) -> dict[str, object]:
+    """Fetch fresh download links through the signed-in browser session."""
+    from core.download_links import parse_download_links
+
+    thread_id = extract_thread_id(f95_url)
+    if not thread_id:
+        return {"success": False, "code": "invalid_url", "error": "Invalid F95Zone thread URL"}
+    if not extension_bridge.is_available():
+        return {"success": False, "code": "extension_unavailable", "error": "Open a browser with the wLib extension"}
+    try:
+        status, html = _f95_get_via_extension(f"https://f95zone.to/threads/{thread_id}/")
+    except (extension_bridge.BridgeFailed, extension_bridge.BridgeUnavailable):
+        return {"success": False, "code": "extension_unavailable", "error": "Open a browser with the wLib extension and try again"}
+    scraper = Scraper()
+    issue = scraper._classify_page_issue(status, scraper._page_title(html), html)  # pyright: ignore[reportPrivateUsage]
+    if issue:
+        return {"success": False, **issue}
+    if status != 200:
+        return {"success": False, "code": "scraper_error", "error": f"F95Zone returned HTTP {status}"}
+    result = parse_download_links(html)
+    if not result["signed_in"]:
+        return {"success": False, "code": "login_required", "error": "Sign in to F95Zone in your browser"}
+    builds = result["builds"]
+    count = sum(len(build["mirrors"]) for build in builds)
+    logging.getLogger("wlib.scraper").info("Thread %s: found %d download links", thread_id, count)
+    return {"success": True, **result}
+
+
+def resolve_download_link(
+    url: str, host: str, on_progress: Callable[[str], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> dict[str, object]:
+    """Pace only the start of a browser resolve, not its user interaction."""
+    return extension_bridge.resolve(
+        url, host, on_progress=on_progress, start=_run_paced_f95_request, cancel=cancel
+    )

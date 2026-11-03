@@ -489,7 +489,7 @@ test('bridge refuses non-allowlisted URLs without fetching', async () => {
   // explicit permission grant.
   const bridgeSource = backgroundSource.slice(backgroundSource.indexOf('// ---- Extension fetch fallback'), backgroundSource.indexOf('// Optional sites'));
   assert.deepEqual(bridgeSource.match(/chrome\.tabs\.\w+\([^)]*\)/g), ['chrome.tabs.query({ url: "https://f95zone.to/*" })']);
-  assert.ok(!backgroundSource.includes('chrome.windows'));
+  // Resolve requests may open windows; fetch itself stays tab-free.
   assert.ok(!backgroundSource.includes('chrome.offscreen'));
   assert.ok(!backgroundSource.includes('chrome.cookies'));
 });
@@ -700,7 +700,8 @@ test('bridge hello carries protocol and can_fetch', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   const hello = sent.map((raw) => JSON.parse(raw)).find((msg) => msg.type === 'hello');
   assert.ok(hello);
-  assert.equal(hello.protocol, 1);
+  assert.equal(hello.protocol, 2);
+  assert.equal(hello.can_resolve, true);
   assert.equal(hello.extension_version, '1.2.0');
   assert.equal(hello.can_fetch, true);
 });
