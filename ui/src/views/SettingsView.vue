@@ -58,6 +58,7 @@ import CompanionToolsSettings from "../components/CompanionToolsSettings.vue";
 import SandboxSettings from "../components/SandboxSettings.vue";
 import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
+import SteamSettings from "../components/SteamSettings.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
@@ -1658,6 +1659,7 @@ const browseUrm = async () => {
 
       <UmuSettings v-if="supportsLinuxRuntimes" />
 
+      <SteamSettings v-if="platformCapabilities.platform === 'linux'" />
       <CompanionToolsSettings v-if="platformCapabilities.companion_tools" />
 
       <SandboxSettings />

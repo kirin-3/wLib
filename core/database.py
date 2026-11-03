@@ -382,6 +382,19 @@ def init_db() -> None:
         """)
 
         _ = cursor.execute("""
+            CREATE TABLE IF NOT EXISTS steam_shortcuts (
+                account_id TEXT NOT NULL,
+                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+                app_id INTEGER,
+                state TEXT NOT NULL,
+                art_key TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(account_id, game_id)
+            )
+        """)
+        for key in ("steam_games_mode", "steam_account_id"):
+            _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,))
+
+        _ = cursor.execute("""
             CREATE TABLE IF NOT EXISTS game_launch_targets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 game_id INTEGER NOT NULL,
@@ -515,6 +528,7 @@ def init_db() -> None:
         }
 
         new_columns = [
+            ("steam_shortcut", "BOOLEAN DEFAULT 0"),
             ("cover_local", "TEXT"),
             ("cover_cache", "TEXT"),
             ("cover_cache_url", "TEXT"),
@@ -1145,6 +1159,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         return {}
     allowed = {
         "title",
+        "steam_shortcut",
         "exe_path",
         "f95_url",
         "version",
@@ -1197,6 +1212,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     for bool_column in (
         "thread_completed",
         "is_favorite",
+        "steam_shortcut",
         "run_japanese_locale",
         "run_wayland",
         "auto_inject_ce",
@@ -2036,4 +2052,28 @@ def set_game_companion_tool_override(
                 "INSERT INTO game_companion_tools (game_id, tool_id, visible) VALUES (?, ?, ?) ON CONFLICT(game_id, tool_id) DO UPDATE SET visible=excluded.visible",
                 (game_id, tool_id, visible),
             )
+        conn.commit()
+
+
+def list_steam_shortcuts(account_id: str) -> list[dict[str, object]]:
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(list[sqlite3.Row], conn.execute(
+            'SELECT * FROM steam_shortcuts WHERE account_id = ?', (account_id,)
+        ).fetchall())
+        return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+
+
+def put_steam_shortcut(account_id: str, game_id: int, app_id: int | None, state: str, art_key: str = '') -> None:
+    with closing(get_connection()) as conn:
+        _ = conn.execute('''INSERT INTO steam_shortcuts(account_id, game_id, app_id, state, art_key)
+            VALUES (?, ?, ?, ?, ?) ON CONFLICT(account_id, game_id) DO UPDATE SET
+            app_id=excluded.app_id, state=excluded.state, art_key=excluded.art_key''',
+            (account_id, game_id, app_id, state, art_key))
+        conn.commit()
+
+
+def delete_steam_shortcut(account_id: str, game_id: int) -> None:
+    with closing(get_connection()) as conn:
+        _ = conn.execute('DELETE FROM steam_shortcuts WHERE account_id = ? AND game_id = ?', (account_id, game_id))
         conn.commit()

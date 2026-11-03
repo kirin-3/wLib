@@ -3,6 +3,7 @@
 # Shared launcher for wLib binary release artifacts.
 
 SELF_PATH="$(readlink -f "$0")"
+export WLIB_LAUNCHER="$SELF_PATH"
 SELF_DIR="$(dirname "$SELF_PATH")"
 APP_DIR="${WLIB_APP_DIR:-$SELF_DIR}"
 LAUNCHER_NAME="${WLIB_LAUNCHER_NAME:-Release}"
@@ -209,6 +210,13 @@ configure_ssl_certificates() {
         export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$SSL_CERT_FILE}"
     fi
 }
+
+# Steam must signal the runner itself, not a waiting shell wrapper.
+if [ "${1:-}" = "--launch" ]; then
+    restore_host_library_path
+    configure_ssl_certificates
+    exec ./wlib-bin "$@" >> "$LOG_FILE" 2>&1
+fi
 
 detect_gpu
 if [ "$GPU_RENDER_MODE" = "auto" ]; then

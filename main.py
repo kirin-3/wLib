@@ -25,6 +25,22 @@ if "--smoke-test" in sys.argv and not (os.environ.get("WLIB_DATA_DIR") or "").st
     _smoke_data_dir = tempfile.mkdtemp(prefix="wlib-smoke-")
     os.environ["WLIB_DATA_DIR"] = _smoke_data_dir
 
+# Runner dispatch precedes importing the API, WebView, Qt, and server setup.
+if __name__ == "__main__" and "--launch" in sys.argv:
+    from core.steam_runner import run
+    from core.app_log import setup_app_log
+    from core.host_platform import get_data_dir
+
+    _ = setup_app_log(get_data_dir())
+    try:
+        launch_id = int(sys.argv[sys.argv.index("--launch") + 1])
+        if launch_id <= 0 or sys.platform != "linux":
+            raise ValueError("Invalid game ID or unsupported platform")
+    except (ValueError, IndexError):
+        print("Usage: wlib --launch <game id>", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(run(launch_id))
+
 from core.api import APP_VERSION, Api  # noqa: E402
 from core.app_log import setup_app_log  # noqa: E402
 from core.diagnostics import record_renderer_stage  # noqa: E402
@@ -1081,6 +1097,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             _ = self.wfile.write(json.dumps(check_payload).encode())
+        elif urlparse(self.path).path == "/api/running":
+            if not self.headers.get(EXTENSION_REQUEST_HEADER):
+                self._reject_origin()
+                return
+            ready = api_ref is not None and window_ref is not None and self._wait_for_database()
+            self.send_response(200 if ready else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            games = api_ref.get_running_games() if ready and api_ref is not None else []
+            _ = self.wfile.write(json.dumps({"success": ready, "games": games}).encode())
         elif urlparse(self.path).path == "/api/open":
             from urllib.parse import urlparse, parse_qs
 
@@ -1160,7 +1186,35 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._reject_origin()
             return
 
-        if self.path == "/api/wishlist":
+        if self.path == "/api/runner-event":
+            if not self.headers.get(EXTENSION_REQUEST_HEADER):
+                self._reject_origin()
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_EXTENSION_BODY_BYTES:
+                    raise ValueError("Invalid Content-Length")
+                raw = cast(object, json.loads(self.rfile.read(length)))
+                if not isinstance(raw, dict):
+                    raise ValueError("Invalid runner event")
+                payload = cast(dict[str, object], raw)
+                if payload.get("state") not in ("started", "ended", "error"):
+                    raise ValueError("Invalid runner event")
+                if not window_ref:
+                    raise ValueError("Application window is not ready")
+                active_window = cast(ExtensionWindow, window_ref)
+                _ = active_window.evaluate_js("window.dispatchEvent(new Event('wlib-refresh-library'))")
+                if payload.get("state") == "error":
+                    detail = json.dumps({"error": str(payload.get("error") or "Launch failed")})
+                    _ = active_window.evaluate_js(f"window.dispatchEvent(new CustomEvent('wlib-launch-error', {{detail: {detail}}}))")
+                runner_ok = True
+            except (ValueError, TypeError, OSError):
+                runner_ok = False
+            self.send_response(200 if runner_ok else 400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(json.dumps({"success": runner_ok}).encode())
+        elif self.path == "/api/wishlist":
             status = 200
             wishlist_response: dict[str, object]
             try:
@@ -1460,6 +1514,13 @@ def main() -> None:
         return
 
     _ = setup_app_log(APP_DATA_DIR)
+    if is_linux():
+        from core.steam_script import ensure_launch_script
+
+        try:
+            _ = ensure_launch_script()
+        except OSError as exc:
+            print(f"[wLib] Failed to update Steam launch script: {exc}")
     print(f"[wLib] SSL certificates: {ssl_summary or 'system defaults'}")
     database_ready = threading.Event()
     if extension_server is not None:
@@ -1488,6 +1549,7 @@ def main() -> None:
     )
 
     api = Api()
+    api._start_steam_sync(os.path.join(get_bundle_root(), "wlib.png"))  # pyright: ignore[reportPrivateUsage]
     api_ref = api
     database_ready.set()
     sync_result = api.sync_extension_files()
@@ -1548,6 +1610,8 @@ def main() -> None:
             icon_path=icon_path if os.path.exists(icon_path) else None,
         )
     finally:
+        if api.steam_sync is not None:
+            api.steam_sync.stop()
         api.cover_cache.stop()
         # Release the port before the final sync can take up to 10 seconds:
         # relaunching wLib while it shuts down must be able to bind it instead

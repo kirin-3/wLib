@@ -601,6 +601,8 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
     fake_webview.create_window.return_value = fake_window
 
     class FakeApi:
+        steam_sync = None
+        _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -665,6 +667,8 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
     fake_webview.create_window.return_value = MagicMock()
 
     class FakeApi:
+        steam_sync = None
+        _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1460,6 +1464,8 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
     monkeypatch.setattr(main.sys, "argv", ["main.py"])
 
     class FakeApi:
+        steam_sync = None
+        _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1503,6 +1509,8 @@ def test_main_flushes_playtime_before_the_final_sync(monkeypatch):
     fake_webview.create_window.return_value = MagicMock()
 
     class FakeApi:
+        steam_sync = None
+        _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1556,6 +1564,8 @@ def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
     fake_webview.create_window.side_effect = RuntimeError("no display")
 
     class FakeApi:
+        steam_sync = None
+        _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1974,3 +1984,23 @@ def test_cached_cover_route_rejects_invalid_names(name):
     handler.send_error = MagicMock()
     handler.do_GET()
     handler.send_error.assert_called_once_with(404)
+
+
+def test_runner_endpoints_require_header_and_notify_window(monkeypatch):
+    api = MagicMock()
+    api.get_running_games.return_value = [12]
+    monkeypatch.setattr(main, 'api_ref', api)
+    window = MagicMock()
+    monkeypatch.setattr(main, 'window_ref', window)
+    denied = _make_extension_handler('/api/running')
+    denied.do_GET()
+    denied.send_response.assert_called_once_with(403)
+    handler = _make_extension_handler('/api/running', headers={'X-wLib-Extension': '1'})
+    handler.do_GET()
+    assert json.loads(handler.wfile.getvalue())['games'] == [12]
+    payload = b'{"gameId": 12, "state": "ended"}'
+    handler = _make_extension_handler('/api/runner-event', headers={'X-wLib-Extension': '1', 'Content-Length': str(len(payload))})
+    handler.__dict__['rfile'] = BytesIO(payload)
+    handler.do_POST()
+    handler.send_response.assert_called_once_with(200)
+    assert 'wlib-refresh-library' in window.evaluate_js.call_args.args[0]

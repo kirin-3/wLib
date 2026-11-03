@@ -286,7 +286,7 @@ def host_command(
         for key, value in env.items():
             if _is_sandbox_only_env_var(key):
                 continue
-            if os.environ.get(key) == value:
+            if os.environ.get(key) == value and key not in ("LD_PRELOAD", "SteamAppId", "SteamGameId"):
                 continue
             argv.append(f"--env={key}={value}")
     argv.append("--")

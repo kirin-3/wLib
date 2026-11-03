@@ -271,3 +271,13 @@ The resulting artifacts are placed in `dist/`. With nFPM available, the output i
 With Flatpak tooling available, or with `WLIB_BUILD_FLATPAK=1`, it also includes:
 
 - `wLib-1.2.0-x86_64.flatpak`
+
+## Testing Steam Deck integration without a Deck
+
+On a Linux desktop with Steam, gamescope and a controller installed, a Steam Deck-like session can be started with:
+
+```bash
+gamescope -e -- steam -gamepadui -steamdeck
+```
+
+Set `WLIB_STEAM_DECK=1` when starting wLib to test the Deck default mode; `WLIB_STEAM_DECK=0` forces desktop detection. Add wLib in Settings, choose the games mode, and close Steam so queued shortcut changes and artwork can be applied. Start Steam again to inspect them. For an isolated headless-launch check, run `.venv/bin/python main.py --launch <game-id>` against a library with a native game; verify its play session after exit. Test a Proton game separately, including Steam's Exit game and Stop in an open wLib window. Flatpak host launches are experimental for focus and overlay behavior.

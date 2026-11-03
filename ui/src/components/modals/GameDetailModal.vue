@@ -64,6 +64,7 @@ import {
 import type { LaunchMode } from "../../utils/launchMode";
 import { performanceToolState } from "../../utils/performanceTools";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
+import { showSteamGameControl, steamIneligibleNote, steamStateLabel } from "../../utils/steam";
 import {
   DEFAULT_PLAY_STATUS,
   getPlayStatusMeta,
@@ -605,6 +606,25 @@ const hasUnsavedChanges = computed(() =>
 );
 
 watch(displayedCover, () => { coverImageFailed.value = false; });
+
+const steamState = ref<{success?: boolean; state?: string; marked?: boolean; mode?: string; eligible?: boolean; reason?: string}>({});
+const refreshSteamState = async () => {
+  if (!props.game || platformCapabilities.value.platform !== "linux") return;
+  try { steamState.value = await api.getGameSteamState(props.game.id); }
+  catch (error) { console.error("Could not load Steam state", error); }
+};
+const setSteamMark = async (event: Event) => {
+  if (!props.game) return;
+  const result = await api.setGameSteamShortcut(props.game.id, (event.target as HTMLInputElement).checked);
+  if (!result.success) notifyError(result.error || "Could not update Steam mark");
+  await refreshSteamState();
+};
+watch(() => [props.modelValue, props.game?.id, activeTab.value, platformCapabilities.value.platform] as const, ([open, id, tab, platform], _previous, cleanup) => {
+  if (!open || !id || tab !== "Launch" || platform !== "linux") return;
+  void refreshSteamState();
+  const timer = setInterval(refreshSteamState, 3000);
+  cleanup(() => clearInterval(timer));
+});
 
 const lastSyncedId = ref<number | null>(null);
 
@@ -2148,6 +2168,14 @@ const removeAttachment = async (name: string) => {
         </section>
 
         <section v-show="activeTab === 'Launch'" id="game-detail-panel-Launch" role="tabpanel" aria-labelledby="game-detail-tab-Launch" tabindex="0" class="space-y-6">
+          <div v-if="showSteamGameControl(platformCapabilities.platform, steamState)" class="space-y-2">
+            <label class="flex items-center justify-between text-sm"><span>Show in Steam</span>
+              <input :checked="steamState.marked" :disabled="!steamState.eligible" type="checkbox" role="switch" class="sandbox-switch" @change="setSteamMark" />
+            </label>
+            <p v-if="!steamState.eligible" class="text-xs" style="color:var(--text-secondary)">{{ steamIneligibleNote(steamState.reason) }}</p>
+            <p v-else class="text-xs" style="color:var(--text-secondary)">{{ steamStateLabel(steamState.state) }}</p>
+            <p v-if="steamState.eligible && steamState.mode === 'all-installed'" class="text-xs" style="color:var(--text-secondary)">All installed games are included; this mark is saved for marked mode.</p>
+          </div>
           <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">

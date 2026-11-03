@@ -34,6 +34,7 @@ import {useUpdateDownloads} from "./composables/useUpdateDownloads";
 const updateDownloads = useUpdateDownloads();
 
 import { extensionAddQuery, extensionOpenQuery, type ExtensionGameDetail } from "./utils/storeLinks";
+import { convertSteamCovers } from "./utils/steamCovers";
 
 const router = useRouter();
 const mainRef = ref<HTMLElement | null>(null);
@@ -234,7 +235,16 @@ const handleExtensionOpen = (event: Event) => {
   }
 };
 
+const handleSteamCovers = () => { void convertSteamCovers(api); };
+
+const handleLaunchError = (event: Event) => {
+  const message = (event as CustomEvent<{ error: string }>).detail?.error;
+  if (message) notify(message, "error", "Game launch failed");
+};
+
 onMounted(() => {
+  window.addEventListener("wlib-launch-error", handleLaunchError);
+  window.addEventListener("wlib-steam-covers", handleSteamCovers);
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
@@ -244,6 +254,8 @@ onMounted(() => {
   // Check for App Updates on Startup
   onWebviewReady(async () => {
     void refreshUpdateCount();
+    handleSteamCovers();
+    void api.getStartupLaunchError().then(({ error }) => { if (error) notify(error, "error", "Game launch failed"); });
     updateDownloads.startPolling();
     void scanDownloadOffers();
     // Listen only once the backend is injected: a focus event at startup would
@@ -292,6 +304,8 @@ onMounted(() => {
 onUnmounted(() => {
   updateDownloads.stopPolling();
   updateCountRequest++;
+  window.removeEventListener("wlib-launch-error", handleLaunchError);
+  window.removeEventListener("wlib-steam-covers", handleSteamCovers);
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);

@@ -11,7 +11,7 @@ import re
 import stat
 import tempfile
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 from uuid import uuid4
 
 from core import database
@@ -196,7 +196,8 @@ def delete_cached_cover(name: object) -> None:
 
 
 class CoverCacheService:
-    def __init__(self) -> None:
+    def __init__(self, on_change: Callable[[], None] | None = None) -> None:
+        self.on_change: Callable[[], None] | None = on_change
         self.disabled: bool = False
         self._stop: threading.Event = threading.Event()
         self._wake: threading.Event = threading.Event()
@@ -284,6 +285,8 @@ class CoverCacheService:
                     try:
                         if not database.set_game_cover_cache(game_id, url, name):
                             delete_cached_cover(name)
+                        elif self.on_change is not None:
+                            self.on_change()
                     except Exception:
                         delete_cached_cover(name)
                         raise

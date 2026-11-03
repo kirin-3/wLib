@@ -258,6 +258,9 @@ yOGBQMkKW+ESPMFgKuOXwIlCypTPRpgSabuY0MLTDXJLR27lk8QyKGOHQ+SwMj4K
 class Api:
     def __init__(self) -> None:
         self.window: Window | None = None
+        from core.steam_sync import SteamSync
+
+        self.steam_sync: SteamSync | None = None
         self._startup_extension_sync_status: ExtensionSyncStatus = {
             "success": True,
             "updated": False,
@@ -289,7 +292,7 @@ class Api:
         )
         from core.game_covers import CoverCacheService
 
-        self.cover_cache: CoverCacheService = CoverCacheService()
+        self.cover_cache: CoverCacheService = CoverCacheService(on_change=self._schedule_steam_sync)
         from core.downloads.manager import manager as download_manager
         from core.update_downloads import UpdateDownloads
 
@@ -1535,6 +1538,7 @@ class Api:
             return {"success": False, "error": "Choose an image file."}
         try:
             _ = set_cover(coerced_id, os.path.expanduser(path))
+            self._schedule_steam_sync()
             game = database.get_game(coerced_id)
             if game is not None:
                 self._add_local_cover_url(game)
@@ -1581,6 +1585,7 @@ class Api:
             }
         try:
             clear_cover(coerced_id)
+            self._schedule_steam_sync()
             return {"success": True, "game": database.get_game(coerced_id)}
         except (OSError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
@@ -1807,6 +1812,7 @@ class Api:
 
     def _refresh_synced_library(self) -> None:
         self.cover_cache.wake()
+        self._schedule_steam_sync()
         if self.window is not None:
             try:
                 _ = cast(
@@ -2176,6 +2182,7 @@ class Api:
             return {"success": False, "error": str(exc) or "Could not add game"}
 
         self.cover_cache.wake()
+        self._schedule_steam_sync()
         metadata_pending = bool(normalized_url) and game_id is not None
         if metadata_pending:
             assert game_id is not None
@@ -2292,6 +2299,7 @@ class Api:
             print(f"[wLib] Failed to remove cover for game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
+        self._schedule_steam_sync()
         return {"success": True}
 
     def update_game(
@@ -2387,6 +2395,7 @@ class Api:
         ):
             response["finished_version"] = applied_fields["finished_version"]
         self.cover_cache.wake()
+        self._schedule_steam_sync()
         return response
 
     def list_companion_tools(self) -> dict[str, object]:
@@ -2539,6 +2548,7 @@ class Api:
                 "error_code": "invalid_target",
             }
 
+        self._schedule_steam_sync()
         return {"success": True, "target": target}
 
     def update_launch_target(
@@ -2587,6 +2597,7 @@ class Api:
                 "error_code": "target_not_found",
             }
 
+        self._schedule_steam_sync()
         return {"success": True, "target": target}
 
     def delete_launch_target(self, target_id: object = None) -> dict[str, object]:
@@ -2619,6 +2630,7 @@ class Api:
                 "error_code": "target_not_found",
             }
 
+        self._schedule_steam_sync()
         return {"success": True}
 
     def reorder_launch_targets(
@@ -2664,6 +2676,7 @@ class Api:
                 "error_code": "invalid_target_order",
             }
 
+        self._schedule_steam_sync()
         return {"success": True, "targets": targets}
 
     # ==========================
@@ -3752,164 +3765,182 @@ class Api:
         """
         Uses the Launcher class to execute the game via Proton/Wine.
         """
-        target_path = os.path.expanduser((exe_path or "").strip())
-        if game_id is not None and not (target_path and os.path.exists(target_path)):
-            # Missing/empty path: fall back to the default exe, then other targets.
-            # Only the default launch (empty request or the canonical path
-            # itself) may fall back. An explicit launch-target path that was
-            # deleted must error instead of silently launching a different file.
-            # When nothing else exists either, pass the request through so the
-            # launcher reports the missing file (and mocked launchers in tests
-            # still see the requested path).
-            from core.database import get_all_games, list_game_launch_targets
+        from core.game_launch import launch_tracked
+        if game_id is not None and is_linux():
+            from core.steam_runner import runner_pid
 
-            canonical_path = next(
-                (
-                    str(g.get("exe_path") or "").strip()
-                    for g in get_all_games()
-                    if g.get("id") == game_id
-                ),
-                "",
-            )
-            candidates = [
-                os.path.expanduser(canonical_path),
-                *[
-                    os.path.expanduser(str(t.get("exe_path") or "").strip())
-                    for t in list_game_launch_targets(game_id)
-                ],
-            ]
-            existing = [
-                candidate
-                for candidate in candidates
-                if candidate and os.path.exists(candidate)
-            ]
-            is_default_request = not target_path or (
-                canonical_path
-                and self._normalize_compare_path(target_path)
-                == self._normalize_compare_path(canonical_path)
-            )
-            if not is_default_request and existing:
-                return {
-                    "success": False,
-                    "error": f"Executable not found at {target_path}",
-                }
-            target_path = next(
-                iter(existing),
-                target_path or os.path.expanduser(canonical_path),
-            )
+            if runner_pid(game_id) is not None:
+                return {"success": False, "code": "already_running", "error": "Game is already running"}
 
-        print(
-            f"Launching {target_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
-        )
-
-        from core.database import (
-            get_all_games,
-            record_play_tick,
-            start_play_session,
-            update_playtime,
-        )
-
-        empty_game: dict[str, object] = {}
-        stored_game = (
-            next(
-                (game for game in get_all_games() if game.get("id") == game_id),
-                empty_game,
-            )
-            if game_id is not None
-            else empty_game
-        )
-        from core.database import get_setting, normalize_tool_override
-
-        def tool_enabled(name: str) -> bool:
-            override = normalize_tool_override(stored_game.get(name))
-            return override == "on" or (override == "default" and get_setting(f"{name}_enabled") == "true")
-
-        launch_version = str(stored_game.get("version") or "")
-        session_id: int | None = None
-        session_failed = False
-        session_lock = threading.Lock()
-        pending_ticks: list[tuple[int, bool]] = []
-
-        def save_tick(delta: int, is_final: bool) -> None:
-            if game_id is None:
-                return
-            last_played_version: str | None = None
-            if session_id is None:
-                # No journal row could be created; still count the playtime.
-                update_playtime(game_id, delta)
-            else:
-                last_played_version = record_play_tick(
-                    game_id, session_id, delta, is_final
-                )
+        def on_tick(detail: dict[str, object]) -> None:
             # evaluate_js can block forever once the window is gone at exit.
             if self.window and not self.launcher.shutting_down:
-                detail = json.dumps(
-                    {
-                        "gameId": game_id,
-                        "delta": max(int(delta), 0),
-                        "isFinal": bool(is_final),
-                        "lastPlayedVersion": last_played_version,
-                        "sessionId": session_id,
-                    }
-                )
                 self.window.evaluate_js(
-                    f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {detail} }}))"
+                    f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {json.dumps(detail)} }}))"
                 )
 
-        def on_exit(delta: int, is_final: bool = True) -> None:
-            if game_id is None:
-                return
-            try:
-                with session_lock:
-                    if session_id is None and not session_failed:
-                        pending_ticks.append((delta, is_final))
-                    else:
-                        save_tick(delta, is_final)
-            except Exception as e:
-                print(f"Failed to update playtime for game {game_id}: {e}")
+        return launch_tracked(self.launcher, game_id, {
+            "exe_path": exe_path,
+            "command_line_args": command_line_args,
+            "run_japanese_locale": run_japanese_locale,
+            "run_wayland": run_wayland,
+            "auto_inject_ce": auto_inject_ce,
+            "custom_prefix": custom_prefix,
+            "proton_version": proton_version,
+            "launch_mode": launch_mode,
+        }, on_tick)
 
+    def _start_steam_sync(self, icon: str) -> None:
+        if not is_linux():
+            return
+        from pathlib import Path
+        from core.steam_sync import SteamSync
+
+        self.steam_sync = SteamSync(Path(icon), on_conversions=self._notify_steam_covers)
+        self.steam_sync.schedule()
+
+    def _notify_steam_covers(self) -> None:
+        if self.window and not self.launcher.shutting_down:
+            self.window.evaluate_js("window.dispatchEvent(new Event('wlib-steam-covers'))")
+
+    def get_steam_cover_conversions(self) -> dict[str, object]:
+        """Covers Qt cannot decode, for the window to convert to PNG."""
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        if self.steam_sync is None:
+            return {"success": True, "covers": []}
+        import base64
+
+        from core.game_covers import COVER_TYPES, MAX_COVER_SIZE
+
+        covers: list[dict[str, str]] = []
+        for token, source in self.steam_sync.conversions().items():
+            try:
+                data = source.read_bytes()
+                kind = COVER_TYPES[source.suffix[1:]]
+                if len(data) > MAX_COVER_SIZE:
+                    raise ValueError("Cover is too large")
+            except (OSError, KeyError, ValueError):
+                _ = self.steam_sync.finish_conversion(token, None)
+                continue
+            covers.append({"token": token, "type": kind, "data": base64.b64encode(data).decode("ascii")})
+        return {"success": True, "covers": covers}
+
+    def save_steam_cover_png(self, token: object = None, data: object = None) -> dict[str, object]:
+        """Store a converted cover; empty data marks the conversion as failed."""
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        if self.steam_sync is None or not isinstance(token, str) or not isinstance(data, str):
+            return {"success": False, "error": "Invalid cover"}
+        import base64
+        import binascii
+
+        png: bytes | None = None
+        if data:
+            try:
+                png = base64.b64decode(data, validate=True)
+            except (binascii.Error, ValueError):
+                png = None
+            if png is None or not png.startswith(b"\x89PNG\r\n\x1a\n") or len(png) > 32 * 1024 * 1024:
+                _ = self.steam_sync.finish_conversion(token, None)
+                return {"success": False, "error": "Invalid PNG"}
         try:
-            result = self.launcher.launch(
-                target_path,
-                command_line_args,
-                run_japanese_locale,
-                run_wayland,
-                auto_inject_ce,
-                custom_prefix,
-                proton_version,
-                normalize_launch_mode(launch_mode),
-                on_exit_callback=on_exit,
-                game_id=game_id,
-                sandbox_enabled=bool(stored_game.get("sandbox_enabled")),
-                block_network=bool(stored_game.get("block_network")),
-                game_title=str(stored_game.get("title") or ""),
-                gamemode=tool_enabled("gamemode"),
-                mangohud=tool_enabled("mangohud"),
-            )
-        except Exception as exc:
-            # Launcher setup can still fail outside its own error paths (for
-            # example creating the default Wine prefix). Keep the bridge
-            # contract: report a failure payload instead of rejecting the call.
-            print(f"Failed to launch game {game_id}: {exc}")
-            return {"success": False, "error": str(exc) or "Could not launch the game."}
-        if (
-            result.get("success")
-            and result.get("tracks_playtime", True)
-            and game_id is not None
-        ):
-            with session_lock:
-                try:
-                    session_id = start_play_session(game_id, launch_version)
-                except Exception as exc:
-                    session_failed = True
-                    print(f"Failed to start play session for game {game_id}: {exc}")
-                for delta, is_final in pending_ticks:
-                    try:
-                        save_tick(delta, is_final)
-                    except Exception as exc:
-                        print(f"Failed to update playtime for game {game_id}: {exc}")
-                pending_ticks.clear()
+            if not self.steam_sync.finish_conversion(token, png):
+                return {"success": False, "error": "Cover is not waiting for conversion"}
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True}
+
+    def _schedule_steam_sync(self) -> None:
+        if self.steam_sync is not None:
+            self.steam_sync.schedule()
+
+    def get_steam_status(self) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        from core.steam_sync import environment
+
+        result = environment()
+        result["success"] = True
+        result["sync"] = self.steam_sync.status() if self.steam_sync else {"running": False}
         return result
+
+    def add_wlib_to_steam(self) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        if self.steam_sync is None:
+            return {"success": False, "error": "Steam integration is not ready"}
+        self.steam_sync.queue_add_wlib()
+        return {"success": True, "queued": True}
+
+    def set_steam_games_mode(self, mode: object = None) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        if mode not in ("off", "all-installed", "marked"):
+            return {"success": False, "error": "Invalid Steam games mode"}
+        database.update_setting("steam_games_mode", str(mode))
+        self._schedule_steam_sync()
+        return {"success": True}
+
+    def set_steam_account(self, account: object = None) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        from core.steam_sync import environment
+
+        if not isinstance(account, str) or account not in cast(list[str], environment()["accounts"]):
+            return {"success": False, "error": "Steam account not found"}
+        database.update_setting("steam_account_id", account)
+        self._schedule_steam_sync()
+        return {"success": True}
+
+    def sync_steam_shortcuts(self) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        if self.steam_sync is None:
+            return {"success": False, "error": "Steam integration is not ready"}
+        self.steam_sync.schedule(0, retry_removed=True)
+        return {"success": True}
+
+    def set_game_steam_shortcut(self, game_id: object = None, enabled: object = None) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        from core.steam_sync import environment
+
+        game_id = self._coerce_db_id(game_id)
+        if game_id is None or database.get_game(game_id) is None or not isinstance(enabled, bool):
+            return {"success": False, "error": "Invalid game or mark"}
+        _ = database.update_game(game_id, {"steam_shortcut": enabled})
+        account = str(environment()["account_id"])
+        if enabled and account:
+            links = database.list_steam_shortcuts(account)
+            if any(link["game_id"] == game_id and link["state"] == "user_removed" for link in links):
+                database.delete_steam_shortcut(account, game_id)
+        self._schedule_steam_sync()
+        return {"success": True}
+
+    def get_game_steam_state(self, game_id: object = None) -> dict[str, object]:
+        if not is_linux():
+            return {"success": False, "code": "unsupported", "error": "Steam integration is Linux only"}
+        from core.steam_sync import environment
+
+        game_id = self._coerce_db_id(game_id)
+        if game_id is None or (game := database.get_game(game_id)) is None:
+            return {"success": False, "error": "Game was not found"}
+        env = environment()
+        from core.steam_shortcuts import desired_games
+        from pathlib import Path
+
+        eligible = game_id in desired_games([game], "all-installed", Path("/wlib-steam"))
+        exe = os.path.expanduser(str(game.get("exe_path") or "").strip())
+        reason = ""
+        if not eligible:
+            reason = "wishlisted" if not exe else "missing_file" if not os.path.isfile(exe) else "browser_game"
+        links = database.list_steam_shortcuts(str(env["account_id"]))
+        state = next((str(link["state"]) for link in links if link["game_id"] == game_id), "not_in_steam")
+        return {"success": True, "state": state, "marked": bool(game.get("steam_shortcut")), "mode": env["mode"], "eligible": eligible, "reason": reason}
+
+    def get_startup_launch_error(self) -> dict[str, str]:
+        return {"error": os.environ.pop("WLIB_LAUNCH_ERROR", "") if "--show-launch-error" in sys.argv else ""}
 
     def get_game_play_sessions(self, game_id: int) -> dict[str, object]:
         from core.database import get_play_sessions
@@ -3924,10 +3955,21 @@ class Api:
         return {"success": True}
 
     def stop_game(self, game_id: int) -> dict[str, object]:
+        if game_id in self.launcher.get_running_games():
+            return self.launcher.stop(game_id)
+        if is_linux():
+            from core.steam_runner import stop_runner
+
+            return stop_runner(game_id)
         return self.launcher.stop(game_id)
 
     def get_running_games(self) -> list[int]:
-        return self.launcher.get_running_games()
+        games = set(self.launcher.get_running_games())
+        if is_linux():
+            from core.steam_runner import running_games
+
+            games.update(running_games())
+        return sorted(games)
 
     def _get_urm_game_dir(self, game_id: int) -> str:
         from core.database import get_all_games

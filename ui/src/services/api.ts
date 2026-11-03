@@ -42,6 +42,31 @@ export interface ApiBasicResponse {
   code?: string;
 }
 
+export type SteamMode = "off" | "all-installed" | "marked";
+export interface SteamStatus extends ApiBasicResponse {
+  found: boolean;
+  flatpak_steam: boolean;
+  accounts: string[];
+  account_id: string;
+  running: boolean;
+  deck: boolean;
+  gaming_mode: boolean;
+  mode: SteamMode;
+  sync: ApiBasicResponse & { running: boolean; added?: number; updated?: number; removed?: number; pending?: number };
+}
+export interface SteamCoverConversion {
+  token: string;
+  type: string;
+  data: string;
+}
+export interface SteamGameState extends ApiBasicResponse {
+  eligible?: boolean;
+  reason?: "" | "wishlisted" | "missing_file" | "browser_game";
+  state?: string;
+  marked?: boolean;
+  mode?: SteamMode;
+}
+
 export interface ApiSuccessResponse {
   success: true;
 }
@@ -1825,6 +1850,25 @@ class ApiService {
     return this.invoke<ExtensionServiceStatus>("get_extension_service_status");
   }
 
+  async getSteamStatus(): Promise<SteamStatus> { return this.invoke<SteamStatus>("get_steam_status"); }
+  async addWlibToSteam(): Promise<ApiBasicResponse & {pending?: boolean; already_exists?: boolean; queued?: boolean}> { return this.invoke("add_wlib_to_steam"); }
+  async setSteamGamesMode(mode: SteamMode): Promise<ApiBasicResponse> { return this.invoke("set_steam_games_mode", mode); }
+  async setSteamAccount(account: string): Promise<ApiBasicResponse> { return this.invoke("set_steam_account", account); }
+  async syncSteamShortcuts(): Promise<ApiBasicResponse> { return this.invoke("sync_steam_shortcuts"); }
+  async setGameSteamShortcut(id: number, marked: boolean): Promise<ApiBasicResponse> { return this.invoke("set_game_steam_shortcut", id, marked); }
+  async getGameSteamState(id: number): Promise<SteamGameState> { return this.invoke("get_game_steam_state", id); }
+
+  async getSteamCoverConversions(): Promise<ApiBasicResponse & { covers?: SteamCoverConversion[] }> {
+    return this.invoke("get_steam_cover_conversions");
+  }
+  async saveSteamCoverPng(token: string, data: string): Promise<ApiBasicResponse> {
+    return this.invoke("save_steam_cover_png", token, data);
+  }
+
+  async getStartupLaunchError(): Promise<{ error: string }> {
+    return this.invoke<{ error: string }>("get_startup_launch_error");
+  }
+
   async getStartupExtensionSyncStatus(): Promise<ExtensionSyncStatus> {
     return this.invoke<ExtensionSyncStatus>("get_startup_extension_sync_status");
   }
@@ -3493,6 +3537,26 @@ class ApiService {
           reachable: false,
           error: "Extension service status requires the desktop app runtime.",
         };
+      case "get_steam_status":
+        return { success: true, found: true, flatpak_steam: false, accounts: ["123456"], account_id: "123456", running: false, deck: false, gaming_mode: false, mode: localStorage.getItem("wlib-mock-steam-mode") || "off", sync: { running: false } };
+      case "get_game_steam_state":
+        return { success: true, state: "not_in_steam", marked: localStorage.getItem(`wlib-mock-steam-${args[0]}`) === "true", mode: localStorage.getItem("wlib-mock-steam-mode") || "off", eligible: true, reason: "" };
+      case "set_steam_games_mode":
+        localStorage.setItem("wlib-mock-steam-mode", String(args[0]));
+        return { success: true };
+      case "set_game_steam_shortcut":
+        localStorage.setItem(`wlib-mock-steam-${args[0]}`, String(args[1]));
+        return { success: true };
+      case "add_wlib_to_steam":
+      case "set_steam_account":
+      case "sync_steam_shortcuts":
+        return { success: true };
+      case "get_steam_cover_conversions":
+        return { success: true, covers: [] };
+      case "save_steam_cover_png":
+        return { success: true };
+      case "get_startup_launch_error":
+        return { error: "" };
       case "get_startup_extension_sync_status":
         return {
           success: true,
