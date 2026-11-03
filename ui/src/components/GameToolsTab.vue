@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { IconLoader2 } from "@tabler/icons-vue";
 import {
@@ -217,7 +218,7 @@ watch(unity, (state) => {
 const installBepinex = async () => {
   if (!unity.value || !selectedBuild.value) return;
   const warning = switchWarning(unity.value, selectedBuild.value);
-  if (warning && !confirm(warning)) return;
+  if (warning && !(await confirmAction({ title: "Install BepInEx", message: warning, confirmLabel: "Install" }))) return;
   const result = await run("bepinex_install", (id) => api.installBepinex(id, buildId.value));
   if (result) { if (result.warning) lastResult.value = result.warning; await load(props.gameId, true); }
 };

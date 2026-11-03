@@ -658,3 +658,15 @@ test('update downloads expose browser mock payloads', async () => {
     assert.equal((await api.openUpdateDownloadInBrowser(1,'mock-other')).success,true);
   } finally { await server.close(); delete globalThis.window; delete globalThis.localStorage; }
 });
+
+
+test("selected update checks forward game ids to the bridge", async () => {
+  const calls = [];
+  globalThis.window = { pywebview: { api: { check_all_updates: async (...args) => { calls.push(args); return { success: true }; } } }, dispatchEvent() {} };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    await api.checkAllUpdates([2, 5]);
+    assert.deepEqual(calls, [[[2, 5]]]);
+  } finally { await server.close(); delete globalThis.window; }
+});

@@ -6,7 +6,7 @@ import { moveFocus, scopeRoot } from "./spatialFocus.ts";
 
 type NamedAction = "play" | "search" | "menu" | "prevTab" | "nextTab" | "pageUp" | "pageDown";
 export interface ControllerHint { button: string; label: string }
-export type ControllerHandlers = Partial<Record<NamedAction, () => void>> & { hints?: ControllerHint[] };
+export type ControllerHandlers = Partial<Record<NamedAction, () => void>> & { hints?: ControllerHint[] | (() => ControllerHint[]); back?: () => boolean };
 export interface ControllerScope { scope: Ref<HTMLElement | null>; handlers: ControllerHandlers }
 const scopes: ControllerScope[] = [];
 export function chooseScope(entries: readonly ControllerScope[], active: Element | null, fallback: Element | null): ControllerScope | undefined {
@@ -19,8 +19,9 @@ export function useControllerActions(scope: Ref<HTMLElement | null>, handlers: C
   scopes.push(entry);
   onBeforeUnmount(() => { const i = scopes.indexOf(entry); if (i >= 0) scopes.splice(i, 1); });
 }
+export const handleScopedBack = (entry: ControllerScope | undefined): boolean => entry?.handlers.back?.() === true;
 export const defaultHints: ControllerHint[] = [{ button: "A", label: "Select" }, { button: "B", label: "Back" }];
-export function resolveHints(entry: ControllerScope | undefined): ControllerHint[] { return entry?.handlers.hints ?? defaultHints; }
+export function resolveHints(entry: ControllerScope | undefined): ControllerHint[] { const hints = entry?.handlers.hints; return typeof hints === "function" ? hints() : hints ?? defaultHints; }
 export function currentHints(): ControllerHint[] { return resolveHints(chooseScope(scopes, document.activeElement, scopeRoot())); }
 function scrollContainer(element: HTMLElement | null): HTMLElement {
   for (let node = element; node; node = node.parentElement) {
@@ -48,6 +49,7 @@ export function dispatchController(action: ControllerAction, back: () => void): 
   }
   if (action.type === "back") {
     if (root.matches('[role="menu"], [data-controller-select]') || modalStack.length) (active ?? root).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    else if (handleScopedBack(chooseScope(scopes, active, root))) return;
     else if (history.state?.back) back();
     return;
   }

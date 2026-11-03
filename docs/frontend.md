@@ -87,6 +87,10 @@ Windows capabilities offer Auto Detect and native Windows targets. The shared la
 
 Always route backend calls through `ui/src/services/api.ts`; do not call `window.pywebview.api` directly from view components.
 
+## Confirmation dialogs
+
+Use `confirmAction({ title, message, confirmLabel, danger })` from `utils/confirm` for actions that cannot be undone. It returns a `Promise<boolean>` and queues concurrent requests. Supply an action-specific label and set `danger` for destructive changes. The global dialog provides keyboard and controller navigation, defaults to Cancel, and follows the current theme. Do not introduce native `confirm`, `alert`, or `prompt` dialogs.
+
 ## State & Routing
 
 wLib uses `vue-router` for top-level views:
@@ -100,6 +104,12 @@ wLib uses `vue-router` for top-level views:
 - **Diagnostics View**: secondary route from the Settings footer for copying a redacted report and opening the log folder.
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
+
+## Undo and bulk actions
+
+Mark as updated, Skip version, Stop skipping, library removal, and bulk changes offer Undo for eight seconds. Hovering a toast or focusing one of its controls holds it; the timer restarts on release. Ctrl+Z invokes the newest Undo outside editable fields and dialogs. In controller mode, a new Undo offer receives focus so its timer stays held until focus leaves. Removal hides games immediately and deletes them only after the offer ends; closing or reloading does not flush pending removals.
+
+In the Library, Ctrl-click toggles a game and Shift-click selects a visible range. The Select button and game menu support selection without modifiers. The bulk bar changes status, collections, favorites and updates, starts selected update checks, and removes games. Filters prune hidden games from the selection. In Updates, row checkboxes and Select all enable Mark updated, Skip version, and Re-check for selected rows.
 
 ## Game screenshot gallery
 

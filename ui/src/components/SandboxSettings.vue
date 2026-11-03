@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { IconShieldLock } from '@tabler/icons-vue';
@@ -53,7 +54,7 @@ const saveDefault = async (event: Event) => {
   finally { busy.value = false; }
 };
 const setAll = async (enabled: boolean) => {
-  if (!confirm(`${enabled ? 'Enable' : 'Disable'} sandboxing for every library game? Running games keep their current mode until their next launch.`)) return;
+  if (!(await confirmAction({ title: `${enabled ? 'Enable' : 'Disable'} sandboxing`, message: `${enabled ? 'Enable' : 'Disable'} sandboxing for every library game? Running games keep their current mode until their next launch.`, confirmLabel: enabled ? 'Enable' : 'Disable' }))) return;
   busy.value = true;
   try {
     const result = await api.setSandboxForAllGames(enabled);

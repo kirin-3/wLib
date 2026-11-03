@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../../utils/confirm";
 import { useControllerActions } from "../../utils/controllerActions";
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
@@ -131,7 +132,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   updated: [];
-  deleted: [];
+  remove: [game: GameRecord];
   launch: [payload: GameRecord];
   "check-updates": [gameId: number];
   "targets-changed": [];
@@ -887,9 +888,9 @@ const close = () => {
 };
 
 // User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
-const requestClose = (): boolean => {
+const requestClose = async (): Promise<boolean> => {
   if (saving.value || deleting.value) return false;
-  if (hasUnsavedChanges.value && !confirm("Discard unsaved changes to this game?")) {
+  if (hasUnsavedChanges.value && !(await confirmAction({ title: "Discard changes", message: "Discard unsaved changes to this game?", confirmLabel: "Discard", danger: true }))) {
     return false;
   }
   close();
@@ -897,8 +898,8 @@ const requestClose = (): boolean => {
 };
 
 // Links that leave the modal for Settings must pass the same discard prompt.
-const closeAndNavigate = (hash: string) => {
-  if (!requestClose()) return;
+const closeAndNavigate = async (hash: string) => {
+  if (!(await requestClose())) return;
   void sandboxRouter.push(hash);
 };
 
@@ -1209,7 +1210,7 @@ const deleteLaunchTarget = async (target: LaunchTarget) => {
   if (deletingTargetId.value !== null) return;
   if (!props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
-  if (!confirm(`Remove launch target "${target.label}"?`)) return;
+  if (!(await confirmAction({ title: "Remove launch target", message: `Remove launch target "${target.label}"?`, confirmLabel: "Remove", danger: true }))) return;
   deletingTargetId.value = target.id;
   try {
     const res = await api.deleteLaunchTarget(target.id);
@@ -1467,29 +1468,10 @@ const save = async () => {
   }
 };
 
-const deleteGame = async () => {
-  if (
-    !props.game ||
-    typeof props.game.id !== "number" ||
-    deleting.value ||
-    !confirm("Are you sure you want to remove this game from your library?")
-  )
-    return;
-  deleting.value = true;
-  try {
-    const res = await api.deleteGame(props.game.id);
-    if (res && res.success === false) {
-      notifyError("Failed to delete game: " + (res.error || "Unknown error"));
-    } else {
-      emit("deleted");
-      close();
-    }
-  } catch (e) {
-    console.error("Failed to delete", e);
-    notifyError("Error deleting game: " + String(e));
-  } finally {
-    deleting.value = false;
-  }
+const deleteGame = () => {
+  if (!props.game || deleting.value) return;
+  emit("remove", props.game);
+  close();
 };
 
 const buildLaunchPayload = (targetPath: string): GameRecord | null => {
@@ -1809,7 +1791,7 @@ const openAttachment = async (name: string) => {
 const removeAttachment = async (name: string) => {
   if (removingAttachment.value !== null || !props.game || typeof props.game.id !== "number") return;
   const gameId = props.game.id;
-  if (!confirm(`Remove ${name}? The attached copy will be deleted.`)) return;
+  if (!(await confirmAction({ title: "Remove attachment", message: `Remove ${name}? The attached copy will be deleted.`, confirmLabel: "Remove", danger: true }))) return;
   removingAttachment.value = name;
   try {
     const res = await api.removeGameAttachment(gameId, name);

@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from "vue";
+import { modalStack } from "./utils/modalKeyboard";
 import { inputModality, listenForPointer, setInputModality } from "./utils/inputModality";
 import { gamingMode, tvModeActive } from "./utils/tvMode";
 import ControllerHints from "./components/ControllerHints.vue";
@@ -26,7 +27,8 @@ import { api, onWebviewReady, type DownloadOffer, type GameRecord } from "./serv
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
-import { dismissToast, notify, toasts } from "./utils/toast";
+import { dismissToast, notify, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
+import { isPendingRemoval, settleRemovals } from "./utils/pendingRemovals";
 import { hasAvailableUpdate } from "./utils/libraryGames";
 import { shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
 import {
@@ -35,6 +37,7 @@ import {
   type InstallArchiveSeed,
 } from "./utils/installArchive";
 import InstallArchiveModal from "./components/modals/InstallArchiveModal.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
 import UpdateDownloadModal from "./components/modals/UpdateDownloadModal.vue";
 import {useUpdateDownloads} from "./composables/useUpdateDownloads";
 const updateDownloads = useUpdateDownloads();
@@ -49,6 +52,26 @@ const openControllerKeyboard = () => { if (gamingMode.value) void api.openSteamK
 onMounted(() => { window.addEventListener("wlib-controller-text", openControllerKeyboard); stopPointer = listenForPointer(); stopControllerInput = startControllerInput(action => { setInputModality("controller"); dispatchController(action, () => router.back()); window.dispatchEvent(new Event("wlib-controller-action")); }); });
 onUnmounted(() => { window.removeEventListener("wlib-controller-text", openControllerKeyboard); stopControllerInput?.(); stopPointer?.(); });
 const mainRef = ref<HTMLElement | null>(null);
+// Give controller users the full Undo window without requiring them to cross
+// the whole page first. Focusing the button holds the timer until focus leaves.
+// When that toast goes away, focus goes back to where the user was.
+let undoFocusReturn: { id: number; element: HTMLElement } | null = null;
+watch(() => [...toasts].reverse().find((toast) => toast.undo)?.id, (id, previous) => {
+  if (id === undefined || (previous !== undefined && id <= previous) || inputModality.value !== "controller" || modalStack.length) return;
+  const button = mainRef.value?.querySelector<HTMLButtonElement>(`[data-undo-id="${id}"]`);
+  if (!button) return;
+  const before = document.activeElement;
+  if (before instanceof HTMLElement && before !== document.body) undoFocusReturn = { id, element: before };
+  button.focus();
+}, { flush: "post" });
+watch(() => toasts.map((toast) => toast.id), (ids) => {
+  if (!undoFocusReturn || ids.includes(undoFocusReturn.id)) return;
+  const { element } = undoFocusReturn;
+  undoFocusReturn = null;
+  const active = document.activeElement;
+  if ((!active || active === document.body) && element.isConnected) element.focus();
+}, { flush: "post" });
+
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
 const latestVersion = ref("");
@@ -64,7 +87,8 @@ const getInitialNavCollapsed = (): boolean => {
 const isNavCollapsed = ref(getInitialNavCollapsed());
 const navCollapsed = computed(() => tvModeActive.value || isNavCollapsed.value);
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
-const availableUpdateCount = ref(0);
+const updateCountGames = ref<GameRecord[]>([]);
+const availableUpdateCount = computed(() => updateCountGames.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;
@@ -173,7 +197,8 @@ const refreshUpdateCount = async () => {
   try {
     const games = await api.getGames();
     if (request !== updateCountRequest) return;
-    availableUpdateCount.value = games.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length;
+    settleRemovals(games.map((game) => game.id));
+    updateCountGames.value = games;
   } catch (error) {
     console.error("Failed to refresh update count", error);
   }
@@ -211,10 +236,23 @@ const pollLibraryUpdates = async () => {
   }
 };
 
+const releaseToastPointer = (id: number, event: MouseEvent) => {
+  const element = event.currentTarget as HTMLElement;
+  setUndoHeld(id, element.contains(document.activeElement));
+};
+
 // Ctrl+N opens Add Game from any view; LibraryView handles ?action=add.
 const handleGlobalShortcut = (event: KeyboardEvent) => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-  if (event.key.toLowerCase() !== "n" || document.querySelector('[aria-modal="true"]')) return;
+  if (document.querySelector('[aria-modal="true"]')) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (event.key.toLowerCase() === "z") {
+    if (target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    event.preventDefault();
+    void runNewestUndo();
+    return;
+  }
+  if (event.key.toLowerCase() !== "n") return;
   event.preventDefault();
   void router.push({ path: "/", query: { action: "add" } });
 };
@@ -590,12 +628,17 @@ onUnmounted(() => {
           :role="toast.type === 'error' ? 'alert' : 'status'"
           class="toast flex items-start gap-3 rounded-xl px-4 py-3 shadow-2xl backdrop-blur-sm"
           :class="`toast--${toast.type}`"
+          @mouseenter="setUndoHeld(toast.id, true)"
+          @mouseleave="releaseToastPointer(toast.id, $event)"
+          @focusin="setUndoHeld(toast.id, true)"
+          @focusout="setUndoHeld(toast.id, ($event.currentTarget as HTMLElement).matches(':hover') || ($event.currentTarget as HTMLElement).contains(($event as FocusEvent).relatedTarget as Node | null))"
         >
           <div class="min-w-0 flex-1">
             <p v-if="toast.title" class="text-sm font-semibold">{{ toast.title }}</p>
             <p class="copyable-feedback text-xs leading-5" :class="toast.title ? 'mt-1' : ''">
               {{ toast.message }}
             </p>
+            <button v-if="toast.undo" :data-undo-id="toast.id" class="toast-action mt-2 px-3 py-1.5 rounded-lg text-xs font-bold" @click="runUndo(toast.id)">Undo</button>
             <button
               v-if="toast.action"
               @click="dismissToast(toast.id); toast.action.run()"
@@ -626,6 +669,7 @@ onUnmounted(() => {
       </router-view>
 
       <UpdateDownloadModal />
+      <ConfirmDialog />
       <InstallArchiveModal
         v-model="showInstallModal"
         :game="installGame"

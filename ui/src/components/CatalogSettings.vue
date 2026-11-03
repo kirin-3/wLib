@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { IconDatabase } from '@tabler/icons-vue';
 import { api, onWebviewReady } from '../services/api';
@@ -31,7 +32,7 @@ const refresh = async () => {
 const toggle = async (event: Event) => {
   const input = event.target as HTMLInputElement;
   const next = input.checked;
-  if (!next && !confirm('Turn off the game catalog? wLib stops downloading it and deletes the local copy.')) {
+  if (!next && !(await confirmAction({ title: 'Turn off catalog', message: 'Turn off the game catalog? wLib stops downloading it and deletes the local copy.', confirmLabel: 'Turn off', danger: true }))) {
     input.checked = true;
     return;
   }

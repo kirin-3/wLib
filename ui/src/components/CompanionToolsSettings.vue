@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { nextTick, onMounted, ref } from "vue";
 import { IconAppWindow } from "@tabler/icons-vue";
 import { api, type CompanionTool, type CompanionToolInput } from "../services/api";
@@ -31,7 +32,7 @@ const save = async () => {
   finally { busy.value = false; }
 };
 const remove = async (tool: CompanionTool) => {
-  if (!confirm(`Delete '${tool.name}' and its per-game overrides?`)) return;
+  if (!(await confirmAction({ title: 'Delete companion tool', message: `Delete '${tool.name}' and its per-game overrides?`, confirmLabel: 'Delete', danger: true }))) return;
   busy.value = true;
   error.value = "";
   try {

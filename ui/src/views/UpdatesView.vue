@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   IconArrowUp,
@@ -16,7 +16,9 @@ import {
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import { notify, notifyError } from "../utils/toast";
+import { notify, notifyError, notifyUndo } from "../utils/toast";
+import { runBulk, versionSnapshot } from "../utils/bulkActions";
+import { isPendingRemoval, settleRemovals } from "../utils/pendingRemovals";
 import { openInstallArchive } from "../utils/installArchive";
 import {useUpdateDownloads} from "../composables/useUpdateDownloads";
 const updateDownloads = useUpdateDownloads();
@@ -112,18 +114,24 @@ const markAsUpdated = async (game: GameRecord) => {
   if (markingUpdatedIds.value.has(game.id) || status.value.running) return;
   markingUpdatedIds.value.add(game.id);
   try {
-    const result = await api.markGameUpdated(game);
-    if (!result.success)
-      throw new Error(result.error || "Could not mark game as updated");
-    notify(
-      `${game.title}: installed version set to ${game.latest_version?.trim()}.`,
-      "success",
-    );
+    const result = await runBulk([game], (item) => api.markGameUpdated(item),
+      (item) => versionSnapshot(item, (id, fields) => api.updateGame(id, fields)));
+    if (result.failed || !result.changed) throw new Error("Could not mark game as updated");
+    notifyUndo(`${game.title}: installed version set to ${game.latest_version?.trim()}.`, result.undo);
   } catch (error) {
     notifyError(String(error));
   } finally {
     markingUpdatedIds.value.delete(game.id);
   }
+};
+const skipVersion = async (game: GameRecord) => {
+  if (status.value.running) return;
+  const result = await runBulk([game], (item) => api.updateGame(item.id, { skipped_version: item.latest_version || "" }), (item) => {
+    const previous = item.skipped_version || "";
+    return () => api.updateGame(item.id, { skipped_version: previous });
+  });
+  if (result.failed) notifyError("Could not skip version");
+  else notifyUndo(`${game.title}: skipping version ${game.latest_version}.`, result.undo);
 };
 const status = ref<UpdateStatusResponse>({
   running: false,
@@ -182,6 +190,7 @@ const loadGames = async () => {
   try {
     const res = await api.getGames();
     if (request !== gamesRequest) return;
+    settleRemovals((res || []).map((game) => game.id));
     games.value = res || [];
   } catch (e) {
     console.error("Failed to load games", e);
@@ -239,11 +248,11 @@ const applyRunningCheck = (started: BulkUpdateStartResponse) => {
   };
 };
 
-const startCheck = async () => {
+const startCheck = async (ids?: number[]) => {
   if (startingCheck.value || status.value.running) return;
   startingCheck.value = true;
   try {
-    const result = await api.checkAllUpdates();
+    const result = await api.checkAllUpdates(ids);
     if (result && result.success === false) {
       notifyError(
         "Failed to start check: " + (result.error || "Unknown error"),
@@ -384,8 +393,32 @@ const gamesWithErrors = computed(() => {
 });
 
 const persistedUpdates = computed(() => {
-  return games.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
+  return games.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
 });
+
+const selectedUpdateIds = ref(new Set<number>());
+const bulkBusy = ref(false);
+watch(() => persistedUpdates.value.map((game) => game.id), (ids) => {
+  const visible = new Set(ids);
+  selectedUpdateIds.value = new Set([...selectedUpdateIds.value].filter((id) => visible.has(id)));
+});
+const toggleAllUpdates = (event: Event) => {
+  selectedUpdateIds.value = (event.target as HTMLInputElement).checked ? new Set(persistedUpdates.value.map((game) => game.id)) : new Set();
+};
+const bulkUpdate = async (action: "updated" | "skip" | "check") => {
+  if (status.value.running || startingCheck.value || bulkBusy.value) return;
+  const selected = persistedUpdates.value.filter((game) => selectedUpdateIds.value.has(game.id));
+  if (action === "check") { await startCheck(selected.filter((game) => game.f95_url).map((game) => game.id)); return; }
+  bulkBusy.value = true;
+  const result = await runBulk(selected, (game) => action === "updated" ? api.markGameUpdated(game) : api.updateGame(game.id, { skipped_version: game.latest_version || "" }), (game) => {
+    if (action === "updated") return versionSnapshot(game, (id, fields) => api.updateGame(id, fields));
+    const previous = game.skipped_version || "";
+    return () => api.updateGame(game.id, { skipped_version: previous });
+  });
+  bulkBusy.value = false;
+  if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, result.undo);
+  else notifyError(`No games changed; ${result.failed} failed.`);
+};
 
 const formatLastCheck = computed(() => {
   if (!lastAutoCheck.value) return "Never";
@@ -665,7 +698,7 @@ onUnmounted(() => {
           <div class="flex items-center gap-3">
             <button
               v-if="!status.running"
-              @click="startCheck"
+              @click="startCheck()"
               :disabled="startingCheck"
               class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
               style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
@@ -757,6 +790,14 @@ onUnmounted(() => {
           Updates Available ({{ persistedUpdates.length }})
         </h3>
 
+        <div class="flex flex-wrap items-center gap-2 mb-4">
+          <label class="flex items-center gap-2"><input type="checkbox" :checked="selectedUpdateIds.size === persistedUpdates.length" @change="toggleAllUpdates" /> Select all ({{ selectedUpdateIds.size }} selected)</label>
+          <template v-if="selectedUpdateIds.size">
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy" @click="bulkUpdate('updated')">Mark updated</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy" @click="bulkUpdate('skip')">Skip version</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && game.f95_url)" @click="bulkUpdate('check')">Re-check</button>
+          </template>
+        </div>
         <TransitionGroup name="list" tag="div" class="space-y-2">
           <div
             v-for="game in persistedUpdates"
@@ -767,6 +808,7 @@ onUnmounted(() => {
               border: 1px solid var(--border);
             "
           >
+            <label><input type="checkbox" :aria-label="`Select ${game.title}`" :checked="selectedUpdateIds.has(game.id)" @change="($event.target as HTMLInputElement).checked ? selectedUpdateIds.add(game.id) : selectedUpdateIds.delete(game.id)" /></label>
             <button
               @click="openGame(game)"
               class="update-entry flex items-center gap-3 min-w-[12rem] flex-1 text-left rounded-md"
@@ -855,6 +897,7 @@ onUnmounted(() => {
                 <IconCheck class="ui-action-icon" />
                 Mark updated
               </button>
+              <button @click="skipVersion(game)" :disabled="status.running" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50">Skip version</button>
               <button
                 @click="recheck(game)"
                 :disabled="!game.f95_url || recheckingIds.has(game.id) || status.running"

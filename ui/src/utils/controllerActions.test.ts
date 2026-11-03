@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chooseScope, dispatchController, defaultHints, resolveHints } from "./controllerActions.ts";
+import { chooseScope, dispatchController, defaultHints, resolveHints, handleScopedBack } from "./controllerActions.ts";
 import { modalStack } from "./modalKeyboard.ts";
 class ElementStub {
   parent: ElementStub | null = null;
@@ -37,4 +37,12 @@ test("back closes a modal first and otherwise only navigates with history", () =
   history.state.back = null;
   dispatchController({ type: "back" }, () => back++); assert.equal(back, 1);
   dispatchController({ type: "menu" }, () => back++); assert.deepEqual(child.events, ["Escape", "ContextMenu"]);
+});
+
+
+test("scoped back reports whether the handler consumed it", () => {
+  const scope = { scope: { value: null }, handlers: { back: () => true } };
+  assert.equal(handleScopedBack(scope), true);
+  assert.equal(handleScopedBack({ ...scope, handlers: { back: () => false } }), false);
+  assert.equal(handleScopedBack(undefined), false);
 });

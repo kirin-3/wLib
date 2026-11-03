@@ -34,3 +34,38 @@ test("dismissToast removes only the matching toast", () => {
   assert.ok(toasts.some((toast) => toast.id === second?.id));
   if (second) dismissToast(second.id);
 });
+
+test("undo expiry pauses while held and restarts on release", async (context) => {
+  const { notifyUndo, setUndoHeld } = await import("./toast.ts");
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let expired = 0;
+  notifyUndo("Changed", async () => {}, { onExpire: () => { expired++; } });
+  const toast = toasts[toasts.length - 1]!;
+  context.mock.timers.tick(7000);
+  setUndoHeld(toast.id, true);
+  context.mock.timers.tick(10000);
+  assert.ok(toasts.some((item) => item.id === toast.id));
+  setUndoHeld(toast.id, false);
+  context.mock.timers.tick(7999);
+  assert.equal(expired, 0);
+  context.mock.timers.tick(1);
+  assert.equal(expired, 1);
+  dismissToast(toast.id);
+  assert.equal(expired, 1);
+});
+
+test("close expires undo, while undo runs without expiring", async (context) => {
+  const { notifyUndo, runNewestUndo } = await import("./toast.ts");
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let expired = 0;
+  let undone = 0;
+  notifyUndo("First", async () => { undone++; }, { onExpire: () => { expired++; } });
+  const first = toasts[toasts.length - 1]!;
+  notifyUndo("Second", async () => { undone++; }, { onExpire: () => { expired++; } });
+  await runNewestUndo();
+  assert.equal(undone, 1);
+  assert.equal(expired, 0);
+  dismissToast(first.id);
+  context.mock.timers.tick(8000);
+  assert.equal(expired, 1);
+});

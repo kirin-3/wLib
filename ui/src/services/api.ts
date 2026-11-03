@@ -1505,6 +1505,7 @@ class ApiService {
   _mockCompanionRuns = new Set<string>();
   _mockCompanionWine = new Set<number>();
   _mockPendingMetadata = new Set<number>();
+  _mockUpdateStatus: UpdateStatusResponse | null = null;
   _mockUrmInstalled = new Set<number>();
   _mockToolRuns = new Map<number, MockToolRun>();
   // Slow enough for the 500 ms status poll to see progress in the browser preview.
@@ -1882,8 +1883,8 @@ class ApiService {
     return this.invokeLibraryChange<UpdateCheckResponse>("check_for_updates", url);
   }
 
-  async checkAllUpdates(): Promise<BulkUpdateStartResponse> {
-    return this.invoke<BulkUpdateStartResponse>("check_all_updates");
+  async checkAllUpdates(gameIds?: number[]): Promise<BulkUpdateStartResponse> {
+    return gameIds === undefined ? this.invoke<BulkUpdateStartResponse>("check_all_updates") : this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds);
   }
 
   async getUpdateStatus(): Promise<UpdateStatusResponse> {
@@ -3135,17 +3136,18 @@ class ApiService {
         }
         if (method === "open_dev_tools") return undefined;
         if (method === "check_all_updates") {
-          return {
-            success: true,
-            mock: true,
-            total: readMockGames().filter((game) => (game.f95_url || "").trim()).length,
-            delay_seconds: 2,
-          };
+          const total = readMockGames().filter((game) => (game.f95_url || "").trim() && (!Array.isArray(args[0]) || args[0].includes(game.id))).length;
+          if (Array.isArray(args[0]) && total) {
+            this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2 };
+            setTimeout(() => { if (this._mockUpdateStatus?.running) this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "completed", checked: total }; }, 3000);
+          }
+          return { success: true, mock: true, total, delay_seconds: 2 };
         }
         if (method === "set_auto_check_setting") {
           try { localStorage.setItem("wlib-mock-auto-check", String(args[0])); } catch { /* Preview just forgets the choice. */ }
         }
         if (method === "cancel_update_check" || method === "set_auto_check_setting") {
+          if (method === "cancel_update_check" && this._mockUpdateStatus) this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "cancelled" };
           return { success: true, mock: true };
         }
         const reason =
@@ -3455,7 +3457,7 @@ class ApiService {
         };
       }
       case "get_update_status":
-        return {
+        return this._mockUpdateStatus || {
           running: false,
           cancelling: false,
           outcome: "idle",

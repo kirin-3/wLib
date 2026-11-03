@@ -87,6 +87,16 @@ async (page) => {
       await page.evaluate(theme => document.documentElement.classList.toggle("light", theme === "light"), theme);
       await measure(theme, [".setting-row p.copyable-feedback"]);
     }
+    await page.evaluate(() => localStorage.setItem("wlib-mock-games", JSON.stringify([{ id: 1, title: "Selected fixture", exe_path: "/game" }])));
+    await page.getByRole("link", { name: "Library", exact: true }).click();
+    const card = page.locator('[data-game-id="1"]');
+    await card.waitFor();
+    await card.click({modifiers: ["Control"]});
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(theme => document.documentElement.classList.toggle("light", theme === "light"), theme);
+      check(await card.getAttribute("aria-checked") === "true", `${theme}: selected state missing`);
+      await measure(theme, [".selection-mark"]);
+    }
     check(failures.length === 0, "Text below 4.5:1 contrast: " + JSON.stringify(failures));
     return "PASS: extension badges/code and Settings status text meet 4.5:1 in both themes";
   } finally {

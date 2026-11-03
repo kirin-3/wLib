@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import { libraryDisplayState } from "../utils/libraryGames";
 import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
@@ -68,7 +69,11 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
-import { notify, notifyError } from "../utils/toast";
+import { notify, notifyError, notifyUndo } from "../utils/toast";
+import { runBulk, statusSnapshot, versionSnapshot } from "../utils/bulkActions";
+import { isPendingRemoval, scheduleRemoval, settleRemovals } from "../utils/pendingRemovals";
+import { useLibrarySelection } from "../composables/useLibrarySelection";
+import { modalStack } from "../utils/modalKeyboard";
 import { sandboxLaunchError } from "../utils/sandbox";
 import { openInstallArchive } from "../utils/installArchive";
 import {
@@ -240,6 +245,10 @@ const collections: Array<{
 
 // Search & Filter state
 const searchQuery = ref("");
+const selection = useLibrarySelection();
+const selectedIds = selection.selectedIds;
+const selecting = ref(false);
+const bulkBar = ref<HTMLElement | null>(null);
 const libraryControllerScope = ref<HTMLElement | null>(null);
 useControllerActions(libraryControllerScope, {
   play: () => {
@@ -247,10 +256,15 @@ useControllerActions(libraryControllerScope, {
     const game = games.value.find(item => String(item.id) === card?.dataset.gameId);
     if (game) void toggleGame(game);
   },
+  back: () => { if (!selectedIds.value.size && !selecting.value) return false; clearSelection(); return true; },
+  menu: () => {
+    if (selectedIds.value.size) bulkBar.value?.querySelector<HTMLElement>("button, select")?.focus();
+    else (document.activeElement as HTMLElement | null)?.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }));
+  },
   search: () => { if (searchInput.value) { controllerFocusText(searchInput.value); searchInput.value.select(); } },
   prevTab: () => cycleControllerCollection(-1),
   nextTab: () => cycleControllerCollection(1),
-  hints: [{ button: "A", label: "Select" }, { button: "B", label: "Back" }, { button: "X", label: "Play" }, { button: "Y", label: "Search" }, { button: "Menu", label: "Actions" }, { button: "LB/RB", label: "Collections" }],
+  hints: () => [{ button: "A", label: selectedIds.value.size ? "Toggle selection" : "Open" }, { button: "B", label: selectedIds.value.size ? "Clear selection" : "Back" }, { button: "X", label: "Play" }, { button: "Y", label: "Search" }, { button: "Menu", label: selectedIds.value.size ? "Bulk actions" : "Actions" }, { button: "LB/RB", label: "Collections" }],
 });
 function cycleControllerCollection(step: number) {
   const tabs = [...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>("[data-collection-tab]") ?? [])];
@@ -499,7 +513,7 @@ const restoreLibraryViewState = () => {
 };
 
 const filteredGames = computed(() => {
-  let result = [...games.value];
+  let result = games.value.filter((game) => !isPendingRemoval(game.id));
   // The selected collection tab limits everything below it.
   if (activeCollection.value) {
     const activeKey = activeCollection.value.toLowerCase();
@@ -550,6 +564,71 @@ const filteredGames = computed(() => {
   result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
 });
+
+watch(() => filteredGames.value.map((game) => game.id), (ids) => selection.prune(ids));
+const handleCardClick = (game: GameRecord, event: MouseEvent | KeyboardEvent) => {
+  const ids = filteredGames.value.map((item) => item.id);
+  if (event.shiftKey) selection.selectRange(ids, game.id);
+  else if (event.ctrlKey || event.metaKey || selecting.value || selectedIds.value.size) selection.toggle(game.id);
+  else openDetail(game);
+  if (!selectedIds.value.size) selecting.value = false;
+};
+const clearSelection = () => { selection.clear(); selecting.value = false; };
+
+const selectedGames = computed(() => filteredGames.value.filter((game) => selectedIds.value.has(game.id)));
+const bulkBusy = ref(false);
+const bulkChecking = ref(false);
+const bulkCollection = ref("");
+const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })));
+const eligibleChecks = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
+let bulkStatusTimer: ReturnType<typeof setInterval> | undefined;
+const refreshBulkStatus = async () => { try { bulkChecking.value = (await api.getUpdateStatus()).running; } catch { /* Keep the last known state. */ } };
+onMounted(() => { void refreshBulkStatus(); bulkStatusTimer = setInterval(refreshBulkStatus, 2000); });
+onUnmounted(() => { if (bulkStatusTimer) clearInterval(bulkStatusTimer); });
+const bulkAction = async (action: string, value = "") => {
+  if (bulkBusy.value) return;
+  const games = [...selectedGames.value];
+  if (action === "remove") { scheduleRemoval(games); return; }
+  if (action === "check") {
+    const ids = games.filter((game) => !!game.f95_url).map((game) => game.id);
+    if (!ids.length || bulkChecking.value) return;
+    bulkBusy.value = true;
+    try {
+      const result = await api.checkAllUpdates(ids);
+      if (!result.success) throw new Error(result.error || "Could not start update check");
+      bulkChecking.value = true;
+      notify(`Checking ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "Update check", { label: "Open Updates", run: () => { void router.push("/updates"); } });
+      void refreshBulkStatus();
+    } catch (error) { notifyError(String(error)); } finally { bulkBusy.value = false; }
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    const result = await runBulk(games, async (game) => {
+      if (action === "status") return normalizePlayStatus(game.play_status, game.status) === value ? null : api.updateGame(game.id, { play_status: value });
+      if (action === "favorite" || action === "unfavorite") {
+        const favorite = action === "favorite";
+        return !!game.is_favorite === favorite ? null : api.updateGame(game.id, { is_favorite: favorite });
+      }
+      if (action === "add" || action === "remove-collection") {
+        const old = game.collections || [];
+        const has = old.some((name) => name.toLowerCase() === value.toLowerCase());
+        if ((action === "add") === has) return null;
+        return api.setGameCollections(game.id, action === "add" ? [...old, value] : old.filter((name) => name.toLowerCase() !== value.toLowerCase()));
+      }
+      if (!hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })) return null;
+      return action === "updated" ? api.markGameUpdated(game) : api.updateGame(game.id, { skipped_version: game.latest_version || "" });
+    }, (game) => {
+      if (action === "status") return statusSnapshot(game, (id, fields) => api.updateGame(id, fields));
+      if (action === "updated") return versionSnapshot(game, (id, fields) => api.updateGame(id, fields));
+      if (action === "add" || action === "remove-collection") { const old = [...(game.collections || [])]; return () => api.setGameCollections(game.id, old); }
+      const fields = action === "skip" ? { skipped_version: game.skipped_version || "" } : { is_favorite: !!game.is_favorite };
+      return () => api.updateGame(game.id, fields);
+    });
+    if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, result.undo);
+    else notifyError(`No games changed; ${result.skipped} skipped, ${result.failed} failed.`);
+  } finally { bulkBusy.value = false; }
+};
 
 // Tab counts show each collection's size and ignore the active filters.
 const collectionCounts = computed(() => {
@@ -681,7 +760,7 @@ const deleteCollectionFromTab = async (name: string) => {
   const membershipNote = count
     ? ` Its ${count} game${count === 1 ? "" : "s"} stay in your library.`
     : " Games stay in your library.";
-  if (!confirm(`Delete the collection "${name}"?${membershipNote}`)) return;
+  if (!(await confirmAction({ title: "Delete collection", message: `Delete the collection "${name}"?${membershipNote}`, confirmLabel: "Delete", danger: true }))) return;
   const result = await api.deleteCollection(name);
   if (!result.success) {
     notifyError(result.error || "Could not delete the collection.");
@@ -826,7 +905,7 @@ const saveFilterPreset = async () => {
   const existing = savedPresets.value.find(
     (preset) => preset.name.toLowerCase() === name.toLowerCase(),
   );
-  if (existing && !confirm(`Replace the saved filter "${name}"?`)) return;
+  if (existing && !(await confirmAction({ title: "Replace saved filter", message: `Replace the saved filter "${name}"?`, confirmLabel: "Replace", danger: true }))) return;
   const preset: LibraryFilterPreset = {
     name,
     filterCollection: filterCollection.value,
@@ -852,7 +931,7 @@ const saveFilterPreset = async () => {
 };
 
 const deleteFilterPreset = async (name: string) => {
-  if (!confirm(`Delete the saved filter "${name}"?`)) return;
+  if (!(await confirmAction({ title: "Delete saved filter", message: `Delete the saved filter "${name}"?`, confirmLabel: "Delete", danger: true }))) return;
   const next = savedPresets.value.filter((preset) => preset.name !== name);
   const result = await api.saveLibraryFilterPresets(next);
   if (!result.success) {
@@ -945,6 +1024,7 @@ const loadGames = async () => {
     const data = await api.getGames();
     if (request !== gamesRequest) return;
     if (data) {
+      settleRemovals(data.map((game) => game.id));
       games.value = data;
       gamesLoaded.value = true;
       loadError.value = null;
@@ -1011,12 +1091,7 @@ const handleGameUpdated = async () => {
   await loadGames();
 };
 
-const handleGameDeleted = async () => {
-  clearModalUpdateState();
-  showDetailModal.value = false;
-  selectedGame.value = null;
-  await loadGames();
-};
+
 
 const handleLaunchTargetsChanged = async () => {
   await loadGames();
@@ -1223,13 +1298,10 @@ const markAsUpdated = async (game: GameRecord) => {
   if (markingUpdatedIds.value.has(game.id)) return;
   markingUpdatedIds.value.add(game.id);
   try {
-    const result = await api.markGameUpdated(game);
-    if (!result.success)
-      throw new Error(result.error || "Could not mark game as updated");
-    notify(
-      `${game.title}: installed version set to ${game.latest_version?.trim()}.`,
-      "success",
-    );
+    const result = await runBulk([game], (item) => api.markGameUpdated(item),
+      (item) => versionSnapshot(item, (id, fields) => api.updateGame(id, fields)));
+    if (result.failed || !result.changed) throw new Error("Could not mark game as updated");
+    notifyUndo(`${game.title}: installed version set to ${game.latest_version?.trim()}.`, result.undo);
   } catch (error) {
     notifyError(String(error));
   } finally {
@@ -1239,12 +1311,15 @@ const markAsUpdated = async (game: GameRecord) => {
 
 const toggleSkippedVersion = async (game: GameRecord) => {
   const skipped = isUpdateSkipped(game);
-  const result = await api.updateGame(game.id, {
-    skipped_version: skipped ? "" : game.latest_version || "",
+  const result = await runBulk([game], (item) => api.updateGame(item.id, {
+    skipped_version: skipped ? "" : item.latest_version || "",
+  }), (item) => {
+    const previous = item.skipped_version || "";
+    return () => api.updateGame(item.id, { skipped_version: previous });
   });
-  if (!result.success) throw new Error(result.error || "Could not change skipped version");
-  notify(skipped ? `${game.title}: stopped skipping ${game.skipped_version}.`
-    : `${game.title}: skipping version ${game.latest_version}.`, "success");
+  if (result.failed) throw new Error("Could not change skipped version");
+  notifyUndo(skipped ? `${game.title}: stopped skipping ${game.skipped_version}.`
+    : `${game.title}: skipping version ${game.latest_version}.`, result.undo);
 };
 
 const closeContextMenu = (restoreFocus = true) => {
@@ -1339,19 +1414,13 @@ const runContextAction = async (
     if (action === "check") return await checkUpdate(game);
     if (action === "mark-updated") return await markAsUpdated(game);
     if (action === "skip-version") return await toggleSkippedVersion(game);
-    if (
-      action === "remove" &&
-      !confirm(`Remove "${game.title}" from your library?`)
-    )
-      return;
+    if (action === "remove") { scheduleRemoval([game]); return; }
     const result =
       action === "folder"
         ? await api.openFolder(gameFolder(game.exe_path))
         : action === "thread"
           ? await api.openInBrowser(gamePageUrl(game))
-          : action === "remove"
-            ? await api.deleteGame(game.id)
-            : await api.updateGame(
+          : await api.updateGame(
                 game.id,
                 action === "favorite"
                   ? { is_favorite: !game.is_favorite }
@@ -1375,6 +1444,7 @@ const handleLibraryScroll = (event: Event) => {
     closeCollectionTabMenu(false);
 };
 const handleLibraryKeyboard = (event: KeyboardEvent) => {
+  if (modalStack.length) return;
   if (contextMenu.value && event.key === "Escape") {
     event.preventDefault();
     closeContextMenu();
@@ -1390,6 +1460,9 @@ const handleLibraryKeyboard = (event: KeyboardEvent) => {
     closeLaunchTargetMenus();
     event.preventDefault();
     return;
+  }
+  if (event.key === "Escape" && (selectedIds.value.size || selecting.value)) {
+    clearSelection(); event.preventDefault(); return;
   }
   const typing =
     event.target instanceof Element &&
@@ -2061,6 +2134,7 @@ onUnmounted(() => {
               <IconX class="w-4 h-4" />
             </button>
           </div>
+          <button class="ui-action-btn px-3 py-2 rounded-lg" :aria-pressed="selecting || selectedIds.size > 0" @click="selecting = !selecting; if (!selecting) selection.clear()">Select</button>
           <button
             @click="toggleFiltersPane"
             class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
@@ -2273,14 +2347,16 @@ onUnmounted(() => {
               :data-game-id="game.id"
               :data-controller-primary="index === 0 ? '' : undefined"
               tabindex="0"
-              @keydown.enter.self="openDetail(game)"
+              @keydown.enter.self.prevent="handleCardClick(game, $event)"
               class="game-row"
-              :class="{ 'is-running': runningGameIds.has(game.id) }"
-              @click="openDetail(game)"
+              :class="{ 'is-running': runningGameIds.has(game.id), 'is-selected': selectedIds.has(game.id) }"
+              :aria-selected="selectedIds.has(game.id)"
+              @mousedown.shift.prevent
+              @click="handleCardClick(game, $event)"
               @contextmenu="openContextMenu(game, $event)"
               @keydown="openContextMenu(game, $event)"
             >
-              <td class="library-table-title">
+              <td class="library-table-title"><span v-if="selectedIds.has(game.id)" class="mr-2" aria-hidden="true">✓</span>
                 <div class="flex items-center gap-2 min-w-0">
                   <img
                     v-if="gameCoverSrc(game)"
@@ -2299,7 +2375,7 @@ onUnmounted(() => {
                       style="color: var(--text-muted)"
                   /></span>
                   <button
-                    @click.stop="openDetail(game)"
+                    @click.stop="handleCardClick(game, $event)"
                     class="truncate text-left font-semibold"
                     :title="game.title"
                   >
@@ -2419,14 +2495,16 @@ onUnmounted(() => {
           :key="game.id"
           :data-game-id="game.id"
           :data-controller-primary="index === 0 ? '' : undefined"
-          @click="openDetail(game)"
-          @keydown.enter.self="openDetail(game)"
-          @keydown.space.self.prevent="openDetail(game)"
+          @click="handleCardClick(game, $event)"
+          @keydown.enter.self.prevent="handleCardClick(game, $event)"
+          @keydown.space.self.prevent="handleCardClick(game, $event)"
           @keydown="openContextMenu(game, $event)"
           @contextmenu="openContextMenu(game, $event)"
           tabindex="0"
-          role="group"
-          :aria-label="`${game.title}. Press Enter for details.`"
+          role="checkbox"
+          :aria-label="`${game.title}. ${selectedIds.size || selecting ? 'Press Enter to toggle selection.' : 'Press Enter for details.'}`"
+          :aria-checked="selectedIds.has(game.id)"
+          @mousedown.shift.prevent
           class="game-card group rounded-xl cursor-pointer relative"
           :class="[
             layoutMode === 'banner'
@@ -2435,11 +2513,13 @@ onUnmounted(() => {
                 ? 'aspect-[16/9]'
                 : 'flex flex-col',
             {
+              'is-selected': selectedIds.has(game.id),
               'is-running': runningGameIds.has(game.id),
               'is-menu-open': openLaunchTargetMenuId === game.id,
             },
           ]"
         >
+          <span v-if="selectedIds.has(game.id)" class="selection-mark" aria-hidden="true">✓</span>
           <div
             class="flex items-center justify-center relative shadow-inner shrink-0 rounded-t-xl"
             :class="
@@ -2681,6 +2761,7 @@ onUnmounted(() => {
         <div
           v-if="contextMenu"
           ref="contextMenuElement"
+          data-controller-select
           role="dialog"
           :aria-label="`Actions for ${contextMenu.game.title}`"
           class="game-context-menu"
@@ -2696,6 +2777,7 @@ onUnmounted(() => {
             {{ contextMenu.game.title }}
           </p>
           <template v-if="contextMenuView === 'actions'">
+            <button @click="selection.toggle(contextMenu.game.id); selecting = true; closeContextMenu()">Select</button>
             <button @click="runContextAction('play')">
               {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
             </button>
@@ -2872,6 +2954,21 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
+      <div v-if="selectedIds.size" ref="bulkBar" class="bulk-bar flex flex-wrap items-center gap-2 p-3 rounded-xl" role="region" aria-label="Bulk actions">
+        <strong>{{ selectedIds.size }} selected</strong>
+        <button class="ui-action-btn px-2 py-1" @click="selection.selectAll(filteredGames.map(game => game.id))">Select all</button>
+        <button class="ui-action-btn px-2 py-1" @click="clearSelection">Done</button>
+        <select class="ui-action-btn px-2 py-1" aria-label="Set status" :disabled="bulkBusy" @change="bulkAction('status', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"><option value="">Set status</option><option v-for="item in allStatuses" :key="item.value" :value="item.value" :disabled="selectedGames.every(game => normalizePlayStatus(game.play_status, game.status) === item.value)">{{ item.label }}</option></select>
+        <select v-model="bulkCollection" class="ui-action-btn px-2 py-1" aria-label="Collection"><option value="">Choose collection</option><option v-for="name in userCollections" :key="name">{{ name }}</option></select>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !bulkCollection || selectedGames.every(game => (game.collections || []).some(name => name.toLowerCase() === bulkCollection.toLowerCase()))" title="Choose a collection that is missing from at least one selected game" @click="bulkAction('add', bulkCollection)">Add to collection</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !bulkCollection || selectedGames.every(game => !(game.collections || []).some(name => name.toLowerCase() === bulkCollection.toLowerCase()))" title="Choose a collection present on at least one selected game" @click="bulkAction('remove-collection', bulkCollection)">Remove from collection</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || selectedGames.every(game => game.is_favorite)" title="All selected games are already favorites" @click="bulkAction('favorite')">Favorite</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || selectedGames.every(game => !game.is_favorite)" title="No selected games are favorites" @click="bulkAction('unfavorite')">Unfavorite</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || bulkChecking || !eligibleChecks.length" :title="!eligibleChecks.length ? 'Selected games have no F95 thread' : bulkChecking ? 'An update check is running' : 'Check selected games'" @click="bulkAction('check')">Check for updates</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !eligibleUpdates.length" title="Requires an available update" @click="bulkAction('updated')">Mark as updated</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !eligibleUpdates.length" title="Requires an available update" @click="bulkAction('skip')">Skip version</button>
+        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy" @click="bulkAction('remove')">Remove</button>
+      </div>
       <ImportFolderModal v-model="showImportModal" />
       <AddGameModal
         v-model="showAddModal"
@@ -2884,7 +2981,7 @@ onUnmounted(() => {
         :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
         :update-check-state="modalUpdateState"
         @updated="handleGameUpdated"
-        @deleted="handleGameDeleted"
+        @remove="scheduleRemoval([$event])"
         @launch="launchGameFast"
         @stop="stopGame"
         @check-updates="handleModalUpdateCheck"
@@ -2896,6 +2993,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.bulk-bar { position: sticky; bottom: 0; z-index: 40; background: var(--bg-raised); border: 1px solid var(--border); box-shadow: 0 4px 20px #0004; }
+.is-selected { box-shadow: inset 0 0 0 3px var(--brand); }
+.selection-mark { position: absolute; z-index: 5; top: .5rem; right: .5rem; padding: .2rem .45rem; border-radius: 999px; background: var(--brand); color: var(--on-brand); font-weight: bold; }
+
 .library-skeletons--list { grid-template-columns: 1fr; gap: 8px; }
 .library-skeleton { background: var(--bg-surface); border: 1px solid var(--border); animation: skeleton-pulse 1.5s ease-in-out infinite alternate; }
 .library-skeleton--grid { height: 340px; }

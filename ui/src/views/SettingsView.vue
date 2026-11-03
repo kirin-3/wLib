@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { confirmAction } from "../utils/confirm";
 import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
 import { formatLibraryFreeSpace } from "../utils/installArchive";
 import type { LibraryFolder } from "../services/api";
@@ -318,7 +319,7 @@ const formValuesChangedSince = (
 };
 
 onBeforeRouteLeave(
-  () => !hasUnsavedChanges.value || confirm("Discard unsaved settings changes?"),
+  () => !hasUnsavedChanges.value || confirmAction({ title: "Discard changes", message: "Discard unsaved settings changes?", confirmLabel: "Discard", danger: true }),
 );
 
 const themeOptions: { value: ThemePreference; label: string }[] = [
@@ -637,7 +638,7 @@ const loadCoverCache = async () => {
   } catch (error) { coverCacheError.value = String(error); }
 };
 const purgeCoverCache = async () => {
-  if (!confirm("Delete all cached covers? Cover downloads will resume next launch. Your local covers will be kept.")) return;
+  if (!(await confirmAction({ title: "Delete cached covers", message: "Delete all cached covers? Cover downloads will resume next launch. Your local covers will be kept.", confirmLabel: "Delete", danger: true }))) return;
   coverCacheBusy.value = true;
   coverCacheError.value = "";
   try {
@@ -883,7 +884,7 @@ const removeStatus = async (name: string) => {
   try {
     const games = await api.getGames();
     const count = games.filter((game) => game.play_status?.toLowerCase() === name.toLowerCase()).length;
-    if (!confirm(`Remove '${name}'? Saving will reset ${count} game${count === 1 ? '' : 's'} to Not Started.`)) return;
+    if (!(await confirmAction({ title: 'Remove status', message: `Remove '${name}'? Saving will reset ${count} game${count === 1 ? '' : 's'} to Not Started.`, confirmLabel: 'Remove', danger: true }))) return;
     customStatuses.value = customStatuses.value.filter((status) => status !== name);
     statusError.value = "";
   } catch (error) {
@@ -972,7 +973,7 @@ const removeCollection = async (name: string) => {
   const note = count
     ? ` Its ${count} game${count === 1 ? "" : "s"} will stay in your library.`
     : " Games stay in your library.";
-  if (!confirm(`Remove the collection '${name}'?${note}`)) return;
+  if (!(await confirmAction({ title: 'Remove collection', message: `Remove the collection '${name}'?${note}`, confirmLabel: 'Remove', danger: true }))) return;
   const result = await api.deleteCollection(name);
   if (!result.success) {
     collectionError.value = result.error || "Could not remove the collection.";

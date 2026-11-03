@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pickNext, primaryCandidate } from "./spatialFocus.ts";
+import { pickNext, primaryCandidate, focusCandidates } from "./spatialFocus.ts";
 const rect = (left: number, top: number) => ({ left, top, right: left + 10, bottom: top + 10 });
 test("moves in a grid and stays at the edge", () => {
   const center = rect(20, 20), up = rect(20, 0), down = rect(20, 40), left = rect(0, 20), right = rect(40, 20);
@@ -25,4 +25,12 @@ test("a wide adjacent input wins over a diagonally closer button", () => {
   const input = { left: 329, right: 779, top: 357, bottom: 397 };
   const cancel = { left: 710, right: 806, top: 437, bottom: 477 };
   assert.equal(pickNext(browse, [cancel, input], "left"), input);
+});
+
+
+test("visible toast controls are directional focus candidates", () => {
+  const button = { getClientRects: () => [1], matches: () => false, closest: () => null };
+  const root = { querySelectorAll: () => [button] };
+  Object.assign(globalThis, { getComputedStyle: () => ({ visibility: "visible" }) });
+  assert.deepEqual(focusCandidates(root as unknown as HTMLElement), [button]);
 });

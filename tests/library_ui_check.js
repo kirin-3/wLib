@@ -3,6 +3,9 @@
 // playwright-cli run-code --filename tests/library_ui_check.js
 async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const nativeDialogs = [];
+  const onDialog = dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); };
+  page.on("dialog", onDialog);
   const previousUrl = page.url();
   const previousViewport = page.viewportSize();
   const previous = await page.evaluate(() => ({
@@ -49,7 +52,7 @@ async (page) => {
       columns.push(await page.locator(".library-cards").evaluate(el => getComputedStyle(el).gridTemplateColumns.split(" ").length));
     }
     check(columns[0] > columns[1], "Largest saved card size must yield fewer grid columns than smallest");
-    const card = page.getByRole("group", { name: "Alpha. Press Enter for details.", exact: true });
+    const card = page.getByRole("checkbox", { name: "Alpha. Press Enter for details.", exact: true });
     const targets = card.getByRole("button", { name: "Choose launch target for Alpha", exact: true });
     await targets.click();
     await page.keyboard.press("Escape");
@@ -89,8 +92,65 @@ async (page) => {
     await releaseRefresh();
     check(await page.getByRole("heading", { name: /^Updates Available/ }).count() === 0, "An old response must not restore the Updates list");
     check(await page.getByRole("link", { name: "Updates, 0 available", exact: true }).count() === 1, "The zero update count must remain current");
+    // Selection, bulk undo and delayed removal use a fresh browser mock fixture.
+    await page.evaluate(() => {
+      delete window.pywebview;
+      localStorage.setItem("wlib-library-view-state", JSON.stringify({layoutMode: "grid"}));
+      localStorage.setItem("wlib-mock-games", JSON.stringify([1,2,3].map(id => ({id, title: `Bulk ${id}`, exe_path: "/game", version: "1", latest_version: "2", play_status: id === 1 ? "Completed" : "Playing"}))));
+    });
+    await page.goto(new URL('/#/', previousUrl).toString());
+    await page.reload();
+    const cards = page.locator('[data-game-id]');
+    await cards.first().waitFor();
+    await page.evaluate(() => { window.__bulkLaunches = 0; window.pywebview = { api: { launch_game: async () => { window.__bulkLaunches++; return { success: true }; } } }; });
+    for (const layout of ['Grid View', 'Banner View', 'List View', 'Compact View']) {
+      await page.getByRole('button', {name: layout, exact: true}).click();
+      await page.getByRole('button', {name: 'Select', exact: true}).click();
+      await cards.first().click();
+      await page.getByRole('region', {name: 'Bulk actions'}).getByText('1 selected').waitFor();
+      const previousLaunches = await page.evaluate(() => window.__bulkLaunches);
+      await cards.first().locator('button[title^="Play "]').first().click();
+      await page.waitForFunction(previous => window.__bulkLaunches === previous + 1, previousLaunches);
+      await page.getByRole('region', {name: 'Bulk actions'}).getByText('1 selected').waitFor();
+      await page.getByRole('region', {name: 'Bulk actions'}).getByRole('button', {name: 'Done'}).click();
+    }
+    await page.evaluate(() => { delete window.pywebview; });
+    await cards.nth(0).click({modifiers: ['Control']});
+    await cards.nth(2).click({modifiers: ['Shift']});
+    const bar = page.getByRole('region', {name: 'Bulk actions'});
+    await bar.getByText('3 selected').waitFor();
+    await page.getByLabel('Search games').fill('Bulk 1');
+    await bar.getByText('1 selected').waitFor();
+    await page.getByLabel('Search games').fill('');
+    await bar.getByRole('button', {name: 'Select all'}).click();
+    await bar.getByText('3 selected').waitFor();
+    await bar.getByLabel('Set status').selectOption('Completed');
+    await page.getByText('2 changed, 1 skipped.').waitFor();
+    await page.getByRole('button', {name: 'Undo', exact: true}).last().click();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).every(game => game.play_status === (game.id === 1 ? 'Completed' : 'Playing')));
+    await bar.getByRole('button', {name: 'Remove', exact: true}).click();
+    await page.getByRole('button', {name: 'Undo', exact: true}).last().waitFor();
+    await page.evaluate(() => window.dispatchEvent(new Event('wlib-refresh-library')));
+    await page.waitForTimeout(200);
+    check(await cards.count() === 0, 'Refresh must not restore pending removals');
+    await page.getByRole('link', {name: 'Updates, 0 available'}).click();
+    check(await page.getByRole('heading', {name: /^Updates Available/}).count() === 0, 'Pending games must leave Updates');
+    await page.getByRole('link', {name: 'Library', exact: true}).click();
+    await page.getByRole('button', {name: 'Undo', exact: true}).last().click();
+    await cards.first().waitFor();
+    await cards.first().click();
+    await page.getByRole('dialog').getByRole('button', {name: 'Remove', exact: true}).click();
+    await page.reload();
+    await cards.first().waitFor();
+    check(JSON.parse(await page.evaluate(() => localStorage.getItem('wlib-mock-games'))).length === 3, 'Reload must keep pending removal');
+    await cards.first().click({button: 'right'});
+    await page.getByRole('dialog', {name: /Actions for/}).getByRole('button', {name: 'Remove', exact: true}).click();
+    await page.mouse.move(0, 0);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).length === 2, undefined, {timeout: 12000});
+    check(nativeDialogs.length === 0, `Unexpected native dialogs: ${nativeDialogs.join(", ")}`);
     return "PASS: saved sorting, launch menus, and delayed refreshes in Library, Updates and navigation";
   } finally {
+    page.off("dialog", onDialog);
     await page.evaluate(({ games, state }) => {
       delete window.pywebview;
       delete window.pendingRefresh;

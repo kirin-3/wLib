@@ -2,6 +2,9 @@
 // Run in an isolated Vite browser: playwright-cli run-code --filename tests/settings_ui_check.js
 async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
+  const nativeDialogs = [];
+  const onDialog = dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); };
+  page.on("dialog", onDialog);
   const previousUrl = page.url();
   const previousViewport = page.viewportSize();
   const keys = ["wlib-mock-games", "wlib-mock-settings", "wlib-theme", "wlib-mock-platform"];
@@ -110,8 +113,10 @@ async (page) => {
       checksAfterLeaving === checksBeforeLeaving,
       `Install polling continued after leaving Settings (${checksBeforeLeaving} -> ${checksAfterLeaving})`,
     );
+    check(nativeDialogs.length === 0, `Unexpected native dialogs: ${nativeDialogs.join(", ")}`);
     return "PASS: settings save-in-flight edits stay unsaved, URM path shows found/not-found feedback, install polling stops on leave";
   } finally {
+    page.off("dialog", onDialog);
     // Drop the test's own unsaved settings so the route guard does not block cleanup.
     const discard = page.getByRole("button", { name: "Discard", exact: true });
     if (await discard.count()) await discard.click().catch(() => {});
