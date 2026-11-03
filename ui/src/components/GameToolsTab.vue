@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { IconLoader2 } from "@tabler/icons-vue";
 import {
   api,
+  type BepInExBuild,
   type GameToolEngine,
   type GameToolStatus,
   type GameToolsResponse,
@@ -22,6 +23,7 @@ import {
   shouldSyncDeveloperOption,
   toolProgressPercent,
 } from "../utils/gameTools";
+import { unityActions, unityWarnings, switchWarning } from "../utils/unityTools";
 import { notify, notifyError } from "../utils/toast";
 
 const props = defineProps<{
@@ -31,7 +33,7 @@ const props = defineProps<{
   active: boolean;
 }>();
 
-type BusyAction = "" | "console" | "extract" | "decrypt" | "switch" | "urm";
+type BusyAction = "" | "console" | "extract" | "decrypt" | "switch" | "urm" | "bepinex_install" | "bepinex_uninstall" | "bepinex_restore";
 
 const POLL_MS = 500;
 
@@ -46,6 +48,14 @@ const extractMode = ref<RenpyExtractMode>("folder");
 const outputFolder = ref("");
 const progress = ref<GameToolStatus | null>(null);
 const cancelling = ref(false);
+const builds = ref<BepInExBuild[]>([]);
+const buildId = ref("");
+const major = ref(5);
+const versionsLoaded = ref(false);
+const versionLoading = ref(false);
+const versionWarnings = ref<string[]>([]);
+const removeUserData = ref(false);
+
 // True when polling belongs to a run that was already going before the tab loaded.
 const resumedRun = ref(false);
 
@@ -152,6 +162,13 @@ watch(
       extractMode.value = "folder";
       outputFolder.value = "";
       developerOption.value = false;
+      builds.value = [];
+      buildId.value = "";
+      major.value = 5;
+      versionsLoaded.value = false;
+      versionLoading.value = false;
+      versionWarnings.value = [];
+      removeUserData.value = false;
       loadedFor = null;
     }
     if (active && loadedFor !== gameId) {
@@ -165,8 +182,55 @@ watch(
 const isBusy = computed(() => busy.value !== "");
 const renpy = computed(() => tools.value?.renpy ?? null);
 const rpgm = computed(() => tools.value?.rpgm ?? null);
+const unity = computed(() => tools.value?.unity ?? null);
+const selectedBuild = computed(() => builds.value.find((build) => build.id === buildId.value) ?? null);
+const filteredBuilds = computed(() => builds.value.filter((build) => build.major === major.value));
+const unityState = computed(() => unity.value ? unityActions(unity.value, selectedBuild.value, isBusy.value) : null);
+const pickBuild = () => {
+  const options = filteredBuilds.value;
+  const preferred = options.find((b) => b.channel === (major.value === 5 ? "stable" : "be")) ?? options[0];
+  buildId.value = preferred?.id ?? "";
+};
+watch(major, pickBuild);
+const loadVersions = async () => {
+  const id = props.gameId;
+  versionLoading.value = true;
+  try {
+    const result = await api.listBepinexVersions(id);
+    if (props.gameId !== id) return;
+    if (result.success === false) { notifyError(result.error || "Could not load versions"); return; }
+    builds.value = result.builds ?? [];
+    versionWarnings.value = result.warnings ?? [];
+    major.value = result.recommended?.major ?? (unity.value?.build.backend === "il2cpp" ? 6 : 5);
+    buildId.value = result.recommended?.id ?? "";
+    if (!buildId.value) pickBuild();
+    versionsLoaded.value = true;
+  } catch (error) { notifyError(String(error)); }
+  finally { if (props.gameId === id) versionLoading.value = false; }
+};
+// Load the version list once a Windows Unity game with a known build is shown,
+// so the best-fitting build is preselected without an extra click.
+watch(unity, (state) => {
+  if (!state || versionsLoaded.value || versionLoading.value) return;
+  if (state.platform === "windows" && state.build.backend && state.build.arch) void loadVersions();
+});
+const installBepinex = async () => {
+  if (!unity.value || !selectedBuild.value) return;
+  const warning = switchWarning(unity.value, selectedBuild.value);
+  if (warning && !confirm(warning)) return;
+  const result = await run("bepinex_install", (id) => api.installBepinex(id, buildId.value));
+  if (result) { if (result.warning) lastResult.value = result.warning; await load(props.gameId, true); }
+};
+const uninstallBepinex = async () => {
+  const result = await run("bepinex_uninstall", (id) => api.uninstallBepinex(id, removeUserData.value));
+  if (result) await load(props.gameId, true);
+};
+const restoreBepinex = async () => {
+  const result = await run("bepinex_restore", (id) => api.restoreBepinex(id));
+  if (result) await load(props.gameId, true);
+};
 const consoleOn = computed(() => (renpy.value?.console ?? "off") !== "off");
-const longRun = computed(() => busy.value === "extract" || busy.value === "decrypt");
+const longRun = computed(() => busy.value === "extract" || busy.value === "decrypt" || busy.value === "bepinex_install");
 
 const extractState = computed(() =>
   getExtractState(renpy.value?.archives ?? [], extractMode.value, outputFolder.value, isBusy.value),
@@ -193,7 +257,7 @@ const run = async <T extends { success?: boolean; error?: string; message?: stri
   resumedRun.value = false;
   busy.value = action;
   lastResult.value = "";
-  if (action === "extract" || action === "decrypt") startPolling(gameId);
+  if (action === "extract" || action === "decrypt" || action === "bepinex_install") startPolling(gameId);
   try {
     const result = await call(gameId);
     if (props.gameId !== gameId) return null;
@@ -496,6 +560,33 @@ const useDecryptedChecked = computed({
         <p v-if="switchState?.message && !isBusy" role="status" class="text-xs" style="color: var(--text-muted)">
           {{ switchState.message }}
         </p>
+      </section>
+    </template>
+
+    <template v-else-if="tools && engine === 'unity' && unity">
+      <section class="tools-card space-y-3" aria-labelledby="tools-unity-title">
+        <h3 id="tools-unity-title" class="text-sm font-medium" style="color: var(--text-primary)">BepInEx</h3>
+        <p class="text-xs" style="color: var(--text-secondary)">Backend: {{ unity.build.backend || "Unknown" }} · Architecture: {{ unity.build.arch || "Unknown" }} · Unity: {{ unity.build.version || "Unknown" }}</p>
+        <p class="text-xs" style="color: var(--text-secondary)">{{ unity.installed ? `BepInEx ${unity.installed.version || "Unknown"} (${unity.installed.backend}) ${unity.installed.complete ? "installed" : "incomplete"}` : "BepInEx is not installed." }}</p>
+        <p v-for="warning in unityWarnings(unity)" :key="warning" class="text-xs" style="color: var(--text-muted)">{{ warning }}</p>
+        <p v-if="unity.platform === 'linux'" class="text-xs" style="color: var(--text-muted)">{{ unityState?.install.message }}</p>
+        <template v-else>
+          <button v-if="!versionsLoaded" type="button" class="tools-btn disabled:opacity-50" :disabled="versionLoading || isBusy" @click="loadVersions">{{ versionLoading ? "Loading versions…" : "Load versions" }}</button>
+          <template v-else>
+            <div class="flex flex-wrap gap-3 items-center text-xs" style="color: var(--text-secondary)">
+              <label v-if="unity.build.backend !== 'il2cpp'"><input v-model="major" type="radio" :value="5" :disabled="isBusy" /> BepInEx 5</label>
+              <label><input v-model="major" type="radio" :value="6" :disabled="isBusy" /> BepInEx 6</label>
+              <select v-model="buildId" class="tools-btn" :disabled="isBusy" aria-label="BepInEx version">
+                <option v-for="build in filteredBuilds" :key="build.id" :value="build.id">{{ build.id }}{{ build.channel === 'be' ? ' (bleeding edge)' : '' }}</option>
+              </select>
+            </div>
+            <button type="button" class="tools-btn disabled:opacity-50" :disabled="!unityState?.install.enabled" @click="installBepinex">{{ unity.installed ? "Update / Reinstall" : "Install" }}</button>
+          </template>
+          <p v-if="unityState?.install.message && !isBusy" class="text-xs" style="color: var(--text-muted)">{{ unityState.install.message }}</p>
+          <p v-for="warning in versionWarnings" :key="warning" class="text-xs" style="color: var(--text-muted)">{{ warning }}</p>
+          <label class="flex items-center gap-2 text-xs" style="color: var(--text-secondary)"><input v-model="removeUserData" type="checkbox" :disabled="isBusy" /> Also remove plugins and config</label>
+          <div class="flex gap-2"><button type="button" class="tools-btn disabled:opacity-50" :disabled="!unityState?.uninstall.enabled" @click="uninstallBepinex">Uninstall</button><button type="button" class="tools-btn disabled:opacity-50" :disabled="!unityState?.restore.enabled" @click="restoreBepinex">Restore</button></div>
+        </template>
       </section>
     </template>
 

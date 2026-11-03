@@ -758,7 +758,7 @@ export interface UrmStatusResponse extends ApiBasicResponse {
   source_configured?: boolean;
 }
 
-export type GameToolEngine = "renpy" | "rpgm" | "";
+export type GameToolEngine = "renpy" | "rpgm" | "unity" | "";
 export type RenpyConsoleState = "off" | "on" | "developer";
 export type RenpyExtractMode = "folder" | "in_place";
 export type RpgmKeySource = "system" | "recovered" | "";
@@ -791,10 +791,17 @@ export interface RpgmToolsState {
   backup: boolean;
 }
 
+export interface UnityBuild { platform: "windows" | "linux"; data_folder: string; backend: "mono" | "il2cpp" | ""; arch: "x86" | "x64" | ""; version: string }
+export interface BepInExInstalled { version: string; major: number; backend: "mono" | "il2cpp"; complete: boolean; managed_by_wlib: boolean }
+export interface UnityToolsState { build: UnityBuild; platform: "windows" | "linux"; installed: BepInExInstalled | null; has_backup: boolean; unity_libs: boolean }
+export interface BepInExBuild { id: string; major: number; backend: "mono" | "il2cpp"; channel: "stable" | "pre" | "be"; date: string }
+export interface BepInExVersions extends ApiBasicResponse { builds?: BepInExBuild[]; recommended?: BepInExBuild | null; warnings?: string[] }
+
 export interface GameToolsResponse extends ApiBasicResponse {
   engine?: GameToolEngine;
   renpy?: RenpyToolsState;
   rpgm?: RpgmToolsState;
+  unity?: UnityToolsState;
 }
 
 export interface GameToolStatus extends ApiBasicResponse {
@@ -813,6 +820,7 @@ export interface RenpyExtractOptions {
 
 export interface GameToolResult extends ApiBasicResponse {
   message?: string;
+  warning?: string;
   cancelled?: boolean;
   // console switch
   state?: RenpyConsoleState;
@@ -1465,12 +1473,15 @@ class ApiService {
   _mockRenpyConsole = new Map<number, RenpyConsoleState>();
   _mockRpgmDecrypted = new Set<number>();
   _mockRpgmUseDecrypted = new Set<number>();
+  _mockBepinex = new Map<number, BepInExInstalled>();
+  _mockBepinexBackup = new Map<number, BepInExInstalled | null>();
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
 
   _mockToolEngine(gameId: number): GameToolEngine {
     const engine = readMockGames().find((game) => game.id === gameId)?.engine ?? "";
     if (/ren.?py/i.test(engine)) return "renpy";
     if (/rpg/i.test(engine)) return "rpgm";
+    if (/unity/i.test(engine)) return "unity";
     return "";
   }
 
@@ -1478,7 +1489,8 @@ class ApiService {
   _mockToolGuard(gameId: number, engine: GameToolEngine): string {
     if (!readMockGames().some((game) => game.id === gameId)) return "Game not found";
     if (this._mockToolEngine(gameId) !== engine) {
-      return `This game is not a ${engine === "renpy" ? "Ren'Py" : "RPG Maker MV/MZ"} game`;
+      const label = { renpy: "Ren'Py", rpgm: "RPG Maker MV/MZ", unity: "Unity" }[engine as "renpy" | "rpgm" | "unity"] ?? engine;
+      return `This game is not a ${label} game`;
     }
     if (this._mockRunningGames.has(gameId)) return "Close the game before using its tools";
     if (this._mockToolRuns.has(gameId)) return "A tool is already running for this game";
@@ -1541,6 +1553,10 @@ class ApiService {
         },
       };
     }
+    if (engine === "unity") return { success: true, mock: true, engine, unity: {
+      platform: "windows", build: { platform: "windows", data_folder: "Game_Data", backend: "il2cpp", arch: "x64", version: "2022.3.21" },
+      installed: this._mockBepinex.get(gameId) ?? null, unity_libs: this._mockBepinex.has(gameId), has_backup: this._mockBepinexBackup.has(gameId),
+    }};
     return { success: true, mock: true, engine: "" };
   }
 
@@ -1891,6 +1907,19 @@ class ApiService {
 
   async getGameTools(gameId: number): Promise<GameToolsResponse> {
     return this.invoke<GameToolsResponse>("get_game_tools", gameId);
+  }
+
+  async listBepinexVersions(gameId: number): Promise<BepInExVersions> {
+    return this.invoke<BepInExVersions>("list_bepinex_versions", gameId);
+  }
+  async installBepinex(gameId: number, buildId: string): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("install_bepinex", gameId, { build_id: buildId });
+  }
+  async uninstallBepinex(gameId: number, removeUserData: boolean): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("uninstall_bepinex", gameId, { remove_user_data: removeUserData });
+  }
+  async restoreBepinex(gameId: number): Promise<GameToolResult> {
+    return this.invoke<GameToolResult>("restore_bepinex", gameId);
   }
 
   async setRenpyConsole(gameId: number, enabled: boolean, developer: boolean): Promise<GameToolResult> {
@@ -2560,6 +2589,33 @@ class ApiService {
         }
         return this._mockGameTools(gameId);
       }
+      case "list_bepinex_versions": {
+        const error = this._mockToolGuard(Number(args[0]), "unity");
+        if (error) return { success: false, error };
+        const build = { id: "6.0.0-be.791", major: 6, backend: "il2cpp", channel: "be", date: "" };
+        return { success: true, builds: [build], recommended: build, warnings: [] };
+      }
+      case "install_bepinex":
+      case "uninstall_bepinex":
+      case "restore_bepinex": return (async () => {
+        const id = Number(args[0]);
+        const error = this._mockToolGuard(id, "unity");
+        if (error) return { success: false, error };
+        if (method === "restore_bepinex") {
+          const old = this._mockBepinexBackup.get(id);
+          if (old) this._mockBepinex.set(id, old); else this._mockBepinex.delete(id);
+          this._mockBepinexBackup.delete(id);
+        } else {
+          const old = this._mockBepinex.get(id);
+          if (old) this._mockBepinexBackup.set(id, old);
+          if (method === "install_bepinex") {
+            const run = await this._runMockTool(id, "bepinex_install", 5);
+            if (run.cancelled) return { success: false, error: "Installation cancelled" };
+            this._mockBepinex.set(id, { version: "6.0.0-be.791", major: 6, backend: "il2cpp", complete: true, managed_by_wlib: true });
+          } else this._mockBepinex.delete(id);
+        }
+        return { success: true };
+      })();
       case "set_renpy_console":
       case "extract_renpy_archives":
       case "decrypt_rpgm_assets":

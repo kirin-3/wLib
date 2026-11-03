@@ -329,6 +329,7 @@ class Api:
         # Per-game mod tool run (extract/decrypt/switch), polled by the Tools tab.
         self._tool_status: dict[int, dict[str, object]] = {}
         self._tool_lock: threading.Lock = threading.Lock()
+        self._bepinex_cache: dict[tuple[str, str], tuple[float, list[dict[str, object]], list[str]]] = {}
         # Games with a save backup/import/restore in flight (one at a time per game).
         self._saves_busy: set[int] = set()
         self._saves_busy_lock: threading.Lock = threading.Lock()
@@ -4049,7 +4050,7 @@ class Api:
             status["cancel"] = True
         return {"success": True}
 
-    def _tool_game(self, game_id: object) -> tuple[int, str] | None:
+    def _tool_game(self, game_id: object) -> tuple[int, str, str] | None:
         """(id, executable folder) from the stored row, or None for an unknown id."""
         from core.database import get_game
 
@@ -4060,9 +4061,9 @@ class Api:
         if row is None:
             return None
         try:
-            return coerced_id, game_tool_folder(row)
+            return coerced_id, game_tool_folder(row), str(row.get("exe_path") or "")
         except ValueError:
-            return coerced_id, ""
+            return coerced_id, "", ""
 
     def get_game_tool_support(self, game_id: object = None) -> dict[str, object]:
         from core.game_tools import detect_engine
@@ -4070,7 +4071,7 @@ class Api:
         game = self._tool_game(game_id)
         if game is None:
             return {"success": False, "error": "Game not found", "engine": ""}
-        return {"success": True, "engine": detect_engine(game[1])}
+        return {"success": True, "engine": detect_engine(game[1], game[2])}
 
     def _renpy_tools_state(self, game_id: int, folder: str) -> dict[str, object]:
         from core.renpy_tools import console_state, list_archives
@@ -4106,6 +4107,7 @@ class Api:
         from core.game_tools import (
             ENGINE_RENPY,
             ENGINE_RPGM,
+            ENGINE_UNITY,
             detect_engine,
             rpgm_data_root,
         )
@@ -4113,9 +4115,20 @@ class Api:
         game = self._tool_game(game_id)
         if game is None:
             return {"success": False, "error": "Game not found"}
-        coerced_id, folder = game
-        engine = detect_engine(folder)
+        coerced_id, folder, exe_path = game
+        engine = detect_engine(folder, exe_path)
         try:
+            if engine == ENGINE_UNITY:
+                from dataclasses import asdict
+                from core.unity_tools import detect_installed, detect_unity
+                unity = detect_unity(folder, exe_path)
+                if unity is not None:
+                    return {"success": True, "engine": engine, "unity": {
+                        "build": asdict(unity), "platform": unity.platform,
+                        "installed": detect_installed(folder),
+                        "unity_libs": bool(unity.version and os.path.isfile(os.path.join(folder, "BepInEx", "unity-libs", unity.version + ".zip"))),
+                        "has_backup": os.path.isfile(os.path.join(folder, "BepInEx.wlib-backup", "manifest.json")),
+                    }}
             if engine == ENGINE_RENPY:
                 return {
                     "success": True,
@@ -4144,13 +4157,15 @@ class Api:
         import sqlite3
 
         from core.game_tools import GameToolError, detect_engine
+        from core.archive_install import ArchiveSafetyError
+        from zipfile import BadZipFile
 
         game = self._tool_game(game_id)
         if game is None:
             return {"success": False, "error": "Game not found"}
-        coerced_id, folder = game
-        if detect_engine(folder) != engine:
-            label = "Ren'Py" if engine == "renpy" else "RPG Maker MV/MZ"
+        coerced_id, folder, exe_path = game
+        if detect_engine(folder, exe_path) != engine:
+            label = {"renpy": "Ren'Py", "rpgm": "RPG Maker MV/MZ", "unity": "Unity"}.get(engine, engine)
             return {"success": False, "error": f"This game is not a {label} game"}
         try:
             with self._tool_run(coerced_id, action):
@@ -4159,9 +4174,117 @@ class Api:
                     self._tool_progress(coerced_id),
                     self._tool_cancelled(coerced_id),
                 )
-        except (GameToolError, ValueError, OSError, sqlite3.Error) as exc:
+        except (GameToolError, ArchiveSafetyError, BadZipFile, ValueError, OSError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True, **result}
+
+    def list_bepinex_versions(self, game_id: object = None) -> dict[str, object]:
+        import time
+        from core import unity_tools
+
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        unity = unity_tools.detect_unity(game[1], game[2])
+        if unity is None:
+            return {"success": False, "error": "This game is not a Unity game"}
+        if unity.platform != "windows" or not unity.arch or not unity.backend:
+            return {"success": False, "error": "A Windows Unity game with known backend and architecture is required"}
+        key = (unity.arch, unity.backend)
+        cached = self._bepinex_cache.get(key)
+        if cached is None or time.monotonic() - cached[0] >= 600:
+            builds, warnings = unity_tools.list_versions(*key)
+            cached = (time.monotonic(), builds, warnings)
+            self._bepinex_cache[key] = cached
+        return {"success": True, "builds": cached[1], "warnings": cached[2],
+                "recommended": unity_tools.recommended_build(cached[1], unity.backend)}
+
+    def install_bepinex(self, game_id: object = None, options: object = None) -> dict[str, object]:
+        from core import unity_tools
+        from core.game_tools import GameToolError
+        from core.host_platform import get_data_dir
+
+        if not isinstance(options, dict):
+            return {"success": False, "error": "A build ID is required"}
+        options_map = cast(dict[str, object], options)
+        if not isinstance(options_map.get("build_id"), str):
+            return {"success": False, "error": "A build ID is required"}
+        build_id = options_map["build_id"]
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+
+        def body(folder: str, progress: ProgressFn, cancelled: CancelFn) -> dict[str, object]:
+            unity = unity_tools.detect_unity(folder, game[2])
+            if unity is None or unity.platform != "windows":
+                raise GameToolError("BepInEx is not supported for Linux-native Unity games")
+            if not unity.arch or not unity.backend:
+                raise GameToolError("Unity backend and architecture must be known")
+            versions = self.list_bepinex_versions(game_id)
+            builds_value = versions.get("builds")
+            if not isinstance(builds_value, list):
+                raise GameToolError(str(versions.get("error") or "No builds available"))
+            builds = cast(list[dict[str, object]], builds_value)
+            build = next((b for b in builds if b.get("id") == build_id), None)
+            if (build is None or build.get("backend") != unity.backend
+                    or (unity.backend == "il2cpp" and build.get("major") != 6)):
+                raise GameToolError("The selected BepInEx build is unavailable or incompatible")
+            cache = os.path.join(get_data_dir(), "bepinex-cache")
+            archive = unity_tools.download_cached(str(build["url"]), str(build["file_name"]), cache,
+                                                  str(build["sha256"]), progress, cancelled)
+            if archive is None:
+                raise GameToolError("BepInEx download is unavailable")
+            libs = None
+            warning = ""
+            if unity.backend == "il2cpp":
+                if unity.version:
+                    try:
+                        libs = unity_tools.download_cached(f"https://unity.bepinex.dev/libraries/{unity.version}.zip",
+                                                           f"unity-libs-{unity.version}.zip", cache, progress=progress,
+                                                           cancelled=cancelled,
+                                                           label="Downloading Unity base libraries ...")
+                    except (OSError, GameToolError):
+                        if cancelled():
+                            raise GameToolError("Download cancelled") from None
+                    if libs is None:
+                        warning = "Unity base libraries unavailable; first launch needs internet."
+                else:
+                    warning = "Unity version unknown; first launch needs internet."
+            result = unity_tools.install_build(folder, str(archive), str(libs) if libs else None, progress, cancelled)
+            result["warning"] = warning
+            return result
+        return self._run_game_tool(game_id, "unity", "bepinex_install", body)
+
+    def uninstall_bepinex(self, game_id: object = None, options: object = None) -> dict[str, object]:
+        from core import unity_tools
+        from core.game_tools import GameToolError
+        if not isinstance(options, dict):
+            return {"success": False, "error": "Invalid uninstall options"}
+        options_map = cast(dict[str, object], options)
+        if not isinstance(options_map.get("remove_user_data", False), bool):
+            return {"success": False, "error": "Invalid uninstall options"}
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        def body(folder: str, _progress: ProgressFn, _cancelled: CancelFn) -> dict[str, object]:
+            unity = unity_tools.detect_unity(folder, game[2])
+            if unity is None or unity.platform != "windows":
+                raise GameToolError("BepInEx is not supported for Linux-native Unity games")
+            return unity_tools.uninstall(folder, bool(options_map.get("remove_user_data", False)))
+        return self._run_game_tool(game_id, "unity", "bepinex_uninstall", body)
+
+    def restore_bepinex(self, game_id: object = None) -> dict[str, object]:
+        from core import unity_tools
+        from core.game_tools import GameToolError
+        game = self._tool_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game not found"}
+        def body(folder: str, _progress: ProgressFn, _cancelled: CancelFn) -> dict[str, object]:
+            unity = unity_tools.detect_unity(folder, game[2])
+            if unity is None or unity.platform != "windows":
+                raise GameToolError("BepInEx is not supported for Linux-native Unity games")
+            return unity_tools.restore(folder)
+        return self._run_game_tool(game_id, "unity", "bepinex_restore", body)
 
     def set_renpy_console(
         self, game_id: object = None, enabled: object = None, developer: object = False

@@ -121,11 +121,12 @@ The **Saves** section sits at the end of the Launch tab in `GameDetailModal.vue`
 
 ## Game tools
 
-`GameDetailModal.vue` shows a **Tools** tab (`components/GameToolsTab.vue`, props `gameId`, `engine`, `active`) only for Ren'Py and RPG Maker MV/MZ games. The tab list is a computed list: `loadGameExtras` calls `api.getGameToolSupport(id)` and Tools is added when it reports an engine; if the engine disappears while Tools is active the modal falls back to Overview. The URM toggle, state and handlers moved here from the Launch tab.
+`GameDetailModal.vue` shows a **Tools** tab (`components/GameToolsTab.vue`, props `gameId`, `engine`, `active`) for Ren'Py, RPG Maker MV/MZ and Unity games. The tab list is a computed list: `loadGameExtras` calls `api.getGameToolSupport(id)` and Tools is added when it reports an engine; if the engine disappears while Tools is active the modal falls back to Overview. The URM toggle, state and handlers moved here from the Launch tab.
 
 - **Loading**: `api.getGameTools(id)` runs the first time the tab is shown for a game; the tab drops its state and polling when the game changes, ignores stale responses, and reloads after every change.
 - **Ren'Py**: Developer console switch plus an "Also enable developer mode" checkbox (changing it rewrites the script only while the console is on), the archive list (name, format, size) with a "Where to extract" radio (folder via `api.browseDirectory`, or into the game folder) and Extract, and the URM switch.
 - **RPG Maker**: Decrypt (encrypted counts, key source, missing copies) and the "Use decrypted files in-game" switch, which shows why it is disabled.
+- **Unity**: The Unity Tools section displays detected build details and installed BepInEx state. Windows games can load versions, install or update, uninstall with optional user-data removal, and restore a backup. It warns about incompatible plugin switches and IL2CPP first-launch requirements; Linux-native Unity games show an unsupported message.
 - **Runs**: extraction and decryption block their API call; the tab polls `getGameToolStatus()` every 500 ms and shows a progress bar (placed first in the tab, above the fold) with Cancel (`cancelGameTool()`). Every control is disabled while any tool call runs.
 - **Helpers**: `utils/gameTools.ts` holds `formatToolProgress`, `toolProgressPercent`, `getExtractState`, `getDecryptState`, `getUseDecryptedState` (availability plus the reason), `consoleHint`, `keySourceLabel` and `formatToolBytes`, tested in `gameTools.test.ts`.
 - **Styling**: scoped `.tools-card`, `.tools-btn` and progress-bar styles with theme tokens only; it shares the modal's fixed size and scrolls inside the tab area.
@@ -373,3 +374,4 @@ All cover views try the local cover, then `cover_cache_url`, then the remote `co
 ### Wine prefix and performance controls
 
 On Linux, Settings offers Winecfg and Winetricks for the prefix and runner currently in the form, plus global GameMode and MangoHud switches. The game Launch tab offers per-game Default, On, and Off choices and provides prefix-tool buttons when a custom prefix is enabled. Unavailable tools are disabled with a note; GameMode is also disabled for sandboxed games.
+

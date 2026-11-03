@@ -22,9 +22,9 @@ export interface ToolActionState {
 }
 
 // A long run that started before this tab was shown can be re-attached to.
-export const getResumableToolAction = (status: GameToolStatus): "extract" | "decrypt" | "" => {
+export const getResumableToolAction = (status: GameToolStatus): "extract" | "decrypt" | "bepinex_install" | "" => {
   if (!status.running) return "";
-  return status.action === "extract" || status.action === "decrypt" ? status.action : "";
+  return status.action === "extract" || status.action === "decrypt" || status.action === "bepinex_install" ? status.action : "";
 };
 
 // The developer checkbox is a pending choice while the console is off, so a

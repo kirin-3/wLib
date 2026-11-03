@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared helpers for the per-game mod tools (Ren'Py and RPG Maker MV/MZ).
+# pyright: reportImportCycles=false
+"""Shared helpers for the per-game mod tools (Ren'Py, RPG Maker MV/MZ, Unity).
 
 Everything here takes explicit paths so it can be tested against a temp dir.
 `core.api` resolves a game's folder from the stored row and calls in.
@@ -12,6 +13,7 @@ from collections.abc import Callable, Mapping
 
 ENGINE_RENPY = "renpy"
 ENGINE_RPGM = "rpgm"
+ENGINE_UNITY = "unity"
 
 # progress(done, total, current file name) and cancelled() -> bool
 ProgressFn = Callable[[int, int, str], None]
@@ -45,14 +47,18 @@ def rpgm_data_root(folder: str) -> str | None:
     return None
 
 
-def detect_engine(folder: str) -> str:
-    """"renpy", "rpgm" or "" from the files on disk (the stored label is ignored)."""
+def detect_engine(folder: str, exe_path: str = "") -> str:
+    """"renpy", "rpgm", "unity" or "" from the files on disk (the stored label is ignored)."""
     if not folder or not os.path.isdir(folder):
         return ""
     if is_renpy_folder(folder):
         return ENGINE_RENPY
     if rpgm_data_root(folder) is not None:
         return ENGINE_RPGM
+    from core.unity_tools import is_unity_folder
+
+    if is_unity_folder(folder, exe_path):
+        return ENGINE_UNITY
     return ""
 
 

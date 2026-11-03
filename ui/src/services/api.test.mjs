@@ -353,11 +353,12 @@ test("browser mock game tools report support and advance progress across polls",
 
     assert.equal((await api.getGameToolSupport(1)).engine, "renpy");
     assert.equal((await api.getGameToolSupport(2)).engine, "rpgm");
-    assert.equal((await api.getGameToolSupport(3)).engine, "");
+    assert.equal((await api.getGameToolSupport(3)).engine, "unity");
     assert.equal((await api.getGameToolSupport(99)).success, false);
     assert.equal((await api.getGameTools(1)).renpy.archives.length, 2);
     assert.equal((await api.getGameTools(2)).rpgm.missing, 12);
-    assert.equal((await api.getGameTools(3)).engine, "");
+    assert.equal((await api.getGameTools(3)).unity.build.backend, "il2cpp");
+    assert.equal((await api.listBepinexVersions(3)).recommended.major, 6);
 
     assert.equal((await api.setRenpyConsole(1, true, true)).state, "developer");
     assert.equal((await api.getGameTools(1)).renpy.console, "developer");

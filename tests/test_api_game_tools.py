@@ -83,6 +83,8 @@ def test_tool_support(tmp_path):
     assert api.get_game_tool_support(renpy_id) == {"success": True, "engine": "renpy"}
     assert api.get_game_tool_support(mv_id) == {"success": True, "engine": "rpgm"}
     assert api.get_game_tool_support(unity_id)["engine"] == ""
+    (unity / "UnityPlayer.dll").touch()
+    assert api.get_game_tool_support(unity_id)["engine"] == "unity"
     assert api.get_game_tool_support(wishlist_id) == {"success": True, "engine": ""}
     assert api.get_game_tool_support(999)["success"] is False
     assert api.get_game_tool_support(None)["success"] is False
@@ -373,3 +375,78 @@ def test_status_is_visible_while_a_run_is_in_flight(tmp_path, monkeypatch):
     thread.join(5)
     assert results[0]["success"] is True
     assert results[0]["cancelled"] is True
+
+
+def test_unity_api_guards_and_catalog(tmp_path, monkeypatch):
+    from core import unity_tools
+
+    api = Api()
+    folder = tmp_path / "Unity"
+    folder.mkdir()
+    exe = folder / "Game.exe"
+    exe.touch()
+    (folder / "UnityPlayer.dll").touch()
+    (folder / "GameAssembly.dll").touch()
+    game_id = add_game("Unity", str(exe))
+    assert api.get_game_tool_support(game_id)["engine"] == "unity"
+    state = api.get_game_tools(game_id)
+    assert state["unity"]["build"]["backend"] == "il2cpp"
+    assert api.install_bepinex(game_id, {"build_id": "x"})["success"] is False
+    monkeypatch.setattr(unity_tools, "_pe_arch", lambda _: "x64")
+    calls = []
+    builds = [{"id": "6.0.0-be.1", "major": 6, "backend": "il2cpp", "channel": "be", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""}]
+    def fetch(*args):
+        calls.append(args)
+        return builds, ["warning"]
+    monkeypatch.setattr(unity_tools, "list_versions", fetch)
+    response = api.list_bepinex_versions(game_id)
+    assert response["recommended"]["id"] == "6.0.0-be.1" and response["warnings"] == ["warning"]
+    api.list_bepinex_versions(game_id)
+    assert len(calls) == 1
+    assert api.install_bepinex(game_id, {"build_id": "missing"})["success"] is False
+    with api._tool_run(game_id, "other"):
+        assert api.uninstall_bepinex(game_id, {})["success"] is False
+    monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    assert api.restore_bepinex(game_id)["success"] is False
+    assert api.install_bepinex(999, {"build_id": "x"})["success"] is False
+
+
+def test_unity_linux_actions_rejected(tmp_path):
+    api = Api()
+    folder = tmp_path / "UnityLinux"
+    folder.mkdir()
+    (folder / "UnityPlayer.so").touch()
+    game_id = add_game("Unity", str(folder / "Game.x86_64"))
+    assert api.get_game_tools(game_id)["unity"]["platform"] == "linux"
+    assert api.uninstall_bepinex(game_id, {})["success"] is False
+    assert api.restore_bepinex(game_id)["success"] is False
+
+
+def test_unity_install_api_result_and_mismatch(tmp_path, monkeypatch):
+    import zipfile
+    from core import unity_tools
+
+    folder = tmp_path / "UnityInstall"
+    folder.mkdir()
+    exe = folder / "Game.exe"
+    exe.touch()
+    (folder / "UnityPlayer.dll").touch()
+    (folder / "GameAssembly.dll").touch()
+    game_id = add_game("Unity", str(exe))
+    monkeypatch.setattr(unity_tools, "_pe_arch", lambda _: "x64")
+    archive = tmp_path / "build.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("BepInEx/core/BepInEx.Core.dll", "x")
+        z.writestr("BepInEx/core/BepInEx.Unity.IL2CPP.dll", "x")
+        z.writestr("winhttp.dll", "x")
+    builds = [{"id": "bad", "major": 5, "backend": "mono", "channel": "stable", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""},
+              {"id": "good", "major": 6, "backend": "il2cpp", "channel": "be", "url": "https://example.test/a", "file_name": "a.zip", "sha256": ""}]
+    monkeypatch.setattr(unity_tools, "list_versions", lambda *args: (builds, []))
+    monkeypatch.setattr(unity_tools, "download_cached", lambda *args, **kwargs: archive)
+    api = Api()
+    assert api.install_bepinex(game_id, {"build_id": "bad"})["success"] is False
+    result = api.install_bepinex(game_id, {"build_id": "good"})
+    assert result["success"] is True and "internet" in result["warning"]
+    assert (folder / "winhttp.dll").exists()
+    assert api.uninstall_bepinex(game_id, {"remove_user_data": False})["success"] is True
+    assert api.restore_bepinex(game_id)["success"] is True

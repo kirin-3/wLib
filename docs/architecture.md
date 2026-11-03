@@ -80,7 +80,7 @@ flowchart TD
 | App shell and bridge | `main.py`, `core/api.py`, `core/database.py`, `core/host_platform.py` |
 | Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/litedb.py`, `core/backup_format.py` |
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
-| Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py` |
+| Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |
 | Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
 | Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
