@@ -758,6 +758,7 @@ export interface PlatformCapabilities {
   wine_proton: boolean;
   runtime_installers: boolean;
   wayland: boolean;
+  gaming_mode: boolean;
   rpgmaker_linux: boolean;
   companion_tools: boolean;
   cheat_engine_injection: boolean;
@@ -2132,6 +2133,10 @@ class ApiService {
 
   async openGameSandboxFolder(gameId: number): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("open_game_sandbox_folder", gameId);
+  }
+
+  async openSteamKeyboard(): Promise<{ success: boolean; code?: string; error?: string }> {
+    return this.invoke("open_steam_keyboard");
   }
 
   async getPlatformCapabilities(): Promise<PlatformCapabilities> {
@@ -3511,6 +3516,8 @@ class ApiService {
         localStorage.setItem("wlib-mock-games", JSON.stringify(games));
         return { success: true, changed };
       }
+      case "open_steam_keyboard":
+        return { success: false, code: "unsupported" };
       case "get_platform_capabilities":
         if (localStorage.getItem("wlib-mock-platform") === "linux") return {
           ...CONSERVATIVE_PLATFORM_CAPABILITIES, platform: "linux", sandbox: "bwrap", wine_proton: true,

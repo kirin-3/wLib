@@ -4,6 +4,7 @@ import "@fontsource-variable/inter";
 import "./style.css";
 import App from "./App.vue";
 import router from "./router";
+import { loadTvMode } from "./utils/tvMode";
 import { loadAccentPreference } from "./utils/accentPreference";
 import { loadMotionPreference } from "./utils/motionPreference";
 import { loadInterfaceScale } from "./utils/interfaceScalePreference";
@@ -15,6 +16,7 @@ loadThemePreference();
 loadAccentPreference();
 loadTextSizePreference();
 loadInterfaceScale();
+loadTvMode();
 
 const app = createApp(App);
 app.use(router);

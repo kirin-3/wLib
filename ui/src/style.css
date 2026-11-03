@@ -603,3 +603,10 @@ body {
 .sandbox-switch:checked::before { transform: translateX(18px); background: #fff; }
 .sandbox-switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 .sandbox-switch:disabled { opacity: .45; cursor: default; }
+
+/* Controller focus is independent of browser :focus-visible heuristics. */
+html[data-input="controller"] :focus { outline: 3px solid var(--brand) !important; outline-offset: 3px; }
+html[data-input="controller"] label:has(> input.sr-only:focus) { outline: 3px solid var(--brand); outline-offset: 3px; }
+html.tv-mode[data-input="controller"] :focus { outline-width: 4px !important; box-shadow: 0 0 0 6px var(--bg-surface), 0 0 0 8px var(--text-primary) !important; }
+html.tv-mode[data-input="controller"] label:has(> input.sr-only:focus) { outline-width: 4px; box-shadow: 0 0 0 6px var(--bg-surface), 0 0 0 8px var(--text-primary); }
+html[data-input="controller"] .app-shell, html.tv-mode .app-shell { padding-bottom: 2.5rem; }

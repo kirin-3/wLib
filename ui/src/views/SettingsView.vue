@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
 import { formatLibraryFreeSpace } from "../utils/installArchive";
 import type { LibraryFolder } from "../services/api";
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
@@ -1416,9 +1417,20 @@ const browseUrm = async () => {
 
         <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">TV mode</h4>
+            <label class="sr-only" for="tv-mode">TV mode</label>
+            <p class="text-xs" style="color: var(--text-muted)">Larger controls for a TV or Steam Deck. Kept on this device. <span v-if="tvPreference === 'auto'">{{ gamingMode ? 'Active (Gaming Mode)' : 'Inactive' }}</span></p>
+          </div>
+          <select id="tv-mode" class="rounded-lg border px-3 py-1.5 text-sm" style="background: var(--bg-surface); color: var(--text-primary); border-color: var(--border)" :value="tvPreference" @change="setTvPreference(($event.target as HTMLSelectElement).value)">
+              <option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option>
+            </select>
+        </div>
+
+        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
             <label for="interface-scale" class="text-sm font-medium" style="color: var(--text-primary)">Interface scale</label>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
-              Scales the whole interface evenly. Kept on this device.
+              Scales the whole interface evenly. Kept on this device. <span v-if="tvModeActive">TV mode uses 150%.</span>
             </p>
           </div>
           <div class="flex items-center gap-2 shrink-0">

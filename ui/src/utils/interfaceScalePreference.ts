@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { ref } from "vue";
+import { tvModeActive } from "./tvMode.ts";
 
 export const INTERFACE_SCALE_STORAGE_KEY = "wlib-interface-scale";
 export const INTERFACE_SCALE_OPTIONS = [80, 90, 100, 110, 120, 130, 140, 150] as const;
@@ -11,11 +12,11 @@ export const normalizeInterfaceScale = (raw: unknown): InterfaceScale => {
   return INTERFACE_SCALE_OPTIONS.includes(value as InterfaceScale) ? value as InterfaceScale : 100;
 };
 
-export const uiScaleFactor = (): number => interfaceScale.value / 100;
+export const uiScaleFactor = (): number => tvModeActive.value ? 1.5 : interfaceScale.value / 100;
 // Pointer positions and bounding rectangles use viewport pixels; styles use scaled CSS pixels.
 export const toCssPx = (viewportPx: number): number => viewportPx / uiScaleFactor();
 
-const applyInterfaceScale = (): void => {
+export const applyInterfaceScale = (): void => {
   if (typeof document !== "undefined") {
     document.documentElement.style.setProperty("--ui-scale", String(uiScaleFactor()));
   }

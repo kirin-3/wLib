@@ -8,6 +8,7 @@ export const CONSERVATIVE_PLATFORM_CAPABILITIES: PlatformCapabilities = {
   wine_proton: false,
   runtime_installers: false,
   wayland: false,
+  gaming_mode: false,
   rpgmaker_linux: false,
   companion_tools: false,
   cheat_engine_injection: false,

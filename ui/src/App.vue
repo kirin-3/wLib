@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from "vue";
+import { inputModality, listenForPointer, setInputModality } from "./utils/inputModality";
+import { gamingMode, tvModeActive } from "./utils/tvMode";
+import ControllerHints from "./components/ControllerHints.vue";
+import ControllerSelect from "./components/ControllerSelect.vue";
+import { startControllerInput } from "./utils/controllerInput";
+import { dispatchController } from "./utils/controllerActions";
 import { useRouter } from "vue-router";
 import {
   IconBrandGithub,
@@ -37,6 +43,11 @@ import { extensionAddQuery, extensionOpenQuery, type ExtensionGameDetail } from 
 import { convertSteamCovers } from "./utils/steamCovers";
 
 const router = useRouter();
+let stopControllerInput: (() => void) | undefined;
+let stopPointer: (() => void) | undefined;
+const openControllerKeyboard = () => { if (gamingMode.value) void api.openSteamKeyboard(); };
+onMounted(() => { window.addEventListener("wlib-controller-text", openControllerKeyboard); stopPointer = listenForPointer(); stopControllerInput = startControllerInput(action => { setInputModality("controller"); dispatchController(action, () => router.back()); window.dispatchEvent(new Event("wlib-controller-action")); }); });
+onUnmounted(() => { window.removeEventListener("wlib-controller-text", openControllerKeyboard); stopControllerInput?.(); stopPointer?.(); });
 const mainRef = ref<HTMLElement | null>(null);
 const hasAppUpdate = ref(false);
 const currentVersion = ref("");
@@ -51,6 +62,7 @@ const getInitialNavCollapsed = (): boolean => {
   }
 };
 const isNavCollapsed = ref(getInitialNavCollapsed());
+const navCollapsed = computed(() => tvModeActive.value || isNavCollapsed.value);
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 const availableUpdateCount = ref(0);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
@@ -319,11 +331,13 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <ControllerSelect />
+  <ControllerHints v-if="inputModality === 'controller' || tvModeActive" />
   <div class="app-shell flex h-[var(--app-vh)] w-[var(--app-vw)] overflow-hidden">
     <!-- Sidebar -->
     <aside
       :class="[
-        isNavCollapsed ? 'w-16' : 'w-64',
+        navCollapsed ? 'w-16' : 'w-64',
         'flex flex-col justify-between shrink-0 collapse-width-transition',
       ]"
       style="
@@ -332,10 +346,10 @@ onUnmounted(() => {
       "
     >
       <div>
-        <div :class="isNavCollapsed ? 'px-2 py-8' : 'px-6 py-8'">
+        <div :class="navCollapsed ? 'px-2 py-8' : 'px-6 py-8'">
           <div
             class="flex items-center"
-            :class="isNavCollapsed ? 'justify-center' : 'gap-3'"
+            :class="navCollapsed ? 'justify-center' : 'gap-3'"
           >
             <img
               src="/icon.svg"
@@ -344,7 +358,7 @@ onUnmounted(() => {
             />
             <h1
               class="brand-gradient-text text-2xl font-extrabold bg-clip-text text-transparent whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
             >
               wLib
             </h1>
@@ -352,7 +366,7 @@ onUnmounted(() => {
           <p
             class="text-xs uppercase tracking-widest font-semibold whitespace-nowrap transition-opacity duration-150"
             :class="
-              isNavCollapsed
+              navCollapsed
                 ? 'opacity-0 h-0 mt-0 overflow-hidden'
                 : 'opacity-100 mt-1.5'
             "
@@ -362,13 +376,13 @@ onUnmounted(() => {
           </p>
         </div>
 
-        <nav :class="isNavCollapsed ? 'px-2 space-y-1 mt-2' : 'px-4 space-y-1 mt-2'">
+        <nav :class="navCollapsed ? 'px-2 space-y-1 mt-2' : 'px-4 space-y-1 mt-2'">
           <router-link
             to="/"
-            :title="isNavCollapsed ? 'Library' : ''"
+            :title="navCollapsed ? 'Library' : ''"
             :class="[
               'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -376,7 +390,7 @@ onUnmounted(() => {
             <IconLayout2 class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Library</span
             >
           </router-link>
@@ -387,7 +401,7 @@ onUnmounted(() => {
             :aria-label="`Updates, ${availableUpdateCount} available`"
             :class="[
               'nav-link relative flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -395,13 +409,13 @@ onUnmounted(() => {
             <IconReload class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Updates</span
             >
             <span
               v-if="availableUpdateCount"
               class="rounded-full px-1.5 min-w-5 text-center text-[0.625rem] font-bold"
-              :class="isNavCollapsed ? 'absolute -top-1 -right-1' : 'ml-auto'"
+              :class="navCollapsed ? 'absolute -top-1 -right-1' : 'ml-auto'"
               style="background: var(--brand); color: var(--on-brand)"
               aria-hidden="true"
               >{{ availableUpdateCount }}</span
@@ -410,11 +424,11 @@ onUnmounted(() => {
 
           <router-link
             to="/import-export"
-            :title="isNavCollapsed ? 'Import / Export' : ''"
-            :aria-label="isNavCollapsed ? 'Import / Export' : undefined"
+            :title="navCollapsed ? 'Import / Export' : ''"
+            :aria-label="navCollapsed ? 'Import / Export' : undefined"
             :class="[
               'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium w-full text-left',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -422,17 +436,17 @@ onUnmounted(() => {
             <IconDatabaseExport class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Import / Export</span
             >
           </router-link>
 
           <router-link
             to="/sync"
-            :title="isNavCollapsed ? 'Sync' : ''"
+            :title="navCollapsed ? 'Sync' : ''"
             :class="[
               'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -440,17 +454,17 @@ onUnmounted(() => {
             <IconCloud class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Sync</span
             >
           </router-link>
 
           <router-link
             to="/extension"
-            :title="isNavCollapsed ? 'Extension' : ''"
+            :title="navCollapsed ? 'Extension' : ''"
             :class="[
               'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -458,17 +472,17 @@ onUnmounted(() => {
             <IconPuzzle class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Extension</span
             >
           </router-link>
 
           <router-link
             to="/settings"
-            :title="isNavCollapsed ? 'Settings' : ''"
+            :title="navCollapsed ? 'Settings' : ''"
             :class="[
               'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
-              isNavCollapsed ? 'justify-center' : 'gap-3',
+              navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
             exact-active-class="nav-active"
@@ -476,7 +490,7 @@ onUnmounted(() => {
             <IconSettings class="shrink-0" :size="18" />
             <span
               class="whitespace-nowrap transition-opacity duration-150"
-              :class="isNavCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Settings</span
             >
           </router-link>
@@ -486,12 +500,12 @@ onUnmounted(() => {
       <!-- Footer: Version, Theme Toggle & Repo -->
       <div
         class="p-5 flex items-center"
-        :class="isNavCollapsed ? 'justify-center' : 'justify-between'"
+        :class="navCollapsed ? 'justify-center' : 'justify-between'"
         style="border-top: 1px solid var(--border)"
       >
         <router-link
           to="/updates"
-          v-if="hasAppUpdate && !isNavCollapsed"
+          v-if="hasAppUpdate && !navCollapsed"
           class="text-xs font-mono font-bold px-2 py-0.5 rounded-md animate-pulse"
           style="
             background: var(--brand-glow-strong);
@@ -501,7 +515,7 @@ onUnmounted(() => {
           >{{ latestVersion }} ✨</router-link
         >
         <span
-          v-else-if="!isNavCollapsed"
+          v-else-if="!navCollapsed"
           class="text-xs font-mono font-semibold"
           style="color: var(--text-muted)"
           >{{ currentVersion }}</span
@@ -510,7 +524,7 @@ onUnmounted(() => {
         <div
           :class="[
             'flex',
-            isNavCollapsed ? 'flex-col items-center gap-2' : 'items-center gap-2',
+            navCollapsed ? 'flex-col items-center gap-2' : 'items-center gap-2',
           ]"
         >
           <!-- Theme Toggle -->
@@ -525,7 +539,7 @@ onUnmounted(() => {
 
           <!-- GitHub -->
           <a
-            v-if="!isNavCollapsed"
+            v-if="!navCollapsed"
             href="https://github.com/kirin-3/wLib"
             target="_blank"
             rel="noopener noreferrer"
@@ -537,7 +551,7 @@ onUnmounted(() => {
 
           <!-- Buy Me a Coffee -->
           <a
-            v-if="!isNavCollapsed"
+            v-if="!navCollapsed"
             href="https://buymeacoffee.com/thekirin"
             target="_blank"
             rel="noopener noreferrer"
@@ -551,11 +565,12 @@ onUnmounted(() => {
           </a>
 
           <button
+            v-if="!tvModeActive"
             @click="toggleNavCollapse"
             class="theme-toggle p-1.5 rounded-lg text-base leading-none font-semibold"
-            :title="isNavCollapsed ? 'Expand navigation' : 'Collapse navigation'"
+            :title="navCollapsed ? 'Expand navigation' : 'Collapse navigation'"
           >
-            <IconPlayerTrackNext v-if="isNavCollapsed" class="w-4 h-4" />
+            <IconPlayerTrackNext v-if="navCollapsed" class="w-4 h-4" />
             <IconPlayerTrackPrev v-else class="w-4 h-4" />
           </button>
         </div>

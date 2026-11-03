@@ -2004,3 +2004,9 @@ def test_runner_endpoints_require_header_and_notify_window(monkeypatch):
     handler.do_POST()
     handler.send_response.assert_called_once_with(200)
     assert 'wlib-refresh-library' in window.evaluate_js.call_args.args[0]
+
+
+def test_gaming_mode_start_url_for_production_and_dev():
+    for url in ('/tmp/ui/dist/index.html', 'http://localhost:5173'):
+        assert main.gaming_mode_start_url(url, True) == f'{url}?gamingMode=1'
+        assert main.gaming_mode_start_url(url, False) == url

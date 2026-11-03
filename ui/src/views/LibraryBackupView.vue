@@ -525,7 +525,7 @@ const runImport = async () => {
     </header>
 
     <div class="backup-panel">
-      <div class="backup-tabs" role="tablist">
+      <div class="backup-tabs" role="group" aria-label="Import and export options">
         <button
           type="button"
           :class="['backup-tab', activeTab === 'export' ? 'backup-tab-active' : '']"

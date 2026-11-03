@@ -20,6 +20,7 @@ class PlatformCapabilities(TypedDict):
     wine_proton: bool
     runtime_installers: bool
     wayland: bool
+    gaming_mode: bool
     rpgmaker_linux: bool
     companion_tools: bool
     cheat_engine_injection: bool
@@ -150,6 +151,8 @@ def get_cheat_engine_dir() -> str:
 
 
 def get_platform_capabilities(platform: str | None = None) -> PlatformCapabilities:
+    from core import steam_env
+
     host = get_host_name(platform)
     linux = host == "linux"
     windows = host == "windows"
@@ -160,6 +163,7 @@ def get_platform_capabilities(platform: str | None = None) -> PlatformCapabiliti
         "wine_proton": linux,
         "runtime_installers": linux,
         "wayland": linux,
+        "gaming_mode": linux and steam_env.gaming_mode(),
         "rpgmaker_linux": linux,
         "companion_tools": linux,
         "cheat_engine_injection": linux,

@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useControllerActions } from "../../utils/controllerActions";
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
-import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
 import type { SandboxStatus } from "../../services/api";
@@ -902,6 +903,20 @@ const closeAndNavigate = (hash: string) => {
 };
 
 const modalRef = ref<HTMLElement | null>(null);
+useControllerActions(modalRef, {
+  play: () => launchGame(),
+  prevTab: () => cycleControllerTab(-1),
+  nextTab: () => cycleControllerTab(1),
+  hints: [{ button: "A", label: "Select" }, { button: "B", label: "Back" }, { button: "X", label: "Play" }, { button: "LB/RB", label: "Tabs" }],
+});
+function cycleControllerTab(step: number) {
+  const tabs = detailTabs.value;
+  const index = (tabs.indexOf(activeTab.value) + step + tabs.length) % tabs.length;
+  const tab = tabs[index];
+  if (!tab) return;
+  selectTab(tab);
+  void nextTick(() => modalRef.value?.querySelector<HTMLButtonElement>(`#game-detail-tab-${tab}`)?.focus());
+}
 const tagColorPicker = ref<{ tag: string; anchor: HTMLElement } | null>(null);
 function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   event.preventDefault();

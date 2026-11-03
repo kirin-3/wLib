@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import { libraryDisplayState } from "../utils/libraryGames";
 import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
@@ -239,6 +240,25 @@ const collections: Array<{
 
 // Search & Filter state
 const searchQuery = ref("");
+const libraryControllerScope = ref<HTMLElement | null>(null);
+useControllerActions(libraryControllerScope, {
+  play: () => {
+    const card = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-game-id]");
+    const game = games.value.find(item => String(item.id) === card?.dataset.gameId);
+    if (game) void toggleGame(game);
+  },
+  search: () => { if (searchInput.value) { controllerFocusText(searchInput.value); searchInput.value.select(); } },
+  prevTab: () => cycleControllerCollection(-1),
+  nextTab: () => cycleControllerCollection(1),
+  hints: [{ button: "A", label: "Select" }, { button: "B", label: "Back" }, { button: "X", label: "Play" }, { button: "Y", label: "Search" }, { button: "Menu", label: "Actions" }, { button: "LB/RB", label: "Collections" }],
+});
+function cycleControllerCollection(step: number) {
+  const tabs = [...(collectionTabsElement.value?.querySelectorAll<HTMLButtonElement>("[data-collection-tab]") ?? [])];
+  if (!tabs.length) return;
+  const current = tabs.findIndex(tab => tab.dataset.collection === activeCollection.value);
+  const tab = tabs[(current + step + tabs.length) % tabs.length];
+  if (tab) { activeCollection.value = tab.dataset.collection ?? ""; void scrollSelectedCollectionTabIntoView(); }
+}
 const filterStatuses = ref<string[]>([
   ...DEFAULT_LIBRARY_VIEW_STATE.filterStatuses,
 ]);
@@ -1547,7 +1567,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex overflow-hidden">
+  <div ref="libraryControllerScope" class="h-full flex overflow-hidden">
     <!-- Filters Sidebar -->
     <aside
       :inert="isFiltersCollapsed"
@@ -2248,8 +2268,12 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr
-              v-for="game in filteredGames"
+              v-for="(game, index) in filteredGames"
               :key="game.id"
+              :data-game-id="game.id"
+              :data-controller-primary="index === 0 ? '' : undefined"
+              tabindex="0"
+              @keydown.enter.self="openDetail(game)"
               class="game-row"
               :class="{ 'is-running': runningGameIds.has(game.id) }"
               @click="openDetail(game)"
@@ -2391,8 +2415,10 @@ onUnmounted(() => {
         "
       >
         <div
-          v-for="game in filteredGames"
+          v-for="(game, index) in filteredGames"
           :key="game.id"
+          :data-game-id="game.id"
+          :data-controller-primary="index === 0 ? '' : undefined"
           @click="openDetail(game)"
           @keydown.enter.self="openDetail(game)"
           @keydown.space.self.prevent="openDetail(game)"

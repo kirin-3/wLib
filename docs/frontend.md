@@ -380,3 +380,9 @@ On Linux, Settings offers Winecfg and Winetricks for the prefix and runner curre
 ### Update downloads
 
 `UpdateDownloadModal.vue` presents thread builds and mirrors, patch guidance, browser fallback, and job progress. `useUpdateDownloads.ts` keeps download jobs and game-running state available across views, polls active work, and hands finished archives to the existing install dialog. The Updates view and the game detail dialog offer the action for eligible games. `updateDownloads.ts` owns platform ordering, mirror preference and next-step messages.
+
+### Controller navigation and TV mode
+
+Standard Gamepad API controllers work while the wLib window is focused. The D-pad and left stick move focus; A selects, B goes back or closes the top dialog, X plays, Y focuses library search, Menu/Start opens a game's actions, LB/RB switch collections or detail tabs, LT/RT page, and the right stick scrolls. Arrow keys and Escape use the same movement and back actions while native text and menu controls retain their keyboard behavior. In Linux Gaming Mode, controller activation of a text field requests Steam's on-screen keyboard. A select opened with A uses a controller-friendly option list; mouse interaction retains the native select.
+
+The focused screen supplies button hints; pointer input hides the controller focus treatment and hints. Settings → Appearance → TV mode stores Auto, On or Off locally. Auto follows Gaming Mode. TV mode temporarily uses 150% interface scale, collapses the sidebar, strengthens the controller focus ring, and keeps hints visible. The saved interface scale and sidebar preference return when TV mode ends; TV mode is not included in library backup or sync.

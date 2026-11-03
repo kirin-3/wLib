@@ -438,6 +438,22 @@ class Api:
     def get_platform_capabilities(self) -> PlatformCapabilities:
         return resolve_platform_capabilities()
 
+    def open_steam_keyboard(self) -> dict[str, object]:
+        from core import steam_env
+
+        if not is_linux() or not steam_env.gaming_mode():
+            return {"success": False, "code": "unsupported"}
+        try:
+            _ = subprocess.Popen(
+                host_command(["steam", "steam://open/keyboard"]),
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True}
+
     def get_sandbox_status(self) -> dict[str, object]:
         from core.game_sandbox import get_sandbox_status
 

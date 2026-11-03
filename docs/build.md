@@ -281,3 +281,5 @@ gamescope -e -- steam -gamepadui -steamdeck
 ```
 
 Set `WLIB_STEAM_DECK=1` when starting wLib to test the Deck default mode; `WLIB_STEAM_DECK=0` forces desktop detection. Add wLib in Settings, choose the games mode, and close Steam so queued shortcut changes and artwork can be applied. Start Steam again to inspect them. For an isolated headless-launch check, run `.venv/bin/python main.py --launch <game-id>` against a library with a native game; verify its play session after exit. Test a Proton game separately, including Steam's Exit game and Stop in an open wLib window. Flatpak host launches are experimental for focus and overlay behavior.
+
+For controller navigation, configure the wLib Steam shortcut with Steam Input's **Gamepad** layout. To test the Gaming Mode and TV mode Auto path on a desktop, launch `gamescope -e -- steam -gamepadui`, open the wLib shortcut, and check navigation, Steam's on-screen keyboard, and that controller input stops reaching wLib while a game has focus. Also test on the normal desktop, where Auto should leave TV mode off.

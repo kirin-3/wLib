@@ -1394,6 +1394,14 @@ def focus_running_instance() -> bool:
         return False
 
 
+def gaming_mode_start_url(url: str, gaming_mode: bool) -> str:
+    """Make the Gaming Mode flag available before the frontend mounts."""
+    if not gaming_mode:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}gamingMode=1"
+
+
 def start_vite_dev_server() -> subprocess.Popen[bytes] | None:
     print("Starting Vite dev server...")
     # Change dir to the 'ui' folder relative to main.py
@@ -1574,6 +1582,10 @@ def main() -> None:
         vite_process = start_vite_dev_server()
         # Give Vite a second to start
         time.sleep(2)
+
+    from core import steam_env
+
+    url = gaming_mode_start_url(url, steam_env.gaming_mode())
 
     library_sync_started = False
     try:
