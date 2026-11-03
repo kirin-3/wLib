@@ -169,3 +169,27 @@ def test_f95_thread_cover_reads_catalog(catalog):
 def test_f95_thread_cover_without_database(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
     assert f95_thread_cover("7") == ""
+
+
+def test_catalog_screenshots_and_mapping(catalog, tmp_path):
+    from core.game_lookup import f95_thread_screenshots, screenshot_urls
+
+    catalog.execute("INSERT INTO f95_threads (thread_id,title,url,first_seen,last_seen,screens) VALUES (123,'A','u','','',?)", ('["https://preview.f95zone.to/a", "http://bad", 1]',))
+    catalog.commit()
+    assert f95_thread_screenshots("123") == ["https://preview.f95zone.to/a"]
+    assert f95_thread_screenshots("124") is None
+    catalog.execute("UPDATE f95_threads SET screens = 'invalid'")
+    catalog.commit()
+    assert f95_thread_screenshots("123") == []
+    catalog.execute("UPDATE f95_threads SET screens = NULL")
+    catalog.commit()
+    assert f95_thread_screenshots("123") == []
+    database.update_setting("catalog_enabled", "0")
+    assert f95_thread_screenshots("123") is None
+    database.update_setting("catalog_enabled", "1")
+    assert screenshot_urls("https://preview.f95zone.to/a") == {"thumb": "https://preview.f95zone.to/a", "full": "https://attachments.f95zone.to/a"}
+    assert screenshot_urls("https://attachments.f95zone.to/a")["thumb"] == "https://preview.f95zone.to/a"
+    for url in ("https://i.imgur.com/a", "http://[bad"):
+        assert screenshot_urls(url) == {"thumb": url, "full": url}
+    catalog.execute("ALTER TABLE f95_threads DROP COLUMN screens")
+    assert f95_thread_screenshots("123") is None

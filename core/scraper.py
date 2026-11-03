@@ -827,17 +827,19 @@ class Scraper:
                 return self._error(
                     "scraper_error", f"F95Zone returned HTTP {status}"
                 )
+            from core.game_lookup import f95_thread_cover
+
+            catalog_cover: str | None = None
             if fallback is None and (
-                self._starter_hides_attachments(html) or self._starter_hides_links(html)
+                self._starter_hides_links(html)
+                or (self._starter_hides_attachments(html) and not (catalog_cover := f95_thread_cover(thread_id)))
             ):
                 html = self._reload_signed_in(
                     f"https://f95zone.to/threads/{thread_id}/", html
                 )
             result = self._extract_page(html)
             if result.get("success") and not result.get("cover_image"):
-                from core.game_lookup import f95_thread_cover
-
-                return {**result, "cover_image": f95_thread_cover(thread_id)}
+                return {**result, "cover_image": catalog_cover if catalog_cover is not None else f95_thread_cover(thread_id)}
             return result
         except _F95RequestError as exc:
             return self._error(exc.code, str(exc))

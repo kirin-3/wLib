@@ -114,3 +114,24 @@ def test_startup_with_unreachable_catalog_does_not_block(monkeypatch, tmp_path):
         time.sleep(0.02)
     status = api.get_catalog_status()
     assert status["success"] is True and status["last_error"]
+
+
+def test_game_screenshots_use_catalog_without_changing_library(started, monkeypatch):
+    import json
+    from core import database, game_lookup
+
+    game_id = database.add_game("A", "", "https://f95zone.to/threads/123/")
+    with database.get_connection() as conn:
+        conn.execute("UPDATE games SET screenshots = ? WHERE id = ?", (json.dumps(["https://stored/a"]), game_id))
+    before = database.get_game(game_id)
+    monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _: ["https://preview.f95zone.to/a"])
+    api = Api()
+    result = api.get_game_screenshots(game_id)
+    assert result == {"success": True, "screenshots": [{"thumb": "https://preview.f95zone.to/a", "full": "https://attachments.f95zone.to/a"}], "source": "catalog", "in_catalog": True}
+    for value in ([], None):
+        monkeypatch.setattr(game_lookup, "f95_thread_screenshots", lambda _, value=value: value)
+        result = api.get_game_screenshots(game_id)
+        assert result["source"] == "library" and result["in_catalog"] == (value is not None)
+        assert result["screenshots"] == [{"thumb": "https://stored/a", "full": "https://stored/a"}]
+    assert database.get_game(game_id) == before
+    assert api.get_game_screenshots(-1)["success"] is False

@@ -103,3 +103,16 @@ def test_older_catalogs_get_the_origin_column(tmp_path):
     columns = {row[1] for row in catalog.conn.execute("PRAGMA table_info(f95_threads)")}
     catalog.close()
     assert "origin" in columns
+
+
+def test_older_catalog_gets_nullable_screens(tmp_path):
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE f95_threads (thread_id INTEGER PRIMARY KEY, title TEXT, url TEXT, first_seen TEXT, last_seen TEXT)")
+    conn.execute("INSERT INTO f95_threads VALUES (1, 'A', 'u', 'x', 'x')")
+    conn.commit()
+    conn.close()
+    catalog = CatalogStore(str(path))
+    assert catalog.conn.execute("SELECT screens FROM f95_threads").fetchone() == (None,)
+    assert catalog.conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("1",)
+    catalog.close()

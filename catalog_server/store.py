@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS f95_threads (
     prefixes TEXT NOT NULL DEFAULT '[]',
     tags TEXT NOT NULL DEFAULT '[]',
     cover_url TEXT,
+    screens TEXT,
     url TEXT NOT NULL,
     {_SEEN_COLUMNS}
 );
@@ -187,6 +188,10 @@ class CatalogStore:
         _ = self.conn.execute("PRAGMA journal_mode=WAL")
         _ = self.conn.executescript(CATALOG_SCHEMA)
         self._add_origin_columns()
+        columns = {str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(f95_threads)"))}
+        if "screens" not in columns:
+            with self.conn:
+                _ = self.conn.execute("ALTER TABLE f95_threads ADD COLUMN screens TEXT")
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:

@@ -12,7 +12,7 @@ from catalog_fakes import (
 )
 from catalog_server.net import RateLimited, Response
 from catalog_server.runner import run_source
-from catalog_server.sources.f95 import F95Source, load_names
+from catalog_server.sources.f95 import F95Source, load_names, parse_page
 
 
 def _page(number, entries, total=3):
@@ -222,3 +222,18 @@ def test_import_tool_converts_latest_updates_object(tmp_path):
     assert data["tags"] == {"107": "3dcg", "130": "2dcg"}
     assert data["prefixes"]["7"] == {"name": "Ren'Py", "category": "Engine"}
     assert data["prefixes"]["18"] == {"name": "Completed", "category": "Status"}
+
+
+def test_feed_screens_replace_previous_list(tmp_path):
+    entry = _entries()[0]
+    entry["screens"] = ["https://preview.f95zone.to/a", "http://bad", 1, "https://img/b"]
+    payload = fixture_json("f95_latest_page.json")
+    payload["msg"]["data"] = [entry]
+    parsed, _ = parse_page(payload)
+    ctx, _ = make_context(tmp_path, FakeTransport())
+    ctx.catalog.upsert("f95_threads", "thread_id", parsed, "now")
+    assert json.loads(rows(ctx.catalog, "SELECT screens FROM f95_threads")[0][0]) == ["https://preview.f95zone.to/a", "https://img/b"]
+    entry["screens"] = []
+    parsed, _ = parse_page(payload)
+    ctx.catalog.upsert("f95_threads", "thread_id", parsed, "later")
+    assert json.loads(rows(ctx.catalog, "SELECT screens FROM f95_threads")[0][0]) == []

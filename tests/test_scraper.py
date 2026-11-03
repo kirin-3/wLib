@@ -1261,6 +1261,7 @@ def test_hidden_links_failed_reload_keeps_guest_metadata(monkeypatch, response):
 
 
 def test_hidden_attachments_reload_through_extension(monkeypatch):
+    monkeypatch.setattr("core.game_lookup.f95_thread_cover", lambda _: "")
     _reset_scraper_globals()
     monkeypatch.setattr(
         scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE))
@@ -1464,3 +1465,15 @@ def test_download_resolve_releases_pacing_while_waiting(monkeypatch):
         thread.join(1)
         bridge.reset_for_tests()
     assert errors == ["disconnected"]
+
+
+def test_hidden_attachments_with_catalog_cover_skip_extension(monkeypatch):
+    _reset_scraper_globals()
+    monkeypatch.setattr(scraper_module, "_f95_get", MagicMock(return_value=(200, _GUEST_HIDDEN_PAGE)))
+    monkeypatch.setattr(scraper_module.extension_bridge, "is_available", lambda: True)
+    monkeypatch.setattr("core.game_lookup.f95_thread_cover", lambda _: "https://example.com/cover.png")
+    via_ext = MagicMock(return_value=(200, _SIGNED_IN_PAGE))
+    monkeypatch.setattr(scraper_module, "_f95_get_via_extension", via_ext)
+    assert Scraper()._get_page("1")["cover_image"] == "https://example.com/cover.png"
+    via_ext.assert_not_called()
+    _reset_scraper_globals()

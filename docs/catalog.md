@@ -84,7 +84,7 @@ entries not marked removed; `updated_at` is the source's last successful run.
 
 | Table | Key | Notes |
 |---|---|---|
-| `f95_threads` | `thread_id` | title, creator, version, `updated_at`/`ts`, views, likes, rating, `tags` and `prefixes` (JSON ID lists), cover and thread URL |
+| `f95_threads` | `thread_id` | title, creator, version, `updated_at`/`ts`, views, likes, rating, `tags` and `prefixes` (JSON ID lists), cover and thread URL, `screens` (JSON URL list from the feed; `NULL` until the feed or Atlas import writes it) |
 | `dlsite_works` | `product_id` | site, title, circle and circle ID, work type, genres (JSON), release date, cover and work URL |
 | `ryuu_posts` | `post_id` | cleaned and raw title, developer, version, categories, `rj_codes`, `steam_ids`, `vndb_ids` (JSON), dates, cover and post URL |
 | `vndb_vns` | `vn_id` | title, original title, developers, release date, original language, non-spoiler tags rated 1.0 or higher, cover |
@@ -210,3 +210,7 @@ one hop from the page's own identity. Newly found IDs are never expanded
 again. F95 thread identity wins when present; otherwise exact matchable store
 IDs are used, without title matching. Multiple matching game IDs are returned
 without merging or changing any game.
+
+The snapshot schema version remains 1 because screenshot storage is additive.
+
+Atlas import backfills screenshots for feed rows only when `screens` is NULL and refreshes imported rows. It strips query strings and fragments from imported cover and screenshot URLs.

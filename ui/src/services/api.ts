@@ -21,6 +21,12 @@ interface PyWebViewBridge {
   api?: Record<string, ApiInvoker>;
 }
 
+export interface GameScreenshotsResponse extends ApiBasicResponse {
+  screenshots: { thumb: string; full: string }[];
+  source: "catalog" | "library";
+  in_catalog: boolean;
+}
+
 export interface ApiErrorResult {
   success: false;
   error: string;
@@ -1652,6 +1658,10 @@ class ApiService {
     return this.invokeLibraryChange("purge_cover_cache");
   }
 
+  async getGameScreenshots(gameId: number): Promise<GameScreenshotsResponse> {
+    return this.invoke<GameScreenshotsResponse>("get_game_screenshots", gameId);
+  }
+
   async getGames(): Promise<GameRecord[]> {
     return this.invoke<GameRecord[]>("get_games");
   }
@@ -2474,6 +2484,11 @@ class ApiService {
         sessionStorage.setItem("wlib-mock-cover-count", "0");
         sessionStorage.setItem("wlib-mock-cover-bytes", "0");
         return { success: true, count: 0, bytes: 0, running: false };
+      case "get_game_screenshots": {
+        const game = readMockGames().find(item => item.id === args[0]);
+        const screenshots = game?.screenshots ?? [];
+        return { success: true, screenshots: screenshots.map(url => ({ thumb: url.replace("attachments.f95zone.to", "preview.f95zone.to"), full: url.replace("preview.f95zone.to", "attachments.f95zone.to") })), source: "catalog", in_catalog: !!game?.f95_url };
+      }
       case "get_games": {
         // get_all_games() embeds every game's additional targets in the same
         // order as get_launch_targets(); the library launch menu reads them there.

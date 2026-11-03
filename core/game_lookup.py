@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
 from typing import TypedDict, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from core import database
 from core.catalog import CATALOG_FILE
@@ -172,3 +173,35 @@ def f95_thread_cover(thread_id: str) -> str:
         return ""
     cover = str(row[0] or "").strip() if row else ""
     return cover if cover.startswith("https://") else ""
+
+
+def f95_thread_screenshots(thread_id: str) -> list[str] | None:
+    """Return the catalog list, or None when no readable catalog row exists."""
+    if not thread_id.isdigit():
+        return None
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    try:
+        if database.get_setting("catalog_enabled") == "0":
+            return None
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            row = cast(tuple[object] | None, conn.execute(
+                "SELECT screens FROM f95_threads WHERE thread_id = ?", (int(thread_id),)
+            ).fetchone())
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    if row is None:
+        return None
+    return [url for url in _strings(row[0]) if url.startswith("https://")]
+
+
+def screenshot_urls(url: str) -> dict[str, str]:
+    """Map F95 media hosts to preview and full-size versions."""
+    try:
+        parts = urlsplit(url)
+        if parts.netloc in ("preview.f95zone.to", "attachments.f95zone.to"):
+            return {host: urlunsplit(parts._replace(netloc=domain)) for host, domain in (
+                ("thumb", "preview.f95zone.to"), ("full", "attachments.f95zone.to")
+            )}
+    except ValueError:
+        pass
+    return {"thumb": url, "full": url}

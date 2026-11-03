@@ -38,6 +38,7 @@ import {useUpdateDownloads} from "../../composables/useUpdateDownloads";
 const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
+import { screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
 import { hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import type {
   GameAttachment,
@@ -228,11 +229,36 @@ let attachmentsRequestId = 0;
 const coverImageFailed = ref(false);
 const lightboxIndex = ref<number | null>(null);
 const failedScreenshots = ref<Set<string>>(new Set());
-const gameScreenshots = computed(() => props.game?.screenshots ?? []);
+const loadedScreenshots = ref<ScreenshotUrls[] | null>(null);
+const inCatalog = ref(false);
+const fullFallbacks = ref<Set<string>>(new Set());
+let screenshotsRequest = 0;
+const gameScreenshots = computed(() => loadedScreenshots.value ?? (props.game?.screenshots ?? []).map(screenshotUrls));
+const loadScreenshots = async () => {
+  const id = props.game?.id;
+  const request = ++screenshotsRequest;
+  loadedScreenshots.value = null;
+  inCatalog.value = false;
+  fullFallbacks.value = new Set();
+  failedScreenshots.value = new Set();
+  if (!props.modelValue || typeof id !== "number") return;
+  try {
+    const result = await api.getGameScreenshots(id);
+    if (request !== screenshotsRequest) return;
+    if (result.success && result.screenshots) {
+      loadedScreenshots.value = result.screenshots;
+      inCatalog.value = result.in_catalog;
+    }
+  } catch { /* Stored screenshots remain available. */ }
+};
+watch(() => [props.modelValue, props.game?.id] as const, () => { void loadScreenshots(); }, { immediate: true });
+watch(() => props.updateCheckState.running, (running, previous) => {
+  if (previous && !running && props.modelValue) void loadScreenshots();
+});
 const hasCoverImage = computed(() => !!displayedCover.value && !coverImageFailed.value);
 const galleryImages = computed(() => [
   ...(hasCoverImage.value ? [displayedCover.value] : []),
-  ...gameScreenshots.value,
+  ...gameScreenshots.value.map(image => image.full),
 ]);
 const hasGallery = computed(() => galleryImages.value.length > 0);
 const openLightboxAt = (index: number) => {
@@ -241,8 +267,10 @@ const openLightboxAt = (index: number) => {
 const closeLightbox = () => {
   lightboxIndex.value = null;
 };
-const markScreenshotFailed = (url: string) => {
-  failedScreenshots.value = new Set([...failedScreenshots.value, url]);
+const markScreenshotFailed = (image: ScreenshotUrls) => {
+  if (image.thumb !== image.full && !fullFallbacks.value.has(image.full))
+    fullFallbacks.value = new Set([...fullFallbacks.value, image.full]);
+  else failedScreenshots.value = new Set([...failedScreenshots.value, image.full]);
 };
 const runJapaneseLocale = ref(false);
 const runWayland = ref(false);
@@ -1932,26 +1960,27 @@ const removeAttachment = async (name: string) => {
             <h3 class="modal-label mb-3">Screenshots</h3>
             <div v-if="gameScreenshots.length" class="screenshot-strip" role="group" aria-label="Game screenshots">
               <button
-                v-for="(url, index) in gameScreenshots"
-                v-show="!failedScreenshots.has(url)"
-                :key="url"
+                v-for="(image, index) in gameScreenshots"
+                v-show="!failedScreenshots.has(image.full)"
+                :key="`${image.full}-${index}`"
                 type="button"
                 class="screenshot-thumb-button"
                 :aria-label="`View screenshot ${index + 1}`"
                 @click="openLightboxAt(index + (hasCoverImage ? 1 : 0))"
               >
                 <img
-                  :src="url"
+                  :src="fullFallbacks.has(image.full) ? image.full : image.thumb"
                   :alt="`Screenshot ${index + 1}`"
                   loading="lazy"
                   class="screenshot-thumb"
-                  @error="markScreenshotFailed(url)"
+                  @error="markScreenshotFailed(image)"
                 />
               </button>
             </div>
             <div v-else class="screenshot-empty">
-              <p class="text-xs" style="color: var(--text-muted)">Screenshots load from the F95 thread.</p>
+              <p class="text-xs" style="color: var(--text-muted)">{{ inCatalog ? "This thread has no screenshots." : "Screenshots load from the F95 thread." }}</p>
               <button
+                v-if="!inCatalog"
                 type="button"
                 class="modal-btn"
                 :disabled="updateCheckState.running"

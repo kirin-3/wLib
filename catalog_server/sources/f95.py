@@ -76,6 +76,9 @@ def parse_page(payload: object) -> tuple[list[dict[str, object]], int]:
                 "prefixes": _int_list(entry.get("prefixes")),
                 "tags": _int_list(entry.get("tags")),
                 "cover_url": str(entry.get("cover") or "") or None,
+                "screens": [url for url in cast(list[object], entry["screens"])
+                            if isinstance(url, str) and url.startswith("https://")]
+                if isinstance(entry.get("screens"), list) else [],
                 "url": THREAD_URL.format(thread_id=thread_id),
             }
         )

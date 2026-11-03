@@ -1468,6 +1468,24 @@ class Api:
                 game["metadata_pending"] = True
         return games
 
+    def get_game_screenshots(self, game_id: int) -> dict[str, object]:
+        from core.database import get_game
+        from core.f95zone import extract_thread_id
+        from core.game_lookup import f95_thread_screenshots, screenshot_urls
+
+        game = get_game(game_id)
+        if game is None:
+            return {"success": False, "error": "Game was not found"}
+        thread_id = extract_thread_id(str(game.get("f95_url") or ""))
+        catalog = f95_thread_screenshots(str(thread_id)) if thread_id else None
+        try:
+            stored = cast(object, json.loads(str(game.get("screenshots") or "[]")))
+        except ValueError:
+            stored = []
+        library = [item for item in cast(list[object], stored) if isinstance(item, str)] if isinstance(stored, list) else []
+        return {"success": True, "screenshots": [screenshot_urls(url) for url in (catalog or library)],
+                "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
+
     def _add_local_cover_url(self, game: dict[str, object]) -> None:
         from core.game_covers import cover_path, cached_cover_path
 
