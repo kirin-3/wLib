@@ -136,7 +136,24 @@ def test_browse_attachment_file_passes_file_types(monkeypatch):
     monkeypatch.setattr("sys.platform", "linux")
     assert api.browse_attachment_file("") == "/picked/guide.pdf"
     assert seen["kind"] == "file"
-    assert seen["file_types"] == ("Documents (*.pdf *.txt *.md)", "All files (*.*)")
+    assert seen["file_types"] == ("Documents (*.pdf;*.txt;*.md)", "All files (*.*)")
+
+
+def test_browse_attachment_file_types_are_valid_pywebview_filters(monkeypatch):
+    from webview.util import parse_file_type
+
+    api = Api()
+    seen = {}
+
+    def fake_qt_dialog(kind, directory="", file_types=()):
+        seen["file_types"] = tuple(file_types)
+        return ""
+
+    monkeypatch.setattr(api, "_browse_qt_dialog", fake_qt_dialog)
+    monkeypatch.setattr("sys.platform", "win32")
+    api.browse_attachment_file("")
+    for file_type in seen["file_types"]:
+        _ = parse_file_type(file_type)
 
 
 def test_delete_game_removes_attachments_folder(tmp_path):

@@ -5651,7 +5651,7 @@ class Api:
     def browse_attachment_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select a document for attachments."""
         file_types = (
-            "Documents (*.pdf *.txt *.md)",
+            "Documents (*.pdf;*.txt;*.md)",
             "All files (*.*)",
         )
 
