@@ -25,6 +25,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libfuse2 \
+            libegl1 \
+            libgl1 \
             libxcb-xkb1 \
             libxcb-shape0 \
             libxcb-icccm4 \
