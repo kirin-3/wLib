@@ -383,8 +383,50 @@ def _tool_argv(
     return cmd if tool == BUNDLED_7ZZ else host_command(cmd, env=env)
 
 
-def list_tool_entries(tool: str, archive_path: str) -> list[str]:
-    """List archive entries via the external tool (for the path pre-check)."""
+def _unrar_links(
+    tool: str, archive_path: str, env: dict[str, str] | None
+) -> list[tuple[str, str, bool]]:
+    """Best-effort link list from `unrar lt` (Name/Type/Target blocks)."""
+    try:
+        completed = subprocess.run(
+            _tool_argv(tool, ["lt", archive_path], env=env),
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError:
+        return []
+    if completed.returncode != 0:
+        return []
+    links: list[tuple[str, str, bool]] = []
+    name = ""
+    is_link = False
+    is_hard = False
+    for raw in (completed.stdout or "").splitlines():
+        key, sep, value = raw.strip().partition(": ")
+        if not sep:
+            continue
+        if key == "Name":
+            name, is_link, is_hard = value, False, False
+        elif key == "Type":
+            is_link = "link" in value.lower()
+            is_hard = "hard" in value.lower()
+        elif key == "Target" and is_link and name:
+            links.append((name, value, is_hard))
+    return links
+
+
+def list_tool_entries(
+    tool: str, archive_path: str, links: list[tuple[str, str, bool]] | None = None
+) -> list[str]:
+    """List archive entries via the external tool (for the path pre-check).
+
+    When ``links`` is given, link members the listing reports are appended to
+    it as ``(path, target, is_hard_link)``. bsdtar is not asked: it refuses to extract
+    through or to escaping links on its own.
+    """
     base = _tool_basename(tool)
     env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
@@ -398,6 +440,8 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         )
         if completed.returncode != 0:
             raise _tool_failure(completed, "Could not list archive contents")
+        if links is not None:
+            links.extend(_unrar_links(tool, archive_path, env))
         return [
             line.strip()
             for line in (completed.stdout or "").splitlines()
@@ -435,22 +479,114 @@ def list_tool_entries(tool: str, archive_path: str) -> list[str]:
         raise _tool_failure(completed, "Could not list archive contents")
     entries = []
     archive_real = os.path.abspath(archive_path)
+    current = ""
     for line in (completed.stdout or "").splitlines():
         if line.startswith("Path = "):
             path = line[len("Path = ") :].strip()
+            current = ""
             # 7z lists the archive itself as the first entry; it is never a member.
             if os.path.abspath(path) == archive_real:
                 continue
+            current = path
             entries.append(path)
+        elif links is not None and current:
+            for field, is_hard in (
+                ("Symbolic Link = ", False),
+                ("Hard Link = ", True),
+                ("Link = ", False),
+            ):
+                if line.startswith(field):
+                    target = line[len(field) :].strip()
+                    if target:
+                        links.append((current, target, is_hard))
+                    break
     return entries
 
 
+def check_archive_links_safe(
+    links: list[tuple[str, str, bool]], entries: list[str]
+) -> None:
+    """Reject listed links that escape, or that other members are written through.
+
+    Runs before an external tool writes anything: an older extractor could
+    follow such a link and write outside staging before the post-extraction
+    check sees it.
+    """
+    link_paths: set[str] = set()
+    for path, target, is_hard in links:
+        member = posixpath.normpath(path.replace("\\", "/")).lstrip("/")
+        link_paths.add(member)
+        normalized = target.replace("\\", "/")
+        if _is_absolute_entry(target) or _is_absolute_entry(normalized):
+            raise ArchiveSafetyError(
+                f"Archive link points outside the destination: {path!r}"
+            )
+        # A hard link names another member from the archive root; a symlink
+        # resolves from its own folder.
+        base = "" if is_hard else posixpath.dirname(member)
+        resolved = posixpath.normpath(posixpath.join(base, normalized))
+        if resolved == ".." or resolved.startswith("../"):
+            raise ArchiveSafetyError(
+                f"Archive link points outside the destination: {path!r}"
+            )
+    if not link_paths:
+        return
+    for entry in entries:
+        parts = posixpath.normpath(entry.replace("\\", "/")).lstrip("/").split("/")
+        for depth in range(1, len(parts)):
+            if "/".join(parts[:depth]) in link_paths:
+                raise ArchiveSafetyError(
+                    f"Archive entry is written through a link: {entry!r}"
+                )
+
+
+def _make_dirs_traversable(staging_dir: str) -> None:
+    """Give every staged folder u+rwx so the link check can list it.
+
+    Extractors keep archive modes, so a mode-000 folder would otherwise hide
+    its links from the check and still reach the install.
+    """
+
+    def _fix(path: str) -> None:
+        try:
+            st = os.lstat(path)
+            if stat.S_ISDIR(st.st_mode) and (st.st_mode & stat.S_IRWXU) != stat.S_IRWXU:
+                os.chmod(path, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+        except OSError:
+            pass
+
+    _fix(staging_dir)
+    # Top-down: each folder is fixed before os.walk tries to list it.
+    for root, dirs, _files in os.walk(staging_dir, followlinks=False):
+        for name in dirs:
+            _fix(os.path.join(root, name))
+
+
+def _unreadable_staging(path: str, staging_dir: str) -> ArchiveSafetyError:
+    return ArchiveSafetyError(
+        f"Archive folder could not be checked: {os.path.relpath(path, staging_dir)!r}"
+    )
+
+
 def check_symlinks_inside_staging(staging_dir: str) -> None:
-    """Reject symlinks and hard links whose resolved target escapes staging."""
+    """Reject symlinks and hard links whose resolved target escapes staging.
+
+    A folder that cannot be listed is rejected too: links inside it could not
+    be checked.
+    """
     staging_real = os.path.realpath(os.path.abspath(staging_dir))
     inode_counts: dict[tuple[int, int], int] = {}
     file_records: list[tuple[str, os.stat_result]] = []
-    for root, _dirs, files in os.walk(staging_dir, followlinks=False):
+    _make_dirs_traversable(staging_dir)
+
+    def _walk_error(exc: OSError) -> None:
+        filename = cast(object, exc.filename)
+        path = filename if isinstance(filename, str) and filename else staging_dir
+        raise _unreadable_staging(path, staging_dir) from exc
+
+    for root, _dirs, files in os.walk(
+        staging_dir, followlinks=False, onerror=_walk_error
+    ):
         candidates: list[str] = []
         try:
             with os.scandir(root) as it:
@@ -458,10 +594,10 @@ def check_symlinks_inside_staging(staging_dir: str) -> None:
                     try:
                         if entry.is_symlink():
                             candidates.append(entry.path)
-                    except OSError:
-                        continue
-        except OSError:
-            continue
+                    except OSError as exc:
+                        raise _unreadable_staging(entry.path, staging_dir) from exc
+        except OSError as exc:
+            raise _unreadable_staging(root, staging_dir) from exc
         # os.walk already yields files; also check dir symlinks via scandir above.
         for path in candidates:
             target_real = os.path.realpath(path)
@@ -488,8 +624,8 @@ def check_symlinks_inside_staging(staging_dir: str) -> None:
                     key = (st.st_dev, st.st_ino)
                     inode_counts[key] = inode_counts.get(key, 0) + 1
                     file_records.append((path, st))
-            except OSError:
-                continue
+            except OSError as exc:
+                raise _unreadable_staging(path, staging_dir) from exc
 
     # A hard link with more names than staging holds also lives outside it.
     for path, st in file_records:
@@ -529,7 +665,8 @@ def check_archive_entries_no_collisions(entries: list[str]) -> None:
 def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
     """Extract via an external tool after a listing-based safety pre-check."""
     os.makedirs(staging_dir, exist_ok=True)
-    entries = list_tool_entries(tool, archive_path)
+    links: list[tuple[str, str, bool]] = []
+    entries = list_tool_entries(tool, archive_path, links)
     meaningful: list[str] = []
     for entry in entries:
         # 7z lists the archive itself as "." or empty in some outputs; skip those.
@@ -538,6 +675,7 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
         check_archive_entry_safe(entry)
         meaningful.append(entry)
     check_archive_entries_no_collisions(meaningful)
+    check_archive_links_safe(links, meaningful)
     base = _tool_basename(tool)
     env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:

@@ -38,6 +38,10 @@ from .host_platform import (
     proton_compat_data_path as proton_compat_data_path,
 )
 
+# Consecutive failed sandbox process-list reads (one per second) before the
+# playtime tracker treats the game as ended.
+SANDBOX_LIST_FAILURE_LIMIT = 60
+
 
 def wrap_performance_tools(cmd: list[str], tools: list[str], user_args: list[str]) -> list[str]:
     existing = {os.path.basename(arg) for arg in user_args}
@@ -1291,6 +1295,7 @@ class Launcher:
                 def track_playtime_thread():
                     last_saved_time = start_time
                     box_started = False
+                    list_failures = 0
                     killpg = getattr(os, "killpg", None)
                     pid = getattr(game_proc, "pid", None)
 
@@ -1318,12 +1323,20 @@ class Launcher:
                                     RuntimeError,
                                     subprocess.TimeoutExpired,
                                 ) as exc:
+                                    list_failures += 1
                                     print(f"Could not read sandbox process list: {exc}")
-                                    time.sleep(1)
-                                    continue
+                                    # A process list that never comes back would
+                                    # otherwise track this game forever.
+                                    if list_failures >= SANDBOX_LIST_FAILURE_LIMIT:
+                                        break
+                                    pids = None
+                                else:
+                                    list_failures = 0
                                 if pids:
                                     box_started = True
-                                elif box_started or time.monotonic() - start_time >= 5:
+                                elif pids is not None and (
+                                    box_started or time.monotonic() - start_time >= 5
+                                ):
                                     break
                                 time.sleep(1)
                             elif game_proc.poll() is None:
@@ -1343,6 +1356,9 @@ class Launcher:
                             if now - last_saved_time < 60:
                                 continue
                             delta = int(now - last_saved_time)
+                            # Advance by whole seconds so the fraction carries
+                            # into the next save instead of being dropped.
+                            saved_until = last_saved_time + delta
                             with self._running_lock:
                                 # shutdown() may have taken the entry and flushed it.
                                 owned = (
@@ -1350,10 +1366,10 @@ class Launcher:
                                     or self._running.get(game_id) is entry
                                 )
                                 if owned:
-                                    entry.last_saved_time = now
+                                    entry.last_saved_time = saved_until
                             if not owned:
                                 break
-                            last_saved_time = now
+                            last_saved_time = saved_until
                             if on_exit_callback is not None:
                                 try:
                                     _ = on_exit_callback(delta, False)

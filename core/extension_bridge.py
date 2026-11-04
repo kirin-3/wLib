@@ -335,6 +335,11 @@ def fetch(url: str, timeout: float = 30) -> BridgeResponse:
     request_id = uuid.uuid4().hex
     item = _Pending(conn)
     with _lock:
+        # A disconnect between picking the connection and registering here
+        # has already failed its pending items; this one would wait the full
+        # timeout while the caller holds the F95 request lock.
+        if conn.closed:
+            raise BridgeUnavailable("extension disconnected")
         _pending[request_id] = item
     payload = json.dumps({"type": "fetch", "id": request_id, "url": url})
     try:
@@ -369,6 +374,8 @@ def resolve(
         item = _PendingResolve(conn)
         item.on_progress = on_progress
         with _lock:
+            if conn.closed:
+                raise BridgeUnavailable("extension disconnected")
             _pending_resolves[request_id] = item
         try:
             payload = json.dumps({"type": "resolve", "id": request_id, "url": url, "host": host})

@@ -2503,6 +2503,27 @@ def test_invalid_journal_rolls_back_import(tmp_path):
     assert get_all_games()[0]["title"] == "Journal"
 
 
+def test_oversized_play_session_duration_is_rejected_cleanly(tmp_path):
+    game_id = add_game("Journal", "/game")
+    backup = build_library_backup()
+    backup["games"][0]["metadata"]["title"] = "Changed"
+    backup["games"][0]["user_state"]["play_sessions"] = [
+        {
+            "version": "1.0",
+            "started_at": "2026-01-01T00:00:00",
+            "ended_at": None,
+            "duration_seconds": 10**30,
+        }
+    ]
+    path = write_backup(tmp_path / "huge-journal.json", backup)
+    # Used to escape as OverflowError from the SQLite bind.
+    result = Api().import_library_backup(str(path))
+    assert not result["success"]
+    assert "play session" in str(result.get("error", "")).lower()
+    assert get_all_games()[0]["id"] == game_id
+    assert get_all_games()[0]["title"] == "Journal"
+
+
 def test_save_path_override_exports_only_with_launch_config(tmp_path):
     game_id = add_game("Saver", "/game.exe")
     assert game_id is not None

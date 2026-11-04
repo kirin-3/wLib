@@ -240,7 +240,7 @@ def test_external_tool_traversal_rejected_before_run(monkeypatch, tmp_path):
     import core.archive_install as ai
 
     monkeypatch.setattr(
-        ai, "list_tool_entries", lambda _t, _a: ["ok.txt", "../../evil.txt"]
+        ai, "list_tool_entries", lambda _t, _a, _links=None: ["ok.txt", "../../evil.txt"]
     )
     called = []
 
@@ -258,7 +258,7 @@ def test_external_tool_traversal_rejected_before_run(monkeypatch, tmp_path):
 def test_external_tool_nonzero_exit_fails(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["ok.txt"])
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["ok.txt"])
 
     class _Result:
         returncode = 1
@@ -1209,7 +1209,7 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
     staging.mkdir()
     archive = str(tmp_path / "game.7z")
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["Game.exe"])
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe"])
 
     calls: list[list[str]] = []
 
@@ -1360,7 +1360,7 @@ def test_case_insensitive_collision_rejected(tmp_path):
 def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["a.txt", "a.txt"])
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["a.txt", "a.txt"])
     called = []
 
     def _fail(cmd, **kwargs):
@@ -1376,7 +1376,7 @@ def test_external_tool_duplicate_precheck(monkeypatch, tmp_path):
 def test_external_tool_case_collision_precheck(monkeypatch, tmp_path):
     import core.archive_install as ai
 
-    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a: ["Game.exe", "game.exe"])
+    monkeypatch.setattr(ai, "list_tool_entries", lambda _t, _a, _links=None: ["Game.exe", "game.exe"])
 
     def _fail(cmd, **kwargs):
         raise AssertionError("subprocess must not run")
@@ -2027,3 +2027,117 @@ def test_in_place_update_works_when_exe_is_nested(tmp_path, monkeypatch):
     exe = tmp_path / "lib" / "Game" / "Game" / "Game.exe"
     assert exe.read_bytes() == b"2.0"
     assert result["exe_path"] == str(exe)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or os.geteuid() == 0,
+    reason="needs Linux permissions as a regular user",
+)
+def test_symlink_check_sees_links_in_unreadable_folders(tmp_path):
+    staging = tmp_path / "staging-locked"
+    locked = staging / "Game" / "locked"
+    locked.mkdir(parents=True)
+    (locked / "escape").symlink_to("/etc")
+    locked.chmod(0)
+    try:
+        with pytest.raises(ArchiveSafetyError, match="outside"):
+            check_symlinks_inside_staging(str(staging))
+    finally:
+        locked.chmod(0o755)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or os.geteuid() == 0,
+    reason="needs Linux permissions as a regular user",
+)
+def test_symlink_check_makes_unreadable_folders_usable(tmp_path):
+    staging = tmp_path / "staging-locked-ok"
+    locked = staging / "Game" / "data"
+    locked.mkdir(parents=True)
+    (locked / "save.dat").write_text("x")
+    locked.chmod(0)
+    check_symlinks_inside_staging(str(staging))
+    assert (locked / "save.dat").read_text() == "x"
+
+
+def test_archive_link_precheck_rejects_escaping_and_written_through_links():
+    from core.archive_install import check_archive_links_safe
+
+    entries = ["Game", "Game/lib", "Game/lib/a.so", "Game/a.so.1"]
+    # Links that stay inside the archive are allowed.
+    check_archive_links_safe(
+        [("Game/lib/a.so", "../a.so.1", False), ("Game/copy", "Game/a.so.1", True)],
+        entries,
+    )
+    for links in (
+        [("Game/esc", "/etc", False)],
+        [("Game/esc", "../../etc", False)],
+        [("Game/esc", "C:\\Windows", False)],
+        [("Game/hard", "../outside", True)],
+    ):
+        with pytest.raises(ArchiveSafetyError, match="outside"):
+            check_archive_links_safe(links, entries)
+    with pytest.raises(ArchiveSafetyError, match="through a link"):
+        check_archive_links_safe(
+            [("Game/dir", "lib", False)], [*entries, "Game/dir", "Game/dir/x.txt"]
+        )
+
+
+def test_external_tool_link_escape_rejected_before_extraction(monkeypatch, tmp_path):
+    import core.archive_install as ai
+
+    listing = "\n".join(
+        [
+            "----------",
+            "Path = Game",
+            "Folder = +",
+            "Symbolic Link = ",
+            "",
+            "Path = Game/esc",
+            "Folder = -",
+            "Symbolic Link = /home/user/.config",
+            "",
+            "Path = Game/esc/autostart.desktop",
+            "Folder = -",
+            "Symbolic Link = ",
+        ]
+    )
+    calls: list[list[str]] = []
+
+    class _Listing:
+        returncode = 0
+        stdout = listing
+        stderr = ""
+
+    def _run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if cmd[1] != "l":
+            raise AssertionError("extractor must not run")
+        return _Listing()
+
+    monkeypatch.setattr(ai.subprocess, "run", _run)
+    monkeypatch.setattr(ai, "host_command", lambda cmd, env=None: cmd)
+    with pytest.raises(ArchiveSafetyError, match="outside"):
+        ai.extract_with_tool("/usr/bin/7z", "game.tar", str(tmp_path / "s"))
+    assert [c[1] for c in calls] == ["l"]
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not os.path.exists("/usr/bin/7z"),
+    reason="needs 7z",
+)
+def test_7z_listing_reports_tar_symlinks(tmp_path, monkeypatch):
+    import tarfile
+
+    import core.archive_install as ai
+
+    monkeypatch.setattr(ai, "host_command", lambda cmd, env=None: cmd)
+    archive = tmp_path / "game.tar"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo("Game/esc")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc"
+        tar.addfile(info)
+    links: list[tuple[str, str, bool]] = []
+    assert ai.list_tool_entries("/usr/bin/7z", str(archive), links) == ["Game/esc"]
+    assert links == [("Game/esc", "/etc", False)]

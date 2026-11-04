@@ -65,16 +65,24 @@ const openExtensionFolder = async () => {
   }
 };
 
+// The bridge and capability load can finish after the view is left; the poll
+// must not start then, because nothing would ever clear it.
+let unmounted = false;
+
 onMounted(() => {
   onWebviewReady(async () => {
+    if (unmounted) return;
     platformCapabilities.value = await loadPlatformCapabilities();
+    if (unmounted) return;
     checkConnection();
     pollInterval = setInterval(checkConnection, 10000);
   });
 });
 
 onUnmounted(() => {
+  unmounted = true;
   if (pollInterval) clearInterval(pollInterval);
+  pollInterval = null;
 });
 </script>
 

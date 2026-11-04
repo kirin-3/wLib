@@ -454,3 +454,20 @@ def test_resolve_timeout_asks_extension_to_close_its_window():
     with pytest.raises(BridgeFailed, match='in time'):
         bridge.resolve('https://f95zone.to/dl/1/?u=fake', 'mega', timeout=0.05)
     assert json.loads(sent[-1])['type'] == 'resolve_cancel'
+
+
+def test_fetch_on_connection_closed_before_register_fails_fast(monkeypatch):
+    sent: list[str] = []
+    conn = _fake_conn(sent)
+    bridge._register_connection(conn)
+    bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
+    # The disconnect lands after the connection is picked but before the
+    # request is registered, so its cleanup never sees this request.
+    monkeypatch.setattr(bridge, "_newest_eligible", lambda: conn)
+    bridge._remove_connection(conn)
+    started = time.monotonic()
+    with pytest.raises(bridge.BridgeUnavailable):
+        _ = bridge.fetch("https://f95zone.to/threads/1/", timeout=5)
+    assert time.monotonic() - started < 1
+    assert sent == []
+    assert not bridge._pending

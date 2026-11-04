@@ -45,8 +45,12 @@ function captureKeydown(event: KeyboardEvent) {
 function outside(event: PointerEvent) {
   if (event.target instanceof Node && !panel.value?.contains(event.target)) close(false);
 }
+// Set before the first update finishes when the picker closes during it;
+// listeners added after that point would never be removed.
+let unmounted = false;
 onMounted(async () => {
   await nextTick();
+  if (unmounted) return;
   const rect = props.anchor.getBoundingClientRect();
   const bounds = panel.value?.getBoundingClientRect();
   left.value = Math.max(8, Math.min(rect.left, window.innerWidth - (bounds?.width || 280) - 8));
@@ -56,6 +60,7 @@ onMounted(async () => {
   document.addEventListener("pointerdown", outside, true);
 });
 onBeforeUnmount(() => {
+  unmounted = true;
   document.removeEventListener("keydown", captureKeydown, true);
   document.removeEventListener("pointerdown", outside, true);
 });

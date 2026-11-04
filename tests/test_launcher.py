@@ -12,6 +12,7 @@ import pytest
 from core.launcher import (
     Launcher,
     RunningGame,
+    SANDBOX_LIST_FAILURE_LIMIT,
     ensure_executable,
     _ElevatedProcess,
     _split_windows_command_line,
@@ -2468,6 +2469,73 @@ def test_sandboxie_launch_tracks_box_after_start_exits(monkeypatch):
         thread.call_args.kwargs["target"]()
     assert launcher.get_running_games() == []
     assert len(calls) == 2
+
+
+def _run_sandboxie_tracker(monkeypatch, pids, clock):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": r"C:\\Sandboxie\\Start.exe"},
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.configure_sandboxie_box", lambda *args, **kwargs: "wLib_12"
+    )
+    monkeypatch.setattr("core.launcher.game_sandbox.list_box_pids", pids)
+    launcher = Launcher()
+    saves: list[tuple[int, bool]] = []
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("core.launcher.get_setting", return_value="false"),
+        patch("os.makedirs"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread") as thread,
+        patch("time.sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
+        patch("time.monotonic", side_effect=lambda: clock[0]),
+    ):
+        popen.return_value.poll.return_value = 0
+        assert launcher.launch(
+            r"C:\\Games\\Game.exe",
+            game_id=12,
+            sandbox_enabled=True,
+            on_exit_callback=lambda delta, final: saves.append((delta, final)),
+        )["success"]
+        thread.call_args.kwargs["target"]()
+    return launcher, saves
+
+
+def test_sandboxie_tracker_stops_after_process_list_keeps_failing(monkeypatch):
+    calls = []
+
+    def pids(*args):
+        calls.append(args)
+        raise RuntimeError("Sandboxie list failed")
+
+    clock = [1000.0]
+    launcher, saves = _run_sandboxie_tracker(monkeypatch, pids, clock)
+    assert len(calls) == SANDBOX_LIST_FAILURE_LIMIT
+    assert launcher.get_running_games() == []
+    # Playtime is still saved while the list fails, and flushed at the end.
+    assert saves and saves[-1][1] is True
+    assert sum(delta for delta, _final in saves) == pytest.approx(
+        SANDBOX_LIST_FAILURE_LIMIT, abs=1
+    )
+
+
+def test_sandboxie_tracker_keeps_fractional_playtime(monkeypatch):
+    calls = []
+
+    def pids(*args):
+        calls.append(args)
+        # Each poll costs 0.3 s on top of the 1 s sleep.
+        clock[0] += 0.3
+        return [42] if len(calls) <= 200 else []
+
+    clock = [1000.0]
+    _launcher, saves = _run_sandboxie_tracker(monkeypatch, pids, clock)
+    total = sum(delta for delta, _final in saves)
+    elapsed = clock[0] - 1000.0
+    assert len(saves) > 2
+    assert elapsed - 1 < total <= elapsed
 
 
 def test_stop_sandboxie_uses_box_termination(monkeypatch):

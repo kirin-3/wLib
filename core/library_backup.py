@@ -1429,6 +1429,8 @@ def _replace_play_sessions(
             or not isinstance(duration, int)
             or isinstance(duration, bool)
             or duration < 0
+            # SQLite raises OverflowError past INTEGER's range at bind time.
+            or duration > SQLITE_INTEGER_MAX
         ):
             raise BackupValidationError("Invalid play session.")
         sessions.append((game_id, session["version"], started_at, ended_at, duration))
