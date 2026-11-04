@@ -173,6 +173,7 @@ const presetError = ref("");
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const showDetailModal = ref(false);
+const detailModal = ref<{ requestClose: () => Promise<boolean> } | null>(null);
 const selectedGame = ref<GameRecord | null>(null);
 const openLaunchTargetMenuId = ref<number | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -1250,7 +1251,16 @@ watch(
         const match = ((await api.getGames()) || []).find((g) =>
           extensionGameId(q.gameId) ? g.id === extensionGameId(q.gameId) : urlsMatchByThreadIdentity(g.f95_url, queryUrl),
         );
-        if (match) openDetail(match);
+        if (match && showDetailModal.value && selectedGame.value && selectedGame.value.id !== match.id) {
+          // Switch games through the modal's own close so unsaved edits get the
+          // discard prompt and the next open reloads every per-game panel.
+          if (await detailModal.value?.requestClose()) {
+            await nextTick();
+            openDetail(match);
+          }
+        } else if (match) {
+          openDetail(match);
+        }
       } catch (e) {
         console.error("Failed to open game from URL", e);
       }
@@ -2988,6 +2998,7 @@ onUnmounted(() => {
         @save="handleAddGame"
       />
       <GameDetailModal
+        ref="detailModal"
         v-model="showDetailModal"
         :game="selectedGame"
         :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"

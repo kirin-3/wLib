@@ -1981,3 +1981,49 @@ def test_install_rejects_target_owned_by_another_game(tmp_path, monkeypatch):
             target_id=tid["id"],
         )
     assert not (tmp_path / "lib").exists()
+
+
+def _install_nested(tmp_path, pattern, version, game_id=None, name="Game-1.0.zip"):
+    from core.archive_install import install_archive
+
+    archive = tmp_path / name
+    _write_game_zip(
+        archive,
+        {"readme.txt": b"hi", "Game/Game.exe": version.encode()},
+    )
+    return install_archive(
+        str(archive),
+        library_folder=str(tmp_path / "lib"),
+        pattern=pattern,
+        title="Game",
+        version=version,
+        game_id=game_id,
+    )
+
+
+def test_update_removes_whole_old_install_when_exe_is_nested(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    first = _install_nested(tmp_path, "{title}/{version}", "1.0")
+    game_id = int(str(first["game_id"]))
+    lib = tmp_path / "lib"
+    (lib / "Game" / "1.0" / "DLC").mkdir()
+
+    result = _install_nested(tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip")
+
+    assert result["removed_old"] is True
+    assert result["old_folder"] == str(lib / "Game" / "1.0")
+    assert not (lib / "Game" / "1.0").exists()
+    assert (lib / "Game" / "2.0" / "Game" / "Game.exe").read_bytes() == b"2.0"
+
+
+def test_in_place_update_works_when_exe_is_nested(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    first = _install_nested(tmp_path, "{title}", "1.0")
+    game_id = int(str(first["game_id"]))
+
+    result = _install_nested(tmp_path, "{title}", "2.0", game_id, "Game-2.0.zip")
+
+    assert result["success"] is True
+    exe = tmp_path / "lib" / "Game" / "Game" / "Game.exe"
+    assert exe.read_bytes() == b"2.0"
+    assert result["exe_path"] == str(exe)

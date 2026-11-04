@@ -639,7 +639,12 @@ watch(displayedCover, () => { coverImageFailed.value = false; });
 const steamState = ref<{success?: boolean; state?: string; marked?: boolean; mode?: string; eligible?: boolean; reason?: string}>({});
 const refreshSteamState = async () => {
   if (!props.game || platformCapabilities.value.platform !== "linux") return;
-  try { steamState.value = await api.getGameSteamState(props.game.id); }
+  const gameId = props.game.id;
+  try {
+    const state = await api.getGameSteamState(gameId);
+    // A reply for a game the modal no longer shows must not land on the new one.
+    if (props.game?.id === gameId) steamState.value = state;
+  }
   catch (error) { console.error("Could not load Steam state", error); }
 };
 const setSteamMark = async (event: Event) => {
@@ -926,6 +931,9 @@ const requestClose = async (): Promise<boolean> => {
   close();
   return true;
 };
+
+// The library calls this before switching the open modal to another game.
+defineExpose({ requestClose });
 
 // Links that leave the modal for Settings must pass the same discard prompt.
 const closeAndNavigate = async (hash: string) => {

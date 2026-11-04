@@ -765,6 +765,16 @@ def test_import_records_without_identity_and_repeated_title_are_ambiguous(tmp_pa
     )
     assert exported["success"] is True
 
+    # The per-game identity tells this library's own copies apart.
+    own = api.import_library_backup(str(destination))
+    assert own["success"] is True
+    assert (own["created"], own["updated"], own["ambiguous"]) == (0, 2, 0)
+
+    # Without it (an older export) only the repeated title is left.
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    for game in payload["games"]:
+        game.pop("uid", None)
+    _ = write_backup(destination, payload)
     result = api.import_library_backup(str(destination))
 
     assert result["success"] is True
@@ -3021,3 +3031,105 @@ def test_download_staging_not_exported(tmp_path, monkeypatch):
     sync = json.dumps(build_sync_backup('2026-11-03T00:00:00Z', 'device'))
     assert 'private-update.zip' not in backup + sync
     assert 'PRIVATE_DOWNLOAD_CONTENT' not in backup + sync
+
+
+def test_sync_follows_a_game_renamed_on_another_device():
+    game_id = add_game("Old Name", "/games/old/run.sh")
+    assert game_id is not None
+    _ = add_game_launch_target(game_id, "Alt", "/games/old/alt.sh")
+    update_game(game_id, {"command_line_args": "--foo"})
+    payload = build_sync_backup("2030-01-01T00:00:00.000Z", "other")
+    games = cast(list[dict[str, dict[str, object]]], payload["games"])
+    games[0]["metadata"]["title"] = "New Name"
+    games[0]["metadata"]["f95_url"] = "https://f95zone.to/threads/new.42/"
+
+    result = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert (result["created"], result["deleted"], result["updated"]) == (0, 0, 1)
+    [game] = get_all_games()
+    assert game["id"] == game_id
+    assert game["title"] == "New Name"
+    assert game["exe_path"] == "/games/old/run.sh"
+    assert game["command_line_args"] == "--foo"
+    assert [t["label"] for t in list_game_launch_targets(game_id)] == ["Alt"]
+
+
+def test_sync_adopts_the_remote_identity_for_a_metadata_match():
+    game_id = add_game("Game", "/games/run.sh", "https://f95zone.to/threads/1/")
+    assert game_id is not None
+    payload = build_sync_backup("2030-01-01T00:00:00.000Z", "other")
+    remote_uid = "ab" * 16
+    cast(list[dict[str, object]], payload["games"])[0]["uid"] = remote_uid
+
+    _ = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert get_all_games()[0]["sync_uid"] == remote_uid
+
+
+def test_new_games_get_a_sync_identity():
+    first = add_game("A", "/a")
+    second = add_game("B", "/b")
+    uids = {game["id"]: game["sync_uid"] for game in get_all_games()}
+    assert len(str(uids[first])) == 32
+    assert uids[first] != uids[second]
+
+
+def test_repeated_thread_url_does_not_abort_import():
+    local_id = add_game("Game", "")
+    assert local_id is not None
+    url = "https://f95zone.to/threads/game.5/"
+    update_game(local_id, {"developer": "Dev"})
+    from core.database import replace_game_links
+
+    replace_game_links(
+        local_id,
+        "backup",
+        [{"source": "steam", "id": "123", "url": "https://store.steampowered.com/app/123/"}],
+    )
+    payload = base_backup(
+        [
+            {"metadata": {"title": "Copy", "developer": "Other", "f95_url": url}},
+            {
+                "metadata": {
+                    "title": "Game",
+                    "developer": "Dev",
+                    "f95_url": url,
+                    "links": [{"url": "https://store.steampowered.com/app/123/"}],
+                }
+            },
+        ]
+    )
+
+    result = apply_library_backup(payload, {"sections": [SECTION_METADATA]})
+
+    assert (result["created"], result["updated"]) == (1, 1)
+    assert [w["type"] for w in result["warning_records"]] == ["duplicate_url"]
+
+
+def test_mirror_sync_does_not_lock_itself_repairing_library_folders():
+    _ = add_game("A", "/x")
+    update_setting("library_folder", "")
+    update_setting("library_folders", '["/games"]')
+    payload = build_sync_backup("2030-01-01T00:00:00.000Z", "other")
+
+    result = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert result["updated"] == 1
+
+
+def test_init_db_backfills_missing_sync_identities():
+    game_id = add_game("Legacy", "/legacy")
+    with get_connection() as conn:
+        _ = conn.execute("UPDATE games SET sync_uid = NULL WHERE id = ?", (game_id,))
+    before = get_setting("sync_local_modified_at")
+
+    init_db()
+
+    assert len(str(get_all_games()[0]["sync_uid"])) == 32
+    assert get_setting("sync_local_modified_at") == before

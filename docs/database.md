@@ -96,6 +96,7 @@ Stores the library records and their associated configuration flags.
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
 | `proton_version` | `TEXT` | Per-game Proton path override, used on Linux. |
 | `save_path_override` | `TEXT DEFAULT ''` | Absolute saves folder chosen for the game; empty means use detection. Machine-specific: exported with launch configuration, never synced. Added additively; `update_game` accepts it, the UI sets it through `set_game_save_folder`. |
+| `sync_uid` | `TEXT` | Random 32-hex per-game identity. `init_db()` backfills empty values and the `games_assign_sync_uid` insert trigger fills new rows. Exported as each game record's `uid`; imports and sync match on it before F95 URL, store link, or title, so a game renamed or re-linked on another device is updated instead of deleted and re-created. A metadata match adopts the incoming `uid` unless another row holds it. Not in `SYNC_GAME_COLUMNS`, so writing it never advances `sync_local_modified_at`. |
 | `launch_mode` | `TEXT` | Per-game runtime selector: `auto`, `native`, `wine_proton`, `rpgmaker_linux`, or `custom`. Defaults and invalid values normalize to `auto`; Windows launches support only `auto`. |
 | `playtime_seconds` | `INTEGER` | Total accumulated seconds played. |
 | `last_played` | `TIMESTAMP` | ISO timestamp of last launch. |

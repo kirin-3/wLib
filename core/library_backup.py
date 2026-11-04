@@ -425,6 +425,9 @@ def build_library_backup(
         exported_game: dict[str, object] = {
             "metadata": _pick_fields(game, METADATA_FIELDS),
         }
+        sync_uid = _sync_uid(game.get("sync_uid"))
+        if sync_uid:
+            exported_game["uid"] = sync_uid
         if SECTION_USER_STATE in sections:
             user_state = _pick_fields(game, USER_STATE_FIELDS)
             user_state["play_sessions"] = [
@@ -466,7 +469,8 @@ def build_library_backup(
         settings["general"] = _get_settings_payload(GENERAL_SETTINGS_KEYS)
     if SECTION_SETTINGS_PATHS in sections:
         paths: dict[str, object] = dict(_get_settings_payload(PATH_SETTINGS_KEYS))
-        folders, default = database.get_library_folders()
+        # Read only: an import may hold the write lock while snapshotting.
+        folders, default = database.read_library_folders()
         paths["library_folders"] = folders
         paths["library_folder"] = default
         paths["companion_tools"] = [
@@ -716,6 +720,16 @@ def _fallback_identity_key(game_metadata: Mapping[str, object]) -> tuple[str, st
     )
 
 
+def _sync_uid(value: object) -> str:
+    """Return a well-formed per-game sync identity, or an empty string."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip().lower()
+    if len(text) != 32 or any(char not in "0123456789abcdef" for char in text):
+        return ""
+    return text
+
+
 def _match_imported_game(
     imported_game: Mapping[str, object],
     local_games: Sequence[Mapping[str, object]],
@@ -724,6 +738,21 @@ def _match_imported_game(
 ) -> dict[str, object]:
     metadata = _game_section(imported_game, "metadata")
     title = _coerce_text(metadata.get("title")).strip()
+    # The sync identity survives title and thread changes made on another
+    # device, so it decides before any metadata-based match.
+    sync_uid = _sync_uid(imported_game.get("uid"))
+    if sync_uid:
+        uid_matches = [
+            # Stored values are already lowercase hex (generated or validated).
+            game for game in local_games if game.get("sync_uid") == sync_uid
+        ]
+        if len(uid_matches) == 1:
+            return {
+                "status": "matched",
+                "game": imported_game,
+                "local_id": int(str(uid_matches[0].get("id", 0))),
+                "match_type": "sync_uid",
+            }
     f95_url = normalize_thread_url(metadata.get("f95_url"))
     title_key, developer_key = _fallback_identity_key(metadata)
 
@@ -1299,6 +1328,21 @@ def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:
     return int(str(cursor.lastrowid))
 
 
+def _adopt_sync_uid(cursor: sqlite3.Cursor, game_id: int, raw_uid: object) -> None:
+    """Take the imported game's sync identity unless another row holds it."""
+    sync_uid = _sync_uid(raw_uid)
+    if not sync_uid:
+        return
+    _ = cursor.execute(
+        "SELECT 1 FROM games WHERE sync_uid = ? AND id != ? LIMIT 1",
+        (sync_uid, game_id),
+    )
+    if cursor.fetchone() is None:
+        _ = cursor.execute(
+            "UPDATE games SET sync_uid = ? WHERE id = ?", (sync_uid, game_id)
+        )
+
+
 def _update_game_row(
     cursor: sqlite3.Cursor, game_id: int, fields: Mapping[str, object]
 ) -> None:
@@ -1809,6 +1853,29 @@ def apply_library_backup(
                         _ = fields.pop("cover_image_path", None)
                     if merge_mode == "fill_missing":
                         fields = _filter_fill_missing(cursor, local_id, fields)
+                    url_owner = (
+                        find_matching_game_row(cursor, fields["f95_url"])
+                        if fields.get("f95_url")
+                        else None
+                    )
+                    if url_owner is not None and int(
+                        str(cast(object, url_owner["id"]))
+                    ) != local_id:
+                        # The backup repeats a thread that another row already
+                        # holds (often one created earlier in this import).
+                        # Keep this row's URL instead of aborting the import.
+                        _ = fields.pop("f95_url")
+                        title = _coerce_text(
+                            _game_section(imported_game, SECTION_METADATA).get("title")
+                        )
+                        warnings.append(
+                            {
+                                "type": "duplicate_url",
+                                "scope": "game",
+                                "title": title,
+                                "message": f"{title or 'Game'}: thread URL kept unchanged because another game already uses it.",
+                            }
+                        )
                     _update_game_row(cursor, local_id, fields)
                     game_id = local_id
                     updated += 1
@@ -1827,6 +1894,7 @@ def apply_library_backup(
                     game_id = _insert_game(cursor, fields)
                     created += 1
                     created_ids.append(game_id)
+                _adopt_sync_uid(cursor, game_id, imported_game.get("uid"))
 
                 if id(item) in cover_files:
                     from core.game_covers import copy_cover_file

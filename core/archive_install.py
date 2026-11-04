@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
@@ -1025,6 +1025,57 @@ def other_game_paths(exclude_id: int | None = None) -> list[str]:
     return paths
 
 
+def _old_install_root(
+    old_exe: str,
+    old_game: Mapping[str, object],
+    library_folders: Sequence[str],
+    pattern: str,
+    names: Sequence[tuple[str, str]],
+    engine: str,
+    game_id: int | None,
+) -> str:
+    """Find the folder the previous version was installed into.
+
+    An archive that wraps the game in a subfolder leaves the executable one
+    level below the install folder, so its own folder is not the install
+    root. Rebuild the old destination from the stored version and use it
+    when it holds the executable and no other game; otherwise fall back to
+    the executable's folder.
+    """
+    exe_dir = os.path.dirname(os.path.abspath(old_exe))
+    exe_real = _real(old_exe)
+    library_reals = {_real(folder) for folder in library_folders if folder}
+    old_version = str(old_game.get("version") or "")
+    candidates = [
+        *names,
+        (str(old_game.get("developer") or ""), str(old_game.get("title") or "")),
+    ]
+    others = [_real(path) for path in other_game_paths(game_id)]
+    best = best_real = ""
+    for folder in library_folders:
+        if not folder:
+            continue
+        for creator, title in candidates:
+            if not title.strip():
+                continue
+            root = build_destination(
+                folder, pattern, creator, title, old_version, engine
+            )
+            root_real = _real(root)
+            if (
+                root_real in library_reals
+                or _is_root(root_real)
+                or not _is_within(exe_real, root_real)
+                or any(_is_within(other, root_real) for other in others)
+            ):
+                continue
+            if len(root_real) > len(best_real):
+                best, best_real = root, root_real
+    if best and best_real != _real(exe_dir):
+        return best
+    return exe_dir
+
+
 def _pick_exe(
     destination: str,
     old_exe: str = "",
@@ -1098,7 +1149,12 @@ def install_archive(
     default_exe = ""
     old_exe = ""
     old_root = ""
+    # The folder the previous version was installed into. It differs from
+    # old_root (the executable's folder) when the archive wrapped the game in
+    # a subfolder; saves and targets stay relative to old_root.
+    old_install = ""
     old_override = ""
+    old_game: dict[str, object] = {}
     game_found = game_id is None
     if game_id is not None:
         for game in get_all_games():
@@ -1111,6 +1167,7 @@ def install_archive(
                     # Updates keep the stored engine unless the caller sent one.
                     if not engine.strip():
                         engine = str(game.get("engine") or "")
+                    old_game = game
                     game_found = True
                     break
             except (TypeError, ValueError):
@@ -1128,8 +1185,6 @@ def install_archive(
                     "The launch target does not belong to this game."
                 )
             old_exe = _absolute_game_path(chosen["exe_path"])
-        if old_exe:
-            old_root = os.path.dirname(os.path.abspath(old_exe))
     elif target_id is not None:
         raise ArchiveInstallError("A game is required when choosing a launch target.")
 
@@ -1138,6 +1193,17 @@ def install_archive(
     library_folders, _default = get_library_folders()
     if library_folder not in library_folders:
         library_folders.append(library_folder)
+    if old_exe:
+        old_root = os.path.dirname(os.path.abspath(old_exe))
+        old_install = _old_install_root(
+            old_exe,
+            old_game,
+            library_folders,
+            pattern,
+            [(creator, title)],
+            engine,
+            game_id,
+        )
     downloads_folder = ""
     try:
         downloads_folder = str(get_setting("downloads_folder") or "")
@@ -1157,7 +1223,7 @@ def install_archive(
             )
         guard: dict[str, object] = (
             can_remove_old_folder(
-                old_root,
+                old_install,
                 destination,
                 library_folders,
                 downloads_folder,
@@ -1169,7 +1235,7 @@ def install_archive(
         )
         return destination, dest_real, guard
 
-    old_real = _real(old_root) if old_root else ""
+    old_real = _real(old_install) if old_install else ""
     destination, dest_real, guard = _resolve_destination(engine)
 
     _progress("preparing")
@@ -1375,7 +1441,7 @@ def install_archive(
                         t
                         for t in remaining
                         if str(t.get("exe_path") or "")
-                        and _is_within(_real(str(t["exe_path"])), _real(old_root))
+                        and _is_within(_real(str(t["exe_path"])), _real(old_install))
                     ),
                     None,
                 )
@@ -1389,7 +1455,7 @@ def install_archive(
         removed_old = False
         if game_id is not None and old_root and remove_old:
             if guard.get("removable"):
-                cleanup_root = old_backup or old_root
+                cleanup_root = old_backup or old_install
                 if _real(cleanup_root) != dest_real:
                     errors = remove_tree_collect(cleanup_root)
                     if errors:
@@ -1426,7 +1492,7 @@ def install_archive(
             "unmoved_targets": unmoved,
             "kept_old_folder_reason": kept_reason,
             "removed_old": removed_old,
-            "old_folder": old_root,
+            "old_folder": old_install,
         }
     except Exception as exc:
         # Step 5 failure after the move: the previous install was renamed aside

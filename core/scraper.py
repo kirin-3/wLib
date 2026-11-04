@@ -875,13 +875,29 @@ class Scraper:
                     )
                     for thread_id in ids
                 }
+            if status >= 500 and len(ids) > 1:
+                # A struggling server would only get slower under a fan-out
+                # of page requests; report the batch and let the user retry.
+                # A single check still tries its one page.
+                return {
+                    thread_id: self._error(
+                        "server_error",
+                        f"F95Zone's version checker returned HTTP {status}. Try again later.",
+                    )
+                    for thread_id in ids
+                }
             if status == 200:
                 payload = cast(object, json.loads(text))
                 if isinstance(payload, dict):
                     data = cast(dict[str, object], payload)
                     if data.get("status") == "ok" and isinstance(data.get("msg"), dict):
                         versions = cast(dict[str, object], data["msg"])
-        except (_F95RequestError, ValueError):
+        except _F95RequestError as exc:
+            # Timeouts and network failures hit every page request the same
+            # way; only a single check is worth its one page request.
+            if len(ids) > 1:
+                return {thread_id: self._error(exc.code, str(exc)) for thread_id in ids}
+        except ValueError:
             pass
         results: dict[str, ScraperResult | None] = {}
         for thread_id in ids:

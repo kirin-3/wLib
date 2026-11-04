@@ -95,6 +95,46 @@
     "id": "creator"
   },
   {
+    "url": "https://www.patreon.com/posts/new-build-123456",
+    "source": "patreon",
+    "id": "posts/new-build-123456"
+  },
+  {
+    "url": "https://www.patreon.com/posts/other-update-654321",
+    "source": "patreon",
+    "id": "posts/other-update-654321"
+  },
+  {
+    "url": "https://www.patreon.com/user?u=555&utm=x",
+    "source": "patreon",
+    "id": "u:555"
+  },
+  {
+    "url": "https://www.patreon.com/user/posts?u=777",
+    "source": "patreon",
+    "id": "u:777"
+  },
+  {
+    "url": "https://www.patreon.com/user",
+    "source": null,
+    "id": null
+  },
+  {
+    "url": "https://www.patreon.com/cw/Creator",
+    "source": "patreon",
+    "id": "creator"
+  },
+  {
+    "url": "https://subscribestar.adult/posts/2024",
+    "source": "subscribestar",
+    "id": "posts/2024"
+  },
+  {
+    "url": "https://gumroad.com/l/game",
+    "source": "gumroad",
+    "id": "l/game"
+  },
+  {
     "url": "https://subscribestar.adult/creator?foo=1",
     "source": "subscribestar",
     "id": "creator"

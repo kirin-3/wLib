@@ -39,9 +39,19 @@
             if (!/^[1-9]\d*$/.test(id)) return null;
             return {source:'ryuugames',id,url:`https://www.ryuugames.com/?p=${id}`};
         } else if (['patreon.com','www.patreon.com','subscribestar.com','www.subscribestar.com','subscribestar.adult','www.subscribestar.adult','gumroad.com','www.gumroad.com'].includes(host)) {
-            match = path.match(/^\/(?:c\/)?([^/]+)(?:\/|$)/);
-            if (!match) return null;
-            source = host.replace(/^www\./,'').split('.')[0]; id = match[1].toLowerCase();
+            source = host.replace(/^www\./,'').split('.')[0];
+            const post = path.match(/^\/(posts|l)\/([^/]+)\/?$/i);
+            const userId = query.get('u') || '';
+            if (post && (post[1].toLowerCase() === 'posts') === (source !== 'gumroad')) {
+                id = `${post[1].toLowerCase()}/${post[2].toLowerCase()}`;
+            } else if (source === 'patreon' && /^\/user(?:\/posts)?\/?$/i.test(path)) {
+                if (!/^[1-9]\d*$/.test(userId)) return null;
+                id = `u:${userId}`; url.search = `?u=${userId}`;
+            } else {
+                match = path.match(/^\/(?:c\/|cw\/|join\/)?([^/]+)(?:\/|$)/);
+                if (!match || ['posts','user','l'].includes(match[1].toLowerCase())) return null;
+                id = match[1].toLowerCase();
+            }
         } else if (host.endsWith('.gumroad.com')) {
             source = 'gumroad'; id = host.slice(0,-'.gumroad.com'.length);
         } else if (['f95zone.to','www.f95zone.to'].includes(host)) return null;

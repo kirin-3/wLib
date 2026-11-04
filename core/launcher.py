@@ -1168,11 +1168,7 @@ class Launcher:
                         ce_command = prepare_ce_command()
                         if ce_command:
                             readonly += (get_cheat_engine_dir(),)
-                            cmd = [
-                                "sh",
-                                "-c",
-                                f"(sleep 5; {shlex.join(ce_command)}) & {shlex.join(cmd)}",
-                            ]
+                            cmd = game_sandbox.cheat_engine_wrapper(cmd, ce_command)
                         run_ce = False
                     sandbox_game_dir = game_sandbox.resolve_game_folder(
                         exe_path, launch_mode

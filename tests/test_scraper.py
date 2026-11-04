@@ -1477,3 +1477,42 @@ def test_hidden_attachments_with_catalog_cover_skip_extension(monkeypatch):
     assert Scraper()._get_page("1")["cover_image"] == "https://example.com/cover.png"
     via_ext.assert_not_called()
     _reset_scraper_globals()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        (502, "<title>Bad gateway</title>"),
+        scraper_module._F95RequestError("navigation_timeout", "Timed out"),
+    ],
+)
+def test_checker_outage_does_not_fan_out_to_pages(monkeypatch, failure):
+    scraper_module._prefer_extension_until = None
+    scraper_module._f95_last_request_finished = None
+    get = MagicMock(side_effect=[failure])
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    monkeypatch.setattr(
+        scraper_module.extension_bridge, "is_available", lambda: False
+    )
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 6)]
+    results = Scraper().check_versions(urls)
+    assert get.call_count == 1
+    assert all(results[url]["success"] is False for url in urls)
+    scraper_module._prefer_extension_until = None
+    scraper_module._f95_last_request_finished = None
+    scraper_module._f95_last_foreground_finished = None
+
+
+def test_single_check_still_tries_its_page_after_checker_timeout(
+    monkeypatch, thread_html
+):
+    get = MagicMock(
+        side_effect=[
+            scraper_module._F95RequestError("navigation_timeout", "Timed out"),
+            (200, thread_html),
+        ]
+    )
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    result = Scraper().get_thread_version("https://f95zone.to/threads/1/")
+    assert result["version"] == "1.10"
+    assert get.call_count == 2

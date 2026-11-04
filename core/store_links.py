@@ -129,11 +129,24 @@ def parse_store_link(url: str) -> StoreLink | None:
         "gumroad.com",
         "www.gumroad.com",
     }:
-        match = re.match(r"/(?:c/)?([^/]+)(?:/|$)", path)
-        if not match:
-            return None
         source = host.removeprefix("www.").split(".")[0]
-        identity = match[1].lower()
+        post = re.match(r"/(posts|l)/([^/]+)/?$", path, re.I)
+        user_id = parse_qs(parts.query).get("u", [""])[0]
+        if post and (post[1].lower() == "posts") == (source != "gumroad"):
+            # A post or product page names no creator; it is its own identity,
+            # so two creators' posts never collapse into one link.
+            identity = f"{post[1].lower()}/{post[2].lower()}"
+        elif source == "patreon" and re.fullmatch(r"/user(?:/posts)?/?", path, re.I):
+            # Profiles without a vanity name are only addressable by user id.
+            if not re.fullmatch(r"[1-9]\d*", user_id):
+                return None
+            identity = f"u:{user_id}"
+            clean_url = urlunsplit((scheme, netloc, path, f"u={user_id}", ""))
+        else:
+            match = re.match(r"/(?:c/|cw/|join/)?([^/]+)(?:/|$)", path)
+            if not match or match[1].lower() in {"posts", "user", "l"}:
+                return None
+            identity = match[1].lower()
     elif host.endswith(".gumroad.com"):
         source, identity = "gumroad", host[: -len(".gumroad.com")]
     elif host in {"f95zone.to", "www.f95zone.to"}:

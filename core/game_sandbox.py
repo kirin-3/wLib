@@ -6,6 +6,7 @@ from __future__ import annotations
 import ntpath
 import glob
 import os
+import shlex
 import subprocess
 from threading import Lock
 from typing import Literal, TypedDict, cast
@@ -187,6 +188,58 @@ SUPERVISOR = (
     "for p in /proc/[0-9]*; do n=$((n+1)); done; "
     '[ "$n" -le 2 ] && exit "$result"; sleep 1; done'
 )
+
+
+# Wine's own background processes. They stay while Cheat Engine keeps the
+# wineserver busy, so they must not count as the game still running.
+_WINE_SERVICE_PATTERN = "|".join(
+    (
+        "wineserver",
+        "wine-preloader",
+        "wine64-preloader",
+        "services.exe",
+        "winedevice.exe",
+        "plugplay.exe",
+        "explorer.exe",
+        "rpcss.exe",
+        "svchost.exe",
+        "conhost.exe",
+        "wineboot.exe",
+        "start.exe",
+        "tabtip.exe",
+        "rundll32.exe",
+    )
+)
+
+
+def cheat_engine_wrapper(game_command: list[str], ce_command: list[str]) -> list[str]:
+    """Run the game with Cheat Engine attached, inside the bwrap supervisor.
+
+    Cheat Engine starts in its own process group. Once the game and anything
+    it spawned are gone (only bwrap's init, the supervisor, this shell and
+    Wine's background services are left besides that group), the group is stopped so a Cheat Engine window
+    left open does not keep the game counted as running.
+    """
+    ce = shlex.join(ce_command)
+    game = shlex.join(game_command)
+    script = (
+        "ce=; "
+        "if command -v setsid >/dev/null 2>&1; then "
+        f"setsid sh -c 'sleep 5; exec \"$@\"' sh {ce} & ce=$!; "
+        f"else (sleep 5; {ce}) & fi; "
+        f"{game}; result=$?; "
+        '[ -n "$ce" ] && while :; do n=0; '
+        "for p in /proc/[0-9]*; do "
+        'pid=${p#/proc/}; case "$pid" in 1|$$|$PPID) continue;; esac; '
+        '{ read -r stat < "$p/stat"; } 2>/dev/null || continue; '
+        'comm=${stat#*[(]}; comm=${comm%) *}; '
+        f'case "$comm" in {_WINE_SERVICE_PATTERN}) continue;; esac; '
+        'set -- ${stat##*) }; [ "$3" = "$ce" ] || n=$((n+1)); done; '
+        '[ "$n" -eq 0 ] && { kill -TERM -- "-$ce" 2>/dev/null; break; }; '
+        "sleep 1; done; "
+        'exit "$result"'
+    )
+    return ["sh", "-c", script]
 
 
 def build_bwrap_argv(

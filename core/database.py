@@ -567,6 +567,7 @@ def init_db() -> None:
             ("note_links", "TEXT DEFAULT '[]'"),
             ("screenshots", "TEXT DEFAULT '[]'"),
             ("save_path_override", "TEXT DEFAULT ''"),
+            ("sync_uid", "TEXT"),
         ]
 
         for col_name, col_type in new_columns:
@@ -574,6 +575,21 @@ def init_db() -> None:
                 _ = cursor.execute(
                     f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
                 )
+
+        # A stable per-game identity lets sync follow a game whose title or
+        # thread URL changed on another device instead of replacing it.
+        _ = cursor.execute(
+            f"UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE sync_uid IS NULL OR sync_uid = ''"
+        )
+        _ = cursor.execute("DROP TRIGGER IF EXISTS games_assign_sync_uid")
+        _ = cursor.execute(
+            f"""CREATE TRIGGER games_assign_sync_uid AFTER INSERT ON games
+            WHEN NEW.sync_uid IS NULL OR NEW.sync_uid = ''
+            BEGIN UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE id = NEW.id; END"""
+        )
+        _ = cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_games_sync_uid ON games(sync_uid)"
+        )
 
         try:
             _ = cursor.execute(
@@ -1431,8 +1447,14 @@ def normalize_library_folders(raw: object) -> list[str]:
     return folders
 
 
-def get_library_folders() -> tuple[list[str], str]:
-    """Read and repair the additive folder-list/default setting pair."""
+_NEW_SYNC_UID_SQL = "lower(hex(randomblob(16)))"
+
+
+def read_library_folders() -> tuple[list[str], str]:
+    """Return the normalized folder-list/default pair without writing repairs.
+
+    Safe to call while another connection holds the write lock.
+    """
     default = (get_setting("library_folder") or "").strip()
     try:
         folders = normalize_library_folders(
@@ -1452,6 +1474,12 @@ def get_library_folders() -> tuple[list[str], str]:
             default = match
     elif folders:
         default = folders[0]
+    return folders, default
+
+
+def get_library_folders() -> tuple[list[str], str]:
+    """Read and repair the additive folder-list/default setting pair."""
+    folders, default = read_library_folders()
     encoded = json.dumps(folders)
     if get_setting("library_folders") != encoded:
         update_setting("library_folders", encoded)
