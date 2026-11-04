@@ -1,16 +1,23 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useFieldAutosave } from "../composables/useFieldAutosave";
+import FieldSaveFeedback from "../components/FieldSaveFeedback.vue";
+import type { SettingsPayload } from "../services/api";
+import { mergeSettingsFields } from "../utils/settingsMerge";
 import { confirmAction } from "../utils/confirm";
 import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
 import { formatLibraryFreeSpace } from "../utils/installArchive";
 import type { LibraryFolder } from "../services/api";
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
-import { onBeforeRouteLeave } from "vue-router";
+import { computed, ref, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
+import { onBeforeRouteLeave, useRoute } from "vue-router";
+import { settingsVisibleRows } from "../utils/settingsVisibility";
+import { matchSettings, type SettingsSearchSection } from "../utils/settingsSearch";
+import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
+import { focusCandidates, pickNext } from "../utils/spatialFocus";
 import {
   IconAdjustments,
   IconAutomation,
   IconBook2,
-  IconDeviceFloppyFilled,
   IconDownloadFilled,
   IconFolderOpen,
   IconKeyboard,
@@ -70,8 +77,7 @@ const availableRunners = ref<RunnerInfo[]>([]);
 const customStatuses = ref<string[]>([]);
 const newStatus = ref("");
 const statusError = ref("");
-// Collections apply immediately through the collection API, unlike the
-// save-bar fields below.
+// Collections apply immediately through their own API.
 const collectionList = ref<string[]>([]);
 const newCollectionName = ref("");
 const collectionError = ref("");
@@ -94,6 +100,7 @@ const removeLibraryFolder = (path: string) => {
   if (path === libraryFolder.value && libraryFolders.value.length > 1) return;
   libraryFolders.value = libraryFolders.value.filter((entry) => entry !== path);
   if (!libraryFolders.value.length) libraryFolder.value = "";
+  void foldersSave.commit();
 };
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
@@ -158,7 +165,6 @@ const rtpProgress = ref<InstallProgressStatus>({
 });
 const systemDeps = ref<SystemDepsCommandResponse | null>(null);
 const copiedCommand = ref(false);
-const saveError = ref("");
 const settingsLoaded = ref(false);
 const settingsLoading = ref(false);
 const settingsLoadError = ref("");
@@ -271,7 +277,7 @@ const applySettings = (data: SettingsResponse) => {
   savedValues.value = formValues();
 };
 
-// Fields saved with the save bar. Toggles (logging, theme, animations) save on click.
+// Values which need protection while settings are reloaded.
 const formValues = () => ({
   protonPath: protonPath.value,
   prefixPath: prefixPath.value,
@@ -285,9 +291,6 @@ const formValues = () => ({
   downloadDetectionEnabled: downloadDetectionEnabled.value,
 });
 const savedValues = ref(formValues());
-const hasUnsavedChanges = computed(
-  () => JSON.stringify(formValues()) !== JSON.stringify(savedValues.value),
-);
 
 const applyFormValues = (values: ReturnType<typeof formValues>) => {
   protonPath.value = values.protonPath;
@@ -302,25 +305,30 @@ const applyFormValues = (values: ReturnType<typeof formValues>) => {
   downloadDetectionEnabled.value = values.downloadDetectionEnabled;
 };
 
-// Fields the user changed while the save request was in flight, which were not
-// part of the values that request submitted.
-const formValuesChangedSince = (
-  current: ReturnType<typeof formValues>,
-  submitted: ReturnType<typeof formValues>,
-): Partial<ReturnType<typeof formValues>> => {
-  const changed: Partial<ReturnType<typeof formValues>> = {};
-  const keys = Object.keys(submitted) as (keyof ReturnType<typeof formValues>)[];
-  for (const key of keys) {
-    if (JSON.stringify(current[key]) !== JSON.stringify(submitted[key])) {
-      Object.assign(changed, { [key]: current[key] });
-    }
+// Coalesce overlapping reads while preserving focused and subsequently edited fields.
+let persistedRead: Promise<SettingsResponse | null> | null = null;
+let persistedGeneration = 0;
+const reloadPersisted = async (submitted: ReturnType<typeof formValues>) => {
+  if (!persistedRead) {
+    persistedRead = (async () => {
+      let data: SettingsResponse | null;
+      let generation: number;
+      do {
+        generation = persistedGeneration;
+        data = await api.getSettings();
+      } while (generation !== persistedGeneration);
+      return data;
+    })().finally(() => { persistedRead = null; });
   }
-  return changed;
+  const data = await persistedRead;
+  if (!data) throw new Error("Settings were saved but could not be reloaded.");
+  const current = formValues();
+  const focused = (document.activeElement as HTMLElement | null)?.dataset.settingsField as keyof typeof current | undefined;
+  applySettings(data);
+  applyFormValues(mergeSettingsFields(formValues(), current, submitted, focused));
+  return data;
 };
 
-onBeforeRouteLeave(
-  () => !hasUnsavedChanges.value || confirmAction({ title: "Discard changes", message: "Discard unsaved settings changes?", confirmLabel: "Discard", danger: true }),
-);
 
 const themeOptions: { value: ThemePreference; label: string }[] = [
   { value: "system", label: "System" },
@@ -399,15 +407,13 @@ const loadSettings = async () => {
       ? await api.getProtonDownloadStatus()
       : null;
     const data = await api.getSettings();
-    if (data) {
-      const editsDuringLoad = formValuesChangedSince(formValues(), beforeLoad);
-      applySettings(data);
-      if (Object.keys(editsDuringLoad).length > 0) {
-        applyFormValues({ ...formValues(), ...editsDuringLoad });
-      }
-      settingsLoadBaseline.value = null;
-      settingsApplied = true;
-    }
+    if (!data) throw new Error("Settings response was empty");
+    const current = formValues();
+    applySettings(data);
+    resetAutosaveBaselines();
+    applyFormValues(mergeSettingsFields(formValues(), current, beforeLoad));
+    settingsLoadBaseline.value = null;
+    settingsApplied = true;
 
     if (supportsLinuxRuntimes.value) {
       performanceTools.value = await api.getPerformanceTools().catch(() => ({ gamemode: false, mangohud: false }));
@@ -480,6 +486,7 @@ const browseProton = async () => {
     const p = await api.browseRunnerFile(protonPath.value || "");
     if (p) {
       protonPath.value = p;
+      void protonSave.commit();
     }
   } catch (e) {
     console.error("Browse proton error", e);
@@ -492,6 +499,7 @@ const browsePrefix = async () => {
     const p = await api.browseDirectory(prefixPath.value || "");
     if (p) {
       prefixPath.value = p;
+      void prefixSave.commit();
     }
   } catch (e) {
     console.error("Browse prefix error", e);
@@ -509,6 +517,7 @@ const browseLibraryFolder = async () => {
       }
       libraryFolders.value = [...libraryFolders.value, p];
       if (!libraryFolder.value) libraryFolder.value = p;
+      void foldersSave.commit();
     }
   } catch (e) {
     console.error("Browse library folder error", e);
@@ -521,6 +530,7 @@ const browseDownloadsFolder = async () => {
     const p = await api.browseDirectory(downloadsFolder.value || "");
     if (p) {
       downloadsFolder.value = p;
+      void downloadsSave.commit();
     }
   } catch (e) {
     console.error("Browse downloads folder error", e);
@@ -558,6 +568,7 @@ const browseRpgmakerLinuxRunner = async () => {
     const p = await api.browseRunnerFile(rpgmakerLinuxRunnerPath.value || "");
     if (p) {
       rpgmakerLinuxRunnerPath.value = p;
+      void runnerSave.commit();
     }
   } catch (e) {
     console.error("Browse RPGMaker Linux runner error", e);
@@ -606,6 +617,7 @@ const pollProtonDownload = async () => {
     ) {
       protonPath.value = settings.proton_path;
       savedValues.value = { ...savedValues.value, protonPath: settings.proton_path };
+      protonSave.resetSaved(settings.proton_path);
     }
   } catch (e) {
     // Without a readable status the loop cannot see the download end, so stop
@@ -665,6 +677,7 @@ const downloadProton = async () => {
       // The backend already saved proton_path; other unsaved edits stay unsaved.
       protonPath.value = result.path;
       savedValues.value = { ...savedValues.value, protonPath: result.path };
+      protonSave.resetSaved(result.path);
       protonError.value = "";
       notify(`GE-Proton installed to ${result.path}.`, "success");
     } else {
@@ -779,10 +792,62 @@ onUnmounted(() => {
   }
 });
 
-const saving = ref(false);
-
-watch([protonPath, prefixPath, rpgmakerLinuxRunnerPath, customStatuses, urmPath, libraryFolder, libraryFolders, libraryFolderPattern, downloadsFolder, downloadDetectionEnabled], () => {
-  if (!saving.value) saveError.value = "";
+// Each setting owns its request queue. Reload using the last persisted values as
+// the baseline so a different field's pending edit is never overwritten.
+const libraryValue = computed({
+  get: () => ({ folder: libraryFolder.value, folders: [...libraryFolders.value] }),
+  set: value => { libraryFolder.value = value.folder; libraryFolders.value = value.folders; },
+});
+const makeField = <T,>(value: import("vue").Ref<T>, payload: (value: T) => SettingsPayload,
+  keys: (keyof ReturnType<typeof formValues>)[], canonical: (values: ReturnType<typeof formValues>) => T,
+  after?: () => Promise<void>) => useFieldAutosave({
+  value,
+  enabled: () => settingsLoaded.value && !settingsLoading.value && !settingsLoadError.value,
+  save: async (submitted) => {
+    const baseline = { ...savedValues.value };
+    const current = formValues();
+    for (const key of keys) Object.assign(baseline, { [key]: current[key] });
+    const body = payload(submitted);
+    const result = await api.saveSettings(body);
+    if (!result?.success) throw new Error(result?.error || "Could not save setting.");
+    persistedGeneration++;
+    const persisted = await reloadPersisted(baseline);
+    if (body.library_folders && persisted.library_folders.length < body.library_folders.length) {
+      notifyError("A duplicate folder was removed: that folder is already a library folder.");
+    }
+    if (after && !pageDisposed) await after();
+    return canonical(savedValues.value);
+  },
+});
+const refreshInstall = async () => { if (supportsLinuxRuntimes.value) await pollInstallStatus(); };
+const protonSave = makeField(protonPath, value => ({ proton_path: value }), ["protonPath"], values => values.protonPath, refreshInstall);
+const prefixSave = makeField(prefixPath, value => ({ wine_prefix_path: value }), ["prefixPath"], values => values.prefixPath, refreshInstall);
+const runnerSave = makeField(rpgmakerLinuxRunnerPath, value => ({ rpgmaker_linux_runner_path: value }), ["rpgmakerLinuxRunnerPath"], values => values.rpgmakerLinuxRunnerPath);
+const urmSave = makeField(urmPath, value => ({ urm_rpa_path: value }), ["urmPath"], values => values.urmPath);
+const foldersSave = makeField(libraryValue, value => ({ library_folder: value.folder, library_folders: value.folders }), ["libraryFolder", "libraryFolders"], values => ({ folder: values.libraryFolder, folders: values.libraryFolders }));
+const patternSave = makeField(libraryFolderPattern, value => ({ library_folder_pattern: value }), ["libraryFolderPattern"], values => values.libraryFolderPattern);
+const downloadsSave = makeField(downloadsFolder, value => ({ downloads_folder: value }), ["downloadsFolder"], values => values.downloadsFolder);
+const statusesSave = makeField(customStatuses, value => ({ custom_play_statuses: value }), ["customStatuses"], values => values.customStatuses);
+const detectionSave = makeField(downloadDetectionEnabled, value => ({ download_detection_enabled: value }), ["downloadDetectionEnabled"], values => values.downloadDetectionEnabled);
+const autosaves = [protonSave, prefixSave, runnerSave, urmSave, foldersSave, patternSave, downloadsSave, statusesSave, detectionSave];
+const resetAutosaveBaselines = () => {
+  protonSave.resetSaved(protonPath.value); prefixSave.resetSaved(prefixPath.value);
+  runnerSave.resetSaved(rpgmakerLinuxRunnerPath.value); urmSave.resetSaved(urmPath.value);
+  foldersSave.resetSaved(libraryValue.value); patternSave.resetSaved(libraryFolderPattern.value);
+  downloadsSave.resetSaved(downloadsFolder.value); statusesSave.resetSaved(customStatuses.value);
+  detectionSave.resetSaved(downloadDetectionEnabled.value);
+};
+const commitPattern = () => {
+  libraryFolderPattern.value = libraryFolderPattern.value.trim() || "{creator}/{title}/{version}";
+  void patternSave.commit();
+};
+onBeforeRouteLeave(() => {
+  commitPattern();
+  for (const field of autosaves) {
+    void field.commit().then(() => {
+      if (field.state.value === "error") notifyError(`Could not save setting: ${field.error.value}`);
+    });
+  }
 });
 
 watch([protonPath, prefixPath], () => {
@@ -795,98 +860,23 @@ watch([protonPath, prefixPath], () => {
   }, 300);
 });
 
-const saveSettings = async () => {
-  if (saving.value || settingsLoading.value || settingsLoadError.value) return;
-  statusError.value = validateCustomPlayStatuses(customStatuses.value);
-  if (statusError.value) return;
-
-  // Only the values in this snapshot are submitted; edits typed while the
-  // request runs must stay unsaved instead of being replaced by the response.
-  const submittedValues = formValues();
-  saving.value = true;
-  saveError.value = "";
-
-  try {
-    const res = await api.saveSettings({
-      proton_path: submittedValues.protonPath,
-      wine_prefix_path: submittedValues.prefixPath,
-      rpgmaker_linux_runner_path: submittedValues.rpgmakerLinuxRunnerPath,
-      custom_play_statuses: submittedValues.customStatuses,
-      urm_rpa_path: submittedValues.urmPath,
-      library_folder: submittedValues.libraryFolder,
-      library_folders: submittedValues.libraryFolders,
-      library_folder_pattern: submittedValues.libraryFolderPattern.trim() || "{creator}/{title}/{version}",
-      downloads_folder: submittedValues.downloadsFolder,
-      download_detection_enabled: submittedValues.downloadDetectionEnabled,
-    });
-
-    if (!res || res.success === false) {
-      saveError.value = "Failed to save settings: " + (res?.error || "Unknown error");
-      return;
-    }
-
-    const persistedSettings = await api.getSettings();
-    if (!persistedSettings) {
-      saveError.value = "Settings were saved but could not be reloaded.";
-      return;
-    }
-
-    if (persistedSettings.library_folders.length < submittedValues.libraryFolders.length) {
-      notifyError("A duplicate folder was removed: that folder is already a library folder.");
-    }
-
-    // Keep values typed during the save, and leave them marked unsaved.
-    const editsDuringSave = formValuesChangedSince(formValues(), submittedValues);
-    applySettings(persistedSettings);
-    if (Object.keys(editsDuringSave).length > 0) {
-      applyFormValues({ ...formValues(), ...editsDuringSave });
-    }
-    if (supportsLinuxRuntimes.value) await pollInstallStatus();
-    notify(
-      Object.keys(editsDuringSave).length > 0
-        ? "Settings saved. Changes made while saving are still unsaved."
-        : "Settings saved.",
-      "success",
-    );
-  } catch (e) {
-    console.error("Failed to save settings", e);
-    saveError.value = "Error saving settings: " + String(e);
-  } finally {
-    saving.value = false;
-  }
-};
-
 const addStatus = () => {
   const name = newStatus.value.trim();
   statusError.value = validateCustomPlayStatuses([...customStatuses.value, name]);
   if (statusError.value) return;
   customStatuses.value = [...customStatuses.value, name];
   newStatus.value = "";
-};
-
-const discardChanges = () => {
-  const saved = savedValues.value;
-  protonPath.value = saved.protonPath;
-  prefixPath.value = saved.prefixPath;
-  rpgmakerLinuxRunnerPath.value = saved.rpgmakerLinuxRunnerPath;
-  customStatuses.value = [...saved.customStatuses];
-  urmPath.value = saved.urmPath;
-  libraryFolder.value = saved.libraryFolder;
-  libraryFolders.value = [...saved.libraryFolders];
-  libraryFolderPattern.value = saved.libraryFolderPattern;
-  downloadsFolder.value = saved.downloadsFolder;
-  downloadDetectionEnabled.value = saved.downloadDetectionEnabled;
-  statusError.value = "";
-  saveError.value = "";
+  void statusesSave.commit();
 };
 
 const removeStatus = async (name: string) => {
   try {
     const games = await api.getGames();
     const count = games.filter((game) => game.play_status?.toLowerCase() === name.toLowerCase()).length;
-    if (!(await confirmAction({ title: 'Remove status', message: `Remove '${name}'? Saving will reset ${count} game${count === 1 ? '' : 's'} to Not Started.`, confirmLabel: 'Remove', danger: true }))) return;
+    if (!(await confirmAction({ title: 'Remove status', message: `Remove '${name}'? This resets ${count} game${count === 1 ? '' : 's'} to Not Started.`, confirmLabel: 'Remove', danger: true }))) return;
     customStatuses.value = customStatuses.value.filter((status) => status !== name);
     statusError.value = "";
+    void statusesSave.commit();
   } catch (error) {
     statusError.value = String(error);
   }
@@ -983,14 +973,177 @@ const removeCollection = async (name: string) => {
   collectionError.value = "";
 };
 
+const settingsRoot = ref<HTMLElement | null>(null);
+const desktopSearch = ref<HTMLInputElement | null>(null);
+const mobileSearch = ref<HTMLInputElement | null>(null);
+const searchQuery = ref("");
+const visibleRows = ref<Set<string> | null>(null);
+provide(settingsVisibleRows, visibleRows);
+const settingsRowVisible = (id: string) => !visibleRows.value || visibleRows.value.has(id);
+const activeSection = ref("general");
+const shownSectionIds = ref<string[]>([]);
+const route = useRoute();
+const sectionRegistry = computed(() => [
+  { id: "general", title: "General", keywords: "logging statuses collections" },
+  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives" },
+  { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
+  { id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : platformCapabilities.value.platform === "windows" ? "Windows Environment" : "Platform Environment", keywords: "wine prefix runner" },
+  ...(supportsLinuxRuntimes.value ? [{ id: "umu", title: "Proton (umu)", keywords: "runtime" }] : []),
+  ...(platformCapabilities.value.platform === "linux" ? [{ id: "steam", title: "Steam", keywords: "account sync" }] : []),
+  ...(platformCapabilities.value.companion_tools ? [{ id: "custom-tools", title: "Custom tools", keywords: "companion" }] : []),
+  { id: "sandbox", title: "Sandbox", keywords: "isolation" },
+  { id: "catalog", title: "Catalog", keywords: "game catalog" },
+  ...(supportsLinuxRuntimes.value ? [{ id: "tools", title: "Tools", keywords: "winetricks" }] : []),
+  { id: "renpy", title: "Ren'Py", keywords: "urm mod" },
+]);
+const shownSections = computed(() => sectionRegistry.value.filter(section => shownSectionIds.value.includes(section.id)));
+const sectionVisible = (id: string) => !searchQuery.value.trim() || shownSectionIds.value.includes(id);
+const scrollToSection = (id: string, focus = false) => {
+  const section = document.getElementById(id);
+  const main = settingsRoot.value?.closest<HTMLElement>("main");
+  if (!section || !main || !shownSectionIds.value.includes(id)) return;
+  main.scrollTo({ top: main.scrollTop + section.getBoundingClientRect().top - main.getBoundingClientRect().top, behavior: "instant" });
+  activeSection.value = id;
+  if (focus) focusCandidates(section)[0]?.focus({ preventScroll: true });
+};
+const cycleSection = (step: number) => {
+  const list = shownSections.value;
+  if (!list.length) return;
+  const index = Math.max(0, list.findIndex(section => section.id === activeSection.value));
+  const target = list[Math.max(0, Math.min(list.length - 1, index + step))];
+  if (target) scrollToSection(target.id, true);
+};
+useControllerActions(settingsRoot, {
+  search: () => {
+    const input = [desktopSearch.value, mobileSearch.value].find(item => item?.getClientRects().length);
+    if (input) controllerFocusText(input);
+  },
+  prevTab: () => cycleSection(-1), nextTab: () => cycleSection(1),
+  move: direction => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return false;
+    if (direction === "right" && active.closest("[data-settings-nav]")) {
+      scrollToSection(activeSection.value, true);
+      return true;
+    }
+    const content = active.closest<HTMLElement>("[data-settings-content]");
+    if (direction !== "left" || !content) return false;
+    const box = (el: HTMLElement) => (el.matches('input[type="checkbox"], input[type="radio"], input.sr-only') ? el.closest("label") || el : el).getBoundingClientRect();
+    const rect = box(active);
+    const candidates = focusCandidates(content).filter(el => el !== active).map(el => ({ element: el, ...box(el).toJSON() })).filter(el => el.bottom > rect.top && el.top < rect.bottom);
+    if (pickNext(rect, candidates, "left")) return false;
+    const entry = settingsRoot.value?.querySelector<HTMLElement>('[data-settings-nav] [aria-current="location"]');
+    if (!entry?.getClientRects().length) return false;
+    entry.focus({ preventScroll: true });
+    return true;
+  },
+  hints: [{ button: "A", label: "Select" }, { button: "B", label: "Back" }, { button: "Y", label: "Search" }, { button: "LB/RB", label: "Sections" }],
+});
+
+// Tag each top-level setting group and keep it mounted when filtering. This
+// also covers conditionally rendered rows supplied by child sections.
+let searchObserver: MutationObserver | null = null;
+let intersectionObserver: IntersectionObserver | null = null;
+let searchScheduled = false;
+const originalDisplay = new WeakMap<HTMLElement, string>();
+const refreshSearch = () => {
+  const root = settingsRoot.value;
+  if (!root) return;
+  const sections: SettingsSearchSection[] = [];
+  const elements = new Map<string, HTMLElement>();
+  for (const section of sectionRegistry.value) {
+    const container = root.querySelector<HTMLElement>(`#${section.id}`);
+    if (!container) continue;
+    const rows: SettingsSearchSection["rows"] = [];
+    let index = 0;
+    for (const child of Array.from(container.children)) {
+      if (!(child instanceof HTMLElement) || child.matches("h3") || child.querySelector("h3")) continue;
+      const id = child.dataset.settingsRow || `${section.id}-dynamic-${index}`;
+      index++;
+      child.dataset.settingsRow = id;
+      if (!child.dataset.keywords) child.dataset.keywords = section.id === "appearance" && child.textContent?.includes("Theme") ? "dark light system" : "";
+      if (!originalDisplay.has(child)) originalDisplay.set(child, child.style.display);
+      elements.set(id, child);
+      rows.push({ id, label: child.textContent || "", keywords: child.dataset.keywords || "" });
+    }
+    sections.push({ id: section.id, title: section.title, rows });
+  }
+  const matched = matchSettings(sections, searchQuery.value);
+  shownSectionIds.value = matched.sectionIds;
+  visibleRows.value = new Set(matched.rowIds);
+  for (const [id, element] of elements) {
+    if (!element.hasAttribute("data-settings-bound")) element.style.display = matched.rowIds.includes(id) ? originalDisplay.get(element) || "" : "none";
+  }
+  if (!shownSectionIds.value.includes(activeSection.value)) activeSection.value = shownSectionIds.value[0] || "";
+  void nextTick(observeSections);
+};
+const scheduleSearch = () => {
+  if (searchScheduled) return;
+  searchScheduled = true;
+  void nextTick(() => { searchScheduled = false; refreshSearch(); });
+};
+const observeSections = () => {
+  intersectionObserver?.disconnect();
+  const main = settingsRoot.value?.closest<HTMLElement>("main");
+  if (!main || typeof IntersectionObserver === "undefined") return;
+  intersectionObserver = new IntersectionObserver(() => {
+    const top = main.getBoundingClientRect().top + 20;
+    const visible = shownSections.value.map(item => document.getElementById(item.id)).filter((el): el is HTMLElement => !!el && el.getClientRects().length > 0);
+    const passed = visible.filter(el => el.getBoundingClientRect().top <= top);
+    const atTop = passed[passed.length - 1] || visible[0];
+    if (atTop) activeSection.value = atTop.id;
+  }, { root: main, rootMargin: "-1px 0px -70% 0px", threshold: [0, 1] });
+  for (const item of shownSections.value) { const el = document.getElementById(item.id); if (el) intersectionObserver.observe(el); }
+};
+const followSettingsHash = async () => {
+  await nextTick();
+  refreshSearch();
+  const id = route.hash.slice(1);
+  if (id && shownSectionIds.value.includes(id)) { scrollToSection(id); pinSection(id); }
+  else settingsRoot.value?.closest<HTMLElement>("main")?.scrollTo({ top: 0, behavior: "instant" });
+};
+// Sections above a deep-link target grow or shrink as settings and child
+// sections finish loading. Keep the target at the top until the user scrolls.
+let unpinSection: (() => void) | null = null;
+const pinSection = (id: string) => {
+  unpinSection?.();
+  const root = settingsRoot.value;
+  const main = root?.closest<HTMLElement>("main");
+  if (!root || !main || typeof ResizeObserver === "undefined") return;
+  let pinnedTop = main.scrollTop;
+  const resize = new ResizeObserver(() => { scrollToSection(id); pinnedTop = main.scrollTop; });
+  // Any scroll the pin did not make (wheel, keys, controller, section list) ends it.
+  const onScroll = () => { if (Math.abs(main.scrollTop - pinnedTop) > 2) stop(); };
+  const stop = () => {
+    resize.disconnect();
+    clearTimeout(timer);
+    main.removeEventListener("scroll", onScroll);
+    unpinSection = null;
+  };
+  const timer = setTimeout(stop, 3000);
+  main.addEventListener("scroll", onScroll, { passive: true });
+  resize.observe(root);
+  unpinSection = stop;
+};
+watch(searchQuery, scheduleSearch);
+watch(sectionRegistry, () => { scheduleSearch(); void followSettingsHash(); });
+watch(() => route.hash, () => { void followSettingsHash(); });
+onMounted(() => {
+  searchObserver = new MutationObserver(scheduleSearch);
+  if (settingsRoot.value) searchObserver.observe(settingsRoot.value, { childList: true, subtree: true });
+  scheduleSearch();
+  void followSettingsHash();
+});
+onUnmounted(() => { searchObserver?.disconnect(); intersectionObserver?.disconnect(); unpinSection?.(); });
+
 const browseUrm = async () => {
   const path = await api.browseUrmFile(urmPath.value);
-  if (path) urmPath.value = path;
+  if (path) { urmPath.value = path; void urmSave.commit(); }
 };
 </script>
 
 <template>
-  <div class="allow-text-selection mx-auto w-full p-8 max-w-4xl pb-12">
+  <div ref="settingsRoot" class="allow-text-selection mx-auto w-full p-8 max-w-7xl pb-12">
     <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
@@ -1006,7 +1159,7 @@ const browseUrm = async () => {
           border-left: 2px solid var(--brand);
         "
       >
-        Configure launch paths and application behavior. Toggles save right away.
+        Configure launch paths and application behavior. Changes save automatically.
       </p>
     </header>
 
@@ -1028,15 +1181,33 @@ const browseUrm = async () => {
       </button>
     </div>
 
-    <div class="space-y-6">
+    <div class="lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-8 lg:items-start">
+      <aside class="hidden lg:block sticky top-4 space-y-3" aria-label="Settings navigation">
+        <label class="block text-sm" for="settings-search-desktop">Search settings</label>
+        <input id="settings-search-desktop" ref="desktopSearch" v-model="searchQuery" type="search" class="settings-input w-full" placeholder="Search settings" />
+        <nav data-settings-nav aria-label="Settings sections" class="flex flex-col gap-1">
+          <button v-for="section in shownSections" :key="section.id" :data-section-id="section.id" type="button" class="settings-nav-item text-left rounded-lg px-3 py-2 text-sm" :class="{ 'settings-nav-active': activeSection === section.id }" :aria-current="activeSection === section.id ? 'location' : undefined" @click="scrollToSection(section.id, $event.detail === 0)">{{ section.title }}</button>
+        </nav>
+      </aside>
+      <div data-settings-content class="min-w-0 max-w-4xl w-full">
+        <div class="lg:hidden space-y-3 mb-6">
+          <label class="block text-sm" for="settings-search-mobile">Search settings</label>
+          <input id="settings-search-mobile" ref="mobileSearch" v-model="searchQuery" type="search" class="settings-input w-full" placeholder="Search settings" />
+          <label class="block text-sm" for="settings-section-select">Section</label>
+          <select id="settings-section-select" class="settings-input w-full" :value="activeSection" @change="scrollToSection(($event.target as HTMLSelectElement).value)">
+            <option v-for="section in shownSections" :key="section.id" :value="section.id">{{ section.title }}</option>
+          </select>
+        </div>
+        <div v-if="!shownSections.length && searchQuery.trim()" class="settings-card rounded-xl p-6 mb-6" role="status">No settings match. <button class="underline" @click="searchQuery = ''">Clear search</button></div>
+        <fieldset :disabled="!!settingsLoadError || settingsLoading" class="space-y-6 w-full min-w-0 border-0 p-0">
       <!-- General -->
-      <section class="settings-card rounded-xl p-6 space-y-5">
+      <section v-show="sectionVisible('general')" id="general" class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconAdjustments class="ui-section-icon" />
           General
         </h3>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-0" data-settings-bound v-show="settingsRowVisible('general-static-0')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Enable Debug Logging
@@ -1062,7 +1233,7 @@ const browseUrm = async () => {
           </label>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-1" data-settings-bound v-show="settingsRowVisible('general-static-1')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <label for="save-backup-keep" class="text-sm font-medium" style="color: var(--text-primary)">
               Save backups to keep per game
@@ -1100,7 +1271,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="general-static-2" data-settings-bound v-show="settingsRowVisible('general-static-2')" class="space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Play Statuses</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1110,14 +1281,17 @@ const browseUrm = async () => {
           <div class="flex gap-3">
             <input
               v-model="newStatus"
+              @input="statusError = ''"
+              :disabled="!!settingsLoadError || settingsLoading"
               @keydown.enter.prevent="addStatus"
               type="text"
               class="settings-input flex-1"
               placeholder="Custom status name"
               aria-label="Custom status name"
             />
-            <button @click="addStatus" class="settings-btn">Add Status</button>
+            <button @click="addStatus" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn">Add Status</button>
           </div>
+          <FieldSaveFeedback :state="statusesSave.state.value" :error="statusesSave.error.value" />
           <p v-if="statusError" role="alert" class="text-xs text-red-400">{{ statusError }}</p>
           <div
             v-for="name in customStatuses"
@@ -1125,13 +1299,13 @@ const browseUrm = async () => {
             class="setting-row flex items-center justify-between gap-3 px-4 py-2 rounded-lg"
           >
             <span class="text-sm" style="color: var(--text-primary)">{{ name }}</span>
-            <button @click="removeStatus(name)" class="settings-btn" :aria-label="`Remove ${name}`">
+            <button @click="removeStatus(name)" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn" :aria-label="`Remove ${name}`">
               Remove
             </button>
           </div>
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="general-static-3" data-settings-bound v-show="settingsRowVisible('general-static-3')" class="space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Collections</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1207,7 +1381,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="general-static-4" data-settings-bound v-show="settingsRowVisible('general-static-4')" class="space-y-3">
           <h4 class="ui-section-heading text-sm font-medium" style="color: var(--text-primary)">
             <IconKeyboard class="w-4 h-4" style="color: var(--text-muted)" />
             Keyboard Shortcuts
@@ -1228,12 +1402,12 @@ const browseUrm = async () => {
       </section>
 
       <!-- Library & Downloads -->
-      <section class="settings-card rounded-xl p-6 space-y-5">
+      <section v-show="sectionVisible('library-downloads')" id="library-downloads" class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconDownloadFilled class="ui-section-icon" />
           Library &amp; Downloads
         </h3>
-        <div class="flex items-center justify-between gap-3 mb-4">
+        <div data-settings-row="library-downloads-static-0" data-settings-bound v-show="settingsRowVisible('library-downloads-static-0')" class="flex items-center justify-between gap-3 mb-4">
           <div>
             <p class="text-sm">Cover cache: {{ coverCache.count ? `${coverCache.count} covers, ${formatCoverCacheSize(coverCache.bytes)}` : 'Empty' }}</p>
             <p class="text-xs mt-1" style="color: var(--text-muted)">Cached covers stay on this device. After purging, downloads resume next launch.</p>
@@ -1242,7 +1416,7 @@ const browseUrm = async () => {
           <button class="settings-btn disabled:opacity-50" :disabled="coverCacheBusy || !coverCache.count" @click="purgeCoverCache">Purge</button>
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="library-downloads-static-1" data-settings-bound v-show="settingsRowVisible('library-downloads-static-1')" class="space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folders</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1253,8 +1427,8 @@ const browseUrm = async () => {
             <div class="flex items-center gap-3">
               <span class="font-mono text-sm break-all flex-1" :aria-label="path">{{ path }}</span>
               <span v-if="path === libraryFolder" class="text-xs">Default</span>
-              <button v-else @click="libraryFolder = path" class="settings-btn">Make default</button>
-              <button @click="removeLibraryFolder(path)" :disabled="path === libraryFolder && libraryFolders.length > 1" :title="path === libraryFolder && libraryFolders.length > 1 ? 'Choose another default first' : 'Remove from list'" class="settings-btn disabled:opacity-50">Remove</button>
+              <button v-else @click="libraryFolder = path; foldersSave.commit()" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn">Make default</button>
+              <button @click="removeLibraryFolder(path)" :disabled="!!settingsLoadError || settingsLoading || (path === libraryFolder && libraryFolders.length > 1)" :title="path === libraryFolder && libraryFolders.length > 1 ? 'Choose another default first' : 'Remove from list'" class="settings-btn disabled:opacity-50">Remove</button>
             </div>
             <div class="flex gap-3 text-xs" style="color: var(--text-muted)">
               <PathStatus :path="path" kind="dir" />
@@ -1262,10 +1436,11 @@ const browseUrm = async () => {
             </div>
           </div>
           <p v-if="libraryFolders.length > 1" class="text-xs" style="color: var(--text-muted)">Choose another default before removing the default folder.</p>
-          <button @click="browseLibraryFolder" class="settings-btn ui-action-btn">Add library folder</button>
+          <button @click="browseLibraryFolder" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">Add library folder</button>
+          <FieldSaveFeedback :state="foldersSave.state.value" :error="foldersSave.error.value" />
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="library-downloads-static-2" data-settings-bound v-show="settingsRowVisible('library-downloads-static-2')" class="space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Folder pattern</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1275,17 +1450,22 @@ const browseUrm = async () => {
           </div>
           <input
             v-model="libraryFolderPattern"
+              @blur="commitPattern()"
+              @keydown.enter.prevent="commitPattern()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="libraryFolderPattern"
             type="text"
             class="settings-input w-full font-mono"
             placeholder="{creator}/{title}/{version}"
             aria-label="Library folder pattern"
           />
+            <FieldSaveFeedback :state="patternSave.state.value" :error="patternSave.error.value" />
           <p class="text-xs font-mono break-all" style="color: var(--text-muted)">
             Example: {{ patternExample }}
           </p>
         </div>
 
-        <div class="space-y-3">
+        <div data-settings-row="library-downloads-static-3" data-settings-bound v-show="settingsRowVisible('library-downloads-static-3')" class="space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Downloads folder</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1295,17 +1475,22 @@ const browseUrm = async () => {
           <div class="flex gap-3">
             <input
               v-model="downloadsFolder"
+              @blur="downloadsSave.commit()"
+              @keydown.enter.prevent="downloadsSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="downloadsFolder"
               type="text"
               class="settings-input flex-1 font-mono"
               placeholder="~/Downloads"
               aria-label="Downloads folder"
             />
-            <button @click="browseDownloadsFolder" class="settings-btn ui-action-btn">Browse</button>
+            <FieldSaveFeedback :state="downloadsSave.state.value" :error="downloadsSave.error.value" />
+            <button @click="browseDownloadsFolder" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">Browse</button>
           </div>
           <PathStatus :path="downloadsFolder" kind="dir" />
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="library-downloads-static-4" data-settings-bound v-show="settingsRowVisible('library-downloads-static-4')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Detect downloaded updates
@@ -1314,10 +1499,13 @@ const browseUrm = async () => {
               Offer to install matching archives when the app starts, after update checks, and when the window regains focus.
             </p>
           </div>
+          <FieldSaveFeedback :state="detectionSave.state.value" :error="detectionSave.error.value" />
           <label class="relative inline-flex items-center cursor-pointer shrink-0">
             <input
               type="checkbox"
               v-model="downloadDetectionEnabled"
+              @change="detectionSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
               class="sr-only peer"
               aria-label="Detect downloaded updates"
             />
@@ -1327,13 +1515,13 @@ const browseUrm = async () => {
       </section>
 
       <!-- Appearance -->
-      <section class="settings-card rounded-xl p-6 space-y-4">
+      <section v-show="sectionVisible('appearance')" id="appearance" class="settings-card rounded-xl p-6 space-y-4">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconPalette class="ui-section-icon" />
           Appearance
         </h3>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-0" data-keywords="dark light system" data-settings-bound v-show="settingsRowVisible('appearance-static-0')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Theme</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1355,7 +1543,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-1" data-settings-bound v-show="settingsRowVisible('appearance-static-1')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 id="accent-label" class="text-sm font-medium" style="color: var(--text-primary)">Accent</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1394,7 +1582,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-2" data-settings-bound v-show="settingsRowVisible('appearance-static-2')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Text size</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1416,7 +1604,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-3" data-settings-bound v-show="settingsRowVisible('appearance-static-3')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">TV mode</h4>
             <label class="sr-only" for="tv-mode">TV mode</label>
@@ -1427,7 +1615,7 @@ const browseUrm = async () => {
             </select>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-4" data-settings-bound v-show="settingsRowVisible('appearance-static-4')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <label for="interface-scale" class="text-sm font-medium" style="color: var(--text-primary)">Interface scale</label>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1445,7 +1633,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-5" data-settings-bound v-show="settingsRowVisible('appearance-static-5')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1476,13 +1664,13 @@ const browseUrm = async () => {
       </section>
 
       <!-- Wine / Proton -->
-      <section class="settings-card rounded-xl p-6 space-y-5">
+      <section v-show="sectionVisible('wine-proton')" id="wine-proton" class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconAutomation class="ui-section-icon" />
           {{ supportsLinuxRuntimes ? "Wine / Proton" : platformCapabilities.platform === 'windows' ? "Windows Environment" : "Platform Environment" }}
         </h3>
 
-        <div
+        <div data-settings-row="wine-proton-static-0" data-settings-bound v-show="settingsRowVisible('wine-proton-static-0')"
           v-if="platformCapabilities.platform === 'windows'"
           class="setting-row p-4 rounded-lg text-sm"
           style="color: var(--text-secondary)"
@@ -1490,7 +1678,7 @@ const browseUrm = async () => {
           Windows games launch directly. Proton, Wine, Winetricks, Wine
           prefixes, and Linux runtime installers are not used on Windows.
         </div>
-        <div
+        <div data-settings-row="wine-proton-static-1" data-settings-bound v-show="settingsRowVisible('wine-proton-static-1')"
           v-else-if="!supportsLinuxRuntimes"
           class="setting-row p-4 rounded-lg text-sm"
           style="color: var(--text-secondary)"
@@ -1498,7 +1686,7 @@ const browseUrm = async () => {
           Wine, Proton, and Linux runtime installers are not supported on this platform.
         </div>
 
-        <div v-if="supportsLinuxRuntimes">
+        <div data-settings-row="wine-proton-static-2" data-settings-bound v-show="settingsRowVisible('wine-proton-static-2')" v-if="supportsLinuxRuntimes">
           <div class="mb-1.5 flex justify-between items-center">
             <label
               for="settings-proton-path"
@@ -1522,16 +1710,21 @@ const browseUrm = async () => {
             <input
               id="settings-proton-path"
               v-model="protonPath"
+              @blur="protonSave.commit()"
+              @keydown.enter.prevent="protonSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="protonPath"
               list="runner-paths"
               aria-describedby="settings-proton-help"
               type="text"
               placeholder="/usr/bin/wine or /path/to/GE-Proton/proton"
               class="settings-input flex-1"
             />
+            <FieldSaveFeedback :state="protonSave.state.value" :error="protonSave.error.value" />
             <datalist id="runner-paths">
               <option v-for="runner in availableRunners" :key="runner.path" :value="runner.path">{{ runner.name }}</option>
             </datalist>
-            <button @click="browseProton" class="settings-btn ui-action-btn">
+            <button @click="browseProton" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
               <IconFolderOpen class="ui-action-icon" />
               Browse
             </button>
@@ -1568,7 +1761,7 @@ const browseUrm = async () => {
           </p>
         </div>
 
-        <div v-if="supportsLinuxRuntimes">
+        <div data-settings-row="wine-proton-static-3" data-settings-bound v-show="settingsRowVisible('wine-proton-static-3')" v-if="supportsLinuxRuntimes">
           <label
             for="settings-prefix-path"
             class="block text-sm font-medium mb-1.5"
@@ -1580,12 +1773,17 @@ const browseUrm = async () => {
             <input
               id="settings-prefix-path"
               v-model="prefixPath"
+              @blur="prefixSave.commit()"
+              @keydown.enter.prevent="prefixSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="prefixPath"
               aria-describedby="settings-prefix-help"
               type="text"
               placeholder="Auto-managed (~/.local/share/wLib/prefix) if left empty"
               class="settings-input flex-1"
             />
-            <button @click="browsePrefix" class="settings-btn ui-action-btn">
+            <FieldSaveFeedback :state="prefixSave.state.value" :error="prefixSave.error.value" />
+            <button @click="browsePrefix" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
               <IconFolderOpen class="ui-action-icon" />
               Browse
             </button>
@@ -1596,7 +1794,7 @@ const browseUrm = async () => {
           </p>
         </div>
 
-        <div v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
+        <div data-settings-row="wine-proton-static-4" data-settings-bound v-show="settingsRowVisible('wine-proton-static-4')" v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
           <div class="flex flex-wrap gap-2">
             <button class="settings-btn" @click="openPrefixTool('winecfg')">Winecfg</button>
             <button class="settings-btn" @click="openPrefixTool('winetricks')">Winetricks</button>
@@ -1617,7 +1815,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">
+        <div data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -1642,13 +1840,18 @@ const browseUrm = async () => {
             <div class="flex gap-3">
               <input
                 v-model="rpgmakerLinuxRunnerPath"
+              @blur="runnerSave.commit()"
+              @keydown.enter.prevent="runnerSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="rpgmakerLinuxRunnerPath"
                 aria-labelledby="settings-rpgm-label"
                 aria-describedby="settings-rpgm-help"
                 type="text"
                 placeholder="Auto-detect or choose /path/to/rpgmaker-linux"
                 class="settings-input flex-1"
               />
-              <button @click="browseRpgmakerLinuxRunner" class="settings-btn ui-action-btn">
+            <FieldSaveFeedback :state="runnerSave.state.value" :error="runnerSave.error.value" />
+              <button @click="browseRpgmakerLinuxRunner" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
                 <IconFolderOpen class="ui-action-icon" />
                 Browse
               </button>
@@ -1670,17 +1873,17 @@ const browseUrm = async () => {
         </div>
       </section>
 
-      <UmuSettings v-if="supportsLinuxRuntimes" />
+      <UmuSettings v-show="sectionVisible('umu')" v-if="supportsLinuxRuntimes" />
 
-      <SteamSettings v-if="platformCapabilities.platform === 'linux'" />
-      <CompanionToolsSettings v-if="platformCapabilities.companion_tools" />
+      <SteamSettings v-show="sectionVisible('steam')" v-if="platformCapabilities.platform === 'linux'" />
+      <CompanionToolsSettings v-show="sectionVisible('custom-tools')" v-if="platformCapabilities.companion_tools" />
 
-      <SandboxSettings />
+      <SandboxSettings v-show="sectionVisible('sandbox')" />
 
-      <CatalogSettings />
+      <CatalogSettings v-show="sectionVisible('catalog')" />
 
       <!-- Tools -->
-      <section v-if="supportsLinuxRuntimes" class="settings-card rounded-xl p-6 space-y-4">
+      <section v-show="sectionVisible('tools')" id="tools" v-if="supportsLinuxRuntimes" class="settings-card rounded-xl p-6 space-y-4">
         <div>
           <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
             <IconTool class="ui-section-icon" />
@@ -1691,7 +1894,7 @@ const browseUrm = async () => {
           </p>
         </div>
 
-        <div class="flex flex-col gap-3">
+        <div data-settings-row="tools-static-0" data-settings-bound v-show="settingsRowVisible('tools-static-0')" class="flex flex-col gap-3">
           <!-- DLL Install Card -->
           <div class="tool-card p-4 rounded-lg relative overflow-hidden">
             <div
@@ -1820,7 +2023,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div class="space-y-1">
+        <div data-settings-row="tools-static-1" data-settings-bound v-show="settingsRowVisible('tools-static-1')" class="space-y-1">
           <p v-if="installError" class="copyable-feedback text-xs text-red-400">{{ installError }}</p>
           <p v-if="rtpError" class="copyable-feedback text-xs text-red-400">{{ rtpError }}</p>
           <p v-if="ceError" class="copyable-feedback text-xs text-red-400">{{ ceError }}</p>
@@ -1828,11 +2031,12 @@ const browseUrm = async () => {
       </section>
 
       <!-- Ren'Py -->
-      <section class="settings-card rounded-xl p-6 space-y-3">
+      <section v-show="sectionVisible('renpy')" id="renpy" class="settings-card rounded-xl p-6 space-y-3">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
           <IconBook2 class="ui-section-icon" />
           Ren'Py
         </h3>
+        <div data-settings-row="renpy-static-0" data-settings-bound v-show="settingsRowVisible('renpy-static-0')" class="space-y-3">
         <label for="urm-source" class="block text-sm font-medium" style="color: var(--text-secondary)">
           Universal Ren'Py Mod (URM) source file (.rpa)
         </label>
@@ -1840,12 +2044,17 @@ const browseUrm = async () => {
           <input
             id="urm-source"
             v-model="urmPath"
+              @blur="urmSave.commit()"
+              @keydown.enter.prevent="urmSave.commit()"
+              :disabled="!!settingsLoadError || settingsLoading"
+              data-settings-field="urmPath"
             aria-describedby="settings-urm-help"
             type="text"
             class="settings-input flex-1"
             placeholder="/path/to/0x52_URM.rpa"
           />
-          <button @click="browseUrm" class="settings-btn ui-action-btn">
+            <FieldSaveFeedback :state="urmSave.state.value" :error="urmSave.error.value" />
+          <button @click="browseUrm" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn ui-action-btn">
             <IconFolderOpen class="ui-action-icon" />Browse
           </button>
         </div>
@@ -1853,44 +2062,24 @@ const browseUrm = async () => {
         <p id="settings-urm-help" class="text-xs" style="color: var(--text-muted)">
           Select the .rpa file you downloaded, then enable URM in a Ren'Py game's details.
         </p>
+        </div>
       </section>
+        </fieldset>
+      </div>
     </div>
 
     <footer class="mt-6">
       <RouterLink to="/diagnostics" class="inline-flex min-h-11 items-center underline underline-offset-4" style="color: var(--text-primary)">Diagnostics</RouterLink>
     </footer>
 
-    <!-- Stays at the bottom of the window while there are unsaved changes. -->
-    <div v-if="hasUnsavedChanges" class="sticky bottom-4 z-20 mt-6">
-      <div
-        class="save-bar rounded-xl px-5 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-        role="region"
-        aria-label="Unsaved changes"
-      >
-        <p v-if="saveError" class="copyable-feedback text-xs text-red-400">{{ saveError }}</p>
-        <p v-else class="text-sm font-medium" style="color: var(--text-primary)">
-          You have unsaved changes.
-        </p>
-        <div class="flex gap-2 shrink-0">
-          <button @click="discardChanges" :disabled="saving" class="settings-btn disabled:opacity-50">
-            Discard
-          </button>
-          <button
-            @click="saveSettings"
-            :disabled="saving || settingsLoading || !!settingsLoadError"
-            class="ui-action-btn px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-wait"
-            style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
-          >
-            <IconDeviceFloppyFilled class="ui-action-icon" />
-            {{ settingsLoading ? "Loading..." : saving ? "Saving..." : "Save Changes" }}
-          </button>
-        </div>
-      </div>
-    </div>
+
   </div>
 </template>
 
 <style scoped>
+.settings-nav-item { color: var(--text-secondary); }
+.settings-nav-item:hover, .settings-nav-active { color: var(--text-primary); background: var(--bg-raised); }
+.settings-nav-active { box-shadow: inset 3px 0 var(--brand); }
 .settings-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -1935,12 +2124,6 @@ const browseUrm = async () => {
 .motion-toggle {
   background: var(--bg-raised);
   border: 1px solid var(--border);
-}
-
-.save-bar {
-  background: var(--bg-surface);
-  border: 1px solid var(--brand-deep);
-  box-shadow: var(--shadow-modal);
 }
 
 kbd {

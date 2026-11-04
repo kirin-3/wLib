@@ -17,7 +17,7 @@ async page => {
       },theme);
       await page.goto(new URL('/#/',previousUrl).toString());
       await page.reload();
-      await page.getByRole('group',{name:'Download fixture. Press Enter for details.'}).press('Enter');
+      await page.getByRole('checkbox', { name: 'Download fixture. Press Enter for details.'}).press('Enter');
       const detail = page.getByRole('dialog').filter({has:page.getByRole('button',{name:'Download update',exact:true})});
       await detail.getByRole('button',{name:'Download update',exact:true}).click();
       let picker = page.getByRole('dialog',{name:'Download update'});

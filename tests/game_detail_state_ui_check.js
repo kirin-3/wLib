@@ -32,7 +32,7 @@ async (page) => {
     await page.goto(url.toString());
     await page.reload();
 
-    const card = () => page.getByRole("group", { name: /^Aurora(?: .*)?\. Press Enter for details\.$/ });
+    const card = () => page.getByRole("checkbox", { name: /^Aurora(?: .*)?\. Press Enter for details\.$/ });
     const openAurora = async () => {
       const locator = card();
       await locator.waitFor({ timeout: 5000 }).catch(async () => {
@@ -100,26 +100,14 @@ async (page) => {
     await secondTab("Info").click();
     const savedTitle = await secondTitle().inputValue();
     await secondTitle().fill("Aurora unsaved link");
-    await page.evaluate(() => {
-      window.__confirms = [];
-      window.__originalConfirm = window.confirm;
-      window.confirm = message => { window.__confirms.push(message); return false; };
-    });
     await secondTab("Launch").click();
     await dialog.getByRole("button", { name: "Open Sandbox settings", exact: true }).waitFor();
     await dialog.getByRole("button", { name: "Open Sandbox settings", exact: true }).click();
-    await page.waitForFunction(() => (window.__confirms || []).length > 0);
-    check(
-      await page.evaluate(() => window.__confirms.includes("Discard unsaved changes to this game?")),
-      "Opening Sandbox settings from an edited game must ask before discarding",
-    );
+    const confirmation = page.getByRole("dialog", { name: "Discard changes", exact: true });
+    await confirmation.getByText("Discard unsaved changes to this game?", { exact: true }).waitFor();
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
     check(await dialog.isVisible(), "Declining the discard prompt must keep the game modal open");
     check(!page.url().includes("/settings"), "Declining the discard prompt must not navigate away");
-    await page.evaluate(() => {
-      window.confirm = window.__originalConfirm;
-      delete window.__originalConfirm;
-      delete window.__confirms;
-    });
     await secondTab("Info").click();
     await secondTitle().fill(savedTitle);
     await dialog.getByRole("button", { name: "Close", exact: true }).click();

@@ -22,7 +22,7 @@ async (page) => {
     const url = new URL(previousUrl); url.hash = "/";
     await page.goto(url.toString());
     await page.reload();
-    const card = page.getByRole("group", { name: "Scale check. Press Enter for details.", exact: true });
+    const card = page.getByRole("checkbox", { name: "Scale check. Press Enter for details.", exact: true });
     await card.waitFor();
     check(await page.evaluate(() => {
       const el = document.scrollingElement;

@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { IconDatabase } from '@tabler/icons-vue';
@@ -7,6 +8,8 @@ import { api, onWebviewReady } from '../services/api';
 import type { CatalogStatusResponse } from '../services/api';
 import { catalogSourceLines, catalogSummary, formatCatalogTime } from '../utils/catalog';
 import { notifyError } from '../utils/toast';
+
+const settingsRowVisible = useSettingsRowVisibility();
 
 const status = ref<CatalogStatusResponse | null>(null);
 const saving = ref(false);
@@ -71,7 +74,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       Game catalog
     </h3>
 
-    <div class="catalog-row flex items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="catalog-static-0" data-settings-bound v-show="settingsRowVisible('catalog-static-0')" class="catalog-row flex items-center justify-between gap-4 p-4 rounded-lg">
       <div>
         <h4 class="text-sm font-medium" style="color: var(--text-primary)">Download the game catalog</h4>
         <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -92,7 +95,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </label>
     </div>
 
-    <div class="flex flex-wrap items-start justify-between gap-3">
+    <div data-settings-row="catalog-static-1" data-settings-bound v-show="settingsRowVisible('catalog-static-1')" class="flex flex-wrap items-start justify-between gap-3">
       <div class="space-y-1 text-sm" role="status">
         <p style="color: var(--text-primary)">{{ summary }}</p>
         <p v-if="enabled && status?.success !== false" class="text-xs" style="color: var(--text-muted)">
@@ -104,11 +107,11 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </button>
     </div>
 
-    <p v-if="enabled && status?.last_error" class="text-xs" role="alert" style="color: var(--danger-text)">
+    <p data-settings-row="catalog-static-2" data-settings-bound v-show="settingsRowVisible('catalog-static-2')" v-if="enabled && status?.last_error" class="text-xs" role="alert" style="color: var(--danger-text)">
       Last check failed: {{ status.last_error }}
     </p>
 
-    <table v-if="enabled && sources.length" class="catalog-table w-full text-xs">
+    <table data-settings-row="catalog-static-3" data-settings-bound v-show="settingsRowVisible('catalog-static-3')" v-if="enabled && sources.length" class="catalog-table w-full text-xs">
       <thead>
         <tr>
           <th scope="col">Source</th>
@@ -125,7 +128,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </tbody>
     </table>
 
-    <p class="text-xs" style="color: var(--text-muted)">
+    <p data-settings-row="catalog-static-4" data-settings-bound v-show="settingsRowVisible('catalog-static-4')" class="text-xs" style="color: var(--text-muted)">
       VNDB data comes from
       <a href="https://vndb.org/" @click.prevent="api.openInBrowser('https://vndb.org/')">The Visual Novel Database</a>
       and is available under the

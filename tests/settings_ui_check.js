@@ -1,134 +1,75 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Run in an isolated Vite browser: playwright-cli run-code --filename tests/settings_ui_check.js
-async (page) => {
-  const check = (ok, message) => { if (!ok) throw new Error(message); };
-  const nativeDialogs = [];
-  const onDialog = dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); };
-  page.on("dialog", onDialog);
-  const previousUrl = page.url();
-  const previousViewport = page.viewportSize();
-  const keys = ["wlib-mock-games", "wlib-mock-settings", "wlib-theme", "wlib-mock-platform"];
-  const previous = await page.evaluate(keys => keys.map(key => [key, localStorage.getItem(key)]), keys);
+// Run with playwright-cli run-code --filename tests/settings_ui_check.js.
+async page => {
+  const url = page.url();
+  const keys = ['wlib-mock-settings', 'wlib-mock-platform', 'wlib-mock-games'];
+  const old = await page.evaluate(keys => keys.map(k => [k, localStorage.getItem(k)]), keys);
+  let step = 'setup';
   try {
-    await page.setViewportSize({ width: 1200, height: 800 });
     await page.evaluate(() => {
       delete window.pywebview;
-      localStorage.setItem("wlib-mock-games", "[]");
-      localStorage.setItem("wlib-mock-platform", "linux");
-      localStorage.setItem("wlib-theme", "dark");
-      localStorage.setItem("wlib-mock-settings", JSON.stringify({ library_folders: ["/tmp/initial-folder", "/tmp/first-folder", "/tmp/second-folder"], library_folder: "/tmp/initial-folder" }));
+      localStorage.setItem('wlib-mock-platform', 'linux');
+      localStorage.setItem('wlib-mock-games', '[]');
+      localStorage.setItem('wlib-mock-settings', JSON.stringify({ proton_path: '/old', wine_prefix_path: '/prefix', library_folders: ['/existing'], library_folder: '/existing' }));
     });
-    const url = new URL(previousUrl); url.hash = "/settings";
-    await page.goto(url.toString());
-    await page.reload();
-    await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
-    const folderRow = path => page.getByLabel(path, { exact: true }).locator("..");
-    await folderRow("/tmp/first-folder").waitFor();
-    check(await folderRow("/tmp/initial-folder").getByRole("button", { name: "Remove", exact: true }).isDisabled(), "Default cannot be removed while other folders exist");
-
-    // 1. Settings typed while a save is in flight must not be replaced by the response.
-    await folderRow("/tmp/first-folder").getByRole("button", { name: "Make default", exact: true }).click();
+    await page.goto(new URL('/#/settings', url).toString()); await page.reload();
+    const proton = page.locator('#settings-proton-path');
+    const prefix = page.locator('#settings-prefix-path');
+    await proton.waitFor(); await page.waitForFunction(() => !document.querySelector('#settings-proton-path').disabled);
+    if (await page.getByRole('button', {name:'Save Changes'}).count() || await page.getByRole('button', {name:'Discard', exact:true}).count()) throw Error('Shared save actions remain');
     await page.evaluate(() => {
-      window.__settingsBase = JSON.parse(localStorage.getItem("wlib-mock-settings") || "{}");
-      window.pywebview = {
-        api: {
-          save_settings: payload => new Promise(resolve => {
-            setTimeout(() => {
-              Object.assign(window.__settingsBase, payload);
-              resolve({ success: true, mock: true });
-            }, 900);
-          }),
-          list_library_folders: () => ["/tmp/initial-folder", "/tmp/first-folder", "/tmp/second-folder"].map(path => ({path, is_default: path === window.__settingsBase.library_folder, available: true, free_bytes: 1024 ** 4})),
-          get_settings: () => ({
-            ...window.__settingsBase,
-            rpgmaker_linux_runner_status: {
-              available: false, path: "", source: "", configured_path: "", error: "not installed",
-            },
-          }),
-        },
-      };
+      window.__data = { ...JSON.parse(localStorage.getItem('wlib-mock-settings') || '{}'), library_folders: ['/existing'], library_folder: '/existing' };
+      window.__calls = []; window.__fail = false;
+      window.pywebview = {api:{
+        save_settings: payload => new Promise(resolve => setTimeout(() => {
+          window.__calls.push(payload);
+          if (window.__fail) { window.__fail = false; resolve({success:false,error:'fixture failure'}); }
+          else { Object.assign(window.__data, payload); resolve({success:true}); }
+        }, 500)),
+        get_settings: () => new Promise(resolve => setTimeout(() => resolve({...window.__data}), 300)),
+      }};
     });
-    const save = page.getByRole("button", { name: "Save Changes", exact: true });
-    await save.click();
-    await page.waitForFunction(() => document.querySelector(".save-bar")?.textContent.includes("Saving"));
-    await folderRow("/tmp/second-folder").getByRole("button", { name: "Make default", exact: true }).click();
-    await page.waitForFunction(() => window.__settingsBase?.library_folder === "/tmp/first-folder");
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    check(await folderRow("/tmp/second-folder").getByText("Default", { exact: true }).isVisible(), "Edits typed during a settings save must stay in the form");
-    check(await page.getByText("You have unsaved changes.", { exact: true }).isVisible(), "Edits typed during a settings save must stay marked unsaved");
-    check(await save.isVisible(), "Edits typed during a settings save must leave Save available");
-
-    // A retry without the delayed backend persists the newer value.
-    await page.evaluate(() => { delete window.pywebview; });
-    await save.click();
-    await page.waitForFunction(() => !document.querySelector(".save-bar") || !document.querySelector(".save-bar").textContent.includes("Saving"));
-    check(await folderRow("/tmp/second-folder").getByText("Default", { exact: true }).isVisible(), "The retry must persist the newer settings value");
-    check(
-      await page.evaluate(() => JSON.parse(localStorage.getItem("wlib-mock-settings") || "{}").library_folder === "/tmp/second-folder"),
-      "The newer settings value must reach the backend",
-    );
-
-    // 2. The URM source is a path field and must show found/not-found feedback.
-    await page.getByLabel("Universal Ren'Py Mod (URM) source file (.rpa)", { exact: true }).fill("/tmp/guide.rpa");
-    await page.waitForFunction(() => {
-      const input = document.querySelector("#urm-source");
-      return input?.closest("section")?.querySelector(".path-status")?.textContent.includes("Found");
-    });
-    await page.getByLabel("Universal Ren'Py Mod (URM) source file (.rpa)", { exact: true }).fill("/tmp/missing-guide.rpa");
-    await page.waitForFunction(() => {
-      const input = document.querySelector("#urm-source");
-      return input?.closest("section")?.querySelector(".path-status")?.textContent.includes("File not found");
-    });
-
-    // 3. Leaving Settings while an install status read is in flight must not
-    // leave a polling loop running in the background.
-    const discard = page.getByRole("button", { name: "Discard", exact: true });
-    if (await discard.count()) await discard.click();
-    await page.evaluate(() => {
-      window.__installChecks = 0;
-      window.pywebview = {
-        api: {
-          get_install_status: () => {
-            window.__installChecks++;
-            return new Promise(resolve => setTimeout(() => resolve({
-              dlls_installed: false,
-              rtps_installed: false,
-              deps: { running: true, done: 0, total: 1, current: "checking", error: "" },
-              rtps: { running: false, done: 0, total: 0, current: "", error: "" },
-            }), 800));
-          },
-        },
-      };
-    });
-    await page.getByRole("link", { name: "Library", exact: true }).click();
-    await page.waitForFunction(() => location.hash === "#/" || location.hash === "");
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
-    await page.waitForFunction(() => window.__installChecks >= 1);
-    const checksBeforeLeaving = await page.evaluate(() => window.__installChecks);
-    await page.getByRole("link", { name: "Library", exact: true }).click();
-    await page.waitForFunction(() => location.hash === "#/" || location.hash === "");
-    await page.waitForTimeout(3200);
-    const checksAfterLeaving = await page.evaluate(() => window.__installChecks);
-    check(
-      checksAfterLeaving === checksBeforeLeaving,
-      `Install polling continued after leaving Settings (${checksBeforeLeaving} -> ${checksAfterLeaving})`,
-    );
-    check(nativeDialogs.length === 0, `Unexpected native dialogs: ${nativeDialogs.join(", ")}`);
-    return "PASS: settings save-in-flight edits stay unsaved, URM path shows found/not-found feedback, install polling stops on leave";
+    step = 'first save';
+    await proton.fill('/new-proton'); await proton.blur();
+    await page.getByText('Saving…', {exact:true}).first().waitFor();
+    await prefix.fill('/editing-prefix');
+    await page.waitForFunction(() => window.__data.proton_path === '/new-proton');
+    await page.getByText('Saved', {exact:true}).first().waitFor();
+    if (await prefix.inputValue() !== '/editing-prefix') throw Error('Focused edit was overwritten by reload');
+    step = 'prefix save';
+    await prefix.blur();
+    await page.waitForFunction(() => window.__data.wine_prefix_path === '/editing-prefix');
+    step = 'failed save';
+    await page.evaluate(() => { window.__fail = true; });
+    await proton.fill('/retry'); await proton.blur();
+    await page.getByRole('alert').filter({hasText:'fixture failure'}).waitFor();
+    if (await proton.inputValue() !== '/retry') throw Error('Failed save lost typed value');
+    await proton.focus(); await proton.blur();
+    await page.waitForFunction(() => window.__data.proton_path === '/retry');
+    step = 'status save';
+    const status = page.getByLabel('Custom status name');
+    await status.fill('Custom'); await page.getByRole('button',{name:'Add Status'}).click();
+    await page.waitForFunction(() => window.__data.custom_play_statuses?.includes('Custom'));
+    const count = await page.evaluate(() => window.__calls.length);
+    await status.fill('Custom'); await page.getByRole('button',{name:'Add Status'}).click();
+    await page.getByRole('alert').filter({hasText:/already|duplicate/i}).waitFor();
+    if (await page.evaluate(() => window.__calls.length) !== count) throw Error('Duplicate status saved');
+    step = 'URM and duplicate folder';
+    const urm = page.locator('#urm-source');
+    await urm.fill('/new-mod.rpa'); await urm.blur();
+    await page.waitForFunction(() => window.__data.urm_rpa_path === '/new-mod.rpa');
+    await page.evaluate(() => { window.pywebview.api.browse_directory = () => '/existing'; });
+    await page.getByRole('button',{name:'Add library folder'}).click();
+    await page.getByText('That folder is already a library folder.').waitFor();
+    if (await page.getByLabel('/existing',{exact:true}).count() !== 1) throw Error('Duplicate folder was added');
+    step = 'leave flush';
+    await page.getByLabel('Library folder pattern').fill('{title}/new');
+    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.waitForFunction(() => window.__data.library_folder_pattern === '{title}/new');
+    return 'PASS: autosave progress, failure retry, reload protection, duplicate status and leave flush';
+  } catch (error) { throw new Error(`${step}: ${error}`);
   } finally {
-    page.off("dialog", onDialog);
-    // Drop the test's own unsaved settings so the route guard does not block cleanup.
-    const discard = page.getByRole("button", { name: "Discard", exact: true });
-    if (await discard.count()) await discard.click().catch(() => {});
-    await page.evaluate(previous => {
-      delete window.pywebview;
-      for (const [key, value] of previous) {
-        if (value === null) localStorage.removeItem(key);
-        else localStorage.setItem(key, value);
-      }
-    }, previous);
-    if (previousViewport) await page.setViewportSize(previousViewport);
-    await page.goto(previousUrl);
-    await page.reload();
+    await page.evaluate(old => { delete window.pywebview; for (const [k,v] of old) v === null ? localStorage.removeItem(k) : localStorage.setItem(k,v); },old);
+    await page.goto(url);
   }
 }

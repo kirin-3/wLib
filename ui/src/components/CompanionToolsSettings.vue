@@ -1,15 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
-import { nextTick, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { IconAppWindow } from "@tabler/icons-vue";
 import { api, type CompanionTool, type CompanionToolInput } from "../services/api";
+
+const settingsRowVisible = useSettingsRowVisibility();
 
 const tools = ref<CompanionTool[]>([]);
 const draft = ref<CompanionToolInput | null>(null);
 const error = ref("");
 const busy = ref(false);
-const section = ref<HTMLElement | null>(null);
 const edit = (tool?: CompanionTool) => {
   error.value = "";
   draft.value = tool ? { ...tool } : { name: "", kind: "wine", path: "", arguments: "", show_on_all_games: true, sort_order: tools.value.length };
@@ -52,13 +54,11 @@ const browse = async () => {
 };
 onMounted(async () => {
   try { await load(); } catch (cause) { error.value = String(cause); }
-  await nextTick();
-  if (window.location.hash.endsWith("#custom-tools")) section.value?.scrollIntoView({ block: "start" });
 });
 </script>
 
 <template>
-  <section id="custom-tools" ref="section" class="settings-card companion-settings rounded-xl p-6 space-y-4" aria-labelledby="custom-tools-heading">
+  <section id="custom-tools" class="settings-card companion-settings rounded-xl p-6 space-y-4" aria-labelledby="custom-tools-heading">
     <div class="flex items-start justify-between gap-3">
       <div>
         <h3 id="custom-tools-heading" class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
@@ -69,8 +69,8 @@ onMounted(async () => {
       </div>
       <button type="button" class="tool-btn shrink-0" :disabled="busy" @click="edit()">Add tool</button>
     </div>
-    <p v-if="!tools.length" class="help text-sm">No custom tools yet.</p>
-    <ul class="space-y-2">
+    <p data-settings-row="custom-tools-static-0" data-settings-bound v-show="settingsRowVisible('custom-tools-static-0')" v-if="!tools.length" class="help text-sm">No custom tools yet.</p>
+    <ul data-settings-row="custom-tools-static-1" data-settings-bound v-show="settingsRowVisible('custom-tools-static-1')" class="space-y-2">
       <li v-for="tool in tools" :key="tool.id" class="tool-row flex items-center justify-between gap-3 rounded-lg p-3">
         <div class="min-w-0">
           <p class="font-medium break-words">{{ tool.name }} <span class="help text-xs capitalize">{{ tool.kind }}</span></p>
@@ -83,7 +83,7 @@ onMounted(async () => {
         </div>
       </li>
     </ul>
-    <form v-if="draft" class="tool-row rounded-lg p-4 space-y-3" @submit.prevent="save">
+    <form data-settings-row="custom-tools-static-2" data-settings-bound v-show="settingsRowVisible('custom-tools-static-2')" v-if="draft" class="tool-row rounded-lg p-4 space-y-3" @submit.prevent="save">
       <h4 class="font-medium">{{ draft.id ? 'Edit tool' : 'Add tool' }}</h4>
       <fieldset :disabled="busy" class="space-y-3">
         <label class="block text-sm">Name<input v-model="draft.name" class="tool-input mt-1 w-full" required /></label>
@@ -102,7 +102,7 @@ onMounted(async () => {
         <div class="flex gap-2"><button type="submit" class="tool-btn">{{ busy ? 'Saving…' : 'Save tool' }}</button><button type="button" class="tool-btn" @click="draft = null; error = ''">Cancel</button></div>
       </fieldset>
     </form>
-    <p v-if="error" role="alert" class="text-sm" style="color: var(--danger-text)">{{ error }}</p>
+    <p data-settings-row="custom-tools-static-3" data-settings-bound v-show="settingsRowVisible('custom-tools-static-3')" v-if="error" role="alert" class="text-sm" style="color: var(--danger-text)">{{ error }}</p>
   </section>
 </template>
 

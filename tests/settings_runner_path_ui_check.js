@@ -67,11 +67,12 @@ async (page) => {
       return input?.closest(".setting-row")?.querySelector(".path-status")?.textContent.includes("Command not found on PATH");
     }, null, { timeout: 3000 });
 
-    await runner.fill("");
-    return "PASS: the RPGMaker runner path field accepts a command name found on PATH";
+    await page.evaluate(() => { delete window.pywebview; });
+    await runner.fill("rpgmaker-linux");
+    await runner.blur();
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("wlib-mock-settings") || "{}").rpgmaker_linux_runner_path === "rpgmaker-linux");
+    return "PASS: the RPGMaker runner path accepts a command name and saves on blur";
   } finally {
-    const discard = page.getByRole("button", { name: "Discard", exact: true });
-    if (await discard.count()) await discard.click().catch(() => {});
     await page.evaluate(previous => {
       delete window.pywebview;
       for (const [key, value] of previous) {

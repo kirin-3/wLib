@@ -9,7 +9,7 @@ async (page) => {
   const errors = [];
   const onError = error => errors.push(String(error));
   page.on("pageerror", onError);
-  const open = () => page.getByRole("group", { name: "Journal fixture. Press Enter for details.", exact: true }).press("Enter");
+  const open = () => page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true }).press("Enter");
   const dialog = page.getByRole("dialog");
   const close = () => dialog.getByRole("button", { name: "Close", exact: true }).click();
   const panel = () => dialog.getByRole("tabpanel", { name: "Journal", exact: true });
@@ -74,9 +74,9 @@ async (page) => {
       check(await page.getByTitle("Open Journal fixture", { exact: true }).count() === 0, "Skipped game leaves the Updates view");
       await page.getByRole("link", { name: "Library", exact: true }).click();
       await page.getByRole("button", { name: "Updates available", exact: false }).click();
-      await page.getByRole("group", { name: "Journal fixture. Press Enter for details.", exact: true }).waitFor({ state: "hidden" });
+      await page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true }).waitFor({ state: "hidden" });
       await page.getByRole("button", { name: "All Games", exact: true }).click();
-      const card = page.getByRole("group", { name: "Journal fixture. Press Enter for details.", exact: true });
+      const card = page.getByRole("checkbox", { name: "Journal fixture. Press Enter for details.", exact: true });
       await card.press("Shift+F10");
       check(await page.getByRole("button", { name: "Mark as updated to 0.9", exact: true }).count() === 0, "Mark as updated is hidden while skipping");
       await page.getByRole("button", { name: "Stop skipping 0.9", exact: true }).click();
@@ -111,7 +111,7 @@ async (page) => {
       await dialog.getByRole("button", { name: "Stop", exact: true }).click();
       await panel().getByText("In progress", { exact: true }).waitFor({ state: "hidden" });
       await close();
-      await page.getByRole("group", { name: "Never played fixture. Press Enter for details.", exact: true }).press("Enter");
+      await page.getByRole("checkbox", { name: "Never played fixture. Press Enter for details.", exact: true }).press("Enter");
       await dialog.getByRole("tab", { name: "Journal", exact: true }).click();
       await panel().getByText("No sessions have been recorded yet.", { exact: false }).waitFor();
       await page.evaluate(() => {

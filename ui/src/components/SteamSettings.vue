@@ -1,8 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { onMounted, onUnmounted, ref } from "vue";
 import { api, type SteamMode, type SteamStatus } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
+
+const settingsRowVisible = useSettingsRowVisibility();
 
 const status = ref<SteamStatus | null>(null);
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -39,9 +42,9 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
 </script>
 
 <template>
-  <section class="settings-card rounded-xl p-6 space-y-4">
+  <section id="steam" class="settings-card rounded-xl p-6 space-y-4">
     <h3 class="text-lg font-semibold" style="color:var(--text-primary)">Steam</h3>
-    <p v-if="!status" class="text-sm" style="color:var(--text-secondary)">Checking Steam…</p>
+    <p data-settings-row="steam-static-0" data-settings-bound v-show="settingsRowVisible('steam-static-0')" v-if="!status" class="text-sm" style="color:var(--text-secondary)">Checking Steam…</p>
     <template v-else>
       <p v-if="!status.found" class="text-sm" style="color:var(--text-secondary)">
         {{ status.flatpak_steam ? "Flatpak Steam is not supported." : "Steam was not found." }}

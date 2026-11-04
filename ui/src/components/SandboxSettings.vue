@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { IconShieldLock } from '@tabler/icons-vue';
 import { api, onWebviewReady } from '../services/api';
 import type { SandboxStatus, SandboxInstallInfo } from '../services/api';
@@ -10,7 +10,8 @@ import { sandboxStatusMessage } from '../utils/sandbox';
 import { copyText } from '../utils/copyText';
 import { notify, notifyError } from '../utils/toast';
 
-const route = useRoute();
+const settingsRowVisible = useSettingsRowVisibility();
+
 const status = ref<SandboxStatus | null>(null);
 const info = ref<SandboxInstallInfo | null>(null);
 const platform = ref('unsupported');
@@ -77,9 +78,6 @@ const copyCommand = async () => {
   if (info.value && await copyText(info.value.command)) notify('Install command copied.', 'success');
   else notifyError('Could not copy the command.');
 };
-watch(() => route.hash, async hash => {
-  if (hash === '#sandbox') { await nextTick(); document.getElementById('sandbox')?.scrollIntoView({block:'start'}); }
-}, {immediate:true});
 onMounted(() => onWebviewReady(() => {
   void (async () => {
     try {
@@ -100,13 +98,13 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       <IconShieldLock class="ui-section-icon" />
       Sandbox
     </h3>
-    <div class="flex items-start justify-between gap-4">
+    <div data-settings-row="sandbox-static-0" data-settings-bound v-show="settingsRowVisible('sandbox-static-0')" class="flex items-start justify-between gap-4">
       <p class="text-sm" role="status">{{ statusText }}</p>
       <button class="sandbox-button" :disabled="installing" @click="recheck().catch(e => notifyError(String(e)))">Recheck</button>
     </div>
-    <p class="text-sm" style="color:var(--text-secondary)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
-    <p v-if="platform === 'linux'" class="text-sm" style="color:var(--text-secondary)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
-    <div v-if="status?.status === 'missing' && info" class="space-y-3">
+    <p data-settings-row="sandbox-static-1" data-settings-bound v-show="settingsRowVisible('sandbox-static-1')" class="text-sm" style="color:var(--text-secondary)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
+    <p data-settings-row="sandbox-static-2" data-settings-bound v-show="settingsRowVisible('sandbox-static-2')" v-if="platform === 'linux'" class="text-sm" style="color:var(--text-secondary)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
+    <div data-settings-row="sandbox-static-3" data-settings-bound v-show="settingsRowVisible('sandbox-static-3')" v-if="status?.status === 'missing' && info" class="space-y-3">
       <div v-if="info.command" class="flex flex-wrap items-center gap-2">
         <code class="text-sm break-all">{{ info.command }}</code>
         <button class="sandbox-button" @click="copyCommand">Copy</button>
@@ -117,9 +115,9 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
         <button v-if="info.download_url" class="sandbox-button" @click="api.openInBrowser(info.download_url)">Official download page</button>
       </div>
     </div>
-    <p v-if="installing" class="text-sm" role="status">Installing sandbox tool. Complete the system authentication prompt if one appears.</p>
-    <p v-if="error" class="text-sm" role="alert" style="color:var(--danger, #dc2626)">{{ error }}</p>
-    <div v-if="platform === 'windows'" class="space-y-2">
+    <p data-settings-row="sandbox-static-4" data-settings-bound v-show="settingsRowVisible('sandbox-static-4')" v-if="installing" class="text-sm" role="status">Installing sandbox tool. Complete the system authentication prompt if one appears.</p>
+    <p data-settings-row="sandbox-static-5" data-settings-bound v-show="settingsRowVisible('sandbox-static-5')" v-if="error" class="text-sm" role="alert" style="color:var(--danger, #dc2626)">{{ error }}</p>
+    <div data-settings-row="sandbox-static-6" data-settings-bound v-show="settingsRowVisible('sandbox-static-6')" v-if="platform === 'windows'" class="space-y-2">
       <p class="text-sm font-medium">Custom Sandboxie Start.exe</p>
       <div class="flex flex-wrap items-center gap-2">
         <code class="text-xs break-all">{{ customPath || 'Use the detected installation' }}</code>
@@ -127,11 +125,11 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
         <button v-if="customPath" class="sandbox-button" @click="savePath('')">Clear</button>
       </div>
     </div>
-    <label class="flex items-center justify-between gap-4 text-sm">
+    <label data-settings-row="sandbox-static-7" data-settings-bound v-show="settingsRowVisible('sandbox-static-7')" class="flex items-center justify-between gap-4 text-sm">
       <span>Sandbox new games</span>
       <input type="checkbox" role="switch" class="sandbox-switch" :checked="defaultEnabled" :disabled="busy" @change="saveDefault" />
     </label>
-    <div class="flex flex-wrap gap-2">
+    <div data-settings-row="sandbox-static-8" data-settings-bound v-show="settingsRowVisible('sandbox-static-8')" class="flex flex-wrap gap-2">
       <button class="sandbox-button" :disabled="busy" @click="setAll(true)">Enable for all games</button>
       <button class="sandbox-button" :disabled="busy" @click="setAll(false)">Disable for all games</button>
     </div>

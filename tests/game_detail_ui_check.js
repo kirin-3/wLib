@@ -46,7 +46,7 @@ async (page) => {
     });
     await page.goto(new URL("/#/", previousUrl).toString());
     await page.reload();
-    const open = title => page.getByRole("group", { name: `${title}. Press Enter for details.`, exact: true }).press("Enter");
+    const open = title => page.getByRole("checkbox", { name: `${title}. Press Enter for details.`, exact: true }).press("Enter");
     await open("Aurora");
     const dialog = page.getByRole("dialog");
     const save = dialog.getByRole("button", { name: "Save Changes", exact: true });
@@ -83,17 +83,13 @@ async (page) => {
     await page.getByText("Failed to save game: Simulated failure", { exact: true }).waitFor();
     check(await dialog.isVisible() && await save.isVisible(), "A failed explicit save must retain edits for retry");
     await dismissError("Failed to save game: Simulated failure");
-    await page.evaluate(() => {
-      window.gameDetailOriginalConfirm = window.confirm;
-      window.confirm = message => { window.gameDetailConfirmation = message; return false; };
-    });
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    check(await page.evaluate(() => window.gameDetailConfirmation === "Discard unsaved changes to this game?"), "Closing failed edits must request confirmation");
+    const confirmation = page.getByRole("dialog", { name: "Discard changes", exact: true });
+    await confirmation.getByText("Discard unsaved changes to this game?", { exact: true }).waitFor({ timeout: 5000 })
+      .catch(() => { throw new Error("Closing failed edits must request confirmation"); });
+    await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
     check(await dialog.isVisible(), "Failed immediate saves must be protected from accidental close");
     await page.evaluate(() => {
-      window.confirm = window.gameDetailOriginalConfirm;
-      delete window.gameDetailOriginalConfirm;
-      delete window.gameDetailConfirmation;
       delete window.pywebview;
     });
     await dialog.getByRole("button", { name: "Mark Favorite", exact: true }).click();

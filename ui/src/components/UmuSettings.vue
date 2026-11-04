@@ -1,12 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useSettingsRowVisibility } from "../utils/settingsVisibility";
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { IconBox } from '@tabler/icons-vue';
 import { api, onWebviewReady } from '../services/api';
 import type { UmuStatus, UmuJobStatus } from '../services/api';
 
-const route = useRoute();
+const settingsRowVisible = useSettingsRowVisibility();
+
 const umu = ref<UmuStatus>({});
 const download = ref<UmuJobStatus>({});
 const runtime = ref<UmuJobStatus>({});
@@ -43,9 +44,6 @@ const runtimeMessage = computed(() => {
   if (!runtime.value.error) return '';
   return prepareMessages[runtime.value.error_class || ''] || prepareMessages.other;
 });
-watch(() => route.hash, async hash => {
-  if (hash === '#umu') { await nextTick(); document.getElementById('umu')?.scrollIntoView({ block: 'start' }); }
-}, { immediate: true });
 onMounted(() => onWebviewReady(() => { void refresh(); }));
 onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
 </script>
@@ -56,23 +54,23 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       <IconBox class="ui-section-icon" />
       Proton (umu)
     </h3>
-    <p class="text-sm" style="color:var(--text-secondary)">
+    <p data-settings-row="umu-static-0" data-settings-bound v-show="settingsRowVisible('umu-static-0')" class="text-sm" style="color:var(--text-secondary)">
       {{ umu.path ? `${umu.source === 'system' ? 'System' : 'wLib download'}: ${umu.path}${umu.version ? ` (${umu.version})` : ''}` : 'umu-launcher is not installed.' }}
     </p>
-    <p v-if="umu.python3 === false" class="text-sm" role="alert">Python 3 is required on the host.</p>
-    <p class="text-sm" role="status">{{ runtime.runtime || 'Steam Linux Runtime' }}: {{ runtime.ready ? 'Ready' : 'Not prepared' }}</p>
-    <p class="text-xs" style="color:var(--text-secondary)">Prepare downloads the shared Steam Linux Runtime and any selected Proton build. Save a changed runner above first.</p>
-    <p v-if="download.running" class="text-sm" role="status">{{ download.stage }} — {{ bytes(download.done) }}<span v-if="download.total"> / {{ bytes(download.total) }}</span></p>
-    <p v-if="runtime.running" class="text-sm" role="status">{{ runtime.stage }} — {{ bytes(runtime.done) }} downloaded or installed</p>
-    <p v-if="error || download.error" class="text-sm" role="alert" style="color:var(--danger, #dc2626)">{{ error || download.error }}</p>
-    <div v-if="runtimeMessage" role="alert">
+    <p data-settings-row="umu-static-1" data-settings-bound v-show="settingsRowVisible('umu-static-1')" v-if="umu.python3 === false" class="text-sm" role="alert">Python 3 is required on the host.</p>
+    <p data-settings-row="umu-static-2" data-settings-bound v-show="settingsRowVisible('umu-static-2')" class="text-sm" role="status">{{ runtime.runtime || 'Steam Linux Runtime' }}: {{ runtime.ready ? 'Ready' : 'Not prepared' }}</p>
+    <p data-settings-row="umu-static-3" data-settings-bound v-show="settingsRowVisible('umu-static-3')" class="text-xs" style="color:var(--text-secondary)">Prepare downloads the shared Steam Linux Runtime and any selected Proton build. Choose the runner above first.</p>
+    <p data-settings-row="umu-static-4" data-settings-bound v-show="settingsRowVisible('umu-static-4')" v-if="download.running" class="text-sm" role="status">{{ download.stage }} — {{ bytes(download.done) }}<span v-if="download.total"> / {{ bytes(download.total) }}</span></p>
+    <p data-settings-row="umu-static-5" data-settings-bound v-show="settingsRowVisible('umu-static-5')" v-if="runtime.running" class="text-sm" role="status">{{ runtime.stage }} — {{ bytes(runtime.done) }} downloaded or installed</p>
+    <p data-settings-row="umu-static-6" data-settings-bound v-show="settingsRowVisible('umu-static-6')" v-if="error || download.error" class="text-sm" role="alert" style="color:var(--danger, #dc2626)">{{ error || download.error }}</p>
+    <div data-settings-row="umu-static-7" data-settings-bound v-show="settingsRowVisible('umu-static-7')" v-if="runtimeMessage" role="alert">
       <p class="text-sm" style="color:var(--danger, #dc2626)">{{ runtimeMessage }}</p>
       <details class="text-xs mt-1" style="color:var(--text-secondary)">
         <summary class="cursor-pointer">Details</summary>
         <pre class="umu-log">{{ runtime.error }}</pre>
       </details>
     </div>
-    <div class="flex flex-wrap gap-2">
+    <div data-settings-row="umu-static-8" data-settings-bound v-show="settingsRowVisible('umu-static-8')" class="flex flex-wrap gap-2">
       <button v-if="umu.source !== 'system'" class="umu-button" :disabled="download.running || runtime.running" @click="start(() => api.downloadUmu())">{{ download.running ? 'Downloading…' : 'Download umu' }}</button>
       <button class="umu-button" :disabled="!umu.path || runtime.running || download.running" @click="start(() => api.prepareUmuRuntime())">{{ runtime.ready ? 'Update runtime' : 'Prepare runtime' }}</button>
       <button v-if="runtime.running" class="umu-button" @click="start(() => api.cancelUmuRuntimePrepare())">Cancel</button>

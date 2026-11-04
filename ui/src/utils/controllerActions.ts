@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { onBeforeUnmount, type Ref } from "vue";
-import type { ControllerAction } from "./controllerInput.ts";
+import type { ControllerAction, Direction } from "./controllerInput.ts";
 import { modalStack } from "./modalKeyboard.ts";
 import { moveFocus, scopeRoot } from "./spatialFocus.ts";
 
 type NamedAction = "play" | "search" | "menu" | "prevTab" | "nextTab" | "pageUp" | "pageDown";
 export interface ControllerHint { button: string; label: string }
-export type ControllerHandlers = Partial<Record<NamedAction, () => void>> & { hints?: ControllerHint[] | (() => ControllerHint[]); back?: () => boolean };
+export type ControllerHandlers = Partial<Record<NamedAction, () => void>> & { hints?: ControllerHint[] | (() => ControllerHint[]); back?: () => boolean; move?: (direction: Direction) => boolean };
 export interface ControllerScope { scope: Ref<HTMLElement | null>; handlers: ControllerHandlers }
 const scopes: ControllerScope[] = [];
 export function chooseScope(entries: readonly ControllerScope[], active: Element | null, fallback: Element | null): ControllerScope | undefined {
@@ -39,7 +39,10 @@ export function dispatchController(action: ControllerAction, back: () => void): 
   const root = scopeRoot();
   const handler = action.type !== "move" && action.type !== "scroll" && action.type !== "activate" && action.type !== "back" ? chooseScope(scopes, active, root)?.handlers[action.type] : undefined;
   if (handler) { handler(); return; }
-  if (action.type === "move") { moveFocus(action.direction); return; }
+  if (action.type === "move") {
+    if (!chooseScope(scopes, active, root)?.handlers.move?.(action.direction)) moveFocus(action.direction);
+    return;
+  }
   if (action.type === "scroll") { scrollContainer(active).scrollBy({ left: action.x * 20, top: action.y * 20 }); return; }
   if (action.type === "activate") {
     if (active instanceof HTMLSelectElement) window.dispatchEvent(new CustomEvent("wlib-controller-select", { detail: active }));
