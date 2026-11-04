@@ -113,18 +113,22 @@ async (page) => {
     check(await tab("Launch").getAttribute("aria-selected") === "true", "ArrowRight must select Launch");
     check(await tab("Launch").evaluate(el => el === document.activeElement), "Keyboard tab changes must move focus");
     await page.keyboard.press("End");
-    check(await tab("Notes").getAttribute("aria-selected") === "true", "End must select the last tab");
+    check(await dialog.getByRole("tab").last().getAttribute("aria-selected") === "true", "End must select the last tab");
     await page.keyboard.press("Home");
     check(await tab("Overview").getAttribute("aria-selected") === "true", "Home must select the first tab");
     await page.keyboard.press("ArrowLeft");
-    check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowLeft must wrap to the last tab");
+    check(await dialog.getByRole("tab").last().getAttribute("aria-selected") === "true", "ArrowLeft must wrap to the last tab");
     const tabOrder = await dialog.getByRole("tab").allTextContents();
-    check(JSON.stringify(tabOrder) === JSON.stringify(["Overview", "Journal", "Launch", "Info", "Notes"]), "Tabs must include Journal after Overview");
+    check(JSON.stringify(tabOrder.slice(0, 5)) === JSON.stringify(["Overview", "Journal", "Launch", "Info", "Notes"]), "Tabs must include Journal after Overview");
     await tab("Info").focus();
     await page.keyboard.press("ArrowRight");
     check(await tab("Notes").getAttribute("aria-selected") === "true", "ArrowRight from Info must select Notes");
+    await dialog.getByRole("tab").last().focus();
     await page.keyboard.press("ArrowRight");
-    check(await tab("Overview").getAttribute("aria-selected") === "true", "ArrowRight from Notes must wrap to Overview");
+    check(await tab("Overview").getAttribute("aria-selected") === "true", "ArrowRight from the last tab must wrap to Overview");
+    const stableTabHeight = (await dialog.boundingBox()).height;
+    await tab("Notes").click();
+    check((await dialog.boundingBox()).height === stableTabHeight, "Modal height must remain stable across tabs");
     await tab("Launch").click();
     await dialog.getByLabel("Runtime Mode").waitFor();
     await dialog.getByText("Enable this if the game has unreadable text", { exact: false }).waitFor();
@@ -203,8 +207,8 @@ async (page) => {
 
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await open("Empty Thread");
-    check(await dialog.getByText("Screenshots load from the F95 thread.", { exact: false }).isVisible(), "Thread games without screenshots must show the empty-state hint");
-    check(await dialog.getByRole("button", { name: "Check thread now", exact: true }).isVisible(), "Empty state must offer a thread check");
+    await dialog.getByText("This thread has no screenshots.", { exact: true }).waitFor();
+    check(await dialog.getByText("This thread has no screenshots.", { exact: true }).isVisible(), "Catalog threads without screenshots must show the empty-state hint");
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await open("No Cover");
     check(await dialog.getByRole("img", { name: "No cover image" }).isVisible(), "Missing covers must have a fallback");

@@ -25,7 +25,7 @@ import {
   IconDownload,
   IconRefresh,
   IconStarFilled,
-  IconTrashX,
+  IconDots,
   IconX,
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
@@ -314,6 +314,33 @@ const collectionMembership = ref<string[]>([]);
 const newCollectionName = ref("");
 const collectionError = ref("");
 const collectionBusy = ref(false);
+const actionsOpen = ref(false);
+const collectionsOpen = ref(false);
+const actionsContainer = ref<HTMLElement | null>(null);
+const collectionsContainer = ref<HTMLElement | null>(null);
+const actionsButton = ref<HTMLButtonElement | null>(null);
+const collectionsButton = ref<HTMLButtonElement | null>(null);
+function closePopover(kind: "actions" | "collections", focus = true) {
+  if (kind === "actions") actionsOpen.value = false;
+  else collectionsOpen.value = false;
+  if (focus) void nextTick(() => (kind === "actions" ? actionsButton : collectionsButton).value?.focus());
+}
+function popoverKeydown(event: KeyboardEvent, kind: "actions" | "collections") {
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closePopover(kind); return; }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || event.target instanceof HTMLInputElement) return;
+  const root = kind === "actions" ? actionsContainer.value : collectionsContainer.value;
+  const items = [...(root?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]') || [])];
+  if (!items.length) return;
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+  event.preventDefault(); items[next]?.focus();
+}
+function togglePopover(kind: "actions" | "collections") {
+  const opening = kind === "actions" ? !actionsOpen.value : !collectionsOpen.value;
+  actionsOpen.value = kind === "actions" && opening;
+  collectionsOpen.value = kind === "collections" && opening;
+  if (opening) void nextTick(() => (kind === "actions" ? actionsContainer : collectionsContainer).value?.querySelector<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]')?.focus());
+}
 // Bumped when the modal closes so a late createCollection answer is dropped.
 let collectionRequestId = 0;
 
@@ -773,6 +800,8 @@ watch(
       attachingFile.value = false;
       removingAttachment.value = null;
       collectionRequestId++;
+      actionsOpen.value = false;
+      collectionsOpen.value = false;
       collectionOptions.value = [];
       newCollectionName.value = "";
       collectionError.value = "";
@@ -848,10 +877,11 @@ const selectEngine = (value: EngineOption) => {
 };
 
 const handleOutsideClick = (event: MouseEvent) => {
-  if (!engineMenuOpen.value) return;
   const target = event.target;
   if (!(target instanceof Node)) return;
-  if (!engineDropdownRef.value?.contains(target)) {
+  if (actionsOpen.value && !actionsContainer.value?.contains(target)) closePopover("actions");
+  if (collectionsOpen.value && !collectionsContainer.value?.contains(target)) closePopover("collections");
+  if (engineMenuOpen.value && !engineDropdownRef.value?.contains(target)) {
     engineMenuOpen.value = false;
   }
 };
@@ -905,6 +935,7 @@ const closeAndNavigate = async (hash: string) => {
 
 const modalRef = ref<HTMLElement | null>(null);
 useControllerActions(modalRef, {
+  back: () => { if (actionsOpen.value) { closePopover("actions"); return true; } if (collectionsOpen.value) { closePopover("collections"); return true; } return false; },
   play: () => launchGame(),
   prevTab: () => cycleControllerTab(-1),
   nextTab: () => cycleControllerTab(1),
@@ -1871,6 +1902,41 @@ const removeAttachment = async (name: string) => {
             </div>
           </div>
         </div>
+        <div class="collection-row">
+          <div class="collection-labels"><span v-for="name in collectionMembership" :key="name" class="collection-chip collection-chip-active">{{ name }}</span></div>
+          <div ref="collectionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'collections')">
+            <button ref="collectionsButton" type="button" class="collection-chip" aria-haspopup="menu" :aria-expanded="collectionsOpen" @click="togglePopover('collections')">+ Collection</button>
+            <div v-if="collectionsOpen" role="menu" aria-label="Collections" class="header-popover collection-popover">
+              <p v-if="!collectionOptions.length" class="text-xs" style="color: var(--text-muted)">No collections yet.</p>
+              <button v-for="name in collectionOptions" :key="name" type="button" role="menuitemcheckbox" :aria-checked="gameInCollection(name)" class="popover-item" @click="toggleModalCollection(name)">{{ gameInCollection(name) ? '✓ ' : '' }}{{ name }}</button>
+              <div class="flex gap-2 mt-2">
+                <input v-model="newCollectionName" aria-label="New collection name" type="text" placeholder="New collection" class="modal-input flex-1 min-w-0 !py-1.5 !text-xs" @keydown.enter.prevent="createModalCollection" />
+                <button class="modal-btn" :disabled="collectionBusy" @click="createModalCollection">Add</button>
+              </div>
+              <p v-if="collectionError" role="alert" class="text-xs mt-2" style="color: var(--danger-text)">{{ collectionError }}</p>
+            </div>
+          </div>
+          <div class="modal-toolbar-group modal-toolbar-group--end">
+            <button
+              @click="toggleFavorite"
+              class="modal-toolbar-action ui-action-btn"
+              :style="
+                isFavorite
+                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: var(--rating-accent)'
+                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
+              "
+            >
+              <IconStarFilled class="ui-action-icon" :style="isFavorite ? '' : 'opacity: 0.7'" />
+              {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
+            </button>
+            <div ref="actionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'actions')">
+              <button ref="actionsButton" type="button" class="modal-toolbar-action" aria-label="More actions" title="More actions" aria-haspopup="menu" :aria-expanded="actionsOpen" @click="togglePopover('actions')"><IconDots class="ui-action-icon" /></button>
+              <div v-if="actionsOpen" role="menu" aria-label="Game actions" class="header-popover actions-popover">
+                <button role="menuitem" class="popover-item" :disabled="deleting" @click="deleteGame">Remove from library</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
             <button v-if="hasUpdate || updateSkipped" @click="toggleSkippedVersion"
@@ -1911,21 +1977,6 @@ const removeAttachment = async (name: string) => {
             >
               <IconDownload class="ui-action-icon" />
               Install update
-            </button>
-          </div>
-
-          <div class="modal-toolbar-group modal-toolbar-group--end">
-            <button
-              @click="toggleFavorite"
-              class="modal-toolbar-action ui-action-btn"
-              :style="
-                isFavorite
-                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: var(--rating-accent)'
-                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
-              "
-            >
-              <IconStarFilled class="ui-action-icon" :style="isFavorite ? '' : 'opacity: 0.7'" />
-              {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
             </button>
           </div>
         </div>
@@ -2021,57 +2072,6 @@ const removeAttachment = async (name: string) => {
                 <component :is="s.icon" class="ui-status-icon" />
                 <span>{{ s.label }}</span>
               </button>
-            </div>
-          </div>
-
-          <div>
-            <h3 class="modal-label mb-3">Collections</h3>
-            <div>
-              <p
-                v-if="!collectionOptions.length"
-                class="text-xs mb-2"
-                style="color: var(--text-muted)"
-              >
-                No collections yet.
-              </p>
-              <div v-else class="flex flex-wrap gap-1.5 mb-2">
-                <button
-                  v-for="name in collectionOptions"
-                  :key="name"
-                  type="button"
-                  :aria-pressed="gameInCollection(name)"
-                  class="collection-chip"
-                  :class="{ 'collection-chip-active': gameInCollection(name) }"
-                  @click="toggleModalCollection(name)"
-                >
-                  {{ name }}
-                </button>
-              </div>
-              <div class="flex gap-2">
-                <input
-                  v-model="newCollectionName"
-                  aria-label="New collection name"
-                  type="text"
-                  placeholder="New collection"
-                  class="modal-input flex-1 !py-1.5 !text-xs"
-                  @keydown.enter.prevent="createModalCollection"
-                />
-                <button
-                  class="modal-btn"
-                  :disabled="collectionBusy"
-                  @click="createModalCollection"
-                >
-                  Add
-                </button>
-              </div>
-              <p
-                v-if="collectionError"
-                role="alert"
-                class="text-xs mt-2"
-                style="color: var(--danger-text)"
-              >
-                {{ collectionError }}
-              </p>
             </div>
           </div>
 
@@ -2179,10 +2179,9 @@ const removeAttachment = async (name: string) => {
               <span>Run in sandbox</span>
               <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(exePath, sandboxStatus).disabled" />
             </label>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }}</p>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }} <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
             <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
             <div class="flex flex-wrap gap-2">
-              <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="modal-btn" @click="closeAndNavigate('/settings#sandbox')">Open Sandbox settings</button>
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
             </div>
           </div>
@@ -2897,16 +2896,6 @@ const removeAttachment = async (name: string) => {
           {{ updateCheckState.message }}
         </p>
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex flex-wrap gap-2">
-            <button
-              @click="deleteGame"
-              :disabled="deleting"
-              class="footer-action ui-action-btn text-red-400"
-            >
-              <IconTrashX class="ui-action-icon" />
-              {{ deleting ? "Removing..." : "Remove" }}
-            </button>
-          </div>
           <div class="ml-auto flex flex-wrap items-center justify-end gap-3">
             <template v-if="hasUnsavedChanges">
               <span class="text-xs" style="color: var(--text-muted)">Unsaved changes</span>
@@ -2943,6 +2932,21 @@ const removeAttachment = async (name: string) => {
 </template>
 
 <style scoped>
+.collection-row { display: flex; align-items: center; gap: .375rem; margin-top: .75rem; }
+.collection-labels { display: flex; gap: .375rem; min-width: 0; overflow-x: auto; }
+.collection-labels:empty { display: none; }
+.collection-labels .collection-chip { flex-shrink: 0; }
+.collection-row > .header-popover-anchor,
+.collection-row > .modal-toolbar-group--end { flex-shrink: 0; }
+/* Favorite and More actions live in the collection row; hide the toolbar when no other action applies. */
+.detail-header .modal-toolbar:not(:has(button)) { display: none; }
+.header-popover-anchor { position: relative; }
+.header-popover { position: absolute; z-index: 30; top: calc(100% + .3rem); padding: .5rem; min-width: 14rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-surface); box-shadow: 0 6px 20px #0003; }
+.actions-popover { right: 0; }
+.collection-popover { left: 0; max-height: 16rem; overflow-y: auto; width: 17rem; }
+.popover-item { display: block; width: 100%; text-align: left; padding: .5rem; border-radius: .3rem; color: var(--text-primary); }
+.popover-item:hover, .popover-item:focus-visible { background: var(--bg-overlay); }
+
 .journal-panel {
   color: var(--text-primary);
 }

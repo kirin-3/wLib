@@ -38,7 +38,7 @@ async (page) => {
     await page.getByRole("button", { name: "Recently played", exact: true }).click();
     check(await page.getByRole("button", { name: "Last played", exact: true }).locator("..").getAttribute("aria-sort") === "descending", "Selecting Recently played should default to newest first");
     await page.getByRole("button", { name: "All Games", exact: true }).click();
-    await page.getByRole("button", { name: "Grid View", exact: true }).click();
+    await page.getByRole("button", { name: "Grid view", exact: true }).click();
     check(await page.getByRole("slider", { name: "Card size" }).count() === 1, "Card size must appear in grid view");
     await page.setViewportSize({ width: 2560, height: 1000 });
     const columns = [];
@@ -103,7 +103,7 @@ async (page) => {
     const cards = page.locator('[data-game-id]');
     await cards.first().waitFor();
     await page.evaluate(() => { window.__bulkLaunches = 0; window.pywebview = { api: { launch_game: async () => { window.__bulkLaunches++; return { success: true }; } } }; });
-    for (const layout of ['Grid View', 'Banner View', 'List View', 'Compact View']) {
+    for (const layout of ['Grid view', 'Banner view', 'List view', 'Compact view']) {
       await page.getByRole('button', {name: layout, exact: true}).click();
       await page.getByRole('button', {name: 'Select', exact: true}).click();
       await cards.first().click();
@@ -139,7 +139,8 @@ async (page) => {
     await page.getByRole('button', {name: 'Undo', exact: true}).last().click();
     await cards.first().waitFor();
     await cards.first().click();
-    await page.getByRole('dialog').getByRole('button', {name: 'Remove', exact: true}).click();
+    await page.getByRole('dialog').getByRole('button', {name: 'More actions', exact: true}).click();
+    await page.getByRole('dialog').getByRole('menuitem', {name: 'Remove from library', exact: true}).click();
     await page.reload();
     await cards.first().waitFor();
     check(JSON.parse(await page.evaluate(() => localStorage.getItem('wlib-mock-games'))).length === 3, 'Reload must keep pending removal');

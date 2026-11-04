@@ -101,8 +101,8 @@ async (page) => {
     const savedTitle = await secondTitle().inputValue();
     await secondTitle().fill("Aurora unsaved link");
     await secondTab("Launch").click();
-    await dialog.getByRole("button", { name: "Open Sandbox settings", exact: true }).waitFor();
-    await dialog.getByRole("button", { name: "Open Sandbox settings", exact: true }).click();
+    await dialog.getByRole("button", { name: "Set up", exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Set up", exact: true }).click();
     const confirmation = page.getByRole("dialog", { name: "Discard changes", exact: true });
     await confirmation.getByText("Discard unsaved changes to this game?", { exact: true }).waitFor();
     await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -110,8 +110,12 @@ async (page) => {
     check(!page.url().includes("/settings"), "Declining the discard prompt must not navigate away");
     await secondTab("Info").click();
     await secondTitle().fill(savedTitle);
-    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await secondTab("Launch").click();
+    await dialog.getByRole("button", { name: "Set up", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
+    await page.getByRole("heading", { name: "Sandbox", exact: true }).waitFor();
+    check(page.url().includes("/settings#sandbox"), "Set up must navigate to Sandbox settings");
+    await page.goto(new URL("/#/", previousUrl).toString());
 
     // 3. A failed collection save must keep the modal open for a retry.
     await page.evaluate(() => {
@@ -141,7 +145,8 @@ async (page) => {
       };
     });
     dialog = await openAurora();
-    const chip = dialog.getByRole("button", { name: "Race Collection", exact: true });
+    await dialog.getByRole("button", { name: "+ Collection", exact: true }).click();
+    const chip = dialog.getByRole("menuitemcheckbox", { name: "Race Collection", exact: true });
     await chip.waitFor();
     await chip.click();
     await dialog.getByRole("button", { name: "Save Changes", exact: true }).waitFor();

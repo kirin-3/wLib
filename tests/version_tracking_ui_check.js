@@ -50,13 +50,13 @@ async (page) => {
       await page.goto(new URL("/#/", previousUrl).toString());
       await page.reload();
       for (const layout of ["Grid", "List", "Compact"]) {
-        await page.getByTitle(`${layout} View`, { exact: true }).click();
+        await page.getByTitle(`${layout} view`, { exact: true }).click();
         await badges().waitFor();
         check(await badges().count() === 1, `${theme}/${layout}: only played installed games get an Unplayed badge`);
         check(await updatePills().count() === 1, `${theme}/${layout}: update indicator coexists with Unplayed`);
         check(await contrast(badges()) >= 4.5, `${theme}/${layout}: badge contrast must pass AA`);
       }
-      await page.getByTitle("Grid View", { exact: true }).click();
+      await page.getByTitle("Grid view", { exact: true }).click();
       await page.getByRole("button", { name: "Filters", exact: true }).click();
       await page.getByRole("button", { name: "Unplayed update", exact: true }).click();
       await page.reload();

@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { activeFilterChips as buildFilterChips, removeFilterValue, type FilterChip } from "../utils/libraryFilters";
 import { confirmAction } from "../utils/confirm";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import { libraryDisplayState } from "../utils/libraryGames";
@@ -388,8 +389,8 @@ const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "date_added", label: "Newest" },
   { key: "last_played", label: "Recent" },
   { key: "playtime_seconds", label: "Playtime" },
-  { key: "rating", label: "F95 ★" },
-  { key: "own_rating", label: "My ★" },
+  { key: "rating", label: "F95 rating" },
+  { key: "own_rating", label: "My rating" },
 ];
 
 const toggleFilter = (arr: string[], val: string) => {
@@ -454,6 +455,22 @@ const activeFilterCount = computed(
     (filterEngines.value.length > 0 ? 1 : 0) +
     (filterTags.value.length > 0 ? 1 : 0),
 );
+const activeFilterChips = computed(() => buildFilterChips({
+  statuses: filterStatuses.value, install: filterInstallState.value, sources: filterSources.value,
+  engines: filterEngines.value, tags: filterTags.value, collection: filterCollection.value,
+  statusLabels: Object.fromEntries(allStatuses.value.map(status => [status.value.toLowerCase(), status.label])),
+  sourceLabels: Object.fromEntries(LIBRARY_SOURCES.map(source => [source.key, source.label])),
+}));
+const removeFilterChip = (chip: FilterChip) => {
+  switch (chip.kind) {
+    case "status": filterStatuses.value = removeFilterValue(filterStatuses.value, chip.value); break;
+    case "install": filterInstallState.value = ""; break;
+    case "source": filterSources.value = removeFilterValue(filterSources.value, chip.value); break;
+    case "engine": filterEngines.value = removeFilterValue(filterEngines.value, chip.value); break;
+    case "tag": filterTags.value = removeFilterValue(filterTags.value, chip.value); break;
+    case "collection": filterCollection.value = "All"; break;
+  }
+};
 const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
@@ -2190,16 +2207,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <button
-            v-if="activeFilterCount > 0"
-            @click="clearFilters"
-            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm hover:text-red-400 border active:scale-95 active:bg-[var(--bg-overlay)]"
-            style="color: var(--text-muted); border-color: var(--border)"
-          >
-            <IconX class="ui-action-icon" />
-            Clear all
-          </button>
-
           <div class="ml-auto flex items-center gap-4">
             <span class="text-xs" style="color: var(--text-muted)"
               >{{ filteredGames.length }} game{{
@@ -2230,7 +2237,7 @@ onUnmounted(() => {
                     ? 'background: var(--bg-overlay); color: var(--text-primary)'
                     : 'color: var(--text-muted)'
                 "
-                title="Grid View"
+                title="Grid view" aria-label="Grid view" :aria-pressed="layoutMode === 'grid'"
               >
                 <IconColumns2Filled class="ui-action-icon" />
               </button>
@@ -2242,7 +2249,7 @@ onUnmounted(() => {
                     ? 'background: var(--bg-overlay); color: var(--text-primary)'
                     : 'color: var(--text-muted)'
                 "
-                title="List View"
+                title="List view" aria-label="List view" :aria-pressed="layoutMode === 'list'"
               >
                 <IconLayoutListFilled class="ui-action-icon" />
               </button>
@@ -2254,7 +2261,7 @@ onUnmounted(() => {
                     ? 'background: var(--bg-overlay); color: var(--text-primary)'
                     : 'color: var(--text-muted)'
                 "
-                title="Compact View"
+                title="Compact view" aria-label="Compact view" :aria-pressed="layoutMode === 'compact'"
               >
                 <IconLayoutGridFilled class="ui-action-icon opacity-90" />
               </button>
@@ -2266,13 +2273,18 @@ onUnmounted(() => {
                     ? 'background: var(--bg-overlay); color: var(--text-primary)'
                     : 'color: var(--text-muted)'
                 "
-                title="Banner View"
+                title="Banner view" aria-label="Banner view" :aria-pressed="layoutMode === 'banner'"
               >
                 <IconPanoramaHorizontalFilled class="ui-action-icon" />
               </button>
             </div>
           </div>
         </div>
+      </div>
+
+      <div v-if="activeFilterChips.length" class="flex flex-wrap items-center gap-2 px-6 pb-3" role="group" aria-label="Active filters">
+        <button v-for="chip in activeFilterChips" :key="chip.key" class="ui-action-btn ui-hover-surface px-3 py-1 rounded-full text-xs" style="color: var(--text-primary); border: 1px solid var(--border); background: var(--bg-raised)" :aria-label="`Remove filter ${chip.label}`" @click="removeFilterChip(chip)">{{ chip.label }} <span aria-hidden="true">×</span></button>
+        <button class="ui-action-btn px-3 py-1 text-xs hover:text-red-400" style="color: var(--text-muted)" @click="clearFilters">Clear all</button>
       </div>
 
       <div v-if="displayState === 'error'" class="empty-state flex-1" role="alert">

@@ -18,7 +18,7 @@ test('resolved status shows storage details or the unavailable note', () => {
     assert.deepEqual(sandboxSwitchState('/game/Game.exe', status), {
       disabled: false,
       needsSettings: true,
-      note: 'The sandbox tool is unavailable. Check Settings → Sandbox before launching.',
+      note: 'Sandbox tool not installed',
     });
   }
 });
