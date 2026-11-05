@@ -13,7 +13,7 @@ Snapshot from 2026-11-03
 | Has ads? | ❌ | ✅ | ❌ | ❌ |
 | RAM usage (idle, Windows)* | ~125 MB | ~379 MB | ~281 MB | Not tested |
 | Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
-| Packaging | AppImage, Flatpak, Nix, Windows | AppImage, Windows, macOS | deb, pacman, AppImage, Windows | deb, rpm, AUR, Nix, portable, Windows zip |
+| Packaging | AppImage, deb, rpm, AUR, tar.gz, Flatpak, Nix, Windows | AppImage, Windows, macOS | deb, pacman, AppImage, Windows | deb, rpm, AUR, Nix, portable, Windows zip |
 
 \* Tested on a fresh Windows 11 VM with empty libraries, using wLib 0.4.4, xLibrary 3.11.4 and Atlas 0.9.14.
 
