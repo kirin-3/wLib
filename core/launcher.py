@@ -32,6 +32,7 @@ from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
     host_command,
+    host_system_layout,
     host_which,
     is_windows,
     open_windows_system_target,
@@ -1257,6 +1258,7 @@ class Launcher:
                     game_sandbox.check_writable_mounts(
                         (sandbox_game_dir, mount_prefix), user_home
                     )
+                    host_nixos, host_links = host_system_layout()
                     cmd = game_sandbox.build_bwrap_argv(
                         cmd,
                         game_dir=sandbox_game_dir,
@@ -1266,7 +1268,8 @@ class Launcher:
                         prefix=mount_prefix,
                         readonly_paths=readonly,
                         environment=env_vars,
-                        nixos=os.path.isdir("/nix/store"),
+                        nixos=host_nixos,
+                        system_links=host_links,
                         bwrap=sandbox_status["path"],
                         umu_data=umu_data,
                         umu_runtime=umu_runtime,

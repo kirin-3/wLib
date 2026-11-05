@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 import os
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1208,9 +1209,15 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     detail = json.dumps({"error": str(payload.get("error") or "Launch failed")})
                     _ = active_window.evaluate_js(f"window.dispatchEvent(new CustomEvent('wlib-launch-error', {{detail: {detail}}}))")
                 runner_ok = True
+                runner_status = 200
             except (ValueError, TypeError, OSError):
                 runner_ok = False
-            self.send_response(200 if runner_ok else 400)
+                runner_status = 400
+            except Exception:
+                logging.getLogger(__name__).exception("Runner event failed")
+                runner_ok = False
+                runner_status = 500
+            self.send_response(runner_status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             _ = self.wfile.write(json.dumps({"success": runner_ok}).encode())

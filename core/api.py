@@ -1548,6 +1548,8 @@ class Api:
     def set_game_cover_file(
         self, game_id: object = None, path: object = ""
     ) -> dict[str, object]:
+        import sqlite3
+
         from core.game_covers import set_cover
 
         coerced_id = self._coerce_db_id(game_id)
@@ -1566,7 +1568,7 @@ class Api:
             if game is not None:
                 self._add_local_cover_url(game)
             return {"success": True, "game": game}
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
 
     def choose_game_cover(self, game_id: object = None) -> dict[str, object]:
@@ -1597,6 +1599,8 @@ class Api:
             return {"success": False, "error": str(exc)}
 
     def clear_game_cover(self, game_id: object = None) -> dict[str, object]:
+        import sqlite3
+
         from core.game_covers import clear_cover
 
         coerced_id = self._coerce_db_id(game_id)
@@ -1610,7 +1614,7 @@ class Api:
             clear_cover(coerced_id)
             self._schedule_steam_sync()
             return {"success": True, "game": database.get_game(coerced_id)}
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
 
     # ==========================
@@ -2320,6 +2324,16 @@ class Api:
                 delete_cover_file(previous_game.get("cover_local"))
         except Exception as exc:
             print(f"[wLib] Failed to remove cover for game {coerced_id}: {exc}")
+        try:
+            import shutil
+
+            from core.game_saves import game_backup_dir
+
+            backup_dir = game_backup_dir(self._save_backups_root(), coerced_id)
+            if os.path.isdir(backup_dir) and not os.path.islink(backup_dir):
+                shutil.rmtree(backup_dir)
+        except Exception as exc:
+            print(f"[wLib] Failed to remove save backups for game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -3468,12 +3482,10 @@ class Api:
                         or any(not result["error"] for result in self._update_results)
                     )
                 if postpone_next_check:
-                    from datetime import datetime
-
                     from core.database import update_setting
 
                     try:
-                        update_setting("last_update_check", datetime.now().isoformat())
+                        update_setting("last_update_check", database.local_now_iso())
                     except Exception as e:
                         print(f"[wLib] Failed to update last_update_check setting: {e}")
                 if completed:
@@ -3680,6 +3692,8 @@ class Api:
         else:
             try:
                 last_check = datetime.fromisoformat(last_check_str)
+                if last_check.tzinfo is not None:
+                    last_check = last_check.astimezone().replace(tzinfo=None)
                 if freq == "weekly" and now - last_check > timedelta(weeks=1):
                     should_check = True
                 elif freq == "monthly" and now - last_check > timedelta(days=30):
@@ -4255,6 +4269,7 @@ class Api:
         from core.game_tools import GameToolError, detect_engine
         from core.archive_install import ArchiveSafetyError
         from zipfile import BadZipFile
+        from http.client import HTTPException
 
         game = self._tool_game(game_id)
         if game is None:
@@ -4270,7 +4285,7 @@ class Api:
                     self._tool_progress(coerced_id),
                     self._tool_cancelled(coerced_id),
                 )
-        except (GameToolError, ArchiveSafetyError, BadZipFile, ValueError, OSError, sqlite3.Error) as exc:
+        except (GameToolError, ArchiveSafetyError, BadZipFile, HTTPException, ValueError, OSError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True, **result}
 

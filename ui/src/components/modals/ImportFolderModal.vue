@@ -23,6 +23,8 @@ const selectedGames = computed(() =>
 );
 
 const resetState = () => {
+  scanToken++;
+  scanning.value = false;
   folder.value = "";
   games.value = [];
   selected.value = new Set();
@@ -47,16 +49,21 @@ const close = () => {
 const modalRef = ref<HTMLElement | null>(null);
 useModalKeyboard(modalRef, () => props.modelValue, close);
 
+// A newer scan (another folder picked mid-scan) replaces the older one.
+let scanToken = 0;
+
 const scan = async () => {
   const path = folder.value.trim();
-  if (!path || scanning.value) return;
+  if (!path) return;
+  const token = ++scanToken;
+  const current = () => token === scanToken && props.modelValue;
   scanning.value = true;
   games.value = [];
   selected.value = new Set();
   scanned.value = false;
   try {
     const result = await api.scanGamesFolder(path);
-    if (!props.modelValue || folder.value.trim() !== path) return;
+    if (!current()) return;
     if (!result?.success) {
       notifyError(`Could not scan folder: ${result?.error || "Unknown error"}`);
       return;
@@ -65,10 +72,10 @@ const scan = async () => {
     selected.value = new Set(newGames.value.map((game) => game.exe_path));
     scanned.value = true;
   } catch (e) {
-    if (!props.modelValue || folder.value.trim() !== path) return;
+    if (!current()) return;
     notifyError(`Could not scan folder: ${String(e)}`);
   } finally {
-    scanning.value = false;
+    if (token === scanToken) scanning.value = false;
   }
 };
 

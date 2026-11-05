@@ -152,6 +152,14 @@ def _run_paced_f95_request[T](
                 _f95_last_foreground_finished = _f95_last_request_finished
 
 
+def _decode_body(body: bytes, charset: str | None) -> str:
+    """Decode a response, falling back to UTF-8 for an unknown charset."""
+    try:
+        return body.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        return body.decode("utf-8", errors="replace")
+
+
 def _urllib_f95_get(url: str) -> tuple[int, str]:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
@@ -159,14 +167,14 @@ def _urllib_f95_get(url: str) -> tuple[int, str]:
             HTTPResponse,
             urlopen(request, timeout=30, context=ssl.create_default_context()),
         ) as response:
-            encoding = response.headers.get_content_charset() or "utf-8"
-            return response.status, response.read().decode(
-                encoding, errors="replace"
+            return response.status, _decode_body(
+                response.read(), response.headers.get_content_charset()
             )
     except HTTPError as exc:
         with exc:
-            encoding = exc.headers.get_content_charset() or "utf-8"
-            return exc.code, exc.read().decode(encoding, errors="replace")
+            return exc.code, _decode_body(
+                exc.read(), exc.headers.get_content_charset()
+            )
     except (TimeoutError, socket.timeout) as exc:
         raise _F95RequestError(
             "navigation_timeout", "F95Zone request timed out"
@@ -223,7 +231,7 @@ def _xenforo_signed_in(html: str) -> bool | None:
 
 def _attribute(opening: str, name: str) -> str:
     match = re.search(
-        rf"\b{re.escape(name)}\s*=\s*([\"'])(.*?)\1", opening, re.S | re.I
+        rf"(?<![\w:-]){re.escape(name)}\s*=\s*([\"'])(.*?)\1", opening, re.S | re.I
     )
     return unescape(match.group(2)) if match else ""
 
@@ -274,7 +282,10 @@ class _StoreHeaderParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.links: dict[tuple[str, str], StoreLink] = {}
+        # Spoilers are skipped by counting only their own tag, so an unclosed
+        # inline tag inside one cannot hide the rest of the post.
         self._hidden_depth: int = 0
+        self._hidden_tag: str = ""
         self._text: str = ""
         self._bold_depth: int = 0
         self._bold_text: str = ""
@@ -296,7 +307,7 @@ class _StoreHeaderParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
         if self._hidden_depth:
-            if tag not in self._VOID:
+            if tag == self._hidden_tag:
                 self._hidden_depth += 1
             return
         classes = (attributes.get("class") or "").split()
@@ -305,7 +316,9 @@ class _StoreHeaderParser(HTMLParser):
             for name in classes
         ):
             self._finish_line()
-            self._hidden_depth = 1
+            if tag not in self._VOID:
+                self._hidden_depth = 1
+                self._hidden_tag = tag
             return
         if tag in {"br", "div", "p", "hr"}:
             self._finish_line()
@@ -325,7 +338,7 @@ class _StoreHeaderParser(HTMLParser):
     @override
     def handle_endtag(self, tag: str) -> None:
         if self._hidden_depth:
-            if tag not in self._VOID:
+            if tag == self._hidden_tag:
                 self._hidden_depth -= 1
             return
         if tag in {"b", "strong"} and self._bold_depth:
@@ -781,7 +794,7 @@ class Scraper:
             "screenshots": screenshots,
             "store_links": _StoreHeaderParser().collect(wrapper),
             "thread_main_post_last_edit_at": last_edit,
-            "thread_main_post_checked_at": datetime.now().isoformat(),
+            "thread_main_post_checked_at": datetime.now().astimezone().isoformat(),
         }
 
     def _starter_hides_attachments(self, html: str) -> bool:

@@ -456,9 +456,12 @@ const loadJournal = async () => {
     if (requestId === journalRequestId) loadingJournal.value = false;
   }
 };
+// Synced sessions can carry other time zones' offsets, so compare moments.
+const sessionTime = (session: PlaySession) => Date.parse(session.started_at) || 0;
+const newestFirst = (a: PlaySession, b: PlaySession) => sessionTime(b) - sessionTime(a) || b.id - a.id;
 const journalGroups = computed(() => {
   const groups = new Map<string, { version: string; sessions: PlaySession[]; duration: number; lastPlayed: string }>();
-  const newest = [...sessions.value].sort((a, b) => b.started_at.localeCompare(a.started_at) || b.id - a.id);
+  const newest = [...sessions.value].sort((a, b) => newestFirst(a, b));
   for (const session of newest) {
     const key = normalizeVersion(session.version);
     let group = groups.get(key);
@@ -475,7 +478,7 @@ const beforeJournal = computed(() => Math.max(0,
   (props.game?.playtime_seconds || 0) - sessions.value.reduce((sum, session) => sum + session.duration_seconds, 0),
 ));
 const newestSessionId = computed(() => [...sessions.value]
-  .sort((a, b) => b.started_at.localeCompare(a.started_at) || b.id - a.id)[0]?.id);
+  .sort((a, b) => newestFirst(a, b))[0]?.id);
 const journalDuration = (seconds: number) => {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor(seconds % 3600 / 60);

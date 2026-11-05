@@ -131,6 +131,24 @@ class LaunchTarget(TypedDict):
     updated_at: str
 
 
+def local_now_iso() -> str:
+    """Local time with its UTC offset, so synced times read the same anywhere."""
+    return datetime.now().astimezone().isoformat()
+
+
+def with_local_offset(value: object) -> object:
+    """Add this device's offset to a stored time written without one."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if moment.tzinfo is not None:
+        return value
+    return moment.astimezone().isoformat()
+
+
 def _normalize_status_key(value: object) -> str:
     return str(value or "").strip().lower()
 
@@ -691,7 +709,7 @@ def add_game(
     if sandbox_enabled is None:
         sandbox_enabled = bool(_coerce_bool_int(get_setting("sandbox_new_games")))
 
-    now_iso = datetime.now().isoformat()
+    now_iso = local_now_iso()
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -801,7 +819,7 @@ def replace_game_links(
         if (source, identity) not in keep:
             _ = conn.execute(
                 "INSERT INTO game_links (game_id, source, external_id, url, origin, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (game_id, source, identity, url, origin, datetime.now().isoformat()),
+                (game_id, source, identity, url, origin, local_now_iso()),
             )
 
 
@@ -889,7 +907,7 @@ def add_game_launch_target(
 ) -> LaunchTarget:
     target_label = _normalize_launch_target_label(label)
     target_path = _normalize_launch_target_path(exe_path)
-    now_iso = datetime.now().isoformat()
+    now_iso = local_now_iso()
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -932,7 +950,7 @@ def update_game_launch_target(
     if not safe_fields:
         return get_game_launch_target(target_id)
 
-    safe_fields["updated_at"] = datetime.now().isoformat()
+    safe_fields["updated_at"] = local_now_iso()
     set_clause = ", ".join([f"{key} = ?" for key in safe_fields.keys()])
     values = tuple(safe_fields.values()) + (target_id,)
 
@@ -975,7 +993,7 @@ def reorder_game_launch_targets(
     if set(normalized_ids) != existing_ids:
         raise ValueError("Launch target order must include all targets for the game")
 
-    now_iso = datetime.now().isoformat()
+    now_iso = local_now_iso()
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
         for sort_order, target_id in enumerate(normalized_ids):
@@ -1320,7 +1338,7 @@ def update_playtime(game_id: int, delta_seconds: int) -> None:
 
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
-        now_iso = datetime.now().isoformat()
+        now_iso = local_now_iso()
         _ = cursor.execute(
             "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
             (clamped_delta, now_iso, game_id),
@@ -1332,7 +1350,7 @@ def start_play_session(game_id: int, version: str) -> int:
     with closing(get_connection()) as conn:
         cursor = conn.execute(
             "INSERT INTO play_sessions (game_id, version, started_at) VALUES (?, ?, ?)",
-            (game_id, version, datetime.now().isoformat()),
+            (game_id, version, local_now_iso()),
         )
         session_id = int(str(cursor.lastrowid))
         conn.commit()
@@ -1357,10 +1375,10 @@ def record_play_tick(game_id: int, session_id: int, delta: int, is_final: bool) 
             # counting playtime so the rest of the run is not lost.
             _ = conn.execute(
                 "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
-                (clamped_delta, datetime.now().isoformat(), game_id),
+                (clamped_delta, local_now_iso(), game_id),
             )
         elif session["ended_at"] is None or not is_final:
-            now = datetime.now().isoformat()
+            now = local_now_iso()
             _ = conn.execute(
                 "UPDATE games SET playtime_seconds = COALESCE(playtime_seconds, 0) + ?, last_played = ? WHERE id = ?",
                 (clamped_delta, now, game_id),
@@ -2011,7 +2029,7 @@ def get_companion_tool(tool_id: int) -> CompanionTool | None:
 def save_companion_tool(fields: Mapping[str, object]) -> CompanionTool:
     tool = normalize_companion_tool(fields)
     tool_id = fields.get("id")
-    now = datetime.now().isoformat()
+    now = local_now_iso()
     with closing(get_connection()) as conn:
         try:
             if tool_id is None:

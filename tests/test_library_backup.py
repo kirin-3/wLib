@@ -3204,3 +3204,26 @@ def test_sync_fallback_match_does_not_merge_into_uid_claimed_game():
     games = {game["sync_uid"]: game for game in get_all_games()}
     assert games[uid]["f95_url"] == "https://f95zone.to/threads/game-x.123/"
     assert games["b" * 32]["f95_url"] == ""
+
+
+def test_export_adds_time_zone_to_old_local_times():
+    from datetime import datetime
+
+    from core.database import with_local_offset
+
+    game_id = add_game(title="Zoned", exe_path="/tmp/zoned/game.sh")
+    assert game_id is not None
+    conn = get_connection()
+    _ = conn.execute(
+        "UPDATE games SET last_played = ?, date_added = ? WHERE id = ?",
+        ("2026-01-02T03:04:05", "2026-01-02T03:04:05+09:00", game_id),
+    )
+    conn.commit()
+    conn.close()
+    backup = build_library_backup({"sections": ["user_state", "launch_targets"]})
+    state = cast(dict[str, object], cast(list[dict[str, object]], backup["games"])[0]["user_state"])
+    last_played = datetime.fromisoformat(str(state["last_played"]))
+    assert last_played.tzinfo is not None
+    assert last_played == datetime(2026, 1, 2, 3, 4, 5).astimezone()
+    assert state["date_added"] == "2026-01-02T03:04:05+09:00"
+    assert with_local_offset("") == "" and with_local_offset(None) is None

@@ -924,10 +924,12 @@ class SyncManager:
         return elapsed >= 30 or elapsed < 0
 
     def run(
-        self, choice: str | None = None, *, push_only: bool = False
+        self, choice: str | None = None, *, push_only: bool = False, wait: bool = False
     ) -> dict[str, object]:
         # The worker was already reported as "syncing", so it must wait its turn.
-        if not self._lock.acquire(blocking=threading.current_thread() is self._worker):
+        if not self._lock.acquire(
+            blocking=wait or threading.current_thread() is self._worker
+        ):
             return self.status()
         self._first_revision = None
         try:
@@ -1345,10 +1347,13 @@ class SyncManager:
             return
 
         def final_push() -> None:
-            with self._lock:
-                pass
+            # Wait for a running sync, then queue on the lock instead of
+            # skipping the push if another run grabs it first.
+            worker = self._worker
+            if worker is not None and worker.is_alive():
+                worker.join()
             if self.local_changed():
-                _ = self.run(push_only=True)
+                _ = self.run(push_only=True, wait=True)
 
         final = threading.Thread(target=final_push, daemon=True)
         final.start()

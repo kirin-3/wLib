@@ -363,3 +363,15 @@ def test_backup_of_users_own_bepinex_survives_later_installs(tmp_path):
     assert not (tmp_path / "winhttp.dll").exists()
     restore(str(tmp_path))
     assert (core / "BepInEx.Core.dll").read_text() == "users own"
+
+
+def test_list_versions_survives_cut_off_response():
+    from http.client import IncompleteRead
+
+    from core.unity_tools import list_versions
+
+    def fetcher(_url):
+        raise IncompleteRead(b"[")
+
+    builds, warnings = list_versions("x64", "mono", fetcher)
+    assert builds == [] and len(warnings) == 2

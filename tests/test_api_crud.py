@@ -604,3 +604,40 @@ def test_mod_tool_refused_while_archive_update_runs(tmp_path):
     assert api._archive_install_game_id is None
     with api._tool_run(7, "extract"):
         pass
+
+
+def test_delete_game_removes_its_save_backups(tmp_path, monkeypatch):
+    root = tmp_path / "save-backups"
+    monkeypatch.setattr(Api, "_save_backups_root", staticmethod(lambda: str(root)))
+    api = Api()
+    game_id = add_game(title="Game", exe_path="game.exe")
+    other_id = add_game(title="Other", exe_path="other.exe")
+    (root / str(game_id) / "20260101-000000").mkdir(parents=True)
+    (root / str(other_id)).mkdir()
+    assert api.delete_game(game_id)["success"] is True
+    assert not (root / str(game_id)).exists()
+    assert (root / str(other_id)).is_dir()
+
+
+def test_cover_change_reports_locked_database(tmp_path, monkeypatch):
+    import sqlite3
+
+    api = Api()
+    game_id = add_game(title="Game", exe_path="game.exe")
+
+    def locked(*_args):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("core.game_covers.copy_cover_file", lambda _path: "x.png")
+    monkeypatch.setattr("core.database.set_game_local_cover", locked)
+    monkeypatch.setattr("core.database.clear_game_local_cover", locked)
+    image = tmp_path / "cover.png"
+    image.write_bytes(b"x")
+    assert api.set_game_cover_file(game_id, str(image)) == {
+        "success": False,
+        "error": "database is locked",
+    }
+    assert api.clear_game_cover(game_id) == {
+        "success": False,
+        "error": "database is locked",
+    }

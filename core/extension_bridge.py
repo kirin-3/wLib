@@ -69,6 +69,11 @@ class BridgeConnection:
         with self._send_lock:
             fn(message)
 
+    def send_locked(self, send: Callable[[], None]) -> None:
+        """Run a raw frame write under the same lock as text messages."""
+        with self._send_lock:
+            send()
+
     def note_hello(
         self, protocol: object, can_fetch: object, extension_version: object = "",
         can_resolve: object = False
@@ -442,7 +447,7 @@ def serve_bridge_connection(
                 kind, payload = extension_ws.recv_message(rfile, state)
             except extension_ws.MessageTooLarge:
                 try:
-                    _send_raw(wfile, extension_ws.encode_server_close(1009))
+                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_close(1009)))
                 except (OSError, ValueError):
                     pass
                 break
@@ -450,15 +455,17 @@ def serve_bridge_connection(
                 break
             if kind == "close":
                 try:
-                    _send_raw(
-                        wfile, extension_ws.encode_server_close(1000)
+                    conn.send_locked(
+                        lambda: _send_raw(
+                            wfile, extension_ws.encode_server_close(1000)
+                        )
                     )
                 except (OSError, ValueError):
                     pass
                 break
             if kind == "ping":
                 try:
-                    _send_raw(wfile, extension_ws.encode_server_pong(payload))
+                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_pong(payload)))
                 except (OSError, ValueError):
                     break
                 continue

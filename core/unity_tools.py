@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 from pathlib import Path
 
 _UNITY_VERSION = re.compile(rb"\b(\d{1,4}\.\d+\.\d+)[abfpx]\d+\b")
@@ -215,7 +215,7 @@ def list_versions(arch: str, backend: str, fetcher: Callable[[str], object] | No
                                    "url": item.get("browser_download_url", ""), "file_name": name,
                                    "sha256": digest[7:] if digest.startswith("sha256:") else "",
                                    "date": release.get("published_at") or ""})
-    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+    except (OSError, HTTPException, ValueError, TypeError, AttributeError, KeyError) as exc:
         warnings.append(f"Could not load GitHub releases: {exc}")
     try:
         raw_feed = fetcher(BLEEDING_EDGE)
@@ -236,7 +236,7 @@ def list_versions(arch: str, backend: str, fetcher: Callable[[str], object] | No
                 builds.append({"id": version, "major": major, "backend": backend, "channel": "be",
                                "url": f"https://builds.bepinex.dev/projects/bepinex_be/{quote(str(feed['id']), safe='')}/{quote(name, safe='')}",
                                "file_name": name, "sha256": "", "date": feed.get("date") or ""})
-    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+    except (OSError, HTTPException, ValueError, TypeError, AttributeError, KeyError) as exc:
         warnings.append(f"Could not load bleeding-edge builds: {exc}")
     return builds, warnings
 

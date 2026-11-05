@@ -8,6 +8,7 @@ import glob
 import os
 import shlex
 import subprocess
+from collections.abc import Mapping
 from threading import Lock
 from typing import Literal, TypedDict, cast
 from http.client import HTTPResponse
@@ -196,7 +197,8 @@ _WINE_SERVICE_PATTERN = "|".join(
     (
         "wineserver",
         "wine-preloader",
-        "wine64-preloader",
+        # /proc comm holds 15 characters, so "wine64-preloader" reads as this.
+        "wine64-preloade",
         "services.exe",
         "winedevice.exe",
         "plugplay.exe",
@@ -253,6 +255,7 @@ def build_bwrap_argv(
     readonly_paths: tuple[str, ...] = (),
     environment: dict[str, str] | None = None,
     nixos: bool = False,
+    system_links: Mapping[str, str] | None = None,
     bwrap: str = "bwrap",
     umu_data: str = "",
     umu_runtime: str = "",
@@ -298,12 +301,16 @@ def build_bwrap_argv(
     for path in system:
         # Merged-/usr hosts link /lib to usr/lib; a bind would break the
         # relative ../lib32 target of 32-bit loaders.
-        if (
-            not nixos
-            and path in ("/bin", "/sbin", "/lib", "/lib64", "/lib32")
-            and os.path.islink(path)
-        ):
-            argv += ["--symlink", os.readlink(path), path]
+        if nixos or path not in ("/bin", "/sbin", "/lib", "/lib64", "/lib32"):
+            argv += ["--ro-bind-try", path, path]
+            continue
+        # system_links is the host's view when running inside Flatpak.
+        if system_links is not None:
+            target = system_links.get(path)
+        else:
+            target = os.readlink(path) if os.path.islink(path) else None
+        if target:
+            argv += ["--symlink", target, path]
         else:
             argv += ["--ro-bind-try", path, path]
     argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"]

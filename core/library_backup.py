@@ -410,6 +410,19 @@ def _get_settings_payload(keys: Sequence[str]) -> dict[str, str]:
     return {key: values.get(key, "") for key in keys}
 
 
+
+# Older rows store local time without an offset; export them with this
+# device's offset so another time zone reads the same moment.
+_TIME_FIELDS = ("last_played", "date_added", "created_at", "updated_at", "started_at", "ended_at")
+
+
+def _zone_times(record: dict[str, object]) -> dict[str, object]:
+    for field in _TIME_FIELDS:
+        if field in record:
+            record[field] = database.with_local_offset(record[field])
+    return record
+
+
 def build_library_backup(
     options: Mapping[str, object] | None = None,
     *,
@@ -429,9 +442,9 @@ def build_library_backup(
         if sync_uid:
             exported_game["uid"] = sync_uid
         if SECTION_USER_STATE in sections:
-            user_state = _pick_fields(game, USER_STATE_FIELDS)
+            user_state = _zone_times(_pick_fields(game, USER_STATE_FIELDS))
             user_state["play_sessions"] = [
-                _pick_fields(session, PLAY_SESSION_FIELDS)
+                _zone_times(_pick_fields(session, PLAY_SESSION_FIELDS))
                 for session in sessions_by_game.get(int(str(game["id"])), [])
             ]
             exported_game[SECTION_USER_STATE] = user_state
@@ -450,7 +463,7 @@ def build_library_backup(
         if SECTION_LAUNCH_TARGETS in sections:
             targets = _coerce_sequence(game.get("launch_targets"))
             exported_game[SECTION_LAUNCH_TARGETS] = [
-                _pick_fields(_coerce_mapping(target), LAUNCH_TARGET_FIELDS)
+                _zone_times(_pick_fields(_coerce_mapping(target), LAUNCH_TARGET_FIELDS))
                 for target in targets
             ]
         games.append(exported_game)
@@ -458,7 +471,7 @@ def build_library_backup(
     backup: dict[str, object] = {
         "format": BACKUP_FORMAT,
         "format_version": BACKUP_FORMAT_VERSION,
-        "exported_at": datetime.now().isoformat(),
+        "exported_at": database.local_now_iso(),
         "app": {"name": "wLib", "version": app_version},
         "selected_sections": sorted(sections),
         "games": games,
@@ -474,7 +487,7 @@ def build_library_backup(
         paths["library_folders"] = folders
         paths["library_folder"] = default
         paths["companion_tools"] = [
-            {key: value for key, value in tool.items() if key != "id"}
+            _zone_times({key: value for key, value in tool.items() if key != "id"})
             for tool in database.list_companion_tools()
         ]
         settings["paths"] = paths
@@ -1361,7 +1374,7 @@ def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:
     _ = insert_fields.setdefault("exe_path", "")
     _ = insert_fields.setdefault("f95_url", "")
     _ = insert_fields.setdefault("play_status", DEFAULT_PLAY_STATUS)
-    _ = insert_fields.setdefault("date_added", datetime.now().isoformat())
+    _ = insert_fields.setdefault("date_added", database.local_now_iso())
     _ = insert_fields.setdefault(
         "sandbox_enabled", _coerce_bool(get_setting("sandbox_new_games"))
     )
@@ -1422,9 +1435,9 @@ def _normalize_launch_target(raw_target: object) -> dict[str, object] | None:
         "exe_path": exe_path,
         "sort_order": _coerce_non_negative_int(target.get("sort_order")),
         "created_at": _coerce_text(target.get("created_at")).strip()
-        or datetime.now().isoformat(),
+        or database.local_now_iso(),
         "updated_at": _coerce_text(target.get("updated_at")).strip()
-        or datetime.now().isoformat(),
+        or database.local_now_iso(),
     }
 
 
@@ -1553,7 +1566,7 @@ def _import_companion_tools(
         )
         if row is not None and merge_mode == "fill_missing":
             continue
-        now = datetime.now().isoformat()
+        now = database.local_now_iso()
         if row is None:
             _ = cursor.execute(
                 "INSERT INTO companion_tools (name, kind, path, arguments, show_on_all_games, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

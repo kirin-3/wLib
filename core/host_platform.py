@@ -262,6 +262,50 @@ def host_which(name: str) -> str | None:
     return path
 
 
+_SYSTEM_LINK_PATHS = ("/bin", "/sbin", "/lib", "/lib64", "/lib32")
+
+
+def host_system_layout() -> tuple[bool, dict[str, str]]:
+    """Return (is NixOS, merged-/usr symlinks) as the host sees them.
+
+    Inside Flatpak the sandbox's own /lib and /nix say nothing about the host
+    that bubblewrap runs on, so ask the host instead.
+    """
+    if not is_flatpak():
+        links: dict[str, str] = {}
+        for path in _SYSTEM_LINK_PATHS:
+            try:
+                if os.path.islink(path):
+                    links[path] = os.readlink(path)
+            except OSError:
+                continue
+        return os.path.isdir("/nix/store"), links
+    script = (
+        '[ -d /nix/store ] && echo nix; '
+        'for p in "$@"; do [ -L "$p" ] && printf "link %s %s\\n" "$p" "$(readlink "$p")"; done'
+    )
+    try:
+        completed = subprocess.run(
+            [*_FLATPAK_SPAWN, "sh", "-c", script, "sh", *_SYSTEM_LINK_PATHS],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, {}
+    nixos = False
+    host_links: dict[str, str] = {}
+    for line in (completed.stdout or "").splitlines():
+        parts = line.strip().split(" ", 2)
+        if parts == ["nix"]:
+            nixos = True
+        elif len(parts) == 3 and parts[0] == "link" and parts[1] in _SYSTEM_LINK_PATHS and parts[2]:
+            host_links[parts[1]] = parts[2]
+    return nixos, host_links
+
+
 def host_command(
     cmd: Sequence[str],
     env: Mapping[str, str] | None = None,

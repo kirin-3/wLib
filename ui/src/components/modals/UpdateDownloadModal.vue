@@ -27,7 +27,7 @@ useModalKeyboard(modal,()=>!!game.value,close);
 async function load() {
   if (!game.value) return;
   const current = ++generation;
-  loading.value = true; error.value = ''; builds.value = []; chosenBuild.value = null; chosenMirror.value = null;
+  loading.value = true; error.value = ''; version.value = ''; builds.value = []; chosenBuild.value = null; chosenMirror.value = null;
   try {
     const [response, capabilities] = await Promise.all([api.getUpdateDownloadLinks(game.value.id),loadPlatformCapabilities()]);
     if (current !== generation) return;
@@ -53,8 +53,11 @@ async function start() {
 }
 async function openBrowser() {
   if (!game.value || !chosenMirror.value) return;
-  const response = await api.openUpdateDownloadInBrowser(game.value.id,chosenMirror.value.link_id);
-  if (!response.success) error.value=response.error || 'Could not open browser';
+  error.value='';
+  try {
+    const response = await api.openUpdateDownloadInBrowser(game.value.id,chosenMirror.value.link_id);
+    if (!response.success) error.value=response.error || 'Could not open browser';
+  } catch (e) { error.value=String(e instanceof Error ? e.message : e) || 'Could not open browser'; }
 }
 const canDownload = computed(()=>!!chosenMirror.value && !!chosenBuild.value && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
 const percent = computed(()=>job.value?.total ? Math.min(100,Math.round(job.value.bytes / job.value.total * 100)) : null);

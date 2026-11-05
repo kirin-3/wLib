@@ -1540,3 +1540,23 @@ def test_single_check_still_tries_its_page_after_checker_timeout(
     result = Scraper().get_thread_version("https://f95zone.to/threads/1/")
     assert result["version"] == "1.10"
     assert get.call_count == 2
+
+
+def test_unknown_charset_falls_back_to_utf8():
+    assert scraper_module._decode_body("café".encode(), "x-no-such-charset") == "café"
+
+
+def test_src_lookup_ignores_data_src():
+    opening = '<img data-src="https://a/full.jpg" src="https://a/thumb.jpg">'
+    assert scraper_module._attribute(opening, "src") == "https://a/thumb.jpg"
+    assert scraper_module._attribute(opening, "data-src") == "https://a/full.jpg"
+    assert scraper_module._attribute('<img data-src="https://a/x.jpg">', "src") == ""
+
+
+def test_unclosed_tag_in_spoiler_keeps_later_store_links():
+    html = (
+        '<div class="bbCodeSpoiler"><div>hidden <b>unclosed</div></div>'
+        "<div><b>Store</b>: <a href=\"https://store.steampowered.com/app/123/\">Steam</a></div>"
+    )
+    links = scraper_module._StoreHeaderParser().collect(html)
+    assert [(link["source"], link["id"]) for link in links] == [("steam", "123")]

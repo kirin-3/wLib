@@ -612,6 +612,32 @@ def test_exit_push_only_changes_and_off():
     assert location.writes == 1
 
 
+
+def test_exit_push_waits_for_a_run_holding_the_lock():
+    import threading
+
+    location = MemoryLocation()
+    sync = manager(location)
+    database.add_game("Local", "/local.exe")
+    # A sync run grabs the lock just before the final push; the push must
+    # queue behind it instead of being skipped.
+    changed = sync.local_changed
+    grabbed = threading.Event()
+
+    def other_run():
+        with sync._lock:
+            grabbed.set()
+            time.sleep(0.2)
+
+    def local_changed():
+        threading.Thread(target=other_run, daemon=True).start()
+        grabbed.wait(5)
+        return changed()
+
+    sync.local_changed = local_changed
+    sync.finish()
+    assert location.writes == 1
+
 def test_push_only_never_pulls_first_or_remote_changes():
     location = MemoryLocation(remote_backup())
     sync = manager(location)

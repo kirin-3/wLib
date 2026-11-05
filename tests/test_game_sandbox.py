@@ -605,3 +605,34 @@ def test_sandboxie_network_setting(monkeypatch, tmp_path):
     call.reset_mock()
     sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", False)
     assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", ""] for args in call.call_args_list)
+
+
+def test_bwrap_uses_host_system_links_when_given(monkeypatch):
+    # Flatpak's own /lib must not decide the host's mounts.
+    monkeypatch.setattr(sandbox.os.path, "islink", lambda _p: True)
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir="/games",
+        home="/home/u",
+        sandbox_home="/s",
+        cwd="/games",
+        system_links={"/lib": "usr/lib"},
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    assert ["--symlink", "usr/lib", "/lib"] in triples
+    assert ["--ro-bind-try", "/lib64", "/lib64"] in triples
+
+
+def test_flatpak_host_layout_is_read_from_the_host(monkeypatch):
+    from core import host_platform
+
+    monkeypatch.setattr(host_platform, "is_flatpak", lambda: True)
+    completed = subprocess.CompletedProcess([], 0, stdout="nix\nlink /bin usr/bin\n", stderr="")
+    run = Mock(return_value=completed)
+    monkeypatch.setattr(host_platform.subprocess, "run", run)
+    assert host_platform.host_system_layout() == (True, {"/bin": "usr/bin"})
+    assert "flatpak-spawn" in run.call_args.args[0]
+
+
+def test_wine_service_names_fit_proc_comm():
+    assert all(len(name) <= 15 for name in sandbox._WINE_SERVICE_PATTERN.split("|"))
