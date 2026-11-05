@@ -635,7 +635,7 @@ onUnmounted(() => {
         >
           <div class="min-w-0 flex-1">
             <p v-if="toast.title" class="text-sm font-semibold">{{ toast.title }}</p>
-            <p class="copyable-feedback text-xs leading-5" :class="toast.title ? 'mt-1' : ''">
+            <p class="copyable-feedback max-h-60 overflow-y-auto pr-1 text-xs leading-5" :class="toast.title ? 'mt-1' : ''">
               {{ toast.message }}
             </p>
             <button v-if="toast.undo" :data-undo-id="toast.id" class="toast-action mt-2 px-3 py-1.5 rounded-lg text-xs font-bold" @click="runUndo(toast.id)">Undo</button>

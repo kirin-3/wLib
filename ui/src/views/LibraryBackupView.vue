@@ -710,7 +710,7 @@ const runImport = async () => {
               {{ importWarnings.length }} warning{{ importWarnings.length === 1 ? '' : 's' }}
             </strong>
             <ul>
-              <li v-for="(warning, index) in importWarnings.slice(0, 4)" :key="index">
+              <li v-for="(warning, index) in importWarnings" :key="index">
                 {{ warning.message }}
               </li>
             </ul>
@@ -847,7 +847,7 @@ const runImport = async () => {
               {{ externalWarnings.length }} warning{{ externalWarnings.length === 1 ? '' : 's' }}
             </strong>
             <ul>
-              <li v-for="(warning, index) in externalWarnings.slice(0, 4)" :key="index">
+              <li v-for="(warning, index) in externalWarnings" :key="index">
                 {{ warning.message }}
               </li>
             </ul>
@@ -1133,7 +1133,21 @@ const runImport = async () => {
 
 .backup-warnings ul {
   margin: 0.5rem 0 0;
-  padding-left: 1rem;
+  padding: 0 0.5rem 0 1.25rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.backup-warnings li {
+  padding: 0.3rem 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+}
+
+.backup-warnings li:last-child {
+  border-bottom: 0;
 }
 
 .backup-warnings {

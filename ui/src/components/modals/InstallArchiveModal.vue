@@ -586,7 +586,7 @@ watch(phase, (next, prev) => {
             <input v-model="removeOld" type="checkbox" :disabled="!removable || phase === 'installing'" class="mt-1" />
             <span>
               Remove old version
-              <span class="block text-xs font-mono" style="color: var(--text-muted)">{{ oldFolder }}</span>
+              <span class="block text-xs font-mono break-all" style="color: var(--text-muted)">{{ oldFolder }}</span>
               <span v-if="!removable && removeReason" class="block text-xs" style="color: var(--warning-text)">
                 Kept automatically: {{ removeReason }}
               </span>
