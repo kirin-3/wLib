@@ -71,6 +71,7 @@ import SteamSettings from "../components/SteamSettings.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
+const URM_PAGE_URL = "https://0x52.dev/mods/Universal-Ren-Py-Mod-1000";
 
 const protonPath = ref("");
 const availableRunners = ref<RunnerInfo[]>([]);
@@ -576,16 +577,18 @@ const browseRpgmakerLinuxRunner = async () => {
   }
 };
 
-const openRpgmakerLinuxRepo = async () => {
+const openExternalPage = async (url: string) => {
   try {
-    const result = await api.openInBrowser(RPGMAKER_LINUX_REPO_URL);
+    const result = await api.openInBrowser(url);
     if (result && result.success === false) {
-      window.open(RPGMAKER_LINUX_REPO_URL, "_blank", "noopener");
+      window.open(url, "_blank", "noopener");
     }
   } catch (_error) {
-    window.open(RPGMAKER_LINUX_REPO_URL, "_blank", "noopener");
+    window.open(url, "_blank", "noopener");
   }
 };
+const openRpgmakerLinuxRepo = () => openExternalPage(RPGMAKER_LINUX_REPO_URL);
+const openUrmPage = () => openExternalPage(URM_PAGE_URL);
 
 const stopProtonDownloadPolling = () => {
   if (protonDownloadTimer) clearInterval(protonDownloadTimer);
@@ -2037,9 +2040,19 @@ const browseUrm = async () => {
           Ren'Py
         </h3>
         <div data-settings-row="renpy-static-0" data-settings-bound v-show="settingsRowVisible('renpy-static-0')" class="space-y-3">
-        <label for="urm-source" class="block text-sm font-medium" style="color: var(--text-secondary)">
-          Universal Ren'Py Mod (URM) source file (.rpa)
-        </label>
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <label for="urm-source" class="block text-sm font-medium" style="color: var(--text-secondary)">
+              Universal Ren'Py Mod (URM) source file (.rpa)
+            </label>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Download URM from its official page on 0x52.dev.
+            </p>
+          </div>
+          <button type="button" @click="openUrmPage" class="settings-btn ui-action-btn shrink-0">
+            Open official page
+          </button>
+        </div>
         <div class="flex gap-3">
           <input
             id="urm-source"
