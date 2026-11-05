@@ -270,6 +270,24 @@ def test_mirror_keeps_ambiguous_manual_games():
     assert len(get_all_games()) == 2
 
 
+def test_sync_keeps_ambiguous_remote_game_as_its_own_entry():
+    add_game("Duplicate", "/one.exe")
+    add_game("Duplicate", "/two.exe")
+    uid = "ab" * 16
+    result = apply_library_backup(
+        base_backup([{"uid": uid, "metadata": {"title": "Duplicate"}}]),
+        {"sections": SYNC_SECTIONS},
+        mirror=True,
+        sync=True,
+    )
+    assert result["ambiguous"] == 1
+    assert result["deleted"] == 0
+    games = get_all_games()
+    assert len(games) == 3
+    # The remote game now has its own row, so the next push keeps it.
+    assert [g for g in games if g.get("sync_uid") == uid]
+
+
 @pytest.fixture(autouse=True)
 def setup_test_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test_wlib_backup.db"

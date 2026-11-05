@@ -110,6 +110,32 @@ def test_custom_command_keeps_user_wine_variables(monkeypatch):
     assert env["STEAM_COMPAT_DATA_PATH"] == "/my/compat"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX prefix paths")
+def test_wine_mode_uses_wineprefix_from_launch_arguments(monkeypatch):
+    monkeypatch.delenv("WINEPREFIX", raising=False)
+    with (
+        patch("os.path.exists", side_effect=lambda path: path == "/opt/game/game.exe"),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch("core.launcher.get_setting", return_value="/settings/prefix"),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        launcher = Launcher()
+        result = launcher.launch(
+            "/opt/game/game.exe",
+            "WINEPREFIX=/typed/prefix %command%",
+            custom_prefix="/game/prefix",
+            game_id=3,
+            launch_mode="wine_proton",
+        )
+    assert result["success"] is True, result
+    assert popen.call_args.kwargs["env"]["WINEPREFIX"] == "/typed/prefix"
+    from core.game_sandbox import normalize_prefix
+
+    assert launcher._running[3].prefix == normalize_prefix("/typed/prefix")
+
+
 def test_user_dll_overrides_come_after_defaults(monkeypatch):
     # Wine keeps the last entry per DLL, so the user's value must come last to win.
     monkeypatch.delenv("WINEDLLOVERRIDES", raising=False)
@@ -253,6 +279,50 @@ def test_stop_skips_wineserver_kill_while_prefix_is_shared(monkeypatch):
         del launcher._running[1]
         assert launcher.stop(2)["success"]
         assert run.call_args.args[0] == ["/usr/bin/wineserver", "-k"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_stop_spares_shared_wineserver_and_ignores_it_for_liveness(tmp_path):
+    import shutil
+    import subprocess as sp
+
+    from core.launcher import _wine_group_pids
+
+    sleep = shutil.which("sleep")
+    assert sleep
+    for name in ("wineserver", "Game.exe"):
+        (tmp_path / name).symlink_to(sleep)
+    # One process group: the game plus the prefix's wineserver it started.
+    group = sp.Popen(
+        ["sh", "-c", f'"{tmp_path}/wineserver" 30 & exec "{tmp_path}/Game.exe" 30'],
+        start_new_session=True,
+    )
+    try:
+        for _ in range(100):
+            members = _wine_group_pids(group.pid)
+            if members and members[1] and members[0]:
+                break
+            time.sleep(0.02)
+        assert members is not None
+        game_pids, background = members
+        assert game_pids == [group.pid] and len(background) == 1
+
+        launcher = Launcher()
+        kill_info = ("/usr/bin/wineserver", {"WINEPREFIX": "/prefix"})
+        launcher._running[1] = RunningGame(group, kill_info, host_native=False)
+        launcher._running[2] = RunningGame(MagicMock(pid=1), kill_info, host_native=False)
+        with patch("subprocess.run") as run, patch("threading.Thread"):
+            assert launcher.stop(1)["success"]
+        run.assert_not_called()
+        _ = group.wait(timeout=5)
+        time.sleep(0.05)
+        # The game is gone; the shared wineserver keeps running.
+        assert _wine_group_pids(group.pid) == ([], background)
+    finally:
+        try:
+            os.killpg(group.pid, 9)
+        except ProcessLookupError:
+            pass
 
 
 def test_wine_paths_expand_home_like_installers(monkeypatch):

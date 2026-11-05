@@ -880,7 +880,7 @@ class SyncManager:
         if result["ambiguous"]:
             database.update_setting(
                 "sync_last_error",
-                "Some games matched more than one local game and were left unchanged.",
+                "Some games matched more than one local game. They were kept as separate games; remove the duplicates you don't need.",
             )
         if self._on_pull is not None:
             self._on_pull()
@@ -1021,7 +1021,7 @@ class SyncManager:
                 if result["ambiguous"]:
                     database.update_setting(
                         "sync_last_error",
-                        "Some games matched more than one local game and were left unchanged.",
+                        "Some games matched more than one local game. They were kept as separate games; remove the duplicates you don't need.",
                     )
             elif choice == "use-local" or (
                 choice is None and local_games and not remote_games

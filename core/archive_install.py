@@ -1359,6 +1359,14 @@ def install_archive(
             raise ArchiveInstallError(
                 f"The destination folder already exists: {destination}. Change the version or destination."
             )
+        if old_root and dest_real == old_real and os.path.lexists(destination):
+            # An in-place update renames the whole folder aside, which would
+            # break any other library game stored inside it.
+            for other in other_game_paths(game_id):
+                if other and _is_within(_real(other), dest_real):
+                    raise ArchiveInstallError(
+                        f"{destination} also contains another library game. Change the destination pattern so the update goes to a new folder."
+                    )
         guard: dict[str, object] = (
             can_remove_old_folder(
                 old_install,
@@ -1574,8 +1582,18 @@ def install_archive(
                         except (OSError, ValueError):
                             unmoved.append(dict(before))
                 # Only unresolved targets block cleanup. In-place updates retain
-                # their old backup when a target was absent from the new tree.
-                remaining = unmoved if old_backup else updated_targets + unmoved
+                # their old backup when a target was absent from the new tree,
+                # including targets outside the executable's folder that
+                # relocation leaves as they were.
+                remaining = (
+                    [
+                        t
+                        for t in updated_targets
+                        if not os.path.isfile(str(t.get("exe_path") or ""))
+                    ]
+                    if old_backup
+                    else updated_targets + unmoved
+                )
                 inside = next(
                     (
                         t

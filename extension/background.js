@@ -406,7 +406,7 @@ async function bridgeTabFetch(url, maxBytes, timeoutMs) {
 }
 
 // Returns null when no F95 tab can run the fetch.
-async function bridgeFetchViaTab(url) {
+async function bridgeFetchViaTab(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
     if (!isBridgeUrlAllowed(url)) {
         return { ok: false, error: "refused" };
     }
@@ -422,7 +422,7 @@ async function bridgeFetchViaTab(url) {
         const injected = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: bridgeTabFetch,
-            args: [url, BRIDGE_MAX_BODY_BYTES, BRIDGE_FETCH_TIMEOUT_MS],
+            args: [url, BRIDGE_MAX_BODY_BYTES, timeoutMs],
         });
         const result = injected && injected[0] ? injected[0].result : null;
         return result && typeof result.ok === "boolean" ? result : null;
@@ -432,18 +432,31 @@ async function bridgeFetchViaTab(url) {
     }
 }
 
+// Smallest budget worth starting a second attempt with.
+const BRIDGE_MIN_ATTEMPT_MS = 2000;
+
+// All attempts share one BRIDGE_FETCH_TIMEOUT_MS budget, so the answer
+// arrives before the app stops waiting and starts its next F95 request.
 async function bridgeFetchPreferringLogin(url) {
+    const deadline = Date.now() + BRIDGE_FETCH_TIMEOUT_MS;
+    const remaining = () => deadline - Date.now();
     if (bridgePreferTabFetch) {
-        const viaTab = await bridgeFetchViaTab(url);
+        const viaTab = await bridgeFetchViaTab(url, remaining());
         if (viaTab) {
             return viaTab;
         }
+        if (remaining() < BRIDGE_MIN_ATTEMPT_MS) {
+            return { ok: false, error: "timeout" };
+        }
     }
-    const fetched = await bridgeFetchUrl(url);
+    const fetched = await bridgeFetchUrl(url, remaining());
     if (bridgePreferTabFetch || !fetched.ok || !bridgeNeedsBrowserSession(fetched.body)) {
         return fetched;
     }
-    const viaTab = await bridgeFetchViaTab(url);
+    if (remaining() < BRIDGE_MIN_ATTEMPT_MS) {
+        return fetched;
+    }
+    const viaTab = await bridgeFetchViaTab(url, remaining());
     if (!viaTab || !viaTab.ok) {
         return fetched;
     }

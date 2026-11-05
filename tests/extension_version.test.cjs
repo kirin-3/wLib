@@ -823,6 +823,31 @@ test('logged-in background fetch never touches tabs', async () => {
   assert.equal(calls.tab, 0);
 });
 
+test('background and tab retries share one fetch budget', async () => {
+  const { context, calls } = makeTabFetchHarness({ backgroundBody: GUEST_PAGE, tabBody: MEMBER_PAGE });
+  context.__now = 1000;
+  vm.runInContext('Date.now = () => globalThis.__now', context);
+  const budget = vm.runInContext('BRIDGE_FETCH_TIMEOUT_MS', context);
+  const slowFetch = context.fetch;
+  context.fetch = async (...args) => {
+    context.__now += budget - 5000;
+    return slowFetch(...args);
+  };
+  await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/61053/")', context);
+  assert.equal(calls.tab, 1);
+  assert.equal(calls.injected[0].args[2], 5000);
+
+  // Too little left for the retry: keep the background answer.
+  context.fetch = async (...args) => {
+    context.__now += budget - 1000;
+    return slowFetch(...args);
+  };
+  vm.runInContext('bridgePreferTabFetch = false', context);
+  const kept = await vm.runInContext('bridgeFetchPreferringLogin("https://f95zone.to/threads/1/")', context);
+  assert.equal(kept.body, GUEST_PAGE);
+  assert.equal(calls.tab, 1);
+});
+
 test('tab fetch refuses non-allowlisted URLs without injecting', async () => {
   const { context, calls } = makeTabFetchHarness({ backgroundBody: MEMBER_PAGE, tabBody: MEMBER_PAGE });
   const result = await vm.runInContext('bridgeFetchViaTab("https://example.com/")', context);

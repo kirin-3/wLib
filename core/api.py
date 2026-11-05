@@ -340,6 +340,13 @@ class Api:
         self._bepinex_cache: dict[tuple[str, str], tuple[float, list[dict[str, object]], list[str]]] = {}
         # Games with a save backup/import/restore in flight (one at a time per game).
         self._saves_busy: set[int] = set()
+        # Subset of _saves_busy that writes into the saves folder (import/restore).
+        self._saves_writing: set[int] = set()
+        # Prefixes the Wine dependency and RTP installers are working on.
+        self._deps_install_prefix: str = ""
+        self._rtp_install_prefix: str = ""
+        # Library game an archive install is updating, if any.
+        self._archive_install_game_id: int | None = None
         self._saves_busy_lock: threading.Lock = threading.Lock()
         self._deps_install_status: ProgressStatus = {
             "running": False,
@@ -3787,6 +3794,11 @@ class Api:
 
             if runner_pid(game_id) is not None:
                 return {"success": False, "code": "already_running", "error": "Game is already running"}
+        if game_id is not None:
+            with self._status_lock:
+                busy = self._game_busy_reason(game_id)
+            if busy:
+                return {"success": False, "code": "game_busy", "error": busy}
 
         def on_tick(detail: dict[str, object]) -> None:
             # evaluate_js can block forever once the window is gone at exit.
@@ -4070,11 +4082,14 @@ class Api:
         """Allow one tool action per game, and none while wLib runs the game."""
         from core.game_tools import GameToolError
 
-        with self._tool_lock:
+        # _status_lock serializes this check with the launcher's reservation.
+        with self._status_lock, self._tool_lock:
             if game_id in self._tool_status:
                 raise GameToolError("A tool is already running for this game")
             if game_id in self.get_running_games():
                 raise GameToolError("Close the game before using its tools")
+            if self._archive_install_status["running"] and self._archive_install_game_id == game_id:
+                raise GameToolError("This game is being updated. Wait for the install to finish.")
             self._tool_status[game_id] = {
                 "running": True,
                 "action": action,
@@ -4471,10 +4486,33 @@ class Api:
             raise ValueError("Winetricks is not installed. Install it first, then try again.")
         return [path], env
 
-    def _prefix_tool_conflict(self, prefix: str) -> str | None:
+    def _prefix_tool_conflict(self, prefix: str, game_id: int | None = None) -> str | None:
         # The caller holds _status_lock while reserving the game in Launcher.
+        if game_id is not None:
+            conflict = self._game_busy_reason(game_id)
+            if conflict:
+                return conflict
+        if not prefix:
+            return None
         if self._prefix_tool_running() and prefix == self._prefix_tool_prefix:
             return f"{self._prefix_tool_name} is open on this Wine prefix. Close it first."
+        # winetricks and the RTP setups end with wineserver -k, which kills the game.
+        if (self._deps_install_status["running"] and prefix == self._deps_install_prefix) or (
+            self._rtp_install_status["running"] and prefix == self._rtp_install_prefix
+        ):
+            return "A Wine runtime install is running on this prefix. Wait for it to finish."
+        return None
+
+    def _game_busy_reason(self, game_id: int) -> str | None:
+        """Why the game's files are in use by wLib, or None. Caller holds _status_lock."""
+        with self._tool_lock:
+            if game_id in self._tool_status:
+                return "A mod tool is changing this game's files. Wait for it to finish."
+        with self._saves_busy_lock:
+            if game_id in self._saves_writing:
+                return "Saves are being restored for this game. Wait for it to finish."
+        if self._archive_install_status["running"] and self._archive_install_game_id == game_id:
+            return "This game is being updated. Wait for the install to finish."
         return None
 
     def _prefix_tool_running(self) -> bool:
@@ -4574,10 +4612,16 @@ class Api:
         print(
             f"Running winetricks command in {env.get('WINEPREFIX')}: {' '.join(command)}"
         )
+        from core.game_sandbox import normalize_prefix
+
+        deps_prefix = normalize_prefix(env.get("WINEPREFIX", ""))
 
         with self._status_lock:
             if self._prefix_tool_running():
                 return {"success": False, "error": "Close the open Wine prefix tool first."}
+            running_title = self.launcher.game_using_prefix(deps_prefix)
+            if running_title:
+                return {"success": False, "error": f"Close {running_title} first: it is running on this Wine prefix."}
             # winetricks verbs run wineserver -k/-w, which would break a parallel install.
             if (
                 self._deps_install_status["running"]
@@ -4594,6 +4638,7 @@ class Api:
                 "current": verbs[0],
                 "error": "",
             }
+            self._deps_install_prefix = deps_prefix
 
         # We run this in a background thread so we don't block the UI returning 'success' immediately
         # (Winetricks downloads huge MS packages that take longer than the IPC timeout)
@@ -4828,9 +4873,15 @@ class Api:
                     self._rtp_install_status["error"] = message
                 print(f"RTP installation stopped unexpectedly: {message}")
 
+        from core.game_sandbox import normalize_prefix
+
+        rtp_prefix = normalize_prefix(env.get("WINEPREFIX", ""))
         with self._status_lock:
             if self._prefix_tool_running():
                 return {"success": False, "error": "Close the open Wine prefix tool first."}
+            running_title = self.launcher.game_using_prefix(rtp_prefix)
+            if running_title:
+                return {"success": False, "error": f"Close {running_title} first: it is running on this Wine prefix."}
             if (
                 self._deps_install_status["running"]
                 or self._rtp_install_status["running"]
@@ -4839,6 +4890,7 @@ class Api:
                     "success": False,
                     "error": "Another install is already running. Wait for it to finish.",
                 }
+            self._rtp_install_prefix = rtp_prefix
             self._rtp_install_status = {
                 "running": True,
                 "done": 0,
@@ -6173,6 +6225,8 @@ class Api:
         self, *, running: bool, stage: str = "", done: int = 0, total: int = 0
     ) -> None:
         with self._status_lock:
+            if not running:
+                self._archive_install_game_id = None
             self._archive_install_status = {
                 "running": running,
                 "stage": stage,
@@ -6298,6 +6352,17 @@ class Api:
                     "error": "Another archive install is running. Wait for it to finish.",
                     "error_code": "install_running",
                 }
+            if game_id is not None:
+                if game_id in self.launcher.get_running_games():
+                    return {
+                        "success": False,
+                        "error": "Close the game before installing an update.",
+                        "error_code": "game_running",
+                    }
+                busy = self._game_busy_reason(game_id)
+                if busy:
+                    return {"success": False, "error": busy, "error_code": "game_busy"}
+            self._archive_install_game_id = game_id
             self._archive_install_status = {
                 "running": True,
                 "stage": "starting",
@@ -6403,21 +6468,31 @@ class Api:
         return get_data_subdir("save-backups")
 
     @contextmanager
-    def _save_operation(self, game_id: int) -> Generator[None]:
-        """Allow one backup/import/restore per game at a time."""
+    def _save_operation(self, game_id: int, writes: bool = False) -> Generator[None]:
+        """Allow one backup/import/restore per game at a time.
+
+        Writing operations also refuse while the game runs: it would overwrite
+        the restored saves when it quits. _status_lock serializes this with
+        the launcher's reservation, which refuses launching meanwhile.
+        """
         from core.game_saves import GameSavesError
 
-        with self._saves_busy_lock:
+        with self._status_lock, self._saves_busy_lock:
             if game_id in self._saves_busy:
                 raise GameSavesError(
                     "A save operation is already running for this game"
                 )
+            if writes and game_id in self.get_running_games():
+                raise GameSavesError("Close the game before changing its saves")
             self._saves_busy.add(game_id)
+            if writes:
+                self._saves_writing.add(game_id)
         try:
             yield
         finally:
             with self._saves_busy_lock:
                 self._saves_busy.discard(game_id)
+                self._saves_writing.discard(game_id)
 
     def _saves_game_state(
         self, game_id: object
@@ -6565,7 +6640,7 @@ class Api:
         if not effective:
             return {"success": False, "error": "Choose a saves folder first"}
         try:
-            with self._save_operation(coerced_id):
+            with self._save_operation(coerced_id, writes=True):
                 info = import_saves(
                     source,
                     effective,

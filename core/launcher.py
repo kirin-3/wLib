@@ -376,6 +376,63 @@ class ToolProcess:
     kind: str
 
 
+# Processes the first Wine program in a prefix starts for the whole prefix.
+# They join that program's process group and outlive it, and later games on
+# the same prefix use them too.
+_WINE_BACKGROUND_NAMES = frozenset(
+    {
+        "wineserver",
+        "services.exe",
+        "winedevice.exe",
+        "plugplay.exe",
+        "explorer.exe",
+        "svchost.exe",
+        "rpcss.exe",
+        "tabtip.exe",
+        "conhost.exe",
+        "winemenubuilder",
+        "winemenubuilder.exe",
+    }
+)
+
+
+def _wine_group_pids(pgid: int) -> tuple[list[int], list[int]] | None:
+    """(game pids, Wine background pids) in a process group, from /proc.
+
+    None when the group is not visible here (no /proc, another PID namespace),
+    so callers fall back to treating the group as a whole.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return None
+    game: list[int] = []
+    background: list[int] = []
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", encoding="utf-8", errors="replace") as stat_file:
+                stat = str(stat_file.read())
+        except (OSError, ValueError):
+            continue
+        # comm can hold spaces and parentheses; the fields follow the last ")".
+        open_paren = stat.find("(")
+        close_paren = stat.rfind(")")
+        if open_paren < 0 or close_paren < open_paren:
+            continue
+        fields = stat[close_paren + 2 :].split()
+        if len(fields) < 3 or fields[2] != str(pgid) or fields[0] in ("Z", "X"):
+            continue
+        comm = stat[open_paren + 1 : close_paren].lower()
+        (background if comm in _WINE_BACKGROUND_NAMES else game).append(int(name))
+    if not game and not background:
+        return None
+    return game, background
+
+
 @dataclass
 class RunningGame:
     # None while the process is still starting (e.g. waiting on a UAC prompt).
@@ -430,7 +487,9 @@ class Launcher:
         self._tools: dict[int, dict[int, ToolProcess]] = {}
         self._running_lock: LockType = threading.Lock()
         self.prefix_guard_lock: LockType | None = None
-        self.prefix_guard: Callable[[str], str | None] | None = None
+        # Called as prefix_guard(prefix, game_id) under prefix_guard_lock;
+        # returns why the launch must be refused, or None.
+        self.prefix_guard: Callable[[str, int | None], str | None] | None = None
         # Set while shutting down so exit callbacks skip the (closed) UI window.
         self.shutting_down: bool = False
         _ = atexit.register(self.shutdown)
@@ -697,8 +756,25 @@ class Launcher:
                     except (OSError, subprocess.TimeoutExpired):
                         pass
                 killpg = cast(Callable[[int, int], None], getattr(os, "killpg"))
+                # Another game on this prefix relies on the wineserver and
+                # services in this group, so signal only this game's processes.
+                spare_wine = prefix_shared and not running.host_native and not running.sandboxed
+
+                def signal_game(sig: int) -> None:
+                    members = _wine_group_pids(pid) if spare_wine else None
+                    if members is None:
+                        killpg(pid, sig)
+                        return
+                    if not members[0]:
+                        raise ProcessLookupError(pid)
+                    for member in members[0]:
+                        try:
+                            os.kill(member, sig)
+                        except ProcessLookupError:
+                            pass
+
                 try:
-                    killpg(pid, signal.SIGTERM)
+                    signal_game(signal.SIGTERM)
                 except ProcessLookupError:
                     # The tracking thread removes the entry and flushes final playtime.
                     return {"success": True}
@@ -708,7 +784,7 @@ class Launcher:
                     try:
                         # Check the group even if its original parent already exited.
                         killpg(pid, 0)
-                        killpg(pid, signal.SIGKILL)
+                        signal_game(signal.SIGKILL)
                     except ProcessLookupError:
                         pass
                     except OSError as exc:
@@ -1108,10 +1184,10 @@ class Launcher:
             # Serialize the prefix-tool check and running-game reservation.
             # Prefix tools take these locks in the same order.
             with self.prefix_guard_lock or nullcontext():
-                if prefix and self.prefix_guard:
-                    error = self.prefix_guard(prefix)
+                if self.prefix_guard:
+                    error = self.prefix_guard(prefix, game_id)
                     if error:
-                        return {"success": False, "code": "prefix_in_use", "error": error}
+                        return {"success": False, "code": "prefix_in_use" if prefix else "game_busy", "error": error}
                 with self._running_lock:
                     if game_id in self._running:
                         return {
@@ -1309,6 +1385,12 @@ class Launcher:
                             return True  # exists, owned by another user
                         except OSError:
                             return False
+                        if is_wine_executable and not sandboxed:
+                            # wineserver and Wine's services stay in the group
+                            # after the game exits; they are not the game.
+                            members = _wine_group_pids(cast(int, pid))
+                            if members is not None:
+                                return bool(members[0])
                         return True
 
                     try:
@@ -1633,8 +1715,14 @@ class Launcher:
 
         proton_path = resolve_runner(proton_path)
 
+        # A WINEPREFIX= in the launch arguments is the most specific choice.
         wine_prefix = path_module.expanduser(
-            (custom_prefix or get_setting("wine_prefix_path") or "").strip()
+            (
+                user_env.get("WINEPREFIX")
+                or custom_prefix
+                or get_setting("wine_prefix_path")
+                or ""
+            ).strip()
         )
         if wine_prefix:
             wine_prefix = path_module.abspath(wine_prefix)

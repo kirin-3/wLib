@@ -2168,3 +2168,68 @@ def test_7z_listing_reports_tar_symlinks(tmp_path, monkeypatch):
     links: list[tuple[str, str, bool]] = []
     assert ai.list_tool_entries("/usr/bin/7z", str(archive), links) == ["Game/esc"]
     assert links == [("Game/esc", "/etc", False)]
+
+
+def test_install_same_folder_refuses_when_another_game_is_inside(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import ArchiveInstallError, install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    nested = dest / "DLC"
+    nested.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    (nested / "DLC.exe").write_text("dlc")
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    assert db.add_game("DLC", str(nested / "DLC.exe"))
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    with pytest.raises(ArchiveInstallError, match="another library game"):
+        _ = install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+    assert (dest / "Game.exe").read_text() == "old"
+    assert (nested / "DLC.exe").read_text() == "dlc"
+    assert [p.name for p in lib.iterdir()] == ["Game"]
+
+
+def test_install_same_folder_keeps_backup_for_target_outside_exe_folder(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    (dest / "Bin").mkdir(parents=True)
+    (dest / "Tools").mkdir()
+    (dest / "Bin" / "Game.exe").write_text("old")
+    (dest / "Tools" / "Mod.exe").write_text("mod")
+    game_id = db.add_game("Game", str(dest / "Bin" / "Game.exe"), version="1.0")
+    assert game_id is not None
+    assert db.add_game_launch_target(
+        int(game_id), "Mod", str(dest / "Tools" / "Mod.exe")
+    )
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Bin/Game.exe": b"new", "Bin/data.bin": b"x"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="2.0",
+        game_id=int(game_id),
+    )
+    assert result["success"] is True, result
+    assert result["removed_old"] is False
+    backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
+    assert len(backups) == 1
+    assert (backups[0] / "Tools" / "Mod.exe").read_text() == "mod"

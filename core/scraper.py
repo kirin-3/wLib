@@ -851,6 +851,10 @@ class Scraper:
 
     def _check_chunk(self, ids: list[str]) -> dict[str, ScraperResult | None]:
         versions: dict[str, object] = {}
+        # Whether the checker gave a usable answer; a login page is handled
+        # above it, because thread pages can still be readable signed out.
+        answered = False
+        login_page = False
         try:
             status, text, fallback = self._fetch_with_fallback(
                 f"https://f95zone.to/sam/checker.php?threads={','.join(ids)}"
@@ -889,12 +893,14 @@ class Scraper:
                     )
                     for thread_id in ids
                 }
+            login_page = bool(issue and issue["code"] == "login_required")
             if status == 200:
                 payload = cast(object, json.loads(text))
                 if isinstance(payload, dict):
                     data = cast(dict[str, object], payload)
                     if data.get("status") == "ok" and isinstance(data.get("msg"), dict):
                         versions = cast(dict[str, object], data["msg"])
+                        answered = True
         except _F95RequestError as exc:
             # Timeouts and network failures hit every page request the same
             # way; only a single check is worth its one page request.
@@ -902,6 +908,16 @@ class Scraper:
                 return {thread_id: self._error(exc.code, str(exc)) for thread_id in ids}
         except ValueError:
             pass
+        if not answered and not login_page and len(ids) > 1:
+            # An unexpected reply (bad JSON, an error status, a 4xx) would
+            # otherwise fan out to one page request per thread.
+            return {
+                thread_id: self._error(
+                    "scraper_error",
+                    "F95Zone's version checker gave an unexpected reply. Try again later.",
+                )
+                for thread_id in ids
+            }
         results: dict[str, ScraperResult | None] = {}
         for thread_id in ids:
             version = self._normalize_checker_version(versions.get(thread_id))

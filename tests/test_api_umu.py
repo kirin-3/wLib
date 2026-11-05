@@ -203,3 +203,25 @@ def test_prefix_tool_refusals(tmp_path, monkeypatch):
     assert "spawn failed" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("", ""))
     assert "umu-launcher is missing" in api.open_wine_prefix_tool("winecfg", prefix, "/fake/proton")["error"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Wine runtime installs run only on Linux hosts")
+def test_runtime_installs_and_launches_respect_shared_prefix(tmp_path, monkeypatch):
+    from core.game_sandbox import normalize_prefix
+    from core.launcher import RunningGame
+
+    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    monkeypatch.setattr("core.api.host_which", lambda name: f"/usr/bin/{name}")
+    api = Api()
+    prefix = str(tmp_path / "prefix")
+    api.launcher._running[1] = RunningGame(None, None, prefix=normalize_prefix(prefix), title="Playing")
+    for result in (
+        api.install_rpgmaker_dependencies(prefix, "/usr/bin/wine"),
+        api.install_rpgmaker_rtp(prefix, "/usr/bin/wine"),
+    ):
+        assert result["success"] is False and "Playing" in result["error"]
+    api.launcher._running.clear()
+    api._deps_install_status["running"] = True
+    api._deps_install_prefix = normalize_prefix(prefix)
+    assert api._prefix_tool_conflict(normalize_prefix(prefix)) is not None
+    assert api._prefix_tool_conflict(normalize_prefix(str(tmp_path / "other"))) is None

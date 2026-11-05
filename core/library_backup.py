@@ -1875,13 +1875,18 @@ def apply_library_backup(
                 status = str(item.get("status") or "")
                 if status == "ambiguous":
                     ambiguous += 1
-                    skipped += 1
-                    continue
+                    if not (sync and _sync_uid(imported_game.get("uid"))):
+                        skipped += 1
+                        continue
+                    # Skipping a synced game would drop it from the other
+                    # device on the next push. Keep it as its own game, never
+                    # merged into one of the candidates.
+                    status = "sync_separate"
 
                 local_id: int | None = None
                 if status == "matched":
                     local_id = int(str(item.get("local_id", 0)))
-                else:
+                elif status != "sync_separate":
                     # A backup may repeat a thread (two copies of one game, or
                     # the same thread under an old and a new slug). A later
                     # copy merges into the row created earlier in this import
@@ -1943,6 +1948,13 @@ def apply_library_backup(
                         sections,
                         include_metadata=True,
                     )
+                    if (
+                        status == "sync_separate"
+                        and fields.get("f95_url")
+                        and find_matching_game_row(cursor, fields["f95_url"]) is not None
+                    ):
+                        # The thread already belongs to a candidate row.
+                        _ = fields.pop("f95_url")
                     game_id = _insert_game(cursor, fields)
                     created += 1
                     created_ids.append(game_id)

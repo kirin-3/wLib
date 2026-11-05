@@ -389,8 +389,84 @@ def _owned_manifest(root: Path) -> list[str] | None:
         return None
 
 
-def _move_to_backup(root: Path, paths: list[str], installed: list[str]) -> bool:
+_DISCARD = ".wlib-bepinex-replaced"
+
+
+def _read_backup_manifest(backup: Path) -> dict[str, object] | None:
+    try:
+        value = cast(object, json.loads((backup / "manifest.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+    return cast(dict[str, object], value) if isinstance(value, dict) else None
+
+
+class _BackupChange:
+    """Undo log for one install's or uninstall's moves into the backup."""
+
+    def __init__(self) -> None:
+        self.moves: list[tuple[Path, Path]] = []  # (now at, came from)
+        self.discard: Path | None = None
+        self.manifest_path: Path | None = None
+        self.manifest_before: str = ""
+
+    def rollback(self) -> None:
+        import shutil
+
+        for now_at, came_from in reversed(self.moves):
+            came_from.parent.mkdir(parents=True, exist_ok=True)
+            _ = shutil.move(str(now_at), str(came_from))
+        if self.manifest_path is not None:
+            _ = self.manifest_path.write_text(self.manifest_before, encoding="utf-8")
+        self.commit()
+
+    def commit(self) -> None:
+        import shutil
+
+        if self.discard is not None and self.discard.exists():
+            shutil.rmtree(self.discard, ignore_errors=True)
+
+
+def _merge_move(source: Path, destination: Path, change: _BackupChange) -> list[Path]:
+    """Move source into destination, descending into folders both have."""
     import shutil
+
+    from core.game_tools import GameToolError
+
+    if not destination.exists() and not destination.is_symlink():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _ = shutil.move(str(source), str(destination))
+        change.moves.append((destination, source))
+        return [destination]
+    if source.is_dir() and not source.is_symlink() and destination.is_dir() and not destination.is_symlink():
+        moved: list[Path] = []
+        for child in sorted(source.iterdir()):
+            moved.extend(_merge_move(child, destination / child.name, change))
+        return moved
+    raise GameToolError(f"The BepInEx backup already holds {destination.name}. Restore or remove the backup first.")
+
+
+def _is_wlib_owned(name: str, owned: list[str] | None, installed: list[str]) -> bool:
+    if owned is None:
+        return False
+    path = Path(name)
+    owned_paths = [Path(p) for p in owned]
+    # A folder the new build replaces whole (dotnet) counts when wLib put files in it.
+    return any(path.is_relative_to(p) for p in owned_paths) or (
+        name in installed and any(p.is_relative_to(path) for p in owned_paths)
+    )
+
+
+def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: list[str] | None = None) -> _BackupChange | None:
+    """Move what the operation replaces into the backup; None when nothing moved.
+
+    The backup normally holds the state before the last install or uninstall.
+    When it holds a setup wLib did not install (the user's own BepInEx), it is
+    the only copy of that setup: later operations keep it, delete wLib's own
+    files instead of backing them up, and merge anything else into it.
+    """
+    import shutil
+
+    from core.game_tools import GameToolError
 
     backup = root / _BACKUP
     # Collapse nested paths so a directory and its descendants are never moved twice.
@@ -401,22 +477,59 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str]) -> bool:
             continue
         if target.exists():
             unique.append(name)
-    if not unique:
-        return False
     if backup.is_symlink():
-        from core.game_tools import GameToolError
         raise GameToolError("Backup path is a symbolic link")
+    change = _BackupChange()
+    existing = _read_backup_manifest(backup) if backup.is_dir() else None
+    if existing is not None and existing.get("foreign") is True:
+        moved_value = existing.get("moved")
+        moved_list = [p for p in cast(list[object], moved_value) if isinstance(p, str)] if isinstance(moved_value, list) else []
+        change.manifest_path = backup / "manifest.json"
+        change.manifest_before = change.manifest_path.read_text(encoding="utf-8")
+        try:
+            for name in unique:
+                if _is_wlib_owned(name, owned, installed):
+                    # wLib's own files: set aside, deleted once the operation succeeds.
+                    if change.discard is None:
+                        change.discard = root / _DISCARD
+                        if change.discard.is_symlink():
+                            raise GameToolError("Staging path is a symbolic link")
+                        if change.discard.exists():
+                            shutil.rmtree(change.discard)
+                    destination = change.discard / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    _ = shutil.move(str(root / name), str(destination))
+                    change.moves.append((destination, root / name))
+                else:
+                    for path in _merge_move(root / name, backup / name, change):
+                        relative = path.relative_to(backup).as_posix()
+                        if relative not in moved_list:
+                            moved_list.append(relative)
+            _ = change.manifest_path.write_text(
+                json.dumps({"moved": moved_list, "installed": installed, "foreign": True}), encoding="utf-8"
+            )
+        except Exception:
+            change.rollback()
+            raise
+        return change
+    if not unique:
+        return None
     if backup.exists():
         shutil.rmtree(backup)
     backup.mkdir()
     moved: list[str] = []
+    # A setup wLib did not install is the user's original: keep it from now on.
+    foreign = any(not _is_wlib_owned(name, owned, installed) for name in unique)
     try:
         for name in unique:
             destination = backup / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             _ = shutil.move(str(root / name), str(destination))
             moved.append(name)
-        _ = (backup / "manifest.json").write_text(json.dumps({"moved": moved, "installed": installed}), encoding="utf-8")
+            change.moves.append((destination, root / name))
+        _ = (backup / "manifest.json").write_text(
+            json.dumps({"moved": moved, "installed": installed, "foreign": foreign}), encoding="utf-8"
+        )
     except Exception:
         for name in reversed(moved):
             destination = root / name
@@ -424,7 +537,7 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str]) -> bool:
             _ = shutil.move(str(backup / name), str(destination))
         shutil.rmtree(backup)
         raise
-    return True
+    return change
 
 
 def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progress: Callable[[int, int, str], None], cancelled: Callable[[], bool]) -> dict[str, object]:
@@ -488,6 +601,7 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
                 break
         _ = marker.write_text(json.dumps({"owned": owned, "version": version}), encoding="utf-8")
         previous = _owned_manifest(root)
+        wlib_owned = None if previous is None else [*previous, _MARKER]
         if previous is None:
             existing = detect_installed(folder)
             previous = ["BepInEx/core"] if existing else []
@@ -500,7 +614,7 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
         staged_files = [p for p in stage.rglob("*") if p.is_file()]
         for path in staged_files:
             _ = _safe_target(root, path.relative_to(stage).as_posix())
-        backed_up = _move_to_backup(root, previous + installed, installed)
+        change = _move_to_backup(root, previous + installed, installed, wlib_owned)
         placed: list[Path] = []
         try:
             for path in sorted(stage.rglob("*"), key=lambda p: len(p.parts)):
@@ -515,13 +629,17 @@ def install_build(folder: str, zip_path: str, unity_libs_zip: str | None, progre
         except Exception:
             for path in reversed(placed):
                 path.unlink(missing_ok=True)
-            if backed_up:
+            if change is not None:
                 for name in installed:
                     path = root / name
                     if path.is_dir():
                         shutil.rmtree(path)
-                _ = restore(folder)
+                change.rollback()
+                if not (root / _BACKUP / "manifest.json").exists():
+                    shutil.rmtree(root / _BACKUP, ignore_errors=True)
             raise
+        if change is not None:
+            change.commit()
         return {"files": len(owned)}
     finally:
         if stage.exists():
@@ -532,6 +650,7 @@ def uninstall(folder: str, remove_user_data: bool) -> dict[str, object]:
     root = Path(folder)
     installed = detect_installed(folder)
     owned = _owned_manifest(root)
+    wlib_owned = None if owned is None else [*owned, _MARKER]
     if owned is None:
         owned = ["BepInEx/core", "winhttp.dll", "doorstop_config.ini", ".doorstop_version", "changelog.txt"]
         if installed and installed["backend"] == "il2cpp":
@@ -539,9 +658,11 @@ def uninstall(folder: str, remove_user_data: bool) -> dict[str, object]:
     owned.append(_MARKER)
     if remove_user_data:
         owned.append("BepInEx")
-    backup = _move_to_backup(root, owned, [])
+    change = _move_to_backup(root, owned, [], wlib_owned)
+    if change is not None:
+        change.commit()
     _prune_empty_parents(root, owned)
-    return {"backup": backup}
+    return {"backup": change is not None}
 
 
 def _prune_empty_parents(root: Path, paths: list[str]) -> None:

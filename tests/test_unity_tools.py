@@ -332,3 +332,34 @@ def test_uninstall_leaves_no_empty_core_folder(tmp_path):
     assert not (tmp_path / "BepInEx/core").exists()
     assert not (tmp_path / "dotnet").exists()
     assert (tmp_path / "BepInEx/plugins").is_dir()
+
+
+def test_backup_of_users_own_bepinex_survives_later_installs(tmp_path):
+    import zipfile
+
+    from core.unity_tools import install_build, restore, uninstall
+
+    core = tmp_path / "BepInEx/core"
+    core.mkdir(parents=True)
+    (core / "BepInEx.Core.dll").write_text("users own")
+    archive = tmp_path / "package.zip"
+
+    def install(value):
+        with zipfile.ZipFile(archive, "w") as z:
+            z.writestr("BepInEx/core/BepInEx.Core.dll", value)
+            z.writestr("winhttp.dll", value)
+        install_build(str(tmp_path), str(archive), None, lambda *a: None, lambda: False)
+
+    install("v1")
+    install("v2")
+    assert (core / "BepInEx.Core.dll").read_text() == "v2"
+    assert not (tmp_path / ".wlib-bepinex-replaced").exists()
+    restore(str(tmp_path))
+    assert (core / "BepInEx.Core.dll").read_text() == "users own"
+    assert not (tmp_path / "winhttp.dll").exists()
+
+    install("v3")
+    uninstall(str(tmp_path), False)
+    assert not (tmp_path / "winhttp.dll").exists()
+    restore(str(tmp_path))
+    assert (core / "BepInEx.Core.dll").read_text() == "users own"

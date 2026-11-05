@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import sqlite3
 import struct
 from pathlib import Path
 
@@ -409,6 +410,51 @@ def test_cache_fill_replace_remove_failure_and_sweep(monkeypatch):
     service._fill()
     service._fill()
     assert calls == [url + "fail"]
+
+
+def test_cache_retries_failed_covers_and_survives_database_errors(monkeypatch):
+    from core import scraper
+
+    url = "https://attachments.f95zone.to/flaky.png"
+    game_id = database.add_game("Flaky", "", "", cover_image=url)
+    attempts = []
+
+    def fetch(url, limit):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise ValueError("challenge")
+        return b"\x89PNG\r\n\x1a\nimage"
+
+    monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
+    now = [1000.0]
+    monkeypatch.setattr(game_covers.time, "monotonic", lambda: now[0])
+    service = game_covers.CoverCacheService()
+    service._fill()
+    service._fill()
+    assert len(attempts) == 1
+    assert service._next_retry_in() == game_covers.RETRY_BASE_SECONDS
+    now[0] += game_covers.RETRY_BASE_SECONDS
+    service._fill()
+    assert len(attempts) == 2
+    assert database.get_game(game_id)["cover_cache"]
+    assert service._next_retry_in() is None
+
+    # One failing pass must not end the worker.
+    passes = []
+    real_fill = service._fill
+
+    def flaky_fill():
+        passes.append(1)
+        if len(passes) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real_fill()
+        service._stop.set()
+
+    monkeypatch.setattr(service, "_fill", flaky_fill)
+    monkeypatch.setattr(game_covers, "ERROR_RETRY_SECONDS", 0.01)
+    service._wake.set()
+    service._run()
+    assert len(passes) == 2
 
 
 @pytest.mark.parametrize("action", ["purge", "change", "delete", "stop"])

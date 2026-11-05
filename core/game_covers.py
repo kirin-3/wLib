@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 import os
 import re
 import stat
@@ -195,6 +196,11 @@ def delete_cached_cover(name: object) -> None:
         path.unlink(missing_ok=True)
 
 
+RETRY_BASE_SECONDS = 15 * 60
+RETRY_MAX_SECONDS = 24 * 60 * 60
+ERROR_RETRY_SECONDS = 60
+
+
 class CoverCacheService:
     def __init__(self, on_change: Callable[[], None] | None = None) -> None:
         self.on_change: Callable[[], None] | None = on_change
@@ -203,7 +209,8 @@ class CoverCacheService:
         self._wake: threading.Event = threading.Event()
         self._store_lock: threading.Lock = threading.Lock()
         self._thread: threading.Thread | None = None
-        self._failed: set[str] = set()
+        # url -> (failures, monotonic time it may be tried again)
+        self._failed: dict[str, tuple[int, float]] = {}
 
     def start(self) -> None:
         if self._thread is None and not self._stop.is_set():
@@ -274,7 +281,10 @@ class CoverCacheService:
                     continue
                 delete_cached_cover(game.get("cover_cache"))
                 database.clear_game_cover_cache(game_id)
-            if not url or url in self._failed:
+            if not url:
+                continue
+            failure = self._failed.get(url)
+            if failure is not None and time.monotonic() < failure[1]:
                 continue
             try:
                 data = f95_get_bytes(url, MAX_COVER_SIZE)
@@ -290,17 +300,35 @@ class CoverCacheService:
                     except Exception:
                         delete_cached_cover(name)
                         raise
+                _ = self._failed.pop(url, None)
             except Exception as exc:
-                self._failed.add(url)
+                count = (failure[0] if failure else 0) + 1
+                delay = min(RETRY_BASE_SECONDS * (1 << (count - 1)), RETRY_MAX_SECONDS)
+                self._failed[url] = (count, time.monotonic() + delay)
                 logging.getLogger(__name__).info("Cover cache skipped %s: %s", game_id, exc)
 
+    def _next_retry_in(self) -> float | None:
+        if not self._failed:
+            return None
+        return max(1.0, min(due for _count, due in self._failed.values()) - time.monotonic())
+
     def _run(self) -> None:
+        log = logging.getLogger(__name__)
         try:
             self._sweep()
-            while not self._stop.is_set():
-                _ = self._wake.wait()
-                self._wake.clear()
-                if not self.disabled and not self._stop.is_set():
-                    self._fill()
         except Exception:
-            logging.getLogger(__name__).exception("Cover cache worker stopped")
+            log.exception("Cover cache sweep failed")
+        timeout: float | None = None
+        while not self._stop.is_set():
+            _ = self._wake.wait(timeout)
+            self._wake.clear()
+            if self.disabled or self._stop.is_set():
+                timeout = None
+                continue
+            try:
+                self._fill()
+                timeout = self._next_retry_in()
+            except Exception:
+                # A database error must not end caching for the session.
+                log.exception("Cover cache pass failed")
+                timeout = ERROR_RETRY_SECONDS

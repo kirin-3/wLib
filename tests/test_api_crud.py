@@ -544,3 +544,63 @@ def test_performance_overrides_passed_to_launcher(monkeypatch):
     assert api.launch_game(game_id, "/game")["success"]
     assert captured["gamemode"] is False
     assert captured["mangohud"] is True
+
+
+def _mark_running(api, game_id, prefix=""):
+    from core.launcher import RunningGame
+
+    api.launcher._running[game_id] = RunningGame(None, None, prefix=prefix, title="Busy game")
+
+
+def test_save_restore_refused_while_game_runs(saves_api, tmp_path):
+    api, _root = saves_api
+    game_id = _saves_game(tmp_path)
+    saves = tmp_path / "my-saves"
+    _write_save(saves / "1.save", "one")
+    assert api.set_game_save_folder(game_id, str(saves))["success"] is True
+    backup = api.backup_game_saves(game_id)
+    _write_save(saves / "1.save", "newer")
+    _mark_running(api, game_id)
+    # Backups only read the folder, so they stay allowed while playing.
+    assert api.backup_game_saves(game_id)["success"] is True
+    restored = api.restore_game_saves_backup(game_id, backup["backup"])
+    assert restored["success"] is False
+    assert "Close the game" in restored["error"]
+    assert (saves / "1.save").read_text() == "newer"
+
+
+def test_launch_and_install_refused_while_game_files_are_busy(tmp_path):
+    api = Api()
+    game_id = add_game("Busy", str(tmp_path / "run.exe"))
+    assert game_id is not None
+    api._tool_status[game_id] = {"running": True, "action": "extract"}
+    launched = api.launch_game(game_id, str(tmp_path / "run.exe"))
+    assert launched["success"] is False and launched["code"] == "game_busy"
+    import zipfile
+
+    with zipfile.ZipFile(tmp_path / "x.zip", "w") as zf:
+        zf.writestr("run.exe", b"MZ")
+    (tmp_path / "lib").mkdir()
+    update_setting("library_folder", str(tmp_path / "lib"))
+    installed = api.install_archive({"archive_path": str(tmp_path / "x.zip"), "game_id": game_id, "title": "Busy"})
+    assert installed["success"] is False and installed["error_code"] == "game_busy"
+    assert api._archive_install_status["running"] is False
+    _ = api._tool_status.pop(game_id)
+    with api._saves_busy_lock:
+        api._saves_writing.add(game_id)
+    assert api.launch_game(game_id, str(tmp_path / "run.exe"))["code"] == "game_busy"
+
+
+def test_mod_tool_refused_while_archive_update_runs(tmp_path):
+    from core.game_tools import GameToolError
+
+    api = Api()
+    api._archive_install_status["running"] = True
+    api._archive_install_game_id = 7
+    with pytest.raises(GameToolError, match="being updated"):
+        with api._tool_run(7, "extract"):
+            pass
+    api._set_archive_install_status(running=False)
+    assert api._archive_install_game_id is None
+    with api._tool_run(7, "extract"):
+        pass

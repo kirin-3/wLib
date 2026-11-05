@@ -404,12 +404,24 @@ def test_invalid_url_callback_exception_propagates_without_request(monkeypatch):
 
 
 def test_cancellation_stops_page_fallbacks(monkeypatch, thread_html):
-    get = MagicMock(side_effect=[(400, "error"), (200, thread_html)])
+    get = MagicMock(side_effect=[(200, '{"status":"ok","msg":{}}'), (200, thread_html)])
     monkeypatch.setattr(scraper_module, "_f95_get", get)
     urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 102)]
     results = Scraper().check_versions(urls, lambda url, result: False)
     assert list(results) == urls[:1]
     assert get.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "response", [(400, "error"), (200, "not json"), (200, '{"status":"error","msg":"x"}')]
+)
+def test_unexpected_batch_checker_reply_does_not_fan_out(monkeypatch, response):
+    get = MagicMock(return_value=response)
+    monkeypatch.setattr(scraper_module, "_f95_get", get)
+    urls = [f"https://f95zone.to/threads/{i}/" for i in range(1, 6)]
+    results = Scraper().check_versions(urls)
+    assert get.call_count == 1
+    assert all(r["success"] is False for r in results.values())
 
 
 def test_single_check_and_metadata_keep_result_shape(monkeypatch, thread_html):
