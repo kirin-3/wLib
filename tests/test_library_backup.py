@@ -3146,8 +3146,14 @@ def test_mirror_sync_does_not_lock_itself_repairing_library_folders():
 
 def test_init_db_backfills_missing_sync_identities():
     game_id = add_game("Legacy", "/legacy")
-    with get_connection() as conn:
-        _ = conn.execute("UPDATE games SET sync_uid = NULL WHERE id = ?", (game_id,))
+    # `with conn` only commits; close it too, or Windows can't delete the DB
+    # file at teardown.
+    conn = get_connection()
+    try:
+        with conn:
+            _ = conn.execute("UPDATE games SET sync_uid = NULL WHERE id = ?", (game_id,))
+    finally:
+        conn.close()
     before = get_setting("sync_local_modified_at")
 
     init_db()
