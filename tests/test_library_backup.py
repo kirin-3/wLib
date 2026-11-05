@@ -3160,3 +3160,29 @@ def test_init_db_backfills_missing_sync_identities():
 
     assert len(str(get_all_games()[0]["sync_uid"])) == 32
     assert get_setting("sync_local_modified_at") == before
+
+
+def test_sync_fallback_match_does_not_merge_into_uid_claimed_game():
+    game_id = add_game(
+        "Game X",
+        "/x",
+        f95_url="https://f95zone.to/threads/game-x.123/",
+        developer="Dev",
+    )
+    local = next(game for game in get_all_games() if game["id"] == game_id)
+    uid = local["sync_uid"]
+    remote = build_sync_backup("2026-11-05T10:00:00.000Z", "dev1")
+    copy = json.loads(json.dumps(remote["games"][0]))
+    copy["uid"] = "b" * 32
+    copy["metadata"]["f95_url"] = ""
+    copy["metadata"]["links"] = []
+    remote["games"].append(copy)
+
+    result = apply_library_backup(
+        remote, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert result["created"] == 1 and result["updated"] == 1
+    games = {game["sync_uid"]: game for game in get_all_games()}
+    assert games[uid]["f95_url"] == "https://f95zone.to/threads/game-x.123/"
+    assert games["b" * 32]["f95_url"] == ""

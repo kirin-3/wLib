@@ -1440,8 +1440,10 @@ def install_archive(
             os.makedirs(os.path.dirname(destination) or destination, exist_ok=True)
         except OSError:
             pass
-        if old_root and dest_real == old_real:
-            # Pattern without {version}: swap via .wlib-old-<ts>.
+        if old_root and dest_real == old_real and os.path.lexists(destination):
+            # Pattern without {version}: swap via .wlib-old-<ts>. When the old
+            # folder was deleted or moved away there is nothing to swap, and
+            # the new version simply moves into the empty destination below.
             old_backup = f"{destination}.wlib-old-{int(time.time())}"
             try:
                 os.rename(destination, old_backup)

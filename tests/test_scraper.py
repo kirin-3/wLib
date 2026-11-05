@@ -137,6 +137,18 @@ def test_post_mentioning_a_login_requirement_is_not_a_login_wall(thread_html):
     assert scraper._extract_page(html)["version"] == "1.10"
 
 
+def test_reply_mentioning_a_login_requirement_is_not_a_login_wall(thread_html):
+    """Replies rendered on page 1 are post text too, not the page's login wall."""
+    scraper = Scraper()
+    html = thread_html.replace(
+        '<img class="bbImage" src="https://example.com/reply.png">',
+        "Links dead? You must be logged in to see them.",
+    )
+    assert "you must be logged in" in html.lower()
+    issue = scraper._classify_page_issue(200, scraper._page_title(html), html)
+    assert issue is None
+
+
 def test_login_page_with_a_rendered_heading_is_still_a_login_wall():
     """The page-level login prompt is outside the starter post and still counts."""
     scraper = Scraper()

@@ -922,10 +922,60 @@ def _build_import_plan(
     backup: Mapping[str, object], *, sync: bool = False
 ) -> list[dict[str, object]]:
     local_games = _local_games()
-    return [
+    plan = [
         _match_imported_game(_coerce_mapping(game), local_games, sync=sync)
         for game in _coerce_sequence(backup.get("games"))
     ]
+    _release_duplicate_claims(plan)
+    return plan
+
+
+# Thread and sync identities name one game; store links and title fallbacks
+# only suggest one, so they lose a local row that a stronger match claims.
+_MATCH_STRENGTH = {"sync_uid": 3, "f95_url": 2}
+_WEAK_MATCH_STRENGTH = 1
+
+
+def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
+    """Stop two different imported games from merging into one local row.
+
+    Each imported game is matched on its own, so a remote game without a
+    thread URL can fall back onto the same local game that another imported
+    game claims by sync identity or thread. Applying both would let the second
+    overwrite the first. A repeated thread (same URL) still merges by design;
+    a weak claim that collides with a stronger one, or with another game's
+    sync identity, becomes a new game instead.
+    """
+    claims: dict[int, list[dict[str, object]]] = {}
+    for item in plan:
+        if item.get("status") == "matched":
+            claims.setdefault(int(str(item.get("local_id", 0))), []).append(item)
+    for items in claims.values():
+        if len(items) < 2:
+            continue
+        ranked = sorted(
+            items,
+            key=lambda entry: -_MATCH_STRENGTH.get(
+                str(entry.get("match_type") or ""), _WEAK_MATCH_STRENGTH
+            ),
+        )
+        winner = ranked[0]
+        winner_strength = _MATCH_STRENGTH.get(
+            str(winner.get("match_type") or ""), _WEAK_MATCH_STRENGTH
+        )
+        winner_uid = _sync_uid(_coerce_mapping(winner.get("game")).get("uid"))
+        for item in ranked[1:]:
+            strength = _MATCH_STRENGTH.get(
+                str(item.get("match_type") or ""), _WEAK_MATCH_STRENGTH
+            )
+            if strength > _WEAK_MATCH_STRENGTH:
+                continue
+            game = _coerce_mapping(item.get("game"))
+            uid = _sync_uid(game.get("uid"))
+            if winner_strength > strength or (uid and winner_uid and uid != winner_uid):
+                title = _coerce_text(_game_section(game, "metadata").get("title"))
+                item.clear()
+                item.update({"status": "new", "game": game, "title": title})
 
 
 def _plan_cover_files(

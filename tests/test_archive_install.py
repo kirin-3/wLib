@@ -673,6 +673,33 @@ def test_install_same_folder_pattern_replaces_safely(tmp_path, monkeypatch):
     assert [p.name for p in lib.iterdir()] == ["Game"]
 
 
+def test_install_same_folder_pattern_when_old_folder_is_gone(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    dest = lib / "Game"
+    # The library still points at a folder the user deleted or moved away.
+    game_id = db.add_game("Game", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="2.0",
+        game_id=int(game_id),
+    )
+    assert result["success"] is True, result
+    assert (dest / "Game.exe").read_bytes() == b"new"
+    assert [p.name for p in lib.iterdir()] == ["Game"]
+    game = db.get_game(int(game_id))
+    assert game and os.path.normpath(game["exe_path"]) == str(dest / "Game.exe")
+
+
 def test_install_same_folder_pattern_keeps_backup_when_unticked(tmp_path, monkeypatch):
     db = _isolated_db(tmp_path, monkeypatch)
     from core.archive_install import install_archive

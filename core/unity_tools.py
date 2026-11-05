@@ -272,8 +272,22 @@ def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: 
             for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
                 h.update(chunk)
         return h.hexdigest()
+    def complete(path: Path) -> bool:
+        # Without a published hash, a zip's central directory (written last)
+        # is the only sign that the whole file arrived.
+        if sha256:
+            return digest(path).lower() == sha256.lower()
+        if file_name.lower().endswith(".zip"):
+            import zipfile
+
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    return archive.testzip() is None
+            except (OSError, zipfile.BadZipFile, EOFError):
+                return False
+        return True
     if target.is_file():
-        if not sha256 or digest(target).lower() == sha256.lower():
+        if complete(target):
             return target
         target.unlink()
     partial = cache / (file_name + ".wlib-partial")
@@ -299,8 +313,15 @@ def _download_cached_unlocked(url: str, file_name: str, cache_dir: str, sha256: 
                 done += len(chunk)
                 if progress:
                     progress(done, total, label)
+        # HTTPResponse.read() returns b"" on an early EOF instead of raising.
+        if total and done != total:
+            raise GameToolError(
+                f"Download incomplete ({done} of {total} bytes); try again"
+            )
         if sha256 and digest(partial).lower() != sha256.lower():
             raise GameToolError("Downloaded file SHA-256 mismatch")
+        if not sha256 and not complete(partial):
+            raise GameToolError("Downloaded file is not a valid zip archive")
         _ = partial.replace(target)
         return target
     finally:

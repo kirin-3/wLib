@@ -91,11 +91,18 @@ def test_download_cache(tmp_path):
     from core.game_tools import GameToolError
     from core.unity_tools import download_cached
 
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.txt", "data")
+    payload = buffer.getvalue()
+
     class Response(io.BytesIO):
-        headers = {"Content-Length": "4"}
+        headers = {"Content-Length": str(len(payload))}
 
     def opener(*args, **kwargs):
-        return Response(b"data")
+        return Response(payload)
 
     url = "https://example.test/file.zip"
     with pytest.raises(GameToolError, match="mismatch"):
@@ -104,12 +111,48 @@ def test_download_cache(tmp_path):
     with pytest.raises(GameToolError, match="cancelled"):
         download_cached(url, "file.zip", str(tmp_path), cancelled=lambda: True, opener=opener)
     assert not list(tmp_path.iterdir())
-    path = download_cached(url, "file.zip", str(tmp_path), hashlib.sha256(b"data").hexdigest(), opener=opener)
-    assert path and path.read_bytes() == b"data"
+    path = download_cached(url, "file.zip", str(tmp_path), hashlib.sha256(payload).hexdigest(), opener=opener)
+    assert path and path.read_bytes() == payload
     assert download_cached(url, "file.zip", str(tmp_path), opener=lambda *a, **k: pytest.fail("cache miss")) == path
     def missing(*args, **kwargs):
         raise urllib.error.HTTPError(url, 404, "missing", {}, None)
     assert download_cached(url, "other.zip", str(tmp_path), opener=missing) is None
+
+
+def test_download_cache_rejects_truncated_files(tmp_path):
+    import io
+    import zipfile
+
+    import pytest
+
+    from core.game_tools import GameToolError
+    from core.unity_tools import download_cached
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.txt", "data" * 100)
+    payload = buffer.getvalue()
+
+    class Truncated(io.BytesIO):
+        headers = {"Content-Length": str(len(payload))}
+
+    url = "https://example.test/be.zip"
+    # The connection drops early; read() just returns b"" (no IncompleteRead).
+    with pytest.raises(GameToolError, match="incomplete"):
+        download_cached(url, "be.zip", str(tmp_path), opener=lambda *a, **k: Truncated(payload[:-20]))
+    assert not list(tmp_path.iterdir())
+
+    class NoLength(io.BytesIO):
+        headers = {}
+
+    with pytest.raises(GameToolError, match="not a valid zip"):
+        download_cached(url, "be.zip", str(tmp_path), opener=lambda *a, **k: NoLength(payload[: len(payload) // 2]))
+    assert not list(tmp_path.iterdir())
+
+    # A truncated file cached by an older build is replaced, not reused.
+    (tmp_path / "be.zip").write_bytes(payload[: len(payload) // 2])
+    path = download_cached(url, "be.zip", str(tmp_path), opener=lambda *a, **k: NoLength(payload))
+    assert path and path.read_bytes() == payload
 
 
 def test_install_update_uninstall_restore(tmp_path):
@@ -238,9 +281,15 @@ def test_concurrent_downloads_share_the_cached_file(tmp_path):
             started.set()
             assert release.wait(5)
             return super().read(*args)
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.txt", "data")
+
     def opener(*args, **kwargs):
         calls.append(1)
-        return Response(b"data")
+        return Response(buffer.getvalue())
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(download_cached, "https://example.test/a", "a.zip", str(tmp_path), opener=opener)
         assert started.wait(5)
