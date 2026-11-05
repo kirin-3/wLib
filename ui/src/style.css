@@ -455,6 +455,70 @@ body {
   flex-shrink: 0;
 }
 
+/* Settings card building blocks shared by component-based settings sections. */
+.ui-card-row {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.ui-card-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-hover);
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: background-color var(--motion-fast) ease, filter var(--motion-fast) ease;
+}
+.ui-card-btn:hover:not(:disabled) { background: var(--border-hover); }
+.ui-card-btn:disabled { opacity: 0.5; cursor: default; }
+.ui-card-btn--primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+.ui-card-btn--primary:hover:not(:disabled) { background: var(--brand); filter: brightness(1.08); }
+
+.ui-card-select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+.ui-card-select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow); }
+.ui-card-select:disabled { opacity: 0.5; }
+
+.ui-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.6rem;
+  font-size: 0.8rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.ui-callout--danger { color: var(--danger-text); background: var(--danger-bg); border-color: var(--danger-border); }
+
+.ui-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--text-muted);
+}
+.ui-status-badge--ok { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
+.ui-status-badge--warn { background: var(--tag-yellow-bg); border-color: var(--tag-yellow-border); color: var(--warning-text); }
+
 .ui-icon-btn {
   display: inline-flex;
   align-items: center;

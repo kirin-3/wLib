@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { IconAlertTriangle, IconAppWindow, IconArrowLeft, IconClipboardText, IconCopy, IconCpu, IconDatabase, IconFolderOpen, IconLoader2, IconPuzzle, IconRefresh, IconStethoscope, IconTools } from "@tabler/icons-vue";
 import { api, onWebviewReady, type DiagnosticsBasic, type DiagnosticsTools } from "../services/api";
 import { copyText } from "../utils/copyText";
 import { notify, notifyError } from "../utils/toast";
@@ -114,85 +115,93 @@ onBeforeUnmount(() => { request++; });
 </script>
 
 <template>
-  <div class="diagnostics-page allow-text-selection">
-    <header>
-      <RouterLink to="/settings" class="back-link">Back to Settings</RouterLink>
-      <h1>Diagnostics</h1>
-      <p>App details for a bug report. Copied reports replace your home folder with ~ and hide your login name in other paths.</p>
+  <div class="diagnostics-page allow-text-selection mx-auto w-full p-8 max-w-5xl pb-12">
+    <header class="mb-8">
+      <RouterLink to="/settings" class="back-link"><IconArrowLeft class="w-4 h-4" />Back to Settings</RouterLink>
+      <h2 class="ui-page-heading text-3xl font-bold mb-2 tracking-tight" style="color: var(--text-primary)">
+        <IconStethoscope class="ui-page-heading-icon" />
+        <span>Diagnostics</span>
+      </h2>
+      <p class="text-sm pl-3" style="color: var(--text-secondary); border-left: 2px solid var(--brand)">
+        App details for a bug report. Copied reports replace your home folder with ~ and hide your login name in other paths.
+      </p>
       <div class="diagnostics-actions">
-        <button type="button" class="primary-action" :disabled="copying || busy || !!basicError" @click="copyReport">{{ copying ? 'Copying…' : 'Copy report' }}</button>
-        <button type="button" :disabled="opening" @click="openLogs">{{ opening ? 'Opening…' : 'Open log folder' }}</button>
-        <button type="button" :disabled="busy" @click="refresh">{{ busy ? 'Refreshing…' : 'Refresh' }}</button>
+        <button type="button" class="diag-btn primary-action" :disabled="copying || busy || !!basicError" @click="copyReport">
+          <IconLoader2 v-if="copying" class="w-4 h-4 animate-spin" /><IconCopy v-else class="w-4 h-4" />{{ copying ? 'Copying…' : 'Copy report' }}
+        </button>
+        <button type="button" class="diag-btn" :disabled="opening" @click="openLogs"><IconFolderOpen class="w-4 h-4" />{{ opening ? 'Opening…' : 'Open log folder' }}</button>
+        <button type="button" class="diag-btn" :disabled="busy" @click="refresh"><IconRefresh class="w-4 h-4" :class="{ 'animate-spin': busy }" />{{ busy ? 'Refreshing…' : 'Refresh' }}</button>
       </div>
     </header>
-    <p v-if="basicLoading" role="status">Loading app details…</p>
-    <p v-if="basicError" role="alert">{{ basicError }}. Use Refresh to try again.</p>
-    <template v-if="basic">
-      <section aria-labelledby="diagnostics-app">
-        <h2 id="diagnostics-app">App</h2>
-        <dl>
-          <div><dt>wLib version</dt><dd>{{ unavailable(basic.app_version) }}</dd></div>
-          <div><dt>Extension version</dt><dd>{{ unavailable(basic.extension_version) }}</dd></div>
-          <div><dt>Packaging</dt><dd>{{ unavailable(basic.packaging) }}</dd></div>
-          <div><dt>Operating system</dt><dd>{{ unavailable(basic.os) }}</dd></div>
-          <div><dt>Python</dt><dd>{{ unavailable(basic.python) }}</dd></div>
+    <p v-if="basicLoading" role="status" class="flex items-center gap-2 text-sm" style="color: var(--text-muted)"><IconLoader2 class="w-4 h-4 animate-spin" />Loading app details…</p>
+    <p v-if="basicError" role="alert" class="ui-callout ui-callout--danger"><IconAlertTriangle class="w-4 h-4 shrink-0" />{{ basicError }}. Use Refresh to try again.</p>
+    <div class="space-y-6">
+      <template v-if="basic">
+        <section class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-app">
+          <h3 id="diagnostics-app" class="ui-section-heading text-lg font-semibold"><IconAppWindow class="ui-section-icon" />App</h3>
+          <dl>
+            <div><dt>wLib version</dt><dd>{{ unavailable(basic.app_version) }}</dd></div>
+            <div><dt>Extension version</dt><dd>{{ unavailable(basic.extension_version) }}</dd></div>
+            <div><dt>Packaging</dt><dd>{{ unavailable(basic.packaging) }}</dd></div>
+            <div><dt>Operating system</dt><dd>{{ unavailable(basic.os) }}</dd></div>
+            <div><dt>Python</dt><dd>{{ unavailable(basic.python) }}</dd></div>
+          </dl>
+        </section>
+        <section class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-renderer">
+          <h3 id="diagnostics-renderer" class="ui-section-heading text-lg font-semibold"><IconCpu class="ui-section-icon" />Renderer</h3>
+          <dl><div v-for="[label, value] in rendererRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div></dl>
+        </section>
+        <section class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-storage">
+          <h3 id="diagnostics-storage" class="ui-section-heading text-lg font-semibold"><IconDatabase class="ui-section-icon" />Storage and library</h3>
+          <dl>
+            <div><dt>Data folder</dt><dd class="mono">{{ basic.data_path }}</dd></div>
+            <div><dt>Database file</dt><dd class="mono">{{ basic.database_path }}</dd></div>
+            <div><dt>Database size (including WAL)</dt><dd>{{ basic.database_bytes.toLocaleString() }} bytes</dd></div>
+            <div><dt>Log folder</dt><dd class="mono">{{ basic.log_path }}</dd></div>
+            <div><dt>Games</dt><dd>{{ basic.game_count }}</dd></div>
+          </dl>
+        </section>
+      </template>
+      <section class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-extension">
+        <h3 id="diagnostics-extension" class="ui-section-heading text-lg font-semibold"><IconPuzzle class="ui-section-icon" />Extension</h3>
+        <dl><div><dt>Local server (127.0.0.1:8183)</dt><dd>{{ toolsLoading ? 'Checking…' : toolsError ? 'Not available' : tools?.extension.reachable ? 'Reachable' : 'Not reachable' }}</dd></div>
+          <div v-if="tools?.extension.error"><dt>Server response</dt><dd>{{ tools.extension.error }}</dd></div>
+          <div v-for="[label, value] in bridgeRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
         </dl>
       </section>
-      <section aria-labelledby="diagnostics-renderer">
-        <h2 id="diagnostics-renderer">Renderer</h2>
-        <dl><div v-for="[label, value] in rendererRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div></dl>
+      <section class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-tools" :aria-busy="toolsLoading">
+        <h3 id="diagnostics-tools" class="ui-section-heading text-lg font-semibold"><IconTools class="ui-section-icon" />Tools</h3>
+        <p v-if="toolsError" role="alert" class="ui-callout ui-callout--danger mb-3"><IconAlertTriangle class="w-4 h-4 shrink-0" />{{ toolsError }}. Use Refresh to try again.</p>
+        <dl><div v-for="[label, value] in toolRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div></dl>
       </section>
-      <section aria-labelledby="diagnostics-storage">
-        <h2 id="diagnostics-storage">Storage and library</h2>
-        <dl>
-          <div><dt>Data folder</dt><dd>{{ basic.data_path }}</dd></div>
-          <div><dt>Database file</dt><dd>{{ basic.database_path }}</dd></div>
-          <div><dt>Database size (including WAL)</dt><dd>{{ basic.database_bytes.toLocaleString() }} bytes</dd></div>
-          <div><dt>Log folder</dt><dd>{{ basic.log_path }}</dd></div>
-          <div><dt>Games</dt><dd>{{ basic.game_count }}</dd></div>
-        </dl>
+      <section v-if="manualReport" class="diag-card rounded-xl p-6" aria-labelledby="diagnostics-manual">
+        <h3 id="diagnostics-manual" class="ui-section-heading text-lg font-semibold"><IconClipboardText class="ui-section-icon" />Copy report manually</h3>
+        <p class="text-sm mt-2" style="color: var(--text-secondary)">Clipboard access was unavailable. The report is selected below; copy it with your keyboard or context menu.</p>
+        <textarea ref="reportBox" :value="manualReport" readonly aria-label="Diagnostics report" rows="14" />
       </section>
-    </template>
-    <section aria-labelledby="diagnostics-extension">
-      <h2 id="diagnostics-extension">Extension</h2>
-      <dl><div><dt>Local server (127.0.0.1:8183)</dt><dd>{{ toolsLoading ? 'Checking…' : toolsError ? 'Not available' : tools?.extension.reachable ? 'Reachable' : 'Not reachable' }}</dd></div>
-        <div v-if="tools?.extension.error"><dt>Server response</dt><dd>{{ tools.extension.error }}</dd></div>
-        <div v-for="[label, value] in bridgeRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
-      </dl>
-    </section>
-    <section aria-labelledby="diagnostics-tools" :aria-busy="toolsLoading">
-      <h2 id="diagnostics-tools">Tools</h2>
-      <p v-if="toolsError" role="alert">{{ toolsError }}. Use Refresh to try again.</p>
-      <dl><div v-for="[label, value] in toolRows" :key="label"><dt>{{ label }}</dt><dd>{{ value }}</dd></div></dl>
-    </section>
-    <section v-if="manualReport" aria-labelledby="diagnostics-manual">
-      <h2 id="diagnostics-manual">Copy report manually</h2>
-      <p>Clipboard access was unavailable. The report is selected below; copy it with your keyboard or context menu.</p>
-      <textarea ref="reportBox" :value="manualReport" readonly aria-label="Diagnostics report" rows="14" />
-    </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.diagnostics-page { margin-inline: auto; width: 100%; max-width: 64rem; min-width: 0; padding: 1rem; color: var(--text-primary); overflow-wrap: anywhere; }
-header { margin-bottom: 2rem; }
-.back-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--text-secondary); text-decoration: underline; text-underline-offset: 3px; }
-h1 { font-size: clamp(1.5rem, 3vw, 1.875rem); font-weight: 700; margin: 0.5rem 0; }
-p { color: var(--text-secondary); font-size: 0.875rem; line-height: 1.6; }
+.diagnostics-page { color: var(--text-primary); min-width: 0; overflow-wrap: anywhere; }
+.back-link { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 2.25rem; margin-bottom: 0.75rem; font-size: 0.8125rem; color: var(--text-muted); }
+.back-link:hover { color: var(--text-primary); }
 .diagnostics-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; }
-button { min-width: 0; max-width: 100%; min-height: 44px; padding: 0.5rem 1rem; border: 1px solid var(--text-secondary); border-radius: 0.5rem; background: var(--bg-raised); color: var(--text-primary); font-size: 0.875rem; font-weight: 600; cursor: pointer; }
-button:hover:enabled { background: var(--bg-overlay); }
-button.primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
-button.primary-action:hover:enabled { filter: brightness(1.08); background: var(--brand); }
-button:disabled { cursor: wait; opacity: 0.6; }
-button:focus-visible, a:focus-visible, textarea:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 3px; }
-section { margin-top: 2rem; }
-h2 { font-size: 1.125rem; font-weight: 600; margin-bottom: 0.75rem; }
-dl { border-top: 1px solid var(--border); }
-dl > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.25rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
-dt { color: var(--text-secondary); }
-dd { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-textarea { width: 100%; margin-top: 1rem; padding: 0.75rem; border: 1px solid var(--text-secondary); border-radius: 0.5rem; background: var(--bg-inset); color: var(--text-primary); font-family: inherit; font-size: 0.875rem; overflow-wrap: anywhere; }
-@media (min-width: 40rem) { .diagnostics-page { padding: 1.5rem; } dl > div { grid-template-columns: minmax(12rem, 35%) minmax(0, 1fr); gap: 1rem; } }
-@media (min-width: 64rem) { .diagnostics-page { padding: 2rem; } }
+.diag-btn { display: inline-flex; align-items: center; gap: 0.5rem; max-width: 100%; min-height: 2.5rem; padding: 0.5rem 1rem; border: 1px solid var(--border-hover); border-radius: 0.5rem; background: var(--bg-overlay); color: var(--text-primary); font-size: 0.875rem; font-weight: 600; transition: background-color var(--motion-fast) ease, filter var(--motion-fast) ease; }
+.diag-btn:hover:enabled { background: var(--border-hover); }
+.diag-btn.primary-action { background: var(--brand); color: var(--on-brand); border-color: var(--brand); box-shadow: var(--shadow-brand); }
+.diag-btn.primary-action:hover:enabled { filter: brightness(1.08); background: var(--brand); }
+.diag-btn:disabled { cursor: wait; opacity: 0.6; }
+.diag-btn:focus-visible, a:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--brand-glow); }
+.diag-card { background: var(--bg-surface); border: 1px solid var(--border); }
+dl { margin-top: 1rem; border-radius: 0.5rem; border: 1px solid var(--border); background: var(--bg-raised); overflow: hidden; }
+dl > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.25rem; padding: 0.65rem 1rem; font-size: 0.8125rem; }
+dl > div + div { border-top: 1px solid var(--border); }
+dt { color: var(--text-muted); }
+dd { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-primary); }
+dd.mono { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+textarea { width: 100%; margin-top: 1rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem; background: var(--bg-inset); color: var(--text-primary); font-family: ui-monospace, monospace; font-size: 0.75rem; overflow-wrap: anywhere; }
+@media (min-width: 40rem) { dl > div { grid-template-columns: minmax(12rem, 35%) minmax(0, 1fr); gap: 1rem; } }
+@media (max-width: 640px) { .diagnostics-page { padding: 1rem; } }
 </style>

@@ -3,7 +3,7 @@
 import { useSettingsRowVisibility } from "../utils/settingsVisibility";
 import { confirmAction } from "../utils/confirm";
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { IconShieldLock } from '@tabler/icons-vue';
+import { IconAlertTriangle, IconCircleCheck, IconCopy, IconExternalLink, IconLoader2, IconRefresh, IconShieldLock } from '@tabler/icons-vue';
 import { api, onWebviewReady } from '../services/api';
 import type { SandboxStatus, SandboxInstallInfo } from '../services/api';
 import { sandboxStatusMessage } from '../utils/sandbox';
@@ -21,6 +21,7 @@ const busy = ref(false);
 const installing = ref(false);
 const error = ref('');
 const statusText = computed(() => sandboxStatusMessage(status.value));
+const statusTone = computed(() => !status.value ? 'pending' : status.value.status === 'ready' ? 'ok' : 'warn');
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 const recheck = async () => { status.value = await api.recheckSandboxStatus(); };
@@ -98,48 +99,87 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       <IconShieldLock class="ui-section-icon" />
       Sandbox
     </h3>
-    <div data-settings-row="sandbox-static-0" data-settings-bound v-show="settingsRowVisible('sandbox-static-0')" class="flex items-start justify-between gap-4">
-      <p class="text-sm" role="status">{{ statusText }}</p>
-      <button class="sandbox-button" :disabled="installing" @click="recheck().catch(e => notifyError(String(e)))">Recheck</button>
-    </div>
-    <p data-settings-row="sandbox-static-1" data-settings-bound v-show="settingsRowVisible('sandbox-static-1')" class="text-sm" style="color:var(--text-secondary)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
-    <p data-settings-row="sandbox-static-2" data-settings-bound v-show="settingsRowVisible('sandbox-static-2')" v-if="platform === 'linux'" class="text-sm" style="color:var(--text-secondary)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
-    <div data-settings-row="sandbox-static-3" data-settings-bound v-show="settingsRowVisible('sandbox-static-3')" v-if="status?.status === 'missing' && info" class="space-y-3">
-      <div v-if="info.command" class="flex flex-wrap items-center gap-2">
-        <code class="text-sm break-all">{{ info.command }}</code>
-        <button class="sandbox-button" @click="copyCommand">Copy</button>
+
+    <div data-settings-row="sandbox-static-0" data-settings-bound v-show="settingsRowVisible('sandbox-static-0')" class="ui-card-row flex items-center justify-between gap-4 p-4 rounded-lg">
+      <div class="flex items-start gap-3 min-w-0" role="status">
+        <span class="ui-status-badge" :class="statusTone === 'ok' ? 'ui-status-badge--ok' : statusTone === 'warn' ? 'ui-status-badge--warn' : ''" aria-hidden="true">
+          <IconLoader2 v-if="statusTone === 'pending'" class="w-4 h-4 animate-spin" />
+          <IconCircleCheck v-else-if="statusTone === 'ok'" class="w-4 h-4" />
+          <IconAlertTriangle v-else class="w-4 h-4" />
+        </span>
+        <div class="min-w-0">
+          <h4 class="text-sm font-medium" style="color: var(--text-primary)">Sandbox tool</h4>
+          <p class="text-xs mt-1 break-words" style="color: var(--text-muted)">{{ statusText }}</p>
+        </div>
       </div>
-      <p v-else-if="platform === 'linux'" class="text-sm">Install bubblewrap with your system package manager, then choose Recheck.</p>
-      <div class="flex flex-wrap gap-2">
-        <button v-if="info.can_install" class="sandbox-button" :disabled="installing" @click="install">{{ installing ? 'Installing…' : 'Install' }}</button>
-        <button v-if="info.download_url" class="sandbox-button" @click="api.openInBrowser(info.download_url)">Official download page</button>
+      <button class="ui-card-btn shrink-0" :disabled="installing" @click="recheck().catch(e => notifyError(String(e)))"><IconRefresh class="w-3.5 h-3.5" />Recheck</button>
+    </div>
+
+    <p data-settings-row="sandbox-static-1" data-settings-bound v-show="settingsRowVisible('sandbox-static-1')" class="text-xs" style="color: var(--text-muted)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
+    <p data-settings-row="sandbox-static-2" data-settings-bound v-show="settingsRowVisible('sandbox-static-2')" v-if="platform === 'linux'" class="text-xs !mt-2" style="color: var(--text-muted)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
+
+    <div data-settings-row="sandbox-static-3" data-settings-bound v-show="settingsRowVisible('sandbox-static-3')" v-if="status?.status === 'missing' && info" class="ui-card-row p-4 rounded-lg space-y-3">
+      <h4 class="text-sm font-medium" style="color: var(--text-primary)">Install the sandbox tool</h4>
+      <div v-if="info.command" class="command flex items-center gap-2 rounded-lg pl-3 pr-1 py-1">
+        <code class="text-xs font-mono break-all flex-1 min-w-0">{{ info.command }}</code>
+        <button class="icon-btn" title="Copy command" aria-label="Copy install command" @click="copyCommand"><IconCopy class="w-4 h-4" /></button>
+      </div>
+      <p v-else-if="platform === 'linux'" class="text-xs" style="color: var(--text-muted)">Install bubblewrap with your system package manager, then choose Recheck.</p>
+      <div v-if="info.can_install || info.download_url" class="flex flex-wrap gap-2">
+        <button v-if="info.can_install" class="ui-card-btn ui-card-btn--primary" :disabled="installing" @click="install">
+          <IconLoader2 v-if="installing" class="w-3.5 h-3.5 animate-spin" />{{ installing ? 'Installing…' : 'Install' }}
+        </button>
+        <button v-if="info.download_url" class="ui-card-btn" @click="api.openInBrowser(info.download_url)"><IconExternalLink class="w-3.5 h-3.5" />Official download page</button>
       </div>
     </div>
-    <p data-settings-row="sandbox-static-4" data-settings-bound v-show="settingsRowVisible('sandbox-static-4')" v-if="installing" class="text-sm" role="status">Installing sandbox tool. Complete the system authentication prompt if one appears.</p>
-    <p data-settings-row="sandbox-static-5" data-settings-bound v-show="settingsRowVisible('sandbox-static-5')" v-if="error" class="text-sm" role="alert" style="color:var(--danger, #dc2626)">{{ error }}</p>
-    <div data-settings-row="sandbox-static-6" data-settings-bound v-show="settingsRowVisible('sandbox-static-6')" v-if="platform === 'windows'" class="space-y-2">
-      <p class="text-sm font-medium">Custom Sandboxie Start.exe</p>
-      <div class="flex flex-wrap items-center gap-2">
-        <code class="text-xs break-all">{{ customPath || 'Use the detected installation' }}</code>
-        <button class="sandbox-button" @click="choosePath">Choose Start.exe</button>
-        <button v-if="customPath" class="sandbox-button" @click="savePath('')">Clear</button>
+
+    <p data-settings-row="sandbox-static-4" data-settings-bound v-show="settingsRowVisible('sandbox-static-4')" v-if="installing" class="ui-callout" role="status">
+      <IconLoader2 class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
+      Installing sandbox tool. Complete the system authentication prompt if one appears.
+    </p>
+    <p data-settings-row="sandbox-static-5" data-settings-bound v-show="settingsRowVisible('sandbox-static-5')" v-if="error" class="ui-callout ui-callout--danger" role="alert">
+      <IconAlertTriangle class="w-4 h-4 shrink-0" />
+      <span class="break-words min-w-0">{{ error }}</span>
+    </p>
+
+    <div data-settings-row="sandbox-static-6" data-settings-bound v-show="settingsRowVisible('sandbox-static-6')" v-if="platform === 'windows'" class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+      <div class="min-w-0">
+        <h4 class="text-sm font-medium" style="color: var(--text-primary)">Custom Sandboxie Start.exe</h4>
+        <p class="text-xs mt-1 font-mono break-all" style="color: var(--text-muted)">{{ customPath || 'Use the detected installation' }}</p>
+      </div>
+      <div class="flex gap-2 shrink-0">
+        <button class="ui-card-btn" @click="choosePath">Choose Start.exe</button>
+        <button v-if="customPath" class="ui-card-btn" @click="savePath('')">Clear</button>
       </div>
     </div>
-    <label data-settings-row="sandbox-static-7" data-settings-bound v-show="settingsRowVisible('sandbox-static-7')" class="flex items-center justify-between gap-4 text-sm">
-      <span>Sandbox new games</span>
-      <input type="checkbox" role="switch" class="sandbox-switch" :checked="defaultEnabled" :disabled="busy" @change="saveDefault" />
-    </label>
-    <div data-settings-row="sandbox-static-8" data-settings-bound v-show="settingsRowVisible('sandbox-static-8')" class="flex flex-wrap gap-2">
-      <button class="sandbox-button" :disabled="busy" @click="setAll(true)">Enable for all games</button>
-      <button class="sandbox-button" :disabled="busy" @click="setAll(false)">Disable for all games</button>
+
+    <div data-settings-row="sandbox-static-7" data-settings-bound v-show="settingsRowVisible('sandbox-static-7')" class="ui-card-row flex items-center justify-between gap-4 p-4 rounded-lg">
+      <div>
+        <h4 class="text-sm font-medium" style="color: var(--text-primary)">Sandbox new games</h4>
+        <p class="text-xs mt-1" style="color: var(--text-muted)">Games you add from now on start with sandboxing turned on.</p>
+      </div>
+      <label class="relative inline-flex items-center cursor-pointer shrink-0">
+        <input type="checkbox" role="switch" class="sr-only peer" aria-label="Sandbox new games" :checked="defaultEnabled" :disabled="busy" @change="saveDefault" />
+        <div class="ui-toggle"></div>
+      </label>
+    </div>
+
+    <div data-settings-row="sandbox-static-8" data-settings-bound v-show="settingsRowVisible('sandbox-static-8')" class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+      <div>
+        <h4 class="text-sm font-medium" style="color: var(--text-primary)">Existing games</h4>
+        <p class="text-xs mt-1" style="color: var(--text-muted)">Change sandboxing for every game in your library at once.</p>
+      </div>
+      <div class="flex flex-wrap gap-2 shrink-0">
+        <button class="ui-card-btn" :disabled="busy" @click="setAll(true)">Enable for all games</button>
+        <button class="ui-card-btn" :disabled="busy" @click="setAll(false)">Disable for all games</button>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
 section { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border); scroll-margin-top: 1.5rem; }
-.sandbox-button { padding: .4rem .7rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); font-size: .8rem; cursor: pointer; }
-.sandbox-button:hover { border-color: var(--brand); }
-.sandbox-button:disabled { opacity: .5; cursor: default; }
-input { accent-color: var(--brand); }
+.command { background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-primary); }
+.icon-btn { display: inline-flex; padding: 0.4rem; border-radius: 0.375rem; color: var(--text-muted); }
+.icon-btn:hover { color: var(--text-primary); background: var(--bg-overlay); }
 </style>
