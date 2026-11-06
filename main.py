@@ -32,7 +32,8 @@ if __name__ == "__main__" and "--launch" in sys.argv:
     from core.app_log import setup_app_log
     from core.host_platform import get_data_dir
 
-    _ = setup_app_log(get_data_dir())
+    # The running app owns rotation of the shared log.
+    _ = setup_app_log(get_data_dir(), rotate=False)
     try:
         launch_id = int(sys.argv[sys.argv.index("--launch") + 1])
         if launch_id <= 0 or sys.platform != "linux":

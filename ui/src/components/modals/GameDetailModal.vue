@@ -654,8 +654,16 @@ const refreshSteamState = async () => {
 };
 const setSteamMark = async (event: Event) => {
   if (!props.game) return;
-  const result = await api.setGameSteamShortcut(props.game.id, (event.target as HTMLInputElement).checked);
-  if (!result.success) notifyError(result.error || "Could not update Steam mark");
+  const input = event.target as HTMLInputElement;
+  const wanted = input.checked;
+  try {
+    const result = await api.setGameSteamShortcut(props.game.id, wanted);
+    if (!result.success) throw new Error(result.error || "Could not update Steam mark");
+  } catch (error) {
+    // The bound value did not change, so Vue will not reset the switch itself.
+    input.checked = !wanted;
+    notifyError(error instanceof Error ? error.message : String(error));
+  }
   await refreshSteamState();
 };
 watch(() => [props.modelValue, props.game?.id, activeTab.value, platformCapabilities.value.platform] as const, ([open, id, tab, platform], _previous, cleanup) => {

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import io
 import logging
+import os
 import sys
 import threading
 import traceback
@@ -114,6 +115,21 @@ def test_rotation(tmp_path, monkeypatch):
         "wlib.log.2",
         "wlib.log.3",
     ]
+
+
+def test_helper_log_never_rotates_and_follows_the_apps_rotation(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_log, "MAX_BYTES", 200)
+    app_log.setup_app_log(str(tmp_path), rotate=False)
+    for index in range(30):
+        print(f"helper {index} " + "x" * 60)
+    logs = tmp_path / "logs"
+    assert [p.name for p in logs.iterdir()] == ["wlib.log"]
+    # The main app rotates the shared file; the helper's next line must land
+    # in the new wlib.log, not in the renamed backup.
+    os.rename(logs / "wlib.log", logs / "wlib.log.1")
+    print("after rotation")
+    assert (logs / "wlib.log").read_text().strip().endswith("after rotation")
+    assert "after rotation" not in (logs / "wlib.log.1").read_text()
 
 
 def test_unwritable_folder_installs_nothing(tmp_path, monkeypatch, capsys):

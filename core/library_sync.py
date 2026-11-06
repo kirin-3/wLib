@@ -663,6 +663,9 @@ class SyncManager:
         # needs_choice/needs_passphrase result it left for that revision.
         self._first_revision: str | None = None
         self._first_pending: tuple[str, str] | None = None
+        # (revision, modified_at) of a remote file a push-only run read and
+        # left for a full sync to apply.
+        self._newer_remote: tuple[str, str] | None = None
         # (state, PKCE verifier, expiry, provider)
         self._pending: tuple[str, str, float, str] | None = None
         self._stop: threading.Event = threading.Event()
@@ -771,6 +774,7 @@ class SyncManager:
         )
         self._state, self._error_code = "idle", ""
         self._first_pending = None
+        self._newer_remote = None
 
     def set_folder(self, folder: object) -> dict[str, object]:
         selected = folder if isinstance(folder, str) else ""
@@ -998,6 +1002,21 @@ class SyncManager:
             # and decrypting the whole file every minute.
             self._state = pending[1]
             return
+        seen = self._newer_remote
+        if (
+            push_only
+            and not first
+            and remote_changed
+            and seen is not None
+            and seen[0] == revision
+            and (
+                not local_changed
+                or timestamp(seen[1]) >= timestamp(local_modified)
+            )
+        ):
+            # Same newer remote the last push-only run read: it still wins and
+            # still waits for a full sync, so don't download it every minute.
+            return
         backup: dict[str, object] | None = None
         if first or remote_changed:
             backup, revision = self._remote(location)
@@ -1036,7 +1055,9 @@ class SyncManager:
             assert backup is not None
             remote_time = str(cast(dict[str, object], backup["sync"])["modified_at"])
             if not local_changed or timestamp(remote_time) >= timestamp(local_modified):
-                if not push_only:
+                if push_only:
+                    self._newer_remote = (revision, remote_time)
+                else:
                     self._pull(backup, revision, local_modified)
                 return
         if local_changed:
@@ -1103,6 +1124,7 @@ class SyncManager:
                 )
                 self._state, self._error_code = "idle", ""
                 self._first_pending = None
+                self._newer_remote = None
                 return self.status()
             except Exception as error:
                 return self._error(error)
@@ -1304,6 +1326,7 @@ class SyncManager:
         self._dropbox, self._gdrive, self._pending = None, None, None
         self._state, self._error_code = "idle", ""
         self._first_pending = None
+        self._newer_remote = None
 
     def disconnect(self) -> dict[str, object]:
         with self._lock:

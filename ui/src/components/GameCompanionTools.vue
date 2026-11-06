@@ -21,14 +21,18 @@ const load = async () => {
   } catch (cause) { if (request === requestId) error.value = String(cause instanceof Error ? cause.message : cause); }
   finally { if (request === requestId) loading.value = false; }
 };
-const setOverride = async (tool: GameCompanionTool, visible: boolean | null) => {
+const setOverride = async (tool: GameCompanionTool, visible: boolean | null, input?: HTMLInputElement) => {
   saving.value = true;
   error.value = "";
   try {
     const result = await api.setGameCompanionToolOverride(props.gameId, tool.id, visible);
     if (!result.success) throw new Error(result.error || "Could not save tool visibility");
     await load();
-  } catch (cause) { error.value = String(cause instanceof Error ? cause.message : cause); }
+  } catch (cause) {
+    // tool.visible did not change, so Vue will not reset the checkbox itself.
+    if (input) input.checked = tool.visible;
+    error.value = String(cause instanceof Error ? cause.message : cause);
+  }
   finally { saving.value = false; }
 };
 watch(() => props.gameId, () => { tools.value = []; void load(); }, { immediate: true });
@@ -40,7 +44,7 @@ watch(() => props.gameId, () => { tools.value = []; void load(); }, { immediate:
     <p v-else-if="!tools.length && !error" class="help text-sm">No custom tools yet. <button type="button" class="underline" @click="emit('settings')">Open Settings &gt; Custom tools</button></p>
     <fieldset :disabled="saving || loading" class="space-y-2">
       <div v-for="tool in tools" :key="tool.id" class="flex items-center gap-3 text-sm">
-        <label class="flex flex-1 items-center gap-2"><input type="checkbox" :checked="tool.visible" @change="setOverride(tool, ($event.target as HTMLInputElement).checked)" />{{ tool.name }}</label>
+        <label class="flex flex-1 items-center gap-2"><input type="checkbox" :checked="tool.visible" @change="setOverride(tool, ($event.target as HTMLInputElement).checked, $event.target as HTMLInputElement)" />{{ tool.name }}</label>
         <span v-if="!tool.overridden" class="help text-xs">default</span>
         <button v-else type="button" class="underline text-xs" :aria-label="`Reset ${tool.name} to default`" @click="setOverride(tool, null)">Reset</button>
       </div>

@@ -671,6 +671,23 @@ def test_auto_push_keeps_a_pending_first_choice_without_rereading():
     assert [game["title"] for game in database.get_all_games()] == ["Local"]
 
 
+def test_auto_push_reads_a_newer_remote_once_while_local_edits_wait():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    database.add_game("Local edit", "/local.exe")
+    location.change(remote_backup("Newer remote", "2099-01-01T00:00:00Z"))
+    reads = location.reads
+    # The newer remote wins, but only a full sync applies it. The watcher
+    # must not download it again every minute meanwhile.
+    for _ in range(3):
+        sync.run(push_only=True)
+    assert location.reads == reads + 1 and location.writes == 0
+    sync.run()
+    assert location.reads == reads + 2
+    assert [game["title"] for game in database.get_all_games()] == ["Newer remote"]
+
+
 def test_auto_push_on_first_connection_pushes_to_an_empty_remote():
     database.add_game("Local", "/local.exe", developer="Dev")
     location = MemoryLocation(remote_backup(title=""))

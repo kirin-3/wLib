@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, WatchedFileHandler
 import os
 import platform
 import sys
@@ -64,19 +64,30 @@ class OutputTee:
         return cast(object, getattr(self.stream, name))
 
 
-def setup_app_log(data_dir: str) -> str | None:
+def setup_app_log(data_dir: str, *, rotate: bool = True) -> str | None:
+    """Send logging, stdout and stderr to ``logs/wlib.log``.
+
+    Only the main app rotates the file. A helper process that shares it (the
+    Steam launch runner) passes ``rotate=False``: two processes rotating one
+    file rename each other's backups. Its handler reopens ``wlib.log`` after
+    the app rotates it, so its lines keep landing in the current file.
+    """
     path = os.path.join(data_dir, "logs", "wlib.log")
     root = logging.getLogger()
     # Repeated initialization in one process must not stack tees or handlers.
     for existing in root.handlers:
         if isinstance(
-            existing, RotatingFileHandler
+            existing, logging.FileHandler
         ) and existing.baseFilename == os.path.abspath(path):
             return path
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        handler = RotatingFileHandler(
-            path, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8"
+        handler: logging.FileHandler = (
+            RotatingFileHandler(
+                path, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8"
+            )
+            if rotate
+            else WatchedFileHandler(path, encoding="utf-8")
         )
     except OSError as exc:
         print(f"[wLib] App log unavailable: {exc}", file=sys.stderr or sys.__stderr__)

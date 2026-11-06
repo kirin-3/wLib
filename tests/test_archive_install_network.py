@@ -6,6 +6,7 @@ The network paths must produce exactly the tree the local path produces;
 they only change how many round trips it takes to get there.
 """
 import os
+import shutil
 import stat
 import sys
 import time
@@ -266,7 +267,8 @@ def test_network_install_and_update_defers_old_folder(tmp_path, monkeypatch):
     assert db.get_all_games()[0]["version"] == "2.0"
 
 
-def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkeypatch):
+@pytest.mark.parametrize("listed_size", [10, None])
+def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkeypatch, listed_size):
     _isolated_db(tmp_path, monkeypatch)
     monkeypatch.setattr(ai, "is_network_filesystem", lambda _p: True)
     scratch_parent = tmp_path / "scratch"
@@ -282,16 +284,18 @@ def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkey
             f.write(b"#!/bin/sh\n")
         return 1
 
-    real_free_space = ai.ensure_free_space
+    real_disk_usage = shutil.disk_usage
 
-    def free_space(folder, required):
+    def disk_usage(folder):
+        usage = real_disk_usage(folder)
         if os.path.realpath(folder) == os.path.realpath(scratch_parent):
-            raise ai.ArchiveInstallError("Not enough free space")
-        real_free_space(folder, required)
+            # Room for the archive itself, but not the reserve on top.
+            return usage._replace(free=ai.SCRATCH_RESERVE_BYTES)
+        return usage
 
     monkeypatch.setattr(ai, "detect_archive_tool", lambda *_a, **_k: ("/usr/bin/7z", ""))
-    monkeypatch.setattr(ai, "uncompressed_size", lambda *_a, **_k: 10)
-    monkeypatch.setattr(ai, "ensure_free_space", free_space)
+    monkeypatch.setattr(ai, "uncompressed_size", lambda *_a, **_k: listed_size)
+    monkeypatch.setattr(ai.shutil, "disk_usage", disk_usage)
     monkeypatch.setattr(ai, "extract_with_tool", fake_extract)
     lib = tmp_path / "lib"
     result = ai.install_archive(

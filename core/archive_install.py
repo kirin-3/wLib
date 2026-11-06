@@ -44,6 +44,11 @@ ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar")
 STAGING_PREFIX = ".wlib-staging-"
 TRASH_PREFIX = ".wlib-trash-"
 SCRATCH_PREFIX = ".wlib-scratch-"
+# Local scratch must leave this much free so an install never fills the home disk.
+SCRATCH_RESERVE_BYTES = 1024**3
+# Without a listed size, assume an archive unpacks to at most this many times
+# its own size before trusting local disk with it.
+SCRATCH_UNKNOWN_SIZE_FACTOR = 4
 BUNDLED_7ZZ = "/app/bin/7zz"
 
 # Network filesystems pay a server round trip (and, with sync exports, a disk
@@ -680,13 +685,18 @@ def _extract_tool_via_local_scratch(
     """Run a 7z/rar extractor into local scratch, then copy into staging.
 
     Returns False without extracting when local disk can't hold the archive;
-    the caller then extracts straight into staging.
+    the caller then extracts straight into staging. An archive whose unpacked
+    size is unknown is budgeted at a multiple of its own size.
     """
     parent = _scratch_parent()
     try:
+        needed = required_bytes
+        if not needed or needed <= 0:
+            needed = os.path.getsize(archive_path) * SCRATCH_UNKNOWN_SIZE_FACTOR
         os.makedirs(parent, exist_ok=True)
         _sweep_stale_scratch(parent)
-        ensure_free_space(parent, required_bytes)
+        if shutil.disk_usage(parent).free < needed + SCRATCH_RESERVE_BYTES:
+            return False
         scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=parent)
     except (OSError, ArchiveInstallError):
         return False
