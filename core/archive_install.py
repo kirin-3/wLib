@@ -70,6 +70,9 @@ NETWORK_FS_TYPES = frozenset(
     }
 )
 NETWORK_IO_WORKERS = 16
+# Zip members inflate in zlib, which releases the GIL, so local installs scale
+# with cores too. The cap keeps huge machines from opening dozens of handles.
+ZIP_MAX_WORKERS = 32
 _COPY_CHUNK = 1024 * 1024
 # os.open() is text mode on Windows unless asked otherwise.
 _O_BINARY: int = getattr(os, "O_BINARY", 0)
@@ -369,6 +372,24 @@ def is_network_filesystem(path: str) -> bool:
     return filesystem_type(path).lower() in NETWORK_FS_TYPES
 
 
+def usable_cpu_count() -> int:
+    """CPU cores this process may run on (affinity-aware where supported)."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
+
+
+def zip_extract_workers(network: bool) -> int:
+    """Parallel zip writers: one per usable core.
+
+    Network shares keep at least NETWORK_IO_WORKERS, because there the
+    workers mostly wait on server round trips rather than use a core.
+    """
+    workers = min(usable_cpu_count(), ZIP_MAX_WORKERS)
+    return max(workers, NETWORK_IO_WORKERS) if network else workers
+
+
 def _exec_mode(name: str, head: bytes, mode: int) -> int:
     """apply_execute_bits()'s rule, decided from bytes already in hand."""
     if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
@@ -645,8 +666,8 @@ def extract_zip(
     Each file's mode is set as it is created rather than with a later chmod.
     With `exec_bits`, the apply_execute_bits() rule is applied from the bytes
     being written, so no second pass has to reopen every file. `workers` > 1
-    writes files concurrently, which hides per-file latency on network
-    filesystems (and only adds overhead on local disks).
+    inflates and writes files concurrently, which uses spare cores locally and
+    hides per-file latency on network filesystems.
     """
     os.makedirs(staging_dir, exist_ok=True)
     count = 0
@@ -1794,7 +1815,12 @@ def install_archive(
         _progress("extracting")
         if fmt == "zip":
             # Execute bits are decided while writing; no second pass needed.
-            _ = extract_zip(archive_path, staging, workers=workers, exec_bits=True)
+            _ = extract_zip(
+                archive_path,
+                staging,
+                workers=zip_extract_workers(network),
+                exec_bits=True,
+            )
         elif network and _extract_tool_via_local_scratch(
             cast(str, tool), archive_path, staging, workers, required_bytes
         ):

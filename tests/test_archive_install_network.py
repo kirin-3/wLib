@@ -332,3 +332,42 @@ def test_network_tool_archive_goes_through_local_scratch(tmp_path, monkeypatch):
     assert result["exe_path"] == str(lib / "Game" / "Game.sh")
     assert os.access(str(lib / "Game" / "lib" / "engine"), os.X_OK)
     assert os.access(str(result["exe_path"]), os.X_OK)
+
+
+@pytest.mark.parametrize(
+    ("cores", "network", "expected"),
+    [(1, False, 1), (8, False, 8), (64, False, ai.ZIP_MAX_WORKERS), (4, True, 16), (24, True, 24)],
+)
+def test_zip_extract_workers_follow_cores(monkeypatch, cores, network, expected):
+    monkeypatch.setattr(ai, "usable_cpu_count", lambda: cores)
+    assert ai.zip_extract_workers(network) == expected
+
+
+def test_usable_cpu_count_is_positive():
+    assert ai.usable_cpu_count() >= 1
+
+
+def test_local_zip_install_uses_one_worker_per_core(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(ai, "is_network_filesystem", lambda _p: False)
+    monkeypatch.setattr(ai, "usable_cpu_count", lambda: 6)
+    real_extract = ai.extract_zip
+    seen = {}
+
+    def spy(archive_path, staging_dir, **kwargs):
+        seen.update(kwargs)
+        return real_extract(archive_path, staging_dir, **kwargs)
+
+    monkeypatch.setattr(ai, "extract_zip", spy)
+    archive = tmp_path / "Game-1.0.zip"
+    _mixed_zip(archive)
+    lib = tmp_path / "lib"
+    result = ai.install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+    )
+    assert seen == {"workers": 6, "exec_bits": True}
+    reference = tmp_path / "ref"
+    extract_zip(str(archive), str(reference))
+    apply_execute_bits(str(reference))
+    assert _snapshot(lib / "Game") == _snapshot(reference / "Game")
+    assert os.access(str(result["exe_path"]), os.X_OK)
