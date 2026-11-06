@@ -778,7 +778,9 @@ def test_new_install_finds_launcher_nested_several_folders_deep(
     )
 
     assert result["needs_executable"] is False
-    assert str(result["exe_path"]).endswith("Game/Game 1.0/win/Game.exe")
+    assert str(result["exe_path"]).endswith(
+        os.path.join("Game", "Game 1.0", "win", "Game.exe")
+    )
 
 
 def test_install_into_wishlisted_game_sets_executable(tmp_path, monkeypatch):
