@@ -37,7 +37,7 @@ def test_pixeldrain_probe_and_error_mapping(monkeypatch):
         urls.append(request.full_url)
         return io.BytesIO(json.dumps({'name':'game.zip','size':123}).encode())
     monkeypatch.setattr(pixeldrain, 'urlopen', urlopen)
-    info = pixeldrain.probe('https://pixeldrain.com/u/abc')
+    info = pixeldrain.probe('https://pixeldrain.com/u/abc', api_key='')
     assert info.name == 'game.zip' and info.size == 123
     info.stream_factory().close()
     assert urls == ['https://pixeldrain.com/api/file/abc/info','https://pixeldrain.com/api/file/abc?download']
@@ -230,7 +230,7 @@ def test_mega_requests_https_urls_and_maps_file_errors(monkeypatch):
 
     monkeypatch.setattr(mega, 'urlopen', fake_open)
     with pytest.raises(DownloadError, match='expired or removed'):
-        mega._api('abc')
+        mega._api('abc', sid='')
     assert requests[0][0]['ssl'] == 2
 
 

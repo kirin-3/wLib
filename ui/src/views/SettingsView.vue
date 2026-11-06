@@ -68,6 +68,7 @@ import SandboxSettings from "../components/SandboxSettings.vue";
 import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
+import FileHostAccounts from "../components/FileHostAccounts.vue";
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
@@ -989,6 +990,7 @@ const route = useRoute();
 const sectionRegistry = computed(() => [
   { id: "general", title: "General", keywords: "logging statuses collections" },
   { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives" },
+  { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega account api key premium download" },
   { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
   { id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : platformCapabilities.value.platform === "windows" ? "Windows Environment" : "Platform Environment", keywords: "wine prefix runner" },
   ...(supportsLinuxRuntimes.value ? [{ id: "umu", title: "Proton (umu)", keywords: "runtime" }] : []),
@@ -1516,6 +1518,8 @@ const browseUrm = async () => {
           </label>
         </div>
       </section>
+
+      <FileHostAccounts v-show="sectionVisible('file-hosts')" />
 
       <!-- Appearance -->
       <section v-show="sectionVisible('appearance')" id="appearance" class="settings-card rounded-xl p-6 space-y-4">

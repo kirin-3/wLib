@@ -6066,6 +6066,73 @@ class Api:
             return {"success": False, "error": "Download is not running"}
         return {"success": True}
 
+    def get_download_accounts(self) -> dict[str, object]:
+        from core.downloads import accounts
+
+        return {"success": True, **accounts.status()}
+
+    def connect_pixeldrain_account(self, api_key: object = None) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+        from core.downloads.transfer import DownloadError
+
+        if not isinstance(api_key, str):
+            return {"success": False, "error": "Enter a valid Pixeldrain API key"}
+        try:
+            username = accounts.connect_pixeldrain(api_key)
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not save the API key"}
+        return {"success": True, "username": username}
+
+    def disconnect_pixeldrain_account(self) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+
+        try:
+            accounts.disconnect_pixeldrain()
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not remove the API key"}
+        return {"success": True}
+
+    def connect_mega_account(
+        self, email: object = None, password: object = None, code: object = None
+    ) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+        from core.downloads.transfer import DownloadError
+
+        if not isinstance(email, str) or not isinstance(password, str):
+            return {"success": False, "error": "Enter your MEGA email and password"}
+        try:
+            connected = accounts.connect_mega(
+                email, password, code if isinstance(code, str) else ""
+            )
+        except DownloadError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "needs_code": str(exc) == "MEGA requires your two-factor code",
+            }
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not save the MEGA session"}
+        return {"success": True, "email": connected}
+
+    def disconnect_mega_account(self) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+
+        try:
+            accounts.disconnect_mega()
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not sign out of MEGA"}
+        return {"success": True}
+
     def open_update_download_in_browser(self, game_id: int, link_id: str) -> dict[str, object]:
         from core.downloads.transfer import DownloadError
 

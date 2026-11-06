@@ -42,6 +42,13 @@ export interface ApiBasicResponse {
   code?: string;
 }
 
+export interface DownloadAccounts extends ApiBasicResponse {
+  pixeldrain: { connected: boolean; username: string };
+  mega: { connected: boolean; email: string };
+}
+export interface PixeldrainConnectResponse extends ApiBasicResponse { username?: string }
+export interface MegaConnectResponse extends ApiBasicResponse { email?: string; needs_code?: boolean }
+
 export type SteamMode = "off" | "all-installed" | "marked";
 export interface SteamStatus extends ApiBasicResponse {
   found: boolean;
@@ -1853,6 +1860,12 @@ class ApiService {
     return this.invoke<ExtensionServiceStatus>("get_extension_service_status");
   }
 
+  async getDownloadAccounts(): Promise<DownloadAccounts> { return this.invoke<DownloadAccounts>("get_download_accounts"); }
+  async connectPixeldrainAccount(apiKey: string): Promise<PixeldrainConnectResponse> { return this.invoke("connect_pixeldrain_account", apiKey); }
+  async disconnectPixeldrainAccount(): Promise<ApiBasicResponse> { return this.invoke("disconnect_pixeldrain_account"); }
+  async connectMegaAccount(email: string, password: string, code = ""): Promise<MegaConnectResponse> { return this.invoke("connect_mega_account", email, password, code); }
+  async disconnectMegaAccount(): Promise<ApiBasicResponse> { return this.invoke("disconnect_mega_account"); }
+
   async getSteamStatus(): Promise<SteamStatus> { return this.invoke<SteamStatus>("get_steam_status"); }
   async addWlibToSteam(): Promise<ApiBasicResponse & {pending?: boolean; already_exists?: boolean; queued?: boolean}> { return this.invoke("add_wlib_to_steam"); }
   async setSteamGamesMode(mode: SteamMode): Promise<ApiBasicResponse> { return this.invoke("set_steam_games_mode", mode); }
@@ -3547,6 +3560,28 @@ class ApiService {
           reachable: false,
           error: "Extension service status requires the desktop app runtime.",
         };
+      case "get_download_accounts":
+        return {
+          success: true,
+          pixeldrain: { connected: !!localStorage.getItem("wlib-mock-pixeldrain"), username: localStorage.getItem("wlib-mock-pixeldrain") || "" },
+          mega: { connected: !!localStorage.getItem("wlib-mock-mega"), email: localStorage.getItem("wlib-mock-mega") || "" },
+        };
+      case "connect_pixeldrain_account":
+        if (!String(args[0] || "").trim()) return { success: false, error: "Enter a valid Pixeldrain API key" };
+        localStorage.setItem("wlib-mock-pixeldrain", "mock-user");
+        return { success: true, username: "mock-user" };
+      case "disconnect_pixeldrain_account":
+        localStorage.removeItem("wlib-mock-pixeldrain");
+        return { success: true };
+      case "connect_mega_account": {
+        const email = String(args[0] || "").trim().toLowerCase();
+        if (!email || !args[1]) return { success: false, error: "Enter your MEGA email and password", needs_code: false };
+        localStorage.setItem("wlib-mock-mega", email);
+        return { success: true, email };
+      }
+      case "disconnect_mega_account":
+        localStorage.removeItem("wlib-mock-mega");
+        return { success: true };
       case "get_steam_status":
         return { success: true, found: true, flatpak_steam: false, accounts: ["123456"], account_id: "123456", running: false, deck: false, gaming_mode: false, mode: localStorage.getItem("wlib-mock-steam-mode") || "off", sync: { running: false } };
       case "get_game_steam_state":
