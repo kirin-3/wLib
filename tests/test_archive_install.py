@@ -2347,3 +2347,57 @@ def test_install_same_folder_keeps_backup_for_target_outside_exe_folder(
     backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
     assert len(backups) == 1
     assert (backups[0] / "Tools" / "Mod.exe").read_text() == "mod"
+
+
+# Runs on every platform, so Windows CI checks parallel zip writes for real.
+@pytest.mark.parametrize("workers", [1, 4])
+def test_extract_zip_is_byte_exact(tmp_path, workers):
+    import core.archive_install as ai
+
+    payloads = {
+        f"Game/d{i % 3}/f{i}.bin": b"line\nwin\r\nnul\x00end\n" * (i + 1) + os.urandom(64)
+        for i in range(12)
+    }
+    archive = tmp_path / "g.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in payloads.items():
+            zf.writestr(name, data)
+    out = tmp_path / "out"
+    assert ai.extract_zip(str(archive), str(out), workers=workers, exec_bits=True) == 12
+    for name, data in payloads.items():
+        assert (out / name).read_bytes() == data
+
+
+def test_windows_name_key_folds_what_windows_folds():
+    import core.archive_install as ai
+
+    key = ai._windows_name_key
+    assert key("S/Game/A.txt") == key("S/game/a.txt.") == key("S/GAME /a.txt:zone")
+    assert key("S/Game/a.txt") != key("S/Game/b.txt")
+
+
+def test_extract_zip_windows_aliases_fall_back_to_one_worker(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    archive = tmp_path / "g.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game/a.txt", b"first")
+        zf.writestr("Game/a.txt.", b"second")
+        zf.writestr("Game/b.txt", b"other")
+    seen = []
+    real_run = ai._run_parallel
+
+    def spy(func, items, workers):
+        seen.append(workers)
+        return real_run(func, items, workers)
+
+    monkeypatch.setattr(ai, "_run_parallel", spy)
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: True)
+    _ = ai.extract_zip(str(archive), str(tmp_path / "out"), workers=4)
+    assert seen == [1]
+
+    seen.clear()
+    _ = ai.extract_zip(str(archive), str(tmp_path / "out2"), workers=4)
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: False)
+    _ = ai.extract_zip(str(archive), str(tmp_path / "out3"), workers=4)
+    assert seen == [1, 4]

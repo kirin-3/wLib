@@ -373,11 +373,30 @@ def is_network_filesystem(path: str) -> bool:
 
 
 def usable_cpu_count() -> int:
-    """CPU cores this process may run on (affinity-aware where supported)."""
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except (AttributeError, OSError):
-        return max(1, os.cpu_count() or 1)
+    """CPU cores this process may run on (affinity-aware on Linux)."""
+    if sys.platform == "linux":
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except OSError:
+            pass
+    return max(1, os.cpu_count() or 1)
+
+
+def _fchmod(fd: int, mode: int) -> None:
+    """os.fchmod, which Windows Python 3.12 lacks (callers skip Windows)."""
+    if sys.platform != "win32":
+        os.fchmod(fd, mode)
+
+
+def _windows_name_key(target: str) -> str:
+    """The file Windows actually opens for `target`.
+
+    Windows matches names case-insensitively, drops trailing dots and spaces
+    from each component and treats `name:stream` as a stream of `name`, so
+    entries that differ only that way land on one file.
+    """
+    parts = target.replace("\\", "/").split("/")
+    return "/".join(p.split(":")[0].rstrip(". ").casefold() for p in parts)
 
 
 def zip_extract_workers(network: bool) -> int:
@@ -485,9 +504,14 @@ def copy_tree_parallel(src_root: str, dst_root: str, workers: int) -> int:
             with open(src, "rb") as f:
                 while chunk := f.read(_COPY_CHUNK):
                     _write_all(fd, chunk)
-            if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
-                os.fchmod(fd, mode)  # create mode is filtered by the umask
-            os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
+            # Shares that don't store modes or times (some SMB, rclone) may
+            # refuse these; 7-Zip extracting there ignores that too.
+            try:
+                if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+                    _fchmod(fd, mode)  # create mode is filtered by the umask
+                os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
+            except OSError:
+                pass
         finally:
             os.close(fd)
 
@@ -703,6 +727,14 @@ def extract_zip(
                 os.makedirs(folder, exist_ok=True)
 
             windows = _is_windows()
+            if windows and workers > 1:
+                # Entries the collision check allows can still name one file
+                # on Windows ("a.txt" and "a.txt."). Writing those from two
+                # threads would interleave them; one worker keeps the old
+                # last-one-wins result.
+                keys = {_windows_name_key(target) for _info, target in files}
+                if len(keys) != len(files):
+                    workers = 1
             local = threading.local()
             opened: list[zipfile.ZipFile] = []
 
@@ -736,7 +768,7 @@ def extract_zip(
                                 wanted = _exec_mode(target, head, wanted)
                             if wanted != current:
                                 try:
-                                    os.fchmod(fd, wanted)
+                                    _fchmod(fd, wanted)
                                 except OSError:
                                     pass
                     finally:
