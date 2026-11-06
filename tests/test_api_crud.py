@@ -591,6 +591,32 @@ def test_launch_and_install_refused_while_game_files_are_busy(tmp_path):
     assert api.launch_game(game_id, str(tmp_path / "run.exe"))["code"] == "game_busy"
 
 
+def test_install_archive_into_wishlisted_game_with_same_thread_url(tmp_path):
+    import zipfile
+
+    url = "https://f95zone.to/threads/game.123/"
+    game_id = add_game("Game", "", f95_url=url)
+    assert game_id is not None
+    with zipfile.ZipFile(tmp_path / "Game-1.0.zip", "w") as zf:
+        zf.writestr("Game.exe", b"MZ")
+    (tmp_path / "lib").mkdir()
+    update_setting("library_folder", str(tmp_path / "lib"))
+    update_setting("library_folders", f'["{tmp_path / "lib"}"]')
+    api = Api()
+    installed = api.install_archive(
+        {
+            "archive_path": str(tmp_path / "Game-1.0.zip"),
+            "game_id": game_id,
+            "title": "Game",
+            "f95_url": url,
+        }
+    )
+    assert installed["success"] is True, installed
+    games = get_all_games()
+    assert len(games) == 1
+    assert str(games[0]["exe_path"]).endswith("Game.exe")
+
+
 def test_mod_tool_refused_while_archive_update_runs(tmp_path):
     from core.game_tools import GameToolError
 

@@ -781,6 +781,66 @@ def test_new_install_finds_launcher_nested_several_folders_deep(
     assert str(result["exe_path"]).endswith("Game/Game 1.0/win/Game.exe")
 
 
+def test_install_into_wishlisted_game_sets_executable(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    game_id = db.add_game("Game", "", developer="Dev", version="0.9")
+    assert game_id is not None
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "Game-1.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"exe"})
+
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="1.0",
+        game_id=game_id,
+        delete_archive=True,
+    )
+
+    assert result["game_id"] == game_id
+    assert result["needs_executable"] is False
+    games = db.get_all_games()
+    assert len(games) == 1
+    assert str(games[0]["exe_path"]).endswith("Game.exe")
+    assert games[0]["version"] == "1.0"
+    assert not archive.exists()
+
+
+def test_install_into_wishlisted_game_without_launcher_keeps_folder(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    game_id = db.add_game("Game", "")
+    assert game_id is not None
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "Game-1.0.zip"
+    _write_game_zip(archive, {"a/readme.txt": b"x", "b/data.bin": b"x"})
+
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="1.0",
+        game_id=game_id,
+        delete_archive=True,
+    )
+
+    assert result["game_id"] == game_id
+    assert result["needs_executable"] is True
+    assert (lib / "Game" / "a" / "readme.txt").exists()
+    assert not archive.exists()
+    assert len(db.get_all_games()) == 1
+
+
 def test_install_same_folder_no_launcher_restores_previous_install(
     tmp_path, monkeypatch
 ):

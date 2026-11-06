@@ -1993,6 +1993,16 @@ const removeAttachment = async (name: string) => {
               <IconDownload class="ui-action-icon" />
               Install update
             </button>
+            <button
+              v-if="!hasUpdate && props.game && isWishlisted(props.game)"
+              @click="openInstallArchive({ gameId: props.game.id })"
+              class="modal-toolbar-action ui-action-btn"
+              style="color: var(--text-primary)"
+              title="Install this wishlisted game from a downloaded archive"
+            >
+              <IconDownload class="ui-action-icon" />
+              Install from archive
+            </button>
           </div>
         </div>
       </header>

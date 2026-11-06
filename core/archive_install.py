@@ -1498,8 +1498,11 @@ def install_archive(
         exe_path = _pick_exe(destination, old_exe, old_root, title)
         # A new game is still added with the details the user entered; the
         # dialog then asks for the executable inside the extracted folder.
+        # The same goes for a wishlisted game, which has no executable to keep.
         # An update keeps raising: its row must keep pointing at a working exe.
-        needs_executable = not exe_path and game_id is None
+        needs_executable = not exe_path and (
+            game_id is None or (not default_exe and target_id is None)
+        )
         if not exe_path and not needs_executable:
             raise ArchiveInstallError(
                 "No launchable file was found. The extracted folder was kept; choose the executable manually."

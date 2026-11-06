@@ -11,7 +11,8 @@ import {
 } from "../../services/api";
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
-import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
+import { isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
@@ -95,6 +96,8 @@ const inspecting = ref(false);
 const target = ref<GameRecord | null>(null);
 const seededArchive = ref("");
 const isUpdate = computed(() => !!target.value);
+// A wishlisted game has no installed files: the archive installs it, not an update.
+const isWishlistTarget = computed(() => !!target.value && isWishlisted(target.value));
 const selectedFolderUnavailable = computed(() =>
   libraryFolders.value.some((folder) => folder.path === libraryFolder.value && !folder.available),
 );
@@ -306,6 +309,15 @@ const inspect = async () => {
   }
 };
 
+// The archive belongs to a game already in the library (often a wishlisted
+// one): reopen the dialog for that game with the same archive.
+const installIntoDuplicate = () => {
+  const gameId = duplicateGameId.value;
+  const path = archive.value.trim();
+  if (gameId === null || phase.value === "installing") return;
+  openInstallArchive({ gameId, archivePath: path });
+};
+
 const browseArchive = async () => {
   try {
     const path = await api.browseArchiveFile(archive.value);
@@ -507,11 +519,13 @@ watch(phase, (next, prev) => {
       >
         <div>
           <h3 id="install-archive-title" class="text-xl font-bold" style="color: var(--text-primary)">
-            {{ isUpdate ? `Install update for ${target?.title}` : "Install from archive" }}
+            {{ isWishlistTarget ? `Install ${target?.title}` : isUpdate ? `Install update for ${target?.title}` : "Install from archive" }}
           </h3>
           <p class="text-xs mt-1" style="color: var(--text-muted)">
             {{
-              isUpdate
+              isWishlistTarget
+                ? "Extracts the archive into your library folder and moves this game from your wishlist into your library."
+                : isUpdate
                 ? "Extracts the archive into your library folder, carries saves over, and points the game at the new version."
                 : "Extracts a downloaded .zip, .7z or .rar into your library folder and adds it as a game."
             }}
@@ -633,7 +647,11 @@ watch(phase, (next, prev) => {
 
         <p v-if="installError" class="text-sm" style="color: var(--error-text)">
           {{ installError }}
-          <span v-if="duplicateGameId !== null"> (Already in library as game #{{ duplicateGameId }} — install the archive as an update to that game instead.)</span>
+          <span v-if="duplicateGameId !== null" class="block mt-2">
+            <button type="button" class="modal-btn" @click="installIntoDuplicate">
+              Install into that game instead
+            </button>
+          </span>
         </p>
 
         <div
@@ -648,7 +666,7 @@ watch(phase, (next, prev) => {
           <div v-if="result.needs_executable" class="text-xs space-y-2" style="color: var(--text-primary)">
             <p v-if="chosenExe">Launches <span class="font-mono break-all">{{ chosenExe }}</span>.</p>
             <template v-else>
-              <p>No launch file was found automatically. The game was added to your library with these details; choose its executable inside the installed folder. Until then it stays in your wishlist.</p>
+              <p>No launch file was found automatically. {{ isWishlistTarget ? "The files are in place" : "The game was added to your library with these details" }}; choose its executable inside the installed folder. Until then it stays in your wishlist.</p>
               <button type="button" class="modal-btn" :disabled="choosingExe" @click="chooseExecutable">
                 <IconFolderOpen class="w-4 h-4 mr-1.5" />
                 {{ choosingExe ? "Choosing…" : "Choose executable" }}
@@ -698,7 +716,7 @@ watch(phase, (next, prev) => {
           class="px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
-          {{ phase === "installing" ? "Installing…" : isUpdate ? "Install update" : "Install game" }}
+          {{ phase === "installing" ? "Installing…" : isUpdate && !isWishlistTarget ? "Install update" : "Install game" }}
         </button>
       </div>
     </div>
