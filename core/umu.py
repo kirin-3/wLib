@@ -72,9 +72,23 @@ def umu_data_dir() -> str:
     return os.path.join(os.path.expanduser(base), "umu")
 
 
+# umu installs each runtime under its variant folder, keyed by the
+# require_tool_appid of the Proton build's toolmanifest.vdf.
+_RUNTIME_FOLDERS = {
+    "1391110": "steamrt2",
+    "1628350": "steamrt3",
+    "4183110": "steamrt4",
+}
+
+
 def required_runtime(runner: str) -> str:
+    # umu resolves codenames to a concrete build before it reads the manifest,
+    # so a GE-Proton build may still need sniper (steamrt3).
     if not runner or runner in ("GE-Proton", "UMU-Proton"):
-        return "steamrt4"
+        try:
+            runner = resolve_codename(runner or "UMU-Proton")
+        except ValueError:
+            return "steamrt4"
     folder = runner if os.path.isdir(runner) else os.path.dirname(runner)
     try:
         with open(
@@ -84,24 +98,26 @@ def required_runtime(runner: str) -> str:
     except OSError:
         return "steamrt4"
     match = re.search(r'"require_tool_appid"\s*"(\d+)"', content)
-    if match and match.group(1) == "1628350":
-        return "sniper"
-    return "steamrt4"
+    return _RUNTIME_FOLDERS.get(match.group(1) if match else "", "steamrt4")
+
+
+def _runtime_installed(root: str) -> bool:
+    # umu writes .installed.ok after a complete install; older releases did
+    # not, so fall back to the entry point that only a finished install has.
+    # The platform folder keeps the runtime's codename (sniper_platform_*).
+    return os.path.isfile(os.path.join(root, ".installed.ok")) or (
+        os.path.isfile(os.path.join(root, "_v2-entry-point"))
+        and any(
+            os.path.isdir(path)
+            for path in glob.glob(os.path.join(root, "*_platform_*"))
+        )
+    )
 
 
 def runtime_status(runner: str) -> dict[str, object]:
     runtime = required_runtime(runner)
     root = os.path.join(umu_data_dir(), runtime)
-    # umu writes .installed.ok after a complete install; older releases did
-    # not, so fall back to the entry point that only a finished install has.
-    ready = os.path.isfile(os.path.join(root, ".installed.ok")) or (
-        os.path.isfile(os.path.join(root, "_v2-entry-point"))
-        and any(
-            os.path.isdir(path)
-            for path in glob.glob(os.path.join(root, runtime + "_platform_*"))
-        )
-    )
-    return {"runtime": runtime, "path": root, "ready": ready}
+    return {"runtime": runtime, "path": root, "ready": _runtime_installed(root)}
 
 
 def proton_path_value(runner: str) -> str:

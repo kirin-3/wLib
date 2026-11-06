@@ -366,8 +366,12 @@ execute inside the proper container environment.
   checksums, ensures member paths stay safe, and extracts only the single
   executable member `umu/umu-run` into `<data dir>/umu/umu-run` (capped at 8 MiB)
   with mode 0755.
-- **Steam Linux Runtime**: Runtimes reside in `~/.local/share/umu/<runtime>`
-  (`XDG_DATA_HOME/umu`). `runtime_status(runner)` checks for `.installed.ok` or
+- **Steam Linux Runtime**: Runtimes reside in `~/.local/share/umu/<variant>`
+  (`XDG_DATA_HOME/umu`), where the variant comes from the build's
+  `toolmanifest.vdf` `require_tool_appid` (`steamrt3` for sniper, `steamrt4`).
+  Like umu 1.4.1+, `GE-Proton`/`UMU-Proton` codenames (and an empty runner, which
+  umu treats as UMU-Proton) resolve to the newest installed build before reading
+  its manifest. `runtime_status(runner)` checks for `.installed.ok` or
   `_v2-entry-point` plus platform directories. `UmuRuntimePrepare` runs
   `umu-run createprefix` in the background with `GAMEID=umu-default` and the
   selected runner's `PROTONPATH`. The UI polls status and progress (installed folder

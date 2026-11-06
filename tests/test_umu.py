@@ -187,12 +187,17 @@ def test_required_runtime_and_installed_folders(tmp_path, monkeypatch):
     runner = tmp_path / "runner"
     runner.mkdir()
     manifest = runner / "toolmanifest.vdf"
-    for appid, runtime in [("4183110", "steamrt4"), ("1628350", "sniper")]:
+    # umu installs sniper builds' runtime under its variant folder, steamrt3.
+    for appid, runtime, codename in [
+        ("4183110", "steamrt4", "steamrt4"),
+        ("1628350", "steamrt3", "sniper"),
+    ]:
         manifest.write_text(f'"require_tool_appid" "{appid}"')
         status = umu.runtime_status(str(runner / "proton"))
         assert status["runtime"] == runtime
+        assert status["path"] == str(tmp_path / "umu" / runtime)
         assert not status["ready"]
-        platform = tmp_path / "umu" / runtime / (runtime + "_platform_test")
+        platform = tmp_path / "umu" / runtime / (codename + "_platform_test")
         platform.mkdir(parents=True)
         # A platform folder alone may be a half-finished install.
         assert not umu.runtime_status(str(runner / "proton"))["ready"]
@@ -205,9 +210,44 @@ def test_required_runtime_and_installed_folders(tmp_path, monkeypatch):
     (marker_only / ".installed.ok").write_text("ok")
     manifest.write_text('"require_tool_appid" "4183110"')
     assert umu.runtime_status(str(runner / "proton"))["ready"]
+    monkeypatch.setattr(umu, "resolve_codename", _raise_missing)
     assert umu.required_runtime("GE-Proton") == "steamrt4"
     assert umu.required_runtime("UMU-Proton") == "steamrt4"
     assert umu.required_runtime("") == "steamrt4"
+
+
+def _raise_missing(runner):
+    raise ValueError(runner)
+
+
+def test_codename_runtime_follows_installed_build(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    builds = {}
+    for name in ("GE-Proton10-25", "UMU-Proton-9.0-4"):
+        build = tmp_path / name
+        build.mkdir()
+        (build / "toolmanifest.vdf").write_text('"require_tool_appid" "1628350"')
+        builds[name.split("-")[0] + "-Proton"] = str(build)
+    seen = []
+
+    def fake_resolve(runner):
+        seen.append(runner)
+        return builds[runner]
+
+    monkeypatch.setattr(umu, "resolve_codename", fake_resolve)
+    assert umu.required_runtime("GE-Proton") == "steamrt3"
+    assert umu.required_runtime("UMU-Proton") == "steamrt3"
+    # Without PROTONPATH umu downloads and uses the latest UMU-Proton.
+    assert umu.required_runtime("") == "steamrt3"
+    assert seen == ["GE-Proton", "UMU-Proton", "UMU-Proton"]
+    runtime = tmp_path / "umu" / "steamrt3"
+    (runtime / "sniper_platform_3.0").mkdir(parents=True)
+    (runtime / "_v2-entry-point").write_text("")
+    assert umu.runtime_status("GE-Proton") == {
+        "runtime": "steamrt3",
+        "path": str(runtime),
+        "ready": True,
+    }
 
 
 def test_prepare_reports_failure_classes_and_environment(tmp_path, monkeypatch):
