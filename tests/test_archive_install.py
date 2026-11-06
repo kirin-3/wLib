@@ -729,6 +729,58 @@ def test_install_same_folder_pattern_keeps_backup_when_unticked(tmp_path, monkey
     assert str(backups[0]) in str(result["kept_old_folder_reason"])
 
 
+def test_new_install_without_launcher_still_adds_game_and_deletes_archive(
+    tmp_path, monkeypatch
+):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "Game-1.0.zip"
+    _write_game_zip(archive, {"a/readme.txt": b"x", "b/data.bin": b"x"})
+
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}",
+        title="Game",
+        version="1.0",
+        creator="Some Dev",
+        delete_archive=True,
+    )
+
+    assert result["needs_executable"] is True
+    assert result["exe_path"] == ""
+    games = db.get_all_games()
+    assert len(games) == 1
+    assert games[0]["developer"] == "Some Dev"
+    assert games[0]["version"] == "1.0"
+    assert (lib / "Game" / "a" / "readme.txt").exists()
+    assert not archive.exists()
+
+
+def test_new_install_finds_launcher_nested_several_folders_deep(
+    tmp_path, monkeypatch
+):
+    _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "Game-1.0.zip"
+    _write_game_zip(
+        archive, {"readme.txt": b"x", "Game/Game 1.0/win/Game.exe": b"exe"}
+    )
+
+    result = install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}", title="Game"
+    )
+
+    assert result["needs_executable"] is False
+    assert str(result["exe_path"]).endswith("Game/Game 1.0/win/Game.exe")
+
+
 def test_install_same_folder_no_launcher_restores_previous_install(
     tmp_path, monkeypatch
 ):

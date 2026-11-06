@@ -2218,6 +2218,7 @@ class Api:
                 or self._is_missing_text(engine)
                 or self._is_missing_text(cover_image)
                 or not self._normalize_tags_csv(tags)
+                or self._is_missing_text(developer)
             )
             # F95 requests are paced app-wide and can queue behind a folder import,
             # so the game is saved now and its card shows a loading state until this finishes.
@@ -2845,11 +2846,15 @@ class Api:
         if not normalized_url:
             return 0
 
+        from core.f95zone import split_thread_title
+
         engine_value = str(metadata.get("engine") or "").strip()
         tags_value = self._normalize_tags_csv(metadata.get("tags"))
         cover_value = str(metadata.get("cover_image") or "").strip()
+        # The thread heading names the developer ("Title [v1] [Dev]").
+        developer_value = split_thread_title(str(metadata.get("title") or ""))[2]
 
-        if not engine_value and not tags_value and not cover_value:
+        if not engine_value and not tags_value and not cover_value and not developer_value:
             return 0
 
         import sqlite3
@@ -2861,7 +2866,7 @@ class Api:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, engine, tags, cover_image_path FROM games WHERE f95_url = ?",
+                "SELECT id, engine, tags, cover_image_path, developer FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -2887,6 +2892,9 @@ class Api:
                     fields["tags"] = tags_value
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
+                developer_current = str(cast(object, game["developer"]) or "").strip()
+                if developer_value and not developer_current:
+                    fields["developer"] = developer_value
 
                 if fields:
                     set_clause = ", ".join(f"{key} = ?" for key in fields)

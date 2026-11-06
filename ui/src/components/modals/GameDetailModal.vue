@@ -160,6 +160,7 @@ const title = ref("");
 const exePath = ref("");
 const f95Url = ref("");
 const version = ref("");
+const developer = ref("");
 const finishedVersion = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
@@ -606,6 +607,7 @@ const formSnapshot = (): string =>
     exe_path: exePath.value,
     f95_url: f95Url.value,
     version: version.value,
+    developer: developer.value,
     finished_version: finishedVersion.value,
     command_line_args: commandLineArgs.value,
     cover_image: coverImage.value,
@@ -680,6 +682,7 @@ watch(
         exePath.value = g.exe_path || "";
         f95Url.value = g.f95_url || "";
         version.value = g.version || "";
+        developer.value = g.developer || "";
         finishedVersion.value = g.finished_version || "";
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
@@ -1427,6 +1430,7 @@ const save = async () => {
       exe_path: exePath.value.trim(),
       f95_url: f95Url.value.trim(),
       version: version.value,
+      developer: developer.value.trim(),
       finished_version: finishedVersion.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
@@ -2657,6 +2661,11 @@ const removeAttachment = async (name: string) => {
             <div class="col-span-2">
               <label for="detail-title" class="modal-label">Title</label>
               <input v-model="title" id="detail-title" type="text" class="modal-input w-full" />
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-developer" class="modal-label">Developer</label>
+              <input v-model="developer" id="detail-developer" type="text" placeholder="Creator or studio" class="modal-input w-full" />
             </div>
 
             <div>

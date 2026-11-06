@@ -375,6 +375,7 @@ export interface ArchiveInstallResponse extends ApiBasicResponse {
   kept_old_folder_reason?: string;
   removed_old?: boolean;
   old_folder?: string;
+  needs_executable?: boolean;
 }
 
 export interface ArchiveInstallStatus {

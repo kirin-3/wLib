@@ -370,11 +370,27 @@ const save = () => {
           <p v-for="link in links" :key="`${link.source}:${link.id}`" class="text-sm break-all" style="color: var(--text-muted)">{{ storeLabel(link.source) }} · {{ link.id }}</p>
         </div>
 
+        <div>
+          <label
+            for="add-game-developer"
+            class="block text-sm font-medium mb-1.5"
+            style="color: var(--text-secondary)"
+            >Developer</label
+          >
+          <input
+            id="add-game-developer"
+            v-model="developer"
+            type="text"
+            placeholder="Creator or studio"
+            class="modal-input w-full !py-3 text-sm"
+            @keydown.enter="save"
+          />
+          <p v-if="f95Url.trim() && !developer.trim()" class="text-xs mt-2" style="color: var(--text-muted)">
+            Optional. Filled from the F95 thread when left empty.
+          </p>
+        </div>
+
         <div v-if="links.length" class="grid grid-cols-2 gap-3">
-          <label class="text-sm" style="color: var(--text-secondary)">
-            Developer
-            <input v-model="developer" type="text" class="modal-input w-full mt-1.5" />
-          </label>
           <label class="text-sm" style="color: var(--text-secondary)">
             Version
             <input v-model="version" type="text" class="modal-input w-full mt-1.5" />

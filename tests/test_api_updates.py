@@ -1233,6 +1233,20 @@ def test_thread_metadata_replaces_stored_non_engine_prefix():
     assert get_all_games()[0]["engine"] == "Ren'Py"
 
 
+def test_backfill_fills_missing_developer_from_thread_title():
+    url = "https://f95zone.to/threads/demo.123/"
+    add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url)
+    other = "https://f95zone.to/threads/other.456/"
+    add_game(title="Other", exe_path="/tmp/o.exe", f95_url=other, developer="Mine")
+
+    title = {"title": "Demo [v0.5] [Studio Dev]"}
+    assert Api()._backfill_missing_metadata_for_url(url, title) == 1
+    _ = Api()._backfill_missing_metadata_for_url(other, {"title": "Other [v1] [Theirs]"})
+
+    developers = {g["title"]: g["developer"] for g in get_all_games()}
+    assert developers == {"Demo": "Studio Dev", "Other": "Mine"}
+
+
 def test_backfill_normalizes_unnormalized_url():
     url = "https://f95zone.to/threads/demo.123/"
     add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url, engine="")

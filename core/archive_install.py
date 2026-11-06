@@ -1228,7 +1228,8 @@ def _pick_exe(
             candidate = os.path.join(destination, rel)
             if os.path.isfile(candidate):
                 return candidate
-    return find_launcher(destination, preferred_title=preferred_title)
+    # Archives often nest the game a few single folders deep (Game/Game v1/...).
+    return find_launcher(destination, depth=4, preferred_title=preferred_title)
 
 
 def install_archive(
@@ -1495,17 +1496,23 @@ def install_archive(
         from core.game_scan import detect_engine as _detect_engine
 
         exe_path = _pick_exe(destination, old_exe, old_root, title)
-        if not exe_path:
+        # A new game is still added with the details the user entered; the
+        # dialog then asks for the executable inside the extracted folder.
+        # An update keeps raising: its row must keep pointing at a working exe.
+        needs_executable = not exe_path and game_id is None
+        if not exe_path and not needs_executable:
             raise ArchiveInstallError(
                 "No launchable file was found. The extracted folder was kept; choose the executable manually."
             )
         # Where the game actually runs from. For archives that keep the game
         # below the archive root this is not `destination`, and saves, the
         # saves override and launch targets are relative to it.
-        new_install_dir = os.path.dirname(exe_path) or destination
+        new_install_dir = (os.path.dirname(exe_path) if exe_path else "") or destination
         detected_engine = ""
         try:
-            detected_engine = _detect_engine(os.path.dirname(exe_path), exe_path)
+            detected_engine = _detect_engine(
+                os.path.dirname(exe_path) if exe_path else destination, exe_path
+            )
         except OSError:
             detected_engine = ""
 
@@ -1651,6 +1658,7 @@ def install_archive(
             "kept_old_folder_reason": kept_reason,
             "removed_old": removed_old,
             "old_folder": old_install,
+            "needs_executable": needs_executable,
         }
     except Exception as exc:
         # Step 5 failure after the move: the previous install was renamed aside

@@ -62,6 +62,30 @@ const inspectError = ref("");
 const installError = ref("");
 const installStage = ref("");
 const result = ref<ArchiveInstallResponse | null>(null);
+// Set when an install was added without a launch file and the user picked one.
+const chosenExe = ref("");
+const choosingExe = ref(false);
+const chooseExeError = ref("");
+const chooseExecutable = async () => {
+  const gameId = result.value?.game_id;
+  if (choosingExe.value || typeof gameId !== "number") return;
+  choosingExe.value = true;
+  chooseExeError.value = "";
+  try {
+    const path = await api.browseFile(String(result.value?.destination || ""));
+    if (!path || result.value?.game_id !== gameId) return;
+    const res = await api.updateGame(gameId, { exe_path: path });
+    if (res && res.success === false) {
+      chooseExeError.value = res.error || "Could not save the executable.";
+      return;
+    }
+    chosenExe.value = path;
+  } catch (e) {
+    chooseExeError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    choosingExe.value = false;
+  }
+};
 const duplicateGameId = ref<number | null>(null);
 const inspecting = ref(false);
 
@@ -137,6 +161,9 @@ const reset = () => {
   installError.value = "";
   installStage.value = "";
   result.value = null;
+  chosenExe.value = "";
+  choosingExe.value = false;
+  chooseExeError.value = "";
   duplicateGameId.value = null;
   inspecting.value = false;
 };
@@ -618,6 +645,17 @@ watch(phase, (next, prev) => {
             <IconCheck class="w-4 h-4" />
             Installed to {{ String(result.destination || "") }}
           </p>
+          <div v-if="result.needs_executable" class="text-xs space-y-2" style="color: var(--text-primary)">
+            <p v-if="chosenExe">Launches <span class="font-mono break-all">{{ chosenExe }}</span>.</p>
+            <template v-else>
+              <p>No launch file was found automatically. The game was added to your library with these details; choose its executable inside the installed folder. Until then it stays in your wishlist.</p>
+              <button type="button" class="modal-btn" :disabled="choosingExe" @click="chooseExecutable">
+                <IconFolderOpen class="w-4 h-4 mr-1.5" />
+                {{ choosingExe ? "Choosing…" : "Choose executable" }}
+              </button>
+              <p v-if="chooseExeError" style="color: var(--error-text)">{{ chooseExeError }}</p>
+            </template>
+          </div>
           <p v-if="result.kept_old_folder_reason" class="text-xs">
             Old folder kept: {{ String(result.kept_old_folder_reason) }}
           </p>
