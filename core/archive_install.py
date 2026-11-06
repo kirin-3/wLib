@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import posixpath
 import re
@@ -11,8 +12,11 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from typing import cast
 
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
@@ -37,7 +41,40 @@ _INVALID_SEGMENT_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar")
 STAGING_PREFIX = ".wlib-staging-"
+TRASH_PREFIX = ".wlib-trash-"
+SCRATCH_PREFIX = ".wlib-scratch-"
 BUNDLED_7ZZ = "/app/bin/7zz"
+
+# Network filesystems pay a server round trip (and, with sync exports, a disk
+# commit) for every file create, close and attribute change. Installs into a
+# library on one of these extract in parallel, stage 7z/rar output on local
+# disk first, and remove the old version in the background.
+NETWORK_FS_TYPES = frozenset(
+    {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smb3",
+        "smbfs",
+        "9p",
+        "afs",
+        "ceph",
+        "glusterfs",
+        "fuse.glusterfs",
+        "fuse.sshfs",
+        "fuse.rclone",
+        "fuse.davfs2",
+        "fuse.gvfsd-fuse",
+        "fuse.smbnetfs",
+        "davfs",
+    }
+)
+NETWORK_IO_WORKERS = 16
+_COPY_CHUNK = 1024 * 1024
+# os.open() is text mode on Windows unless asked otherwise.
+_O_BINARY: int = getattr(os, "O_BINARY", 0)
+
+_log = logging.getLogger("wlib.archive")
 
 
 class ArchiveInstallError(Exception):
@@ -288,6 +325,300 @@ def build_host_open_env() -> dict[str, str]:
     return clean_env
 
 
+def _unescape_mountinfo(field: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def filesystem_type(path: str, *, mountinfo: str = "/proc/self/mountinfo") -> str:
+    """Filesystem type of the mount holding `path` ("" when unknown).
+
+    Uses the deepest mount point containing the nearest existing ancestor, so
+    a library folder that does not exist yet still resolves to its drive.
+    """
+    if _is_windows():
+        return ""
+    probe = os.path.abspath(os.path.expanduser(path or ""))
+    while probe and not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    probe = os.path.realpath(probe)
+    best, best_type = "", ""
+    try:
+        with open(mountinfo, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                pre, sep, post = line.partition(" - ")
+                fields = pre.split()
+                if not sep or len(fields) < 5 or not post.split():
+                    continue
+                mount_point = _unescape_mountinfo(fields[4])
+                if mount_point != "/" and not (
+                    probe == mount_point or probe.startswith(mount_point.rstrip("/") + "/")
+                ):
+                    continue
+                # Later lines are mounted over earlier ones at the same point.
+                if len(mount_point) >= len(best):
+                    best, best_type = mount_point, post.split()[0]
+    except OSError:
+        return ""
+    return best_type
+
+
+def is_network_filesystem(path: str) -> bool:
+    return filesystem_type(path).lower() in NETWORK_FS_TYPES
+
+
+def _exec_mode(name: str, head: bytes, mode: int) -> int:
+    """apply_execute_bits()'s rule, decided from bytes already in hand."""
+    if mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+        return mode
+    lower = os.path.basename(name).lower()
+    if not (lower.endswith((".sh", ".x86", ".x86_64")) or head[:4] == b"\x7fELF"):
+        return mode
+    new_mode = mode | stat.S_IXUSR
+    if mode & stat.S_IRGRP:
+        new_mode |= stat.S_IXGRP
+    if mode & stat.S_IROTH:
+        new_mode |= stat.S_IXOTH
+    return new_mode
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _interleave_by_folder[T](items: list[T], key: Callable[[T], str]) -> list[T]:
+    """Round-robin across folders.
+
+    The kernel serialises creates inside one folder, so parallel workers that
+    all write into the same folder would queue on its lock.
+    """
+    buckets: dict[str, list[T]] = {}
+    for item in items:
+        buckets.setdefault(os.path.dirname(key(item)), []).append(item)
+    queues = [list(reversed(b)) for b in buckets.values()]
+    out: list[T] = []
+    while queues:
+        for q in queues:
+            out.append(q.pop())
+        queues = [q for q in queues if q]
+    return out
+
+
+def _run_parallel[T](func: Callable[[T], None], items: list[T], workers: int) -> None:
+    """Run func over items; the first failure stops new work and is raised."""
+    if workers <= 1 or len(items) <= 1:
+        for item in items:
+            func(item)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(func, item) for item in items]
+        done, pending = wait(futures, return_when=FIRST_EXCEPTION)
+        for fut in pending:
+            _ = fut.cancel()
+        for fut in done:
+            exc = fut.exception()
+            if exc is not None:
+                raise exc
+
+
+def copy_tree_parallel(src_root: str, dst_root: str, workers: int) -> int:
+    """Copy an extracted tree into an existing empty folder.
+
+    Modes are set when each file is created (no separate chmod round trip)
+    and modification times are kept, as direct extraction would leave them.
+    Symlinks are recreated as links; install_archive() re-checks them in
+    staging afterwards. Returns the number of files copied.
+    """
+    dirs: list[str] = []
+    files: list[str] = []
+    for root, dirnames, filenames in os.walk(src_root):
+        rel_root = os.path.relpath(root, src_root)
+        rel_root = "" if rel_root == "." else rel_root
+        for d in dirnames:
+            path = os.path.join(root, d)
+            if os.path.islink(path):
+                files.append(os.path.join(rel_root, d))
+            else:
+                dirs.append(os.path.join(rel_root, d))
+        files.extend(os.path.join(rel_root, f) for f in filenames)
+    for rel in dirs:  # os.walk is top-down, so parents come first
+        mode = stat.S_IMODE(os.lstat(os.path.join(src_root, rel)).st_mode)
+        os.mkdir(os.path.join(dst_root, rel), mode | stat.S_IRWXU)
+
+    def _copy(rel: str) -> None:
+        src = os.path.join(src_root, rel)
+        dst = os.path.join(dst_root, rel)
+        st = os.lstat(src)
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(src), dst)
+            return
+        if not stat.S_ISREG(st.st_mode):
+            return  # extractors don't produce devices or FIFOs we want to keep
+        mode = stat.S_IMODE(st.st_mode)
+        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, mode)
+        try:
+            with open(src, "rb") as f:
+                while chunk := f.read(_COPY_CHUNK):
+                    _write_all(fd, chunk)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+                os.fchmod(fd, mode)  # create mode is filtered by the umask
+            os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
+        finally:
+            os.close(fd)
+
+    _run_parallel(_copy, _interleave_by_folder(files, key=lambda r: r), workers)
+    # Folder times last: creating their entries above bumped them.
+    for rel in reversed(dirs):
+        st = os.lstat(os.path.join(src_root, rel))
+        try:
+            os.utime(os.path.join(dst_root, rel), ns=(st.st_atime_ns, st.st_mtime_ns))
+        except OSError:
+            pass
+    return len(files)
+
+
+_trash_lock = threading.Lock()
+_trash_in_flight: set[str] = set()
+
+
+def _start_trash_delete(trash: str) -> None:
+    """Delete a trash folder on a daemon thread, at most once at a time."""
+    with _trash_lock:
+        if trash in _trash_in_flight:
+            return
+        _trash_in_flight.add(trash)
+
+    def _delete() -> None:
+        try:
+            errors = remove_tree_collect(trash)
+            if errors:
+                _log.warning(
+                    "Could not fully remove old version %s: %s", trash, errors[0]
+                )
+        finally:
+            with _trash_lock:
+                _trash_in_flight.discard(trash)
+
+    threading.Thread(target=_delete, name="wlib-trash", daemon=True).start()
+
+
+def defer_remove_tree(path: str, trash_root: str) -> bool:
+    """Rename `path` into `trash_root` and delete it on a background thread.
+
+    Returns False (nothing renamed) when the rename is impossible, e.g. the
+    folders sit on different filesystems; callers then delete synchronously.
+    Leftovers from an interrupted delete are swept by sweep_trash().
+    """
+    if not trash_root:
+        return False
+    trash = os.path.join(trash_root, f"{TRASH_PREFIX}{time.time_ns()}")
+    try:
+        os.rename(path, trash)
+    except OSError:
+        return False
+    _start_trash_delete(trash)
+    return True
+
+
+def sweep_trash(library_folder: str) -> int:
+    """Restart background deletes of `.wlib-trash-*` folders left by a crash."""
+    started = 0
+    try:
+        base = os.path.abspath(os.path.expanduser(library_folder))
+        if not os.path.isdir(base):
+            return 0
+        for name in os.listdir(base):
+            if not name.startswith(TRASH_PREFIX):
+                continue
+            candidate = os.path.join(base, name)
+            if os.path.isdir(candidate) and not os.path.islink(candidate):
+                _start_trash_delete(candidate)
+                started += 1
+    except OSError:
+        return started
+    return started
+
+
+def _trash_root_for(path: str, library_folders: Sequence[str]) -> str:
+    """Deepest library folder holding `path` ("" when none does).
+
+    Trash only goes where sweep_trash() looks, so an old version outside every
+    library folder is deleted synchronously instead.
+    """
+    real = _real(path)
+    best = ""
+    for folder in library_folders:
+        folder_real = _real(folder) if folder else ""
+        if (
+            folder_real
+            and real != folder_real
+            and _is_within(real, folder_real)
+            and len(folder_real) > len(best)
+        ):
+            best = folder_real
+    return best
+
+
+def _scratch_parent() -> str:
+    from core.host_platform import get_data_subdir
+
+    return get_data_subdir("install-scratch")
+
+
+def _sweep_stale_scratch(parent: str) -> None:
+    """Remove scratch left behind by a crashed install a day or more ago."""
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith(SCRATCH_PREFIX):
+            continue
+        old = os.path.join(parent, name)
+        try:
+            stale = time.time() - os.lstat(old).st_mtime > 86400
+        except OSError:
+            continue
+        if stale:
+            shutil.rmtree(old, ignore_errors=True)
+
+
+def _extract_tool_via_local_scratch(
+    tool: str,
+    archive_path: str,
+    staging: str,
+    workers: int,
+    required_bytes: int | None,
+) -> bool:
+    """Run a 7z/rar extractor into local scratch, then copy into staging.
+
+    Returns False without extracting when local disk can't hold the archive;
+    the caller then extracts straight into staging.
+    """
+    parent = _scratch_parent()
+    try:
+        os.makedirs(parent, exist_ok=True)
+        _sweep_stale_scratch(parent)
+        ensure_free_space(parent, required_bytes)
+        scratch = tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=parent)
+    except (OSError, ArchiveInstallError):
+        return False
+    try:
+        _ = extract_with_tool(tool, archive_path, scratch)
+        try:
+            _ = apply_execute_bits(scratch)
+        except OSError:
+            pass
+        _ = copy_tree_parallel(scratch, staging, workers)
+    finally:
+        cleanup_staging_dir(scratch)
+    return True
+
+
 def _zip_entry_name(info: zipfile.ZipInfo) -> str:
     """Entry name, recovering UTF-8 names stored without the UTF-8 flag (bit 11)."""
     name = info.filename
@@ -299,13 +630,24 @@ def _zip_entry_name(info: zipfile.ZipInfo) -> str:
     return name.replace("\\", "/")
 
 
-def extract_zip(archive_path: str, staging_dir: str) -> int:
+def extract_zip(
+    archive_path: str,
+    staging_dir: str,
+    *,
+    workers: int = 1,
+    exec_bits: bool = False,
+) -> int:
     """Extract a zip into staging with per-entry validation.
 
     Returns the number of entries extracted. Raises ArchiveSafetyError for
     traversal entries and ArchiveInstallError for corrupt or encrypted archives.
-    """
 
+    Each file's mode is set as it is created rather than with a later chmod.
+    With `exec_bits`, the apply_execute_bits() rule is applied from the bytes
+    being written, so no second pass has to reopen every file. `workers` > 1
+    writes files concurrently, which hides per-file latency on network
+    filesystems (and only adds overhead on local disks).
+    """
     os.makedirs(staging_dir, exist_ok=True)
     count = 0
     try:
@@ -325,25 +667,71 @@ def extract_zip(archive_path: str, staging_dir: str) -> int:
                 _ = _target_inside_staging(staging_dir, name)
                 names.append(name)
             check_archive_entries_no_collisions(names)
-            for info in infos:
-                name = _zip_entry_name(info)
+            # Folders first (sorted, so parents precede children), then files.
+            folders: set[str] = set()
+            files: list[tuple[zipfile.ZipInfo, str]] = []
+            for info, name in zip(infos, names):
                 target = _target_inside_staging(staging_dir, name)
                 if name.endswith("/"):
-                    os.makedirs(target, exist_ok=True)
+                    folders.add(target)
                     count += 1
                     continue
-                os.makedirs(os.path.dirname(target) or staging_dir, exist_ok=True)
+                folders.add(os.path.dirname(target) or staging_dir)
+                files.append((info, target))
+            for folder in sorted(folders):
+                os.makedirs(folder, exist_ok=True)
+
+            windows = _is_windows()
+            local = threading.local()
+            opened: list[zipfile.ZipFile] = []
+
+            def _write(item: tuple[zipfile.ZipInfo, str]) -> None:
+                info, target = item
+                handle = cast(zipfile.ZipFile | None, getattr(local, "zf", None))
+                if handle is None:
+                    handle = zf if workers <= 1 else zipfile.ZipFile(archive_path, "r")
+                    local.zf = handle
+                    if handle is not zf:
+                        opened.append(handle)
+                mode = (info.external_attr >> 16) & 0o7777
                 # Symlink entries are written as plain files holding the link
                 # text, so a zip can't plant links (deliberate, see design).
-                mode = (info.external_attr >> 16) & 0o7777
-                with zf.open(info, "r") as src, open(target, "wb") as out:
-                    _ = shutil.copyfileobj(src, out)
-                if mode and not _is_windows():
+                with handle.open(info, "r") as src:
+                    chunk = src.read(_COPY_CHUNK)
+                    head = chunk[:4]
+                    fd = os.open(
+                        target,
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_BINARY,
+                        mode if (mode and not windows) else 0o666,
+                    )
                     try:
-                        os.chmod(target, mode)
-                    except OSError:
-                        pass
-                count += 1
+                        while chunk:
+                            _write_all(fd, chunk)
+                            chunk = src.read(_COPY_CHUNK)
+                        if not windows:
+                            current = stat.S_IMODE(os.fstat(fd).st_mode)
+                            wanted = mode or current
+                            if exec_bits:
+                                wanted = _exec_mode(target, head, wanted)
+                            if wanted != current:
+                                try:
+                                    os.fchmod(fd, wanted)
+                                except OSError:
+                                    pass
+                    finally:
+                        os.close(fd)
+
+            try:
+                order = (
+                    _interleave_by_folder(files, key=lambda it: it[1])
+                    if workers > 1
+                    else files
+                )
+                _run_parallel(_write, order, workers)
+            finally:
+                for handle in opened:
+                    handle.close()
+            count += len(files)
     except (zipfile.BadZipFile, RuntimeError) as exc:
         msg = str(exc)
         if "encrypted" in msg.lower() or "password" in msg.lower():
@@ -1387,25 +1775,41 @@ def install_archive(
 
     _progress("preparing")
     _ = cleanup_stale_staging(library_folder)
+    # Resume background deletes only where this install could have left one,
+    # so a fresh install never touches unrelated (possibly offline) shares.
+    _ = sweep_trash(library_folder)
+    if old_install:
+        old_trash_root = _trash_root_for(old_install, library_folders)
+        if old_trash_root and old_trash_root != _real(library_folder):
+            _ = sweep_trash(old_trash_root)
     tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
     if tool_error:
         raise ArchiveInstallError(tool_error)
-    ensure_free_space(
-        library_folder, uncompressed_size(archive_path, library_folder=library_folder)
-    )
+    required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
+    ensure_free_space(library_folder, required_bytes)
+    network = is_network_filesystem(library_folder)
+    workers = NETWORK_IO_WORKERS if network else 1
     staging = create_staging_dir(library_folder)
     try:
         _progress("extracting")
         if fmt == "zip":
-            _ = extract_zip(archive_path, staging)
+            # Execute bits are decided while writing; no second pass needed.
+            _ = extract_zip(archive_path, staging, workers=workers, exec_bits=True)
+        elif network and _extract_tool_via_local_scratch(
+            cast(str, tool), archive_path, staging, workers, required_bytes
+        ):
+            # 7-Zip/unrar write one file at a time. On a network share every
+            # file waits for the server, so they extract on local disk, modes
+            # are fixed there, and the finished tree is copied over in parallel.
+            pass
         else:
             assert tool is not None
             _ = extract_with_tool(tool, archive_path, staging)
-        _progress("fixing permissions")
-        try:
-            _ = apply_execute_bits(staging)
-        except OSError:
-            pass
+            _progress("fixing permissions")
+            try:
+                _ = apply_execute_bits(staging)
+            except OSError:
+                pass
         _ = flatten_single_wrapper(staging)
         # Flattening moves a wrapper's entries up one level, which changes
         # what relative symlinks resolve to (staging/Game/link -> ../x means
@@ -1625,7 +2029,18 @@ def install_archive(
             if guard.get("removable"):
                 cleanup_root = old_backup or old_install
                 if _real(cleanup_root) != dest_real:
-                    errors = remove_tree_collect(cleanup_root)
+                    errors: list[str] = []
+                    # On a network share deleting thousands of files takes as
+                    # long as extracting them; move the old version aside
+                    # (instant) and delete it in the background instead.
+                    if not (
+                        is_network_filesystem(cleanup_root)
+                        and defer_remove_tree(
+                            cleanup_root,
+                            _trash_root_for(cleanup_root, library_folders),
+                        )
+                    ):
+                        errors = remove_tree_collect(cleanup_root)
                     if errors:
                         kept_reason = (
                             f"Could not fully remove {cleanup_root}: {errors[0]}"

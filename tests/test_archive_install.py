@@ -1610,8 +1610,8 @@ def test_flatten_relative_symlink_rechecked(tmp_path, monkeypatch):
     _write_game_zip(archive, {"Game/Game.exe": b"x"})
     real_extract = ai.extract_zip
 
-    def _plant_symlink(archive_path, staging_dir):
-        _ = real_extract(archive_path, staging_dir)
+    def _plant_symlink(archive_path, staging_dir, **kwargs):
+        _ = real_extract(archive_path, staging_dir, **kwargs)
         os.symlink("../evil", os.path.join(staging_dir, "Game", "link"))
         return 2
 

@@ -214,6 +214,21 @@ def test_scan_skips_leftover_staging_folders(tmp_path):
     assert [game["exe_path"] for game in games] == [str(real / "Demo.exe")]
 
 
+def test_scan_skips_old_versions_being_deleted(tmp_path):
+    from core.game_scan import scan_games_folder
+
+    real = tmp_path / "Demo"
+    real.mkdir()
+    (real / "Demo.exe").touch()
+    trash = tmp_path / ".wlib-trash-1793249770123"
+    trash.mkdir()
+    (trash / "Demo.exe").touch()
+
+    games = scan_games_folder(str(tmp_path))
+
+    assert [game["exe_path"] for game in games] == [str(real / "Demo.exe")]
+
+
 def test_scan_skips_leftover_old_version_backups(tmp_path):
     from core.game_scan import find_launcher, scan_games_folder
 

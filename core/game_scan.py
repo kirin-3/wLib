@@ -38,9 +38,10 @@ _SKIPPED_32BIT_EXECUTABLE_RE = re.compile(r"^.*-32\.exe$", re.I)
 _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 # Archive installs keep their temporary and backup trees next to the game.
 # They are internal state, not games: `.wlib-staging-*` during extraction,
+# `.wlib-trash-*` while a replaced version is deleted in the background,
 # `<destination>.wlib-old-*` when the previous version is kept and
 # `<destination>.wlib-new-*` when a failed in-place update keeps the new tree.
-_INTERNAL_DIR_PREFIXES = (".wlib-staging-",)
+_INTERNAL_DIR_PREFIXES = (".wlib-staging-", ".wlib-trash-")
 _INTERNAL_DIR_MARKERS = (".wlib-old-", ".wlib-new-")
 _LAUNCHER_EXTENSIONS = (
     ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar"
