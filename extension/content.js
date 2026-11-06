@@ -548,8 +548,21 @@ function extractGameInfo() {
             }
         }
 
+        // Current theme: the banner shows the average as a ring when signed in
+        // (aria-label="4.6 out of 5") or as stars for guests
+        // (aria-label="4.6 stars"), plus an "N reviews" link. Review-list stars
+        // sit outside .f95rv-banner. The older bratr widget stays as a fallback.
+        const rvAverage = document.querySelector(
+            '.f95rv-banner-ring[aria-label], .f95rv-banner-stars .f95rv-stars[aria-label]'
+        );
+        const rvMatch = rvAverage ? /(\d+(?:\.\d+)?)/.exec(rvAverage.getAttribute('aria-label') || '') : null;
+        const rvValue = rvMatch ? parseFloat(rvMatch[1]) : 0;
         const brWidget = document.querySelector('.br-widget.bratr-rating');
-        if (brWidget) {
+        if (rvValue > 0) {
+            const countEl = document.querySelector('.f95rv-banner-count');
+            const votes = countEl ? countEl.textContent.trim() : '';
+            info.rating = votes ? `${rvValue.toFixed(1)}/5 (${votes})` : `${rvValue.toFixed(1)}/5`;
+        } else if (brWidget) {
             const allStars = brWidget.querySelectorAll('a[data-rating-value]');
             let ratingValue = 0;
             allStars.forEach(star => {
