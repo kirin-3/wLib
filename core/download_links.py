@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from typing import TypedDict, final, override
@@ -319,7 +318,7 @@ def parse_download_links(html: str) -> ThreadDownloads:
             if build is None:
                 build = Build(label=build_label, section=section, platform=platform, kind=kind, mirrors=[])
                 builds.append(build)
-            build["mirrors"].append({"url": unescape(url), "host": host, "label": value, "part": part, "split": bool(part)})
+            build["mirrors"].append({"url": url, "host": host, "label": value, "part": part, "split": bool(part)})
             glue = False
     title = re.search(r'<h1\b[^>]*class=["\'][^"\']*p-title-value[^"\']*["\'][^>]*>(.*?)</h1>', html, re.I | re.S)
     version = re.search(r"\[((?:v(?:ersion)?\s*)?\d[^\]]*|(?:chapter|ch\.|episode|ep\.|part)\s*\d[^\]]*)\]", re.sub(r"<[^>]*>", "", title.group(1)), re.I) if title else None

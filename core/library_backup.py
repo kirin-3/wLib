@@ -1741,6 +1741,31 @@ def build_sync_backup(modified_at: str, device: str) -> dict[str, object]:
 MERGE_MODES = ("overwrite", "fill_missing")
 
 
+def _is_thread_less_fallback(
+    cursor: sqlite3.Cursor,
+    item: Mapping[str, object],
+    imported_game: Mapping[str, object],
+    local_id: int,
+) -> bool:
+    """True when a URL-less record matched a local game that has a thread.
+
+    Title fallbacks can pair a record without a thread URL (a metadata-only
+    backup or another app's library) with a local game that has one. The
+    record's empty URL means the source never knew it, not a request to clear
+    it. Sync identities are excluded: there an empty URL is the peer's edit.
+    """
+    if item.get("match_type") == "sync_uid":
+        return False
+    metadata = _game_section(imported_game, SECTION_METADATA)
+    if normalize_thread_url(metadata.get("f95_url")):
+        return False
+    row = cast(
+        sqlite3.Row | None,
+        cursor.execute("SELECT f95_url FROM games WHERE id = ?", (local_id,)).fetchone(),
+    )
+    return row is not None and bool(_coerce_text(cast(object, row["f95_url"])).strip())
+
+
 def _filter_fill_missing(
     cursor: sqlite3.Cursor,
     game_id: int,
@@ -1897,6 +1922,7 @@ def apply_library_backup(
                     status = "sync_separate"
 
                 local_id: int | None = None
+                metadata_fill_only = False
                 if status == "matched":
                     local_id = int(str(item.get("local_id", 0)))
                 elif status != "sync_separate":
@@ -1921,6 +1947,24 @@ def apply_library_backup(
                     )
                     if sync and not fields.get("cover_image_path"):
                         _ = fields.pop("cover_image_path", None)
+                    metadata_fill_only = _is_thread_less_fallback(
+                        cursor, item, imported_game, local_id
+                    )
+                    if metadata_fill_only:
+                        # A title fallback without a thread URL must not wipe
+                        # the local game's thread, version or links; its
+                        # metadata only fills fields that are empty here.
+                        metadata_fields = {
+                            key: value
+                            for key, value in fields.items()
+                            if key in METADATA_FIELDS
+                        }
+                        kept = _filter_fill_missing(cursor, local_id, metadata_fields)
+                        fields = {
+                            key: value
+                            for key, value in fields.items()
+                            if key not in METADATA_FIELDS or key in kept
+                        }
                     if merge_mode == "fill_missing":
                         fields = _filter_fill_missing(cursor, local_id, fields)
                     url_owner = (
@@ -2000,7 +2044,7 @@ def apply_library_backup(
                     local_id is None or SECTION_METADATA in sections
                 ):
                     keep_links = (
-                        merge_mode == "fill_missing"
+                        (merge_mode == "fill_missing" or metadata_fill_only)
                         and cursor.execute(
                             "SELECT 1 FROM game_links WHERE game_id = ? LIMIT 1",
                             (game_id,),

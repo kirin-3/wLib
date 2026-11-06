@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import zipfile
+import zlib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from typing import cast
@@ -82,6 +83,10 @@ _log = logging.getLogger("wlib.archive")
 
 class ArchiveInstallError(Exception):
     """Base failure for archive installs (message is user-facing)."""
+
+
+class ZipMethodUnsupportedError(ArchiveInstallError):
+    """A zip member uses a compression method Python cannot inflate."""
 
 
 class ArchiveSafetyError(ArchiveInstallError):
@@ -240,21 +245,44 @@ def detect_archive_tool(
             return found, None
 
     if _is_windows(platform):
-        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
-        program_files_x86 = os.environ.get(
-            "ProgramFiles(x86)", r"C:\Program Files (x86)"
-        )
-        for base in (program_files, program_files_x86):
-            candidate = os.path.join(base, "7-Zip", "7z.exe")
-            try:
-                if os.path.isfile(candidate):
-                    return candidate, None
-            except OSError:
-                continue
+        found = _windows_7zip()
+        if found:
+            return found, None
         return None, "Install 7-Zip to extract .7z/.rar archives."
     if fmt == "rar":
         return None, "Install 7-Zip (7z), bsdtar, or unrar to extract .rar archives."
     return None, "Install 7-Zip (7z) or bsdtar to extract .7z archives."
+
+
+def _windows_7zip() -> str | None:
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    for base in (program_files, program_files_x86):
+        candidate = os.path.join(base, "7-Zip", "7z.exe")
+        try:
+            if os.path.isfile(candidate):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def find_7zip_tool(
+    archive_path: str, *, platform: str | None = None, library_folder: str = ""
+) -> str | None:
+    """A 7-Zip binary for zips Python can't inflate (Deflate64, LZMA, ...)."""
+    if (
+        is_flatpak()
+        and os.path.isfile(BUNDLED_7ZZ)
+        and os.path.isfile(archive_path)
+        and (not library_folder or _writable_in_sandbox(library_folder))
+    ):
+        return BUNDLED_7ZZ
+    for candidate in ("7zz", "7z", "7za"):
+        found = host_which(candidate)
+        if found:
+            return found
+    return _windows_7zip() if _is_windows(platform) else None
 
 
 def _is_absolute_entry(entry: str) -> bool:
@@ -422,6 +450,16 @@ def _exec_mode(name: str, head: bytes, mode: int) -> int:
     if mode & stat.S_IROTH:
         new_mode |= stat.S_IXOTH
     return new_mode
+
+
+def _empty_dir(path: str) -> None:
+    """Remove everything inside `path`, keeping the folder itself."""
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                shutil.rmtree(entry.path)
+            else:
+                os.unlink(entry.path)
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -723,6 +761,13 @@ def extract_zip(
                     continue
                 folders.add(os.path.dirname(target) or staging_dir)
                 files.append((info, target))
+            folder_keys = {os.path.normcase(folder).casefold() for folder in folders}
+            for _info, target in files:
+                if os.path.normcase(target).casefold() in folder_keys:
+                    name = os.path.relpath(target, staging_dir)
+                    raise ArchiveSafetyError(
+                        f"Archive has a file and a folder with the same name: {name!r}"
+                    )
             for folder in sorted(folders):
                 os.makedirs(folder, exist_ok=True)
 
@@ -735,21 +780,21 @@ def extract_zip(
                 keys = {_windows_name_key(target) for _info, target in files}
                 if len(keys) != len(files):
                     workers = 1
-            local = threading.local()
-            opened: list[zipfile.ZipFile] = []
+            # All workers share one ZipFile: reopening it per thread would
+            # parse the whole central directory again in every worker. Reads
+            # of the shared file are serialized by zipfile's own lock, and
+            # inflating runs in parallel. Opening and closing members update
+            # an unlocked reference count, so those two steps take this lock.
+            member_lock = threading.Lock()
 
             def _write(item: tuple[zipfile.ZipInfo, str]) -> None:
                 info, target = item
-                handle = cast(zipfile.ZipFile | None, getattr(local, "zf", None))
-                if handle is None:
-                    handle = zf if workers <= 1 else zipfile.ZipFile(archive_path, "r")
-                    local.zf = handle
-                    if handle is not zf:
-                        opened.append(handle)
                 mode = (info.external_attr >> 16) & 0o7777
                 # Symlink entries are written as plain files holding the link
                 # text, so a zip can't plant links (deliberate, see design).
-                with handle.open(info, "r") as src:
+                with member_lock:
+                    src = zf.open(info, "r")
+                try:
                     chunk = src.read(_COPY_CHUNK)
                     head = chunk[:4]
                     fd = os.open(
@@ -773,19 +818,22 @@ def extract_zip(
                                     pass
                     finally:
                         os.close(fd)
+                finally:
+                    with member_lock:
+                        src.close()
 
-            try:
-                order = (
-                    _interleave_by_folder(files, key=lambda it: it[1])
-                    if workers > 1
-                    else files
-                )
-                _run_parallel(_write, order, workers)
-            finally:
-                for handle in opened:
-                    handle.close()
+            order = (
+                _interleave_by_folder(files, key=lambda it: it[1])
+                if workers > 1
+                else files
+            )
+            _run_parallel(_write, order, workers)
             count += len(files)
-    except (zipfile.BadZipFile, RuntimeError) as exc:
+    except NotImplementedError as exc:
+        raise ZipMethodUnsupportedError(
+            f"Archive uses a compression method wLib can't read: {exc}"
+        ) from exc
+    except (zipfile.BadZipFile, RuntimeError, EOFError, zlib.error) as exc:
         msg = str(exc)
         if "encrypted" in msg.lower() or "password" in msg.lower():
             raise ArchiveInstallError(
@@ -1298,7 +1346,8 @@ def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | N
         try:
             with zipfile.ZipFile(archive_path, "r") as zf:
                 return sum(info.file_size for info in zf.infolist())
-        except OSError:
+        except (OSError, zipfile.BadZipFile):
+            # Extraction reports a broken zip with a clear message.
             return None
     if fmt in ("7z", "rar"):
         tool, _err = detect_archive_tool(archive_path, library_folder=library_folder)
@@ -1846,13 +1895,29 @@ def install_archive(
     try:
         _progress("extracting")
         if fmt == "zip":
-            # Execute bits are decided while writing; no second pass needed.
-            _ = extract_zip(
-                archive_path,
-                staging,
-                workers=zip_extract_workers(network),
-                exec_bits=True,
-            )
+            try:
+                # Execute bits are decided while writing; no second pass needed.
+                _ = extract_zip(
+                    archive_path,
+                    staging,
+                    workers=zip_extract_workers(network),
+                    exec_bits=True,
+                )
+            except ZipMethodUnsupportedError as exc:
+                # Deflate64 (Windows Explorer's choice for large files) and
+                # other methods zipfile lacks: 7-Zip reads them.
+                fallback = find_7zip_tool(archive_path, library_folder=library_folder)
+                if fallback is None:
+                    raise ArchiveInstallError(
+                        f"{exc}. Install 7-Zip (7z) to extract this archive."
+                    ) from exc
+                _empty_dir(staging)
+                _ = extract_with_tool(fallback, archive_path, staging)
+                _progress("fixing permissions")
+                try:
+                    _ = apply_execute_bits(staging)
+                except OSError:
+                    pass
         elif network and _extract_tool_via_local_scratch(
             cast(str, tool), archive_path, staging, workers, required_bytes
         ):

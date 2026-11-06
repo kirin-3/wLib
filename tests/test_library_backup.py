@@ -3227,3 +3227,40 @@ def test_export_adds_time_zone_to_old_local_times():
     assert last_played == datetime(2026, 1, 2, 3, 4, 5).astimezone()
     assert state["date_added"] == "2026-01-02T03:04:05+09:00"
     assert with_local_offset("") == "" and with_local_offset(None) is None
+
+
+def test_url_less_title_match_keeps_local_thread_data():
+    from core.database import get_game_links, replace_game_links
+
+    game_id = add_game(
+        "Foo",
+        "/foo",
+        f95_url="https://f95zone.to/threads/foo.123/",
+        developer="Bar",
+    )
+    assert game_id is not None
+    update_game(game_id, {"latest_version": "1.0"})
+    replace_game_links(game_id, "page", [{"url": "https://vndb.org/v1"}])
+    backup = base_backup(
+        [
+            {
+                "metadata": {
+                    "title": "Foo",
+                    "developer": "Bar",
+                    "f95_url": "",
+                    "latest_version": "",
+                    "engine": "Ren'Py",
+                    "links": [],
+                }
+            }
+        ]
+    )
+
+    result = apply_library_backup(backup, {"sections": ["metadata"]})
+
+    assert result["updated"] == 1 and result["created"] == 0
+    game = next(game for game in get_all_games() if game["id"] == game_id)
+    assert game["f95_url"] == "https://f95zone.to/threads/foo.123/"
+    assert game["latest_version"] == "1.0"
+    assert game["engine"] == "Ren'Py"
+    assert [link["id"] for link in get_game_links(game_id)] == ["v1"]

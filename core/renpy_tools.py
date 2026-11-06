@@ -483,6 +483,7 @@ def extract_archives(
     archives = list_archives(game_folder)
     if not archives:
         raise GameToolError("There are no archives to extract")
+    game_root = _game_dir(game_folder)
 
     unsupported: list[str] = []
     skipped_scripts = skipped_existing = skipped_unsafe = skipped_invalid = 0
@@ -510,7 +511,10 @@ def extract_archives(
             used_targets.add(target)
             root = os.path.join(output_real, target)
         else:
-            root = os.path.dirname(path)
+            # Ren'Py resolves archive entries against `game/`, wherever under
+            # it the archive sits (`game/patch/x.rpa` holds `images/a.png`
+            # for `game/images/a.png`).
+            root = game_root
         root_real = os.path.realpath(root)
         for entry in index.entries:
             destination = _destination(root, root_real, entry.name)

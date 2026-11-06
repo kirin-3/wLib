@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import os
+import shutil
 import sys
 import zipfile
 from typing import cast
@@ -2401,3 +2402,79 @@ def test_extract_zip_windows_aliases_fall_back_to_one_worker(tmp_path, monkeypat
     monkeypatch.setattr(ai, "_is_windows", lambda platform=None: False)
     _ = ai.extract_zip(str(archive), str(tmp_path / "out3"), workers=4)
     assert seen == [1, 4]
+
+
+def _patch_compress_type(path, method):
+    # Rewrite every member's method in both headers; data stays stored.
+    data = bytearray(path.read_bytes())
+    with zipfile.ZipFile(path) as zf:
+        infos = zf.infolist()
+    for info in infos:
+        data[info.header_offset + 8 : info.header_offset + 10] = method.to_bytes(2, "little")
+    start = data.find(b"PK\x01\x02")
+    while start != -1:
+        data[start + 10 : start + 12] = method.to_bytes(2, "little")
+        start = data.find(b"PK\x01\x02", start + 4)
+    path.write_bytes(bytes(data))
+
+
+def test_extract_zip_reports_unsupported_method(tmp_path):
+    from core.archive_install import ZipMethodUnsupportedError
+
+    archive = tmp_path / "g.zip"
+    _make_zip(archive, {"a.txt": b"hello"})
+    _patch_compress_type(archive, 9)  # Deflate64
+    with pytest.raises(ZipMethodUnsupportedError):
+        _ = extract_zip(str(archive), str(tmp_path / "s"))
+
+
+def test_extract_zip_rejects_file_and_folder_with_same_name(tmp_path):
+    archive = tmp_path / "g.zip"
+    _make_zip(archive, {"a": b"file", "a/b.txt": b"child"})
+    with pytest.raises(ArchiveSafetyError, match="same name"):
+        _ = extract_zip(str(archive), str(tmp_path / "s"), workers=4)
+
+
+def test_uncompressed_size_of_broken_zip_is_unknown(tmp_path):
+    from core.archive_install import uncompressed_size
+
+    archive = tmp_path / "g.zip"
+    archive.write_bytes(b"not a zip")
+    assert uncompressed_size(str(archive)) is None
+
+
+@pytest.mark.skipif(
+    not any(shutil.which(tool) for tool in ("7zz", "7z", "7za")),
+    reason="7-Zip is not installed",
+)
+def test_install_falls_back_to_7zip_for_deflate64(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    import subprocess
+
+    seven = next(shutil.which(t) for t in ("7zz", "7z", "7za") if shutil.which(t))
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Game.exe").write_bytes(b"x" * 4096)
+    archive = tmp_path / "Game-1.0-pc.zip"
+    _ = subprocess.run(
+        [seven, "a", "-tzip", "-mm=Deflate64", str(archive), "Game.exe"],
+        cwd=src,
+        check=True,
+        capture_output=True,
+    )
+    with zipfile.ZipFile(archive) as zf:
+        assert zf.infolist()[0].compress_type == 9
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="1.0",
+    )
+    assert result["success"] is True
+    assert open(str(result["exe_path"]), "rb").read() == b"x" * 4096
+    assert len(db.get_all_games()) == 1

@@ -105,6 +105,20 @@ GPU_DETECTED_RENDERER=""
 GPU_DIRECT_RENDERING=""
 GPU_VENDOR_MATCH=""
 
+# The guard holds the PID of the launcher whose GPU run is in progress. A
+# second launch (which only focuses the running window and exits) must not
+# read a live instance's guard as a crash, nor delete it on its way out.
+guard_owned_by_other_instance() {
+    local pid=""
+    pid="$(head -n 1 "$1" 2>/dev/null)" || return 1
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$pid" != "$$" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    grep -qa wlib "/proc/$pid/cmdline" 2>/dev/null
+}
+
 detect_gpu() {
     local glxinfo_output=""
     local renderer_line=""
@@ -128,7 +142,7 @@ detect_gpu() {
             ;;
     esac
 
-    if [ -f "$GPU_CRASH_GUARD" ]; then
+    if [ -f "$GPU_CRASH_GUARD" ] && ! guard_owned_by_other_instance "$GPU_CRASH_GUARD"; then
         GPU_SOFTWARE_FROM_CRASH_GUARD=1
         GPU_RENDER_MODE="software"
         GPU_DETECTION_REASON="crash-guard"
@@ -219,8 +233,8 @@ if [ "${1:-}" = "--launch" ]; then
 fi
 
 detect_gpu
-if [ "$GPU_RENDER_MODE" = "auto" ]; then
-    touch "$GPU_CRASH_GUARD"
+if [ "$GPU_RENDER_MODE" = "auto" ] && ! guard_owned_by_other_instance "$GPU_CRASH_GUARD"; then
+    printf '%s\n' "$$" > "$GPU_CRASH_GUARD"
 fi
 
 # Let the app set QT_QPA_PLATFORM based on the active desktop session.
@@ -238,7 +252,9 @@ fi
 WLIB_EXIT=$?
 printf 'exit_code=%s\n' "$WLIB_EXIT" >> "$LOG_FILE"
 
-if [ "$WLIB_EXIT" -eq 0 ] && { [ "$GPU_RENDER_MODE" = "auto" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; }; then
+if [ "$WLIB_EXIT" -eq 0 ] \
+    && { [ "$GPU_RENDER_MODE" = "auto" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; } \
+    && ! guard_owned_by_other_instance "$GPU_CRASH_GUARD"; then
     rm -f "$GPU_CRASH_GUARD"
 fi
 

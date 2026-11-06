@@ -101,6 +101,20 @@ GPU_DETECTED_RENDERER=""
 GPU_DIRECT_RENDERING=""
 GPU_VENDOR_MATCH=""
 
+# The guard holds the PID of the launcher whose GPU run is in progress. A
+# second launch (which only focuses the running window and exits) must not
+# read a live instance's guard as a crash, nor delete it on its way out.
+guard_owned_by_other_instance() {
+    local pid=""
+    pid="$(head -n 1 "$1" 2>/dev/null)" || return 1
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$pid" != "$$" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    grep -qa wlib "/proc/$pid/cmdline" 2>/dev/null
+}
+
 detect_gpu() {
     local glxinfo_output=""
     local renderer_line=""
@@ -124,7 +138,7 @@ detect_gpu() {
             ;;
     esac
 
-    if [ -f "$CRASH_GUARD_FILE" ]; then
+    if [ -f "$CRASH_GUARD_FILE" ] && ! guard_owned_by_other_instance "$CRASH_GUARD_FILE"; then
         GPU_SOFTWARE_FROM_CRASH_GUARD=1
         GPU_RENDER_MODE="software"
         GPU_DETECTION_REASON="crash-guard"
@@ -197,8 +211,8 @@ if [ -n "$GPU_VENDOR_MATCH" ]; then
     echo "   DRM vendor match: $GPU_VENDOR_MATCH"
 fi
 
-if [ "$GPU_RENDER_MODE" = "auto" ]; then
-    touch "$CRASH_GUARD_FILE"
+if [ "$GPU_RENDER_MODE" = "auto" ] && ! guard_owned_by_other_instance "$CRASH_GUARD_FILE"; then
+    printf '%s\n' "$$" > "$CRASH_GUARD_FILE"
 fi
 
 set +e
@@ -206,11 +220,9 @@ python main.py
 APP_EXIT_CODE=$?
 set -e
 
-if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$GPU_RENDER_MODE" = "auto" ]; then
-    rm -f "$CRASH_GUARD_FILE"
-fi
-
-if [ "$APP_EXIT_CODE" -eq 0 ] && [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; then
+if [ "$APP_EXIT_CODE" -eq 0 ] \
+    && { [ "$GPU_RENDER_MODE" = "auto" ] || [ "$GPU_SOFTWARE_FROM_CRASH_GUARD" = "1" ]; } \
+    && ! guard_owned_by_other_instance "$CRASH_GUARD_FILE"; then
     rm -f "$CRASH_GUARD_FILE"
 fi
 

@@ -67,3 +67,14 @@ def test_bold_separator_text_is_not_a_heading():
     assert len(builds) == 1
     assert builds[0]["section"] == "Season 2" and builds[0]["label"] == "Linux"
     assert [m["host"] for m in builds[0]["mirrors"]] == ["pixeldrain", "mega"]
+
+
+def test_mirror_url_is_decoded_once():
+    html = (
+        '<html data-logged-in="true"><article class="message-threadStarterPost">'
+        '<div class="bbWrapper"><b>DOWNLOAD</b><br><b>Windows</b>: '
+        '<a href="https://example.com/g.zip?dl=1&amp;param=2&amp;not=3&amp;amp=4">Mirror</a>'
+        "</div></article></html>"
+    )
+    mirror = parse_download_links(html)["builds"][0]["mirrors"][0]
+    assert mirror["url"] == "https://example.com/g.zip?dl=1&param=2&not=3&amp=4"

@@ -390,6 +390,19 @@ def test_in_place_first_archive_wins_for_shared_files(tmp_path):
     assert result["skipped_existing"] == 1
 
 
+def test_in_place_nested_archive_extracts_relative_to_game_dir(tmp_path):
+    # Ren'Py resolves entries against game/, not the archive's own folder.
+    game = make_game(tmp_path)
+    (game / "game" / "patch").mkdir()
+    build_rpa(game / "game" / "patch" / "extra.rpa", {"images/x.png": b"x"})
+
+    result = extract_archives(str(game), "in_place", "", no_progress, never)
+
+    assert (game / "game" / "images" / "x.png").read_bytes() == b"x"
+    assert not (game / "game" / "patch" / "images").exists()
+    assert result["files"] == 1
+
+
 def test_unsafe_and_out_of_range_entries_are_skipped(tmp_path):
     game = make_game(tmp_path)
     archive = game / "game" / "evil.rpa"
