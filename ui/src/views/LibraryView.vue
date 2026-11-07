@@ -4,7 +4,9 @@ import { activeFilterChips as buildFilterChips, removeFilterValue, type FilterCh
 import { confirmAction } from "../utils/confirm";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
 import { libraryDisplayState } from "../utils/libraryGames";
-import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
+import { gameCoverSrc } from "../utils/gameCover";
+import CoverImage from "../components/CoverImage.vue";
+import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
@@ -155,7 +157,6 @@ const games = ref<GameRecord[]>([]);
 const gamesLoaded = ref(false);
 const loadError = ref<string | null>(null);
 const displayState = computed(() => libraryDisplayState(gamesLoaded.value, loadError.value, games.value.length, filteredGames.value.length));
-const runningGameIds = ref(new Set<number>());
 const customStatuses = ref<string[]>([]);
 // True once Settings has answered, so the custom status list is authoritative.
 const customStatusesLoaded = ref(false);
@@ -1170,17 +1171,7 @@ const loadGames = async () => {
   }
 };
 
-let runningGamesRequest = 0;
-const loadRunningGames = async () => {
-  const request = ++runningGamesRequest;
-  try {
-    const ids = await api.getRunningGames();
-    if (request !== runningGamesRequest) return;
-    runningGameIds.value = new Set(ids);
-  } catch (error) {
-    console.error("Failed to load running games", error);
-  }
-};
+const loadRunningGames = () => refreshRunningGames(() => api.getRunningGames());
 
 // Sync and imports can replace the collection list and presets, not just games.
 let settingsRequest = 0;
@@ -1648,7 +1639,6 @@ const handlePlaytimeTick = (event: Event) => {
   const detail = (event as CustomEvent<PlaytimeTickDetail>).detail || {};
   const gameId = Number(detail.gameId);
   const delta = Number(detail.delta);
-  if (detail.isFinal && Number.isInteger(gameId)) runningGameIds.value.delete(gameId);
   if (!Number.isInteger(gameId) || !Number.isFinite(delta) || delta < 0) return;
 
   const game = games.value.find((g) => g.id === gameId);
@@ -1773,7 +1763,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   gamesRequest++;
-  runningGamesRequest++;
   settingsRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
@@ -2506,15 +2495,9 @@ onUnmounted(() => {
             >
               <td class="library-table-title"><span v-if="selectedIds.has(game.id)" class="mr-2" aria-hidden="true">✓</span>
                 <div class="flex items-center gap-2 min-w-0">
-                  <img
-                    v-if="gameCoverSrc(game)"
-                    :src="gameCoverSrc(game)"
-                    @error="gameCoverError($event, game)"
-                    loading="lazy"
-                    decoding="async"
-                    alt=""
-                    class="w-8 h-8 rounded object-cover shrink-0"
-                  />
+                  <span v-if="gameCoverSrc(game)" class="cover-thumb w-8 h-8 shrink-0">
+                    <CoverImage :game="game" img-class="w-8 h-8 rounded object-cover" />
+                  </span>
                   <span
                     v-else
                     class="w-8 h-8 rounded shrink-0 flex items-center justify-center"
@@ -2685,17 +2668,14 @@ onUnmounted(() => {
               );
             "
           >
-            <img
+            <CoverImage
               v-if="gameCoverSrc(game)"
-              :src="gameCoverSrc(game)"
-              @error="gameCoverError($event, game)"
-              loading="lazy"
-              decoding="async"
+              :game="game"
               :alt="game.title"
-              class="absolute inset-0 w-full h-full object-cover rounded-t-xl"
-              :class="[
+              :img-class="[
+                'absolute inset-0 w-full h-full object-cover rounded-t-xl',
                 layoutMode === 'banner' ? 'object-center' : 'object-top',
-                { 'rounded-b-xl': isImageTileLayout },
+                isImageTileLayout ? 'rounded-b-xl' : '',
               ]"
             />
             <IconPhotoFilled

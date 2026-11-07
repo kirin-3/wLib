@@ -29,6 +29,7 @@ import {
 import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError } from "../utils/toast";
 import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
+import { coverAnimation, saveCoverAnimation } from "../utils/coverAnimation";
 import {
   accentPreference,
   previewAccentPreference,
@@ -69,6 +70,12 @@ import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
 import FileHostAccounts from "../components/FileHostAccounts.vue";
+
+const coverAnimationOptions = [
+  { value: "always", label: "Always" },
+  { value: "hover", label: "On hover" },
+  { value: "never", label: "Never" },
+] as const;
 
 const RPGMAKER_LINUX_REPO_URL =
   "https://github.com/bakustarver/rpgmakermlinux-cicpoffs";
@@ -1665,6 +1672,31 @@ const browseUrm = async () => {
               @click="saveMotionPreference(false)"
             >
               Off
+            </button>
+          </div>
+        </div>
+
+        <div data-settings-row="appearance-static-6" data-keywords="gif cover covers animate animated hover" data-settings-bound v-show="settingsRowVisible('appearance-static-6')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animate covers</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              {{ motionEnabled
+                ? "When animated covers play. They always stay still while a game is running."
+                : "Covers stay still while Animations are off." }}
+            </p>
+          </div>
+          <div class="motion-toggle inline-flex rounded-lg p-1 shrink-0" :class="motionEnabled ? '' : 'opacity-50'" role="group" aria-label="Animate covers">
+            <button
+              v-for="option in coverAnimationOptions"
+              :key="option.value"
+              type="button"
+              class="motion-option px-3 py-1.5 rounded-md text-xs font-semibold"
+              :class="coverAnimation === option.value ? 'motion-option-active' : ''"
+              :aria-pressed="coverAnimation === option.value"
+              :disabled="!motionEnabled"
+              @click="saveCoverAnimation(option.value)"
+            >
+              {{ option.label }}
             </button>
           </div>
         </div>

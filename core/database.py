@@ -1242,6 +1242,12 @@ def referenced_cover_cache_names() -> set[str]:
         return {row[0] for row in rows}
 
 
+def referenced_cover_local_names() -> set[str]:
+    with closing(get_connection()) as conn:
+        rows = cast(list[tuple[str]], conn.execute("SELECT cover_local FROM games WHERE cover_local IS NOT NULL AND cover_local != ''").fetchall())
+        return {row[0] for row in rows}
+
+
 def set_sandbox_for_all_games(enabled: bool) -> int:
     """Set the next-launch sandbox preference and count only changed games."""
     value = _coerce_bool_int(enabled)

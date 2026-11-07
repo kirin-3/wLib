@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { gameCoverSrc, gameCoverError } from "./gameCover.ts";
+import { gameCoverSrc, gameCoverError, coverCardSources, coverAnimError } from "./gameCover.ts";
+
+const fakeEvent = (src: string) => ({ currentTarget: { getAttribute: () => src } }) as unknown as Event;
 
 test("local cover wins, errors fall back once, replacement is tried afresh", () => {
   const game = { cover_local_url: "http://127.0.0.1:8183/covers/test.png", cover_image_path: "https://example.com/test.jpg" };
@@ -27,4 +29,25 @@ test("cache precedes remote and follows local, with error fallback", () => {
   assert.equal(gameCoverSrc(game), game.cover_cache_url);
   assert.equal(gameCoverError({} as Event, game), true);
   assert.equal(gameCoverSrc(game), game.cover_image_path);
+});
+
+test("card sources use copies when present and fall back to the original", () => {
+  const base = { cover_local_url: "cs-local.gif", cover_image_path: "cs-remote.gif" };
+  assert.deepEqual(coverCardSources(base), { still: "", anim: "", original: "cs-local.gif" });
+  assert.deepEqual(coverCardSources(null), { still: "", anim: "", original: "" });
+  const both = { ...base, cover_card_still_url: "cs-a.still.webp", cover_card_anim_url: "cs-a.anim.webp" };
+  assert.deepEqual(coverCardSources(both), { still: "cs-a.still.webp", anim: "cs-a.anim.webp", original: "cs-local.gif" });
+  // Too long for an animated copy: the original plays in the animated layer.
+  const stillOnly = { ...base, cover_card_still_url: "cs-b.still.webp" };
+  assert.equal(coverCardSources(stillOnly).anim, "cs-local.gif");
+  // An animated copy without its still copy is never used.
+  assert.deepEqual(coverCardSources({ ...base, cover_card_anim_url: "cs-c.anim.webp" }).anim, "");
+});
+
+test("failed animated copy falls back to the original; failed still falls back to the original", () => {
+  const game = { cover_local_url: "cf-local.gif", cover_card_still_url: "cf.still.webp", cover_card_anim_url: "cf.anim.webp" };
+  coverAnimError(fakeEvent("cf.anim.webp"));
+  assert.deepEqual(coverCardSources(game), { still: "cf.still.webp", anim: "cf-local.gif", original: "cf-local.gif" });
+  assert.equal(gameCoverError(fakeEvent("cf.still.webp"), game), true);
+  assert.deepEqual(coverCardSources(game), { still: "", anim: "", original: "cf-local.gif" });
 });

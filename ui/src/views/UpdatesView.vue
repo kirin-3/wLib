@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
+import { gameCoverSrc } from "../utils/gameCover";
+import CoverImage from "../components/CoverImage.vue";
+import { refreshRunningGames } from "../composables/useRunningGames";
 import { ref, onMounted, onUnmounted, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
@@ -488,6 +490,7 @@ const handleLibraryRefresh = async () => {
 
 onMounted(() => {
   window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
+  onWebviewReady(() => void refreshRunningGames(() => api.getRunningGames()));
   onWebviewReady(async () => {
     if (disposed) return;
     const capabilities = await loadPlatformCapabilities();
@@ -814,12 +817,9 @@ onUnmounted(() => {
               class="update-entry flex items-center gap-3 min-w-[12rem] flex-1 text-left rounded-md"
               :title="`Open ${game.title}`"
             >
-              <img
-                v-if="gameCoverSrc(game)"
-                :src="gameCoverSrc(game)"
-                @error="gameCoverError($event, game)"
-                class="w-10 h-10 rounded-lg object-cover shrink-0"
-              />
+              <span v-if="gameCoverSrc(game)" class="cover-thumb w-10 h-10 shrink-0">
+                <CoverImage :game="game" img-class="w-10 h-10 rounded-lg object-cover" />
+              </span>
               <div
                 class="w-6 h-6 rounded shrink-0 flex items-center justify-center"
                 style="background: var(--bg-overlay)"

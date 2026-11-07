@@ -99,6 +99,23 @@ def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch, extension)
     assert handler.wfile.getvalue() == data
 
 
+def test_cover_route_serves_card_copies(tmp_path, monkeypatch):
+    from core import database
+
+    monkeypatch.setattr(database, "DATA_DIR", str(tmp_path))
+    folder = tmp_path / "covers" / "cards"
+    folder.mkdir(parents=True)
+    name = "c" * 32 + ".anim.webp"
+    (folder / name).write_bytes(b"RIFFdata")
+    handler = _make_extension_handler("/covers/cards/" + name)
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    headers = dict(call.args for call in handler.send_header.call_args_list)
+    assert headers["Content-Type"] == "image/webp"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert handler.wfile.getvalue() == b"RIFFdata"
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -106,6 +123,11 @@ def test_cover_route_is_read_only_without_cors(tmp_path, monkeypatch, extension)
         "/covers/",
         "/covers/" + "b" * 32 + ".jpg",
         "/covers/%2e%2e/wlib.db",
+        "/covers/cards/../../wlib.db",
+        "/covers/cards/",
+        "/covers/cards/" + "b" * 32 + ".still.webp",
+        "/covers/cards/" + "b" * 32 + ".still.png",
+        "/covers/cards/" + "b" * 32 + ".gif",
     ],
 )
 def test_cover_route_rejects_invalid_names(path):
@@ -614,6 +636,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -680,6 +703,7 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1485,6 +1509,7 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1530,6 +1555,7 @@ def test_main_flushes_playtime_before_the_final_sync(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 
@@ -1585,6 +1611,7 @@ def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
 

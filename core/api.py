@@ -292,7 +292,12 @@ class Api:
         )
         from core.game_covers import CoverCacheService
 
-        self.cover_cache: CoverCacheService = CoverCacheService(on_change=self._schedule_steam_sync)
+        from core.cover_cards import CoverCardService
+
+        self.cover_cards: CoverCardService = CoverCardService(
+            on_copies_ready=self._notify_card_copies_ready
+        )
+        self.cover_cache: CoverCacheService = CoverCacheService(on_change=self._cover_cache_changed)
         from core.downloads.manager import manager as download_manager
         from core.update_downloads import UpdateDownloads
 
@@ -1542,11 +1547,13 @@ class Api:
                 "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
 
     def _add_local_cover_url(self, game: dict[str, object]) -> None:
+        from core.cover_cards import card_paths
         from core.game_covers import cover_path, cached_cover_path
 
         cached_url = game.pop("cover_cache_url", None)
         name = game.pop("cover_cache", None)
         cached = cached_cover_path(name)
+        shown: str | None = None
         if (
             self.library_sync.server_available
             and cached_url == game.get("cover_image_path")
@@ -1556,9 +1563,18 @@ class Api:
             game["cover_cache_url"] = (
                 f"http://127.0.0.1:8183/covers/cache/{cached.name}"
             )
+            shown = cached.name
         path = cover_path(game.get("cover_local"))
         if self.library_sync.server_available and path is not None and path.is_file():
             game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
+            shown = path.name
+        # Card copies belong to the source that is shown: local over cached.
+        copies = card_paths(shown) if shown else None
+        if copies is not None and copies[0].is_file():
+            base = "http://127.0.0.1:8183/covers/cards/"
+            game["cover_card_still_url"] = base + copies[0].name
+            if copies[1].is_file():
+                game["cover_card_anim_url"] = base + copies[1].name
 
     def get_cover_cache_status(self) -> dict[str, object]:
         try:
@@ -1569,6 +1585,7 @@ class Api:
     def purge_cover_cache(self) -> dict[str, object]:
         try:
             self.cover_cache.purge()
+            self.cover_cards.sweep()
             self._refresh_synced_library()
             return self.cover_cache.status()
         except Exception as exc:
@@ -1592,6 +1609,8 @@ class Api:
             return {"success": False, "error": "Choose an image file."}
         try:
             _ = set_cover(coerced_id, os.path.expanduser(path))
+            self.cover_cards.sweep()
+            self.cover_cards.wake()
             self._schedule_steam_sync()
             game = database.get_game(coerced_id)
             if game is not None:
@@ -1641,6 +1660,7 @@ class Api:
             }
         try:
             clear_cover(coerced_id)
+            self.cover_cards.sweep()
             self._schedule_steam_sync()
             return {"success": True, "game": database.get_game(coerced_id)}
         except (OSError, ValueError, sqlite3.Error) as exc:
@@ -1865,6 +1885,21 @@ class Api:
         except (OSError, ValueError) as e:
             return {"success": False, "error": str(e) or "Could not scan folder"}
         return {"success": True, "games": games}
+
+    def _cover_cache_changed(self) -> None:
+        self._schedule_steam_sync()
+        self.cover_cards.wake()
+
+    def _notify_card_copies_ready(self) -> None:
+        # Device-local copies only: no sync or dirty marking, just a reload.
+        if self.window is not None:
+            with suppress(Exception):
+                _ = cast(
+                    object,
+                    self.window.evaluate_js(
+                        "window.dispatchEvent(new Event('wlib-refresh-library'));"
+                    ),
+                )
 
     def _refresh_synced_library(self) -> None:
         self.cover_cache.wake()
@@ -2376,6 +2411,7 @@ class Api:
 
             if previous_game:
                 delete_cover_file(previous_game.get("cover_local"))
+            self.cover_cards.sweep()
         except Exception as exc:
             print(f"[wLib] Failed to remove cover for game {coerced_id}: {exc}")
         try:

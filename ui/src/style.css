@@ -293,6 +293,33 @@ body {
   animation: none !important;
 }
 
+/* Animated card copies sit over their still copy. The root class set by
+   utils/coverAnimation.ts decides when they show, so hidden layers are never
+   decoded or fetched and hovering needs no Vue state. */
+.cover-anim {
+  display: none;
+}
+
+.cover-thumb {
+  position: relative;
+  display: inline-block;
+}
+
+.cover-thumb .cover-anim {
+  position: absolute;
+  inset: 0;
+}
+
+html[data-cover-animation="always"] .cover-anim,
+html[data-cover-animation="hover"] .game-card:hover .cover-anim,
+html[data-cover-animation="hover"] .game-card:focus-within .cover-anim,
+html[data-cover-animation="hover"] .game-row:hover .cover-anim,
+html[data-cover-animation="hover"] .game-row:focus-within .cover-anim,
+html[data-cover-animation="hover"] .update-entry:hover .cover-anim,
+html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
+  display: block;
+}
+
 /* Launch actions use a fixed green that never follows the accent. */
 .ui-play-btn {
   background: var(--play);

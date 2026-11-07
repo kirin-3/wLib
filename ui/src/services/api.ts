@@ -685,6 +685,8 @@ export interface GameRecord {
   cover_local?: string | null;
   cover_local_url?: string;
   cover_cache_url?: string;
+  cover_card_still_url?: string;
+  cover_card_anim_url?: string;
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
@@ -2598,9 +2600,13 @@ class ApiService {
           if (!String(args[1] || "").trim()) return { success: false, error: "Choose an image file." };
           game.cover_local = "mock-local-cover.png";
           game.cover_local_url = String(args[1]);
+          delete game.cover_card_still_url;
+          delete game.cover_card_anim_url;
         } else {
           game.cover_local = null;
           delete game.cover_local_url;
+          delete game.cover_card_still_url;
+          delete game.cover_card_anim_url;
         }
         localStorage.setItem("wlib-mock-games", JSON.stringify(games));
         return { success: true, mock: true, game };

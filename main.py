@@ -1094,11 +1094,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         from urllib.parse import urlparse as _urlparse
 
         if _urlparse(self.path).path.startswith("/covers/"):
+            from core.cover_cards import card_path
             from core.game_covers import COVER_TYPES, cover_path, cached_cover_path
 
             name = _urlparse(self.path).path.removeprefix("/covers/")
-            path = (cached_cover_path(name.removeprefix("cache/"))
-                    if name.startswith("cache/") else cover_path(name))
+            if name.startswith("cards/"):
+                path = card_path(name.removeprefix("cards/"))
+            elif name.startswith("cache/"):
+                path = cached_cover_path(name.removeprefix("cache/"))
+            else:
+                path = cover_path(name)
             try:
                 if path is None:
                     raise FileNotFoundError
@@ -1952,6 +1957,7 @@ def main() -> None:
         def start_cover_cache() -> None:
             if cast(RendererDiagnosticsWindow, cast(object, window)).events.loaded.wait(60):
                 api.cover_cache.start()
+                api.cover_cards.start()
 
         threading.Thread(target=start_cover_cache, daemon=True).start()
         api.library_sync.start()
@@ -1969,6 +1975,7 @@ def main() -> None:
         if api.steam_sync is not None:
             api.steam_sync.stop()
         api.cover_cache.stop()
+        api.cover_cards.stop()
         # Release the port before the final sync can take up to 10 seconds:
         # relaunching wLib while it shuts down must be able to bind it instead
         # of finding this closing instance and exiting.

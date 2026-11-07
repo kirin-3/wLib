@@ -218,6 +218,7 @@ The UI uses Tailwind utility classes plus CSS variables in `ui/src/style.css` fo
 ### Motion
 
 - Settings Appearance offers **Animations** on or off via `utils/motionPreference.ts` (localStorage key `wlib-ui-motion`). `main.ts` applies the saved choice before mount by toggling `.motion-off` on the root element.
+- Settings Appearance also offers **Animate covers** (`Always`, `On hover`, `Never`; default `On hover`) via `utils/coverAnimation.ts` (localStorage key `wlib-cover-animation`, device-local, not in backup or sync). Library cards, list thumbnails and Updates entries render `CoverImage.vue`: the still card copy with the animated copy on top, and `html[data-cover-animation]` plus CSS decides which plays, so hover never re-renders. Covers stay still while Animations are off or while any game runs (`composables/useRunningGames.ts`). The detail modal and lightbox keep the original cover.
 - Turning motion off removes non-essential transitions and hover effects. Loading indicators stay visible. The choice is per-device and is not included in backup or sync.
 
 ### Library view preferences
