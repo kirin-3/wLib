@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 
@@ -17,6 +18,8 @@ def test_script_formats(options, expected):
     script = render_launch_script(**options)
     assert expected in script
     assert '--launch "$1"' in script
+    if shutil.which('sh') is None:
+        return  # syntax check needs a POSIX sh (Windows without Git Bash)
     assert subprocess.run(['sh', '-n'], input=script, text=True, check=False).returncode == 0
 
 

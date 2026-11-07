@@ -15,7 +15,7 @@ import threading
 import time
 from urllib.parse import quote
 from contextlib import nullcontext
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from _thread import LockType, start_new_thread
 from dataclasses import dataclass
 from typing import IO, Protocol, TypedDict, cast, final
@@ -35,6 +35,7 @@ from .host_platform import (
     host_system_layout,
     host_which,
     is_windows,
+    no_console_window,
     open_windows_system_target,
     proton_compat_data_path as proton_compat_data_path,
 )
@@ -256,6 +257,273 @@ class _ElevatedProcess:
             return None
 
 
+_CREATE_SUSPENDED = 0x00000004
+# The real host, unlike is_windows(), which tests replace.
+_NATIVE_WINDOWS: bool = sys.platform == "win32"
+
+
+class _WindowsJob:
+    """A Job Object that holds a game and every process it starts.
+
+    Many games start through a launcher that runs the real game and exits.
+    Linux follows the process group; Windows has none, so the job is what
+    tells whether the game still runs and what Stop ends. The job is not
+    killed when its handle closes: a game outlives wLib, as on Linux.
+    """
+
+    def __init__(self) -> None:
+        import ctypes
+        import weakref
+        from ctypes import wintypes
+
+        load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+        kernel32 = load_dll("kernel32", use_last_error=True)
+        create = kernel32.CreateJobObjectW
+        create.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        create.restype = wintypes.HANDLE
+        handle = cast(int | None, create(None, None))
+        if not handle:
+            raise OSError("Windows could not create a job object for the game.")
+        self._kernel32: ctypes.CDLL = kernel32
+        self._handle: int = handle
+        close = kernel32.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        _ = weakref.finalize(self, close, handle)
+
+    def add(self, process_handle: int) -> bool:
+        from ctypes import wintypes
+
+        assign = self._kernel32.AssignProcessToJobObject
+        assign.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        assign.restype = wintypes.BOOL
+        return bool(cast(int, assign(self._handle, process_handle)))
+
+    def active_processes(self) -> int | None:
+        """Processes still running in the job; None when Windows cannot say."""
+        import ctypes
+        from ctypes import wintypes
+
+        @final
+        class BasicAccounting(ctypes.Structure):
+            _fields_ = [
+                ("TotalUserTime", ctypes.c_int64),
+                ("TotalKernelTime", ctypes.c_int64),
+                ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                ("TotalPageFaultCount", wintypes.DWORD),
+                ("TotalProcesses", wintypes.DWORD),
+                ("ActiveProcesses", wintypes.DWORD),
+                ("TotalTerminatedProcesses", wintypes.DWORD),
+            ]
+
+        query = self._kernel32.QueryInformationJobObject
+        query.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        ]
+        query.restype = wintypes.BOOL
+        info = BasicAccounting()
+        # 1 = JobObjectBasicAccountingInformation
+        if not query(self._handle, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+            return None
+        return int(cast(int, info.ActiveProcesses))
+
+    def terminate(self) -> bool:
+        from ctypes import wintypes
+
+        terminate = self._kernel32.TerminateJobObject
+        terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        terminate.restype = wintypes.BOOL
+        return bool(cast(int, terminate(self._handle, 1)))
+
+    def process_ids(self) -> list[int] | None:
+        """IDs of the processes in the job; None when Windows cannot say."""
+        import ctypes
+        from ctypes import wintypes
+
+        query = self._kernel32.QueryInformationJobObject
+        query.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        ]
+        query.restype = wintypes.BOOL
+        for capacity in (64, 4096):
+
+            @final
+            class ProcessIdList(ctypes.Structure):
+                _fields_ = [
+                    ("assigned", wintypes.DWORD),
+                    ("listed", wintypes.DWORD),
+                    ("ids", ctypes.c_size_t * capacity),
+                ]
+
+            info = ProcessIdList()
+            # 3 = JobObjectBasicProcessIdList
+            if query(self._handle, 3, ctypes.byref(info), ctypes.sizeof(info), None):
+                ids = cast(Sequence[int], info.ids)
+                return [int(ids[index]) for index in range(int(cast(int, info.listed)))]
+            if _last_error() != 234:  # ERROR_MORE_DATA
+                return None
+        return None
+
+    def game_process_ids(self) -> list[int] | None:
+        """Job processes that are the game, not a shared program it opened."""
+        pids = self.process_ids()
+        if pids is None:
+            return None
+        return [
+            pid
+            for pid in pids
+            if ntpath.basename(_process_image(pid)).lower()
+            not in _WINDOWS_SHARED_PROGRAMS
+        ]
+
+    def stop_game(self) -> bool:
+        """End the game's processes and leave shared programs running."""
+        pids = self.game_process_ids()
+        if pids is None:
+            return self.terminate()
+        return all(_terminate_process(pid) for pid in pids)
+
+
+# Programs a game starts that are not the game: the browser a link opens when
+# none was running, the Steam client a DRM game starts, the console host and
+# crash reporter. They can outlive the game by hours, so they neither keep it
+# "running" nor get closed by Stop.
+_WINDOWS_SHARED_PROGRAMS = frozenset(
+    {
+        "brave.exe",
+        "chrome.exe",
+        "conhost.exe",
+        "discord.exe",
+        "explorer.exe",
+        "firefox.exe",
+        "iexplore.exe",
+        "msedge.exe",
+        "opera.exe",
+        "steam.exe",
+        "steamservice.exe",
+        "steamwebhelper.exe",
+        "vivaldi.exe",
+        "werfault.exe",
+    }
+)
+
+
+def _last_error() -> int:
+    import ctypes
+
+    # Windows-only; absent from the Linux type stubs.
+    get_last_error = cast(Callable[[], int], getattr(ctypes, "get_last_error"))
+    return get_last_error()
+
+
+def _process_image(pid: int) -> str:
+    """A process's executable path, or "" when it cannot be read."""
+    import ctypes
+    from ctypes import wintypes
+
+    load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+    kernel32 = load_dll("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    query = kernel32.QueryFullProcessImageNameW
+    query.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    query.restype = wintypes.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    # PROCESS_QUERY_LIMITED_INFORMATION
+    handle = cast(int | None, open_process(0x1000, False, pid))
+    if not handle:
+        return ""
+    try:
+        buffer = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buffer))
+        if not query(handle, 0, buffer, ctypes.byref(size)):
+            return ""
+        return str(cast(object, buffer.value))
+    finally:
+        _ = cast(object, close(handle))
+
+
+def _terminate_process(pid: int) -> bool:
+    """End one process; True when it is gone."""
+    import ctypes
+    from ctypes import wintypes
+
+    load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+    kernel32 = load_dll("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    terminate = kernel32.TerminateProcess
+    terminate.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    terminate.restype = wintypes.BOOL
+    close = kernel32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    handle = cast(int | None, open_process(0x0001, False, pid))  # PROCESS_TERMINATE
+    if not handle:
+        # ERROR_INVALID_PARAMETER: the process already exited.
+        return _last_error() == 87
+    try:
+        return bool(cast(int, terminate(handle, 1)))
+    finally:
+        _ = cast(object, close(handle))
+
+
+def _resume_process(process_handle: int) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+    resume = load_dll("ntdll").NtResumeProcess
+    resume.argtypes = [wintypes.HANDLE]
+    resume.restype = ctypes.c_long
+    return cast(int, resume(process_handle)) == 0
+
+
+def _start_in_windows_job(
+    start: Callable[[int], "subprocess.Popen[bytes]"],
+) -> "tuple[subprocess.Popen[bytes], _WindowsJob | None]":
+    """Start a game suspended, put it in a job, then let it run.
+
+    Suspended first, so a launcher cannot start the real game before it is
+    in the job. Without a job the game still starts, tracked as before.
+    """
+    if not _NATIVE_WINDOWS:
+        return start(0), None
+    try:
+        job = _WindowsJob()
+    except (OSError, AttributeError) as exc:
+        print(f"Could not track the game's child processes: {exc}")
+        return start(0), None
+    proc = start(_CREATE_SUSPENDED)
+    raw_handle = cast(object, getattr(proc, "_handle", None))
+    if not isinstance(raw_handle, int):
+        # Only a stand-in process (tests) lacks a Windows process handle.
+        return proc, None
+    handle = int(raw_handle)
+    added = job.add(handle)
+    if not _resume_process(handle):
+        proc.kill()
+        raise OSError("Windows could not start the game process.")
+    if not added:
+        print("Could not track the game's child processes: the job was refused.")
+    return proc, job if added else None
+
+
 def without_wine_proton_env(env_vars: dict[str, str]) -> dict[str, str]:
     clean_env = env_vars.copy()
     for var in (
@@ -452,6 +720,8 @@ class RunningGame:
     host_native: bool = True
     umu: bool = False
     network_blocked: bool = False
+    # Windows: the job that holds the game and the processes it starts.
+    job: _WindowsJob | None = None
 
 
 def _spawn_sandbox_process(
@@ -807,12 +1077,16 @@ class Launcher:
         try:
             if running.sandbox_box:
                 game_sandbox.terminate_box(running.sandbox_tool, running.sandbox_box)
+            elif is_windows() and running.job is not None and running.job.stop_game():
+                # Also ends what a launcher that already exited started.
+                pass
             elif is_windows():
                 result = subprocess.run(
                     ["taskkill", "/T", "/F", "/PID", str(pid)],
                     capture_output=True,
                     timeout=5,
                     check=False,
+                    creationflags=no_console_window(),
                 )
                 if result.returncode:
                     return {
@@ -1387,7 +1661,7 @@ class Launcher:
                 )
                 try:
 
-                    def start_game() -> "subprocess.Popen[bytes]":
+                    def start_game(creationflags: int = 0) -> "subprocess.Popen[bytes]":
                         return subprocess.Popen(
                             host_command(
                                 cmd, env=popen_env, cwd=effective_cwd, supervise=True
@@ -1403,13 +1677,17 @@ class Launcher:
                             ),
                             cwd=effective_cwd,
                             start_new_session=not is_windows(),
+                            creationflags=creationflags,
                         )
 
-                    game_proc = (
-                        _spawn_sandbox_process(start_game)
-                        if sandboxed and not is_windows()
-                        else start_game()
-                    )
+                    game_job: _WindowsJob | None = None
+                    if sandboxed and not is_windows():
+                        game_proc = _spawn_sandbox_process(start_game)
+                    elif is_windows() and not sandboxed:
+                        game_proc, game_job = _start_in_windows_job(start_game)
+                    else:
+                        game_proc = start_game()
+                    entry.job = game_job
                 except OSError as exc:
                     if not is_windows() or getattr(exc, "winerror", None) != 740:
                         raise
@@ -1468,7 +1746,15 @@ class Launcher:
 
                     def group_alive() -> bool:
                         # Launcher stubs exit while their children keep the game running.
-                        if is_windows() or killpg is None or pid is None:
+                        if is_windows():
+                            job = entry.job
+                            if job is None:
+                                return False
+                            game_pids = job.game_process_ids()
+                            if game_pids is None:
+                                return bool(job.active_processes())
+                            return bool(game_pids)
+                        if killpg is None or pid is None:
                             return False
                         try:
                             killpg(pid, 0)

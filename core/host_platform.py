@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast, final
 
 
 HostName = Literal["linux", "windows", "unsupported"]
@@ -340,6 +340,65 @@ def host_command(
     argv.append("--")
     argv.extend(inner)
     return argv
+
+
+def no_console_window() -> int:
+    """`creationflags` that keep a console helper tool from opening a window.
+
+    The Windows build is a windowed app with no console, so every console
+    program it starts (7z, SbieIni, taskkill, powershell) would otherwise
+    pop up its own terminal window. Zero everywhere else.
+    """
+    if not is_windows():
+        return 0
+    return int(cast(int, getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)))
+
+
+# SHGetKnownFolderPath IDs; the user can move these folders (OneDrive moves
+# Documents by default), so a path under the profile can be the wrong one.
+WINDOWS_FOLDER_DOCUMENTS = "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+WINDOWS_FOLDER_SAVED_GAMES = "{4C5C32FF-BB9D-43B0-B5B4-2D72E54EAAA4}"
+WINDOWS_FOLDER_DOWNLOADS = "{374DE290-123F-4565-9164-39C4925E467B}"
+
+
+def windows_known_folder(folder_id: str) -> str:
+    """The current path of a Windows known folder, or "" when unavailable."""
+    if not is_windows():
+        return ""
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        @final
+        class _Guid(ctypes.Structure):
+            _fields_ = [
+                ("data1", wintypes.DWORD),
+                ("data2", wintypes.WORD),
+                ("data3", wintypes.WORD),
+                ("data4", ctypes.c_ubyte * 8),
+            ]
+
+        raw = uuid.UUID(folder_id).bytes_le
+        guid = _Guid.from_buffer_copy(raw)
+        load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+        shell32 = load_dll("shell32")
+        ole32 = load_dll("ole32")
+        path = ctypes.c_wchar_p()
+        result = cast(
+            int,
+            shell32.SHGetKnownFolderPath(
+                ctypes.byref(guid), 0, None, ctypes.byref(path)
+            ),
+        )
+        try:
+            if result != 0 or not path.value:
+                return ""
+            return str(path.value)
+        finally:
+            _ = cast(object, ole32.CoTaskMemFree(path))
+    except Exception:
+        return ""
 
 
 def open_windows_system_target(

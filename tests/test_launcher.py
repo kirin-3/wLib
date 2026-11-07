@@ -3793,3 +3793,152 @@ def test_network_blocked_game_cannot_share_prefix_with_networked_game():
     assert launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) is None
     assert 5 not in launcher._external
     launcher.shutdown()
+
+
+class _FakeJob:
+    def __init__(self, active, terminated=True):
+        self.active = list(active)
+        self.terminated = terminated
+        self.terminate_calls = 0
+
+    def active_processes(self):
+        return self.active.pop(0) if self.active else 0
+
+    def game_process_ids(self):
+        return [100] * self.active_processes()
+
+    def stop_game(self):
+        self.terminate_calls += 1
+        return self.terminated
+
+
+def test_windows_stop_ends_the_games_job(monkeypatch):
+    launcher = Launcher()
+    job = _FakeJob([])
+    launcher._running[1] = RunningGame(MagicMock(pid=123), None, job=job)
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    with patch("subprocess.run") as run:
+        assert launcher.stop(1)["success"] is True
+        assert job.terminate_calls == 1
+        run.assert_not_called()
+        # A job Windows will not end falls back to taskkill on the process tree.
+        job.terminated = False
+        run.return_value.returncode = 0
+        assert launcher.stop(1)["success"] is True
+        assert run.call_args.args[0] == ["taskkill", "/T", "/F", "/PID", "123"]
+
+
+@patch("os.path.exists", return_value=True)
+@patch("core.launcher.get_setting", return_value="false")
+def test_windows_game_runs_while_its_launcher_children_do(
+    mock_get_setting, mock_exists, monkeypatch
+):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    stub = MagicMock(pid=50, returncode=0)
+    stub.poll.return_value = 0  # the launcher stub exits at once
+    job = _FakeJob([1, 1])
+    started = []
+
+    def start_in_job(start):
+        started.append(start)
+        return stub, job
+
+    monkeypatch.setattr("core.launcher._start_in_windows_job", start_in_job)
+    exits = []
+    launcher = Launcher()
+    result = launcher.launch(
+        r"C:\Games\Stub\Game.exe",
+        game_id=7,
+        on_exit_callback=lambda delta, final=False: exits.append(final),
+    )
+    assert result["success"] is True and started
+    time.sleep(0.5)
+    # The stub is gone, but the job still has the real game in it.
+    assert launcher.get_running_games() == [7]
+    deadline = time.monotonic() + 10
+    while launcher.get_running_games() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert launcher.get_running_games() == []
+    assert exits == [True]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows job objects")
+def test_real_windows_launcher_stub_is_tracked_and_stopped(tmp_path, monkeypatch):
+    import shutil
+
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+
+    system = os.environ.get("SystemRoot", r"C:\Windows")
+    stub = tmp_path / "Stub Game" / "Game.exe"
+    stub.parent.mkdir()
+    shutil.copy(os.path.join(system, "System32", "cmd.exe"), stub)
+    child = tmp_path / "wlibchild.exe"
+    shutil.copy(os.path.join(system, "System32", "PING.EXE"), child)
+
+    def child_running() -> bool:
+        listing = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq wlibchild.exe"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return "wlibchild.exe" in listing.lower()
+
+    launcher = Launcher()
+    result = launcher.launch(
+        str(stub), f'/c start "" /b "{child}" -n 30 127.0.0.1', game_id=9
+    )
+    assert result["success"] is True
+    time.sleep(3)
+    try:
+        assert child_running()
+        assert launcher.get_running_games() == [9]
+        assert launcher.stop(9)["success"] is True
+        deadline = time.monotonic() + 10
+        while launcher.get_running_games() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert launcher.get_running_games() == []
+        assert not child_running()
+    finally:
+        subprocess.run(["taskkill", "/F", "/IM", "wlibchild.exe"], capture_output=True, check=False)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows job objects")
+def test_real_windows_browser_a_game_opened_is_not_the_game(tmp_path, monkeypatch):
+    import shutil
+
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    system = os.environ.get("SystemRoot", r"C:\Windows")
+    stub = tmp_path / "Link Game" / "Game.exe"
+    stub.parent.mkdir()
+    shutil.copy(os.path.join(system, "System32", "cmd.exe"), stub)
+    # Stands in for a browser the game started for a link.
+    browser = tmp_path / "browser" / "msedge.exe"
+    browser.parent.mkdir()
+    shutil.copy(os.path.join(system, "System32", "PING.EXE"), browser)
+
+    def _image_paths(name: str) -> str:
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-Process -Name {name[:-4]} -ErrorAction SilentlyContinue).Path"],
+            capture_output=True, text=True, check=False,
+        ).stdout.lower()
+
+    launcher = Launcher()
+    result = launcher.launch(
+        str(stub), f'/c start "" /b "{browser}" -n 30 127.0.0.1', game_id=10
+    )
+    assert result["success"] is True
+    try:
+        deadline = time.monotonic() + 10
+        while launcher.get_running_games() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        # The launcher exited and only the "browser" is left: the game is over.
+        assert launcher.get_running_games() == []
+        assert str(browser).lower() in _image_paths("msedge.exe")
+    finally:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{browser}' }} | Stop-Process -Force"],
+            capture_output=True, check=False,
+        )

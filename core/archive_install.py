@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import posixpath
 import re
@@ -29,7 +30,7 @@ from core.game_saves import (
     is_within,
     loose_save_files,
 )
-from core.host_platform import host_command, host_which, is_flatpak
+from core.host_platform import host_command, host_which, is_flatpak, no_console_window
 
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -1104,19 +1105,80 @@ def _tool_argv(
     return cmd if tool == BUNDLED_7ZZ else host_command(cmd, env=env)
 
 
+# 7-Zip builds that refused -sccUTF-8 (very old releases): run them without it.
+_NO_UTF8_SWITCH: set[str] = set()
+_SEVEN_ZIP_COMMAND_LINE_ERROR = 7
+
+
+def _windows_seven_zip(tool: str) -> bool:
+    base = _tool_basename(tool)
+    return (
+        _is_windows()
+        and "7z" in base
+        and "unrar" not in base
+        and tool not in _NO_UTF8_SWITCH
+    )
+
+
+def _tool_args(tool: str, args: Sequence[str]) -> list[str]:
+    """Make 7-Zip on Windows print names as UTF-8.
+
+    Its console output is otherwise in the OEM code page, where names like
+    'ア.txt' and 'イ.txt' both become '?.txt' and look like duplicates.
+    """
+    if not args or not _windows_seven_zip(tool):
+        return list(args)
+    return [args[0], "-sccUTF-8", *args[1:]]
+
+
+def _tool_encoding(tool: str) -> str | None:
+    return "utf-8" if _windows_seven_zip(tool) else None
+
+
+def _run_tool(
+    tool: str, args: Sequence[str], env: dict[str, str] | None
+) -> subprocess.CompletedProcess[str]:
+    """Run an archive tool and decode its output; undecodable bytes never raise."""
+
+    def run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            _tool_argv(tool, _tool_args(tool, args), env=env),
+            capture_output=True,
+            encoding=_tool_encoding(tool),
+            errors="replace",
+            check=False,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            creationflags=no_console_window(),
+        )
+
+    completed = run()
+    if completed.returncode == _SEVEN_ZIP_COMMAND_LINE_ERROR and _windows_seven_zip(tool):
+        # A 7-Zip too old to know -scc rejects the whole command line.
+        _NO_UTF8_SWITCH.add(tool)
+        completed = run()
+    return completed
+
+
+def _seven_zip_member_lines(output: str) -> list[str]:
+    """`7z l -slt` lines that describe members, not the archive itself.
+
+    7-Zip prints one header block per archive layer (a split set has two,
+    both naming the inner archive) before a line of ten dashes.
+    """
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == "----------":
+            return lines[index + 1 :]
+    return lines
+
+
 def _unrar_links(
     tool: str, archive_path: str, env: dict[str, str] | None
 ) -> list[tuple[str, str, bool]]:
     """Best-effort link list from `unrar lt` (Name/Type/Target blocks)."""
     try:
-        completed = subprocess.run(
-            _tool_argv(tool, ["lt", archive_path], env=env),
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=env,
-        )
+        completed = _run_tool(tool, ["lt", archive_path], env)
     except OSError:
         return []
     if completed.returncode != 0:
@@ -1151,14 +1213,7 @@ def list_tool_entries(
     base = _tool_basename(tool)
     env = None if tool == BUNDLED_7ZZ else build_host_open_env()
     if "unrar" in base:
-        completed = subprocess.run(
-            _tool_argv(tool, ["lb", archive_path], env=env),
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=env,
-        )
+        completed = _run_tool(tool, ["lb", archive_path], env)
         if completed.returncode != 0:
             raise _tool_failure(completed, "Could not list archive contents")
         if links is not None:
@@ -1169,14 +1224,7 @@ def list_tool_entries(
             if line.strip()
         ]
     if "bsdtar" in base or base == "tar":
-        completed = subprocess.run(
-            _tool_argv(tool, ["-tf", archive_path], env=env),
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=env,
-        )
+        completed = _run_tool(tool, ["-tf", archive_path], env)
         if completed.returncode != 0:
             raise _tool_failure(completed, "Could not list archive contents")
         entries: list[str] = []
@@ -1188,20 +1236,13 @@ def list_tool_entries(
                 entries.append(line)
         return entries
     # 7z/7zz/7za (also a raw 7z.exe path on Windows).
-    completed = subprocess.run(
-        _tool_argv(tool, ["l", "-slt", "-p", archive_path], env=env),
-        capture_output=True,
-        text=True,
-        check=False,
-        stdin=subprocess.DEVNULL,
-        env=env,
-    )
+    completed = _run_tool(tool, ["l", "-slt", "-p", archive_path], env)
     if completed.returncode != 0:
         raise _tool_failure(completed, "Could not list archive contents")
     entries = []
     archive_real = os.path.abspath(archive_path)
     current = ""
-    for line in (completed.stdout or "").splitlines():
+    for line in _seven_zip_member_lines(completed.stdout or ""):
         if line.startswith("Path = "):
             path = line[len("Path = ") :].strip()
             current = ""
@@ -1410,17 +1451,10 @@ def extract_with_tool(
         args = ["-xf", archive_path, "-C", staging_dir]
     else:
         args = ["x", archive_path, f"-o{staging_dir}", "-y", "-p"]
-    argv = _tool_argv(tool, args, env=env)
+    argv = _tool_argv(tool, _tool_args(tool, args), env=env)
     if cancel is None:
         try:
-            completed = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                check=False,
-                stdin=subprocess.DEVNULL,
-                env=env,
-            )
+            completed = _run_tool(tool, args, env)
         except OSError as exc:
             raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
         if completed.returncode != 0:
@@ -1432,9 +1466,11 @@ def extract_with_tool(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding=_tool_encoding(tool),
+            errors="replace",
             stdin=subprocess.DEVNULL,
             env=env,
+            creationflags=no_console_window(),
         )
     except OSError as exc:
         raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
@@ -1554,10 +1590,37 @@ def create_staging_dir(library_folder: str) -> str:
     return path
 
 
+def _long_path_safe(path: str) -> str:
+    """On Windows, the extended-length form that reaches past 260 characters."""
+    if not _is_windows() or not path:
+        return path
+    absolute = ntpath.abspath(path)
+    if absolute.startswith("\\\\"):
+        return absolute
+    return "\\\\?\\" + absolute
+
+
+def _windows_long_path_error(exc: BaseException) -> str:
+    """A message for a Windows path-length failure, or ""."""
+    if not _is_windows() or not isinstance(exc, OSError):
+        return ""
+    raw_names = (cast(object, exc.filename), cast(object, exc.filename2))
+    names = [str(name) for name in raw_names if name]
+    # Folders stop at 248 characters, files at 260.
+    if not any(len(name) >= 248 for name in names):
+        return ""
+    return (
+        "A file in this archive would have a path longer than Windows allows "
+        + "(260 characters). Choose a library folder with a shorter path, or turn "
+        + "on Windows long path support, then install again."
+    )
+
+
 def cleanup_staging_dir(path: str) -> None:
     try:
         if path and os.path.isdir(path) and not os.path.islink(path):
-            shutil.rmtree(path, ignore_errors=True)
+            # A tree with paths past 260 characters only goes in extended form.
+            shutil.rmtree(_long_path_safe(path), ignore_errors=True)
     except OSError:
         pass
 
@@ -1575,7 +1638,7 @@ def cleanup_stale_staging(library_folder: str) -> int:
             candidate = os.path.join(base, name)
             try:
                 if os.path.isdir(candidate) and not os.path.islink(candidate):
-                    shutil.rmtree(candidate, ignore_errors=True)
+                    shutil.rmtree(_long_path_safe(candidate), ignore_errors=True)
                     removed += 1
             except OSError:
                 continue
@@ -1618,17 +1681,11 @@ def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | N
         if tool and "7z" in _tool_basename(tool):
             try:
                 env = None if tool == BUNDLED_7ZZ else build_host_open_env()
-                completed = subprocess.run(
-                    _tool_argv(tool, ["l", "-slt", "-p", archive_path], env=env),
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    stdin=subprocess.DEVNULL,
-                    env=env,
-                )
+                completed = _run_tool(tool, ["l", "-slt", "-p", archive_path], env)
                 if completed.returncode == 0:
                     total = 0
-                    for line in (completed.stdout or "").splitlines():
+                    # The header blocks repeat the archive's own size.
+                    for line in _seven_zip_member_lines(completed.stdout or ""):
                         if line.startswith("Size = "):
                             try:
                                 total += int(line[len("Size = ") :].strip())
@@ -2287,6 +2344,14 @@ def install_archive(
             try:
                 os.rename(destination, old_backup)
             except OSError as exc:
+                if getattr(exc, "winerror", None) in (5, 32):
+                    # Windows cannot rename a folder while a program has a
+                    # file in it open or runs from it.
+                    raise ArchiveInstallError(
+                        f"{destination} is in use. Close the game and any program "
+                        + "or File Explorer window using files in it, then install "
+                        + "again. The current version was not changed."
+                    ) from exc
                 raise ArchiveInstallError(
                     f"Could not replace the current folder: {exc}"
                 ) from exc
@@ -2312,9 +2377,12 @@ def install_archive(
             staging = ""
             old_root_for_targets = old_root
             old_backup = ""
-    except Exception:
+    except Exception as exc:
         if staging:
             cleanup_staging_dir(staging)
+        long_path = _windows_long_path_error(exc)
+        if long_path:
+            raise ArchiveInstallError(long_path) from exc
         raise
 
     # Destination is in place from here on; failures below keep the update.

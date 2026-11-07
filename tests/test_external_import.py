@@ -1189,6 +1189,8 @@ def test_locate_external_library_found_and_missing(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    # A real Atlas install under Program Files must not count as found.
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "Program Files"))
 
     if host_is_windows:
         staged = tmp_path / "f95checker" / "db.sqlite3"

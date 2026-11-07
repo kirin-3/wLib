@@ -15,7 +15,12 @@ from typing import Protocol, TypedDict, cast
 from urllib.parse import urlsplit
 
 from core.f95zone import normalize_thread_url, thread_urls_match
-from core.host_platform import get_data_dir
+from core.host_platform import (
+    WINDOWS_FOLDER_DOWNLOADS,
+    get_data_dir,
+    is_windows,
+    windows_known_folder,
+)
 from core.store_links import (
     LINK_ORIGINS,
     MATCHABLE_SOURCES,
@@ -158,6 +163,9 @@ def _normalize_status_key(value: object) -> str:
 def default_downloads_folder() -> str:
     """OS Downloads folder: `xdg-user-dir DOWNLOAD` with `~/Downloads` fallback."""
     fallback = os.path.abspath(os.path.expanduser(os.path.join("~", "Downloads")))
+    if is_windows():
+        # The Downloads folder can be moved off the profile (Properties > Location).
+        return windows_known_folder(WINDOWS_FOLDER_DOWNLOADS) or fallback
     try:
         import shutil
         import subprocess

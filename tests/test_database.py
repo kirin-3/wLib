@@ -2055,3 +2055,13 @@ def test_schema_fingerprint_is_stable_across_processes():
         for seed in (1, 2)
     }
     assert len(results) == 1
+
+
+def test_default_downloads_folder_follows_a_moved_windows_downloads(monkeypatch):
+    import core.database as database
+
+    monkeypatch.setattr(database, "is_windows", lambda: True)
+    monkeypatch.setattr(database, "windows_known_folder", lambda _folder: r"D:\Downloads")
+    assert database.default_downloads_folder() == r"D:\Downloads"
+    monkeypatch.setattr(database, "windows_known_folder", lambda _folder: "")
+    assert database.default_downloads_folder().endswith("Downloads")

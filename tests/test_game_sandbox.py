@@ -395,6 +395,7 @@ def test_sandboxie_configuration_replaces_passthrough(monkeypatch, tmp_path):
         [ini, "set", "wLib_12", "FileRootPath", str(tmp_path / "sandbox/12")],
         [ini, "set", "wLib_12", "AutoDelete", "n"],
         [ini, "set", "wLib_12", "ClosedFilePath", ""],
+        [ini, "set", "wLib_12", "NotifyInternetAccessDenied", ""],
         [ini, "set", "wLib_12", "OpenFilePath", r"D:\Games\Story" + chr(92)],
         [start, "/reload"],
     ]
@@ -602,9 +603,12 @@ def test_sandboxie_network_setting(monkeypatch, tmp_path):
     monkeypatch.setattr(sandbox, "_sandboxie_call", call)
     sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", True)
     assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", "!<InternetAccess>,InternetAccessDevices"] for args in call.call_args_list)
+    # A blocked game must not make Sandboxie open a message window (SBIE1307).
+    assert any(args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", "n"] for args in call.call_args_list)
     call.reset_mock()
     sandbox.configure_sandboxie_box(r"C:\Sandboxie\Start.exe", 1, r"D:\Game", False)
     assert any(args.args[1] == ["set", "wLib_1", "ClosedFilePath", ""] for args in call.call_args_list)
+    assert any(args.args[1] == ["set", "wLib_1", "NotifyInternetAccessDenied", ""] for args in call.call_args_list)
 
 
 def test_bwrap_uses_host_system_links_when_given(monkeypatch):
@@ -649,3 +653,11 @@ def test_sandbox_environment_drops_host_secrets():
     # Set by wLib or the user's launch options, so kept.
     assert result["MY_FLAG"] == "1" and result["LANG"] == "ja_JP.UTF-8"
     assert "--die-with-parent" not in sandbox.BWRAP_NAMESPACE_OPTIONS
+
+
+def test_sandboxie_tools_run_without_a_console_window(monkeypatch):
+    run = Mock(return_value=Mock(returncode=0, stdout="0\n", stderr=""))
+    monkeypatch.setattr(sandbox.subprocess, "run", run)
+    monkeypatch.setattr(sandbox, "no_console_window", lambda: 0x08000000)
+    sandbox.terminate_box(r"C:\Sandboxie\Start.exe", "wLib_1")
+    assert run.call_args.kwargs["creationflags"] == 0x08000000

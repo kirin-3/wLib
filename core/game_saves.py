@@ -18,7 +18,13 @@ from datetime import datetime
 from typing import TypedDict
 
 from core.database import get_setting
-from core.host_platform import get_default_wine_prefix, is_windows
+from core.host_platform import (
+    WINDOWS_FOLDER_DOCUMENTS,
+    WINDOWS_FOLDER_SAVED_GAMES,
+    get_default_wine_prefix,
+    is_windows,
+    windows_known_folder,
+)
 from core.launcher import proton_compat_data_path
 
 INFOLDER_SAVE_DIRS = (
@@ -347,6 +353,18 @@ def detect_save_locations(
             (os.path.join(user_home, "Documents"), "Documents"),
             (os.path.join(user_home, "Saved Games"), "Saved Games"),
         ]
+        if not _profile_home:
+            # OneDrive (and the user) can move Documents and Saved Games out
+            # of the profile folder; games save to wherever they now are.
+            for folder_id, label in (
+                (WINDOWS_FOLDER_DOCUMENTS, "Documents"),
+                (WINDOWS_FOLDER_SAVED_GAMES, "Saved Games"),
+            ):
+                moved = windows_known_folder(folder_id)
+                if moved and not any(
+                    _same_path(moved, root) for root, _label in native_roots
+                ):
+                    native_roots.append((moved, label))
         for root, label in native_roots:
             if not root or not os.path.isdir(root):
                 continue

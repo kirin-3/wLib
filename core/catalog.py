@@ -106,6 +106,27 @@ def _parse_time(value: object) -> float | None:
         return None
 
 
+REPLACE_RETRY_SECONDS = 5.0
+_ON_WINDOWS: bool = os.name == "nt"
+
+
+def _replace_retrying(source: str, target: str) -> None:
+    """os.replace that waits out a reader holding the target open.
+
+    Windows refuses to replace a file another handle has open, and a game
+    lookup keeps catalog.db open for the length of a query.
+    """
+    deadline = time.monotonic() + REPLACE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if not _ON_WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
 def _remove(path: str) -> None:
     try:
         os.remove(path)
@@ -180,7 +201,7 @@ class CatalogClient:
                 json.dump(dict(data), handle, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, self.sidecar_path)
+            _replace_retrying(tmp, self.sidecar_path)
             self._sync_dir()
         except BaseException:
             _remove(tmp)
@@ -349,7 +370,7 @@ class CatalogClient:
             self._verify(db_tmp)
             if not self._enabled():
                 return False
-            os.replace(db_tmp, self.catalog_path)
+            _replace_retrying(db_tmp, self.catalog_path)
             self._sync_dir()
             if not self._enabled():
                 # The setting was turned off while this check was finishing.

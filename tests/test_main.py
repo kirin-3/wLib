@@ -2113,3 +2113,50 @@ def test_sigterm_closes_the_window_through_the_shutdown_path(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("closed")
     assert "not closed" not in result.stdout
+
+
+def test_fatal_startup_error_uses_a_message_box_on_windows(monkeypatch):
+    import ctypes
+
+    shown = []
+
+    class _User32:
+        def MessageBoxW(self, hwnd, text, title, flags):  # noqa: N802
+            shown.append((text, title))
+            return 1
+
+    monkeypatch.setattr(main, "is_windows", lambda: True)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name: _User32(), raising=False)
+    monkeypatch.setattr(main.shutil, "which", lambda _name: pytest.fail("no Linux tools"))
+    main.show_fatal_startup_error("The data folder is read-only.")
+    assert shown == [("The data folder is read-only.", "wLib cannot start")]
+
+
+def test_webview_profile_goes_to_the_data_folder(tmp_path, monkeypatch):
+    import types
+
+    home = tmp_path / "home"
+    legacy = home / ".pywebview"
+    (legacy / "Local Storage").mkdir(parents=True)
+    (legacy / "Local Storage" / "leveldb").write_text("ui state")
+    (legacy / "GPUCache").mkdir()
+    (legacy / "GPUCache" / "data_0").write_bytes(b"cache")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    storage = tmp_path / "data" / "webview"
+    storage.mkdir(parents=True)
+
+    assert main.adopt_legacy_webview_storage(str(storage)) is True
+    assert (storage / "Local Storage" / "leveldb").read_text() == "ui state"
+    assert (legacy / "Local Storage" / "leveldb").exists()  # copied, not moved
+    assert not (storage / "GPUCache").exists()  # caches are rebuilt, not copied
+    # Once the data folder has a profile it is never overwritten.
+    (legacy / "Local Storage" / "leveldb").write_text("other app")
+    assert main.adopt_legacy_webview_storage(str(storage)) is False
+    assert (storage / "Local Storage" / "leveldb").read_text() == "ui state"
+
+    backend = types.ModuleType("webview.platforms.qt")
+    backend._profile_storage_path = str(legacy)  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "webview.platforms.qt", backend)
+    main.point_qt_backend_at_storage(str(storage))
+    assert backend._profile_storage_path == str(storage)  # pyright: ignore[reportAttributeAccessIssue]

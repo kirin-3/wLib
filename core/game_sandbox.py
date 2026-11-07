@@ -19,6 +19,7 @@ from core.host_platform import (
     get_host_name,
     host_command,
     host_which,
+    no_console_window,
 )
 
 
@@ -545,7 +546,13 @@ def normalize_prefix(prefix: str) -> str:
 
 def _sandboxie_call(tool: str, args: list[str]) -> str:
     result = subprocess.run(
-        [tool, *args], capture_output=True, text=True, timeout=15, check=False
+        [tool, *args],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=15,
+        check=False,
+        creationflags=no_console_window(),
     )
     if result.returncode:
         raise RuntimeError(
@@ -590,6 +597,9 @@ def configure_sandboxie_box(
             "ClosedFilePath",
             "!<InternetAccess>,InternetAccessDevices" if block_network else "",
         ),
+        # Otherwise Sandboxie opens a message window (SBIE1307) each time
+        # the game tries to go online.
+        ("NotifyInternetAccessDenied", "n" if block_network else ""),
         # Sandboxie appends '*': the separator prevents matching sibling
         # folders whose names merely start with the game's directory name.
         ("OpenFilePath", ntpath.normpath(game_dir).rstrip("\\/") + "\\"),
@@ -673,9 +683,11 @@ def _install_command(command: list[str]) -> None:
         command,
         capture_output=True,
         text=True,
+        errors="replace",
         stdin=subprocess.DEVNULL,
         timeout=900,
         check=False,
+        creationflags=no_console_window(),
     )
     if result.returncode:
         raise RuntimeError(
@@ -787,8 +799,10 @@ def _download_sandboxie_installer() -> None:
             ],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=60,
             check=False,
+            creationflags=no_console_window(),
         )
         try:
             signature = _json_object(verification.stdout)

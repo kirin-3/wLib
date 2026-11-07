@@ -52,6 +52,7 @@ from core.host_platform import (  # noqa: E402
     get_data_dir,
     get_legacy_browser_dirs,
     is_linux,
+    is_windows,
 )
 
 APP_DATA_DIR = get_data_dir()
@@ -757,10 +758,58 @@ def wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
         time.sleep(0.2)
 
 
+LEGACY_WEBVIEW_STORAGE = os.path.join("~", ".pywebview")
+LEGACY_WEBVIEW_CACHE_DIRS = (
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "GrShaderCache",
+    "ShaderCache",
+)
+
+
+def adopt_legacy_webview_storage(storage_path: str) -> bool:
+    """Copy the profile older versions left in ~/.pywebview, once.
+
+    pywebview's Qt backend reads its storage path when it is imported, and
+    the startup diagnostics imported it before start(), so the profile
+    (saved UI state, cookies) went to ~/.pywebview instead. Copied, not
+    moved: other pywebview apps use that folder too.
+    """
+    legacy = os.path.expanduser(LEGACY_WEBVIEW_STORAGE)
+    try:
+        if os.listdir(storage_path) or not os.path.isdir(
+            os.path.join(legacy, "Local Storage")
+        ):
+            return False
+        _ = shutil.copytree(
+            legacy,
+            storage_path,
+            dirs_exist_ok=True,
+            # Chromium rebuilds its caches; only the profile data is worth copying.
+            ignore=shutil.ignore_patterns(*LEGACY_WEBVIEW_CACHE_DIRS),
+        )
+    except OSError as exc:
+        print(f"[wLib] Could not copy the old WebView profile: {exc}")
+        return False
+    return True
+
+
+def point_qt_backend_at_storage(storage_path: str) -> None:
+    """Make an already-imported Qt backend use wLib's storage folder."""
+    qt_backend = sys.modules.get("webview.platforms.qt")
+    if qt_backend is not None:
+        setattr(qt_backend, "_profile_storage_path", storage_path)
+
+
 def start_webview(
     webview_module: WebviewModule, *, dev_mode: bool, icon_path: str | None
 ) -> None:
     storage_path = get_webview_storage_path()
+    _ = adopt_legacy_webview_storage(storage_path)
+    point_qt_backend_at_storage(storage_path)
 
     if dev_mode:
         webview_module.start(
@@ -1701,6 +1750,18 @@ def show_fatal_startup_error(message: str) -> None:
     """
     print(f"[wLib] {message}", file=sys.stderr)
     title = "wLib cannot start"
+    if is_windows():
+        # The Windows build has no console, so stderr goes nowhere.
+        try:
+            import ctypes
+
+            load_dll = cast(type[ctypes.CDLL], getattr(ctypes, "WinDLL"))
+            message_box = load_dll("user32").MessageBoxW
+            # MB_OK | MB_ICONERROR | MB_SETFOREGROUND
+            _ = cast(object, message_box(None, message, title, 0x10 | 0x10000))
+        except (OSError, AttributeError):
+            pass
+        return
     for command in (
         ["zenity", "--error", f"--title={title}", f"--text={message}"],
         ["kdialog", "--title", title, "--error", message],

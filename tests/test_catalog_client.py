@@ -429,3 +429,34 @@ def test_startup_removes_stale_catalog_temp_files(tmp_path):
     assert not stale.exists()
     assert fresh.exists()
     assert other.exists()
+
+
+def test_catalog_replace_waits_for_a_reader_on_windows(tmp_path, monkeypatch):
+    from core import catalog
+
+    source = tmp_path / "new.db"
+    target = tmp_path / "catalog.db"
+    source.write_text("new")
+    target.write_text("old")
+    real_replace = os.replace
+    attempts = []
+
+    def replace(src, dst):
+        attempts.append(src)
+        if len(attempts) < 3:
+            raise PermissionError(5, "Access is denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(catalog, "_ON_WINDOWS", True)
+    monkeypatch.setattr(catalog.os, "replace", replace)
+    monkeypatch.setattr(catalog.time, "sleep", lambda _s: None)
+    catalog._replace_retrying(str(source), str(target))
+    assert target.read_text() == "new" and len(attempts) == 3
+
+    # Elsewhere a refusal is not a transient reader, so it fails at once.
+    monkeypatch.setattr(catalog, "_ON_WINDOWS", False)
+    attempts.clear()
+    source.write_text("again")
+    with pytest.raises(PermissionError):
+        catalog._replace_retrying(str(source), str(target))
+    assert len(attempts) == 1

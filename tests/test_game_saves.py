@@ -752,3 +752,21 @@ def test_my_documents_link_is_not_a_second_location(tmp_path):
         _profile_home=str(tmp_path / "nohome"),
     )
     assert len([r for r in results if r["eligible"]]) == 1
+
+
+def test_windows_finds_saves_in_a_moved_documents_folder(tmp_path, monkeypatch):
+    import core.game_saves as game_saves
+    from core.host_platform import WINDOWS_FOLDER_DOCUMENTS
+
+    onedrive = tmp_path / "OneDrive" / "Documents"
+    saves = onedrive / "My Games" / "Zelda"
+    _write(saves / "save.dat")
+    monkeypatch.setattr(
+        game_saves,
+        "windows_known_folder",
+        lambda folder: str(onedrive) if folder == WINDOWS_FOLDER_DOCUMENTS else "",
+    )
+
+    results = detect_save_locations("/games/Zelda/Game.exe", "Zelda", windows=True)
+
+    assert str(saves) in {r["path"] for r in results}

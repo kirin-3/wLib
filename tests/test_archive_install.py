@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import zipfile
 from typing import cast
@@ -1365,6 +1366,8 @@ def test_extract_with_tool_flatpak_argv_and_default_path(monkeypatch, tmp_path):
         return _Res()
 
     monkeypatch.setattr(ai.subprocess, "run", _run)
+    # Flatpak is Linux; on a Windows test host 7-Zip would gain -sccUTF-8.
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: False)
 
     # Default path is unchanged outside Flatpak.
     _simulate_flatpak_archive(monkeypatch, enabled=False)
@@ -2597,7 +2600,7 @@ def test_extract_with_tool_kills_the_extractor_on_cancel(tmp_path, monkeypatch):
     from core import archive_install
 
     monkeypatch.setattr(archive_install, "list_tool_entries", lambda tool, path, links: ["a.txt"])
-    monkeypatch.setattr(archive_install, "_tool_argv", lambda tool, args, env=None: ["sleep", "30"])
+    monkeypatch.setattr(archive_install, "_tool_argv", lambda tool, args, env=None: [sys.executable, "-c", "import time; time.sleep(30)"])
     cancel = threading.Event()
     threading.Timer(0.3, cancel.set).start()
     started = time.monotonic()
@@ -2732,3 +2735,174 @@ def test_offers_wait_for_every_part(tmp_path, monkeypatch):
     (downloads / "Eternum-0.8.part3.rar.crdownload").unlink()
     offers = find_download_offers()
     assert [o["archive_path"] for o in offers] == [str(first)]
+
+
+SPLIT_7Z_LISTING = """
+7-Zip 26.05 (x64)
+
+Scanning the drive for archives:
+1 file, 2048 bytes (2 KiB)
+
+Listing archive: G.7z.001
+
+--
+Path = G.7z.001
+Type = Split
+Volumes = 4
+----
+Path = G.7z
+Size = 6400
+--
+Path = G.7z
+Type = 7z
+Physical Size = 6400
+
+----------
+Path = G
+Folder = +
+Size = 0
+
+Path = G/Game.exe
+Size = 6000
+"""
+
+
+def test_seven_zip_listing_skips_split_set_headers(monkeypatch):
+    from core import archive_install
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=SPLIT_7Z_LISTING, stderr="")
+
+    monkeypatch.setattr(archive_install.subprocess, "run", fake_run)
+    assert archive_install.list_tool_entries("7z", "/x/G.7z.001") == ["G", "G/Game.exe"]
+    monkeypatch.setattr(archive_install, "detect_archive_tool", lambda *a, **k: ("7z", None))
+    assert archive_install.uncompressed_size("/x/G.7z.001") == 6000
+
+
+def test_seven_zip_prints_utf8_names_on_windows(monkeypatch):
+    from core import archive_install
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: True)
+    monkeypatch.setattr(archive_install.subprocess, "run", fake_run)
+    archive_install.list_tool_entries(r"C:\Program Files\7-Zip\7z.exe", "a.7z")
+    cmd, kwargs = calls[-1]
+    assert cmd[1:3] == ["l", "-sccUTF-8"]
+    assert kwargs["encoding"] == "utf-8" and kwargs["errors"] == "replace"
+    # The windowed Windows app must not flash a terminal per 7-Zip run.
+    assert kwargs["creationflags"] == archive_install.no_console_window()
+    # unrar has no such switch.
+    before = len(calls)
+    archive_install.list_tool_entries("unrar.exe", "a.rar")
+    assert all("-sccUTF-8" not in cmd for cmd, _ in calls[before:])
+
+
+def _real_seven_zip():
+    from core import archive_install
+
+    tool, _error = archive_install.detect_archive_tool("x.7z")
+    return tool if tool and "7z" in os.path.basename(tool).lower() else None
+
+
+@pytest.mark.skipif(_real_seven_zip() is None, reason="needs 7-Zip")
+def test_real_seven_zip_keeps_non_ascii_names_and_split_sets(tmp_path):
+    from core import archive_install
+
+    tool = _real_seven_zip()
+    assert tool is not None
+    source = tmp_path / "src" / "ゲーム"
+    source.mkdir(parents=True)
+    for name in ("ア.txt", "イ.txt", "café.txt"):
+        (source / name).write_text("x", encoding="utf-8")
+    (source / "big.bin").write_bytes(os.urandom(6000))
+    single = tmp_path / "jp.7z"
+    split = tmp_path / "split.7z"
+    for archive, extra in ((single, []), (split, ["-v2k", "-mx0"])):
+        completed = subprocess.run(
+            [tool, "a", *extra, str(archive), str(source)], capture_output=True, check=False
+        )
+        assert completed.returncode == 0, completed
+    expected = {"ゲーム", "ゲーム/ア.txt", "ゲーム/イ.txt", "ゲーム/café.txt", "ゲーム/big.bin"}
+    for archive in (single, tmp_path / "split.7z.001"):
+        entries = archive_install.list_tool_entries(tool, str(archive))
+        assert {entry.replace("\\", "/") for entry in entries} == expected
+        out = tmp_path / f"out-{archive.name}"
+        assert archive_install.extract_with_tool(tool, str(archive), str(out)) == 5
+        assert (out / "ゲーム" / "イ.txt").read_text(encoding="utf-8") == "x"
+
+
+def test_update_explains_a_folder_windows_keeps_in_use(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core import archive_install
+
+    lib = tmp_path / "lib"
+    dest = lib / "Game"
+    dest.mkdir(parents=True)
+    old_exe = dest / "Game.exe"
+    old_exe.write_text("old")
+    game_id = db.add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+    archive = tmp_path / "Game-2.0.zip"
+    _write_game_zip(archive, {"Game.exe": b"new"})
+    real_rename = os.rename
+
+    def rename(src, dst):
+        if os.path.abspath(src) == str(dest):
+            error = PermissionError(32, "The process cannot access the file")
+            error.winerror = 32  # pyright: ignore[reportAttributeAccessIssue]
+            raise error
+        real_rename(src, dst)
+
+    monkeypatch.setattr(archive_install.os, "rename", rename)
+    with pytest.raises(archive_install.ArchiveInstallError, match="is in use. Close the game"):
+        archive_install.install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Game",
+            version="2.0",
+            game_id=int(game_id),
+        )
+    assert old_exe.read_text() == "old"
+    assert [p.name for p in lib.iterdir()] == ["Game"]
+
+
+def test_windows_path_length_failure_gets_a_clear_message(monkeypatch):
+    from core import archive_install
+
+    monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: True)
+    long_name = "C:\\Library\\" + "x" * 250
+    message = archive_install._windows_long_path_error(FileNotFoundError(3, "missing", long_name))
+    assert "longer than Windows allows" in message
+    assert archive_install._windows_long_path_error(FileNotFoundError(3, "missing", "C:\\a")) == ""
+    assert archive_install._long_path_safe("C:\\Library\\Game") == "\\\\?\\C:\\Library\\Game"
+    monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: False)
+    assert archive_install._windows_long_path_error(FileNotFoundError(3, "missing", long_name)) == ""
+
+
+def test_old_seven_zip_without_the_utf8_switch_still_lists(monkeypatch):
+    from core import archive_install
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "-sccUTF-8" in cmd:
+            return subprocess.CompletedProcess(cmd, 7, stdout="", stderr="Unsupported switch")
+        return subprocess.CompletedProcess(cmd, 0, stdout="Path = Game.exe\n", stderr="")
+
+    tool = r"C:\Old 7-Zip\7z.exe"
+    monkeypatch.setattr(archive_install, "_is_windows", lambda platform=None: True)
+    monkeypatch.setattr(archive_install.subprocess, "run", fake_run)
+    monkeypatch.setattr(archive_install, "_NO_UTF8_SWITCH", set())
+    assert archive_install.list_tool_entries(tool, "a.7z") == ["Game.exe"]
+    assert "-sccUTF-8" in calls[0] and "-sccUTF-8" not in calls[1]
+    # Later runs skip the switch straight away.
+    calls.clear()
+    assert archive_install.list_tool_entries(tool, "a.7z") == ["Game.exe"]
+    assert len(calls) == 1 and "-sccUTF-8" not in calls[0]
