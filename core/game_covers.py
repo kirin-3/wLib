@@ -288,6 +288,10 @@ class CoverCacheService:
     def _fill(self) -> None:
         from core.scraper import f95_get_bytes
 
+        # URLs still waiting on a retry; a failure for any other URL (the game
+        # was removed or its cover changed) is dropped after the pass, or its
+        # past retry time would wake the loop every second.
+        waiting: set[str] = set()
         for game in database.get_cover_cache_work():
             if self.disabled or self._stop.is_set():
                 return
@@ -305,6 +309,7 @@ class CoverCacheService:
                 continue
             failure = self._failed.get(url)
             if failure is not None and time.monotonic() < failure[1]:
+                waiting.add(url)
                 continue
             try:
                 data = f95_get_bytes(url, MAX_COVER_SIZE)
@@ -328,7 +333,10 @@ class CoverCacheService:
                 count = (failure[0] if failure else 0) + 1
                 delay = min(RETRY_BASE_SECONDS * (1 << (count - 1)), RETRY_MAX_SECONDS)
                 self._failed[url] = (count, time.monotonic() + delay)
+                waiting.add(url)
                 logging.getLogger(__name__).info("Cover cache skipped %s: %s", game_id, exc)
+        for url in [url for url in self._failed if url not in waiting]:
+            del self._failed[url]
 
     def _next_retry_in(self) -> float | None:
         if not self._failed:

@@ -10,7 +10,7 @@ from urllib.request import Request
 
 from core.downloads.network import open_host
 
-from core.downloads.transfer import DownloadError, FileInfo
+from core.downloads.transfer import DownloadError, FileInfo, open_range
 
 
 def urlopen(request: Request, timeout: int = 30) -> object:
@@ -48,4 +48,22 @@ def probe(url: str, share_url: str = "") -> FileInfo:
     # Ownership of this response passes to the transfer loop.
     def stream() -> BinaryIO:
         return cast(BinaryIO, response)
-    return FileInfo(name, int(length) if length.isdigit() else None, stream, close=response.close)
+
+    def resume(offset: int) -> BinaryIO | None:
+        return open_range(
+            lambda extra: cast(
+                BinaryIO,
+                urlopen(Request(url, headers={"Referer": share_url, **extra}), timeout=30),
+            ),
+            offset,
+        )
+
+    return FileInfo(
+        name,
+        int(length) if length.isdigit() else None,
+        stream,
+        close=response.close,
+        resume_factory=resume,
+        # The share page names the file; the resolved address can change.
+        resume_key=f"buzzheavier:{urlsplit(share_url).path}",
+    )

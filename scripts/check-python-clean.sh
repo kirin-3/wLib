@@ -42,7 +42,7 @@ echo "==> Creating clean Python 3.12 environment"
 
 "$VENV_DIR/bin/python" --version
 "$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install -r requirements-dev.txt
+"$VENV_DIR/bin/pip" install --require-hashes -r requirements-dev.lock
 
 PYTHON_BIN="$VENV_DIR/bin/python" \
 PIP_BIN="$VENV_DIR/bin/pip" \

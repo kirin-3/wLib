@@ -1505,6 +1505,10 @@ def bind_extension_server() -> ThreadingHTTPServer | None:
 window_minimized = threading.Event()
 
 
+class _DestroyableWindow(Protocol):
+    def destroy(self) -> None: ...
+
+
 class _ShowableWindow(Protocol):
     def show(self) -> None: ...
 
@@ -1611,8 +1615,18 @@ def cleanup_legacy_browser_data() -> None:
             print(f"[wLib] Failed to remove legacy browser directory {path}: {exc}")
 
 
+def _startup_cleanup() -> None:
+    cleanup_legacy_browser_data()
+    try:
+        from core.game_sandbox import prune_removed_sandboxes
+
+        _ = prune_removed_sandboxes()
+    except Exception as exc:
+        print(f"[wLib] Failed to prune removed sandboxes: {exc}")
+
+
 def cleanup_legacy_browser_data_async() -> None:
-    threading.Thread(target=cleanup_legacy_browser_data, daemon=True).start()
+    threading.Thread(target=_startup_cleanup, daemon=True).start()
 
 
 def run_packaged_smoke_test() -> int:
@@ -1667,7 +1681,106 @@ def run_packaged_smoke_test() -> int:
             shutil.rmtree(_smoke_data_dir, ignore_errors=True)
 
 
+def data_dir_problem(path: str) -> str | None:
+    """Why wLib cannot keep its library in `path`, or None when it can."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path, prefix=".wlib-write-check-"):
+            pass
+    except OSError as exc:
+        reason = exc.strerror or str(exc)
+        return f"wLib cannot write to its data folder {path}: {reason}."
+    return None
+
+
+def show_fatal_startup_error(message: str) -> None:
+    """Tell the user why wLib quit before its window could open.
+
+    The app log may be what cannot be written, so this uses stderr and the
+    desktop's own dialog or notification tools, whichever exists.
+    """
+    print(f"[wLib] {message}", file=sys.stderr)
+    title = "wLib cannot start"
+    for command in (
+        ["zenity", "--error", f"--title={title}", f"--text={message}"],
+        ["kdialog", "--title", title, "--error", message],
+        ["notify-send", "--urgency=critical", title, message],
+    ):
+        if shutil.which(command[0]) is None:
+            continue
+        try:
+            _ = subprocess.run(command, check=False, timeout=600)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return
+
+
+def install_shutdown_signals(close: Callable[[], None]) -> bool:
+    """Close the window on SIGTERM, SIGHUP or SIGINT, so shutdown runs.
+
+    Python runs signal handlers only between bytecodes of the main thread,
+    which the Qt event loop does not give back. The C-level handler still
+    writes the signal number to the wakeup fd at once, so a thread waiting
+    on that pipe closes the window, and the normal shutdown path saves
+    playtime and finishes the last sync. A signal repeated after five
+    seconds (a stuck shutdown) exits at once.
+    """
+    import signal
+
+    if os.name == "nt" or threading.current_thread() is not threading.main_thread():
+        return False
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(write_fd, False)
+    _ = signal.set_wakeup_fd(write_fd, warn_on_full_buffer=False)
+    numbers = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    for number in numbers:
+        _ = signal.signal(number, lambda _signum, _frame: None)
+
+    def watch() -> None:
+        first: float | None = None
+        while True:
+            try:
+                data = os.read(read_fd, 1)
+            except OSError:
+                return
+            if not data:
+                return
+            if data[0] not in numbers:
+                continue
+            now = time.monotonic()
+            if first is None:
+                first = now
+                print(f"[wLib] Received signal {data[0]}; closing.")
+                try:
+                    close()
+                except Exception as exc:
+                    print(f"[wLib] Could not close the window: {exc}")
+            elif now - first >= 5:
+                # A terminal closing sends SIGHUP and the launcher script
+                # forwards SIGTERM; only a later repeat means "quit now".
+                os._exit(128 + data[0])
+
+    threading.Thread(target=watch, name="shutdown-signals", daemon=True).start()
+    return True
+
+
+def restore_ctrl_c() -> None:
+    """Let Ctrl+C stop startup even when the launcher started wLib with it ignored.
+
+    `wlib.sh` runs the app as a background job so it can forward SIGTERM, and
+    a shell starts background jobs with SIGINT ignored; Python then leaves it
+    ignored. Once the window exists, `install_shutdown_signals` takes over.
+    """
+    import signal
+
+    if threading.current_thread() is threading.main_thread() and (
+        signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+    ):
+        _ = signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
 def main() -> None:
+    restore_ctrl_c()
     ssl_summary = configure_ssl_certificates()
 
     global window_ref, api_ref, DEV_MODE
@@ -1677,6 +1790,15 @@ def main() -> None:
     if extension_server is None and focus_running_instance():
         print("[wLib] wLib is already running; showing its window instead.")
         return
+
+    problem = data_dir_problem(APP_DATA_DIR)
+    if problem:
+        if extension_server is not None:
+            extension_server.server_close()
+        show_fatal_startup_error(
+            f"{problem} Make the folder writable, or set WLIB_DATA_DIR to another folder."
+        )
+        raise SystemExit(1)
 
     _ = setup_app_log(APP_DATA_DIR)
     if is_linux():
@@ -1755,6 +1877,9 @@ def main() -> None:
             background_color="#101014",
         )
         window_ref = window
+        _ = install_shutdown_signals(
+            cast(_DestroyableWindow, cast(object, window)).destroy
+        )
         track_minimized(window)
         api.set_window(window)
         cleanup_legacy_browser_data_async()

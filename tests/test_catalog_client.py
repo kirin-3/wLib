@@ -409,3 +409,23 @@ def test_failed_check_is_retried_after_15_minutes(tmp_path, server):
     clock.now += 301
     server.publish(tmp_path, "2026-10-27T05:00:00Z")
     assert _client(tmp_path, clock).check()["success"] is True
+
+
+def test_startup_removes_stale_catalog_temp_files(tmp_path):
+    import os
+    import time
+
+    data = tmp_path / "data"
+    data.mkdir()
+    stale = data / ".catalog-abc.xz"
+    fresh = data / ".catalog-def.db"
+    other = data / "keep.db"
+    for path in (stale, fresh, other):
+        path.write_bytes(b"x")
+    old = time.time() - 2 * 60 * 60
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    _ = CatalogClient(str(data), app_version="9.9.9")
+    assert not stale.exists()
+    assert fresh.exists()
+    assert other.exists()

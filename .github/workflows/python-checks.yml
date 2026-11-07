@@ -43,9 +43,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+          cache-dependency-path: requirements-dev.lock
 
       - name: Run clean backend verification
         env:
@@ -88,10 +86,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-            requirements-windows.txt
+          cache-dependency-path: requirements-dev-windows.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -106,7 +101,7 @@ jobs:
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           python -m venv .venv
-          .venv\Scripts\python -m pip install -r requirements-dev.txt
+          .venv\Scripts\python -m pip install --require-hashes -r requirements-dev-windows.lock
 
       # Built first: the source smoke-mode test needs ui/dist.
       - name: Run frontend checks

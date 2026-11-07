@@ -865,7 +865,7 @@ def test_two_data_directories_folder_sync(tmp_path, monkeypatch, encrypted):
     games = database.get_all_games()
     assert len(games) == 1 and games[0]["rating"] == "9"
     assert games[0]["exe_path"] == "/b/game.exe" and games[0]["launch_mode"] == "native"
-    assert (db_b.parent / "sync" / "last-local.json").exists()
+    assert list((db_b.parent / "sync" / "snapshots").glob("*.json"))
 
 
 def test_collections_and_presets_sync_between_data_directories(tmp_path, monkeypatch):
@@ -1608,3 +1608,66 @@ def test_dropbox_account_name_includes_email(monkeypatch):
     )
     monkeypatch.setattr("urllib.request.urlopen", mock)
     assert DropboxLocation("refresh").account_name() == "Sam (sam@example.com)"
+
+
+def test_restore_snapshot_undoes_a_pull_with_launch_paths(tmp_path, monkeypatch):
+    from core import library_backup
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
+    database.init_db()
+    kept = database.add_game("Kept", "/local/kept.exe")
+    removed = database.add_game("Removed", "/local/removed.exe")
+    assert kept is not None and removed is not None
+    database.update_game(removed, {"rating": "7"})
+    name = library_backup.write_sync_snapshot()
+    assert name is not None
+    database.delete_game(removed)
+    database.update_game(kept, {"rating": "1"})
+
+    sync = SyncManager()
+    listed = sync.list_snapshots()["snapshots"]
+    assert [snapshot["name"] for snapshot in listed] == [name]
+    assert listed[0]["games"] == 2
+    result = sync.restore_snapshot(name)
+    assert result["success"], result
+    games = {game["title"]: game for game in database.get_all_games()}
+    assert games["Removed"]["exe_path"] == "/local/removed.exe"
+    assert games["Removed"]["rating"] == "7"
+    # The restore saved the library it replaced, so it can be undone too.
+    assert len(sync.list_snapshots()["snapshots"]) == 2
+    assert sync.restore_snapshot("../wlib.db")["error_code"] == "snapshot_not_found"
+
+
+def test_sync_snapshots_keep_the_last_five(tmp_path, monkeypatch):
+    from core import library_backup
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "wlib.db"))
+    database.init_db()
+    folder = tmp_path / "sync"
+    folder.mkdir()
+    # The single copy older versions kept joins the list.
+    (folder / "last-local.json").write_text("{}")
+    assert library_backup.write_sync_snapshot() is None  # empty library
+    assert not (folder / "last-local.json").exists()
+    _ = database.add_game("Game", "/game.exe")
+    for _ in range(6):
+        assert library_backup.write_sync_snapshot()
+    names = sorted(path.name for path in (folder / "snapshots").glob("*.json"))
+    assert len(names) == library_backup.SYNC_SNAPSHOT_KEEP
+
+
+def test_folder_write_removes_stale_temporary_files(tmp_path):
+    import os
+    import time
+
+    from core.library_sync import FolderLocation
+
+    stale = tmp_path / "wlib-library.json.tmp.1.a.b"
+    fresh = tmp_path / "wlib-library.json.tmp.2.a.b"
+    stale.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    old = time.time() - 2 * 60 * 60
+    os.utime(stale, (old, old))
+    _ = FolderLocation(str(tmp_path)).write(b"{}", None)
+    assert not stale.exists()
+    assert fresh.exists()

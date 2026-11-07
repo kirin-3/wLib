@@ -2,6 +2,23 @@
 
 `cryptography>=44.0.0` is a runtime dependency for library backup and sync encryption. Linux `scripts/build.sh` collects the package with `--collect-all`; the Windows script uses `packaging/windows/wlib.spec`, which collects its data, modules, and native binaries. `main.py --smoke-test` imports the AEAD module to verify packaging. AUR metadata and its PKGBUILD template include `python-cryptography`. Rebuild the Linux test image when requirements change.
 
+## Locked dependencies
+
+`requirements*.txt` state what wLib needs; the `.lock` files pin every package with hashes and are what CI, release builds and the test image install (`pip install --require-hashes -r ...`). `wlib.sh` keeps using `requirements.txt`, since a user's system Python varies. After changing a requirements file, regenerate the locks:
+
+```bash
+uv pip compile requirements.txt --python-version 3.12 --python-platform x86_64-manylinux_2_35 --generate-hashes --no-header -o requirements.lock
+uv pip compile requirements-dev.txt --python-version 3.12 --python-platform x86_64-manylinux_2_35 --generate-hashes --no-header -o requirements-dev.lock
+uv pip compile requirements-windows.txt --python-version 3.12 --python-platform windows --generate-hashes --no-header -o requirements-windows.lock
+uv pip compile requirements-dev.txt --python-version 3.12 --python-platform windows --generate-hashes --no-header -o requirements-dev-windows.lock
+```
+
+The Linux platform is `manylinux_2_35` (Ubuntu 22.04, the CI runner), because the pinned Qt wheels need glibc 2.34 or newer. `tests/test_release_version.py` fails when a lock no longer has an exact pin from `requirements.txt`.
+
+## Release version check
+
+The release workflow's first job runs `scripts/check-release-version.py <tag>` on tag pushes. It fails when the tag is not `v` + `APP_VERSION` from `core/api.py`, or when `extension/manifest.json` has the version the previous release tag shipped (AMO signs each version once). Manual dry runs skip it.
+
 The Linux test image includes `binutils` (PyInstaller's `objdump`), `curl` (appimagetool download), and `file` (AppImage assembly). Windows checkouts can contain CRLF shell files; normalize shell scripts in a temporary Linux source copy for packaging/clean checks. Keep Linux node_modules in the container or the named volume.
 
 wLib ships Linux artifacts through `scripts/build.sh` and Windows x64 artifacts through `scripts/build-windows.ps1`. Windows output is a portable ZIP plus a per-user MSI, both derived from one canonical PyInstaller onedir payload.
@@ -14,7 +31,7 @@ Backend changes are validated through `.github/workflows/python-checks.yml`, whi
 
 - The workflow runs on pull requests, pushes to `master`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
-- The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment and installs `requirements-dev.txt`.
+- The Ubuntu job runs `bash scripts/check-python-clean.sh`, which creates a fresh virtual environment and installs `requirements-dev.lock`.
 - The clean check executes `ruff`, `basedpyright`, `scripts/smoke_backend.py`, and the full `pytest` suite.
 - The Windows job creates `.venv` and runs those tools directly in PowerShell; the Bash wrappers assume Linux virtual-environment paths.
 - The Windows job also runs frontend unit tests, typecheck, and production build with Python 3.12 and Node 22. For local development, use Node 22.12+ to meet both Vite and unit-test requirements.

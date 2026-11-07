@@ -2109,9 +2109,12 @@ onUnmounted(() => {
               role="tab"
               :aria-selected="activeCollection === name"
               class="collection-tab shrink-0"
-              :title="name"
+              :title="`${name} — Shift+F10 to rename or delete`"
+              aria-haspopup="menu"
               @click="activeCollection = name"
               @contextmenu.prevent.stop="openCollectionTabMenu(name, $event)"
+              @keydown.shift.f10.prevent.stop="openCollectionTabMenu(name, $event)"
+              @keydown.context-menu.prevent.stop="openCollectionTabMenu(name, $event)"
             >
               <span class="truncate max-w-40">{{ name }}</span>
               <span class="collection-count">{{ collectionCount(name) }}</span>
@@ -2360,7 +2363,7 @@ onUnmounted(() => {
       </div>
 
       <div v-else-if="layoutMode === 'list'" class="library-table-wrap pb-12">
-        <table class="library-table">
+        <table class="library-table" role="grid" aria-label="Games" aria-multiselectable="true">
           <caption class="sr-only">
             Games in your library. Select a column header to sort.
           </caption>
@@ -2399,7 +2402,9 @@ onUnmounted(() => {
               :data-game-id="game.id"
               :data-controller-primary="index === 0 ? '' : undefined"
               tabindex="0"
+              role="row"
               @keydown.enter.self.prevent="handleCardClick(game, $event)"
+              @keydown.space.self.prevent="handleCardClick(game, $event)"
               class="game-row"
               :class="{ 'is-running': runningGameIds.has(game.id), 'is-selected': selectedIds.has(game.id) }"
               :aria-selected="selectedIds.has(game.id)"

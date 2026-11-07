@@ -122,7 +122,7 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
 if (-not $SkipDependencies) {
     Invoke-Checked "Install Windows Python dependencies" {
-        & $Python -m pip install --disable-pip-version-check -r (Join-Path $RepositoryRoot "requirements-windows.txt")
+        & $Python -m pip install --disable-pip-version-check --require-hashes -r (Join-Path $RepositoryRoot "requirements-windows.lock")
     }
 }
 if (-not $SkipFrontend) {

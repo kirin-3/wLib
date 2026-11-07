@@ -31,11 +31,24 @@ from core.library_backup import (
     decrypt_library_backup,
     derive_backup_key,
     encrypt_library_backup,
+    SECTION_EXECUTABLE_PATHS,
+    SECTION_LAUNCH_CONFIG,
+    SECTION_LAUNCH_TARGETS,
     encrypted_backup_salt,
+    list_sync_snapshots,
+    load_library_backup,
+    sync_snapshot_path,
     validate_library_backup,
 )
 
 SYNC_FILENAME = "wlib-library.json"
+RESTORE_SECTIONS = (
+    *SYNC_SECTIONS,
+    SECTION_EXECUTABLE_PATHS,
+    SECTION_LAUNCH_CONFIG,
+    SECTION_LAUNCH_TARGETS,
+)
+STALE_TEMPORARY_SECONDS = 60 * 60
 DROPBOX_APP_KEY = "l5ybaj3u18tq492"
 DROPBOX_REDIRECT_URI = "http://127.0.0.1:8183/dropbox/callback"
 # App-folder tokens already root paths at /Apps/wLib.
@@ -194,10 +207,30 @@ class FolderLocation:
 
     def write(self, data: bytes, expected_revision: str | None) -> str:
         self._check_folder()
+        self._remove_stale_temporaries()
         # Serialize writers for one folder: the revision check below is only
         # meaningful if no other writer can slip in before os.replace.
         with _folder_write_lock(self.folder):
             return self._write_exclusive(data, expected_revision)
+
+    def _remove_stale_temporaries(self) -> None:
+        """Delete temporary files a writer killed mid-write left behind.
+
+        They sit in the user's synced folder, so a cloud client would upload
+        them. Only files older than an hour go: another machine may be
+        writing one right now.
+        """
+        cutoff = time.time() - STALE_TEMPORARY_SECONDS
+        try:
+            candidates = list(self.folder.glob(f"{SYNC_FILENAME}.tmp.*"))
+        except OSError:
+            return
+        for candidate in candidates:
+            try:
+                if candidate.is_file() and candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+            except OSError:
+                pass
 
     def _write_exclusive(self, data: bytes, expected_revision: str | None) -> str:
         # The threading lock above only covers this process. A second wLib
@@ -1569,6 +1602,47 @@ class SyncManager:
         self._first_pending = None
         self._newer_remote = None
         self._choice_revision, self._choice_reason = None, ""
+
+    def list_snapshots(self) -> dict[str, object]:
+        return {"success": True, "snapshots": list_sync_snapshots()}
+
+    def restore_snapshot(self, name: object) -> dict[str, object]:
+        """Put the library back as it was before a sync changed it.
+
+        The restore is itself a mirror apply, so it saves the current library
+        as a new snapshot first and can be undone the same way. The next sync
+        uploads the restored library.
+        """
+        path = sync_snapshot_path(name)
+        if path is None or not os.path.isfile(path):
+            return {
+                "success": False,
+                "error": "That library copy no longer exists.",
+                "error_code": "snapshot_not_found",
+            }
+        with self._lock:
+            try:
+                backup = load_library_backup(path)
+                # What sync changes, plus the per-game launch data: the copy
+                # came from this machine, so its executable paths and launch
+                # options are this machine's own, and a game a pull removed
+                # comes back ready to launch. Path settings (library folders)
+                # are never touched by sync and stay as they are now.
+                result = apply_library_backup(
+                    backup, {"sections": RESTORE_SECTIONS}, mirror=True, sync=True
+                )
+            except BackupValidationError as error:
+                return {"success": False, "error": str(error), "error_code": error.error_code}
+            except OSError as error:
+                return {"success": False, "error": str(error), "error_code": "write_failed"}
+        if self._on_pull is not None:
+            self._on_pull()
+        return {
+            "success": True,
+            "created": result["created"],
+            "updated": result["updated"],
+            "deleted": result["deleted"],
+        }
 
     def disconnect(self) -> dict[str, object]:
         with self._lock:

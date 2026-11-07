@@ -379,7 +379,11 @@ class Api:
             "stage": "",
             "done": 0,
             "total": 0,
+            "cancellable": False,
         }
+        # Set by cancel_archive_install(); the install checks it until the new
+        # version starts moving into place.
+        self._archive_install_cancel: threading.Event = threading.Event()
         from core.catalog import CatalogClient
         from core.host_platform import get_data_dir
 
@@ -1919,6 +1923,16 @@ class Api:
     def disconnect_sync(self) -> dict[str, object]:
         return self.library_sync.disconnect()
 
+    def list_sync_snapshots(self) -> dict[str, object]:
+        return self.library_sync.list_snapshots()
+
+    def restore_sync_snapshot(self, name: str) -> dict[str, object]:
+        result = self.library_sync.restore_snapshot(name)
+        if result.get("success"):
+            # Upload the restored library so other devices get it too.
+            _ = self.library_sync.start_run()
+        return result
+
     def sync_now(self) -> dict[str, object]:
         return self.library_sync.start_run()
 
@@ -2380,6 +2394,12 @@ class Api:
                 )
         except Exception as exc:
             print(f"[wLib] Failed to keep save backups for game {coerced_id}: {exc}")
+        try:
+            from core.game_sandbox import retire_sandbox_folder
+
+            _ = retire_sandbox_folder(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to move the sandbox of game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -5871,7 +5891,7 @@ class Api:
     def browse_archive_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select a game archive (.zip/.7z/.rar)."""
         file_types = (
-            "Game Archives (*.zip;*.7z;*.rar)",
+            "Game Archives (*.zip;*.7z;*.rar;*.001)",
             "All files (*.*)",
         )
 
@@ -6273,6 +6293,14 @@ class Api:
                 "success": False,
                 "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
             }
+        from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
+
+        volumes = volume_set(archive_path)
+        if volumes is not None:
+            try:
+                check_volume_set(volumes)
+            except ArchiveInstallError as exc:
+                return {"success": False, "error": str(exc), "error_code": "parts_missing"}
 
         guessed_title, guessed_version = guess_title_and_version(
             archive_stem(archive_path)
@@ -6414,18 +6442,51 @@ class Api:
         with self._status_lock:
             return dict(self._archive_install_status)
 
+    # Stages before the library changes; the install can still be cancelled.
+    _CANCELLABLE_INSTALL_STAGES: frozenset[str] = frozenset(
+        {"starting", "preparing", "extracting", "fixing permissions", "carrying saves"}
+    )
+
     def _set_archive_install_status(
-        self, *, running: bool, stage: str = "", done: int = 0, total: int = 0
+        self,
+        *,
+        running: bool,
+        stage: str = "",
+        done: int | None = None,
+        total: int | None = None,
     ) -> None:
+        """Update the polled status; bytes left out keep their last value."""
         with self._status_lock:
             if not running:
                 self._archive_install_game_id = None
+            previous = self._archive_install_status
+            if running and self._archive_install_cancel.is_set() and stage in self._CANCELLABLE_INSTALL_STAGES:
+                stage = "cancelling"
             self._archive_install_status = {
                 "running": running,
                 "stage": stage,
-                "done": done,
-                "total": total,
+                "done": previous.get("done", 0) if done is None else done,
+                "total": previous.get("total", 0) if total is None else total,
+                "cancellable": running
+                and stage in self._CANCELLABLE_INSTALL_STAGES
+                and not self._archive_install_cancel.is_set(),
             }
+
+    def cancel_archive_install(self) -> dict[str, object]:
+        """Stop the running install if the new version has not moved yet."""
+        with self._status_lock:
+            status = self._archive_install_status
+            if not status.get("running"):
+                return {"success": False, "error": "No install is running.", "error_code": "not_running"}
+            if not status.get("cancellable"):
+                return {
+                    "success": False,
+                    "error": "The new version is already being moved into place; it can no longer be cancelled.",
+                    "error_code": "not_cancellable",
+                }
+            self._archive_install_cancel.set()
+            self._archive_install_status = {**status, "cancellable": False, "stage": "cancelling"}
+        return {"success": True}
 
     def install_archive(
         self, options: Mapping[str, object] | None = None
@@ -6433,7 +6494,7 @@ class Api:
         """Blocking install from an archive; the dialog polls status meanwhile."""
         import sqlite3
 
-        from core.archive_install import ArchiveInstallError, archive_stem
+        from core.archive_install import ArchiveInstallError, InstallCancelled, archive_stem
         from core.archive_install import install_archive as run_install
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -6556,15 +6617,26 @@ class Api:
                 if busy:
                     return {"success": False, "error": busy, "error_code": "game_busy"}
             self._archive_install_game_id = game_id
+            self._archive_install_cancel.clear()
             self._archive_install_status = {
                 "running": True,
                 "stage": "starting",
                 "done": 0,
                 "total": 0,
+                "cancellable": True,
             }
 
         def _on_stage(stage: str) -> None:
             self._set_archive_install_status(running=True, stage=stage)
+
+        def _on_bytes(done: int, total: int) -> None:
+            with self._status_lock:
+                if self._archive_install_status.get("running"):
+                    self._archive_install_status = {
+                        **self._archive_install_status,
+                        "done": done,
+                        "total": total,
+                    }
 
         try:
             result = run_install(
@@ -6583,7 +6655,12 @@ class Api:
                 remove_old=remove_old,
                 delete_archive=delete_archive,
                 progress_cb=_on_stage,
+                bytes_cb=_on_bytes,
+                cancel=self._archive_install_cancel,
             )
+        except InstallCancelled as exc:
+            self._set_archive_install_status(running=False, stage="cancelled")
+            return {"success": False, "error": str(exc), "error_code": "install_cancelled"}
         except ArchiveInstallError as exc:
             self._set_archive_install_status(running=False, stage="failed")
             return {"success": False, "error": str(exc)}

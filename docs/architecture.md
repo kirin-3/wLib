@@ -117,7 +117,8 @@ flowchart TD
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
 | PDF, TXT and MD attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
 | Downloaded umu-launcher | `~/.local/share/wLib/umu/umu-run` | Unavailable (Linux only) |
-| Sync snapshot | `~/.local/share/wLib/sync/last-local.json` | `%LOCALAPPDATA%\wLib\sync\last-local.json` |
+| Sync snapshots (last five) | `~/.local/share/wLib/sync/snapshots/` | `%LOCALAPPDATA%\wLib\sync\snapshots\` |
+| Sandboxes of removed games (30 days) | `~/.local/share/wLib/sandbox/removed/` | `%LOCALAPPDATA%\wLib\sandbox\removed\` |
 
 Attachment copies are limited to PDF, TXT and MD. PDF files must start with `%PDF-`; text files must contain no NUL in their first 8 KiB. The bridge exposes `browse_attachment_file` and reports rejected types as `unsupported_attachment`.
 

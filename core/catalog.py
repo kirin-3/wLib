@@ -49,6 +49,7 @@ CHECK_INTERVAL_SECONDS = 12 * 60 * 60
 # After a failed check (offline, server error) the next start tries again sooner.
 FAILED_CHECK_RETRY_SECONDS = 15 * 60
 MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
+STALE_TEMP_SECONDS = 60 * 60
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 _CHUNK = 256 * 1024
@@ -129,6 +130,28 @@ class CatalogClient:
         self._clock: Callable[[], float] = clock
         self._lock: threading.Lock = threading.Lock()
         self._checking: bool = False
+        self._remove_stale_temp_files()
+
+    def _remove_stale_temp_files(self) -> None:
+        """Delete temporary files a download killed mid-way left behind.
+
+        Only files older than an hour go, so a download another thread just
+        started keeps its files.
+        """
+        cutoff = time.time() - STALE_TEMP_SECONDS
+        try:
+            names = os.listdir(self.data_dir)
+        except OSError:
+            return
+        for name in names:
+            if not name.startswith(".catalog-"):
+                continue
+            path = os.path.join(self.data_dir, name)
+            try:
+                if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+            except OSError:
+                pass
 
     @property
     def catalog_path(self) -> str:

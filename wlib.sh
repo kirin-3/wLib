@@ -79,8 +79,21 @@ if [ ! -f "$VENV_DIR/.deps_installed" ] || [ requirements.txt -nt "$VENV_DIR/.de
     touch "$VENV_DIR/.deps_installed"
 fi
 
-# Build frontend if dist doesn't exist
-if [ ! -d "$SCRIPT_DIR/ui/dist" ]; then
+# Build the frontend when it is missing or older than its sources (after a
+# git pull, for example). A checkout without ui/src (a packaged copy) only
+# needs dist to exist.
+frontend_is_stale() {
+    local built="$SCRIPT_DIR/ui/dist/index.html"
+    [ -f "$built" ] || return 0
+    [ -d "$SCRIPT_DIR/ui/src" ] || return 1
+    local newer
+    newer="$(find "$SCRIPT_DIR/ui/src" "$SCRIPT_DIR/ui/public" \
+        "$SCRIPT_DIR/ui/index.html" "$SCRIPT_DIR/ui/package-lock.json" \
+        "$SCRIPT_DIR/ui/vite.config.js" -newer "$built" -print -quit 2>/dev/null)"
+    [ -n "$newer" ]
+}
+
+if frontend_is_stale; then
     if command -v npm &>/dev/null; then
         echo "🔨 Building frontend..."
         cd "$SCRIPT_DIR/ui"
@@ -216,8 +229,19 @@ if [ "$GPU_RENDER_MODE" = "auto" ] && ! guard_owned_by_other_instance "$CRASH_GU
 fi
 
 set +e
-python main.py
+# Run in the background so this script can pass on a stop signal (logout,
+# `kill`, a closing terminal): wLib then closes its window and saves playtime
+# and the last sync instead of being cut off.
+python main.py &
+APP_PID=$!
+trap 'kill -TERM "$APP_PID" 2>/dev/null' TERM HUP
+trap '' INT  # Ctrl+C already reaches wLib through the process group.
+while kill -0 "$APP_PID" 2>/dev/null; do
+    wait "$APP_PID"
+done
+wait "$APP_PID"
 APP_EXIT_CODE=$?
+trap - TERM HUP INT
 set -e
 
 if [ "$APP_EXIT_CODE" -eq 0 ] \

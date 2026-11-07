@@ -244,12 +244,23 @@ restore_host_library_path
 configure_ssl_certificates
 log_launch_context
 
+# Run in the background so a stop signal (logout, `kill`, a closing
+# terminal) reaches wLib, which then closes its window and runs its normal
+# shutdown instead of being cut off.
 if [ -t 1 ] || [ -t 2 ]; then
-    ./wlib-bin "$@" > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
+    ./wlib-bin "$@" > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2) &
 else
-    ./wlib-bin "$@" >> "$LOG_FILE" 2>&1
+    ./wlib-bin "$@" >> "$LOG_FILE" 2>&1 &
 fi
+WLIB_PID=$!
+trap 'kill -TERM "$WLIB_PID" 2>/dev/null' TERM HUP
+trap '' INT  # Ctrl+C already reaches wLib through the process group.
+while kill -0 "$WLIB_PID" 2>/dev/null; do
+    wait "$WLIB_PID"
+done
+wait "$WLIB_PID"
 WLIB_EXIT=$?
+trap - TERM HUP INT
 printf 'exit_code=%s\n' "$WLIB_EXIT" >> "$LOG_FILE"
 
 if [ "$WLIB_EXIT" -eq 0 ] \

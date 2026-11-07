@@ -439,9 +439,11 @@ class Scraper:
                     return _trim_post_version(version.group())
         version_re = _POST_VERSION_RE.pattern
         text_patterns = [
-            rf"(?:Current\s+)?Version\s*:?\s*v?({version_re})",
-            rf"Ver(?:\.|sion)?\s*:?\s*v?({version_re})",
-            r"Release\s*:?\s*v?(\d[\d.]*[a-zA-Z]?)",
+            # Word-bounded: "Over 18" or "Conversion 2" is not a version.
+            rf"\b(?:Current\s+)?Version(?![a-z])\s*:?\s*v?({version_re})",
+            rf"\bVer(?:sion)?(?![a-z])\.?\s*:?\s*v?({version_re})",
+            # A bare year ("Release 2024") is a date, not a version.
+            r"\bRelease(?![a-z])\s*:?\s*v?(?!(?:19|20)\d\d(?![\d.]|\.\d))(\d[\d.]*[a-zA-Z]?)",
         ]
         for pattern in text_patterns:
             match = re.search(pattern, _text(html), re.I)

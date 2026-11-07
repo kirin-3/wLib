@@ -249,7 +249,7 @@ cd "$PROJECT_DIR"
 
 # ── Ensure PyInstaller & deps are available ──
 echo "📦 Installing Python dependencies for build..."
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 
 # ── Embed the Google Drive client secret (gitignored; removed after the build) ──
 GDRIVE_SECRET_MODULE="$PROJECT_DIR/core/_gdrive_secret.py"

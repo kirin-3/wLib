@@ -253,7 +253,7 @@ def test_mirror_preserves_paths_deletes_targets_and_snapshots(tmp_path):
     assert games["New"]["exe_path"] == ""
     assert len(list_game_launch_targets(keep)) == 1
     assert list_game_launch_targets(remove) == []
-    snapshot = tmp_path / "sync" / "last-local.json"
+    (snapshot,) = (tmp_path / "sync" / "snapshots").glob("*.json")
     assert len(load_library_backup(snapshot)["games"]) == 2
 
 
@@ -2514,36 +2514,48 @@ def test_journal_missing_fields_or_unselected_state_preserve_local(
     assert database.get_play_sessions(game_id) == original
 
 
-def test_invalid_journal_rolls_back_import(tmp_path):
+def test_invalid_play_sessions_are_skipped_with_a_warning(tmp_path):
     game_id = add_game("Journal", "/game")
-    backup = build_library_backup()
-    backup["games"][0]["metadata"]["title"] = "Changed"
-    backup["games"][0]["user_state"]["play_sessions"] = [{"duration_seconds": -1}]
-    path = write_backup(tmp_path / "invalid-journal.json", backup)
-    assert not Api().import_library_backup(str(path))["success"]
-    assert get_all_games()[0]["id"] == game_id
-    assert get_all_games()[0]["title"] == "Journal"
+    from core import database
 
-
-def test_oversized_play_session_duration_is_rejected_cleanly(tmp_path):
-    game_id = add_game("Journal", "/game")
+    database.record_play_tick(
+        game_id, database.start_play_session(game_id, "0.1"), 30, True
+    )
+    good = {
+        "version": "1.0",
+        "started_at": "2026-01-01T00:00:00",
+        "ended_at": None,
+        "duration_seconds": 60,
+    }
     backup = build_library_backup()
     backup["games"][0]["metadata"]["title"] = "Changed"
     backup["games"][0]["user_state"]["play_sessions"] = [
-        {
-            "version": "1.0",
-            "started_at": "2026-01-01T00:00:00",
-            "ended_at": None,
-            "duration_seconds": 10**30,
-        }
+        {"duration_seconds": -1},
+        # Used to escape as OverflowError from the SQLite bind.
+        {**good, "duration_seconds": 10**30},
+        good,
     ]
-    path = write_backup(tmp_path / "huge-journal.json", backup)
-    # Used to escape as OverflowError from the SQLite bind.
-    result = Api().import_library_backup(str(path))
-    assert not result["success"]
-    assert "play session" in str(result.get("error", "")).lower()
-    assert get_all_games()[0]["id"] == game_id
-    assert get_all_games()[0]["title"] == "Journal"
+    path = write_backup(tmp_path / "invalid-journal.json", backup)
+    preview = Api().inspect_library_backup(str(path))
+    assert any(w["type"] == "invalid_play_session" for w in preview["warnings"])
+    # One bad session used to roll back the whole import.
+    assert Api().import_library_backup(str(path))["success"]
+    assert get_all_games()[0]["title"] == "Changed"
+    assert [s["duration_seconds"] for s in database.get_play_sessions(game_id)] == [60]
+
+
+def test_only_invalid_play_sessions_keep_local_history(tmp_path):
+    game_id = add_game("Journal", "/game")
+    from core import database
+
+    database.record_play_tick(
+        game_id, database.start_play_session(game_id, "0.1"), 30, True
+    )
+    backup = build_library_backup()
+    backup["games"][0]["user_state"]["play_sessions"] = [{"duration_seconds": -1}]
+    path = write_backup(tmp_path / "invalid-journal.json", backup)
+    assert Api().import_library_backup(str(path))["success"]
+    assert [s["version"] for s in database.get_play_sessions(game_id)] == ["0.1"]
 
 
 def test_save_path_override_exports_only_with_launch_config(tmp_path):
@@ -3337,3 +3349,48 @@ def test_merge_import_keeps_local_collections_and_blank_lists():
     _ = apply_library_backup(backup, {"sections": [SECTION_USER_STATE, "settings_general"]})
     assert get_collections() == ["Local"]
     assert get_all_games()[0]["collections"] == ["Local"]
+
+
+def test_fill_missing_fills_launch_defaults_nobody_chose():
+    url = "https://f95zone.to/threads/launch-fill.990/"
+    game_id = add_game("Launch", "/local/game.exe", f95_url=url)
+    kept_url = "https://f95zone.to/threads/launch-kept.989/"
+    kept_id = add_game("Kept", "/local/kept.exe", f95_url=kept_url)
+    assert game_id is not None and kept_id is not None
+    update_game(kept_id, {"launch_mode": "native", "gamemode": "off"})
+    config = {"launch_mode": "wine_proton", "gamemode": "on", "mangohud": "on"}
+    payload = base_backup(
+        [
+            {"metadata": {"title": "Launch", "f95_url": url}, SECTION_LAUNCH_CONFIG: config},
+            {"metadata": {"title": "Kept", "f95_url": kept_url}, SECTION_LAUNCH_CONFIG: config},
+        ]
+    )
+    _ = apply_library_backup(
+        payload, {"sections": [SECTION_LAUNCH_CONFIG]}, merge_mode="fill_missing"
+    )
+    games = {game["id"]: game for game in get_all_games()}
+    # "auto" and "default" are what a new game starts with, so they count as empty.
+    assert games[game_id]["launch_mode"] == "wine_proton"
+    assert games[game_id]["gamemode"] == "on"
+    assert games[kept_id]["launch_mode"] == "native"
+    assert games[kept_id]["gamemode"] == "off"
+    assert games[kept_id]["mangohud"] == "on"
+
+
+def test_two_weak_matches_do_not_merge_into_one_game():
+    game_id = add_game("Twin", "/local/twin.exe")
+    assert game_id is not None
+    payload = base_backup(
+        [
+            {"metadata": {"title": "twin"}},
+            {"metadata": {"title": "Twin"}},
+        ]
+    )
+    from core.library_backup import _build_import_plan
+
+    plan = _build_import_plan(payload)
+    statuses = sorted(item["status"] for item in plan)
+    assert statuses == ["matched", "new"]
+    # The exact title keeps the match, even though it comes second.
+    matched = next(item for item in plan if item["status"] == "matched")
+    assert matched["game"]["metadata"]["title"] == "Twin"

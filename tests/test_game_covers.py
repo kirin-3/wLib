@@ -518,3 +518,25 @@ def test_cut_off_cover_is_not_cached():
     assert game_covers.image_looks_complete(b"\xff\xd8\xff\xe0data\xff\xd9")
     assert not game_covers.image_looks_complete(b"\xff\xd8\xff\xe0data")
     assert not game_covers.image_looks_complete(b"RIFF\x20\x00\x00\x00WEBPVP8 ")
+
+
+def test_cache_drops_failures_for_covers_no_longer_wanted(monkeypatch):
+    from core import scraper
+
+    url = "https://attachments.f95zone.to/gone.png"
+    game_id = database.add_game("Gone", "", "", cover_image=url)
+
+    def fetch(url, limit):
+        raise ValueError("challenge")
+
+    monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
+    now = [1000.0]
+    monkeypatch.setattr(game_covers.time, "monotonic", lambda: now[0])
+    service = game_covers.CoverCacheService()
+    service._fill()
+    assert service._next_retry_in() == game_covers.RETRY_BASE_SECONDS
+    database.update_game(game_id, {"cover_image_path": ""})
+    now[0] += game_covers.RETRY_BASE_SECONDS * 2
+    service._fill()
+    # A stale failure whose retry time passed used to wake the loop every second.
+    assert service._next_retry_in() is None

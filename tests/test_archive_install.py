@@ -1436,7 +1436,7 @@ def test_install_checks_destination_when_selecting_tool(monkeypatch, tmp_path):
         checked_folders.append(library_folder)
         return "/usr/bin/7z", None
 
-    def extract(tool, path, staging):
+    def extract(tool, path, staging, cancel=None):
         from pathlib import Path
 
         (Path(staging) / "Game.exe").write_bytes(b"game")
@@ -2552,3 +2552,183 @@ def test_extract_zip_decodes_shift_jis_names(tmp_path):
     staging = tmp_path / "out"
     extract_zip(str(archive), str(staging))
     assert (staging / "ゲーム" / "セーブ.txt").read_bytes() == b"data"
+
+
+def test_install_cancelled_during_extraction_changes_nothing(tmp_path, monkeypatch):
+    import threading
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core import archive_install
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    archive = tmp_path / "Eternum-0.8-pc.zip"
+    _write_game_zip(archive, {f"file{n}.dat": b"x" * 10 for n in range(5)} | {"Eternum.exe": b"x"})
+    cancel = threading.Event()
+    real_write = archive_install._check_cancel
+    seen = []
+
+    def check(event):
+        # Cancel while the third file is about to be written.
+        seen.append(1)
+        if len(seen) == 3:
+            cancel.set()
+        real_write(event)
+
+    monkeypatch.setattr(archive_install, "_check_cancel", check)
+    with pytest.raises(archive_install.InstallCancelled):
+        archive_install.install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}/{version}",
+            title="Eternum",
+            version="0.8",
+            cancel=cancel,
+        )
+    assert db.get_all_games() == []
+    # Staging is removed and nothing was installed.
+    assert [p.name for p in lib.iterdir() if not p.name.startswith(".wlib-trash")] == []
+
+
+def test_extract_with_tool_kills_the_extractor_on_cancel(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from core import archive_install
+
+    monkeypatch.setattr(archive_install, "list_tool_entries", lambda tool, path, links: ["a.txt"])
+    monkeypatch.setattr(archive_install, "_tool_argv", lambda tool, args, env=None: ["sleep", "30"])
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(archive_install.InstallCancelled):
+        archive_install.extract_with_tool("7z", str(tmp_path / "a.7z"), str(tmp_path / "out"), cancel)
+    assert time.monotonic() - started < 10
+
+
+def test_extract_meter_reports_bytes_written(tmp_path):
+    import time
+
+    from core.archive_install import _ExtractMeter
+
+    reports = []
+    (tmp_path / "f").write_bytes(b"x" * 100)
+    with _ExtractMeter(str(tmp_path), 1000, lambda done, total: reports.append((done, total))):
+        time.sleep(1.3)
+    assert reports and reports[-1] == (100, 1000)
+
+
+@pytest.mark.parametrize(
+    ("names", "chosen", "first", "missing"),
+    [
+        (["G.part1.rar", "G.part2.rar", "G.part3.rar"], "G.part2.rar", "G.part1.rar", ()),
+        (["G.part01.rar", "G.part03.rar"], "G.part01.rar", "G.part01.rar", (2,)),
+        (["G.7z.001", "G.7z.002"], "G.7z.002", "G.7z.001", ()),
+        (["G.zip.002"], "G.zip.002", "", (1,)),
+        (["G.rar", "G.r00", "G.r01"], "G.r01", "G.rar", ()),
+        (["G.r00"], "G.r00", "", (1,)),
+        (["G.zip", "G.z01", "G.z02"], "G.z01", "G.zip", ()),
+        (["G.z01", "G.z02"], "G.z02", "", (3,)),
+    ],
+)
+def test_volume_set_finds_every_part(tmp_path, names, chosen, first, missing):
+    from core.archive_install import volume_set
+
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+    volumes = volume_set(str(tmp_path / chosen))
+    assert volumes is not None
+    assert volumes.first == (str(tmp_path / first) if first else "")
+    assert volumes.missing == missing
+    assert sorted(volumes.parts) == sorted(str(tmp_path / name) for name in names)
+
+
+def test_single_archives_are_not_volume_sets(tmp_path):
+    from core.archive_install import archive_format, archive_stem, volume_set
+
+    for name in ("Game.zip", "Game.7z", "Game.rar", "Game.part1.rar", "Game.7z.001"):
+        (tmp_path / name).write_bytes(b"x")
+        assert volume_set(str(tmp_path / name)) is None, name
+    assert archive_format("Game.7z.001") == "7z"
+    assert archive_format("Game.zip.001") == "7z"
+    assert archive_stem("Eternum-0.8.7z.001") == "Eternum-0.8"
+    assert archive_stem("Eternum-0.8.part1.rar") == "Eternum-0.8"
+    (tmp_path / "Span.zip").write_bytes(b"x")
+    (tmp_path / "Span.z01").write_bytes(b"x")
+    # A spanned zip needs 7-Zip; zipfile cannot read it.
+    assert archive_format(str(tmp_path / "Span.zip")) == "7z"
+
+
+def test_install_refuses_a_set_with_parts_missing(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import ArchiveInstallError, install_archive
+
+    (tmp_path / "G.part1.rar").write_bytes(b"x")
+    (tmp_path / "G.part3.rar").write_bytes(b"x")
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    with pytest.raises(ArchiveInstallError, match="Part 2 of this multi-part archive is missing"):
+        install_archive(str(tmp_path / "G.part3.rar"), library_folder=str(lib), pattern="{title}", title="G")
+
+
+def test_install_of_a_set_starts_at_part_one_and_deletes_every_part(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core import archive_install
+
+    parts = [tmp_path / f"Game-1.0.part{n}.rar" for n in (1, 2)]
+    for part in parts:
+        part.write_bytes(b"Rar!\x1a\x07")
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    seen = []
+
+    def extract(tool, path, staging, cancel=None):
+        seen.append(path)
+        os.makedirs(staging, exist_ok=True)
+        with open(os.path.join(staging, "Game.exe"), "wb") as handle:
+            handle.write(b"x")
+        return 1
+
+    monkeypatch.setattr(archive_install, "detect_archive_tool", lambda *a, **k: ("/usr/bin/7z", None))
+    monkeypatch.setattr(archive_install, "uncompressed_size", lambda *a, **k: 1)
+    monkeypatch.setattr(archive_install, "extract_with_tool", extract)
+    result = archive_install.install_archive(
+        str(parts[1]), library_folder=str(lib), pattern="{title}", title="Game", delete_archive=True
+    )
+    assert result["success"] is True
+    assert seen == [str(parts[0])]
+    assert not any(part.exists() for part in parts)
+    assert len(db.get_all_games()) == 1
+
+
+def test_offers_wait_for_every_part(tmp_path, monkeypatch):
+    import time as _time
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import find_download_offers
+
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    db.update_setting("downloads_folder", str(downloads))
+    db.update_setting("download_detection_enabled", "true")
+    game_id = db.add_game("Eternum", "/games/Eternum/0.7/Eternum.exe", version="0.7")
+    db.update_game(int(game_id), {"latest_version": "0.8"})
+
+    def put(name, size):
+        path = downloads / name
+        path.write_bytes(b"x" * size)
+        old = _time.time() - 60
+        os.utime(path, (old, old))
+        return path
+
+    first = put("Eternum-0.8.part1.rar", 100)
+    put("Eternum-0.8.part2.rar", 100)
+    # Same-size parts: more are probably coming.
+    assert find_download_offers() == []
+    put("Eternum-0.8.part3.rar.crdownload", 10)
+    put("Eternum-0.8.part3.rar", 40)
+    # The next part is still downloading under the browser's name.
+    assert find_download_offers() == []
+    (downloads / "Eternum-0.8.part3.rar.crdownload").unlink()
+    offers = find_download_offers()
+    assert [o["archive_path"] for o in offers] == [str(first)]

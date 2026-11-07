@@ -2004,3 +2004,54 @@ def test_performance_tool_migration_and_overrides():
         update_game(game_id, {"gamemode": value, "mangohud": value})
         assert get_game(game_id)["gamemode"] == expected
         assert get_game(game_id)["mangohud"] == expected
+
+
+@pytest.mark.schema_fingerprint
+def test_init_db_skips_migrations_when_the_schema_is_current(monkeypatch):
+    from core import database
+
+    fingerprint = database.schema_fingerprint()
+    init_db()
+    with closing(get_connection()) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == database._schema_state(conn, fingerprint) != 0
+    # Wrapping _migrate_schema below changes the code the fingerprint hashes.
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: fingerprint)
+    calls = []
+    real = database._migrate_schema
+    monkeypatch.setattr(database, "_migrate_schema", lambda conn: calls.append(1) or real(conn))
+    init_db()
+    assert calls == []
+    # Another wLib version that rewrote a trigger leaves a schema this one
+    # did not, so the migrations run again and restore it.
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.commit()
+    init_db()
+    assert calls == [1]
+    with closing(get_connection()) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'sync_games_update'"
+        ).fetchone()
+    init_db()
+    assert calls == [1]
+
+
+def test_schema_fingerprint_is_stable_across_processes():
+    import subprocess
+    import sys
+
+    # Set iteration order changes with the hash seed; the fingerprint must not.
+    script = "from core import database; print(database.schema_fingerprint())"
+    results = {
+        subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            cwd=os.path.dirname(os.path.dirname(__file__)),
+        ).stdout
+        for seed in (1, 2)
+    }
+    assert len(results) == 1

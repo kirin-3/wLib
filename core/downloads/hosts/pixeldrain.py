@@ -13,7 +13,7 @@ from urllib.request import Request
 
 from core.downloads import credentials
 from core.downloads.network import open_host
-from core.downloads.transfer import DownloadError, FileInfo
+from core.downloads.transfer import DownloadError, FileInfo, open_range
 
 
 def urlopen(request: Request, timeout: int = 30) -> object:
@@ -102,7 +102,23 @@ def probe(url: str, api_key: str | None = None) -> FileInfo:
                 return cast(BinaryIO, urlopen(Request(base + "?download", headers=headers), timeout=30))
             except HTTPError as exc:
                 raise DownloadError(classify_error(exc.code)) from exc
-        return FileInfo(name, size if isinstance(size, int) and size >= 0 else None, stream)
+
+        def resume(offset: int) -> BinaryIO | None:
+            return open_range(
+                lambda extra: cast(
+                    BinaryIO,
+                    urlopen(Request(base + "?download", headers={**headers, **extra}), timeout=30),
+                ),
+                offset,
+            )
+
+        return FileInfo(
+            name,
+            size if isinstance(size, int) and size >= 0 else None,
+            stream,
+            resume_factory=resume,
+            resume_key=f"pixeldrain:{file_id}",
+        )
     except HTTPError as exc:
         raise DownloadError(classify_error(exc.code)) from exc
     except (URLError, OSError, ValueError) as exc:

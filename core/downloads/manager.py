@@ -12,7 +12,7 @@ from typing import Callable, final
 
 from core import extension_bridge
 from core.downloads.hosts import buzzheavier, mega, pixeldrain
-from core.downloads.transfer import DownloadError, FileInfo, staging_dir, transfer
+from core.downloads.transfer import RESUME_KEEP_SECONDS, RESUME_PREFIX, DownloadError, FileInfo, staging_dir, transfer
 
 
 def _resolve_failure(error: str) -> str:
@@ -173,7 +173,12 @@ class DownloadManager:
             try:
                 if not path.is_file() or path.is_symlink() or path.resolve() in protected:
                     continue
-                if path.suffix == '.part' or (path.suffix.lower() in ('.zip','.rar','.7z') and path.stat().st_mtime < now - 7 * 86400):
+                if path.suffix == '.part':
+                    # A resumable partial file waits a week for a retry of the
+                    # same download; one named after its job can never resume.
+                    if not path.name.startswith(RESUME_PREFIX) or path.stat().st_mtime < now - RESUME_KEEP_SECONDS:
+                        path.unlink()
+                elif path.suffix.lower() in ('.zip','.rar','.7z') and path.stat().st_mtime < now - 7 * 86400:
                     path.unlink()
             except OSError:
                 continue

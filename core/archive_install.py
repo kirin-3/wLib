@@ -16,6 +16,7 @@ import threading
 import time
 import zipfile
 import zlib
+from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from typing import cast
@@ -91,6 +92,75 @@ class ArchiveInstallError(Exception):
     """Base failure for archive installs (message is user-facing)."""
 
 
+class InstallCancelled(ArchiveInstallError):
+    """The user cancelled the install before the new version moved into place."""
+
+    def __init__(self) -> None:
+        super().__init__("The install was cancelled. Nothing was changed.")
+
+
+def _check_cancel(cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise InstallCancelled()
+
+
+def _tree_bytes(root: str) -> int:
+    """Bytes of the regular files under root (symlinks not followed)."""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            try:
+                info = os.lstat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return total
+
+
+class _ExtractMeter:
+    """Report how many bytes have landed in staging while extraction runs.
+
+    Measuring the folder works the same for zipfile, 7-Zip, unrar and
+    bsdtar, none of which needs to report progress itself.
+    """
+
+    def __init__(
+        self, root: str, total: int | None, report: Callable[[int, int], None] | None
+    ) -> None:
+        self._root: str = root
+        self._total: int = total if total and total > 0 else 0
+        self._report: Callable[[int, int], None] | None = report
+        self._stop: threading.Event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> "_ExtractMeter":
+        if self._report is not None:
+            self._thread = threading.Thread(target=self._run, name="extract-meter", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        interval = 1.0
+        while not self._stop.wait(interval):
+            started = time.monotonic()
+            done = _tree_bytes(self._root)
+            # Walking a large tree, or one on a network share, takes time the
+            # extractor needs; keep the walks to a fifth of the wall clock.
+            interval = max(1.0, (time.monotonic() - started) * 4)
+            if self._report is not None:
+                try:
+                    # Never claim done before the extractor exits.
+                    self._report(min(done, self._total - 1) if self._total else done, self._total)
+                except Exception:
+                    pass
+
+
 class ZipMethodUnsupportedError(ArchiveInstallError):
     """A zip member uses a compression method Python cannot inflate."""
 
@@ -149,10 +219,125 @@ def build_destination(
     return os.path.join(*segments)
 
 
+# Multi-part archive names, matched against the lowercase file name. The
+# number of the first part is what install and offers start from.
+_RAR_PART_RE = re.compile(r"^(?P<base>.+)\.part(?P<n>\d+)\.rar$")
+_SPLIT_RE = re.compile(r"^(?P<base>.+\.(?:7z|zip|rar))\.(?P<n>\d{3})$")
+_RAR_OLD_RE = re.compile(r"^(?P<base>.+)\.r(?P<n>\d{2,3})$")
+_ZIP_SPAN_RE = re.compile(r"^(?P<base>.+)\.z(?P<n>\d{2,3})$")
+
+
+@dataclass(frozen=True)
+class VolumeSet:
+    """The files of one multi-part archive.
+
+    `first` is the file to open; `parts` lists every part found, in order;
+    `missing` holds the part numbers absent from the run 1..highest (the old
+    `.rar` + `.r00` style counts the `.rar` as part 1, and a spanned zip's
+    `.zip` is its last part).
+    """
+
+    kind: str
+    first: str
+    parts: tuple[str, ...]
+    missing: tuple[int, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
+
+
+def volume_set(archive_path: str) -> VolumeSet | None:
+    """The multi-part set `archive_path` belongs to, or None for one file."""
+    path = os.path.abspath(str(archive_path or ""))
+    folder, name = os.path.split(path)
+    lower = name.lower()
+    try:
+        siblings = os.listdir(folder)
+    except OSError:
+        siblings = [name]
+    by_lower = {entry.lower(): entry for entry in siblings}
+
+    def numbered(pattern: re.Pattern[str], base: str) -> dict[int, str]:
+        found: dict[int, str] = {}
+        for entry_lower, entry in by_lower.items():
+            match = pattern.match(entry_lower)
+            if match and match.group("base") == base:
+                found[int(match.group("n"))] = os.path.join(folder, entry)
+        return found
+
+    def build(kind: str, parts: dict[int, str], first_number: int) -> VolumeSet | None:
+        if len(parts) < 2 and first_number in parts:
+            return None
+        highest = max(parts) if parts else first_number
+        missing = tuple(n for n in range(first_number, highest + 1) if n not in parts)
+        first = parts.get(first_number, "")
+        ordered = tuple(parts[n] for n in sorted(parts))
+        return VolumeSet(kind, first, ordered, missing)
+
+    match = _RAR_PART_RE.match(lower)
+    if match:
+        parts = numbered(_RAR_PART_RE, match.group("base"))
+        return build("rar_parts", parts, 1) if len(parts) > 1 or 1 not in parts else None
+    match = _SPLIT_RE.match(lower)
+    if match:
+        return build("split", numbered(_SPLIT_RE, match.group("base")), 1)
+    rar_old = _RAR_OLD_RE.match(lower)
+    if lower.endswith(".rar") or rar_old:
+        base = rar_old.group("base") if rar_old else lower[: -len(".rar")]
+        parts = {n + 2: p for n, p in numbered(_RAR_OLD_RE, base).items()}
+        if not parts:
+            return None
+        if base + ".rar" in by_lower:
+            parts[1] = os.path.join(folder, by_lower[base + ".rar"])
+        return build("rar_old", parts, 1)
+    zip_span = _ZIP_SPAN_RE.match(lower)
+    if lower.endswith(".zip") or zip_span:
+        base = zip_span.group("base") if zip_span else lower[: -len(".zip")]
+        parts = numbered(_ZIP_SPAN_RE, base)
+        if not parts:
+            return None
+        # .z01 .. .zNN, then the .zip as the last part; 7-Zip opens the .zip.
+        last = max(parts) + 1
+        zip_name = by_lower.get(base + ".zip")
+        if zip_name:
+            parts[last] = os.path.join(folder, zip_name)
+        span = build("zip_span", parts, 1)
+        if span is None:
+            return None
+        first = parts.get(last, "")
+        missing = span.missing + (() if zip_name else (last,))
+        return VolumeSet("zip_span", first, span.parts, missing)
+    return None
+
+
+def check_volume_set(volumes: VolumeSet) -> None:
+    """Refuse a multi-part archive with parts missing, naming them."""
+    if volumes.complete:
+        return
+    numbers = ", ".join(str(n) for n in volumes.missing[:5])
+    more = "…" if len(volumes.missing) > 5 else ""
+    noun = "Part" if len(volumes.missing) == 1 else "Parts"
+    verb = "is" if len(volumes.missing) == 1 else "are"
+    raise ArchiveInstallError(
+        f"{noun} {numbers}{more} of this multi-part archive {verb} missing. Download every part into the same folder first."
+    )
+
+
 def archive_format(archive_path: str) -> str:
-    """'zip' | '7z' | 'rar' | '' based on the file extension."""
+    """'zip' | '7z' | 'rar' | '' based on the file extension.
+
+    Split archives (`.7z.001`, `.zip.001`) and spanned zips (`.zip` with
+    `.z01`...) need 7-Zip, so they report '7z'.
+    """
     lower = (archive_path or "").lower()
+    split = _SPLIT_RE.match(os.path.basename(lower))
+    if split:
+        return "rar" if split.group("base").endswith(".rar") else "7z"
     if lower.endswith(".zip"):
+        stem = lower[: -len(".zip")]
+        if os.path.exists(stem + ".z01") or os.path.exists(archive_path[: -len(".zip")] + ".z01"):
+            return "7z"
         return "zip"
     if lower.endswith(".7z"):
         return "7z"
@@ -167,10 +352,15 @@ _PART_SUFFIX_RE = re.compile(r"\.part\d+$", re.IGNORECASE)
 def archive_stem(archive_path: str) -> str:
     """File name without the archive extension or multi-part suffix.
 
-    `Game-1.0.part1.rar` is the first part of `Game-1.0.rar`; the part number
-    is not part of the game's name or version.
+    `Game-1.0.part1.rar` is the first part of `Game-1.0.rar` and
+    `Game-1.0.7z.001` the first of `Game-1.0.7z`; the part number is not part
+    of the game's name or version.
     """
-    stem = os.path.splitext(os.path.basename(str(archive_path or "")))[0]
+    name = os.path.basename(str(archive_path or ""))
+    split = _SPLIT_RE.match(name.lower())
+    if split:
+        name = name[: len(split.group("base"))]
+    stem = os.path.splitext(name)[0]
     return _PART_SUFFIX_RE.sub("", stem)
 
 
@@ -242,13 +432,17 @@ def detect_archive_tool(
         found = host_which(candidate)
         if found:
             return found, None
-    found = host_which("bsdtar")
+    # bsdtar opens one file; it cannot follow the parts of a multi-part set.
+    multi_part = volume_set(archive_path) is not None
+    found = None if multi_part else host_which("bsdtar")
     if found:
         return found, None
     if fmt == "rar":
         found = host_which("unrar")
         if found:
             return found, None
+    if multi_part and not _is_windows(platform):
+        return None, "Install 7-Zip (7z) to extract archives split into several parts."
 
     if _is_windows(platform):
         found = _windows_7zip()
@@ -682,6 +876,7 @@ def _extract_tool_via_local_scratch(
     staging: str,
     workers: int,
     required_bytes: int | None,
+    cancel: threading.Event | None = None,
 ) -> bool:
     """Run a 7z/rar extractor into local scratch, then copy into staging.
 
@@ -702,11 +897,12 @@ def _extract_tool_via_local_scratch(
     except (OSError, ArchiveInstallError):
         return False
     try:
-        _ = extract_with_tool(tool, archive_path, scratch)
+        _ = extract_with_tool(tool, archive_path, scratch, cancel)
         try:
             _ = apply_execute_bits(scratch)
         except OSError:
             pass
+        _check_cancel(cancel)
         _ = copy_tree_parallel(scratch, staging, workers)
     finally:
         cleanup_staging_dir(scratch)
@@ -752,6 +948,7 @@ def extract_zip(
     *,
     workers: int = 1,
     exec_bits: bool = False,
+    cancel: threading.Event | None = None,
 ) -> int:
     """Extract a zip into staging with per-entry validation.
 
@@ -822,6 +1019,7 @@ def extract_zip(
             member_lock = threading.Lock()
 
             def _write(item: tuple[zipfile.ZipInfo, str]) -> None:
+                _check_cancel(cancel)
                 info, target = item
                 mode = (info.external_attr >> 16) & 0o7777
                 # Symlink entries are written as plain files holding the link
@@ -1185,7 +1383,12 @@ def check_archive_entries_no_collisions(entries: list[str]) -> None:
         _ = seen_fold.setdefault(folded, key)
 
 
-def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
+def extract_with_tool(
+    tool: str,
+    archive_path: str,
+    staging_dir: str,
+    cancel: threading.Event | None = None,
+) -> int:
     """Extract via an external tool after a listing-based safety pre-check."""
     os.makedirs(staging_dir, exist_ok=True)
     links: list[tuple[str, str, bool]] = []
@@ -1207,17 +1410,44 @@ def extract_with_tool(tool: str, archive_path: str, staging_dir: str) -> int:
         args = ["-xf", archive_path, "-C", staging_dir]
     else:
         args = ["x", archive_path, f"-o{staging_dir}", "-y", "-p"]
+    argv = _tool_argv(tool, args, env=env)
+    if cancel is None:
+        try:
+            completed = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                env=env,
+            )
+        except OSError as exc:
+            raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+        if completed.returncode != 0:
+            raise _tool_failure(completed, "Extraction failed")
+        check_symlinks_inside_staging(staging_dir)
+        return len(meaningful)
     try:
-        completed = subprocess.run(
-            _tool_argv(tool, args, env=env),
-            capture_output=True,
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
             stdin=subprocess.DEVNULL,
             env=env,
         )
     except OSError as exc:
         raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel.is_set():
+                process.kill()
+                _ = process.communicate()
+                raise InstallCancelled() from None
+    completed = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if completed.returncode != 0:
         raise _tool_failure(completed, "Extraction failed")
     check_symlinks_inside_staging(staging_dir)
@@ -1764,8 +1994,15 @@ def install_archive(
     remove_old: bool = True,
     delete_archive: bool = False,
     progress_cb: Callable[[str], None] | None = None,
+    bytes_cb: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
 ) -> dict[str, object]:
     """Full install orchestration per design §7 (filesystem + DB).
+
+    `bytes_cb(done, total)` reports extracted bytes about once a second
+    (total 0 when the archive does not say). Setting `cancel` stops the
+    install with InstallCancelled at any point before the new version moves
+    into place; after that it has no effect.
 
     Returns {"game_id", "exe_path", "destination", "unmoved_targets",
     "kept_old_folder_reason", "removed_old", "old_folder"}.
@@ -1790,6 +2027,11 @@ def install_archive(
     archive_path = os.path.expanduser(str(archive_path or "").strip())
     if not archive_path or not os.path.isfile(archive_path):
         raise ArchiveInstallError("Archive file was not found.")
+    volumes = volume_set(archive_path)
+    if volumes is not None:
+        check_volume_set(volumes)
+        # Any part may be chosen; extraction always starts from the first.
+        archive_path = volumes.first
     fmt = archive_format(archive_path)
     if fmt not in ("zip", "7z", "rar"):
         raise ArchiveInstallError(
@@ -1916,48 +2158,52 @@ def install_archive(
     ensure_free_space(library_folder, required_bytes)
     network = is_network_filesystem(library_folder)
     workers = NETWORK_IO_WORKERS if network else 1
+    _check_cancel(cancel)
     staging = create_staging_dir(library_folder)
     try:
         _progress("extracting")
-        if fmt == "zip":
-            try:
-                # Execute bits are decided while writing; no second pass needed.
-                _ = extract_zip(
-                    archive_path,
-                    staging,
-                    workers=zip_extract_workers(network),
-                    exec_bits=True,
-                )
-            except ZipMethodUnsupportedError as exc:
-                # Deflate64 (Windows Explorer's choice for large files) and
-                # other methods zipfile lacks: 7-Zip reads them.
-                fallback = find_7zip_tool(archive_path, library_folder=library_folder)
-                if fallback is None:
-                    raise ArchiveInstallError(
-                        f"{exc}. Install 7-Zip (7z) to extract this archive."
-                    ) from exc
-                _empty_dir(staging)
-                _ = extract_with_tool(fallback, archive_path, staging)
+        with _ExtractMeter(staging, required_bytes, bytes_cb):
+            if fmt == "zip":
+                try:
+                    # Execute bits are decided while writing; no second pass needed.
+                    _ = extract_zip(
+                        archive_path,
+                        staging,
+                        workers=zip_extract_workers(network),
+                        exec_bits=True,
+                        cancel=cancel,
+                    )
+                except ZipMethodUnsupportedError as exc:
+                    # Deflate64 (Windows Explorer's choice for large files) and
+                    # other methods zipfile lacks: 7-Zip reads them.
+                    fallback = find_7zip_tool(archive_path, library_folder=library_folder)
+                    if fallback is None:
+                        raise ArchiveInstallError(
+                            f"{exc}. Install 7-Zip (7z) to extract this archive."
+                        ) from exc
+                    _empty_dir(staging)
+                    _ = extract_with_tool(fallback, archive_path, staging, cancel)
+                    _progress("fixing permissions")
+                    try:
+                        _ = apply_execute_bits(staging)
+                    except OSError:
+                        pass
+            elif network and _extract_tool_via_local_scratch(
+                cast(str, tool), archive_path, staging, workers, required_bytes, cancel
+            ):
+                # 7-Zip/unrar write one file at a time. On a network share every
+                # file waits for the server, so they extract on local disk, modes
+                # are fixed there, and the finished tree is copied over in parallel.
+                pass
+            else:
+                assert tool is not None
+                _ = extract_with_tool(tool, archive_path, staging, cancel)
                 _progress("fixing permissions")
                 try:
                     _ = apply_execute_bits(staging)
                 except OSError:
                     pass
-        elif network and _extract_tool_via_local_scratch(
-            cast(str, tool), archive_path, staging, workers, required_bytes
-        ):
-            # 7-Zip/unrar write one file at a time. On a network share every
-            # file waits for the server, so they extract on local disk, modes
-            # are fixed there, and the finished tree is copied over in parallel.
-            pass
-        else:
-            assert tool is not None
-            _ = extract_with_tool(tool, archive_path, staging)
-            _progress("fixing permissions")
-            try:
-                _ = apply_execute_bits(staging)
-            except OSError:
-                pass
+        _check_cancel(cancel)
         _ = flatten_single_wrapper(staging)
         # Flattening moves a wrapper's entries up one level, which changes
         # what relative symlinks resolve to (staging/Game/link -> ../x means
@@ -1989,6 +2235,7 @@ def install_archive(
         # root) rather than the executable's folder.
         override_from_install = False
         if old_root and os.path.isdir(old_root):
+            _check_cancel(cancel)
             _progress("carrying saves")
             _ = copy_infolder_saves(old_root, staging_install_dir)
             # The executable can sit below the install folder (Game/bin/x.exe);
@@ -2024,6 +2271,8 @@ def install_archive(
         picked_rel = (
             _relative_inside(picked_exe, staging) if picked_exe else None
         ) or ""
+        # Last point to cancel: from here on the library changes.
+        _check_cancel(cancel)
         _progress("moving into place")
         old_backup = ""
         try:
@@ -2248,7 +2497,9 @@ def install_archive(
         # Archive deletion is always last and only on success.
         if delete_archive:
             try:
-                os.remove(archive_path)
+                # Every part of a multi-part set goes, not only the first.
+                for part in volumes.parts if volumes is not None else (archive_path,):
+                    os.remove(part)
             except OSError as exc:
                 kept_reason = (
                     f"{kept_reason}; could not delete archive: {exc}"
@@ -2345,6 +2596,40 @@ def dismiss_download_offer(key: str) -> None:
         pass
 
 
+def _volume_set_finished(volumes: VolumeSet, in_progress: set[str], now: float) -> bool:
+    """True when no part of the set is still arriving.
+
+    A set looks complete while its last part is still downloading under a
+    browser's temporary name, so a part being written (temporary file of the
+    next number, or a part changed in the last 15 seconds) holds the offer.
+    Sets whose parts all have the first part's size probably continue, so they
+    wait too; only the last part of a split archive is shorter.
+    """
+    sizes: list[int] = []
+    for part in volumes.parts:
+        try:
+            info = os.stat(part)
+        except OSError:
+            return False
+        if now - info.st_mtime < 15:
+            return False
+        sizes.append(info.st_size)
+    lowered = [os.path.basename(part).lower() for part in volumes.parts]
+    for candidate in in_progress:
+        if any(_same_set(candidate, name) for name in lowered):
+            return False
+    return volumes.kind == "zip_span" or len(set(sizes)) > 1
+
+
+def _same_set(candidate: str, part_name: str) -> bool:
+    """Whether a file name is another part of the set `part_name` is in."""
+    for pattern in (_RAR_PART_RE, _SPLIT_RE, _RAR_OLD_RE, _ZIP_SPAN_RE):
+        left, right = pattern.match(candidate), pattern.match(part_name)
+        if left and right:
+            return left.group("base") == right.group("base")
+    return False
+
+
 def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]:
     """Scan the Downloads folder for archives matching pending updates."""
     import time as _time
@@ -2414,15 +2699,28 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
         by_key.setdefault(str(game["key"]), []).append(game)
 
     offers: list[dict[str, object]] = []
+    # Browser downloads in progress, by the name they will finish with.
+    in_progress = {
+        re.sub(r"\.(?:crdownload|part|download|opdownload)$", "", name.lower())
+        for name in names
+        if re.search(r"\.(?:crdownload|part|download|opdownload)$", name.lower())
+    }
     for name in sorted(names):
         lower = name.lower()
-        if not lower.endswith((".zip", ".7z", ".rar")):
-            continue
-        # Multi-part rar: offer only through the first part.
-        part_match = re.search(r"\.part(\d+)\.rar$", lower)
-        if part_match and int(part_match.group(1)) > 1:
+        if not (
+            lower.endswith((".zip", ".7z", ".rar"))
+            or _SPLIT_RE.match(lower)
+        ):
             continue
         path = os.path.join(folder, name)
+        volumes = volume_set(path)
+        if volumes is not None:
+            # One offer per set, through its first part, once every part is
+            # here and none is still downloading.
+            if os.path.normcase(volumes.first) != os.path.normcase(path):
+                continue
+            if not volumes.complete or not _volume_set_finished(volumes, in_progress, current):
+                continue
         try:
             if not os.path.isfile(path) or os.path.islink(path):
                 continue
@@ -2434,14 +2732,7 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
         key = _dismissal_key(path, stat_result.st_size, stat_result.st_mtime)
         if key in dismissals:
             continue
-        stem = name
-        if lower.endswith(".zip"):
-            stem = name[: -len(".zip")]
-        elif lower.endswith(".7z"):
-            stem = name[: -len(".7z")]
-        else:
-            stem = name[: -len(".rar")]
-        stem = re.sub(r"\.part\d+$", "", stem, flags=re.IGNORECASE)
+        stem = archive_stem(name)
         guessed_title, guessed_version = guess_title_and_version(stem)
         squashed = _squash_key(guessed_title)
         if not squashed:

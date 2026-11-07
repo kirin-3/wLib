@@ -21,9 +21,24 @@ jobs:
     name: Checks
     uses: ./.github/workflows/python-checks.yml
 
+  version:
+    name: Check Release Version
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # A tag must match APP_VERSION, and the extension needs a version AMO
+      # has not signed yet. Manual dry runs build whatever version they name.
+      - name: Check tag and extension versions
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python3 scripts/check-release-version.py "${GITHUB_REF#refs/tags/}"
+
   extension:
     name: Validate and Sign Extension
-    needs: checks
+    needs: [checks, version]
     runs-on: ubuntu-22.04
 
     steps:
@@ -227,9 +242,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            requirements-windows.txt
+          cache-dependency-path: requirements-windows.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

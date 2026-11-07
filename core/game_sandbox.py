@@ -448,6 +448,56 @@ def sandbox_folder(game_id: int) -> str:
     return os.path.join(get_data_dir(), "sandbox", str(game_id))
 
 
+REMOVED_SANDBOX_KEEP_SECONDS = 30 * 24 * 60 * 60
+
+
+def retire_sandbox_folder(game_id: int) -> str | None:
+    """Move a removed game's sandbox aside; return the new path, or None.
+
+    A later game that gets the same ID must not inherit its home or Wine
+    prefix. The folder can hold saves, so it stays in `sandbox/removed/` for
+    30 days before `prune_removed_sandboxes` deletes it.
+    """
+    from datetime import datetime
+
+    folder = sandbox_folder(game_id)
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        return None
+    removed_root = os.path.join(os.path.dirname(folder), "removed")
+    os.makedirs(removed_root, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    target = os.path.join(removed_root, f"{game_id}_{stamp}")
+    os.replace(folder, target)
+    # The rename keeps the old mtime; the 30 days count from the removal.
+    os.utime(target)
+    return target
+
+
+def prune_removed_sandboxes(now: float | None = None) -> int:
+    """Delete sandboxes of removed games older than 30 days; return the count."""
+    import shutil
+    import time
+
+    from core.host_platform import get_data_dir
+
+    root = os.path.join(get_data_dir(), "sandbox", "removed")
+    cutoff = (time.time() if now is None else now) - REMOVED_SANDBOX_KEEP_SECONDS
+    removed = 0
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_dir() or entry.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry.path, ignore_errors=True)
+        removed += 0 if os.path.exists(entry.path) else 1
+    return removed
+
+
 def resolve_game_folder(exe_path: str, launch_mode: str = "auto") -> str:
     folder = os.path.dirname(os.path.abspath(exe_path))
     if launch_mode == "rpgmaker_linux" and os.path.basename(folder).lower() == "www":

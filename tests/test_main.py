@@ -22,6 +22,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import main
 
+_real_install_shutdown_signals = main.install_shutdown_signals
+_real_data_dir_problem = main.data_dir_problem
+
+
+@pytest.fixture(autouse=True)
+def _no_process_wide_startup_effects(monkeypatch):
+    """main() must not replace pytest's signal handlers or probe the real data dir."""
+    monkeypatch.setattr(main, "install_shutdown_signals", lambda close: False)
+    monkeypatch.setattr(main, "data_dir_problem", lambda path: None)
+
 
 def _configure_packaged_webview_cache_runtime(monkeypatch, tmp_path):
     app_data_dir = tmp_path / "data"
@@ -2052,3 +2062,53 @@ def test_wait_for_port_free_waits_for_a_closing_instance():
     finally:
         holder.close()
     assert main.wait_for_port_free(port, timeout=1) is True
+
+
+def test_data_dir_problem_reports_a_read_only_folder(tmp_path):
+    assert _real_data_dir_problem(str(tmp_path / "new")) is None
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    problem = _real_data_dir_problem(str(blocker / "data"))
+    assert problem and str(blocker / "data") in problem
+
+
+def test_main_shows_an_error_when_the_data_dir_is_read_only(monkeypatch):
+    shown = []
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: "")
+    monkeypatch.setattr(main, "bind_extension_server", lambda: None)
+    monkeypatch.setattr(main, "focus_running_instance", lambda: False)
+    monkeypatch.setattr(main, "data_dir_problem", lambda path: "cannot write")
+    monkeypatch.setattr(main, "show_fatal_startup_error", shown.append)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_a, **_k: pytest.fail("logged"))
+    with pytest.raises(SystemExit) as exit_info:
+        main.main()
+    assert exit_info.value.code == 1
+    assert shown and shown[0].startswith("cannot write")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_sigterm_closes_the_window_through_the_shutdown_path(tmp_path):
+    import subprocess
+
+    script = (
+        "import os, signal, sys, threading, time\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import main\n"
+        "closed = threading.Event()\n"
+        "assert main.install_shutdown_signals(closed.set)\n"
+        "os.kill(os.getpid(), signal.SIGTERM)\n"
+        "print('closed' if closed.wait(5) else 'not closed', flush=True)\n"
+    )
+    root = os.path.dirname(os.path.dirname(__file__))
+    result = subprocess.run(
+        [sys.executable, "-c", script, root],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "WLIB_DATA_DIR": str(tmp_path)},
+        check=False,
+    )
+    # The process survives the signal and closes the window instead.
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("closed")
+    assert "not closed" not in result.stdout

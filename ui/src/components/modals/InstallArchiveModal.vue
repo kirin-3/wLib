@@ -62,6 +62,30 @@ const libraryFolderMissing = ref(false);
 const inspectError = ref("");
 const installError = ref("");
 const installStage = ref("");
+const installDone = ref(0);
+const installTotal = ref(0);
+const installCancellable = ref(false);
+const cancelRequested = ref(false);
+// Whole percent of the archive extracted, or null while the size is unknown.
+const installPercent = computed(() =>
+  installStage.value === "extracting" && installTotal.value > 0
+    ? Math.min(99, Math.floor((installDone.value / installTotal.value) * 100))
+    : null,
+);
+const cancelInstall = async () => {
+  if (!installCancellable.value || cancelRequested.value) return;
+  cancelRequested.value = true;
+  try {
+    const res = await api.cancelArchiveInstall();
+    if (res?.success === false) {
+      cancelRequested.value = false;
+      notifyError(res.error || "The install could not be cancelled.");
+    }
+  } catch (e) {
+    cancelRequested.value = false;
+    notifyError(e instanceof Error ? e.message : String(e));
+  }
+};
 const result = ref<ArchiveInstallResponse | null>(null);
 // Set when an install was added without a launch file and the user picked one.
 const chosenExe = ref("");
@@ -369,6 +393,9 @@ const pollStatus = () => {
       const status = await api.getArchiveInstallStatus();
       if (id !== pollId || phase.value !== "installing") return;
       if (status?.stage) installStage.value = status.stage;
+      installDone.value = status?.done ?? 0;
+      installTotal.value = status?.total ?? 0;
+      installCancellable.value = Boolean(status?.cancellable);
     } catch (e) {
       console.error("Failed to poll install status", e);
     }
@@ -394,6 +421,9 @@ const install = async () => {
   phase.value = "installing";
   installError.value = "";
   installStage.value = "starting";
+  installDone.value = installTotal.value = 0;
+  installCancellable.value = true;
+  cancelRequested.value = false;
   duplicateGameId.value = null;
   pollStatus();
   try {
@@ -416,6 +446,7 @@ const install = async () => {
     });
     if (!res?.success) {
       installError.value = res?.error || "Install failed.";
+      if (res?.error_code === "install_cancelled") installError.value = "Install cancelled. Nothing was changed.";
       const payload = res as unknown as Record<string, unknown>;
       duplicateGameId.value =
         typeof payload?.game_id === "number" ? payload.game_id : null;
@@ -431,6 +462,8 @@ const install = async () => {
   } finally {
     stopPolling();
     installStage.value = "";
+    installCancellable.value = false;
+    cancelRequested.value = false;
   }
 };
 
@@ -641,9 +674,34 @@ watch(phase, (next, prev) => {
           Delete archive after install
         </label>
 
-        <div v-if="phase === 'installing'" class="flex items-center gap-2 text-sm" style="color: var(--text-secondary)">
-          <IconLoader2 class="w-4 h-4 animate-spin" />
-          {{ installStage || "Working…" }} — the rest of the app stays usable.
+        <div v-if="phase === 'installing'" class="space-y-2 text-sm" style="color: var(--text-secondary)" role="status" aria-live="polite">
+          <div class="flex items-center gap-2">
+            <IconLoader2 class="w-4 h-4 animate-spin" aria-hidden="true" />
+            <span class="flex-1">
+              {{ installStage || "Working…" }}{{ installPercent !== null ? ` ${installPercent}%` : "" }}
+              — the rest of the app stays usable.
+            </span>
+            <button
+              v-if="installCancellable || cancelRequested"
+              type="button"
+              class="modal-btn"
+              :disabled="cancelRequested"
+              @click="cancelInstall"
+            >
+              {{ cancelRequested ? "Cancelling…" : "Cancel install" }}
+            </button>
+          </div>
+          <div
+            v-if="installPercent !== null"
+            class="install-progress"
+            role="progressbar"
+            aria-label="Extraction progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-valuenow="installPercent"
+          >
+            <div class="install-progress-bar" :style="{ width: `${installPercent}%` }"></div>
+          </div>
         </div>
 
         <p v-if="installError" class="text-sm" style="color: var(--error-text)">
@@ -725,6 +783,8 @@ watch(phase, (next, prev) => {
 </template>
 
 <style scoped>
+.install-progress { height: 0.375rem; border-radius: 9999px; background: var(--bg-inset); overflow: hidden; }
+.install-progress-bar { height: 100%; background: var(--brand); transition: width 0.3s ease; }
 .modal-content {
   background: var(--bg-surface);
   border: 1px solid var(--border);

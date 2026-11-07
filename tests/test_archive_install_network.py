@@ -277,7 +277,7 @@ def test_network_tool_archive_skips_scratch_without_local_space(tmp_path, monkey
     archive.write_bytes(b"7z\xbc\xaf\x27\x1c")
     seen = {}
 
-    def fake_extract(tool, archive_path, dest):
+    def fake_extract(tool, archive_path, dest, cancel=None):
         seen["dest"] = dest
         os.makedirs(os.path.join(dest, "Game"), exist_ok=True)
         with open(os.path.join(dest, "Game", "Game.sh"), "wb") as f:
@@ -315,7 +315,7 @@ def test_network_tool_archive_goes_through_local_scratch(tmp_path, monkeypatch):
     archive.write_bytes(b"7z\xbc\xaf\x27\x1c")
     seen = {}
 
-    def fake_extract(tool, archive_path, dest):
+    def fake_extract(tool, archive_path, dest, cancel=None):
         seen["dest"] = dest
         os.makedirs(os.path.join(dest, "Game", "lib"), exist_ok=True)
         with open(os.path.join(dest, "Game", "lib", "engine"), "wb") as f:
@@ -369,7 +369,7 @@ def test_local_zip_install_uses_one_worker_per_core(tmp_path, monkeypatch):
     result = ai.install_archive(
         str(archive), library_folder=str(lib), pattern="{title}", title="Game",
     )
-    assert seen == {"workers": 6, "exec_bits": True}
+    assert seen == {"workers": 6, "exec_bits": True, "cancel": None}
     reference = tmp_path / "ref"
     extract_zip(str(archive), str(reference))
     apply_execute_bits(str(reference))

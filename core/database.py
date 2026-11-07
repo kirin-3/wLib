@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import shlex
+import types
 import re
 import os
 import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime
-from typing import TypedDict, cast
+from typing import Protocol, TypedDict, cast
 from urllib.parse import urlsplit
 
 from core.f95zone import normalize_thread_url, thread_urls_match
@@ -364,327 +366,415 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+class _Digest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+
+def _stable_repr(value: object) -> str:
+    """repr() that does not depend on hash randomization (set order)."""
+    kind = type(value)
+    if kind in (set, frozenset):
+        items = sorted(_stable_repr(item) for item in cast(set[object], value))
+        return f"{type(value).__name__}({items!r})"
+    if kind in (tuple, list):
+        items = [_stable_repr(item) for item in cast(list[object], value)]
+        return f"{type(value).__name__}({items!r})"
+    if kind is dict:
+        pairs = sorted(
+            f"{_stable_repr(key)}:{_stable_repr(item)}"
+            for key, item in cast(dict[object, object], value).items()
+        )
+        return f"dict({pairs!r})"
+    return repr(value)
+
+
+def _code_digest(code: types.CodeType, digest: _Digest, seen: set[str]) -> None:
+    digest.update(code.co_code)
+    digest.update(repr(code.co_names).encode())
+    for const in cast(tuple[object, ...], code.co_consts):
+        if isinstance(const, types.CodeType):
+            _code_digest(const, digest, seen)
+        else:
+            digest.update(_stable_repr(const).encode())
+    for name in code.co_names:
+        if name in seen:
+            continue
+        seen.add(name)
+        value = cast(object, globals().get(name))
+        if isinstance(value, types.FunctionType) and value.__module__ == __name__:
+            _code_digest(value.__code__, digest, seen)
+        elif type(value) in (str, int, float, tuple, list, dict, set, frozenset):
+            digest.update(f"{name}={_stable_repr(value)}".encode())
+
+
+def schema_fingerprint() -> int:
+    """A non-zero 31-bit number that changes whenever the migrations change.
+
+    It covers `_migrate_schema`'s code, the helpers in this module it calls
+    and the constants they read, so editing any of them reruns the
+    migrations once; no version number has to be bumped by hand.
+    """
+    digest = hashlib.sha256()
+    _code_digest(_migrate_schema.__code__, digest, set())
+    return (int.from_bytes(digest.digest()[:4], "big") & 0x7FFFFFFF) or 1
+
+
+def _schema_state(conn: sqlite3.Connection, fingerprint: int) -> int:
+    """Fingerprint of the migrations combined with the schema they left.
+
+    Including the stored table, index and trigger SQL means an older wLib
+    that ran its own migrations on this file (a downgrade, or another install
+    sharing the data folder) changes the value, so the next start migrates
+    again instead of trusting a schema it did not leave.
+    """
+    digest = hashlib.sha256(str(fingerprint).encode())
+    for (sql,) in cast(
+        list[tuple[str | None]],
+        conn.execute(
+            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
+        ).fetchall(),
+    ):
+        digest.update(b"\0" + (sql or "").encode())
+    return (int.from_bytes(digest.digest()[:4], "big") & 0x7FFFFFFF) or 1
+
+
 def init_db() -> None:
+    """Create or upgrade the schema, skipping the work when it is current.
+
+    `PRAGMA user_version` holds `_schema_state` from the last migration; a
+    fresh database starts at 0, so it always migrates.
+    """
     conn = get_connection()
-    conn.row_factory = sqlite3.Row
     try:
+        fingerprint = schema_fingerprint()
+        row = cast(tuple[int] | None, conn.execute("PRAGMA user_version").fetchone())
+        if row is not None and row[0] == _schema_state(conn, fingerprint):
+            return
+        conn.row_factory = sqlite3.Row
         # WAL is stored in the database file, so setting it once covers every connection.
         _ = conn.execute("PRAGMA journal_mode=WAL;")
-        cursor = conn.cursor()
-
-        # Create the Games table
-        # f95_url: the F95Zone thread URL to scrape
-        # exe_path: the path to the main game executable
-        # version: the last known version string from F95Zone
-        # progress: optional user notes or completion status
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS games (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                f95_url TEXT,
-                exe_path TEXT NOT NULL,
-                version TEXT,
-                progress TEXT DEFAULT '',
-                developer TEXT DEFAULT '',
-                last_played TIMESTAMP,
-                cover_image_path TEXT
-            )
-        """)
-
-        # Create a table for Settings (like Proton Path, Default Prefix Path)
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS steam_shortcuts (
-                account_id TEXT NOT NULL,
-                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                app_id INTEGER,
-                state TEXT NOT NULL,
-                art_key TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY(account_id, game_id)
-            )
-        """)
-        for key in ("steam_games_mode", "steam_account_id"):
-            _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,))
-
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS game_launch_targets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL,
-                label TEXT NOT NULL,
-                exe_path TEXT NOT NULL,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TIMESTAMP,
-                updated_at TIMESTAMP,
-                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
-            )
-        """)
-        _ = cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
-        )
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS game_links (
-                id INTEGER PRIMARY KEY,
-                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                source TEXT NOT NULL,
-                external_id TEXT NOT NULL,
-                url TEXT NOT NULL,
-                origin TEXT NOT NULL,
-                created_at TIMESTAMP,
-                UNIQUE(game_id, source, external_id)
-            )
-        """)
-        _ = cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_game_links_identity ON game_links(source, external_id)"
-        )
-        # itch slugs used to keep their case; fold them so identities match exactly.
-        _ = cursor.execute(
-            "UPDATE OR IGNORE game_links SET external_id = lower(external_id) WHERE source = 'itch' AND external_id <> lower(external_id)"
-        )
-        _ = cursor.execute(
-            "DELETE FROM game_links WHERE source = 'itch' AND external_id <> lower(external_id)"
-        )
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS companion_tools (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                path TEXT NOT NULL DEFAULT '',
-                arguments TEXT NOT NULL DEFAULT '',
-                show_on_all_games INTEGER NOT NULL DEFAULT 1,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TIMESTAMP,
-                updated_at TIMESTAMP
-            )
-        """)
-        _ = cursor.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_tools_name ON companion_tools(name COLLATE NOCASE)"
-        )
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS game_companion_tools (
-                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                tool_id INTEGER NOT NULL REFERENCES companion_tools(id) ON DELETE CASCADE,
-                visible INTEGER NOT NULL,
-                PRIMARY KEY(game_id, tool_id)
-            )
-        """)
-        _ = cursor.execute("""
-            CREATE TABLE IF NOT EXISTS play_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-                version TEXT NOT NULL DEFAULT '',
-                started_at TEXT NOT NULL,
-                ended_at TEXT,
-                duration_seconds INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        _ = cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_play_sessions_game_started ON play_sessions(game_id, started_at)"
-        )
-
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('proton_path', '')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('wine_prefix_path', '')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('enable_logging', 'false')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
-        )
-        for key in ("gamemode_enabled", "mangohud_enabled"):
-            _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_update_check', 'weekly')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('update_notifications', 'on')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
-        )
-        _ = cursor.execute(
-            "DELETE FROM settings WHERE key = 'playwright_browsers_path'"
-        )
-        _ = cursor.execute(
-            f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder', '')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folders', '[]')"
-        )
-        _ = cursor.execute(
-            """UPDATE settings SET value = json_array((SELECT value FROM settings WHERE key = 'library_folder'))
-            WHERE key = 'library_folders' AND value = '[]'
-            AND COALESCE((SELECT value FROM settings WHERE key = 'library_folder'), '') != ''"""
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder_pattern', ?)",
-            (DEFAULT_LIBRARY_FOLDER_PATTERN,),
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('downloads_folder', ?)",
-            (default_downloads_folder(),),
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('download_detection_enabled', 'true')"
-        )
-        _ = cursor.execute(
-            "INSERT OR IGNORE INTO settings (key, value) VALUES ('dismissed_download_archives', '[]')"
-        )
-
-        # Safely migrate existing DBs by adding new columns
-        _ = cursor.execute("PRAGMA table_info(games)")
-        table_info_rows = cast(list[tuple[object, ...]], cursor.fetchall())
-        existing_columns = {
-            str(row[1]) for row in table_info_rows if len(row) > 1 and row[1]
-        }
-
-        new_columns = [
-            ("steam_shortcut", "BOOLEAN DEFAULT 0"),
-            ("cover_local", "TEXT"),
-            ("cover_cache", "TEXT"),
-            ("cover_cache_url", "TEXT"),
-            ("tags", "TEXT DEFAULT ''"),
-            ("rating", "TEXT DEFAULT ''"),
-            ("command_line_args", "TEXT DEFAULT ''"),
-            ("status", "TEXT DEFAULT ''"),
-            ("rating_graphics", "REAL DEFAULT 0"),
-            ("rating_story", "REAL DEFAULT 0"),
-            ("rating_fappability", "REAL DEFAULT 0"),
-            ("rating_gameplay", "REAL DEFAULT 0"),
-            ("engine", "TEXT DEFAULT ''"),
-            ("latest_version", "TEXT DEFAULT ''"),
-            ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
-            ("run_wayland", "BOOLEAN DEFAULT 0"),
-            ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
-            ("gamemode", "TEXT DEFAULT 'default'"),
-            ("mangohud", "TEXT DEFAULT 'default'"),
-            ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
-            ("block_network", "BOOLEAN DEFAULT 0"),
-            ("custom_prefix", "TEXT DEFAULT ''"),
-            ("proton_version", "TEXT DEFAULT ''"),
-            ("playtime_seconds", "INTEGER DEFAULT 0"),
-            ("last_played", "TIMESTAMP"),
-            ("date_added", "TIMESTAMP"),
-            ("play_status", f"TEXT DEFAULT '{DEFAULT_PLAY_STATUS}'"),
-            ("is_favorite", "BOOLEAN DEFAULT 0"),
-            ("thread_main_post_last_edit_at", "TIMESTAMP"),
-            ("thread_main_post_checked_at", "TIMESTAMP"),
-            ("thread_completed", "BOOLEAN DEFAULT 0"),
-            ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
-            ("finished_version", "TEXT DEFAULT ''"),
-            ("last_played_version", "TEXT DEFAULT ''"),
-            ("skipped_version", "TEXT DEFAULT ''"),
-            ("collections", "TEXT DEFAULT '[]'"),
-            ("note_links", "TEXT DEFAULT '[]'"),
-            ("screenshots", "TEXT DEFAULT '[]'"),
-            ("save_path_override", "TEXT DEFAULT ''"),
-            ("sync_uid", "TEXT"),
-        ]
-
-        for col_name, col_type in new_columns:
-            if col_name not in existing_columns:
-                _ = cursor.execute(
-                    f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
-                )
-
-        # A stable per-game identity lets sync follow a game whose title or
-        # thread URL changed on another device instead of replacing it.
-        _ = cursor.execute(
-            f"UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE sync_uid IS NULL OR sync_uid = ''"
-        )
-        _ = cursor.execute("DROP TRIGGER IF EXISTS games_assign_sync_uid")
-        _ = cursor.execute(
-            f"""CREATE TRIGGER games_assign_sync_uid AFTER INSERT ON games
-            WHEN NEW.sync_uid IS NULL OR NEW.sync_uid = ''
-            BEGIN UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE id = NEW.id; END"""
-        )
-        _ = cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_games_sync_uid ON games(sync_uid)"
-        )
-
-        try:
-            _ = cursor.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_f95_url_unique ON games(f95_url) WHERE f95_url IS NOT NULL AND f95_url != ''"
-            )
-        except sqlite3.IntegrityError:
-            print(
-                "[wLib] Warning: duplicate f95_url values exist; unique index not applied"
-            )
-
-        _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
-        _normalize_game_f95_urls(cursor)
-        launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
-        _ = cursor.execute(
-            f"UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN ({launch_mode_placeholders})",
-            (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
-        )
-
-        bump_sync_time = """
-            INSERT INTO settings (key, value)
-            VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            ON CONFLICT(key) DO UPDATE SET value = CASE
-                WHEN settings.value >= excluded.value
-                THEN COALESCE(
-                    strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds'),
-                    excluded.value
-                )
-                ELSE excluded.value END;
-        """
-        for action in ("INSERT", "DELETE"):
-            for table, prefix in (
-                ("game_links", "sync_game_links"),
-                ("games", "sync_games"),
-            ):
-                trigger = f"{prefix}_{action.lower()}"
-                # Recreate on every start so upgraded databases pick up
-                # changes to the bump statement.
-                _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-                _ = cursor.execute(
-                    f"CREATE TRIGGER {trigger} AFTER {action} ON {table} BEGIN {bump_sync_time} END"
-                )
-        columns = ", ".join(SYNC_GAME_COLUMNS)
-        changed = " OR ".join(
-            f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
-        )
-        # Recreate on every start so upgraded databases watch columns added
-        # after the trigger was first created.
-        _ = cursor.execute("DROP TRIGGER IF EXISTS sync_games_update")
-        _ = cursor.execute(
-            f"CREATE TRIGGER sync_games_update AFTER UPDATE OF {columns} ON games WHEN {changed} BEGIN {bump_sync_time} END"
-        )
-        keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
-        for action in ("INSERT", "UPDATE", "DELETE"):
-            trigger = f"sync_play_sessions_{action.lower()}"
-            _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-            _ = cursor.execute(
-                f"CREATE TRIGGER {trigger} AFTER {action} ON play_sessions BEGIN {bump_sync_time} END"
-            )
-            row = "OLD" if action == "DELETE" else "NEW"
-            condition = f"{row}.key IN ({keys})"
-            if action == "UPDATE":
-                condition += " AND OLD.value IS NOT NEW.value"
-            _ = cursor.execute(f"DROP TRIGGER IF EXISTS sync_settings_{action.lower()}")
-            _ = cursor.execute(
-                f"CREATE TRIGGER sync_settings_{action.lower()} AFTER {action} ON settings WHEN {condition} BEGIN {bump_sync_time} END"
-            )
-
+        _migrate_schema(conn)
+        conn.row_factory = None
+        state = _schema_state(conn, fingerprint)
+        # PRAGMA takes no parameters; the value is an int computed here.
+        _ = conn.execute(f"PRAGMA user_version = {int(state)}")
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    cursor = conn.cursor()
+
+    # Create the Games table
+    # f95_url: the F95Zone thread URL to scrape
+    # exe_path: the path to the main game executable
+    # version: the last known version string from F95Zone
+    # progress: optional user notes or completion status
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            f95_url TEXT,
+            exe_path TEXT NOT NULL,
+            version TEXT,
+            progress TEXT DEFAULT '',
+            developer TEXT DEFAULT '',
+            last_played TIMESTAMP,
+            cover_image_path TEXT
+        )
+    """)
+
+    # Create a table for Settings (like Proton Path, Default Prefix Path)
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS steam_shortcuts (
+            account_id TEXT NOT NULL,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            app_id INTEGER,
+            state TEXT NOT NULL,
+            art_key TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(account_id, game_id)
+        )
+    """)
+    for key in ("steam_games_mode", "steam_account_id"):
+        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')", (key,))
+
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS game_launch_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            exe_path TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+        )
+    """)
+    _ = cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_launch_targets_game_order ON game_launch_targets(game_id, sort_order, id)"
+    )
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS game_links (
+            id INTEGER PRIMARY KEY,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            source TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            created_at TIMESTAMP,
+            UNIQUE(game_id, source, external_id)
+        )
+    """)
+    _ = cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_game_links_identity ON game_links(source, external_id)"
+    )
+    # itch slugs used to keep their case; fold them so identities match exactly.
+    _ = cursor.execute(
+        "UPDATE OR IGNORE game_links SET external_id = lower(external_id) WHERE source = 'itch' AND external_id <> lower(external_id)"
+    )
+    _ = cursor.execute(
+        "DELETE FROM game_links WHERE source = 'itch' AND external_id <> lower(external_id)"
+    )
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS companion_tools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            path TEXT NOT NULL DEFAULT '',
+            arguments TEXT NOT NULL DEFAULT '',
+            show_on_all_games INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP
+        )
+    """)
+    _ = cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_tools_name ON companion_tools(name COLLATE NOCASE)"
+    )
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS game_companion_tools (
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            tool_id INTEGER NOT NULL REFERENCES companion_tools(id) ON DELETE CASCADE,
+            visible INTEGER NOT NULL,
+            PRIMARY KEY(game_id, tool_id)
+        )
+    """)
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS play_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            version TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            duration_seconds INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    _ = cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_play_sessions_game_started ON play_sessions(game_id, started_at)"
+    )
+
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('proton_path', '')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('wine_prefix_path', '')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('enable_logging', 'false')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
+    )
+    for key in ("gamemode_enabled", "mangohud_enabled"):
+        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_update_check', 'weekly')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('update_notifications', 'on')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('last_update_check', '')"
+    )
+    _ = cursor.execute(
+        "DELETE FROM settings WHERE key = 'playwright_browsers_path'"
+    )
+    _ = cursor.execute(
+        f"INSERT OR IGNORE INTO settings (key, value) VALUES ('{RPGMAKER_LINUX_RUNNER_SETTING}', '')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder', '')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folders', '[]')"
+    )
+    _ = cursor.execute(
+        """UPDATE settings SET value = json_array((SELECT value FROM settings WHERE key = 'library_folder'))
+        WHERE key = 'library_folders' AND value = '[]'
+        AND COALESCE((SELECT value FROM settings WHERE key = 'library_folder'), '') != ''"""
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('library_folder_pattern', ?)",
+        (DEFAULT_LIBRARY_FOLDER_PATTERN,),
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('downloads_folder', ?)",
+        (default_downloads_folder(),),
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('download_detection_enabled', 'true')"
+    )
+    _ = cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('dismissed_download_archives', '[]')"
+    )
+
+    # Safely migrate existing DBs by adding new columns
+    _ = cursor.execute("PRAGMA table_info(games)")
+    table_info_rows = cast(list[tuple[object, ...]], cursor.fetchall())
+    existing_columns = {
+        str(row[1]) for row in table_info_rows if len(row) > 1 and row[1]
+    }
+
+    new_columns = [
+        ("steam_shortcut", "BOOLEAN DEFAULT 0"),
+        ("cover_local", "TEXT"),
+        ("cover_cache", "TEXT"),
+        ("cover_cache_url", "TEXT"),
+        ("tags", "TEXT DEFAULT ''"),
+        ("rating", "TEXT DEFAULT ''"),
+        ("command_line_args", "TEXT DEFAULT ''"),
+        ("status", "TEXT DEFAULT ''"),
+        ("rating_graphics", "REAL DEFAULT 0"),
+        ("rating_story", "REAL DEFAULT 0"),
+        ("rating_fappability", "REAL DEFAULT 0"),
+        ("rating_gameplay", "REAL DEFAULT 0"),
+        ("engine", "TEXT DEFAULT ''"),
+        ("latest_version", "TEXT DEFAULT ''"),
+        ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
+        ("run_wayland", "BOOLEAN DEFAULT 0"),
+        ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
+        ("gamemode", "TEXT DEFAULT 'default'"),
+        ("mangohud", "TEXT DEFAULT 'default'"),
+        ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
+        ("block_network", "BOOLEAN DEFAULT 0"),
+        ("custom_prefix", "TEXT DEFAULT ''"),
+        ("proton_version", "TEXT DEFAULT ''"),
+        ("playtime_seconds", "INTEGER DEFAULT 0"),
+        ("last_played", "TIMESTAMP"),
+        ("date_added", "TIMESTAMP"),
+        ("play_status", f"TEXT DEFAULT '{DEFAULT_PLAY_STATUS}'"),
+        ("is_favorite", "BOOLEAN DEFAULT 0"),
+        ("thread_main_post_last_edit_at", "TIMESTAMP"),
+        ("thread_main_post_checked_at", "TIMESTAMP"),
+        ("thread_completed", "BOOLEAN DEFAULT 0"),
+        ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
+        ("finished_version", "TEXT DEFAULT ''"),
+        ("last_played_version", "TEXT DEFAULT ''"),
+        ("skipped_version", "TEXT DEFAULT ''"),
+        ("collections", "TEXT DEFAULT '[]'"),
+        ("note_links", "TEXT DEFAULT '[]'"),
+        ("screenshots", "TEXT DEFAULT '[]'"),
+        ("save_path_override", "TEXT DEFAULT ''"),
+        ("sync_uid", "TEXT"),
+    ]
+
+    for col_name, col_type in new_columns:
+        if col_name not in existing_columns:
+            _ = cursor.execute(
+                f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
+            )
+
+    # A stable per-game identity lets sync follow a game whose title or
+    # thread URL changed on another device instead of replacing it.
+    _ = cursor.execute(
+        f"UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE sync_uid IS NULL OR sync_uid = ''"
+    )
+    _ = cursor.execute("DROP TRIGGER IF EXISTS games_assign_sync_uid")
+    _ = cursor.execute(
+        f"""CREATE TRIGGER games_assign_sync_uid AFTER INSERT ON games
+        WHEN NEW.sync_uid IS NULL OR NEW.sync_uid = ''
+        BEGIN UPDATE games SET sync_uid = {_NEW_SYNC_UID_SQL} WHERE id = NEW.id; END"""
+    )
+    _ = cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_games_sync_uid ON games(sync_uid)"
+    )
+
+    try:
+        _ = cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_f95_url_unique ON games(f95_url) WHERE f95_url IS NOT NULL AND f95_url != ''"
+        )
+    except sqlite3.IntegrityError:
+        print(
+            "[wLib] Warning: duplicate f95_url values exist; unique index not applied"
+        )
+
+    _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
+    _normalize_game_f95_urls(cursor)
+    launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
+    _ = cursor.execute(
+        f"UPDATE games SET launch_mode = ? WHERE launch_mode IS NULL OR TRIM(launch_mode) = '' OR launch_mode NOT IN ({launch_mode_placeholders})",
+        (DEFAULT_LAUNCH_MODE, *CANONICAL_LAUNCH_MODES),
+    )
+
+    bump_sync_time = """
+        INSERT INTO settings (key, value)
+        VALUES ('sync_local_modified_at', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        ON CONFLICT(key) DO UPDATE SET value = CASE
+            WHEN settings.value >= excluded.value
+            THEN COALESCE(
+                strftime('%Y-%m-%dT%H:%M:%fZ', settings.value, '+0.001 seconds'),
+                excluded.value
+            )
+            ELSE excluded.value END;
+    """
+    for action in ("INSERT", "DELETE"):
+        for table, prefix in (
+            ("game_links", "sync_game_links"),
+            ("games", "sync_games"),
+        ):
+            trigger = f"{prefix}_{action.lower()}"
+            # Recreate on every start so upgraded databases pick up
+            # changes to the bump statement.
+            _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            _ = cursor.execute(
+                f"CREATE TRIGGER {trigger} AFTER {action} ON {table} BEGIN {bump_sync_time} END"
+            )
+    columns = ", ".join(SYNC_GAME_COLUMNS)
+    changed = " OR ".join(
+        f"OLD.{column} IS NOT NEW.{column}" for column in SYNC_GAME_COLUMNS
+    )
+    # Recreate on every start so upgraded databases watch columns added
+    # after the trigger was first created.
+    _ = cursor.execute("DROP TRIGGER IF EXISTS sync_games_update")
+    _ = cursor.execute(
+        f"CREATE TRIGGER sync_games_update AFTER UPDATE OF {columns} ON games WHEN {changed} BEGIN {bump_sync_time} END"
+    )
+    keys = ", ".join(f"'{key}'" for key in GENERAL_SETTINGS_KEYS)
+    for action in ("INSERT", "UPDATE", "DELETE"):
+        trigger = f"sync_play_sessions_{action.lower()}"
+        _ = cursor.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        _ = cursor.execute(
+            f"CREATE TRIGGER {trigger} AFTER {action} ON play_sessions BEGIN {bump_sync_time} END"
+        )
+        row = "OLD" if action == "DELETE" else "NEW"
+        condition = f"{row}.key IN ({keys})"
+        if action == "UPDATE":
+            condition += " AND OLD.value IS NOT NEW.value"
+        _ = cursor.execute(f"DROP TRIGGER IF EXISTS sync_settings_{action.lower()}")
+        _ = cursor.execute(
+            f"CREATE TRIGGER sync_settings_{action.lower()} AFTER {action} ON settings WHEN {condition} BEGIN {bump_sync_time} END"
+        )
 
 
 # CRUD Operations for Games

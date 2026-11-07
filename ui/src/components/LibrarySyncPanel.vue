@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { IconCloud, IconRefresh } from "@tabler/icons-vue";
-import { api, type LibrarySyncChoice, type LibrarySyncStatus } from "../services/api";
+import { api, type LibrarySyncChoice, type LibrarySyncStatus, type SyncSnapshot } from "../services/api";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const status = ref<LibrarySyncStatus>({ state: "off" });
@@ -10,7 +10,11 @@ const loading = ref(true);
 const busy = ref(false);
 const error = ref("");
 const location = ref<"" | "folder" | "dropbox" | "gdrive">("");
-const dialog = ref<"choice" | "unlock" | "encrypt" | null>(null);
+const dialog = ref<"choice" | "unlock" | "encrypt" | "restore" | null>(null);
+const snapshots = ref<SyncSnapshot[]>([]);
+const snapshotsLoaded = ref(false);
+const restoreTarget = ref<SyncSnapshot | null>(null);
+const restoreMessage = ref("");
 const dialogElement = ref<HTMLElement | null>(null);
 const passphrase = ref("");
 const confirmation = ref("");
@@ -34,7 +38,47 @@ const lastSynced = computed(() => status.value.last_synced_at ? new Date(status.
 
 function closeDialog() {
   dialog.value = null;
+  restoreTarget.value = null;
   passphrase.value = confirmation.value = dialogError.value = "";
+}
+const snapshotLabel = (snapshot: SyncSnapshot) =>
+  `${new Date(snapshot.created_at).toLocaleString()} · ${snapshot.games} ${snapshot.games === 1 ? "game" : "games"}`;
+async function loadSnapshots() {
+  try {
+    const result = await api.listSyncSnapshots();
+    snapshots.value = result.success === false ? [] : result.snapshots ?? [];
+  } catch {
+    snapshots.value = [];
+  } finally {
+    snapshotsLoaded.value = true;
+  }
+}
+async function openRestore() {
+  closeDialog();
+  restoreMessage.value = "";
+  dialog.value = "restore";
+  await loadSnapshots();
+}
+async function restoreSnapshot() {
+  const target = restoreTarget.value;
+  if (!target || busy.value) return;
+  busy.value = true;
+  dialogError.value = "";
+  try {
+    const result = await api.restoreSyncSnapshot(target.name);
+    if (result.success === false) {
+      dialogError.value = result.error || "Could not restore that library.";
+      return;
+    }
+    closeDialog();
+    restoreMessage.value = `Restored the library from ${new Date(target.created_at).toLocaleString()}. It will be uploaded on the next sync.`;
+  } catch {
+    dialogError.value = "Could not restore that library.";
+  } finally {
+    busy.value = false;
+    await loadSnapshots();
+    await refreshStatus();
+  }
 }
 useModalKeyboard(dialogElement, () => dialog.value !== null, closeDialog);
 
@@ -135,7 +179,7 @@ async function openPrivacy() {
   } catch { error.value = "Could not open the privacy policy."; }
 }
 onMounted(async () => {
-  await refreshStatus();
+  await Promise.all([refreshStatus(), loadSnapshots()]);
   // The view can unmount while the first status read is still in flight.
   if (disposed) return;
   timer = setInterval(() => void refreshStatus(), 1500);
@@ -185,6 +229,10 @@ onBeforeUnmount(() => {
         <button v-if="status.state === 'needs_choice'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'choice'">Choose library</button>
         <button v-if="status.state === 'needs_passphrase'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'unlock'">Enter passphrase</button>
       </div>
+      <div v-if="snapshots.length" class="sync-controls">
+        <button type="button" class="sync-btn" :disabled="disabled" @click="openRestore">Restore an earlier library</button>
+      </div>
+      <p v-if="restoreMessage" class="sync-description" role="status">{{ restoreMessage }}</p>
       <label v-if="connected" class="sync-encryption"><span>Encrypt the sync file with a passphrase</span><input type="checkbox" :checked="status.encrypted" :disabled="disabled || !status.last_synced_at || status.state === 'needs_choice' || status.state === 'needs_passphrase'" @change="toggleEncryption" /></label>
     </div>
     <footer class="sync-footer"><button type="button" class="sync-link" @click="openPrivacy">Privacy policy</button></footer>
@@ -197,6 +245,18 @@ onBeforeUnmount(() => {
             <button type="button" :disabled="busy" @click="choose('use-remote')"><strong>Use sync file</strong><span>Replace this library, including deletions. Keep local launch options for matching games.</span></button>
             <button type="button" :disabled="busy" @click="choose('use-local')"><strong>Use this machine</strong><span>Replace the sync file with this machine's library.</span></button>
             <button type="button" :disabled="busy" @click="choose('merge-once')"><strong>Merge once</strong><span>Combine both libraries, using sync file values for matches, then upload. Delete nothing.</span></button>
+          </template>
+          <template v-else-if="dialog === 'restore' && !restoreTarget">
+            <h3 id="sync-dialog-title">Restore an earlier library</h3>
+            <p>wLib saves this machine's library before each sync changes it and keeps the last five copies.</p>
+            <p v-if="snapshotsLoaded && !snapshots.length">No earlier library is saved yet.</p>
+            <button v-for="snapshot in snapshots" :key="snapshot.name" type="button" :disabled="busy" @click="restoreTarget = snapshot"><strong>{{ snapshotLabel(snapshot) }}</strong></button>
+          </template>
+          <template v-else-if="dialog === 'restore' && restoreTarget">
+            <h3 id="sync-dialog-title">Restore this library?</h3>
+            <p>This machine's library goes back to {{ snapshotLabel(restoreTarget) }}, including its executable paths and launch options, and games added since are removed. The current library is saved first, so you can undo this the same way. The restored library is uploaded on the next sync.</p>
+            <button type="button" class="sync-primary" :disabled="busy" @click="restoreSnapshot"><strong>{{ busy ? 'Restoring...' : 'Restore' }}</strong></button>
+            <button type="button" :disabled="busy" @click="restoreTarget = null">Back</button>
           </template>
           <form v-else @submit.prevent="submitPassphrase">
             <h3 id="sync-dialog-title">{{ dialog === 'unlock' ? 'Unlock the sync file' : 'Encrypt the sync file' }}</h3>

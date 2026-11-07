@@ -8,10 +8,11 @@ import math
 import secrets
 import ntpath
 import os
+import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import cast
 
 from cryptography.exceptions import InvalidTag
@@ -562,6 +563,87 @@ def write_library_backup(
     }
 
 
+SYNC_SNAPSHOT_KEEP = 5
+_SYNC_SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{6}Z\.json$")
+
+
+def sync_snapshot_dir() -> str:
+    return os.path.join(os.path.dirname(database.DB_PATH), "sync", "snapshots")
+
+
+def sync_snapshot_path(name: object) -> str | None:
+    """Path of a snapshot by its listed name, or None for any other name."""
+    text = str(name or "")
+    if not _SYNC_SNAPSHOT_RE.match(text):
+        return None
+    return os.path.join(sync_snapshot_dir(), text)
+
+
+def _snapshot_name(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ") + ".json"
+
+
+def write_sync_snapshot() -> str | None:
+    """Save the whole local library before sync changes it; keep the last five.
+
+    Returns the snapshot's name, or None when the library has no games (there
+    is nothing to undo). The copy older wLib versions kept in
+    `sync/last-local.json` moves into the list the first time.
+    """
+    folder = sync_snapshot_dir()
+    os.makedirs(folder, exist_ok=True)
+    legacy = os.path.join(os.path.dirname(folder), "last-local.json")
+    if os.path.isfile(legacy):
+        try:
+            moment = datetime.fromtimestamp(os.path.getmtime(legacy), timezone.utc)
+            os.replace(legacy, os.path.join(folder, _snapshot_name(moment)))
+        except OSError:
+            pass
+    if not database.get_all_games():
+        return None
+    name = _snapshot_name(datetime.now(timezone.utc))
+    _ = write_library_backup(os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS})
+    names = sorted(entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry))
+    for old in names[:-SYNC_SNAPSHOT_KEEP]:
+        try:
+            os.remove(os.path.join(folder, old))
+        except OSError:
+            pass
+    return name
+
+
+def list_sync_snapshots() -> list[dict[str, object]]:
+    """Snapshots newest first: name, UTC time, game count and size."""
+    folder = sync_snapshot_dir()
+    try:
+        names = sorted(
+            (entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry)),
+            reverse=True,
+        )
+    except OSError:
+        return []
+    snapshots: list[dict[str, object]] = []
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            backup = load_library_backup(path)
+            size = os.path.getsize(path)
+        except (BackupValidationError, OSError):
+            continue
+        stamp = datetime.strptime(name[: -len(".json")], "%Y-%m-%dT%H-%M-%S-%fZ")
+        snapshots.append(
+            {
+                "name": name,
+                "created_at": stamp.replace(tzinfo=timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
+                "games": len(_coerce_sequence(backup.get("games"))),
+                "bytes": size,
+            }
+        )
+    return snapshots
+
+
 def load_library_backup(
     path: object, passphrase: str | None = None
 ) -> dict[str, object]:
@@ -1014,39 +1096,38 @@ def _release_duplicate_claims(plan: list[dict[str, object]]) -> None:
     thread URL can fall back onto the same local game that another imported
     game claims by sync identity or thread. Applying both would let the second
     overwrite the first. A repeated thread (same URL) still merges by design;
-    a weak claim that collides with a stronger one, or with another game's
-    sync identity, becomes a new game instead.
+    every other weak claim on a row someone else keeps becomes a new game.
+    Among only weak claims, the one titled exactly like the local game keeps
+    the match (the first in plan order on a tie).
     """
     claims: dict[int, list[dict[str, object]]] = {}
     for item in plan:
         if item.get("status") == "matched":
             claims.setdefault(int(str(item.get("local_id", 0))), []).append(item)
-    for items in claims.values():
+
+    def strength(entry: Mapping[str, object]) -> int:
+        return _MATCH_STRENGTH.get(str(entry.get("match_type") or ""), _WEAK_MATCH_STRENGTH)
+
+    def title(entry: Mapping[str, object]) -> str:
+        game = _coerce_mapping(entry.get("game"))
+        return _coerce_text(_game_section(game, "metadata").get("title")).strip()
+
+    for local_id, items in claims.items():
         if len(items) < 2:
             continue
-        ranked = sorted(
-            items,
-            key=lambda entry: -_MATCH_STRENGTH.get(
-                str(entry.get("match_type") or ""), _WEAK_MATCH_STRENGTH
-            ),
-        )
-        winner = ranked[0]
-        winner_strength = _MATCH_STRENGTH.get(
-            str(winner.get("match_type") or ""), _WEAK_MATCH_STRENGTH
-        )
-        winner_uid = _sync_uid(_coerce_mapping(winner.get("game")).get("uid"))
+        ranked = sorted(items, key=lambda entry: -strength(entry))
+        if strength(ranked[0]) == _WEAK_MATCH_STRENGTH:
+            local = database.get_game(local_id) or {}
+            local_title = _coerce_text(local.get("title")).strip()
+            # sorted() is stable, so plan order breaks ties.
+            ranked.sort(key=lambda entry: title(entry) != local_title)
         for item in ranked[1:]:
-            strength = _MATCH_STRENGTH.get(
-                str(item.get("match_type") or ""), _WEAK_MATCH_STRENGTH
-            )
-            if strength > _WEAK_MATCH_STRENGTH:
+            if strength(item) > _WEAK_MATCH_STRENGTH:
                 continue
             game = _coerce_mapping(item.get("game"))
-            uid = _sync_uid(game.get("uid"))
-            if winner_strength > strength or (uid and winner_uid and uid != winner_uid):
-                title = _coerce_text(_game_section(game, "metadata").get("title"))
-                item.clear()
-                item.update({"status": "new", "game": game, "title": title})
+            item_title = title(item)
+            item.clear()
+            item.update({"status": "new", "game": game, "title": item_title})
 
 
 def _plan_cover_files(
@@ -1143,6 +1224,17 @@ def _build_backup_warnings(backup: Mapping[str, object]) -> list[dict[str, objec
         title = _coerce_text(metadata.get("title")).strip()
         if _coerce_text(metadata.get("cover_image_path")).strip():
             has_cover_reference = True
+
+        invalid_sessions = _invalid_play_session_count(game)
+        if invalid_sessions:
+            warnings.append(
+                {
+                    "type": "invalid_play_session",
+                    "scope": "game",
+                    "title": title,
+                    "message": f"{title or 'Game'}: {invalid_sessions} invalid play session(s) will be skipped.",
+                }
+            )
 
         executable_paths = _game_section(game, SECTION_EXECUTABLE_PATHS)
         _path_warning(
@@ -1539,34 +1631,63 @@ def _replace_launch_targets(
         )
 
 
+def _play_session_row(raw: object) -> tuple[object, str, str | None, int] | None:
+    """(version, started_at, ended_at, duration) for a valid session, else None."""
+    session = _coerce_mapping(raw)
+    version = session.get("version")
+    started_at = session.get("started_at")
+    ended_at = session.get("ended_at")
+    duration = session.get("duration_seconds")
+    if (
+        not isinstance(version, str)
+        or not isinstance(started_at, str)
+        or not started_at.strip()
+        or (ended_at is not None and not isinstance(ended_at, str))
+        or not isinstance(duration, int)
+        or isinstance(duration, bool)
+        or duration < 0
+        # SQLite raises OverflowError past INTEGER's range at bind time.
+        or duration > SQLITE_INTEGER_MAX
+    ):
+        return None
+    return version, started_at, ended_at, duration
+
+
+def _invalid_play_session_count(imported_game: Mapping[str, object]) -> int:
+    state = _game_section(imported_game, SECTION_USER_STATE)
+    if "play_sessions" not in state:
+        return 0
+    raw_sessions = state["play_sessions"]
+    if not isinstance(raw_sessions, list):
+        return 1
+    return sum(
+        1 for raw in cast(list[object], raw_sessions) if _play_session_row(raw) is None
+    )
+
+
 def _replace_play_sessions(
     cursor: sqlite3.Cursor, game_id: int, imported_game: Mapping[str, object]
 ) -> None:
+    """Replace a game's sessions with the imported ones.
+
+    An invalid session is skipped (the preview warns about it) instead of
+    failing the whole import. A game whose session list is not a list, or
+    holds no valid session, keeps its local sessions.
+    """
     state = _game_section(imported_game, SECTION_USER_STATE)
     if "play_sessions" not in state:
         return
     raw_sessions = state["play_sessions"]
     if not isinstance(raw_sessions, list):
-        raise BackupValidationError("Invalid play sessions.")
+        return
     sessions: list[tuple[object, ...]] = []
     for raw in cast(list[object], raw_sessions):
-        session = _coerce_mapping(raw)
-        started_at = session.get("started_at")
-        ended_at = session.get("ended_at")
-        duration = session.get("duration_seconds")
-        if (
-            not isinstance(session.get("version"), str)
-            or not isinstance(started_at, str)
-            or not started_at.strip()
-            or (ended_at is not None and not isinstance(ended_at, str))
-            or not isinstance(duration, int)
-            or isinstance(duration, bool)
-            or duration < 0
-            # SQLite raises OverflowError past INTEGER's range at bind time.
-            or duration > SQLITE_INTEGER_MAX
-        ):
-            raise BackupValidationError("Invalid play session.")
-        sessions.append((game_id, session["version"], started_at, ended_at, duration))
+        row = _play_session_row(raw)
+        if row is not None:
+            sessions.append((game_id, *row))
+    if raw_sessions and not sessions:
+        # Nothing usable came in; an empty replacement would wipe local history.
+        return
     _ = cursor.execute("DELETE FROM play_sessions WHERE game_id = ?", (game_id,))
     _ = cursor.executemany(
         "INSERT INTO play_sessions (game_id, version, started_at, ended_at, duration_seconds) VALUES (?, ?, ?, ?, ?)",
@@ -1899,6 +2020,12 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
         return _coerce_text(local_value).strip() in ("", "[]")
     if field == "screenshots":
         return _coerce_text(local_value).strip() in ("", "[]")
+    if field == "launch_mode":
+        # New games start on the default mode, which nobody chose.
+        text = _coerce_text(local_value).strip().lower()
+        return text in ("", database.DEFAULT_LAUNCH_MODE)
+    if field in ("gamemode", "mangohud"):
+        return database.normalize_tool_override(local_value) == "default"
     if field == "play_status":
         if local_value is None:
             return True
@@ -1996,13 +2123,10 @@ def apply_library_backup(
                     for candidate in _coerce_sequence(item.get("candidate_ids"))
                 )
             original_ids = {int(str(game["id"])) for game in _local_games()}
-            if mirror:
-                snapshot_dir = os.path.join(os.path.dirname(database.DB_PATH), "sync")
-                os.makedirs(snapshot_dir, exist_ok=True)
-                _ = write_library_backup(
-                    os.path.join(snapshot_dir, "last-local.json"),
-                    {"sections": SUPPORTED_SECTIONS},
-                )
+            if mirror or sync:
+                # A mirror can delete games and a sync merge overwrites values;
+                # either can be undone from these copies.
+                _ = write_sync_snapshot()
 
             if SECTION_SETTINGS_PATHS in sections:
                 tools_updated, tools_skipped = _import_companion_tools(

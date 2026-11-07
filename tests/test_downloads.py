@@ -264,3 +264,120 @@ def test_pixeldrain_folder_links_are_reported_as_unsupported(monkeypatch):
     with pytest.raises(DownloadError, match='folder links are not supported'):
         pixeldrain.probe('https://pixeldrain.com/d/abc123', api_key='')
     assert opened == []
+
+
+class _Flaky(io.BytesIO):
+    """Serves `data[start:]`, then drops the connection after `fail_after` bytes."""
+
+    def __init__(self, data, start=0, fail_after=None):
+        super().__init__(data[start:])
+        self.fail_after = fail_after
+        self.sent = 0
+
+    def read(self, size=-1):
+        if self.fail_after is not None and self.sent >= self.fail_after:
+            raise ConnectionResetError("dropped")
+        limit = size if self.fail_after is None else min(size, self.fail_after - self.sent)
+        chunk = super().read(limit)
+        self.sent += len(chunk)
+        return chunk
+
+
+def _resumable(data, offsets, *, fail_after=None, resume_fails_after=None, honour_range=True):
+    def resume(offset):
+        offsets.append(offset)
+        if not honour_range:
+            return None
+        return _Flaky(data, offset, resume_fails_after)
+
+    return FileInfo(
+        "game.zip",
+        len(data),
+        lambda: _Flaky(data, 0, fail_after),
+        resume_factory=resume,
+        resume_key="host:file-1",
+    )
+
+
+def test_transfer_reconnects_after_a_dropped_connection(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.downloads.transfer.RESUME_RETRY_DELAY_SECONDS", 0)
+    data = b"PK\x03\x04" + bytes(range(256)) * 10
+    offsets = []
+    path = transfer(_resumable(data, offsets, fail_after=1000), "job", Event(), lambda *_: None, directory=tmp_path)
+    assert path.read_bytes() == data
+    assert offsets == [1000]
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_failed_download_resumes_in_a_later_job(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.downloads.transfer.RESUME_RETRY_DELAY_SECONDS", 0)
+    data = b"PK\x03\x04" + bytes(range(256)) * 10
+    offsets = []
+    with pytest.raises(DownloadError, match="network error"):
+        transfer(
+            _resumable(data, offsets, fail_after=700, resume_fails_after=0),
+            "first", Event(), lambda *_: None, directory=tmp_path,
+        )
+    (part,) = tmp_path.glob("resume-*.part")
+    assert part.stat().st_size == 700
+    progress = []
+    later = []
+    path = transfer(_resumable(data, later), "second", Event(), lambda done, total: progress.append(done), directory=tmp_path)
+    assert path.read_bytes() == data
+    assert later == [700] and progress[0] > 700
+    assert not part.exists()
+
+
+def test_transfer_starts_over_when_the_host_ignores_ranges(tmp_path):
+    data = b"PK\x03\x04" + b"a" * 100
+    offsets = []
+    info = _resumable(data, offsets, honour_range=False)
+    from core.downloads.transfer import _resume_part
+
+    stale = _resume_part(tmp_path, info)
+    stale.write_bytes(b"PK\x03\x04garbage")
+    path = transfer(info, "job", Event(), lambda *_: None, directory=tmp_path)
+    assert path.read_bytes() == data and offsets == [len(b"PK\x03\x04garbage")]
+
+
+def test_cancel_drops_the_partial_file(tmp_path):
+    data = b"PK\x03\x04" + b"a" * 100
+    flag = Event()
+    with pytest.raises(DownloadError, match="cancelled"):
+        transfer(_resumable(data, []), "job", flag, lambda *_: flag.set(), directory=tmp_path)
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_open_range_accepts_only_a_matching_partial_answer():
+    from core.downloads.transfer import open_range
+
+    class Answer(io.BytesIO):
+        def __init__(self, status, content_range):
+            super().__init__(b"rest")
+            self.status = status
+            self.headers = Message()
+            if content_range:
+                self.headers["Content-Range"] = content_range
+
+    sent = []
+    good = open_range(lambda headers: sent.append(headers) or Answer(206, "bytes 10-99/100"), 10)
+    assert good is not None and good.read() == b"rest"
+    assert sent == [{"Range": "bytes=10-"}]
+    assert open_range(lambda headers: Answer(200, ""), 10) is None
+    assert open_range(lambda headers: Answer(206, "bytes 0-99/100"), 10) is None
+
+
+def test_cleanup_keeps_recent_resumable_parts(tmp_path, monkeypatch):
+    import os
+
+    from core.downloads import manager as manager_module
+
+    monkeypatch.setattr(manager_module, "staging_dir", lambda: tmp_path)
+    recent = tmp_path / "resume-abc.part"
+    old = tmp_path / "resume-def.part"
+    orphan = tmp_path / "0123abcd.part"
+    for path in (recent, old, orphan):
+        path.write_bytes(b"x")
+    os.utime(old, (1, 1))
+    manager_module.DownloadManager().cleanup()
+    assert recent.exists() and not old.exists() and not orphan.exists()

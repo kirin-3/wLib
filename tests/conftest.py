@@ -25,3 +25,27 @@ def _no_f95_rate_limit_cooldown(monkeypatch):
     import core.scraper
 
     monkeypatch.setattr(core.scraper, "_f95_cooldown_until", 0.0)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "schema_fingerprint: keep init_db's skip-when-current check"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _init_db_always_migrates(request, monkeypatch):
+    """Run every migration on each init_db() call.
+
+    Tests build old databases by dropping tables or writing legacy rows into
+    a current one, which a real upgrade only meets with an older fingerprint.
+    Tests of the skip itself opt out with @pytest.mark.schema_fingerprint.
+    """
+    if request.node.get_closest_marker("schema_fingerprint"):
+        return
+    import itertools
+
+    import core.database
+
+    counter = itertools.count(1)
+    monkeypatch.setattr(core.database, "schema_fingerprint", lambda: next(counter))

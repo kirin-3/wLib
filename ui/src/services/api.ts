@@ -388,8 +388,11 @@ export interface ArchiveInstallResponse extends ApiBasicResponse {
 export interface ArchiveInstallStatus {
   running: boolean;
   stage: string;
+  /** Extracted bytes so far and the archive's unpacked size (0 when unknown). */
   done: number;
   total: number;
+  /** True until the new version starts moving into place. */
+  cancellable?: boolean;
 }
 
 export interface DownloadOffer {
@@ -505,6 +508,23 @@ export interface LibraryBackupExportResponse extends ApiBasicResponse {
 
 export type LibrarySyncState = "off" | "idle" | "syncing" | "needs_choice" | "needs_passphrase" | "error";
 export type LibrarySyncChoice = "use-remote" | "use-local" | "merge-once";
+export interface SyncSnapshot {
+  name: string;
+  created_at: string;
+  games: number;
+  bytes: number;
+}
+
+export interface SyncSnapshotList extends ApiBasicResponse {
+  snapshots?: SyncSnapshot[];
+}
+
+export interface SyncSnapshotRestore extends ApiBasicResponse {
+  created?: number;
+  updated?: number;
+  deleted?: number;
+}
+
 export interface LibrarySyncStatus extends ApiBasicResponse {
   state?: LibrarySyncState;
   location?: "" | "folder" | "dropbox" | "gdrive";
@@ -2259,6 +2279,12 @@ class ApiService {
   async connectGdrive(): Promise<LibrarySyncStatus> { return this.invoke("connect_gdrive"); }
   async disconnectSync(): Promise<LibrarySyncStatus> { return this.invoke("disconnect_sync"); }
   async syncNow(): Promise<LibrarySyncStatus> { return this.invoke("sync_now"); }
+  async listSyncSnapshots(): Promise<SyncSnapshotList> { return this.invoke("list_sync_snapshots"); }
+  async restoreSyncSnapshot(name: string): Promise<SyncSnapshotRestore> {
+    const result = await this.invoke<SyncSnapshotRestore>("restore_sync_snapshot", name);
+    if (result.success) this.notifyLibraryChange();
+    return result;
+  }
   async resolveSyncChoice(choice: LibrarySyncChoice): Promise<LibrarySyncStatus> { return this.invoke("resolve_sync_choice", choice); }
   async setSyncPassphrase(passphrase: string | null): Promise<LibrarySyncStatus> { return this.invoke("set_sync_passphrase", passphrase); }
   async unlockSync(passphrase: string): Promise<LibrarySyncStatus> { return this.invoke("unlock_sync", passphrase); }
@@ -2362,6 +2388,10 @@ class ApiService {
 
   async getArchiveInstallStatus(): Promise<ArchiveInstallStatus> {
     return this.invoke<ArchiveInstallStatus>("get_archive_install_status");
+  }
+
+  async cancelArchiveInstall(): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("cancel_archive_install");
   }
 
   async findDownloadOffers(): Promise<DownloadOffersResponse> {
@@ -3077,6 +3107,17 @@ class ApiService {
           updated_ids: [],
         };
       }
+      case "list_sync_snapshots":
+        return {
+          success: true,
+          mock: true,
+          snapshots: [
+            { name: "2026-11-06T18-20-00-000000Z.json", created_at: "2026-11-06T18:20:00Z", games: 42, bytes: 81234 },
+            { name: "2026-11-02T09-05-00-000000Z.json", created_at: "2026-11-02T09:05:00Z", games: 40, bytes: 79001 },
+          ],
+        };
+      case "restore_sync_snapshot":
+        return { success: true, mock: true, created: 0, updated: 2, deleted: 0 };
       case "get_sync_status":
       case "set_sync_folder":
       case "connect_dropbox":
@@ -3372,24 +3413,46 @@ class ApiService {
           remove_reason: game ? "" : "No previous install.",
         };
       }
+      case "cancel_archive_install":
+        if (!this._mockArchiveStatus.running) return { success: false, mock: true, error: "No install is running.", error_code: "not_running" };
+        this._mockArchiveStatus = { ...this._mockArchiveStatus, stage: "cancelling", cancellable: false };
+        return { success: true, mock: true };
       case "install_archive": {
-        this._mockArchiveStatus = { running: true, stage: "extracting", done: 1, total: 3 };
-        setTimeout(() => {
-          this._mockArchiveStatus = { running: false, stage: "done", done: 3, total: 3 };
-          window.dispatchEvent(new Event("wlib-refresh-library"));
-        }, 900);
+        // Like the backend, answer only when the install ends; the dialog
+        // polls get_archive_install_status meanwhile.
         const options = isRecord(args[0]) ? args[0] : {};
-        return {
-          success: true,
-          mock: true,
-          game_id: typeof options.game_id === "number" ? options.game_id : 9001,
-          exe_path: String(options.archive_path || ""),
-          destination: "",
-          unmoved_targets: [],
-          kept_old_folder_reason: "",
-          removed_old: false,
-          old_folder: "",
-        };
+        const total = 300 * 1024 ** 2;
+        this._mockArchiveStatus = { running: true, stage: "extracting", done: 0, total, cancellable: true };
+        return new Promise((resolve) => {
+          let step = 0;
+          const tick = () => {
+            if (this._mockArchiveStatus.stage === "cancelling") {
+              this._mockArchiveStatus = { running: false, stage: "cancelled", done: 0, total: 0, cancellable: false };
+              resolve({ success: false, mock: true, error: "The install was cancelled. Nothing was changed.", error_code: "install_cancelled" });
+              return;
+            }
+            step += 1;
+            if (step < 5) {
+              this._mockArchiveStatus = { ...this._mockArchiveStatus, done: Math.round((total * step) / 5) };
+              setTimeout(tick, 600);
+              return;
+            }
+            this._mockArchiveStatus = { running: false, stage: "done", done: total, total, cancellable: false };
+            window.dispatchEvent(new Event("wlib-refresh-library"));
+            resolve({
+              success: true,
+              mock: true,
+              game_id: typeof options.game_id === "number" ? options.game_id : 9001,
+              exe_path: String(options.archive_path || ""),
+              destination: "",
+              unmoved_targets: [],
+              kept_old_folder_reason: "",
+              removed_old: false,
+              old_folder: "",
+            });
+          };
+          setTimeout(tick, 600);
+        });
       }
       case "release_download_archive":
         return {success:true};

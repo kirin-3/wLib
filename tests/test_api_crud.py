@@ -681,3 +681,44 @@ def test_cover_change_reports_locked_database(tmp_path, monkeypatch):
         "success": False,
         "error": "database is locked",
     }
+
+
+def test_delete_game_moves_its_sandbox_aside(tmp_path, monkeypatch):
+    import os
+
+    from core import game_sandbox
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    api = Api()
+    game_id = add_game(title="Game", exe_path="game.exe")
+    home = game_sandbox.prepare_sandbox_home(game_id)
+    (tmp_path / "data" / "sandbox" / str(game_id) / "home" / "save.dat").write_text("x")
+    assert api.delete_game(game_id)["success"] is True
+    # A later game with the same ID must not inherit this home or prefix.
+    assert not os.path.exists(home)
+    removed = tmp_path / "data" / "sandbox" / "removed"
+    (kept,) = removed.iterdir()
+    assert kept.name.startswith(f"{game_id}_")
+    assert (kept / "home" / "save.dat").read_text() == "x"
+    # Kept for 30 days, then pruned.
+    assert game_sandbox.prune_removed_sandboxes() == 0
+    later = kept.stat().st_mtime + game_sandbox.REMOVED_SANDBOX_KEEP_SECONDS + 1
+    assert game_sandbox.prune_removed_sandboxes(now=later) == 1
+    assert not kept.exists()
+
+
+def test_cancel_archive_install_only_before_the_move(monkeypatch):
+    api = Api()
+    assert api.cancel_archive_install()["error_code"] == "not_running"
+    api._archive_install_status = {"running": True, "stage": "extracting", "done": 0, "total": 0, "cancellable": True}
+    assert api.cancel_archive_install()["success"] is True
+    assert api._archive_install_cancel.is_set()
+    assert api.get_archive_install_status()["stage"] == "cancelling"
+    # A later stage report keeps showing the cancel in progress.
+    api._set_archive_install_status(running=True, stage="fixing permissions")
+    assert api.get_archive_install_status()["stage"] == "cancelling"
+    api._archive_install_cancel.clear()
+    api._set_archive_install_status(running=True, stage="moving into place", done=5, total=9)
+    status = api.get_archive_install_status()
+    assert status["cancellable"] is False and status["done"] == 5
+    assert api.cancel_archive_install()["error_code"] == "not_cancellable"
