@@ -28,6 +28,7 @@ def _no_f95_rate_limit_cooldown(monkeypatch):
 
 
 def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: takes several seconds (real network loopback)")
     config.addinivalue_line(
         "markers", "schema_fingerprint: keep init_db's skip-when-current check"
     )

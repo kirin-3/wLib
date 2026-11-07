@@ -14,6 +14,8 @@ import {
   IconFileZip,
   IconInfoCircle,
   IconLoader2,
+  IconPlayerPause,
+  IconPlayerPlay,
   IconReload,
   IconX,
 } from "@tabler/icons-vue";
@@ -23,6 +25,7 @@ import { runBulk, versionSnapshot } from "../utils/bulkActions";
 import { isPendingRemoval, settleRemovals } from "../utils/pendingRemovals";
 import { openInstallArchive } from "../utils/installArchive";
 import {useUpdateDownloads} from "../composables/useUpdateDownloads";
+import { isSeeding, isTorrentJob, needsSeedAnswer, seedingLabel, torrentDetails, torrentStatusLine } from "../utils/torrentDownloads";
 const updateDownloads = useUpdateDownloads();
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
@@ -33,7 +36,7 @@ import {
   shouldAdoptBackgroundCheck,
   updateCheckProgressLabel,
 } from "../utils/updateCheck";
-import type { BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
+import type { ApiBasicResponse, BulkUpdateStartResponse, DownloadOffer, GameRecord, UpdateStatusResponse } from "../services/api";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
@@ -71,11 +74,33 @@ const DOWNLOAD_STAGE_LABELS: Record<string, string> = {
 const downloadProgressLabel = (gameId: number): string => {
   const job = updateDownloads.jobFor(gameId);
   if (!job) return "";
+  if (isTorrentJob(job)) return torrentStatusLine(job);
   const label = DOWNLOAD_STAGE_LABELS[job.stage] || job.stage;
   if (job.stage !== "downloading") return label;
   if (job.total) return `${label} ${Math.floor((job.bytes / job.total) * 100)}%`;
   return `${label} ${Math.round(job.bytes / 1048576)} MiB`;
 };
+
+// Torrent downloads and seeding torrents, listed on their own: a seeding game has no pending update.
+const torrentJobs = computed(() => updateDownloads.torrentJobs());
+const torrentBusy = ref(new Set<string>());
+const torrentCommand = async (jobId: string, run: () => Promise<ApiBasicResponse>) => {
+  if (torrentBusy.value.has(jobId)) return;
+  torrentBusy.value.add(jobId);
+  try {
+    const result = await run();
+    if (result.success === false) notifyError(result.error || "Could not change the torrent");
+  } catch (error) {
+    notifyError(error instanceof Error ? error.message : String(error));
+  } finally {
+    torrentBusy.value.delete(jobId);
+    updateDownloads.refresh();
+  }
+};
+const pauseTorrent = (jobId: string) => torrentCommand(jobId, () => api.pauseTorrent(jobId));
+const resumeTorrent = (jobId: string) => torrentCommand(jobId, () => api.resumeTorrent(jobId));
+const cancelTorrent = (jobId: string) => torrentCommand(jobId, () => api.cancelUpdateDownload(jobId));
+const stopSeeding = (jobId: string) => torrentCommand(jobId, () => api.stopSeeding(jobId));
 
 const installUpdate = (game: GameRecord) => {
   if (status.value.running) return;
@@ -780,6 +805,42 @@ onUnmounted(() => {
         </p>
       </section>
 
+      <!-- Torrents -->
+      <section
+        v-if="torrentJobs.length > 0"
+        class="section-card rounded-xl p-6"
+        aria-labelledby="torrents-heading"
+        data-testid="torrent-section"
+      >
+        <h3 id="torrents-heading" class="ui-section-heading text-lg font-semibold mb-4" style="color: var(--text-primary)">
+          <IconDownload class="ui-section-icon" />
+          Torrents ({{ torrentJobs.length }})
+        </h3>
+        <ul class="space-y-3">
+          <li v-for="job in torrentJobs" :key="job.job_id" class="torrent-row rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold truncate" style="color: var(--text-primary)">
+                {{ job.title || "Game" }}<span v-if="job.version" class="font-mono text-xs ml-2" style="color: var(--text-muted)">{{ job.version }}</span>
+              </p>
+              <p v-if="isSeeding(job)" class="text-xs tabular-nums" style="color: var(--brand)" aria-live="polite">{{ seedingLabel(job) }}</p>
+              <p v-else-if="needsSeedAnswer(job)" class="text-xs" style="color: var(--text-secondary)">Waiting for your seeding answer</p>
+              <template v-else>
+                <p class="text-xs tabular-nums" :class="job.stage === 'failed' ? 'torrent-failed' : ''" style="color: var(--text-secondary)" aria-live="polite">{{ torrentStatusLine(job) }}</p>
+                <p v-if="torrentDetails(job)" class="text-xs tabular-nums" style="color: var(--text-muted)">{{ torrentDetails(job) }}</p>
+              </template>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button v-if="isSeeding(job) || needsSeedAnswer(job)" type="button" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs" :disabled="torrentBusy.has(job.job_id)" @click="stopSeeding(job.job_id)">Stop seeding</button>
+              <template v-else>
+                <button v-if="job.stage === 'downloading'" type="button" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs" :disabled="torrentBusy.has(job.job_id)" @click="pauseTorrent(job.job_id)"><IconPlayerPause class="ui-action-icon" />Pause</button>
+                <button v-else-if="job.stage === 'paused' || job.stage === 'failed'" type="button" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs" :disabled="torrentBusy.has(job.job_id)" @click="resumeTorrent(job.job_id)"><IconPlayerPlay class="ui-action-icon" />{{ job.stage === 'failed' ? 'Retry' : 'Resume' }}</button>
+                <button type="button" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs" :disabled="torrentBusy.has(job.job_id)" @click="cancelTorrent(job.job_id)"><IconX class="ui-action-icon" />Cancel</button>
+              </template>
+            </div>
+          </li>
+        </ul>
+      </section>
+
       <!-- Updates Available -->
       <section
         v-if="persistedUpdates.length > 0"
@@ -1013,6 +1074,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.torrent-row { background: var(--bg-raised); border: 1px solid var(--border); }
+.torrent-failed { color: var(--danger-text) !important; }
 .section-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);

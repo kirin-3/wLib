@@ -25,6 +25,10 @@ hiddenimports = collect_submodules("webview")
 crypto_datas, crypto_binaries, crypto_imports = collect_all("cryptography")
 datas += crypto_datas
 hiddenimports += crypto_imports
+# The torrent engine (--torrent-helper) is the only user of libtorrent.
+torrent_datas, torrent_binaries, torrent_imports = collect_all("libtorrent")
+datas += torrent_datas
+hiddenimports += torrent_imports
 hiddenimports += [
     "PyQt6.QtCore",
     "PyQt6.QtGui",
@@ -37,7 +41,7 @@ hiddenimports += [
 analysis = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
-    binaries=crypto_binaries,
+    binaries=crypto_binaries + torrent_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

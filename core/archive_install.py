@@ -17,11 +17,16 @@ import threading
 import time
 import zipfile
 import zlib
-from dataclasses import dataclass
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from typing import cast
 
+from core.archive_volumes import RAR_OLD_RE as _RAR_OLD_RE
+from core.archive_volumes import RAR_PART_RE as _RAR_PART_RE
+from core.archive_volumes import SPLIT_RE as _SPLIT_RE
+from core.archive_volumes import ZIP_SPAN_RE as _ZIP_SPAN_RE
+from core.archive_volumes import VolumeSet as VolumeSet
+from core.archive_volumes import volume_set as volume_set
 from core.database import DEFAULT_LIBRARY_FOLDER_PATTERN
 from core.game_saves import (
     INFOLDER_SAVE_DIRS as INFOLDER_SAVE_DIRS,
@@ -218,98 +223,6 @@ def build_destination(
     if base:
         return os.path.join(base, *segments)
     return os.path.join(*segments)
-
-
-# Multi-part archive names, matched against the lowercase file name. The
-# number of the first part is what install and offers start from.
-_RAR_PART_RE = re.compile(r"^(?P<base>.+)\.part(?P<n>\d+)\.rar$")
-_SPLIT_RE = re.compile(r"^(?P<base>.+\.(?:7z|zip|rar))\.(?P<n>\d{3})$")
-_RAR_OLD_RE = re.compile(r"^(?P<base>.+)\.r(?P<n>\d{2,3})$")
-_ZIP_SPAN_RE = re.compile(r"^(?P<base>.+)\.z(?P<n>\d{2,3})$")
-
-
-@dataclass(frozen=True)
-class VolumeSet:
-    """The files of one multi-part archive.
-
-    `first` is the file to open; `parts` lists every part found, in order;
-    `missing` holds the part numbers absent from the run 1..highest (the old
-    `.rar` + `.r00` style counts the `.rar` as part 1, and a spanned zip's
-    `.zip` is its last part).
-    """
-
-    kind: str
-    first: str
-    parts: tuple[str, ...]
-    missing: tuple[int, ...]
-
-    @property
-    def complete(self) -> bool:
-        return not self.missing
-
-
-def volume_set(archive_path: str) -> VolumeSet | None:
-    """The multi-part set `archive_path` belongs to, or None for one file."""
-    path = os.path.abspath(str(archive_path or ""))
-    folder, name = os.path.split(path)
-    lower = name.lower()
-    try:
-        siblings = os.listdir(folder)
-    except OSError:
-        siblings = [name]
-    by_lower = {entry.lower(): entry for entry in siblings}
-
-    def numbered(pattern: re.Pattern[str], base: str) -> dict[int, str]:
-        found: dict[int, str] = {}
-        for entry_lower, entry in by_lower.items():
-            match = pattern.match(entry_lower)
-            if match and match.group("base") == base:
-                found[int(match.group("n"))] = os.path.join(folder, entry)
-        return found
-
-    def build(kind: str, parts: dict[int, str], first_number: int) -> VolumeSet | None:
-        if len(parts) < 2 and first_number in parts:
-            return None
-        highest = max(parts) if parts else first_number
-        missing = tuple(n for n in range(first_number, highest + 1) if n not in parts)
-        first = parts.get(first_number, "")
-        ordered = tuple(parts[n] for n in sorted(parts))
-        return VolumeSet(kind, first, ordered, missing)
-
-    match = _RAR_PART_RE.match(lower)
-    if match:
-        parts = numbered(_RAR_PART_RE, match.group("base"))
-        return build("rar_parts", parts, 1) if len(parts) > 1 or 1 not in parts else None
-    match = _SPLIT_RE.match(lower)
-    if match:
-        return build("split", numbered(_SPLIT_RE, match.group("base")), 1)
-    rar_old = _RAR_OLD_RE.match(lower)
-    if lower.endswith(".rar") or rar_old:
-        base = rar_old.group("base") if rar_old else lower[: -len(".rar")]
-        parts = {n + 2: p for n, p in numbered(_RAR_OLD_RE, base).items()}
-        if not parts:
-            return None
-        if base + ".rar" in by_lower:
-            parts[1] = os.path.join(folder, by_lower[base + ".rar"])
-        return build("rar_old", parts, 1)
-    zip_span = _ZIP_SPAN_RE.match(lower)
-    if lower.endswith(".zip") or zip_span:
-        base = zip_span.group("base") if zip_span else lower[: -len(".zip")]
-        parts = numbered(_ZIP_SPAN_RE, base)
-        if not parts:
-            return None
-        # .z01 .. .zNN, then the .zip as the last part; 7-Zip opens the .zip.
-        last = max(parts) + 1
-        zip_name = by_lower.get(base + ".zip")
-        if zip_name:
-            parts[last] = os.path.join(folder, zip_name)
-        span = build("zip_span", parts, 1)
-        if span is None:
-            return None
-        first = parts.get(last, "")
-        missing = span.missing + (() if zip_name else (last,))
-        return VolumeSet("zip_span", first, span.parts, missing)
-    return None
 
 
 def check_volume_set(volumes: VolumeSet) -> None:
@@ -704,7 +617,9 @@ def _run_parallel[T](func: Callable[[T], None], items: list[T], workers: int) ->
                 raise exc
 
 
-def copy_tree_parallel(src_root: str, dst_root: str, workers: int) -> int:
+def copy_tree_parallel(
+    src_root: str, dst_root: str, workers: int, cancel: threading.Event | None = None
+) -> int:
     """Copy an extracted tree into an existing empty folder.
 
     Modes are set when each file is created (no separate chmod round trip)
@@ -729,6 +644,7 @@ def copy_tree_parallel(src_root: str, dst_root: str, workers: int) -> int:
         os.mkdir(os.path.join(dst_root, rel), mode | stat.S_IRWXU)
 
     def _copy(rel: str) -> None:
+        _check_cancel(cancel)
         src = os.path.join(src_root, rel)
         dst = os.path.join(dst_root, rel)
         st = os.lstat(src)
@@ -2034,6 +1950,65 @@ def _pick_exe(
     return find_launcher(destination, depth=4, preferred_title=preferred_title)
 
 
+def _torrent_area() -> str:
+    from core.downloads.torrents import torrents_dir
+
+    return _real(str(torrents_dir()))
+
+
+def in_torrent_area(path: str) -> bool:
+    """Whether `path` lies inside wLib's torrent staging area."""
+    try:
+        root = _torrent_area()
+        real = _real(path)
+    except OSError:
+        return False
+    return real != root and _is_within(real, root)
+
+
+def _checked_torrent_folder(path: str) -> str:
+    folder = os.path.abspath(os.path.expanduser(str(path or "").strip()))
+    if not folder or not os.path.isdir(folder) or os.path.islink(folder):
+        raise ArchiveInstallError("The downloaded folder was not found.")
+    if not in_torrent_area(folder):
+        raise ArchiveInstallError(
+            "Only folders downloaded by wLib's torrent downloads can be installed this way."
+        )
+    return folder
+
+
+def _torrent_seeding(path: str) -> bool:
+    from core.downloads.torrents import supervisor
+
+    return supervisor.is_seeding_path(path)
+
+
+def _place_folder(
+    source: str,
+    staging: str,
+    *,
+    seeding: bool,
+    workers: int,
+    cancel: threading.Event | None,
+    progress: Callable[[str], None],
+) -> str:
+    """Fill `staging` from a downloaded folder; returns the source path when it was moved.
+
+    A seeding torrent keeps its files, so they are copied. Otherwise the folder
+    is moved when both sit on one drive, and copied when they do not.
+    """
+    if not seeding:
+        try:
+            os.rmdir(staging)
+            os.replace(source, staging)
+            return source
+        except OSError:
+            os.makedirs(staging, exist_ok=True)
+    progress("copying")
+    _ = copy_tree_parallel(source, staging, workers, cancel)
+    return ""
+
+
 def install_archive(
     archive_path: str,
     *,
@@ -2053,8 +2028,12 @@ def install_archive(
     progress_cb: Callable[[str], None] | None = None,
     bytes_cb: Callable[[int, int], None] | None = None,
     cancel: threading.Event | None = None,
+    source_kind: str = "archive",
 ) -> dict[str, object]:
     """Full install orchestration per design §7 (filesystem + DB).
+
+    `source_kind="folder"` installs a folder downloaded by wLib's torrent
+    downloads (refused anywhere else) instead of extracting an archive.
 
     `bytes_cb(done, total)` reports extracted bytes about once a second
     (total 0 when the archive does not say). Setting `cancel` stops the
@@ -2081,19 +2060,25 @@ def install_archive(
             except Exception:
                 pass
 
+    folder_source = source_kind == "folder"
     archive_path = os.path.expanduser(str(archive_path or "").strip())
-    if not archive_path or not os.path.isfile(archive_path):
-        raise ArchiveInstallError("Archive file was not found.")
-    volumes = volume_set(archive_path)
-    if volumes is not None:
-        check_volume_set(volumes)
-        # Any part may be chosen; extraction always starts from the first.
-        archive_path = volumes.first
-    fmt = archive_format(archive_path)
-    if fmt not in ("zip", "7z", "rar"):
-        raise ArchiveInstallError(
-            "Unsupported archive format. Choose a .zip, .7z, or .rar file."
-        )
+    volumes: VolumeSet | None = None
+    if folder_source:
+        archive_path = _checked_torrent_folder(archive_path)
+        fmt = "folder"
+    else:
+        if not archive_path or not os.path.isfile(archive_path):
+            raise ArchiveInstallError("Archive file was not found.")
+        volumes = volume_set(archive_path)
+        if volumes is not None:
+            check_volume_set(volumes)
+            # Any part may be chosen; extraction always starts from the first.
+            archive_path = volumes.first
+        fmt = archive_format(archive_path)
+        if fmt not in ("zip", "7z", "rar"):
+            raise ArchiveInstallError(
+                "Unsupported archive format. Choose a .zip, .7z, or .rar file."
+            )
     if not title.strip():
         raise ArchiveInstallError("A title is required.")
     if not library_folder.strip():
@@ -2208,19 +2193,39 @@ def install_archive(
         old_trash_root = _trash_root_for(old_install, library_folders)
         if old_trash_root and old_trash_root != _real(library_folder):
             _ = sweep_trash(old_trash_root)
-    tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
-    if tool_error:
-        raise ArchiveInstallError(tool_error)
-    required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
+    tool: str | None = None
+    if folder_source:
+        required_bytes: int | None = _tree_bytes(archive_path)
+    else:
+        tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
+        if tool_error:
+            raise ArchiveInstallError(tool_error)
+        required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
     ensure_free_space(library_folder, required_bytes)
     network = is_network_filesystem(library_folder)
     workers = NETWORK_IO_WORKERS if network else 1
     _check_cancel(cancel)
     staging = create_staging_dir(library_folder)
+    moved_from = ""
     try:
-        _progress("extracting")
+        if not folder_source:
+            _progress("extracting")
         with _ExtractMeter(staging, required_bytes, bytes_cb):
-            if fmt == "zip":
+            if folder_source:
+                moved_from = _place_folder(
+                    archive_path,
+                    staging,
+                    seeding=_torrent_seeding(archive_path),
+                    workers=workers,
+                    cancel=cancel,
+                    progress=_progress,
+                )
+                _progress("fixing permissions")
+                try:
+                    _ = apply_execute_bits(staging)
+                except OSError:
+                    pass
+            elif fmt == "zip":
                 try:
                     # Execute bits are decided while writing; no second pass needed.
                     _ = extract_zip(
@@ -2379,7 +2384,16 @@ def install_archive(
             old_backup = ""
     except Exception as exc:
         if staging:
-            cleanup_staging_dir(staging)
+            restored = False
+            if moved_from and os.path.isdir(staging):
+                # A moved download must survive a failed install.
+                try:
+                    os.replace(staging, moved_from)
+                    restored = True
+                except OSError:
+                    pass
+            if not restored:
+                cleanup_staging_dir(staging)
         long_path = _windows_long_path_error(exc)
         if long_path:
             raise ArchiveInstallError(long_path) from exc
@@ -2563,7 +2577,8 @@ def install_archive(
             kept_reason = f"Previous contents kept at {old_backup}."
 
         # Archive deletion is always last and only on success.
-        if delete_archive:
+        # A torrent's files go with the torrent (see TorrentSupervisor), never here.
+        if delete_archive and not folder_source and not in_torrent_area(archive_path):
             try:
                 # Every part of a multi-part set goes, not only the first.
                 for part in volumes.parts if volumes is not None else (archive_path,):

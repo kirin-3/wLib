@@ -8,9 +8,11 @@ import { useModalKeyboard } from "../utils/modalKeyboard";
 const current = computed(() => confirmQueue[0]);
 const dialog = ref<HTMLElement | null>(null);
 const cancelButton = ref<HTMLButtonElement | null>(null);
-const cancel = () => resolveConfirmation(false);
+const checked = ref(false);
+const cancel = () => resolveConfirmation(false, checked.value);
 useModalKeyboard(dialog, () => Boolean(current.value), cancel);
 watch(current, async (request) => {
+  checked.value = false;
   if (request) {
     await nextTick();
     cancelButton.value?.focus();
@@ -39,14 +41,18 @@ watch(current, async (request) => {
           <div class="min-w-0 flex-1 pt-1.5">
             <h3 id="confirm-title" class="text-lg font-bold" style="color: var(--text-primary)">{{ current.title }}</h3>
             <p id="confirm-message" class="mt-2 text-sm whitespace-pre-line break-words" style="color: var(--text-secondary)">{{ current.message }}</p>
+            <label v-if="current.checkboxLabel" class="mt-4 flex items-center gap-2 text-sm" style="color: var(--text-primary)">
+              <input v-model="checked" type="checkbox" />
+              {{ current.checkboxLabel }}
+            </label>
           </div>
         </div>
         <div class="px-6 py-4 flex justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
-          <button ref="cancelButton" class="confirm-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="cancel">Cancel</button>
+          <button ref="cancelButton" class="confirm-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="cancel">{{ current.cancelLabel || "Cancel" }}</button>
           <button
             class="px-6 py-2.5 rounded-lg text-sm font-bold"
             :class="current.danger ? 'confirm-danger' : 'confirm-primary'"
-            @click="resolveConfirmation(true)"
+            @click="resolveConfirmation(true, checked)"
           >
             {{ current.confirmLabel }}
           </button>

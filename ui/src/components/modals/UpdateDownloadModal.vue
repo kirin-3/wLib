@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue';
-import {IconAlertTriangle, IconCheck, IconChevronRight, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconRefresh, IconX} from '@tabler/icons-vue';
-import {api, type UpdateBuild, type UpdateMirror} from '../../services/api';
+import {IconAlertTriangle, IconCheck, IconChevronRight, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconPlayerPause, IconPlayerPlay, IconRefresh, IconX} from '@tabler/icons-vue';
+import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
 import {downloadFailureMessage, inAppMirror, orderBuilds, preselect, suitable, type HostPlatform} from '../../utils/updateDownloads';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
+import {formatSize, formatUploadDate, isTorrentJob, rpdlMarks, rpdlNote, rpdlPreselected, torrentDetails, torrentPercent, torrentStatusLine} from '../../utils/torrentDownloads';
 import {useModalKeyboard} from '../../utils/modalKeyboard';
 
 const downloads = useUpdateDownloads();
@@ -16,11 +17,21 @@ const chosenMirror = ref<UpdateMirror | null>(null);
 const version = ref('');
 const error = ref('');
 const loading = ref(false);
+const rpdl = ref<RpdlSearchResponse | null>(null);
+const rpdlLoading = ref(false);
+const rpdlError = ref('');
+const chosenTorrent = ref<RpdlTorrent | null>(null);
+// Set once the user picks something, so a late RPDL answer never changes the choice.
+let userChose = false;
+let rpdlGeneration = 0;
 const busy = ref(false);
 const platform = ref<HostPlatform>('linux');
 const modal = ref<HTMLElement | null>(null);
 let generation = 0;
 const job = computed(() => game.value ? [...downloads.jobs.value].reverse().find(j=>j.game_id===game.value?.id && !['done','cancelled'].includes(j.stage)) : undefined);
+const torrentJob = computed(() => job.value && isTorrentJob(job.value) ? job.value : undefined);
+const updateVersion = computed(() => (game.value?.latest_version || '').trim());
+const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
 const close = () => { generation++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
 useModalKeyboard(modal,()=>!!game.value,close);
@@ -28,6 +39,8 @@ async function load() {
   if (!game.value) return;
   const current = ++generation;
   loading.value = true; error.value = ''; version.value = ''; builds.value = []; chosenBuild.value = null; chosenMirror.value = null;
+  chosenTorrent.value = null; userChose = false;
+  void loadRpdl(false);
   try {
     const [response, capabilities] = await Promise.all([api.getUpdateDownloadLinks(game.value.id),loadPlatformCapabilities()]);
     if (current !== generation) return;
@@ -35,17 +48,35 @@ async function load() {
     platform.value = capabilities.platform === 'windows' ? 'windows' : 'linux';
     builds.value = response.builds || []; version.value = response.version || 'Unknown';
     const choice = preselect(builds.value,platform.value);
-    chosenBuild.value = choice?.build || null; chosenMirror.value = choice?.mirror || null;
+    if (!userChose && !chosenTorrent.value) { chosenBuild.value = choice?.build || null; chosenMirror.value = choice?.mirror || null; }
   } catch (e) { if (current === generation) error.value = String(e instanceof Error ? e.message : e); }
   finally { if (current === generation) loading.value = false; }
 }
+// RPDL loads on its own, so a failure here never hides the thread's builds and the reverse.
+async function loadRpdl(refresh: boolean) {
+  if (!game.value) return;
+  const current = ++rpdlGeneration;
+  rpdlLoading.value = true; rpdlError.value = ''; rpdl.value = null;
+  try {
+    const response = await api.findRpdlTorrents(game.value.id, updateVersion.value, refresh);
+    if (current !== rpdlGeneration) return;
+    if (!response.success) throw new Error(response.error || 'Could not search RPDL');
+    rpdl.value = response;
+    const clear = rpdlPreselected(response);
+    if (clear && !userChose) { chosenTorrent.value = clear; chosenMirror.value = null; chosenBuild.value = null; }
+  } catch (e) { if (current === rpdlGeneration) rpdlError.value = String(e instanceof Error ? e.message : e); }
+  finally { if (current === rpdlGeneration) rpdlLoading.value = false; }
+}
 watch(game, current => { if (current) void load(); });
-function choose(build: UpdateBuild, mirror: UpdateMirror) { chosenBuild.value=build; chosenMirror.value=mirror; }
+function choose(build: UpdateBuild, mirror: UpdateMirror) { userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; }
+function chooseTorrent(torrent: RpdlTorrent) { userChose=true; chosenTorrent.value=torrent; chosenBuild.value=null; chosenMirror.value=null; }
 async function start() {
-  if (!game.value || !chosenMirror.value || busy.value) return;
+  if (!game.value || busy.value || (!chosenMirror.value && !chosenTorrent.value)) return;
   busy.value=true; error.value='';
   try {
-    const response = await api.startUpdateDownload(game.value.id,chosenMirror.value.link_id);
+    const response = chosenTorrent.value
+      ? await api.startRpdlDownload(game.value.id,chosenTorrent.value.id,updateVersion.value)
+      : await api.startUpdateDownload(game.value.id,chosenMirror.value!.link_id);
     if (!response.success) throw new Error(response.error || 'Could not start download');
     downloads.refresh();
   } catch (e) { error.value=String(e instanceof Error ? e.message : e); }
@@ -59,14 +90,23 @@ async function openBrowser() {
     if (!response.success) error.value=response.error || 'Could not open browser';
   } catch (e) { error.value=String(e instanceof Error ? e.message : e) || 'Could not open browser'; }
 }
-const canDownload = computed(()=>!!chosenMirror.value && !!chosenBuild.value && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
-const percent = computed(()=>job.value?.total ? Math.min(100,Math.round(job.value.bytes / job.value.total * 100)) : null);
-const speedLabel = computed(()=>job.value?.stage === 'downloading' && job.value.speed > 0 ? `${(job.value.speed / 1048576).toFixed(1)} MiB/s` : '');
+const canDownloadMirror = computed(()=>!!chosenMirror.value && !!chosenBuild.value && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
+const canDownloadTorrent = computed(()=>!!chosenTorrent.value && !!rpdl.value?.signed_in);
+const canDownload = computed(()=>canDownloadMirror.value || canDownloadTorrent.value);
+async function torrentAction(action: 'pause'|'resume') {
+  if (!torrentJob.value) return;
+  const response = action === 'pause' ? await api.pauseTorrent(torrentJob.value.job_id) : await api.resumeTorrent(torrentJob.value.job_id);
+  if (!response.success) error.value = response.error || 'Could not change the torrent';
+  downloads.refresh();
+}
+const percent = computed(()=>job.value ? (isTorrentJob(job.value) ? torrentPercent(job.value) : job.value.total ? Math.min(100,Math.round(job.value.bytes / job.value.total * 100)) : null) : null);
+const speedLabel = computed(()=>torrentJob.value ? torrentDetails(torrentJob.value) : job.value?.stage === 'downloading' && job.value.speed > 0 ? `${(job.value.speed / 1048576).toFixed(1)} MiB/s` : '');
 const buildTitle = (build: UpdateBuild) => (build.section ? build.section + ' · ' : '') + build.label;
 const platformLabel = (value: string) => value === 'unknown' ? 'Any platform' : value === 'all' ? 'All platforms' : value.split('/').map(part=>part.charAt(0).toUpperCase()+part.slice(1)).join(' / ');
 const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).replace(/\s/g,'').toLowerCase() !== build.label.replace(/\s/g,'').toLowerCase();
 const progressLabel = computed(()=>{
   if (!job.value) return '';
+  if (isTorrentJob(job.value)) return torrentStatusLine(job.value);
   if (job.value.stage === 'needs_user') return 'Finish the check in the browser window that opened.';
   if (job.value.stage === 'resolving') return 'Resolving link…';
   if (job.value.stage === 'verifying') return 'Verifying archive…';
@@ -190,19 +230,74 @@ const progressLabel = computed(()=>{
             <p>{{ downloadFailureMessage(error) }}</p>
           </div>
 
-          <div v-if="job" class="progress-card" :class="{ 'callout-danger': job.stage === 'failed' }">
-            <div class="flex items-center gap-3">
-              <IconAlertTriangle v-if="job.stage === 'failed'" class="w-4 h-4 shrink-0" />
-              <IconLoader2 v-else class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
-              <p class="text-sm flex-1 min-w-0">{{ progressLabel }}</p>
-              <span v-if="percent !== null && job.stage === 'downloading'" class="text-sm font-mono" style="color: var(--text-secondary)">{{ percent }}%</span>
-            </div>
-            <div v-if="job.stage !== 'failed'" class="bar mt-3" role="progressbar" :aria-valuenow="percent ?? undefined" aria-valuemin="0" aria-valuemax="100">
-              <div class="bar-fill" :class="{ indeterminate: percent === null || job.stage !== 'downloading' }" :style="percent !== null && job.stage === 'downloading' ? { width: percent + '%' } : undefined"></div>
-            </div>
-            <p v-if="speedLabel" class="text-xs mt-2" style="color: var(--text-muted)">{{ speedLabel }}</p>
-          </div>
         </template>
+
+        <section class="space-y-2" aria-labelledby="rpdl-heading" data-testid="rpdl-section">
+          <div class="flex items-center gap-2">
+            <h4 id="rpdl-heading" class="text-sm font-semibold" style="color: var(--text-primary)">RPDL torrents</h4>
+            <button v-if="!rpdlLoading" type="button" class="icon-btn" aria-label="Search RPDL again" title="Search RPDL again" @click="loadRpdl(true)"><IconRefresh class="w-3.5 h-3.5" /></button>
+          </div>
+          <div v-if="rpdlLoading" class="flex items-center gap-2 text-sm py-2" style="color: var(--text-muted)">
+            <IconLoader2 class="w-4 h-4 animate-spin" />Searching RPDL…
+          </div>
+          <div v-else-if="rpdlError" class="callout callout-danger" role="alert">
+            <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
+            <div class="flex-1 min-w-0">
+              <p>{{ rpdlError }}</p>
+              <button type="button" class="modal-btn mt-3" @click="loadRpdl(true)"><IconRefresh class="w-4 h-4" />Retry</button>
+            </div>
+          </div>
+          <p v-else-if="!rpdl?.results?.length" class="text-sm" style="color: var(--text-muted)">No matching torrents on RPDL.</p>
+          <template v-else>
+            <div class="torrent-list">
+              <button
+                v-for="torrent in rpdl.results"
+                :key="torrent.id"
+                type="button"
+                class="mirror torrent"
+                :class="{ selected: chosenTorrent?.id === torrent.id }"
+                :aria-pressed="chosenTorrent?.id === torrent.id"
+                @click="chooseTorrent(torrent)"
+              >
+                <span class="min-w-0 flex-1 text-left">
+                  <span class="block text-sm font-medium truncate" :title="torrent.title">{{ torrent.title }}</span>
+                  <span class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" style="color: var(--text-muted)">
+                    <span>{{ formatSize(torrent.size) }}</span>
+                    <span>{{ torrent.seeders }} seeders</span>
+                    <span>{{ torrent.leechers }} leechers</span>
+                    <span v-if="formatUploadDate(torrent.date)">{{ formatUploadDate(torrent.date) }}</span>
+                    <span v-for="mark in rpdlMarks(torrent)" :key="mark.text" class="chip" :class="mark.tone === 'warn' ? 'chip-warn' : 'chip-good'">{{ mark.text }}</span>
+                  </span>
+                </span>
+                <span class="radio" aria-hidden="true"><IconCheck v-if="chosenTorrent?.id === torrent.id" class="w-3 h-3" stroke-width="3" /></span>
+              </button>
+            </div>
+            <div v-if="rpdlNoteText" class="callout">
+              <IconInfoCircle class="w-4 h-4 shrink-0 mt-0.5" />
+              <p>{{ rpdlNoteText }}</p>
+            </div>
+          </template>
+        </section>
+
+        <div v-if="job" class="progress-card" :class="{ 'callout-danger': job.stage === 'failed' }">
+          <div class="flex items-center gap-3">
+            <IconAlertTriangle v-if="job.stage === 'failed'" class="w-4 h-4 shrink-0" />
+            <IconPlayerPause v-else-if="job.stage === 'paused'" class="w-4 h-4 shrink-0" />
+            <IconLoader2 v-else class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
+            <p class="text-sm flex-1 min-w-0" aria-live="polite">{{ progressLabel }}</p>
+            <span v-if="percent !== null && job.stage === 'downloading'" class="text-sm font-mono" style="color: var(--text-secondary)">{{ percent }}%</span>
+            <template v-if="torrentJob">
+              <button v-if="torrentJob.stage === 'downloading'" type="button" class="modal-btn" @click="torrentAction('pause')"><IconPlayerPause class="w-4 h-4" />Pause</button>
+              <button v-else-if="torrentJob.stage === 'paused' || torrentJob.stage === 'failed'" type="button" class="modal-btn" @click="torrentAction('resume')">
+                <IconPlayerPlay class="w-4 h-4" />{{ torrentJob.stage === 'failed' ? 'Retry' : 'Resume' }}
+              </button>
+            </template>
+          </div>
+          <div v-if="job.stage !== 'failed'" class="bar mt-3" role="progressbar" :aria-valuenow="percent ?? undefined" aria-valuemin="0" aria-valuemax="100">
+            <div class="bar-fill" :class="{ indeterminate: percent === null || job.stage !== 'downloading' || (!!torrentJob?.hint) }" :style="percent !== null && job.stage === 'downloading' && !torrentJob?.hint ? { width: percent + '%' } : undefined"></div>
+          </div>
+          <p v-if="speedLabel" class="text-xs mt-2" style="color: var(--text-muted)">{{ speedLabel }}</p>
+        </div>
       </div>
 
       <footer class="px-6 py-4 flex items-center justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
@@ -244,12 +339,20 @@ const progressLabel = computed(()=>{
   color: var(--text-secondary);
   border: 1px solid var(--border);
 }
+.chip-good {
+  background: var(--success-bg, var(--bg-overlay));
+  color: var(--success-text, var(--text-secondary));
+  border-color: var(--success-border, var(--border));
+}
 .chip-warn {
   background: var(--tag-yellow-bg);
   color: var(--tag-yellow-text);
   border-color: var(--tag-yellow-border);
 }
 
+.torrent-list { display: grid; gap: 0.5rem; }
+.icon-btn { color: var(--text-muted); padding: 0.15rem; border-radius: 0.375rem; }
+.icon-btn:hover { color: var(--text-primary); background: var(--bg-overlay); }
 .mirror-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));

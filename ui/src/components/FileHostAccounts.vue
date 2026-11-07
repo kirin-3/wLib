@@ -14,14 +14,16 @@ const megaEmail = ref("");
 const megaPassword = ref("");
 const megaCode = ref("");
 const megaNeedsCode = ref(false);
-const busy = ref<"" | "pixeldrain" | "mega">("");
+const rpdlUsername = ref("");
+const rpdlPassword = ref("");
+const busy = ref<"" | "pixeldrain" | "mega" | "rpdl">("");
 
 const refresh = async () => {
   try { accounts.value = await api.getDownloadAccounts(); }
   catch (error) { console.error("Could not load file host accounts", error); }
 };
 
-const run = async (host: "pixeldrain" | "mega", action: () => Promise<void>) => {
+const run = async (host: "pixeldrain" | "mega" | "rpdl", action: () => Promise<void>) => {
   busy.value = host;
   try { await action(); }
   catch (error) { notifyError(error instanceof Error ? error.message : String(error)); }
@@ -57,6 +59,17 @@ const connectMega = () => run("mega", async () => {
 const disconnectMega = () => run("mega", async () => {
   const result = await api.disconnectMegaAccount();
   if (!result.success) throw new Error(result.error || "Could not sign out of MEGA");
+});
+
+const connectRpdl = () => run("rpdl", async () => {
+  const result = await api.connectRpdlAccount(rpdlUsername.value, rpdlPassword.value);
+  if (!result.success) throw new Error(result.error || "Could not sign in to RPDL");
+  rpdlPassword.value = "";
+  notify(`Signed in to RPDL as ${result.username}.`, "success");
+});
+const disconnectRpdl = () => run("rpdl", async () => {
+  const result = await api.disconnectRpdlAccount();
+  if (!result.success) throw new Error(result.error || "Could not sign out of RPDL");
 });
 
 const openPage = (url: string) => { void api.openInBrowser(url); };
@@ -116,6 +129,34 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
         <div class="flex items-center sm:col-span-2">
           <button type="submit" class="ui-card-btn ui-card-btn--primary" :disabled="busy === 'mega' || !megaEmail.trim() || !megaPassword || (megaNeedsCode && megaCode.trim().length !== 6)">
             <IconLoader2 v-if="busy === 'mega'" class="w-3.5 h-3.5 animate-spin" />Sign in
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div data-settings-row="file-hosts-rpdl" data-keywords="rpdl torrent account sign in login seed" data-settings-bound v-show="settingsRowVisible('file-hosts-rpdl')" class="ui-card-row p-4 rounded-lg space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h4 class="text-sm font-medium" style="color:var(--text-primary)">RPDL (torrents)</h4>
+          <p v-if="accounts?.rpdl?.connected" class="text-xs mt-1 flex items-center gap-1" style="color:var(--text-muted)">
+            <IconCircleCheck class="w-3.5 h-3.5" />Signed in as {{ accounts.rpdl.username }}
+          </p>
+          <p v-else class="text-xs mt-1" style="color:var(--text-muted)">
+            Needed to download RPDL torrents. No account yet?
+            <button type="button" class="underline" @click="openPage('https://dl.rpdl.net/register')">Sign up on RPDL</button>.
+          </p>
+          <p class="text-xs mt-1" style="color:var(--text-muted)">
+            wLib stores your RPDL password on this device, so it can renew the session without asking. Signing out removes it.
+          </p>
+        </div>
+        <button v-if="accounts?.rpdl?.connected" class="ui-card-btn" :disabled="busy === 'rpdl'" @click="disconnectRpdl">Sign out</button>
+      </div>
+      <form v-if="accounts && !accounts.rpdl?.connected" class="grid gap-2 sm:grid-cols-2" @submit.prevent="connectRpdl">
+        <input v-model="rpdlUsername" type="text" autocomplete="username" class="host-input" placeholder="Username or email" aria-label="RPDL username" />
+        <input v-model="rpdlPassword" type="password" autocomplete="current-password" class="host-input" placeholder="Password" aria-label="RPDL password" />
+        <div class="flex items-center sm:col-span-2">
+          <button type="submit" class="ui-card-btn ui-card-btn--primary" :disabled="busy === 'rpdl' || !rpdlUsername.trim() || !rpdlPassword">
+            <IconLoader2 v-if="busy === 'rpdl'" class="w-3.5 h-3.5 animate-spin" />Sign in
           </button>
         </div>
       </form>

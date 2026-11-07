@@ -46,6 +46,32 @@ export interface ApiBasicResponse {
 export interface DownloadAccounts extends ApiBasicResponse {
   pixeldrain: { connected: boolean; username: string };
   mega: { connected: boolean; email: string };
+  rpdl: { connected: boolean; username: string };
+}
+export interface RpdlConnectResponse extends ApiBasicResponse { username?: string }
+/** One RPDL search result, scored against the game. */
+export interface RpdlTorrent {
+  id: number;
+  title: string;
+  size: number;
+  seeders: number;
+  leechers: number;
+  /** Unix time of the upload. */
+  date: number;
+  /** 0-100 match against the game's title. */
+  score: number;
+  /** Whether the title carries the requested version; null when none was requested. */
+  version_match: boolean | null;
+  no_seeders: boolean;
+}
+export interface RpdlSearchResponse extends ApiBasicResponse {
+  results?: RpdlTorrent[];
+  /** The one torrent that clearly wins, or null when the user must choose. */
+  preselected_id?: number | null;
+  needs_choice?: boolean;
+  signed_in?: boolean;
+  query?: string;
+  error_code?: string;
 }
 export interface PixeldrainConnectResponse extends ApiBasicResponse { username?: string }
 export interface MegaConnectResponse extends ApiBasicResponse { email?: string; needs_code?: boolean }
@@ -351,12 +377,47 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
   library_folder?: string;
   own_targets_inside?: string[];
   downloaded_by_wlib?: boolean;
+  /** "folder" when the source is a game folder downloaded by a torrent. */
+  source_kind?: "archive" | "folder";
+  /** The source lies in wLib's torrent staging area. */
+  torrent_source?: boolean;
+  /** Its torrent is still sharing the files, so install copies them and keeps them. */
+  torrent_seeding?: boolean;
 }
 
 export interface UpdateMirror { link_id: string; host: string; label: string; part: string; split: boolean; /** False when wLib cannot download it itself (a direct Buzzheavier link). */ in_app?: boolean }
 export interface UpdateBuild { label: string; section: string; platform: string; kind: string; mirrors: UpdateMirror[] }
 export interface UpdateDownloadLinks extends ApiBasicResponse { version?: string; builds?: UpdateBuild[] }
-export interface UpdateDownloadJob { job_id: string; game_id: number; stage: string; bytes: number; total: number | null; speed: number; error: string; archive_path: string }
+export interface UpdateDownloadJob {
+  job_id: string;
+  game_id: number;
+  stage: string;
+  bytes: number;
+  total: number | null;
+  speed: number;
+  error: string;
+  archive_path: string;
+  /** Present on torrent jobs. */
+  kind?: "torrent";
+  title?: string;
+  version?: string;
+  /** Torrent folder to install from when the torrent holds no single archive. */
+  folder_path?: string;
+  payload_kind?: "archive" | "folder" | "";
+  /** An install from this torrent already finished. */
+  installed?: boolean;
+  peers?: number;
+  upload_speed?: number;
+  ratio?: number;
+  ratio_target?: number;
+  /** "", "awaiting_answer", "seeding" or "ended". */
+  seed_state?: string;
+  paused?: boolean;
+  /** What a running torrent is waiting for, such as "Looking for peers". */
+  hint?: string;
+  /** Seconds left, when known. */
+  eta?: number | null;
+}
 export interface UpdateDownloadStatus extends ApiBasicResponse { jobs?: UpdateDownloadJob[] }
 
 export interface ArchiveInstallOptions {
@@ -376,6 +437,8 @@ export interface ArchiveInstallOptions {
   pattern?: string | undefined;
   remove_old?: boolean | undefined;
   delete_archive?: boolean | undefined;
+  /** "folder" installs a game folder from a finished torrent; archive_path then names that folder. */
+  source_kind?: "archive" | "folder" | undefined;
 }
 
 export interface ArchiveInstallResponse extends ApiBasicResponse {
@@ -905,6 +968,8 @@ export interface PlatformCapabilities {
   extension_dir: string;
 }
 
+export type TorrentSeedMode = "ask" | "always" | "never";
+
 export interface SettingsPayload {
   gamemode_enabled?: boolean;
   mangohud_enabled?: boolean;
@@ -912,6 +977,12 @@ export interface SettingsPayload {
   sandbox_new_games?: boolean;
   sandboxie_custom_path?: string;
   update_notifications?: boolean;
+  torrent_seed_mode?: TorrentSeedMode;
+  torrent_seed_ratio?: number | string;
+  torrent_seed_hours?: number | string;
+  torrent_download_limit_kib?: number | string;
+  torrent_upload_limit_kib?: number | string;
+  torrent_port_mapping?: boolean;
   custom_play_statuses?: string[];
   collections?: string[];
   library_filter_presets?: LibraryFilterPreset[];
@@ -1030,6 +1101,16 @@ export interface SettingsResponse {
   html_builtin_player: boolean;
   sandbox_new_games: boolean;
   sandboxie_custom_path: string;
+  /** After a torrent finishes. In backups and sync. */
+  torrent_seed_mode: TorrentSeedMode;
+  /** Stop seeding at this upload ratio; 0 means no ratio limit. */
+  torrent_seed_ratio: number;
+  /** Optional seeding time limit in hours; empty means none. */
+  torrent_seed_hours: number | "";
+  /** Device-local: KiB/s, 0 means unlimited. */
+  torrent_download_limit_kib: number;
+  torrent_upload_limit_kib: number;
+  torrent_port_mapping: boolean;
   tag_colors: Record<string, string>;
   update_notifications?: boolean;
   custom_play_statuses: string[];
@@ -1135,6 +1216,12 @@ const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   html_builtin_player: true,
   sandbox_new_games: false,
   sandboxie_custom_path: "",
+  torrent_seed_mode: "ask",
+  torrent_seed_ratio: 1,
+  torrent_seed_hours: "",
+  torrent_download_limit_kib: 0,
+  torrent_upload_limit_kib: 0,
+  torrent_port_mapping: false,
   tag_colors: {},
   custom_play_statuses: [],
   collections: [],
@@ -1617,6 +1704,12 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
     html_builtin_player: source.html_builtin_player !== false,
     sandbox_new_games: source.sandbox_new_games === true,
     sandboxie_custom_path: typeof source.sandboxie_custom_path === "string" ? source.sandboxie_custom_path : "",
+    torrent_seed_mode: source.torrent_seed_mode === "always" || source.torrent_seed_mode === "never" ? source.torrent_seed_mode : "ask",
+    torrent_seed_ratio: typeof source.torrent_seed_ratio === "number" && source.torrent_seed_ratio >= 0 ? source.torrent_seed_ratio : 1,
+    torrent_seed_hours: typeof source.torrent_seed_hours === "number" && source.torrent_seed_hours > 0 ? source.torrent_seed_hours : "",
+    torrent_download_limit_kib: typeof source.torrent_download_limit_kib === "number" && source.torrent_download_limit_kib > 0 ? Math.floor(source.torrent_download_limit_kib) : 0,
+    torrent_upload_limit_kib: typeof source.torrent_upload_limit_kib === "number" && source.torrent_upload_limit_kib > 0 ? Math.floor(source.torrent_upload_limit_kib) : 0,
+    torrent_port_mapping: source.torrent_port_mapping === true,
     tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
       ? Object.fromEntries(Object.entries(source.tag_colors).filter(([name, swatch]) => name.trim() && typeof swatch === "string" && ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"].includes(swatch)).map(([name, swatch]) => [name.trim().toLowerCase(), swatch])) : {},
     collections: Array.isArray(source.collections) ? source.collections.filter((name): name is string => typeof name === "string") : [],
@@ -2113,6 +2206,8 @@ class ApiService {
   async disconnectPixeldrainAccount(): Promise<ApiBasicResponse> { return this.invoke("disconnect_pixeldrain_account"); }
   async connectMegaAccount(email: string, password: string, code = ""): Promise<MegaConnectResponse> { return this.invoke("connect_mega_account", email, password, code); }
   async disconnectMegaAccount(): Promise<ApiBasicResponse> { return this.invoke("disconnect_mega_account"); }
+  async connectRpdlAccount(username: string, password: string): Promise<RpdlConnectResponse> { return this.invoke("connect_rpdl_account", username, password); }
+  async disconnectRpdlAccount(): Promise<ApiBasicResponse> { return this.invoke("disconnect_rpdl_account"); }
 
   async getSteamStatus(): Promise<SteamStatus> { return this.invoke<SteamStatus>("get_steam_status"); }
   async addWlibToSteam(): Promise<ApiBasicResponse & {pending?: boolean; already_exists?: boolean; queued?: boolean}> { return this.invoke("add_wlib_to_steam"); }
@@ -2572,6 +2667,18 @@ class ApiService {
   async getUpdateDownloadStatus(): Promise<UpdateDownloadStatus> {
     return this.invoke<UpdateDownloadStatus>("get_update_download_status");
   }
+  async findRpdlTorrents(gameId: number, version = "", refresh = false): Promise<RpdlSearchResponse> {
+    return this.invoke<RpdlSearchResponse>("find_rpdl_torrents", gameId, version, refresh);
+  }
+  async startRpdlDownload(gameId: number, torrentId: number, version = ""): Promise<ApiBasicResponse & {job_id?: string}> {
+    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_rpdl_download", gameId, torrentId, version);
+  }
+  async pauseTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("pause_torrent", jobId); }
+  async resumeTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("resume_torrent", jobId); }
+  async answerSeedPrompt(jobId: string, seed: boolean, remember = false): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("answer_seed_prompt", jobId, seed, remember);
+  }
+  async stopSeeding(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("stop_seeding", jobId); }
   async cancelUpdateDownload(jobId: string): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("cancel_update_download", jobId);
   }
@@ -3905,6 +4012,7 @@ class ApiService {
           success: true,
           pixeldrain: { connected: !!localStorage.getItem("wlib-mock-pixeldrain"), username: localStorage.getItem("wlib-mock-pixeldrain") || "" },
           mega: { connected: !!localStorage.getItem("wlib-mock-mega"), email: localStorage.getItem("wlib-mock-mega") || "" },
+          rpdl: { connected: !!localStorage.getItem("wlib-mock-rpdl"), username: localStorage.getItem("wlib-mock-rpdl") || "" },
         };
       case "connect_pixeldrain_account":
         if (!String(args[0] || "").trim()) return { success: false, error: "Enter a valid Pixeldrain API key" };
@@ -3922,6 +4030,31 @@ class ApiService {
       case "disconnect_mega_account":
         localStorage.removeItem("wlib-mock-mega");
         return { success: true };
+      case "connect_rpdl_account": {
+        const name = String(args[0] || "").trim();
+        if (!name || !args[1]) return { success: false, error: "Enter your RPDL username and password" };
+        localStorage.setItem("wlib-mock-rpdl", name);
+        return { success: true, username: name };
+      }
+      case "disconnect_rpdl_account":
+        localStorage.removeItem("wlib-mock-rpdl");
+        return { success: true };
+      case "find_rpdl_torrents": {
+        const wanted = String(args[1] || "");
+        const results = [
+          { id: 1, title: `MockGame-${wanted || "1.0"}-pc`, size: 3_221_225_472, seeders: 12, leechers: 1, date: 1_767_225_600, score: 96, version_match: wanted ? true : null, no_seeders: false },
+          { id: 2, title: "MockGame-0.9-pc", size: 3_000_000_000, seeders: 0, leechers: 0, date: 1_760_000_000, score: 88, version_match: wanted ? false : null, no_seeders: true },
+        ];
+        return { success: true, results, preselected_id: 1, needs_choice: false, signed_in: !!localStorage.getItem("wlib-mock-rpdl"), query: "MockGame" };
+      }
+      case "start_rpdl_download":
+        if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
+        return { success: false, error: "Downloads are available in the desktop app" };
+      case "pause_torrent":
+      case "resume_torrent":
+      case "answer_seed_prompt":
+      case "stop_seeding":
+        return { success: false, error: "Torrent downloads are available in the desktop app" };
       case "get_steam_status":
         return { success: true, found: true, flatpak_steam: false, accounts: ["123456"], account_id: "123456", running: false, deck: false, gaming_mode: false, mode: localStorage.getItem("wlib-mock-steam-mode") || "off", sync: { running: false } };
       case "get_game_steam_state":

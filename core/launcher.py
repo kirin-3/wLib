@@ -576,18 +576,18 @@ def is_packaged_runtime_library_path(raw_path: str) -> bool:
     )
 
 
-def web_player_command() -> list[str]:
-    """argv prefix that starts the built-in web player from a frozen or source run."""
+def self_command(flag: str) -> list[str]:
+    """argv prefix that starts a wLib child process (`flag`) from a frozen or source run."""
     if getattr(sys, "frozen", False):
-        return [sys.executable, "--play-web"]
+        return [sys.executable, flag]
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # A venv's python is a symlink chain that a sandbox does not contain, so run
-    # the real interpreter and hand it the venv's packages (see web_player_env).
+    # the real interpreter and hand it the venv's packages (see self_env).
     interpreter = os.path.realpath(sys.executable) if sys.prefix != sys.base_prefix else sys.executable
-    return [interpreter, os.path.join(repo_root, "main.py"), "--play-web"]
+    return [interpreter, os.path.join(repo_root, "main.py"), flag]
 
 
-def web_player_env(env: dict[str, str]) -> dict[str, str]:
+def self_env(env: dict[str, str]) -> dict[str, str]:
     """Source runs inside a venv: point the real interpreter at the venv's packages."""
     if getattr(sys, "frozen", False) or sys.prefix == sys.base_prefix:
         return env
@@ -598,6 +598,11 @@ def web_player_env(env: dict[str, str]) -> dict[str, str]:
     env = env.copy()
     env["PYTHONPATH"] = os.pathsep.join([*paths, *([existing] if existing else [])])
     return env
+
+
+def web_player_command() -> list[str]:
+    """argv prefix that starts the built-in web player."""
+    return self_command("--play-web")
 
 
 def web_player_runtime_paths() -> tuple[str, ...]:
@@ -2062,7 +2067,7 @@ class Launcher:
                 player.append("--offline")
             # Links cannot leave a sandboxed or offline player.
             player += ["--links", "ignore" if (sandboxed or block) else "open"]
-            player_env = web_player_env(without_wine_proton_env(env.copy()))
+            player_env = self_env(without_wine_proton_env(env.copy()))
             player_env.update(user_env)
             if sandboxed:
                 # The sandbox is the security boundary; Chromium's own cannot nest.

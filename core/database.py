@@ -51,6 +51,9 @@ GENERAL_SETTINGS_KEYS = (
     "gamemode_enabled",
     "mangohud_enabled",
     "html_builtin_player",
+    "torrent_seed_mode",
+    "torrent_seed_ratio",
+    "torrent_seed_hours",
 )
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (

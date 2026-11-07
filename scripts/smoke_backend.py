@@ -7,6 +7,37 @@ import tempfile
 from pathlib import Path
 
 
+def check_torrent_helper() -> int:
+    """Start `--torrent-helper`, expect `ready` for `hello`, and expect it to exit on EOF."""
+    import json
+    import subprocess
+
+    from core import launcher
+
+    proc = subprocess.Popen(
+        launcher.self_command("--torrent-helper"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env=launcher.self_env(os.environ.copy()),
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    try:
+        _ = proc.stdin.write('{"cmd":"hello"}\n')
+        proc.stdin.flush()
+        event = json.loads(proc.stdout.readline() or "{}")
+        if event.get("event") != "ready":
+            raise RuntimeError(f"torrent helper did not start: {event.get('message', event)}")
+        proc.stdin.close()
+        if proc.wait(timeout=15) != 0:
+            raise RuntimeError(f"torrent helper exited with code {proc.returncode}")
+        return int(event.get("port") or 0)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
@@ -39,7 +70,10 @@ def main() -> None:
                 f"extension sync failed during smoke check: {sync_result.get('error', 'unknown error')}"
             )
 
+        port = check_torrent_helper()
+
         print("Smoke check passed")
+        print(f"Torrent helper listen port: {port}")
         print(f"Qt platform source: {qt_env['source']}")
         print(f"Extension sync reason: {sync_result.get('reason', 'unknown')}")
 

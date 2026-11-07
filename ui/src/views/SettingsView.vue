@@ -70,6 +70,7 @@ import UmuSettings from "../components/UmuSettings.vue";
 import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
 import FileHostAccounts from "../components/FileHostAccounts.vue";
+import TorrentSettings from "../components/TorrentSettings.vue";
 
 const coverAnimationOptions = [
   { value: "always", label: "Always" },
@@ -1011,7 +1012,8 @@ const route = useRoute();
 const sectionRegistry = computed(() => [
   { id: "general", title: "General", keywords: "logging statuses collections" },
   { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives" },
-  { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega account api key premium download" },
+  { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega rpdl account api key premium download" },
+  { id: "torrents", title: "Torrents", keywords: "torrent seed seeding ratio speed limit rpdl" },
   { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
   { id: "wine-proton", title: supportsLinuxRuntimes.value ? "Wine / Proton" : platformCapabilities.value.platform === "windows" ? "Windows Environment" : "Platform Environment", keywords: "wine prefix runner" },
   ...(supportsLinuxRuntimes.value ? [{ id: "umu", title: "Proton (umu)", keywords: "runtime" }] : []),
@@ -1563,6 +1565,8 @@ const browseUrm = async () => {
       </section>
 
       <FileHostAccounts v-show="sectionVisible('file-hosts')" />
+
+      <TorrentSettings v-show="sectionVisible('torrents')" />
 
       <!-- Appearance -->
       <section v-show="sectionVisible('appearance')" id="appearance" class="settings-card rounded-xl p-6 space-y-4">

@@ -57,6 +57,16 @@ if __name__ == "__main__" and "--play-web" in sys.argv:
         raise SystemExit(2)
     raise SystemExit(web_player.run(_player_args))
 
+# The torrent engine runs in its own process so a native crash cannot take the
+# app down. It loads neither the API, the database nor Qt.
+if __name__ == "__main__" and "--torrent-helper" in sys.argv:
+    from core.app_log import setup_app_log
+    from core.downloads import torrent_helper
+    from core.host_platform import get_data_dir
+
+    _ = setup_app_log(get_data_dir(), rotate=False)
+    raise SystemExit(torrent_helper.run())
+
 from core.api import APP_VERSION, Api  # noqa: E402
 from core.app_log import setup_app_log  # noqa: E402
 from core.diagnostics import record_renderer_stage  # noqa: E402

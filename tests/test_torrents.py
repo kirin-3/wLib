@@ -1,0 +1,342 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""TorrentSupervisor against a fake helper process that speaks the real protocol."""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from core.downloads import torrents
+from core.downloads.bencode import parse_torrent
+from core.downloads.manager import manager
+from core.downloads.torrents import (
+    MSG_INVALID,
+    MSG_KEEPS_STOPPING,
+    MSG_LOW_DISK,
+    MSG_RESTARTING,
+    MSG_UNAVAILABLE,
+    TorrentSupervisor,
+)
+from core.downloads.transfer import DownloadError
+
+FAKE = str(Path(__file__).with_name("fake_torrent_helper.py"))
+PASSKEY = "PASSKEY0123456789"
+GIB = 1024**3
+
+
+def torrent_bytes(size: int = 100, name: str = "game") -> bytes:
+    announce = f"http://tracker.example/announce/{PASSKEY}?k=SECRETQUERY"
+    return (
+        f"d8:announce{len(announce)}:{announce}4:infod6:lengthi{size}e4:name{len(name)}:{name}"
+        f"12:piece lengthi16384e6:pieces20:".encode()
+        + b"x" * 20
+        + b"7:privatei1eee"
+    )
+
+
+@pytest.fixture(autouse=True)
+def data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    return tmp_path / "data"
+
+
+@pytest.fixture(autouse=True)
+def default_seed_mode(monkeypatch):
+    monkeypatch.setattr(torrents.torrent_settings, "seed_mode", lambda: "ask")
+
+
+@pytest.fixture
+def make(tmp_path, monkeypatch):
+    created: list[TorrentSupervisor] = []
+
+    def build(mode="complete", free=100 * GIB, **extra):
+        env = {**os.environ, "FAKE_MODE": mode, "FAKE_LOG": str(tmp_path / "fake.log"), "FAKE_STATE": str(tmp_path / "fake.count"), **extra}
+        sup = TorrentSupervisor(
+            command=lambda: ([sys.executable, FAKE], env),
+            backoff=(0.05, 0.05, 0.05),
+            free_space_fn=lambda path: free,
+        )
+        created.append(sup)
+        return sup
+
+    yield build
+    for sup in created:
+        sup._closing = True  # pyright: ignore[reportPrivateUsage]
+        proc = sup._proc  # pyright: ignore[reportPrivateUsage]
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def wait_for(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.02)
+    raise AssertionError("condition not met")
+
+
+def job_of(sup, job_id):
+    return next(j for j in sup.status() if j["job_id"] == job_id)
+
+
+def stage(sup, job_id):
+    return job_of(sup, job_id)["stage"]
+
+
+def log_commands(tmp_path) -> list[dict]:
+    path = tmp_path / "fake.log"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_parse_torrent_reads_hash_size_and_private():
+    meta = parse_torrent(torrent_bytes(size=123))
+    assert meta.size == 123 and meta.private and len(meta.info_hash) == 40
+    with pytest.raises(ValueError):
+        parse_torrent(b"d3:fooi1ee")
+
+
+def test_download_finishes_and_lays_out_the_folder(make, data_dir):
+    sup = make()
+    job_id = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "done")
+    snap = job_of(sup, job_id)
+    folder = data_dir / "downloads" / "torrents" / parse_torrent(torrent_bytes()).info_hash
+    assert {p.name for p in folder.iterdir()} >= {"meta.torrent", "state.json", "data"}
+    assert snap["kind"] == "torrent" and snap["archive_path"] == str(folder / "data" / "game.zip")
+    assert json.loads((folder / "state.json").read_text())["phase"] == "awaiting_seed_answer"
+
+
+def test_manager_status_merges_torrent_jobs(make, monkeypatch):
+    sup = make()
+    monkeypatch.setattr(torrents, "supervisor", sup)
+    job_id = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "done")
+    merged = [j for j in manager.status() if j["job_id"] == job_id]
+    assert merged and merged[0]["kind"] == "torrent"
+
+
+def test_one_active_download_per_game(make):
+    sup = make("stalled")
+    sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    with pytest.raises(DownloadError):
+        sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+
+
+def test_fetch_failure_and_invalid_torrent(make):
+    sup = make()
+
+    def boom():
+        raise DownloadError("Sign in to RPDL in Settings")
+
+    first = sup.start(1, "A", "1", 1, boom)
+    wait_for(lambda: stage(sup, first) == "failed")
+    assert job_of(sup, first)["error"] == "Sign in to RPDL in Settings"
+    second = sup.start(2, "B", "1", 2, lambda: b"<html>")
+    wait_for(lambda: stage(sup, second) == "failed")
+    assert job_of(sup, second)["error"] == MSG_INVALID
+
+
+def test_disk_space_checked_before_start(make):
+    sup = make(free=1 * GIB)
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes(size=6 * GIB))
+    wait_for(lambda: stage(sup, job_id) == "failed")
+    error = job_of(sup, job_id)["error"]
+    assert "6.0 GiB needed" in error and "1.0 GiB free" in error
+    assert not list((Path(os.environ["WLIB_DATA_DIR"]) / "downloads" / "torrents").glob("*/meta.torrent"))
+
+
+def test_low_disk_pauses_the_torrent(make, tmp_path):
+    sup = make("stalled", free=100 * 1024 * 1024)
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "paused")
+    snap = job_of(sup, job_id)
+    assert snap["error"] == MSG_LOW_DISK and snap["paused"] is True
+    wait_for(lambda: any(c["cmd"] == "pause" for c in log_commands(tmp_path)))
+
+
+def test_resume_refused_while_disk_is_low(make):
+    sup = make("stalled", free=100 * 1024 * 1024)
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "paused")
+    assert sup.resume(job_id) is False
+
+
+def test_peer_and_data_hints(make):
+    now = [1000.0]
+    sup = TorrentSupervisor(command=lambda: ([sys.executable, FAKE], {**os.environ}), clock=lambda: now[0], free_space_fn=lambda p: 100 * GIB)
+    job = torrents._Job(1, "G", "1", 1)  # pyright: ignore[reportPrivateUsage]
+    job.stage = "downloading"
+    job.total = 100
+    job.folder = None
+    job.peerless_since = 1000.0
+    sup._jobs[job.id] = job  # pyright: ignore[reportPrivateUsage]
+
+    def status(peers, down):
+        sup._on_event({"event": "status", "torrents": [{"id": job.id, "state": "downloading", "size": 100, "downloaded": 10, "down": down, "up": 0, "peers": peers, "uploaded": 0}]})  # pyright: ignore[reportPrivateUsage]
+        return job_of(sup, job.id)["hint"]
+
+    assert status(0, 0) == "Finding peers"
+    now[0] += 21
+    assert status(0, 0) == "Looking for peers"
+    assert status(3, 0) == ""
+    now[0] += 121
+    assert status(3, 0) == "Connected, but no data is arriving"
+    assert status(3, 5000) == ""
+
+
+def test_single_crash_restarts_and_resumes(make, tmp_path):
+    sup = make("crash_once")
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: job_of(sup, job_id)["bytes"] == 30)
+    assert job_of(sup, job_id)["stage"] == "downloading" and job_of(sup, job_id)["hint"] == ""
+    adds = [c for c in log_commands(tmp_path) if c["cmd"] == "add"]
+    assert len(adds) == 2
+
+
+def test_restarting_message_while_helper_is_down(make):
+    sup = make("crash_once")
+    sup._backoff = (0.5,)  # pyright: ignore[reportPrivateUsage]
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: job_of(sup, job_id)["hint"] == MSG_RESTARTING)
+
+
+def test_repeated_crashes_give_up_and_keep_data(make, data_dir):
+    sup = make("crash_always")
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "failed", timeout=20)
+    assert job_of(sup, job_id)["error"] == MSG_KEEPS_STOPPING
+    folder = data_dir / "downloads" / "torrents" / parse_torrent(torrent_bytes()).info_hash
+    assert (folder / "meta.torrent").is_file()
+
+
+def test_missing_engine_is_reported(make):
+    sup = make("noimport")
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "failed")
+    assert job_of(sup, job_id)["error"] == MSG_UNAVAILABLE
+
+
+def test_unsafe_torrent_fails_and_leaves_no_folder(make, data_dir):
+    sup = make("badpaths")
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "failed")
+    assert job_of(sup, job_id)["error"] == MSG_INVALID
+    assert not any((data_dir / "downloads" / "torrents").iterdir())
+
+
+def test_pause_resume_cancel(make, tmp_path, data_dir):
+    sup = make("stalled")
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: job_of(sup, job_id)["bytes"] == 30)
+    assert sup.pause(job_id) and stage(sup, job_id) == "paused"
+    assert sup.resume(job_id) and stage(sup, job_id) == "downloading"
+    wait_for(lambda: {"pause", "resume"} <= {c["cmd"] for c in log_commands(tmp_path)})
+    folder = data_dir / "downloads" / "torrents" / parse_torrent(torrent_bytes()).info_hash
+    assert sup.cancel(job_id)
+    assert stage(sup, job_id) == "cancelled" and not folder.exists()
+
+
+def test_restart_readds_jobs_paused_or_running_as_recorded(make, tmp_path, data_dir):
+    root = data_dir / "downloads" / "torrents"
+    for name, paused in (("aa" * 20, False), ("bb" * 20, True)):
+        folder = root / name
+        folder.mkdir(parents=True)
+        (folder / "meta.torrent").write_bytes(torrent_bytes())
+        (folder / "state.json").write_text(json.dumps({
+            "job_id": name[:8], "game_id": 1 if not paused else 2, "title": "G", "version": "1", "size": 100,
+            "phase": "paused" if paused else "downloading", "paused": paused, "updated": time.time(),
+        }))
+    sup = make("stalled")
+    sup.load()
+    wait_for(lambda: len([c for c in log_commands(tmp_path) if c["cmd"] == "add"]) == 2)
+    adds = {c["id"]: c["paused"] for c in log_commands(tmp_path) if c["cmd"] == "add"}
+    assert adds == {"aaaaaaaa": False, "bbbbbbbb": True}
+    assert {j["stage"] for j in sup.status()} == {"downloading", "paused"}
+
+
+def test_cleanup_orphans_old_paused_and_keeps_seeding(make, data_dir):
+    root = data_dir / "downloads" / "torrents"
+    now = time.time()
+
+    def folder(name, phase, age_days):
+        path = root / name
+        path.mkdir(parents=True)
+        (path / "data").mkdir()
+        (path / "state.json").write_text(json.dumps({"job_id": name, "game_id": 1, "phase": phase, "paused": phase == "paused", "updated": now - age_days * 86400}))
+        return path
+
+    young = folder("young", "paused", 3)
+    old = folder("old", "paused", 31)
+    seeding = folder("seeding", "seeding", 10)
+    failed_old = folder("failedold", "failed", 40)
+    orphan = root / "orphan"
+    (orphan / "data").mkdir(parents=True)
+    sup = make("stalled")
+    sup.load()
+    sup.cleanup(now=now)
+    assert young.exists() and seeding.exists()
+    assert not old.exists() and not failed_old.exists() and not orphan.exists()
+
+
+def test_cleanup_protects_open_folders(make, data_dir):
+    root = data_dir / "downloads" / "torrents"
+    held = root / "held"
+    (held / "data").mkdir(parents=True)
+    sup = make("stalled")
+    sup.mark_open(str(held / "data"))
+    sup.cleanup(now=time.time())
+    assert held.exists()
+    sup.release(str(held / "data"))
+    sup.cleanup(now=time.time())
+    assert not held.exists()
+
+
+def test_download_manager_cleanup_leaves_torrent_area_alone(data_dir):
+    folder = data_dir / "downloads" / "torrents" / "abc" / "data"
+    folder.mkdir(parents=True)
+    old = folder / "big.zip"
+    old.write_bytes(b"x")
+    os.utime(old, (1, 1))
+    manager.cleanup()
+    assert old.exists()
+
+
+def test_forget_game_stops_seeding_torrent_and_deletes_folder(make, data_dir):
+    root = data_dir / "downloads" / "torrents"
+    folder = root / "seed1"
+    (folder / "data").mkdir(parents=True)
+    (folder / "state.json").write_text(json.dumps({"job_id": "s1", "game_id": 9, "phase": "seeding", "updated": time.time()}))
+    sup = make("stalled")
+    sup.load()
+    sup.forget_game(9)
+    assert not folder.exists() and sup.status() == []
+
+
+def test_delete_game_forgets_its_torrents(data_dir, monkeypatch):
+    from core.api import Api
+    from core.database import add_game
+
+    seen: list[int] = []
+    monkeypatch.setattr(torrents.supervisor, "forget_game", seen.append)
+    api = Api()
+    game_id = add_game(title="Game", exe_path="index.html")
+    assert api.delete_game(game_id)["success"] is True
+    assert seen == [game_id]
+
+
+def test_log_holds_no_passkey_or_announce_url(make, capsys, caplog, data_dir):
+    sup = make()
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "done")
+    sup.shutdown()
+    captured = capsys.readouterr()
+    text = captured.out + captured.err + caplog.text + json.dumps(sup.status())
+    for needle in (PASSKEY, "SECRETQUERY", "announce", "magnet:"):
+        assert needle not in text
+    state = next((data_dir / "downloads" / "torrents").glob("*/state.json")).read_text()
+    assert PASSKEY not in state

@@ -53,6 +53,10 @@ const removable = ref(false);
 const removeReason = ref("");
 const removeOld = ref(true);
 const deleteArchive = ref(false);
+// Set by the preview: a folder from a finished torrent, and whether its torrent still shares the files.
+const sourceKind = ref<'archive' | 'folder'>('archive');
+const torrentSource = ref(false);
+const torrentSeeding = ref(false);
 const libraryFolder = ref("");
 const libraryFolders = ref<LibraryFolder[]>([]);
 const folderEdited = ref(false);
@@ -178,6 +182,9 @@ const reset = () => {
   removeReason.value = "";
   removeOld.value = true;
   deleteArchive.value = false;
+  sourceKind.value = 'archive';
+  torrentSource.value = false;
+  torrentSeeding.value = false;
   libraryFolder.value = "";
   libraryFolders.value = [];
   folderEdited.value = false;
@@ -297,7 +304,11 @@ const inspect = async () => {
       phase.value = "pick";
       return;
     }
-    deleteArchive.value = defaultDeleteArchive(info.downloaded_by_wlib);
+    sourceKind.value = info.source_kind === 'folder' ? 'folder' : 'archive';
+    torrentSource.value = !!info.torrent_source;
+    torrentSeeding.value = !!info.torrent_seeding;
+    // Torrent files are removed with the torrent, never by the install checkbox.
+    deleteArchive.value = torrentSource.value ? false : defaultDeleteArchive(info.downloaded_by_wlib);
     // A guess from a previously picked archive is replaced; thread, seed and typed values are kept.
     const replaceable = (field: "title" | "version", value: string) =>
       !edited.has(field) && (!value.trim() || value === archiveGuess[field]);
@@ -442,7 +453,8 @@ const install = async () => {
       library_folder: libraryFolder.value || undefined,
       target_id: targetId.value,
       remove_old: removeOld.value,
-      delete_archive: deleteArchive.value,
+      delete_archive: torrentSource.value ? false : deleteArchive.value,
+      source_kind: sourceKind.value,
     });
     if (!res?.success) {
       installError.value = res?.error || "Install failed.";
@@ -669,7 +681,12 @@ watch(phase, (next, prev) => {
           </label>
         </div>
 
-        <label class="flex items-center gap-2 text-sm" style="color: var(--text-primary)">
+        <p v-if="torrentSource" class="text-xs" style="color: var(--text-muted)">
+          <template v-if="torrentSeeding">The downloaded files stay in place and are copied. They are removed when seeding ends.</template>
+          <template v-else-if="sourceKind === 'folder'">The downloaded folder is moved into the library when possible, otherwise copied.</template>
+          <template v-else>The downloaded files are removed after a successful install.</template>
+        </p>
+        <label v-else class="flex items-center gap-2 text-sm" style="color: var(--text-primary)">
           <input v-model="deleteArchive" type="checkbox" :disabled="phase === 'installing'" />
           Delete archive after install
         </label>

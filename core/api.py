@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -174,6 +175,7 @@ normalize_thread_url: Callable[[str], str] = cast(
 )
 
 APP_VERSION = "0.4.5"
+_torrent_exit_hook = False
 # Lunar.Engine.zip from visibou/lunarengine v.7.2 (uploaded 2020-11-29, 29738666 bytes).
 LUNAR_ENGINE_SHA256 = "c208f52ca1873007df3f7ef71b61f3c2870a58ad0ddadff7944785f6bf36de23"
 RTP_DOWNLOADS_PAGE_URL = "https://www.rpgmakerweb.com/run-time-package"
@@ -303,6 +305,19 @@ class Api:
 
         self._update_downloads: UpdateDownloads = UpdateDownloads(download_manager)
         download_manager.cleanup()
+        try:
+            from core.downloads.torrents import supervisor as torrent_supervisor
+
+            torrent_supervisor.load()
+            torrent_supervisor.cleanup()
+            global _torrent_exit_hook
+            if not _torrent_exit_hook:
+                import atexit
+
+                _ = atexit.register(torrent_supervisor.shutdown)
+                _torrent_exit_hook = True
+        except Exception as exc:
+            print(f"[wLib] Torrent startup failed: {type(exc).__name__}")
         self.scraper: Scraper = Scraper()
         self.launcher: Launcher = Launcher()
         self._update_running: bool = False
@@ -2431,6 +2446,12 @@ class Api:
                 )
         except Exception as exc:
             print(f"[wLib] Failed to keep save backups for game {coerced_id}: {exc}")
+        try:
+            from core.downloads.torrents import supervisor as torrent_supervisor
+
+            torrent_supervisor.forget_game(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to remove torrents of game {coerced_id}: {type(exc).__name__}")
         try:
             from core.game_sandbox import retire_sandbox_folder
 
@@ -5577,6 +5598,7 @@ class Api:
             "gamemode_enabled": get_setting_fn("gamemode_enabled") == "true",
             "mangohud_enabled": get_setting_fn("mangohud_enabled") == "true",
             "html_builtin_player": get_setting_fn("html_builtin_player") != "false",
+            **self._torrent_settings_payload(),
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -5705,6 +5727,25 @@ class Api:
             return {"success": False, "error": "Settings must be an object"}
 
         settings_map = cast(Mapping[str, object], settings)
+        # Checked first, so a bad torrent value never leaves other settings half saved.
+        from core.downloads import torrent_settings
+
+        torrent_values: dict[str, str] = {}
+        for torrent_key in (
+            torrent_settings.SEED_MODE_KEY,
+            torrent_settings.SEED_RATIO_KEY,
+            torrent_settings.SEED_HOURS_KEY,
+            torrent_settings.DOWNLOAD_LIMIT_KEY,
+            torrent_settings.UPLOAD_LIMIT_KEY,
+            torrent_settings.PORT_MAPPING_KEY,
+        ):
+            if torrent_key in settings_map:
+                clean = torrent_settings.normalize_for_save(
+                    torrent_key, settings_map[torrent_key]
+                )
+                if clean is None:
+                    return {"success": False, "error": "Enter a valid torrent setting"}
+                torrent_values[torrent_key] = clean
         from core.database import get_library_folders, normalize_library_folders
 
         folder_pair: tuple[list[str], str] | None = None
@@ -5905,6 +5946,7 @@ class Api:
                     catalog_change = catalog_enabled
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
+            pending.update(torrent_values)
             update_settings(
                 pending,
                 custom_play_statuses=custom_statuses
@@ -5915,9 +5957,28 @@ class Api:
                 self.catalog.remove()
             elif catalog_change is True:
                 _ = self.catalog.start_background(force=True)
+            if any(key in torrent_values for key in torrent_settings.DEVICE_LOCAL_KEYS):
+                from core.downloads.torrents import supervisor as torrent_supervisor
+
+                torrent_supervisor.apply_limits()
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}
+
+    @staticmethod
+    def _torrent_settings_payload() -> dict[str, object]:
+        from core.downloads import torrent_settings as ts
+
+        download, upload = ts.limits_kib()
+        ratio, hours = ts.seed_ratio(), ts.seed_hours()
+        return {
+            "torrent_seed_mode": ts.seed_mode(),
+            "torrent_seed_ratio": ratio if ratio is not None else 0,
+            "torrent_seed_hours": hours if hours is not None else "",
+            "torrent_download_limit_kib": download,
+            "torrent_upload_limit_kib": upload,
+            "torrent_port_mapping": ts.port_mapping(),
+        }
 
     def save_library_filter_presets(self, presets: object = None) -> dict[str, object]:
         import json
@@ -6392,6 +6453,151 @@ class Api:
             return {"success": False, "error": str(exc) or "Could not sign out of MEGA"}
         return {"success": True}
 
+    def connect_rpdl_account(
+        self, username: object = None, password: object = None
+    ) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+        from core.downloads.transfer import DownloadError
+
+        if not isinstance(username, str) or not isinstance(password, str):
+            return {"success": False, "error": "Enter your RPDL username and password"}
+        try:
+            name = accounts.connect_rpdl(username, password)
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not save the RPDL account"}
+        return {"success": True, "username": name}
+
+    def disconnect_rpdl_account(self) -> dict[str, object]:
+        import sqlite3
+
+        from core.downloads import accounts
+
+        try:
+            accounts.disconnect_rpdl()
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc) or "Could not sign out of RPDL"}
+        return {"success": True}
+
+    def find_rpdl_torrents(
+        self, game_id: object = None, version: object = None, refresh: object = None
+    ) -> dict[str, object]:
+        """Search RPDL for a game and score the results; works without an account."""
+        from core import database
+        from core.downloads import accounts, rpdl_match
+        from core.downloads.hosts import rpdl
+        from core.downloads.transfer import DownloadError
+
+        coerced_id = self._coerce_db_id(game_id)
+        game = database.get_game(coerced_id) if coerced_id is not None else None
+        if not game:
+            return {"success": False, "error": "Game not found"}
+        wanted = refresh is True
+        try:
+            found = rpdl_match.find(
+                lambda query: rpdl.search(query, refresh=wanted),
+                str(game.get("title") or ""),
+                str(game.get("developer") or ""),
+                version if isinstance(version, str) else None,
+            )
+        except rpdl.RpdlError as exc:
+            return {"success": False, "error": str(exc), "error_code": exc.kind}
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+        signed_in = accounts.rpdl_connected()
+        return {"success": True, "signed_in": signed_in, **found}
+
+    def start_rpdl_download(
+        self, game_id: object = None, torrent_id: object = None, version: object = None
+    ) -> dict[str, object]:
+        from core import database
+        from core.downloads import credentials
+        from core.downloads.bencode import parse_torrent
+        from core.downloads.hosts import rpdl
+        from core.downloads.torrents import supervisor
+        from core.downloads.transfer import DownloadError
+
+        coerced_id = self._coerce_db_id(game_id)
+        game = database.get_game(coerced_id) if coerced_id is not None else None
+        if coerced_id is None or not game:
+            return {"success": False, "error": "Game not found"}
+        if isinstance(torrent_id, bool) or not isinstance(torrent_id, int) or torrent_id <= 0:
+            return {"success": False, "error": "Choose a torrent first"}
+        if coerced_id in self.get_running_games():
+            return {"success": False, "error": "Close the game before downloading an update"}
+        if not (credentials.get(credentials.RPDL_TOKEN) or credentials.get(credentials.RPDL_USERNAME)):
+            return {"success": False, "error": rpdl.SIGN_IN_MESSAGE, "error_code": rpdl.KIND_SIGN_IN}
+        if any(
+            job.get("game_id") == coerced_id
+            and job.get("stage") in ("resolving", "needs_user", "downloading", "verifying")
+            for job in self._update_downloads.manager.status()
+        ):
+            return {"success": False, "error": "A download is already running for this game"}
+        wanted_id = torrent_id
+
+        def fetch() -> bytes:
+            data = rpdl.fetch_torrent(wanted_id)
+            try:
+                info_hash = str(rpdl.details(wanted_id).get("info_hash") or "")
+            except rpdl.RpdlError:
+                info_hash = ""  # Details are optional; the .torrent is enough.
+            # Only a hex v1 hash is comparable; RPDL may also send base32 or v2 hashes.
+            hex_hash = info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
+            if hex_hash and hex_hash != parse_torrent(data).info_hash:
+                raise rpdl.RpdlError(rpdl.KIND_INVALID, "RPDL sent an invalid response")
+            return data
+
+        try:
+            job_id = supervisor.start(
+                coerced_id,
+                str(game.get("title") or ""),
+                version.strip() if isinstance(version, str) else "",
+                wanted_id,
+                fetch,
+            )
+        except DownloadError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "job_id": job_id}
+
+    def pause_torrent(self, job_id: object = None) -> dict[str, object]:
+        from core.downloads.torrents import supervisor
+
+        if not isinstance(job_id, str) or not supervisor.pause(job_id):
+            return {"success": False, "error": "The torrent is not downloading"}
+        return {"success": True}
+
+    def resume_torrent(self, job_id: object = None) -> dict[str, object]:
+        from core.downloads.torrents import MSG_LOW_DISK, supervisor
+
+        if not isinstance(job_id, str):
+            return {"success": False, "error": "The torrent was not found"}
+        if not supervisor.resume(job_id):
+            job = next((j for j in supervisor.status() if j["job_id"] == job_id), None)
+            message = str(job["error"]) if job and job.get("error") == MSG_LOW_DISK else ""
+            return {"success": False, "error": message or "The torrent cannot be resumed"}
+        return {"success": True}
+
+    def answer_seed_prompt(
+        self, job_id: object = None, seed: object = None, remember: object = None
+    ) -> dict[str, object]:
+        from core.downloads.torrents import supervisor
+
+        if not isinstance(job_id, str) or not isinstance(seed, bool):
+            return {"success": False, "error": "Choose Seed or Don't seed"}
+        if not supervisor.answer_seed(job_id, seed, remember is True):
+            return {"success": False, "error": "That question was already answered"}
+        return {"success": True}
+
+    def stop_seeding(self, job_id: object = None) -> dict[str, object]:
+        from core.downloads.torrents import supervisor
+
+        if not isinstance(job_id, str) or not supervisor.stop_seeding(job_id):
+            return {"success": False, "error": "The torrent is not seeding"}
+        return {"success": True}
+
     def open_update_download_in_browser(self, game_id: int, link_id: str) -> dict[str, object]:
         from core.downloads.transfer import DownloadError
 
@@ -6421,26 +6627,39 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
 
+        from core.archive_install import in_torrent_area
+
         archive_path = os.path.expanduser((path or "").strip())
-        if not archive_path or not os.path.isfile(archive_path):
-            return {"success": False, "error": "Archive file was not found."}
-        if archive_format(archive_path) not in ("zip", "7z", "rar"):
-            return {
-                "success": False,
-                "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
-            }
-        from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
+        folder_source = bool(archive_path) and os.path.isdir(archive_path)
+        if folder_source:
+            if not in_torrent_area(archive_path):
+                return {
+                    "success": False,
+                    "error": "Only folders downloaded by wLib's torrent downloads can be installed this way.",
+                }
+            guessed_title, guessed_version = guess_title_and_version(
+                os.path.basename(archive_path.rstrip("/\\"))
+            )
+        else:
+            if not archive_path or not os.path.isfile(archive_path):
+                return {"success": False, "error": "Archive file was not found."}
+            if archive_format(archive_path) not in ("zip", "7z", "rar"):
+                return {
+                    "success": False,
+                    "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
+                }
+            from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
 
-        volumes = volume_set(archive_path)
-        if volumes is not None:
-            try:
-                check_volume_set(volumes)
-            except ArchiveInstallError as exc:
-                return {"success": False, "error": str(exc), "error_code": "parts_missing"}
+            volumes = volume_set(archive_path)
+            if volumes is not None:
+                try:
+                    check_volume_set(volumes)
+                except ArchiveInstallError as exc:
+                    return {"success": False, "error": str(exc), "error_code": "parts_missing"}
 
-        guessed_title, guessed_version = guess_title_and_version(
-            archive_stem(archive_path)
-        )
+            guessed_title, guessed_version = guess_title_and_version(
+                archive_stem(archive_path)
+            )
 
         from core.database import get_library_folders, list_game_launch_targets
         from core.game_saves import is_within
@@ -6524,9 +6743,11 @@ class Api:
             and old_folder
             and is_within(os.path.expanduser(str(t["exe_path"])), old_folder)
         ]
-        _tool, tool_error = detect_archive_tool(
-            archive_path, library_folder=os.path.expanduser(library_folder)
-        )
+        tool_error: str | None = None
+        if not folder_source:
+            _tool, tool_error = detect_archive_tool(
+                archive_path, library_folder=os.path.expanduser(library_folder)
+            )
         destination = ""
         if library_folder.strip() and title.strip():
             destination = build_destination(
@@ -6551,10 +6772,18 @@ class Api:
         from core.downloads.transfer import staging_dir
 
         downloaded_by_wlib = Path(archive_path).resolve().is_relative_to(staging_dir().resolve())
+        from core.downloads.torrents import supervisor as torrent_supervisor
+
+        in_torrents = in_torrent_area(archive_path)
         if downloaded_by_wlib:
             self._update_downloads.manager.mark_open(archive_path)
+        if in_torrents:
+            torrent_supervisor.mark_open(archive_path)
         return {
             "success": True,
+            "source_kind": "folder" if folder_source else "archive",
+            "torrent_source": in_torrents,
+            "torrent_seeding": in_torrents and torrent_supervisor.is_seeding_path(archive_path),
             "downloaded_by_wlib": downloaded_by_wlib,
             "title": title,
             "version": version,
@@ -6571,7 +6800,10 @@ class Api:
         }
 
     def release_download_archive(self, path: str) -> dict[str, object]:
+        from core.downloads.torrents import supervisor as torrent_supervisor
+
         self._update_downloads.manager.release(path)
+        torrent_supervisor.release(path)
         return {"success": True}
 
     def get_archive_install_status(self) -> dict[str, object]:
@@ -6580,7 +6812,7 @@ class Api:
 
     # Stages before the library changes; the install can still be cancelled.
     _CANCELLABLE_INSTALL_STAGES: frozenset[str] = frozenset(
-        {"starting", "preparing", "extracting", "fixing permissions", "carrying saves"}
+        {"starting", "preparing", "extracting", "copying", "fixing permissions", "carrying saves"}
     )
 
     def _set_archive_install_status(
@@ -6642,7 +6874,15 @@ class Api:
         archive_path = os.path.expanduser(
             str(payload.get("archive_path") or payload.get("archive") or "").strip()
         )
+        source_kind = "folder" if str(payload.get("source_kind") or "") == "folder" else "archive"
+        from core.archive_install import in_torrent_area
+        from core.downloads.torrents import supervisor as torrent_supervisor
+
+        torrent_source = bool(archive_path) and in_torrent_area(archive_path)
         self._update_downloads.manager.release(archive_path)
+        if torrent_source:
+            # Held for the whole install, so seeding ending now cannot delete the files.
+            torrent_supervisor.mark_open(archive_path)
         game_id_raw = payload.get("game_id", payload.get("gameId"))
         game_id: int | None = None
         if game_id_raw not in (None, ""):
@@ -6793,6 +7033,7 @@ class Api:
                 progress_cb=_on_stage,
                 bytes_cb=_on_bytes,
                 cancel=self._archive_install_cancel,
+                source_kind=source_kind,
             )
         except InstallCancelled as exc:
             self._set_archive_install_status(running=False, stage="cancelled")
@@ -6812,6 +7053,8 @@ class Api:
             return {"success": False, "error": str(exc)}
 
         self._set_archive_install_status(running=False, stage="done")
+        if torrent_source:
+            torrent_supervisor.release(archive_path, installed=True)
         installed_id = result.get("game_id")
         if incoming_links and isinstance(installed_id, int):
             from core.database import replace_game_links

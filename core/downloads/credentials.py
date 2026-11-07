@@ -12,6 +12,9 @@ PIXELDRAIN_API_KEY = "pixeldrain_api_key"
 PIXELDRAIN_USERNAME = "pixeldrain_username"
 MEGA_SESSION = "mega_session"
 MEGA_EMAIL = "mega_email"
+RPDL_USERNAME = "rpdl_username"
+RPDL_PASSWORD = "rpdl_password"
+RPDL_TOKEN = "rpdl_token"
 
 
 def get(key: str) -> str:

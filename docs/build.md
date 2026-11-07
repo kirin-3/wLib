@@ -1,5 +1,7 @@
 # Build & Packaging
 
+`libtorrent==2.1.1` is the torrent engine for RPDL downloads. Only the `wlib --torrent-helper` child process imports it, so the app runs without it and torrent downloads then report that they are unavailable. Its wheels are one statically linked module (OpenSSL and Boost included) with type stubs, for Linux x86_64 (manylinux2014) and Windows x64. `scripts/build.sh` collects it with `--collect-all "libtorrent"`, `packaging/windows/wlib.spec` with `collect_all("libtorrent")`, and the Nix environment uses `libtorrent-rasterbar`. The AUR, Flatpak and native packages repackage the PyInstaller folder, so they carry the bundled copy. `python scripts/smoke_backend.py` starts the helper and checks that it answers `hello` and exits when its stdin closes.
+
 `cryptography>=44.0.0` is a runtime dependency for library backup and sync encryption. Linux `scripts/build.sh` collects the package with `--collect-all`; the Windows script uses `packaging/windows/wlib.spec`, which collects its data, modules, and native binaries. `main.py --smoke-test` imports the AEAD module to verify packaging. AUR metadata and its PKGBUILD template include `python-cryptography`. Rebuild the Linux test image when requirements change.
 
 ## Locked dependencies
@@ -246,7 +248,7 @@ The build prefers Flathub's `org.flatpak.Builder` when it is installed (the rele
 `flake.nix` exposes `packages.x86_64-linux.wlib` (also `default`) and `overlays.default`; the derivation is `nix/package.nix`. Unlike the other Linux formats it builds from source instead of repackaging the PyInstaller folder:
 
 - The Vue frontend builds with `buildNpmPackage` and Node 22. Dependencies come from `ui/package-lock.json` through `importNpmLock`, so there is no npm dependency hash to update when the lockfile changes.
-- The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography). Add any new runtime dependency in `requirements.txt` to that list too.
+- The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography, libtorrent-rasterbar). Add any new runtime dependency in `requirements.txt` to that list too.
 - The version is read from `APP_VERSION` in `core/api.py`.
 - `bin/wlib` runs the shared `packaging/wlib-launcher` with `WLIB_APP_DIR` pointing at `share/wlib`. The launcher's `./wlib-bin` is a wrapper that runs `main.py` with the Python environment and the Qt wrapper environment, so GPU detection, crash guard, SSL setup and launch logging work as in the other formats.
 - Runtime tools (glxinfo, xdg-open, gdbus, 7zz, bsdtar, bubblewrap and, unless `withWine = false`, Wine and winetricks) are appended to `PATH`, so user-installed versions win.

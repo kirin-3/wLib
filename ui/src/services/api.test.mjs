@@ -660,6 +660,58 @@ test('update downloads expose browser mock payloads', async () => {
 });
 
 
+test('RPDL bridge methods have browser mocks and forward arguments to the desktop bridge', async () => {
+  const data = new Map();
+  const storage = {getItem:(k)=>data.has(k)?data.get(k):null,setItem:(k,v)=>data.set(k,String(v)),removeItem:(k)=>data.delete(k)};
+  globalThis.localStorage = storage;
+  globalThis.window = {localStorage:storage,dispatchEvent(){},addEventListener(){},navigator:{userAgent:'node'}};
+  const server = await createServer({server:{middlewareMode:true},appType:'custom'});
+  try {
+    const {api} = await server.ssrLoadModule('/src/services/api.ts');
+    assert.equal((await api.getDownloadAccounts()).rpdl.connected,false);
+    assert.equal((await api.connectRpdlAccount('','x')).success,false);
+    assert.deepEqual(await api.connectRpdlAccount('kim','pw'),{success:true,username:'kim'});
+    assert.deepEqual((await api.getDownloadAccounts()).rpdl,{connected:true,username:'kim'});
+    const found = await api.findRpdlTorrents(1,'0.8');
+    assert.equal(found.success,true);
+    assert.equal(found.preselected_id,1);
+    assert.equal(found.signed_in,true);
+    assert.equal(found.results[0].version_match,true);
+    assert.equal(found.results[1].no_seeders,true);
+    assert.equal((await api.startRpdlDownload(1,1,'0.8')).success,false);
+    assert.equal((await api.pauseTorrent('j')).success,false);
+    assert.deepEqual(await api.disconnectRpdlAccount(),{success:true});
+    const failed = await api.startRpdlDownload(1,1,'0.8');
+    assert.match(failed.error,/Sign in to RPDL/);
+  } finally { await server.close(); delete globalThis.window; delete globalThis.localStorage; }
+
+  const calls = [];
+  const record = (name) => async (...args) => { calls.push([name, ...args]); return { success: true }; };
+  globalThis.window = { pywebview: { api: {
+    connect_rpdl_account: record('connect'), disconnect_rpdl_account: record('disconnect'),
+    find_rpdl_torrents: record('find'), start_rpdl_download: record('start'),
+    pause_torrent: record('pause'), resume_torrent: record('resume'),
+    answer_seed_prompt: record('answer'), stop_seeding: record('stop'),
+  } }, dispatchEvent() {} };
+  const bridge = await createServer({server:{middlewareMode:true},appType:'custom'});
+  try {
+    const {api} = await bridge.ssrLoadModule('/src/services/api.ts');
+    await api.connectRpdlAccount('kim','pw');
+    await api.disconnectRpdlAccount();
+    await api.findRpdlTorrents(3,'1.0',true);
+    await api.startRpdlDownload(3,9,'1.0');
+    await api.pauseTorrent('a');
+    await api.resumeTorrent('a');
+    await api.answerSeedPrompt('a',true,true);
+    await api.stopSeeding('a');
+    assert.deepEqual(calls,[
+      ['connect','kim','pw'],['disconnect'],['find',3,'1.0',true],['start',3,9,'1.0'],
+      ['pause','a'],['resume','a'],['answer','a',true,true],['stop','a'],
+    ]);
+  } finally { await bridge.close(); delete globalThis.window; }
+});
+
+
 test("selected update checks forward game ids to the bridge", async () => {
   const calls = [];
   globalThis.window = { pywebview: { api: { check_all_updates: async (...args) => { calls.push(args); return { success: true }; } } }, dispatchEvent() {} };

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.downloads import credentials
-from core.downloads.hosts import mega, pixeldrain
+from core.downloads.hosts import mega, pixeldrain, rpdl
 
 
 def status() -> dict[str, object]:
@@ -17,7 +17,15 @@ def status() -> dict[str, object]:
             "connected": bool(credentials.get(credentials.MEGA_SESSION)),
             "email": credentials.get(credentials.MEGA_EMAIL),
         },
+        "rpdl": {
+            "connected": rpdl_connected(),
+            "username": credentials.get(credentials.RPDL_USERNAME),
+        },
     }
+
+
+def rpdl_connected() -> bool:
+    return bool(credentials.get(credentials.RPDL_USERNAME))
 
 
 def connect_pixeldrain(api_key: str) -> str:
@@ -48,3 +56,17 @@ def disconnect_mega() -> None:
     session = credentials.get(credentials.MEGA_SESSION)
     credentials.put({credentials.MEGA_SESSION: "", credentials.MEGA_EMAIL: ""})
     mega.logout(session)
+
+
+def connect_rpdl(username: str, password: str) -> str:
+    token, name = rpdl.login(username, password)
+    credentials.put({
+        credentials.RPDL_USERNAME: name,
+        credentials.RPDL_PASSWORD: password,
+        credentials.RPDL_TOKEN: token,
+    })
+    return name
+
+
+def disconnect_rpdl() -> None:
+    credentials.put({credentials.RPDL_USERNAME: "", credentials.RPDL_PASSWORD: "", credentials.RPDL_TOKEN: ""})

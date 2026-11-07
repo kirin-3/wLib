@@ -146,16 +146,23 @@ class DownloadManager:
 
 
     def status(self) -> list[dict[str, object]]:
+        from core.downloads.torrents import supervisor
+
         with self._lock:
-            return [job.snapshot() for job in self._jobs.values()]
+            jobs = [job.snapshot() for job in self._jobs.values()]
+        return jobs + supervisor.status()
 
     def cancel(self, job_id: str) -> bool:
+        from core.downloads.torrents import supervisor
+
         with self._lock:
             job = self._jobs.get(job_id)
-            if not job or job.stage not in ('resolving','needs_user','downloading','verifying'):
-                return False
-            job.cancel.set()
-            return True
+            if job is not None:
+                if job.stage not in ('resolving','needs_user','downloading','verifying'):
+                    return False
+                job.cancel.set()
+                return True
+        return supervisor.cancel(job_id)
 
     def mark_open(self, path: str) -> None:
         with self._lock:

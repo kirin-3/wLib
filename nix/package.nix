@@ -65,6 +65,7 @@ let
     ps.pyqt6-webengine
     ps.certifi
     ps.cryptography
+    ps.libtorrent-rasterbar # imported only by the --torrent-helper process
   ]);
 
   # Suffixed so tools the user installed (their own Wine flavour, say) win.
