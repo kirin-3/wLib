@@ -3,6 +3,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTagFilterOptions,
+  formatLastPlayed,
+  formatPlaytime,
+  getEffectiveLaunchTargets,
+  hasAdditionalLaunchTargets,
   compareLibraryGames,
   gameFolder,
   gameSources,
@@ -343,4 +347,35 @@ test("source filters match any selected source or all games when empty", () => {
   assert.equal(matchesSourceFilter(game, ["dlsite"]), true);
   assert.equal(matchesSourceFilter(game, ["vndb", "f95"]), true);
   assert.equal(matchesSourceFilter(game, ["vndb", "ryuugames"]), false);
+});
+
+test("playtime and last-played formatting", () => {
+  assert.equal(formatPlaytime(null), "0.0 hrs");
+  assert.equal(formatPlaytime(5400), "1.5 hrs");
+  assert.equal(formatLastPlayed(null), "Never");
+  assert.equal(formatLastPlayed("not a date"), "Never");
+  assert.notEqual(formatLastPlayed("2026-01-02T00:00:00Z"), "Never");
+});
+
+test("launch targets list the default first, then by sort order", () => {
+  const targets = getEffectiveLaunchTargets({
+    id: 7,
+    exe_path: "/g/a.sh",
+    launch_targets: [
+      { id: 2, game_id: 7, label: "B", exe_path: "/g/b", sort_order: 1 },
+      { id: 1, game_id: 7, label: "A", exe_path: "/g/a2", sort_order: 1 },
+      { id: 3, game_id: 7, label: "C", exe_path: "/g/c", sort_order: 0 },
+    ],
+  } as never);
+  assert.deepEqual(targets.map((t) => t.id), ["default-7", "target-3", "target-1", "target-2"]);
+  assert.equal(targets[0].isDefault, true);
+});
+
+test("additional launch targets are hidden while running or wishlisted", () => {
+  const target = { id: 1, game_id: 1, label: "A", exe_path: "/a", sort_order: 0 };
+  const game = { exe_path: "/g/a.sh", launch_targets: [target] } as never;
+  assert.equal(hasAdditionalLaunchTargets(game, false), true);
+  assert.equal(hasAdditionalLaunchTargets(game, true), false);
+  assert.equal(hasAdditionalLaunchTargets({ exe_path: "", launch_targets: [target] } as never, false), false);
+  assert.equal(hasAdditionalLaunchTargets({ exe_path: "/g/a.sh", launch_targets: [] } as never, false), false);
 });

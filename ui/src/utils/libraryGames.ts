@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { GameRecord } from "../services/api.ts";
+import type { GameRecord, LaunchTarget } from "../services/api.ts";
 import type { SortDir, SortField } from "./libraryViewState.ts";
-import { normalizePlayStatus } from "./playStatus.ts";
+import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 
 export const LIBRARY_SOURCES = [
   { key: "f95", label: "F95Zone" },
@@ -246,3 +246,43 @@ export function libraryDisplayState(
   if (!gameCount) return "empty";
   return filteredCount ? "list" : "no-results";
 }
+
+export interface EffectiveLaunchTarget {
+  id: string;
+  label: string;
+  exe_path: string;
+  isDefault: boolean;
+}
+
+export const formatPlaytime = (seconds: number | null | undefined): string => {
+  if (!seconds) return "0.0 hrs";
+  return (seconds / 3600).toFixed(1) + " hrs";
+};
+
+export const formatLastPlayed = (value?: string | null): string => {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleDateString();
+};
+
+export const getGamePlayStatusMeta = (game: Pick<GameRecord, "play_status" | "status">) =>
+  getPlayStatusMeta(game.play_status, game.status);
+
+const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] =>
+  [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+
+export const getEffectiveLaunchTargets = (
+  game: Pick<GameRecord, "id" | "exe_path" | "launch_targets">,
+): EffectiveLaunchTarget[] => [
+  { id: `default-${game.id}`, label: "Default", exe_path: game.exe_path, isDefault: true },
+  ...sortLaunchTargets(game.launch_targets || []).map((target) => ({
+    id: `target-${target.id}`,
+    label: target.label,
+    exe_path: target.exe_path,
+    isDefault: false,
+  })),
+];
+
+export const hasAdditionalLaunchTargets = (
+  game: Pick<GameRecord, "exe_path" | "launch_targets">,
+  running: boolean,
+): boolean => !isWishlisted(game) && !running && (game.launch_targets || []).length > 0;

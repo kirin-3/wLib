@@ -152,6 +152,18 @@ The game detail modal has a **Notes** tab after Overview, Journal, Launch, and I
 - **Rendered links**: a single delegated click handler on the rendered container calls `preventDefault()` on any `<a>` click. `getSafeNotesLinkUrl()` in `ui/src/utils/notesLinks.ts` returns the href only for absolute `http:`/`https:` URLs; safe links open through `api.openInBrowser` with `notifyError` on failure, every other link does nothing, and the wLib window never navigates.
 - **Attachments**: `GameAttachment` (`{name, size}`) with `listGameAttachments`, `addGameAttachment`, `openGameAttachment`, `removeGameAttachment`, and `browseAttachmentFile` wrappers in `services/api.ts`. The tab shows an Attach file button (busy while pending), names with human-readable sizes, open-on-click, and Remove with `confirm()`. Errors go through `notifyError`; an `attachment_missing` error refreshes the list. The list loads when the Notes tab is selected or the game changes. Browser mocks persist a per-game list in `localStorage` under `wlib-mock-attachments`, return `/mock/guide.md` for the picker, and report success for open.
 
+## Library cards and rows
+
+`LibraryView.vue` renders each game through `components/library/GameCard.vue` (grid, compact and banner layouts) and `components/library/GameRow.vue` (the list `<tr>`). A change to one game, such as a selection toggle, a playtime tick, a game starting or stopping, an update-check spinner or a launch-target menu, re-renders only that game's card or row.
+
+Keep it that way:
+
+- Pass primitive props (`selected`, `running`, `menuOpen`, `updating`, `updateBusy`, `selectionMode`, `primary`, `layoutMode`) plus the `game` record. Do not read per-game fields in the `LibraryView` template.
+- Bind handlers as method references (`@activate="handleCardClick"`). The components emit with the game (`emit('activate', game, event)`), so the parent never creates a per-game closure that would change the props on every render.
+- Pure per-game helpers (`getGamePlayStatusMeta`, `formatPlaytime`, `formatLastPlayed`, `getEffectiveLaunchTargets`, `hasAdditionalLaunchTargets(game, running)`) live in `utils/libraryGames.ts`.
+- Keep `.game-card`, `.game-row`, `data-game-id` and `data-controller-primary` on the component roots; controller navigation, selection and scrolling query them.
+- Card and row styles are scoped in the components. Rules that depend on the parent (`.library-cards--banner ...`) still match because only the last compound selector gets the component's scope attribute.
+
 ## Import Folder
 
 `LibraryView.vue` opens `components/modals/ImportFolderModal.vue` from the **Import Folder** action beside **Add Game** and **Install from archive**. The modal scans a folder with `api.scanGamesFolder(path)`, lists games already in the library separately and disables their checkboxes, and selects every new game by default. The folder input uses `PathStatus` (`dir`) and Enter starts a scan.

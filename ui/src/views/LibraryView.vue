@@ -3,9 +3,13 @@
 import { activeFilterChips as buildFilterChips, removeFilterValue, type FilterChip } from "../utils/libraryFilters";
 import { confirmAction } from "../utils/confirm";
 import { controllerFocusText, useControllerActions } from "../utils/controllerActions";
-import { libraryDisplayState } from "../utils/libraryGames";
-import { gameCoverSrc } from "../utils/gameCover";
-import CoverImage from "../components/CoverImage.vue";
+import {
+  getEffectiveLaunchTargets,
+  libraryDisplayState,
+  type EffectiveLaunchTarget,
+} from "../utils/libraryGames";
+import GameCard from "../components/library/GameCard.vue";
+import GameRow from "../components/library/GameRow.vue";
 import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { toCssPx } from "../utils/interfaceScalePreference";
@@ -15,7 +19,6 @@ import { useRoute, useRouter } from "vue-router";
 import {
   IconArchive,
   IconCheck,
-  IconChevronDown,
   IconArrowLeft,
   IconArrowUp,
   IconClock,
@@ -28,25 +31,20 @@ import {
   IconPanoramaHorizontalFilled,
   IconLayoutListFilled,
   IconFolderPlus,
-  IconLoader2,
   IconPhotoFilled,
-  IconPlayerStopFilled,
-  IconPlayerPlayFilled,
   IconPlus,
-  IconRefresh,
   IconSparkles,
   IconZoom,
   IconStarFilled,
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
-import type { CompanionTool, GameRecord, LaunchMode, LaunchTarget, StoreLink } from "../services/api";
+import type { CompanionTool, GameRecord, LaunchMode, StoreLink } from "../services/api";
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import ImportFolderModal from "../components/modals/ImportFolderModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
 import {
   getPlayStatusOptions,
-  getPlayStatusMeta,
   normalizePlayStatus,
 } from "../utils/playStatus";
 import {
@@ -135,13 +133,6 @@ interface PlaytimeTickDetail {
   isFinal?: boolean;
   lastPlayedVersion?: string;
   sessionId?: number;
-}
-
-interface EffectiveLaunchTarget {
-  id: string;
-  label: string;
-  exe_path: string;
-  isDefault: boolean;
 }
 
 const readQueryValue = (value: unknown): string => {
@@ -303,10 +294,6 @@ const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.fi
 const cardSize = ref<CardSize>(DEFAULT_LIBRARY_VIEW_STATE.cardSize);
 const cardScales = [0.75, 0.875, 1, 1.25, 1.5] as const;
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
-// Compact and banner both draw image-only tiles (cover, overlay, bottom row).
-const isImageTileLayout = computed(
-  () => layoutMode.value === "compact" || layoutMode.value === "banner",
-);
 const sortBy = ref<SortField>(DEFAULT_LIBRARY_VIEW_STATE.sortBy);
 const sortDir = ref<SortDir>(DEFAULT_LIBRARY_VIEW_STATE.sortDir);
 
@@ -1100,44 +1087,6 @@ const showModalUpdateNotice = (type: UpdateNotice["type"], message: string) => {
   }, 5000);
 };
 
-const formatPlaytime = (seconds: number | null | undefined): string => {
-  if (!seconds) return "0.0 hrs";
-  return (seconds / 3600).toFixed(1) + " hrs";
-};
-
-const getGamePlayStatusMeta = (game: GameRecord) => {
-  return getPlayStatusMeta(game.play_status, game.status);
-};
-
-const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
-  return [...targets].sort(
-    (a, b) => a.sort_order - b.sort_order || a.id - b.id,
-  );
-};
-
-const getEffectiveLaunchTargets = (
-  game: GameRecord,
-): EffectiveLaunchTarget[] => [
-  {
-    id: `default-${game.id}`,
-    label: "Default",
-    exe_path: game.exe_path,
-    isDefault: true,
-  },
-  ...sortLaunchTargets(game.launch_targets || []).map((target) => ({
-    id: `target-${target.id}`,
-    label: target.label,
-    exe_path: target.exe_path,
-    isDefault: false,
-  })),
-];
-
-const hasAdditionalLaunchTargets = (game: GameRecord): boolean => {
-  return (
-    !isWishlisted(game) && !runningGameIds.value.has(game.id) && (game.launch_targets || []).length > 0
-  );
-};
-
 const closeLaunchTargetMenus = () => {
   openLaunchTargetMenuId.value = null;
 };
@@ -1610,11 +1559,6 @@ const handleLibraryKeyboard = (event: KeyboardEvent) => {
     searchInput.value.focus();
     searchInput.value.select();
   }
-};
-
-const formatLastPlayed = (value?: string | null): string => {
-  const date = new Date(value || "");
-  return Number.isNaN(date.getTime()) ? "Never" : date.toLocaleDateString();
 };
 
 const handleModalUpdateCheck = async (gameId: number) => {
@@ -2476,137 +2420,18 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr
+            <GameRow
               v-for="(game, index) in filteredGames"
               :key="game.id"
-              :data-game-id="game.id"
-              :data-controller-primary="index === 0 ? '' : undefined"
-              tabindex="0"
-              role="row"
-              @keydown.enter.self.prevent="handleCardClick(game, $event)"
-              @keydown.space.self.prevent="handleCardClick(game, $event)"
-              class="game-row"
-              :class="{ 'is-running': runningGameIds.has(game.id), 'is-selected': selectedIds.has(game.id) }"
-              :aria-selected="selectedIds.has(game.id)"
-              @mousedown.shift.prevent
-              @click="handleCardClick(game, $event)"
-              @contextmenu="openContextMenu(game, $event)"
-              @keydown="openContextMenu(game, $event)"
-            >
-              <td class="library-table-title"><span v-if="selectedIds.has(game.id)" class="mr-2" aria-hidden="true">✓</span>
-                <div class="flex items-center gap-2 min-w-0">
-                  <span v-if="gameCoverSrc(game)" class="cover-thumb w-8 h-8 shrink-0">
-                    <CoverImage :game="game" img-class="w-8 h-8 rounded object-cover" />
-                  </span>
-                  <span
-                    v-else
-                    class="w-8 h-8 rounded shrink-0 flex items-center justify-center"
-                    style="background: var(--bg-raised)"
-                    aria-hidden="true"
-                    ><IconPhotoFilled
-                      class="w-4 h-4"
-                      style="color: var(--text-muted)"
-                  /></span>
-                  <button
-                    @click.stop="handleCardClick(game, $event)"
-                    class="truncate text-left font-semibold"
-                    :title="game.title"
-                  >
-                    {{ game.title }}
-                  </button>
-                  <span v-if="isWishlisted(game)" class="wishlist-pill shrink-0">Wishlist</span>
-                  <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill shrink-0">Finished</span>
-                  <IconStarFilled
-                    v-if="game.is_favorite"
-                    class="w-3.5 h-3.5 shrink-0 text-yellow-500"
-                    aria-label="Favorite"
-                  />
-                  <span
-                    v-if="runningGameIds.has(game.id)"
-                    class="running-label shrink-0"
-                    >Running</span
-                  >
-                  <IconLoader2
-                    v-if="game.metadata_pending"
-                    class="w-3.5 h-3.5 shrink-0 animate-spin"
-                    style="color: var(--text-muted)"
-                    aria-label="Fetching F95 info"
-                  />
-                </div>
-              </td>
-              <td>
-                <div class="flex items-center gap-1">
-                  <span class="font-mono text-xs">{{
-                    game.version || "Unknown"
-                  }}</span>
-                  <span
-                    v-if="hasAvailableUpdate(game)"
-                    class="update-pill"
-                    :title="`Update available: ${game.latest_version}`"
-                  >
-                    <IconArrowUp class="w-3 h-3" aria-hidden="true" />
-                    <span class="sr-only">Update available: </span
-                    >{{ game.latest_version }}
-                  </span>
-                  <span v-if="hasUnplayedUpdate(game)" class="unplayed-label">Unplayed</span>
-                </div>
-              </td>
-              <td class="library-table-clip" :title="getGamePlayStatusMeta(game).label">
-                <span
-                  class="ui-status-inline whitespace-nowrap"
-                  :class="getGamePlayStatusMeta(game).toneClass"
-                  ><component
-                    :is="getGamePlayStatusMeta(game).icon"
-                    class="ui-status-icon"
-                  />{{ getGamePlayStatusMeta(game).label }}</span
-                >
-              </td>
-              <td
-                class="col-engine library-table-clip text-xs"
-                :title="game.engine || 'Unknown'"
-              >
-                {{ game.engine || "Unknown" }}
-              </td>
-              <td class="text-xs">
-                {{ formatPlaytime(game.playtime_seconds) }}
-              </td>
-              <td
-                class="col-last-played text-xs"
-                :title="game.last_played || 'Never'"
-              >
-                {{ formatLastPlayed(game.last_played) }}
-              </td>
-              <td>
-                <div class="flex items-center gap-1">
-                  <button
-                    @click.stop="toggleGame(game)"
-                    :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                    class="play-btn ui-play-btn rounded-md p-1.5"
-                  >
-                    <IconPlayerStopFilled
-                      v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
-                      class="w-4 h-4"
-                    /><span v-else-if="isWishlisted(game)" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-4 h-4" />
-                  </button>
-                  <select
-                    v-if="hasAdditionalLaunchTargets(game)"
-                    aria-label="Choose launch target"
-                    class="table-target-select"
-                    @click.stop
-                    @change="launchTargetFromSelect(game, $event)"
-                  >
-                    <option value="">▾</option>
-                    <option
-                      v-for="target in getEffectiveLaunchTargets(game)"
-                      :key="target.id"
-                      :value="target.id"
-                    >
-                      {{ target.label }}
-                    </option>
-                  </select>
-                </div>
-              </td>
-            </tr>
+              :game="game"
+              :selected="selectedIds.has(game.id)"
+              :running="runningGameIds.has(game.id)"
+              :primary="index === 0"
+              @activate="handleCardClick"
+              @contextmenu="openContextMenu"
+              @toggle-game="toggleGame"
+              @target-select="launchTargetFromSelect"
+            />
           </tbody>
         </table>
       </div>
@@ -2623,270 +2448,25 @@ onUnmounted(() => {
               : 'library-cards--grid'
         "
       >
-        <div
+        <GameCard
           v-for="(game, index) in filteredGames"
           :key="game.id"
-          :data-game-id="game.id"
-          :data-controller-primary="index === 0 ? '' : undefined"
-          @click="handleCardClick(game, $event)"
-          @keydown.enter.self.prevent="handleCardClick(game, $event)"
-          @keydown.space.self.prevent="handleCardClick(game, $event)"
-          @keydown="openContextMenu(game, $event)"
-          @contextmenu="openContextMenu(game, $event)"
-          tabindex="0"
-          role="checkbox"
-          :aria-label="`${game.title}. ${selectedIds.size || selecting ? 'Press Enter to toggle selection.' : 'Press Enter for details.'}`"
-          :aria-checked="selectedIds.has(game.id)"
-          @mousedown.shift.prevent
-          class="game-card group rounded-xl cursor-pointer relative"
-          :class="[
-            layoutMode === 'banner'
-              ? 'aspect-[2/1]'
-              : isImageTileLayout
-                ? 'aspect-[16/9]'
-                : 'flex flex-col',
-            {
-              'is-selected': selectedIds.has(game.id),
-              'is-running': runningGameIds.has(game.id),
-              'is-menu-open': openLaunchTargetMenuId === game.id,
-            },
-          ]"
-        >
-          <span v-if="selectedIds.has(game.id)" class="selection-mark" aria-hidden="true">✓</span>
-          <div
-            class="flex items-center justify-center relative shadow-inner shrink-0 rounded-t-xl"
-            :class="
-              isImageTileLayout
-                ? 'w-full h-full rounded-b-xl'
-                : 'w-full aspect-[16/9]'
-            "
-            style="
-              background: linear-gradient(
-                135deg,
-                var(--bg-raised),
-                var(--bg-inset)
-              );
-            "
-          >
-            <CoverImage
-              v-if="gameCoverSrc(game)"
-              :game="game"
-              :alt="game.title"
-              :img-class="[
-                'absolute inset-0 w-full h-full object-cover rounded-t-xl',
-                layoutMode === 'banner' ? 'object-center' : 'object-top',
-                isImageTileLayout ? 'rounded-b-xl' : '',
-              ]"
-            />
-            <IconPhotoFilled
-              v-else
-              class="w-12 h-12"
-              style="color: var(--border)"
-            />
-            <div
-              v-if="game.metadata_pending"
-              class="metadata-pending absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-xs font-medium"
-              :class="isImageTileLayout ? 'rounded-xl' : 'rounded-t-xl'"
-              role="status"
-            >
-              <IconLoader2 class="w-6 h-6 animate-spin" />
-              Fetching F95 info…
-            </div>
-            <div class="absolute top-2 left-2 flex items-center gap-1 z-10">
-              <span
-                v-if="runningGameIds.has(game.id)"
-                class="running-label"
-                title="Game is running"
-                >● Running</span
-              >
-              <span
-                v-if="game.is_favorite"
-                class="card-indicator"
-                title="Favorite"
-                aria-label="Favorite"
-                ><IconStarFilled class="w-3 h-3 text-yellow-400"
-              /></span>
-              <span
-                v-if="isImageTileLayout && hasAvailableUpdate(game)"
-                class="update-pill update-pill-on-art"
-                :title="`Update available: ${game.latest_version}`"
-              >
-                <IconArrowUp class="w-3 h-3" aria-hidden="true" />
-                <span class="sr-only">Update available: </span
-                >{{ game.latest_version }}
-              </span>
-              <span v-if="isImageTileLayout && hasUnplayedUpdate(game)" class="unplayed-label unplayed-on-art">Unplayed</span>
-            </div>
-            <button
-              v-if="!isImageTileLayout && game.f95_url"
-              @click.stop="checkUpdate(game)"
-              :disabled="updatingId !== null"
-              :title="`Check updates for ${game.title}`"
-              class="update-overlay-btn ui-icon-btn absolute top-2 right-2 p-1.5 rounded-lg"
-              :class="{ 'update-check-running': updatingId === game.id }"
-            >
-              <IconRefresh
-                v-if="updatingId !== game.id"
-                class="ui-action-icon"
-              /><IconLoader2 v-else class="ui-action-icon animate-spin" />
-            </button>
-            <span
-              v-if="!isImageTileLayout && game.rating"
-              class="rating-badge absolute bottom-2 left-2 text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1"
-              ><IconStarFilled class="w-3 h-3" />{{ game.rating }}</span
-            >
-            <div
-              v-if="isImageTileLayout"
-              class="compact-image-overlay banner-reveal absolute inset-0 rounded-xl"
-            ></div>
-            <div
-              v-if="isImageTileLayout"
-              class="banner-reveal absolute inset-x-0 bottom-0 z-10 p-2 flex items-end gap-2"
-              :class="layoutMode === 'banner' ? 'justify-start' : 'justify-between'"
-            >
-              <h3
-                class="compact-title text-sm font-bold leading-tight"
-                :class="
-                  layoutMode === 'banner'
-                    ? 'banner-title min-w-0 flex-1'
-                    : ''
-                "
-                :title="game.title"
-              >
-                {{ game.title }}
-              </h3>
-              <div
-                class="relative flex shrink-0"
-                :class="{ 'order-first': layoutMode === 'banner' }"
-              >
-                <button
-                  @click.stop="toggleGame(game)"
-                  class="compact-play-btn ui-play-btn rounded-md p-2"
-                  :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                >
-                  <IconPlayerStopFilled
-                    v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
-                    class="w-3.5 h-3.5"
-                  /><span v-else-if="isWishlisted(game)" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
-                </button>
-                <button
-                  v-if="hasAdditionalLaunchTargets(game)"
-                  @click.stop="toggleLaunchTargetMenu(game)"
-                  class="compact-target-toggle rounded-md px-1.5"
-                  :title="`Choose launch target for ${game.title}`"
-                  :aria-expanded="openLaunchTargetMenuId === game.id"
-                >
-                  <IconChevronDown class="w-3.5 h-3.5" />
-                </button>
-                <div
-                  v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
-                  class="launch-target-menu"
-                  @click.stop
-                >
-                  <button
-                    v-for="target in getEffectiveLaunchTargets(game)"
-                    :key="target.id"
-                    class="launch-target-menu-item"
-                    @click.stop="launchSelectedTarget(game, target)"
-                  >
-                    {{ target.label }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div
-            v-if="!isImageTileLayout"
-            class="p-3 flex flex-col flex-1 min-w-0"
-          >
-            <h3
-              class="font-bold truncate text-base mb-1"
-              :title="game.title"
-              style="color: var(--text-primary)"
-            >
-              {{ game.title }}
-            </h3>
-            <p
-              v-if="game.developer"
-              class="truncate text-xs mb-2"
-              style="color: var(--text-muted)"
-            >
-              by {{ game.developer }}
-            </p>
-            <div class="flex flex-wrap items-center gap-1.5 text-xs mb-3">
-              <span class="font-mono" style="color: var(--brand)">{{
-                game.version || "Unknown"
-              }}</span>
-              <span v-if="isWishlisted(game)" class="wishlist-pill">Wishlist</span>
-              <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill">Finished</span>
-              <span
-                v-if="hasAvailableUpdate(game)"
-                class="update-pill"
-                :title="`Update available: ${game.latest_version}`"
-              >
-                <IconArrowUp class="w-3 h-3" aria-hidden="true" />
-                <span class="sr-only">Update available: </span
-                >{{ game.latest_version }}
-              </span>
-              <span v-if="hasUnplayedUpdate(game)" class="unplayed-label">Unplayed</span>
-              <span
-                v-if="game.playtime_seconds"
-                style="color: var(--text-secondary)"
-                >⏱ {{ formatPlaytime(game.playtime_seconds) }}</span
-              >
-            </div>
-            <div class="flex items-center justify-between gap-2 mt-auto">
-              <span
-                class="ui-status-chip px-2 py-1 text-xs min-w-0"
-                :class="getGamePlayStatusMeta(game).toneClass"
-                :title="getGamePlayStatusMeta(game).label"
-                ><component
-                  :is="getGamePlayStatusMeta(game).icon"
-                  class="ui-status-icon"
-                /><span class="truncate">{{
-                  getGamePlayStatusMeta(game).label
-                }}</span></span
-              >
-              <div class="relative flex shrink-0">
-                <button
-                  @click.stop="toggleGame(game)"
-                  :title="`${isWishlisted(game) ? 'Set up' : runningGameIds.has(game.id) ? 'Stop' : 'Play'} ${game.title}`"
-                  class="play-btn ui-play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
-                >
-                  <IconPlayerStopFilled
-                    v-if="!isWishlisted(game) && runningGameIds.has(game.id)"
-                    class="ui-action-icon"
-                  /><IconPlayerPlayFilled v-else-if="!isWishlisted(game)" class="ui-action-icon" />{{
-                    isWishlisted(game) ? "Set up" : runningGameIds.has(game.id) ? "Stop" : "Play"
-                  }}
-                </button>
-                <button
-                  v-if="hasAdditionalLaunchTargets(game)"
-                  @click.stop="toggleLaunchTargetMenu(game)"
-                  class="target-menu-toggle ui-action-btn px-1 py-1.5 rounded-lg"
-                  :title="`Choose launch target for ${game.title}`"
-                  :aria-expanded="openLaunchTargetMenuId === game.id"
-                >
-                  <IconChevronDown class="ui-action-icon" />
-                </button>
-                <div
-                  v-if="openLaunchTargetMenuId === game.id && !runningGameIds.has(game.id)"
-                  class="launch-target-menu"
-                  @click.stop
-                >
-                  <button
-                    v-for="target in getEffectiveLaunchTargets(game)"
-                    :key="target.id"
-                    class="launch-target-menu-item"
-                    @click.stop="launchSelectedTarget(game, target)"
-                  >
-                    {{ target.label }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+          :game="game"
+          :layout-mode="layoutMode"
+          :selected="selectedIds.has(game.id)"
+          :running="runningGameIds.has(game.id)"
+          :menu-open="openLaunchTargetMenuId === game.id"
+          :updating="updatingId === game.id"
+          :update-busy="updatingId !== null"
+          :selection-mode="selecting || selectedIds.size > 0"
+          :primary="index === 0"
+          @activate="handleCardClick"
+          @contextmenu="openContextMenu"
+          @toggle-game="toggleGame"
+          @toggle-menu="toggleLaunchTargetMenu"
+          @launch-target="launchSelectedTarget"
+          @check-update="checkUpdate"
+        />
       </div>
 
       <Teleport to="body">
@@ -3131,9 +2711,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.is-selected { box-shadow: inset 0 0 0 3px var(--brand); }
-.selection-mark { position: absolute; z-index: 5; top: .5rem; right: .5rem; padding: .2rem .45rem; border-radius: 999px; background: var(--brand); color: var(--on-brand); font-weight: bold; }
-
 .library-skeletons--list { grid-template-columns: 1fr; gap: 8px; }
 .library-skeleton { background: var(--bg-surface); border: 1px solid var(--border); animation: skeleton-pulse 1.5s ease-in-out infinite alternate; }
 .library-skeleton--grid { height: 340px; }
@@ -3156,54 +2733,6 @@ onUnmounted(() => {
 .library-cards--banner {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(420px * var(--card-scale, 1))), 1fr));
 }
-.banner-title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  text-overflow: ellipsis;
-  overflow: hidden;
-}
-/* Hidden only visually: opacity keeps Play clickable and focusable, so a click
-   that arrives before :hover applies still hits the button, not the card. */
-.library-cards--banner .banner-reveal {
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.library-cards--banner .game-card:hover .banner-reveal,
-.library-cards--banner .game-card:focus-within .banner-reveal,
-.library-cards--banner .game-card.is-running .banner-reveal,
-.library-cards--banner .game-card.is-menu-open .banner-reveal {
-  opacity: 1;
-}
-@media (hover: none) {
-  .library-cards--banner .banner-reveal {
-    opacity: 1;
-  }
-}
-/* Play sits bottom-left here, so the chooser opens rightward from it. */
-.library-cards--banner .launch-target-menu {
-  right: auto;
-  left: 0;
-}
-.game-card:focus-visible,
-.library-table button:focus-visible,
-.game-context-menu :is(button, select):focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 3px;
-}
-.metadata-pending {
-  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
-  color: var(--text-secondary);
-}
-
-.game-card.is-running {
-  border-color: var(--brand);
-  box-shadow:
-    0 0 0 2px var(--brand),
-    var(--shadow-card);
-}
-.running-label,
 .collection-count {
   background: var(--brand);
   color: var(--on-brand);
@@ -3256,27 +2785,6 @@ onUnmounted(() => {
   background: var(--brand);
   color: var(--on-brand);
 }
-.wishlist-pill,
-.finished-pill {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  padding: 0.15rem 0.35rem;
-  background: var(--bg-raised);
-  color: var(--text-primary);
-  font-size: 0.65rem;
-  font-weight: 700;
-  line-height: 1.2;
-}
-.finished-pill {
-  color: var(--success-text);
-}
-.card-indicator {
-  background: var(--overlay-scrim-strong);
-  border-radius: 0.3rem;
-  padding: 0.25rem;
-}
 .library-table-wrap {
   overflow-x: auto;
   container-type: inline-size;
@@ -3299,42 +2807,19 @@ onUnmounted(() => {
   background: var(--bg-surface);
   font-size: 0.8rem;
 }
-.library-table :is(th, td) {
+.library-table th {
   padding: 0.4rem 0.5rem;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-/* Fits the longest built-in status ("Waiting For Update"); longer custom names truncate. */
-.library-table-clip {
-  max-width: 10.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.library-table button:focus-visible,
+.game-context-menu :is(button, select):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 3px;
 }
 .library-table th {
   color: var(--text-muted);
   font-size: 0.7rem;
-}
-.library-table-title {
-  max-width: 16rem;
-  min-width: 10rem;
-  color: var(--text-primary);
-}
-.game-row {
-  height: 48px;
-  cursor: pointer;
-}
-.game-row:hover {
-  background: var(--bg-raised);
-}
-.game-row.is-running {
-  background: var(--brand-glow);
-  box-shadow: inset 3px 0 var(--brand);
-}
-.table-target-select {
-  width: 1.5rem;
-  background: var(--bg-raised);
-  color: var(--text-primary);
-  border-radius: 0.25rem;
 }
 .game-context-menu {
   position: fixed;
@@ -3365,67 +2850,6 @@ onUnmounted(() => {
   opacity: 0.5;
   cursor: wait;
 }
-.game-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-}
-.game-card:hover {
-  border-color: var(--brand);
-  box-shadow: 0 4px 20px var(--brand-glow);
-  transform: translateY(-2px);
-}
-
-:global(.motion-off) .game-card:not(.is-running):hover {
-  border-color: var(--border);
-  box-shadow: var(--shadow-card);
-  transform: none;
-}
-
-.target-menu-toggle {
-  margin-left: 0.35rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-hover);
-  color: var(--text-secondary);
-}
-
-.target-menu-toggle:hover {
-  background: var(--bg-overlay);
-  color: var(--text-primary);
-}
-
-.launch-target-menu {
-  position: absolute;
-  z-index: 30;
-  right: 0;
-  bottom: calc(100% + 0.5rem);
-  min-width: 11rem;
-  max-width: 16rem;
-  padding: 0.35rem;
-  border: 1px solid var(--border-hover);
-  border-radius: 0.5rem;
-  background: var(--bg-surface);
-  box-shadow: var(--shadow-card);
-}
-
-.launch-target-menu-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  width: 100%;
-  padding: 0.45rem 0.55rem;
-  border-radius: 0.4rem;
-  color: var(--text-primary);
-  font-size: 0.75rem;
-  text-align: left;
-}
-
-.launch-target-menu-item:hover {
-  background: var(--bg-raised);
-}
-
 .library-primary-btn {
   transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
 }
@@ -3460,115 +2884,8 @@ onUnmounted(() => {
   outline-offset: 1px;
 }
 
-.compact-image-overlay {
-  background: linear-gradient(
-    to top,
-    rgba(0, 0, 0, 0.85) 0%,
-    rgba(0, 0, 0, 0.58) 42%,
-    rgba(0, 0, 0, 0.24) 70%,
-    rgba(0, 0, 0, 0.08) 100%
-  );
-}
-
-.compact-title {
-  color: #f8fafc;
-  text-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.95),
-    0 0 8px rgba(0, 0, 0, 0.85);
-  -webkit-text-stroke: 0.4px rgba(0, 0, 0, 0.65);
-  max-height: 2.6em;
-  overflow: hidden;
-}
-
-.compact-target-toggle {
-  margin-left: 0.25rem;
-  background: rgba(17, 24, 39, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  color: #f8fafc;
-}
-
-.compact-target-toggle:hover {
-  background: rgba(17, 24, 39, 0.78);
-  border-color: rgba(255, 255, 255, 0.42);
-}
-
-/* Sits on cover art in both themes, so it keeps dark-on-image colors. */
-.rating-badge {
-  background: var(--overlay-scrim-strong);
-  border: 1px solid var(--overlay-border);
-  color: #facc15;
-}
-
-.rating-badge svg {
-  fill: currentColor;
-}
-
-.update-overlay-btn {
-  background: var(--overlay-scrim-strong);
-  border: 1px solid var(--overlay-border);
-  color: var(--overlay-control-text);
-  /* Hidden only visually: it stays clickable so a click that arrives with the
-     pointer (before :hover applies) still hits the button, not the card. */
-  opacity: 0;
-  transition: opacity 0.18s ease, background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
-}
-
-.game-card:hover .update-overlay-btn,
-.game-card:focus-within .update-overlay-btn,
-/* Every card's control is disabled while any check runs; only the card being
-   checked keeps its spinner visible at rest. */
-.update-overlay-btn.update-check-running {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .update-overlay-btn {
-    opacity: 1;
-  }
-}
-
-.update-overlay-btn:hover {
-  background: var(--overlay-scrim);
-  color: var(--overlay-control-text);
-}
-
-.update-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-  color: var(--success-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-/* Sits on cover art, so it keeps a solid fill for contrast. */
-.update-pill-on-art {
-  background: var(--success-text);
-  border-color: transparent;
-  color: var(--text-inverse);
-}
-
 .library-sort-btn {
   transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
-}
-
-.unplayed-label {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--bg-raised);
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.unplayed-on-art {
-  background: var(--bg-surface);
 }
 
 .filter-tag-btn {
