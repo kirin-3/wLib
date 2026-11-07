@@ -1795,6 +1795,25 @@ def test_save_path_override_migration_and_update():
     assert "save_path_override" not in SYNC_GAME_COLUMNS
 
 
+def test_tags_user_edited_migration_and_update():
+    game_id = add_game("Tagged", "/tmp/tagged.exe")
+    assert game_id is not None
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN tags_user_edited")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    assert get_all_games()[0]["tags_user_edited"] == 0
+    applied = update_game(game_id, {"tags_user_edited": True})
+    assert applied == {"tags_user_edited": 1}
+    assert get_all_games()[0]["tags_user_edited"] == 1
+
+
 def test_save_backup_keep_validation():
     assert get_save_backup_keep() is None
     for raw, expected in (

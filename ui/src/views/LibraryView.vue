@@ -71,7 +71,13 @@ import {
 } from "../utils/libraryViewState";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notify, notifyError, notifyUndo } from "../utils/toast";
-import { runBulk, statusSnapshot, versionSnapshot } from "../utils/bulkActions";
+import {
+  addTagCsv, engineSnapshot, launchModeApplicable, launchModeSnapshot, removeTagCsv, runBulk, runBulkSaveBackup,
+  runtimeSnapshot, sandboxSnapshot, statusSnapshot, tagsSnapshot, versionSnapshot, wineApplicable,
+} from "../utils/bulkActions";
+import BulkActionBar from "../components/BulkActionBar.vue";
+import { isEngine } from "../utils/engines";
+import BulkWineDialog, { type WineChoice } from "../components/BulkWineDialog.vue";
 import { isPendingRemoval, scheduleRemoval, settleRemovals } from "../utils/pendingRemovals";
 import { useLibrarySelection } from "../composables/useLibrarySelection";
 import { modalStack } from "../utils/modalKeyboard";
@@ -82,6 +88,7 @@ import {
   buildTagFilterOptions,
   compareLibraryGames,
   gameFolder,
+  gameTags,
   hasAvailableUpdate,
   hasTagFilter,
   hasUnplayedUpdate,
@@ -250,7 +257,7 @@ const searchQuery = ref("");
 const selection = useLibrarySelection();
 const selectedIds = selection.selectedIds;
 const selecting = ref(false);
-const bulkBar = ref<HTMLElement | null>(null);
+const bulkBar = ref<InstanceType<typeof BulkActionBar> | null>(null);
 const libraryControllerScope = ref<HTMLElement | null>(null);
 useControllerActions(libraryControllerScope, {
   play: () => {
@@ -258,9 +265,9 @@ useControllerActions(libraryControllerScope, {
     const game = games.value.find(item => String(item.id) === card?.dataset.gameId);
     if (game) void toggleGame(game);
   },
-  back: () => { if (!selectedIds.value.size && !selecting.value) return false; clearSelection(); return true; },
+  back: () => { if (bulkBar.value?.closeMenu()) return true; if (!selectedIds.value.size && !selecting.value) return false; clearSelection(); return true; },
   menu: () => {
-    if (selectedIds.value.size) bulkBar.value?.querySelector<HTMLElement>("button, select")?.focus();
+    if (selectedIds.value.size) bulkBar.value?.focusFirst();
     else (document.activeElement as HTMLElement | null)?.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }));
   },
   search: () => { if (searchInput.value) { controllerFocusText(searchInput.value); searchInput.value.select(); } },
@@ -610,17 +617,101 @@ const clearSelection = () => { selection.clear(); selecting.value = false; };
 const selectedGames = computed(() => filteredGames.value.filter((game) => selectedIds.value.has(game.id)));
 const bulkBusy = ref(false);
 const bulkChecking = ref(false);
-const bulkCollection = ref("");
+const bulkSavesBusy = ref(false);
+const bulkWineOpen = ref(false);
+const bulkShowRuntime = ref(false);
+const bulkTagSuggestions = computed(() => [...new Set(games.value.flatMap((game) => gameTags(game)))].sort((a, b) => a.localeCompare(b)));
 const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate(game)));
 const eligibleChecks = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
 let bulkStatusTimer: ReturnType<typeof setInterval> | undefined;
 const refreshBulkStatus = async () => { try { bulkChecking.value = (await api.getUpdateStatus()).running; } catch { /* Keep the last known state. */ } };
-onMounted(() => { void refreshBulkStatus(); bulkStatusTimer = setInterval(refreshBulkStatus, 2000); });
+onMounted(() => {
+  void refreshBulkStatus(); bulkStatusTimer = setInterval(refreshBulkStatus, 2000);
+  void loadPlatformCapabilities().then((capabilities) => { bulkShowRuntime.value = capabilities.platform === "linux"; });
+});
 onUnmounted(() => { if (bulkStatusTimer) clearInterval(bulkStatusTimer); });
+type BulkUpdate = (id: number, fields: Record<string, unknown>) => Promise<{ success?: boolean | undefined; error?: string | undefined }>;
+const bulkUpdate: BulkUpdate = (id, fields) => api.updateGame(id, fields);
+// Shared by the newer field actions: one library refresh, one summary toast, one Undo.
+const runBulkFields = async (
+  targets: GameRecord[],
+  apply: (game: GameRecord) => Promise<{ success?: boolean | undefined; error?: string | undefined }> | null,
+  snapshot: (game: GameRecord) => () => Promise<{ success?: boolean | undefined; error?: string | undefined }>,
+) => {
+  bulkBusy.value = true;
+  try {
+    const result = await api.withLibraryBatch(() => runBulk(targets, async (game) => apply(game), snapshot));
+    if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, () => api.withLibraryBatch(result.undo));
+    else notifyError(`No games changed; ${result.skipped} skipped, ${result.failed} failed.`);
+  } finally { bulkBusy.value = false; }
+};
+const applyBulkWine = (choice: WineChoice) => {
+  const running = runningGameIds.value;
+  void runBulkFields(
+    [...selectedGames.value],
+    (game) => {
+      if (!wineApplicable(game, running)) return null;
+      const fields: Record<string, unknown> = {};
+      if (choice.prefix.mode === "folder" && (game.custom_prefix || "") !== choice.prefix.path) fields.custom_prefix = choice.prefix.path;
+      if (choice.prefix.mode === "default" && (game.custom_prefix || "") !== "") fields.custom_prefix = "";
+      if (choice.runner.mode === "set" && (game.proton_version || "") !== choice.runner.path) fields.proton_version = choice.runner.path;
+      if (choice.runner.mode === "global" && (game.proton_version || "") !== "") fields.proton_version = "";
+      return Object.keys(fields).length ? bulkUpdate(game.id, fields) : null;
+    },
+    (game) => runtimeSnapshot(game, bulkUpdate),
+  );
+};
+const bulkBackupSaves = async (targets: GameRecord[]) => {
+  if (bulkSavesBusy.value) return;
+  bulkSavesBusy.value = true;
+  try {
+    const counts = await runBulkSaveBackup(targets, (id) => api.backupGameSaves(id));
+    const summary = `${counts.backedUp} backed up, ${counts.skipped} skipped${counts.failed ? `, ${counts.failed} failed` : ""}.`;
+    if (counts.backedUp || !counts.failed) notify(summary, counts.failed ? "info" : "success", "Save backup");
+    else notifyError(summary);
+  } finally { bulkSavesBusy.value = false; }
+};
 const bulkAction = async (action: string, value = "") => {
   if (bulkBusy.value) return;
   const games = [...selectedGames.value];
   if (action === "remove") { scheduleRemoval(games); return; }
+  if (action === "backup-saves") { await bulkBackupSaves(games); return; }
+  if (action === "launch-mode") {
+    const running = runningGameIds.value;
+    await runBulkFields(games, (game) => launchModeApplicable(game, value, running) ? bulkUpdate(game.id, { launch_mode: value }) : null, (game) => launchModeSnapshot(game, bulkUpdate));
+    return;
+  }
+  if (action === "sandbox-on" || action === "sandbox-off") {
+    const enable = action === "sandbox-on";
+    const affected = games.filter((game) => !!game.sandbox_enabled !== enable).length;
+    if (!enable && affected && !(await confirmAction({ title: "Turn sandbox off", message: `Turn off the sandbox for ${affected} game${affected === 1 ? "" : "s"}? They will launch with full access to your files.`, confirmLabel: "Sandbox off", danger: true }))) return;
+    await runBulkFields(games, (game) => !!game.sandbox_enabled === enable ? null : bulkUpdate(game.id, { sandbox_enabled: enable }), (game) => sandboxSnapshot(game, bulkUpdate));
+    return;
+  }
+  if (action === "add-tag" || action === "remove-tag") {
+    await runBulkFields(games, (game) => {
+      const csv = action === "add-tag" ? addTagCsv(game, value) : removeTagCsv(game, value);
+      return csv === null ? null : bulkUpdate(game.id, { tags: csv, tags_user_edited: true });
+    }, (game) => tagsSnapshot(game, bulkUpdate));
+    return;
+  }
+  if (action === "engine") {
+    await runBulkFields(games, (game) => isEngine(game.engine, value) ? null : bulkUpdate(game.id, { engine: value }), (game) => engineSnapshot(game, bulkUpdate));
+    return;
+  }
+  if (action === "refresh-covers") {
+    const ids = games.filter((game) => !!game.f95_url).map((game) => game.id);
+    if (!ids.length || bulkChecking.value) return;
+    bulkBusy.value = true;
+    try {
+      const result = await api.checkAllUpdates(ids, { refreshCovers: true });
+      if (!result.success) throw new Error(result.error || "Could not start cover refresh");
+      bulkChecking.value = true;
+      notify(`Refreshing covers for ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "Cover refresh", { label: "Open Updates", run: () => { void router.push("/updates"); } });
+      void refreshBulkStatus();
+    } catch (error) { notifyError(String(error)); } finally { bulkBusy.value = false; }
+    return;
+  }
   if (action === "check") {
     const ids = games.filter((game) => !!game.f95_url).map((game) => game.id);
     if (!ids.length || bulkChecking.value) return;
@@ -3015,21 +3106,26 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
-      <div v-if="selectedIds.size" ref="bulkBar" class="bulk-bar flex flex-wrap items-center gap-2 p-3 rounded-xl" role="region" aria-label="Bulk actions">
-        <strong>{{ selectedIds.size }} selected</strong>
-        <button class="ui-action-btn px-2 py-1" @click="selection.selectAll(filteredGames.map(game => game.id))">Select all</button>
-        <button class="ui-action-btn px-2 py-1" @click="clearSelection">Done</button>
-        <select class="ui-action-btn px-2 py-1" aria-label="Set status" :disabled="bulkBusy" @change="bulkAction('status', ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"><option value="">Set status</option><option v-for="item in allStatuses" :key="item.value" :value="item.value" :disabled="selectedGames.every(game => normalizePlayStatus(game.play_status, game.status) === item.value)">{{ item.label }}</option></select>
-        <select v-model="bulkCollection" class="ui-action-btn px-2 py-1" aria-label="Collection"><option value="">Choose collection</option><option v-for="name in userCollections" :key="name">{{ name }}</option></select>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !bulkCollection || selectedGames.every(game => (game.collections || []).some(name => name.toLowerCase() === bulkCollection.toLowerCase()))" title="Choose a collection that is missing from at least one selected game" @click="bulkAction('add', bulkCollection)">Add to collection</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !bulkCollection || selectedGames.every(game => !(game.collections || []).some(name => name.toLowerCase() === bulkCollection.toLowerCase()))" title="Choose a collection present on at least one selected game" @click="bulkAction('remove-collection', bulkCollection)">Remove from collection</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || selectedGames.every(game => game.is_favorite)" title="All selected games are already favorites" @click="bulkAction('favorite')">Favorite</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || selectedGames.every(game => !game.is_favorite)" title="No selected games are favorites" @click="bulkAction('unfavorite')">Unfavorite</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || bulkChecking || !eligibleChecks.length" :title="!eligibleChecks.length ? 'Selected games have no F95 thread' : bulkChecking ? 'An update check is running' : 'Check selected games'" @click="bulkAction('check')">Check for updates</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !eligibleUpdates.length" title="Requires an available update" @click="bulkAction('updated')">Mark as updated</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy || !eligibleUpdates.length" title="Requires an available update" @click="bulkAction('skip')">Skip version</button>
-        <button class="ui-action-btn px-2 py-1" :disabled="bulkBusy" @click="bulkAction('remove')">Remove</button>
-      </div>
+      <BulkActionBar
+        v-if="selectedIds.size"
+        ref="bulkBar"
+        :games="selectedGames"
+        :statuses="allStatuses"
+        :collections="userCollections"
+        :tag-suggestions="bulkTagSuggestions"
+        :running-ids="runningGameIds"
+        :show-runtime="bulkShowRuntime"
+        :busy="bulkBusy"
+        :checking="bulkChecking"
+        :saves-busy="bulkSavesBusy"
+        :eligible-checks="eligibleChecks.length"
+        :eligible-updates="eligibleUpdates.length"
+        @select-all="selection.selectAll(filteredGames.map(game => game.id))"
+        @done="clearSelection"
+        @action="bulkAction"
+        @wine="bulkWineOpen = true"
+      />
+      <BulkWineDialog v-model="bulkWineOpen" :games="selectedGames" :running-ids="runningGameIds" @apply="applyBulkWine" />
       <ImportFolderModal v-model="showImportModal" />
       <AddGameModal
         v-model="showAddModal"
@@ -3055,7 +3151,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.bulk-bar { position: sticky; bottom: 0; z-index: 40; background: var(--bg-raised); border: 1px solid var(--border); box-shadow: 0 4px 20px #0004; }
 .is-selected { box-shadow: inset 0 0 0 3px var(--brand); }
 .selection-mark { position: absolute; z-index: 5; top: .5rem; right: .5rem; padding: .2rem .45rem; border-radius: 999px; background: var(--brand); color: var(--on-brand); font-weight: bold; }
 

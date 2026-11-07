@@ -27,10 +27,10 @@ import { api, onWebviewReady, type DownloadOffer, type GameRecord } from "./serv
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
-import { dismissToast, notify, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
+import { dismissToast, notify, notifyUndo, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
 import { isPendingRemoval, settleRemovals } from "./utils/pendingRemovals";
 import { hasAvailableUpdate } from "./utils/libraryGames";
-import { shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
+import { changedCoversOfFinishedRefresh, shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
 import {
   INSTALL_ARCHIVE_EVENT,
   type InstallArchiveRequest,
@@ -94,6 +94,7 @@ let lastUpdateProgress = "";
 let pollingUpdates = false;
 let updateCountRequest = 0;
 let wasUpdateRunning = false;
+let lastCoverRefreshToast = "";
 const notifiedFinishedIds = new Set<number>();
 
 // Sync problems are shown on the Sync nav item and once as a toast, so they
@@ -230,6 +231,28 @@ const refreshUpdateCount = async () => {
   }
 };
 
+// One toast per finished cover refresh. It lives here, not in the Library, so
+// it still appears when the user leaves the Library during the check.
+const announceCoverRefresh = (status: Awaited<ReturnType<typeof api.getUpdateStatus>>) => {
+  // A new run must toast even when it changes the same covers as the last one.
+  if (status.running && status.refresh_covers) lastCoverRefreshToast = "";
+  const changed = changedCoversOfFinishedRefresh(status);
+  if (!changed.length) return;
+  const signature = JSON.stringify(changed);
+  if (signature === lastCoverRefreshToast) return;
+  lastCoverRefreshToast = signature;
+  notifyUndo(`${changed.length} cover${changed.length === 1 ? "" : "s"} changed.`, () =>
+    api.withLibraryBatch(async () => {
+      let failures = 0;
+      for (const { id, previous } of changed) {
+        try { if (!(await api.updateGame(id, { cover_image_path: previous })).success) failures++; }
+        catch { failures++; }
+      }
+      window.dispatchEvent(new Event("wlib-refresh-library"));
+      if (failures) throw new Error(`Could not restore ${failures} cover${failures === 1 ? "" : "s"}.`);
+    }));
+};
+
 const pollLibraryUpdates = async () => {
   if (pollingUpdates) return;
   pollingUpdates = true;
@@ -255,6 +278,7 @@ const pollLibraryUpdates = async () => {
       void scanDownloadOffers();
     }
     wasUpdateRunning = !!status.running;
+    announceCoverRefresh(status);
   } catch (error) {
     console.error("Failed to refresh update progress", error);
   } finally {

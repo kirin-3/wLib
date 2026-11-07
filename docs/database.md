@@ -69,6 +69,7 @@ Stores the library records and their associated configuration flags.
 | `developer` | `TEXT` | Extracted developer name. |
 | `engine` | `TEXT` | Detected engine label (for example Ren'Py, RPGM, Unity, Unreal Engine, Godot, Wolf RPG, HTML). |
 | `tags` | `TEXT` | Comma-separated list of tags. |
+| `tags_user_edited` | `BOOLEAN DEFAULT 0` | Set when the user changed the tags (Game Detail or bulk Add/Remove tag). F95 metadata backfill never writes tags to such a game, even when empty. Exported and synced with `tags`; an older backup without the field leaves the local value unchanged. |
 | `f95_url` | `TEXT` | F95Zone thread URL. Unique index protects against exact duplicates; the app also rejects equivalent F95 thread URL variants by thread identity. |
 | `version` | `TEXT` | The local downloaded version string. |
 | `latest_version` | `TEXT` | The remote version identified by the scraper. |

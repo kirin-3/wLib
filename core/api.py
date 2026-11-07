@@ -309,6 +309,7 @@ class Api:
         self._update_current: str = ""
         self._update_results: list[dict[str, object]] = []
         self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
+        self._update_refresh_covers: bool = False
         self._update_lock: threading.Lock = threading.Lock()
         self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
@@ -2931,7 +2932,7 @@ class Api:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, engine, tags, cover_image_path, developer FROM games WHERE f95_url = ?",
+                "SELECT id, engine, tags, tags_user_edited, cover_image_path, developer FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -2953,7 +2954,12 @@ class Api:
                     or normalize_prefix_label(engine_current) in NON_ENGINE_PREFIXES
                 ):
                     fields["engine"] = engine_value
-                if tags_value and self._is_missing_text(tags_current):
+                tags_user_edited = bool(cast(object, game["tags_user_edited"]))
+                if (
+                    tags_value
+                    and not tags_user_edited
+                    and self._is_missing_text(tags_current)
+                ):
                     fields["tags"] = tags_value
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
@@ -2975,6 +2981,52 @@ class Api:
         if updated_rows:
             self.cover_cache.wake()
         return updated_rows
+
+    def _update_cancelled_now(self) -> bool:
+        with self._update_lock:
+            return self._update_cancelled
+
+    def _refresh_cover_for_url(
+        self, url: str, metadata: Mapping[str, object]
+    ) -> str | None:
+        """Replace stored remote covers for ``url`` with the thread's cover.
+
+        Returns the previous cover URL when one game changed, else ``None``.
+        Only an explicit cover refresh calls this; the automatic backfill
+        never overwrites an existing cover.
+        """
+        normalized_url = normalize_thread_url(url)
+        cover_value = str(metadata.get("cover_image") or "").strip()
+        if not normalized_url or not cover_value:
+            return None
+
+        import sqlite3
+
+        from core.database import get_connection
+
+        previous: str | None = None
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            _ = cursor.execute(
+                "SELECT id, cover_image_path FROM games WHERE f95_url = ?",
+                (normalized_url,),
+            )
+            for game in cast(list[sqlite3.Row], cursor.fetchall()):
+                current = str(cast(object, game["cover_image_path"]) or "").strip()
+                if current == cover_value:
+                    continue
+                _ = cursor.execute(
+                    "UPDATE games SET cover_image_path = ? WHERE id = ?",
+                    (cover_value, cast(object, game["id"])),
+                )
+                if previous is None:
+                    previous = current
+            if previous is not None:
+                conn.commit()
+        if previous is not None:
+            self.cover_cache.wake()
+        return previous
 
     def _update_thread_edit_metadata_for_url(
         self, url: str, metadata: Mapping[str, object]
@@ -3197,9 +3249,18 @@ class Api:
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
     def check_all_updates(
-        self, game_ids: Sequence[int] | None = None, *, automatic: bool = False
+        self,
+        game_ids: Sequence[int] | None = None,
+        refresh_covers: bool = False,
+        *,
+        automatic: bool = False,
     ) -> dict[str, object]:
-        """Start a background thread to check all games for updates."""
+        """Start a background thread to check all games for updates.
+
+        With ``refresh_covers`` the pass also reads each F95 thread and
+        replaces a stored remote cover URL that differs from the thread's.
+        Catalog-only (Ryuu) games are left out of such a pass.
+        """
         from core.database import get_all_games
 
         wanted_ids: set[int] | None = None
@@ -3235,7 +3296,7 @@ class Api:
                     ),
                     None,
                 )
-                if ryuu_link:
+                if ryuu_link and not refresh_covers:
                     ryuu_games.append((game, ryuu_link["url"]))
             if (
                 not isinstance(game_id, int)
@@ -3270,6 +3331,7 @@ class Api:
             # The callback fires after a game finishes, so show the game being checked now.
             self._update_current = games_with_url[0]["title"] if games_with_url else ""
             self._update_results = []
+            self._update_refresh_covers = bool(refresh_covers)
             self._update_delay_seconds = self._get_bulk_check_delay_seconds()
 
         games_by_url = {g["f95_url"]: g for g in games_with_url}
@@ -3310,6 +3372,7 @@ class Api:
                     has_update = False
                     skipped = False
                     newly_finished = False
+                    thread_metadata: dict[str, object] | None = None
                     wishlisted = not str(game.get("exe_path") or "").strip()
                     callback_error = str(result_dict.get("error") or "")
                     callback_error_code = str(result_dict.get("code") or "")
@@ -3399,6 +3462,7 @@ class Api:
                                 metadata = self._coerce_string_key_dict(
                                     self.scraper.get_thread_metadata(url)
                                 )
+                                thread_metadata = metadata
                                 if metadata and metadata.get("success"):
                                     newly_finished = game["id"] in (
                                         self._update_thread_edit_metadata_for_url(
@@ -3426,6 +3490,31 @@ class Api:
                         except Exception:
                             pass
 
+                    cover_changed = False
+                    previous_cover = ""
+                    if refresh_covers and not self._update_cancelled_now():
+                        try:
+                            if thread_metadata is None:
+                                if "cover_image" in result_dict and (
+                                    "thread_main_post_checked_at" in result_dict
+                                ):
+                                    # The page fallback already read the thread.
+                                    thread_metadata = dict(result_dict)
+                                    thread_metadata["success"] = True
+                                else:
+                                    thread_metadata = self._coerce_string_key_dict(
+                                        self.scraper.get_thread_metadata(url)
+                                    )
+                            if thread_metadata and thread_metadata.get("success"):
+                                replaced = self._refresh_cover_for_url(
+                                    url, thread_metadata
+                                )
+                                if replaced is not None:
+                                    cover_changed = True
+                                    previous_cover = replaced
+                        except Exception:
+                            pass  # A failed thread read keeps the current cover.
+
                     with self._update_lock:
                         result_entry: dict[str, object] = {
                             "id": game["id"],
@@ -3440,6 +3529,9 @@ class Api:
                         }
                         if callback_browser_fallback:
                             result_entry["browser_fallback"] = callback_browser_fallback
+                        if refresh_covers:
+                            result_entry["cover_changed"] = cover_changed
+                            result_entry["previous_cover"] = previous_cover
                         self._update_results.append(result_entry)
                         self._update_checked += 1
                         self._update_current = next_title_by_url.get(url, "")
@@ -3647,6 +3739,7 @@ class Api:
                 "current": getattr(self, "_update_current", ""),
                 "results": list(getattr(self, "_update_results", [])),
                 "delay_seconds": getattr(self, "_update_delay_seconds", 2),
+                "refresh_covers": getattr(self, "_update_refresh_covers", False),
             }
 
     def cancel_update_check(self) -> dict[str, bool]:

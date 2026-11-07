@@ -21,6 +21,12 @@ async page => {
     await page.waitForFunction(() => window.__controllerPlay === 1);
     await dispatch('menu');
     if (!(await bar.evaluate(el => el.contains(document.activeElement)))) throw Error('Menu did not focus bulk bar');
+    await bar.getByRole('button',{name:/^Metadata/}).click();
+    const addTag = bar.getByRole('menuitem',{name:/^Add tag/});
+    await addTag.focus();
+    if (!(await addTag.evaluate(el => document.activeElement === el))) throw Error('Metadata menu item did not take focus');
+    await dispatch('back');
+    if (await bar.getByRole('menu').count() || !(await bar.count())) throw Error('Back did not close the open bulk menu before clearing selection');
     await cards.first().focus(); await dispatch('back');
     if (await bar.count() || await page.evaluate(() => !!window.__backCalled)) throw Error('Back did not clear selection first');
     await page.evaluate(async () => {

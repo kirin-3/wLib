@@ -1233,6 +1233,22 @@ def test_thread_metadata_replaces_stored_non_engine_prefix():
     assert get_all_games()[0]["engine"] == "Ren'Py"
 
 
+def test_backfill_skips_tags_the_user_edited():
+    marked = "https://f95zone.to/threads/marked.1/"
+    plain = "https://f95zone.to/threads/plain.2/"
+    marked_id = add_game(title="Marked", exe_path="/tmp/m.exe", f95_url=marked)
+    add_game(title="Plain", exe_path="/tmp/p.exe", f95_url=plain)
+    assert marked_id is not None
+    _ = update_game(marked_id, {"tags_user_edited": True})
+
+    api = Api()
+    _ = api._backfill_missing_metadata_for_url(marked, {"tags": ["a", "b"]})
+    _ = api._backfill_missing_metadata_for_url(plain, {"tags": ["a", "b"]})
+
+    tags = {g["title"]: g["tags"] for g in get_all_games()}
+    assert tags == {"Marked": "", "Plain": "a, b"}
+
+
 def test_backfill_fills_missing_developer_from_thread_title():
     url = "https://f95zone.to/threads/demo.123/"
     add_game(title="Demo", exe_path="/tmp/demo.exe", f95_url=url)
@@ -4519,3 +4535,108 @@ def test_inspect_names_other_targets_even_when_label_is_default(tmp_path, label)
     archive = tmp_path / "Title-2.0.zip"
     _write_archive(archive, {"Game.exe": b"new"})
     assert Api().inspect_archive(str(archive), gid)["own_targets_inside"] == [label]
+
+
+def _run_update_check(api, *args):
+    import time
+
+    assert api.check_all_updates(*args)["success"] is True
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def _set_cover(game_id: int, cover: str) -> None:
+    conn = get_connection()
+    conn.execute("UPDATE games SET cover_image_path = ? WHERE id = ?", (cover, game_id))
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    ("thread_metadata", "expected_cover", "changed", "previous"),
+    [
+        ({"success": True, "cover_image": "https://img/new.jpg"}, "https://img/new.jpg", True, "https://img/old.jpg"),
+        ({"success": True, "cover_image": "https://img/old.jpg"}, "https://img/old.jpg", False, ""),
+        ({"success": True, "cover_image": ""}, "https://img/old.jpg", False, ""),
+        ({"success": False, "error": "blocked"}, "https://img/old.jpg", False, ""),
+    ],
+)
+def test_refresh_covers_replaces_only_a_different_thread_cover(
+    monkeypatch, thread_metadata, expected_cover, changed, previous
+):
+    api = Api()
+    url = "https://f95zone.to/threads/cover.7/"
+    game_id = add_game("Cover", "/tmp/c.sh", f95_url=url, version="1.0")
+    assert game_id is not None
+    _set_cover(game_id, "https://img/old.jpg")
+
+    fetch = MagicMock(return_value=thread_metadata)
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch)
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], {"success": True, "version": "1.0"})
+        and {},
+    )
+
+    _run_update_check(api, [game_id], True)
+
+    status = api.get_update_status()
+    assert status["refresh_covers"] is True
+    assert fetch.call_count == 1
+    assert get_all_games()[0]["cover_image_path"] == expected_cover
+    entry = cast(list[dict[str, object]], status["results"])[0]
+    assert entry["cover_changed"] is changed
+    assert entry["previous_cover"] == previous
+
+
+def test_normal_update_check_never_overwrites_cover(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/cover.8/"
+    game_id = add_game("Cover", "/tmp/c.sh", f95_url=url, version="1.0")
+    assert game_id is not None
+    _set_cover(game_id, "https://img/old.jpg")
+    fetch = MagicMock(return_value={"success": True, "cover_image": "https://img/new.jpg"})
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch)
+    monkeypatch.setattr(
+        api.scraper,
+        "check_versions",
+        lambda urls, callback: callback(urls[0], {"success": True, "version": "1.0"})
+        and {},
+    )
+
+    _run_update_check(api)
+
+    status = api.get_update_status()
+    assert status["refresh_covers"] is False
+    assert fetch.call_count == 0
+    assert get_all_games()[0]["cover_image_path"] == "https://img/old.jpg"
+    assert "cover_changed" not in cast(list[dict[str, object]], status["results"])[0]
+
+
+def test_refresh_covers_queues_only_f95_games(monkeypatch):
+    api = Api()
+    f95_id = add_game("F95", "/tmp/a.sh", f95_url="https://f95zone.to/threads/a.9/")
+    local_id = add_game("Local", "/tmp/b.sh")
+    assert f95_id is not None and local_id is not None
+    monkeypatch.setattr(api, "_catalog_enabled", lambda: True)
+    seen: list[list[str]] = []
+
+    def batch(urls, callback):
+        seen.append(list(urls))
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    result = api.check_all_updates([f95_id, local_id], True)
+    assert result["success"] is True and result["total"] == 1
+    _run_update_check_wait(api)
+    assert seen == [["https://f95zone.to/threads/a.9/"]]
+
+
+def _run_update_check_wait(api) -> None:
+    import time
+
+    deadline = time.monotonic() + 5
+    while api.get_update_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)

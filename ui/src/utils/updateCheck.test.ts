@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 
 import {
   shouldAdoptBackgroundCheck,
-  shouldScanDownloadsAfterCheck,
+  shouldScanDownloadsAfterCheck, changedCoversOfFinishedRefresh,
   updateCheckProgressLabel,
 } from "./updateCheck.ts";
 
@@ -54,4 +54,18 @@ test("download offers are scanned for a finished check even if running was misse
     shouldScanDownloadsAfterCheck({ running: false, checked: 0, outcome: "idle" }, true, true),
     false,
   );
+});
+
+test("only a finished cover refresh reports changed covers", () => {
+  const results = [
+    { id: 1, cover_changed: true, previous_cover: "old" },
+    { id: 2, cover_changed: false, previous_cover: "" },
+    { id: 3, cover_changed: true },
+  ];
+  const base = { running: false, checked: 3, outcome: "completed", refresh_covers: true, results };
+  assert.deepEqual(changedCoversOfFinishedRefresh(base), [{ id: 1, previous: "old" }, { id: 3, previous: "" }]);
+  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, outcome: "cancelled" }).length, 2);
+  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, running: true, outcome: "running" }), []);
+  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, refresh_covers: false }), []);
+  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, results: [] }), []);
 });

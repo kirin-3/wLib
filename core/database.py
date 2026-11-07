@@ -68,6 +68,7 @@ SYNC_GAME_COLUMNS = (
     "developer",
     "engine",
     "tags",
+    "tags_user_edited",
     "f95_url",
     "version",
     "latest_version",
@@ -660,6 +661,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("cover_cache", "TEXT"),
         ("cover_cache_url", "TEXT"),
         ("tags", "TEXT DEFAULT ''"),
+        ("tags_user_edited", "BOOLEAN DEFAULT 0"),
         ("rating", "TEXT DEFAULT ''"),
         ("command_line_args", "TEXT DEFAULT ''"),
         ("status", "TEXT DEFAULT ''"),
@@ -1307,6 +1309,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "developer",
         "cover_image_path",
         "tags",
+        "tags_user_edited",
         "rating",
         "command_line_args",
         "rating_graphics",
@@ -1350,6 +1353,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
 
     for bool_column in (
         "thread_completed",
+        "tags_user_edited",
         "is_favorite",
         "steam_shortcut",
         "run_japanese_locale",

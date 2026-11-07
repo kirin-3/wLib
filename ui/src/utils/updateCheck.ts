@@ -48,3 +48,19 @@ export const shouldScanDownloadsAfterCheck = (
   !!status.outcome &&
   status.outcome !== "idle" &&
   (wasRunning || progressChanged);
+
+export interface CoverRefreshStatusLike extends UpdateCheckStatusLike {
+  refresh_covers?: boolean | undefined;
+  results: { id: number; cover_changed?: boolean | undefined; previous_cover?: string | undefined }[];
+}
+
+// Covers a finished cover-refresh run replaced. Cancelled runs count too: the
+// covers already changed stay changed, so the user can still undo them.
+export const changedCoversOfFinishedRefresh = (
+  status: CoverRefreshStatusLike,
+): { id: number; previous: string }[] =>
+  status.refresh_covers && !status.running && status.outcome && status.outcome !== "idle"
+    ? status.results
+        .filter((result) => result.cover_changed)
+        .map((result) => ({ id: result.id, previous: result.previous_cover ?? "" }))
+    : [];

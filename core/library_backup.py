@@ -83,6 +83,7 @@ METADATA_FIELDS = (
     "developer",
     "engine",
     "tags",
+    "tags_user_edited",
     "f95_url",
     "version",
     "latest_version",
@@ -147,6 +148,7 @@ NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detectio
 
 BOOLEAN_GAME_FIELDS = (
     "thread_completed",
+    "tags_user_edited",
     "run_japanese_locale",
     "run_wayland",
     "auto_inject_ce",

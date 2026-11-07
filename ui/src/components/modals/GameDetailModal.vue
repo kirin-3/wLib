@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
+import { ENGINE_OPTIONS, type EngineOption } from "../../utils/engines";
 import { confirmAction } from "../../utils/confirm";
 import { addLeaveGuard } from "../../utils/leaveGuard";
 import { useControllerActions } from "../../utils/controllerActions";
@@ -85,25 +86,6 @@ type UpdateCheckState = {
   message: string;
 };
 
-const ENGINE_OPTIONS = [
-  "ADRIFT",
-  "Flash",
-  "Godot",
-  "HTML",
-  "Java",
-  "Others",
-  "QSP",
-  "RAGS",
-  "RPGM",
-  "Ren'Py",
-  "Tads",
-  "Unity",
-  "Unreal Engine",
-  "WebGL",
-  "Wolf RPG",
-] as const;
-
-type EngineOption = (typeof ENGINE_OPTIONS)[number];
 
 // One hue per engine; the text mixes toward --text-primary so it stays readable in both themes.
 const ENGINE_HUES: Record<Exclude<EngineOption, "Others">, string> = {
@@ -687,6 +669,13 @@ const parseGameTags = (raw: GameRecord["tags"]): string[] => {
   return [];
 };
 
+// F95 backfill must stop refilling tags once the user changed them. Saving an
+// untouched tag list must not set that mark.
+const userEditedTagFields = (): Record<string, unknown> =>
+  props.game && tags.value.join(", ") !== parseGameTags(props.game.tags).join(", ")
+    ? { tags_user_edited: true }
+    : {};
+
 // What a game record holds for each form field, keyed like formSnapshot().
 const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   gamemode: g.gamemode || "default",
@@ -1156,7 +1145,10 @@ const saveQuickFields = async (
       return res;
     }
     if (isCurrentGame(gameId)) {
-      Object.assign(savedQuickFields.value, fields);
+      // The edit mark is not a form field; keeping it out of the baseline
+      // stops it from reading as an unsaved change.
+      const { tags_user_edited: _mark, ...baselineFields } = fields;
+      Object.assign(savedQuickFields.value, baselineFields);
     }
     return res;
   } catch (e) {
@@ -1579,6 +1571,7 @@ const save = async () => {
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
       ...submittedQuickFields,
+      ...userEditedTagFields(),
       progress: notes.value,
       note_links: noteLinks.value.map(link => ({ ...link })),
       engine: normalizeEngine(engine.value),
@@ -1727,13 +1720,13 @@ const addTag = () => {
   newTag.value = "";
   if (t && !tags.value.includes(t)) {
     tags.value.push(t);
-    void saveQuickFields({ tags: tags.value.join(", ") });
+    void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true });
   }
 };
 
 const removeTag = (tag: string) => {
   tags.value = tags.value.filter((t) => t !== tag);
-  void saveQuickFields({ tags: tags.value.join(", ") });
+  void saveQuickFields({ tags: tags.value.join(", "), tags_user_edited: true });
 };
 
 const formatPlaytime = (seconds: number | null | undefined): string => {

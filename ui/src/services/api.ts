@@ -203,6 +203,9 @@ export interface BulkUpdateResultItem {
   error: string;
   error_code: string;
   browser_fallback?: "unavailable" | "failed" | "logged_out";
+  // Present on cover-refresh runs only.
+  cover_changed?: boolean;
+  previous_cover?: string;
 }
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
@@ -214,6 +217,7 @@ export interface UpdateStatusResponse extends ApiBasicResponse {
   current: string;
   results: BulkUpdateResultItem[];
   delay_seconds: number;
+  refresh_covers?: boolean;
 }
 
 export interface AutoCheckSettingResponse extends ApiBasicResponse {
@@ -669,6 +673,8 @@ export interface GameRecord {
   mangohud?: "default" | "on" | "off";
   sandbox_enabled?: boolean;
   block_network?: boolean;
+  // Set once the user edits the tags; F95 backfill then never refills them.
+  tags_user_edited?: boolean;
   id: number;
   title: string;
   exe_path: string;
@@ -1941,7 +1947,8 @@ class ApiService {
     return this.invokeLibraryChange<UpdateCheckResponse>("check_for_updates", url);
   }
 
-  async checkAllUpdates(gameIds?: number[]): Promise<BulkUpdateStartResponse> {
+  async checkAllUpdates(gameIds?: number[], options?: { refreshCovers?: boolean }): Promise<BulkUpdateStartResponse> {
+    if (options?.refreshCovers) return this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds ?? null, true);
     return gameIds === undefined ? this.invoke<BulkUpdateStartResponse>("check_all_updates") : this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds);
   }
 
@@ -3219,8 +3226,26 @@ class ApiService {
         if (method === "check_all_updates") {
           const total = readMockGames().filter((game) => (game.f95_url || "").trim() && (!Array.isArray(args[0]) || args[0].includes(game.id))).length;
           if (Array.isArray(args[0]) && total) {
-            this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2 };
-            setTimeout(() => { if (this._mockUpdateStatus?.running) this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "completed", checked: total }; }, 3000);
+            const refreshCovers = args[1] === true;
+            this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2, refresh_covers: refreshCovers };
+            setTimeout(() => {
+              if (!this._mockUpdateStatus?.running) return;
+              let results: BulkUpdateResultItem[] = [];
+              if (refreshCovers) {
+                // Mirrors the backend: every F95 game reports cover_changed/previous_cover.
+                const stored = readMockGames();
+                results = stored
+                  .filter((game) => (game.f95_url || "").trim() && (args[0] as number[]).includes(game.id))
+                  .map((game, index) => ({
+                    id: game.id, title: game.title, current_version: game.version || "", latest_version: game.version || "",
+                    has_update: false, error: "", error_code: "",
+                    cover_changed: index % 2 === 0, previous_cover: game.cover_image_path || "",
+                  }));
+                const changed = new Map(results.filter((r) => r.cover_changed).map((r) => [r.id, `https://example.com/refreshed-${r.id}.jpg`]));
+                localStorage.setItem("wlib-mock-games", JSON.stringify(stored.map((game) => (changed.has(game.id) ? { ...game, cover_image_path: changed.get(game.id) } : game))));
+              }
+              this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "completed", checked: total, results };
+            }, refreshCovers ? 7000 : 3000);
           }
           return { success: true, mock: true, total, delay_seconds: 2 };
         }

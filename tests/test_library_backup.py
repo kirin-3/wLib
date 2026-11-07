@@ -1514,6 +1514,40 @@ def test_thread_completion_backup_round_trip_and_missing_field_preserves_local(
     assert get_all_games()[0]["thread_completed"] == 1
 
 
+def test_tags_user_edited_round_trip_and_missing_field_preserves_local(tmp_path):
+    game_id = add_game(
+        "Tagged", "", f95_url="https://f95zone.to/threads/tagged.450/"
+    )
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute("UPDATE games SET tags_user_edited = 1 WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+
+    api = Api()
+    exported = api.export_library_backup(destination_path=str(tmp_path / "t.json"))
+    assert exported["success"] is True
+    path = Path(str(exported["path"]))
+    backup = json.loads(path.read_text(encoding="utf-8"))
+    assert backup["games"][0]["metadata"]["tags_user_edited"] == 1
+
+    conn = get_connection()
+    conn.execute("UPDATE games SET tags_user_edited = 0 WHERE id = ?", (game_id,))
+    conn.commit()
+    conn.close()
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    assert get_all_games()[0]["tags_user_edited"] == 1
+
+    del backup["games"][0]["metadata"]["tags_user_edited"]
+    path.write_text(json.dumps(backup), encoding="utf-8")
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    assert get_all_games()[0]["tags_user_edited"] == 1
+
+
 def test_import_new_game_uses_metadata_without_metadata_section(tmp_path):
     api = Api()
     backup_path = write_backup(
