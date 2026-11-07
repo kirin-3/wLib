@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -68,6 +69,7 @@ def _launch(game_dir, name="index.html", **kwargs):
     return result, popen, update_setting, launcher
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
 def test_builtin_player_is_a_tracked_process_with_first_use_note(game_dir):
     result, popen, update_setting, launcher = _launch(game_dir)
     assert result["success"] and result.get("tracks_playtime", True)
@@ -124,6 +126,7 @@ def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
     assert ["--bind", profile, profile] in [argv[i : i + 3] for i in range(len(argv) - 2)]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
 def test_non_html_targets_are_unaffected(game_dir):
     script = game_dir / "run.sh"
     script.write_text("#!/bin/sh\n")

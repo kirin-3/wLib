@@ -410,5 +410,5 @@ def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(tmp_path, monk
 
     (tmp_path / "lib").mkdir()
     (tmp_path / "lib" / "g.swf").touch()
-    assert [g["engine"] for g in scan_games_folder(str(tmp_path / "lib").rsplit("/lib", 1)[0])
+    assert [g["engine"] for g in scan_games_folder(str(tmp_path))
             if g["exe_path"].endswith("g.swf")] == ["Flash"]
