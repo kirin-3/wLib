@@ -7108,6 +7108,151 @@ class Api:
             return {"success": False, "error": str(exc)}
         return self._merge_into_game_saves(coerced_id, source, "Restored")
 
+    def _rpgm_save_context(
+        self, game_id: object
+    ) -> tuple[int, str, str, dict[str, object]] | dict[str, object]:
+        """(id, data root, effective folder, row) or a failure payload."""
+        from core.game_tools import ENGINE_RPGM, detect_engine, rpgm_data_root
+
+        state = self._saves_game_state(game_id)
+        if state is None:
+            return self._game_saves_not_found()
+        coerced_id, row, effective, _detected = state
+        game = self._tool_game(coerced_id)
+        if game is None:
+            return self._game_saves_not_found()
+        _id, folder, exe_path = game
+        root = (
+            rpgm_data_root(folder)
+            if detect_engine(folder, exe_path) == ENGINE_RPGM
+            else None
+        )
+        if root is None:
+            return {
+                "success": False,
+                "error": "The save editor only works with RPG Maker MV/MZ games",
+                "error_code": "unsupported_engine",
+            }
+        return coerced_id, root, effective, row
+
+    @staticmethod
+    def _rpgm_save_failure(exc: Exception) -> dict[str, object]:
+        from core.rpgm_saves import RpgmSaveError
+
+        code = exc.code if isinstance(exc, RpgmSaveError) else "error"
+        return {"success": False, "error": str(exc), "error_code": code}
+
+    def list_rpgm_saves(self, game_id: object = None) -> dict[str, object]:
+        from core.rpgm_saves import list_slots
+
+        context = self._rpgm_save_context(game_id)
+        if isinstance(context, dict):
+            return context
+        _id, root, effective, _row = context
+        try:
+            slots = list_slots(root, effective)
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+        return {
+            "success": True,
+            "slots": [
+                {key: value for key, value in slot.items() if key != "folder"}
+                for slot in slots
+            ],
+        }
+
+    def load_rpgm_save(
+        self, game_id: object = None, file: object = None
+    ) -> dict[str, object]:
+        from core.rpgm_saves import RpgmSaveError, load_names, load_save, resolve_slot
+
+        context = self._rpgm_save_context(game_id)
+        if isinstance(context, dict):
+            return context
+        _id, root, effective, _row = context
+        try:
+            path, _folder = resolve_slot(root, effective, file)
+            payload = load_save(path, load_names(root))
+        except RpgmSaveError as exc:
+            return self._rpgm_save_failure(exc)
+        except (OSError, RecursionError, MemoryError) as exc:
+            return {"success": False, "error": str(exc) or "Could not read the save"}
+        return {"success": True, **payload}
+
+    def write_rpgm_save(
+        self,
+        game_id: object = None,
+        file: object = None,
+        patches: object = None,
+        size: object = None,
+        mtime_ns: object = None,
+    ) -> dict[str, object]:
+        from core.database import get_save_backup_keep
+        from core.game_saves import GameSavesError, backup_saves
+        from core.rpgm_saves import (
+            BackupFailed,
+            InvalidPatch,
+            RpgmSaveError,
+            load_names,
+            resolve_slot,
+            write_save,
+        )
+
+        context = self._rpgm_save_context(game_id)
+        if isinstance(context, dict):
+            return context
+        coerced_id, root, effective, _row = context
+        stamp = (
+            int(mtime_ns)
+            if isinstance(mtime_ns, str) and mtime_ns.isdigit()
+            else mtime_ns
+        )
+        if (
+            not isinstance(patches, list)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or not isinstance(stamp, int)
+            or isinstance(stamp, bool)
+        ):
+            return self._rpgm_save_failure(
+                InvalidPatch("The edit request is not valid")
+            )
+        try:
+            path, folder = resolve_slot(root, effective, file)
+            with self._save_operation(coerced_id, writes=True):
+
+                def backup() -> str:
+                    try:
+                        return backup_saves(
+                            folder,
+                            self._save_backups_root(),
+                            coerced_id,
+                            get_save_backup_keep(),
+                        ).name
+                    except GameSavesError as exc:
+                        raise BackupFailed(str(exc)) from exc
+
+                backup_name = write_save(
+                    path, cast("list[object]", patches), size, stamp, load_names(root), backup
+                )
+        except GameSavesError as exc:
+            running = "Close the game" in str(exc)
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_code": "game_running" if running else "busy",
+            }
+        except RpgmSaveError as exc:
+            return self._rpgm_save_failure(exc)
+        except (OSError, RecursionError, MemoryError) as exc:
+            return {"success": False, "error": str(exc) or "Could not write the save"}
+        return {
+            "success": True,
+            "backup": backup_name,
+            "message": f"Saved. Previous saves backed up as {backup_name}",
+            "backups": self._saves_summary(coerced_id),
+        }
+
     def open_game_save_backup(
         self, game_id: object = None, backup_name: object = ""
     ) -> dict[str, object]:

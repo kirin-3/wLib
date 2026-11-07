@@ -656,6 +656,102 @@ export interface GameSaveActionResponse extends ApiBasicResponse {
   backups?: GameSaveBackup[];
 }
 
+export interface RpgmSaveSlot {
+  file: string;
+  slot: number;
+  modified: string;
+  size: number;
+  playtime: string;
+  title: string;
+}
+
+export interface RpgmSavesListResponse extends ApiBasicResponse {
+  slots: RpgmSaveSlot[];
+}
+
+export type RpgmInventoryKind = "item" | "weapon" | "armor";
+
+export interface RpgmDatabaseEntry {
+  id: number;
+  name: string;
+  kind: "item" | "key" | "hidden";
+  description: string;
+}
+
+export interface RpgmNames {
+  items: RpgmDatabaseEntry[];
+  weapons: RpgmDatabaseEntry[];
+  armors: RpgmDatabaseEntry[];
+  actors: Record<string, string>;
+  classes: Record<string, { name: string; expParams: number[] | null }>;
+  switches: string[];
+  variables: string[];
+  currency: string;
+  params: string[];
+}
+
+export interface RpgmInventoryRow {
+  id: number;
+  count: number;
+  name: string;
+  known: boolean;
+}
+
+export interface RpgmActorView {
+  id: number;
+  name: string;
+  database_name: string;
+  level: number | null;
+  exp: number | null;
+  class_id: number | null;
+  class_name: string;
+  has_curve: boolean;
+  hp: number | null;
+  mp: number | null;
+  param_plus: number[];
+}
+
+export interface RpgmValueRow {
+  id: number;
+  name: string;
+  value: boolean | number | string | null;
+  type: "bool" | "number" | "string" | "other";
+}
+
+export interface RpgmSaveView {
+  gold: number | null;
+  inventory: Record<RpgmInventoryKind, RpgmInventoryRow[]>;
+  actors: RpgmActorView[];
+  switches: RpgmValueRow[];
+  variables: RpgmValueRow[];
+  missing: string[];
+}
+
+export type RpgmActorField = "name" | "level" | "exp" | "hp" | "mp" | "paramPlus";
+
+export type RpgmPatch =
+  | { op: "set"; path: (string | number)[]; value: boolean | number | string }
+  | { op: "set_count"; kind: RpgmInventoryKind; id: number; count: number }
+  | { op: "set_switch"; id: number; value: boolean }
+  | { op: "set_variable"; id: number; value: number | string }
+  | { op: "set_actor"; id: number; field: RpgmActorField; value: number | string; index?: number };
+
+export interface RpgmSaveLoadResponse extends ApiBasicResponse {
+  format: "mv" | "mz";
+  size: number;
+  // a string: nanosecond timestamps exceed JS's safe integer range
+  mtime_ns: string;
+  view: RpgmSaveView;
+  names: RpgmNames;
+  raw: Record<string, unknown>;
+}
+
+export interface RpgmSaveWriteResponse extends ApiBasicResponse {
+  backup?: string;
+  message?: string;
+  backups?: GameSaveBackup[];
+}
+
 export interface StoreLink {
   source: string;
   id: string;
@@ -1319,6 +1415,99 @@ const mockGameSaves = (method: string, args: unknown[]): unknown => {
         ? { success: true, mock: true }
         : { success: false, mock: true, error: "That backup no longer exists" };
   }
+};
+
+let mockRpgmSaveMtime = 1;
+
+const mockRpgmNames = (): RpgmNames => ({
+  items: [
+    { id: 1, name: "Potion", kind: "item", description: "Restores 100 HP." },
+    { id: 2, name: "Magic Water", kind: "item", description: "Restores 50 MP." },
+    { id: 3, name: "Royal Crest", kind: "key", description: "Proof of birth." },
+  ],
+  weapons: [{ id: 1, name: "Iron Sword", kind: "item", description: "" }],
+  armors: [{ id: 1, name: "Leather Armor", kind: "item", description: "" }],
+  actors: { "1": "Harold" },
+  classes: { "1": { name: "Hero", expParams: [30, 20, 30, 30] } },
+  switches: ["", "Met the king", "Door opened"],
+  variables: ["", "Gold seen", "Chapter"],
+  currency: "G",
+  params: ["Max HP", "Max MP", "ATK", "DEF", "MAT", "MDF", "AGI", "LUK"],
+});
+
+const mockRpgmSaveView = (): RpgmSaveView => ({
+  gold: 1200,
+  inventory: {
+    item: [
+      { id: 1, count: 5, name: "Potion", known: true },
+      { id: 42, count: 1, name: "Unknown item #42", known: false },
+    ],
+    weapon: [],
+    armor: [{ id: 1, count: 1, name: "Leather Armor", known: true }],
+  },
+  actors: [
+    {
+      id: 1,
+      name: "Harold",
+      database_name: "Harold",
+      level: 5,
+      exp: 380,
+      class_id: 1,
+      class_name: "Hero",
+      has_curve: true,
+      hp: 320,
+      mp: 40,
+      param_plus: [0, 0, 5, 0, 0, 0, 0, 0],
+    },
+  ],
+  switches: [
+    { id: 1, name: "Met the king", value: true, type: "bool" },
+    { id: 2, name: "Door opened", value: false, type: "bool" },
+  ],
+  variables: [
+    { id: 1, name: "Gold seen", value: 10, type: "number" },
+    { id: 2, name: "Chapter", value: "One", type: "string" },
+    { id: 3, name: "", value: null, type: "other" },
+  ],
+  missing: [],
+});
+
+const mockRpgmSaves = (method: string, args: unknown[]): unknown => {
+  const gameId = Number(args[0]);
+  if (!Number.isInteger(gameId) || gameId < 1 || !readMockGames().some((game) => game.id === gameId)) {
+    return { success: false, mock: true, error: "Game was not found", error_code: "game_not_found" };
+  }
+  const slots: RpgmSaveSlot[] = [
+    { file: "file1.rpgsave", slot: 1, modified: "2026-01-02T10:00:00", size: 4096, playtime: "01:23:45", title: "Chapter 1" },
+    { file: "file3.rpgsave", slot: 3, modified: "2026-01-05T18:30:00", size: 4200, playtime: "", title: "" },
+  ];
+  if (method === "list_rpgm_saves") return { success: true, mock: true, slots };
+  if (!slots.some((slot) => slot.file === args[1])) {
+    return { success: false, mock: true, error: "That save file is not available", error_code: "not_found" };
+  }
+  if (method === "load_rpgm_save") {
+    return {
+      success: true,
+      mock: true,
+      format: "mv",
+      size: 4096,
+      mtime_ns: String(mockRpgmSaveMtime),
+      view: mockRpgmSaveView(),
+      names: mockRpgmNames(),
+      raw: {
+        party: { "@": "Game_Party", _gold: 1200, _items: { "1": 5, "42": 1 }, _questLog: { points: 3, title: "Intro", done: false } },
+        actors: { "@": "Game_Actors", _data: [null, { "@": "Game_Actor", _name: "Harold", _level: 5, _hp: 320 }] },
+      },
+    };
+  }
+  if (args[3] !== 4096 || args[4] !== String(mockRpgmSaveMtime)) {
+    return { success: false, mock: true, error: "The save changed since it was opened. Reopen the slot.", error_code: "changed" };
+  }
+  const target = globalThis as { __wlibMockRpgmWrites?: unknown[] };
+  (target.__wlibMockRpgmWrites ??= []).push({ file: args[1], patches: args[2] });
+  mockRpgmSaveMtime += 1;
+  const name = "2026-01-06_12-00-00";
+  return { success: true, mock: true, backup: name, message: `Saved. Previous saves backed up as ${name}`, backups: [{ name }] };
 };
 
 const mockAttachmentList = (gameId: number): GameAttachment[] => {
@@ -2518,6 +2707,24 @@ class ApiService {
 
   async restoreGameSavesBackup(gameId: number, backupName: string): Promise<GameSaveActionResponse> {
     return this.invoke<GameSaveActionResponse>("restore_game_saves_backup", gameId, backupName);
+  }
+
+  async listRpgmSaves(gameId: number): Promise<RpgmSavesListResponse | ApiErrorResult> {
+    return this.invoke<RpgmSavesListResponse | ApiErrorResult>("list_rpgm_saves", gameId);
+  }
+
+  async loadRpgmSave(gameId: number, file: string): Promise<RpgmSaveLoadResponse | ApiErrorResult> {
+    return this.invoke<RpgmSaveLoadResponse | ApiErrorResult>("load_rpgm_save", gameId, file);
+  }
+
+  async writeRpgmSave(
+    gameId: number,
+    file: string,
+    patches: RpgmPatch[],
+    size: number,
+    mtimeNs: string,
+  ): Promise<RpgmSaveWriteResponse | ApiErrorResult> {
+    return this.invoke<RpgmSaveWriteResponse | ApiErrorResult>("write_rpgm_save", gameId, file, patches, size, mtimeNs);
   }
 
   async openGameSaveBackup(gameId: number, backupName: string): Promise<ApiBasicResponse> {
@@ -3895,6 +4102,10 @@ class ApiService {
       }
       case "find_save_files":
         return [];
+      case "list_rpgm_saves":
+      case "load_rpgm_save":
+      case "write_rpgm_save":
+        return mockRpgmSaves(method, args);
       case "get_game_saves":
       case "set_game_save_folder":
       case "backup_game_saves":

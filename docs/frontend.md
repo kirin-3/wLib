@@ -142,6 +142,13 @@ The **Saves** section sits at the end of the Launch tab in `GameDetailModal.vue`
 - **Styling**: scoped `.tools-card`, `.tools-btn` and progress-bar styles with theme tokens only; it shares the modal's fixed size and scrolls inside the tab area.
 - **Browser mocks**: `services/api.ts` infers the engine from the mock game's `engine` label and keeps console, decrypted and switch state for the session. Extract and Decrypt run one file per `_mockToolStepMs` so polling sees `done` advance, and Cancel works.
 
+## RPG Maker save editor
+The Tools tab of an RPG Maker MV/MZ game has a Save editor card (`GameToolsTab.vue`) listing slots with modified time and play time. Open shows `components/modals/RpgmSaveEditor.vue` (teleported to `body`) with Party, Actors, Switches, Variables and Raw tabs; the Raw tree is `RpgmRawNode.vue`, expanded lazily and capped at 200 rows per node.
+- Edits go into a patch map (`utils/rpgmSaveEditor.ts`) keyed by the JSON path of the leaf, so curated and Raw edits of the same value share one entry and the last wins. Level edits are sent first so an explicit experience edit made afterwards still wins.
+- Values are validated in the UI (gold 0 to 9,999,999, counts 0 to 9,999, level at least 1, bonuses may be negative); Save stays disabled while any field is invalid.
+- A dirty indicator, Discard and a confirm on close protect unsaved edits. Save shows the backup name or the refusal message (game running, save changed since opened, backup failed).
+- Browser mocks in `services/api.ts` serve two slots and a small MV-shaped save, and record write calls in `globalThis.__wlibMockRpgmWrites` for checks.
+
 ## Game notes and attachments
 
 The game detail modal has a **Notes** tab after Overview, Journal, Launch, and Info (`detailTabs` in `GameDetailModal.vue`; arrow-key navigation wraps, so no new keyboard code). It holds one markdown document per game plus saved web links and that game's PDF, TXT and MD attachments.

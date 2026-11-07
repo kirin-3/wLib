@@ -10,6 +10,7 @@ import {
   type GameToolStatus,
   type GameToolsResponse,
   type RenpyExtractMode,
+  type RpgmSaveSlot,
 } from "../services/api";
 import {
   consoleHint,
@@ -26,6 +27,7 @@ import {
 } from "../utils/gameTools";
 import { unityActions, unityWarnings, switchWarning } from "../utils/unityTools";
 import { notify, notifyError } from "../utils/toast";
+import RpgmSaveEditor from "./modals/RpgmSaveEditor.vue";
 
 const props = defineProps<{
   gameId: number;
@@ -183,6 +185,50 @@ watch(
 const isBusy = computed(() => busy.value !== "");
 const renpy = computed(() => tools.value?.renpy ?? null);
 const rpgm = computed(() => tools.value?.rpgm ?? null);
+
+const saveSlots = ref<RpgmSaveSlot[]>([]);
+const saveSlotsLoaded = ref(false);
+const saveSlotsError = ref("");
+const editorFile = ref("");
+const editorOpen = ref(false);
+let saveSlotsToken = 0;
+
+const loadSaveSlots = async (): Promise<void> => {
+  const token = ++saveSlotsToken;
+  saveSlotsError.value = "";
+  try {
+    const result = await api.listRpgmSaves(props.gameId);
+    if (token !== saveSlotsToken) return;
+    if (result.success === false || !("slots" in result)) {
+      saveSlotsError.value = ("error" in result && result.error) || "Could not list the save files";
+      saveSlots.value = [];
+    } else {
+      saveSlots.value = result.slots;
+    }
+  } catch (error) {
+    if (token === saveSlotsToken) saveSlotsError.value = error instanceof Error ? error.message : "Could not list the save files";
+  } finally {
+    if (token === saveSlotsToken) saveSlotsLoaded.value = true;
+  }
+};
+
+watch(
+  () => [props.gameId, props.active, !!rpgm.value] as const,
+  ([, active, hasRpgm]) => {
+    if (active && hasRpgm) void loadSaveSlots();
+  },
+  { immediate: true },
+);
+
+const openEditor = (file: string): void => {
+  editorFile.value = file;
+  editorOpen.value = true;
+};
+
+const formatSlotTime = (iso: string): string => {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+};
 const unity = computed(() => tools.value?.unity ?? null);
 const selectedBuild = computed(() => builds.value.find((build) => build.id === buildId.value) ?? null);
 const filteredBuilds = computed(() => builds.value.filter((build) => build.major === major.value));
@@ -562,6 +608,29 @@ const useDecryptedChecked = computed({
           {{ switchState.message }}
         </p>
       </section>
+
+      <section class="tools-card space-y-3" aria-labelledby="tools-saveeditor-title">
+        <span id="tools-saveeditor-title" class="text-sm font-medium block" style="color: var(--text-primary)">Save editor</span>
+        <p v-if="saveSlotsError" role="alert" class="text-xs" style="color: var(--danger-text)">{{ saveSlotsError }}</p>
+        <p v-else-if="saveSlotsLoaded && saveSlots.length === 0" class="text-xs" style="color: var(--text-muted)">No save files were found. Save in the game first.</p>
+        <ul v-else class="space-y-1">
+          <li v-for="slot in saveSlots" :key="slot.file" class="flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm" style="color: var(--text-primary)">
+                Slot {{ slot.slot }}<span v-if="slot.title" class="text-xs" style="color: var(--text-muted)"> · {{ slot.title }}</span>
+              </p>
+              <p class="text-xs" style="color: var(--text-muted)">
+                {{ formatSlotTime(slot.modified) }}<span v-if="slot.playtime"> · {{ slot.playtime }}</span>
+              </p>
+            </div>
+            <button type="button" class="tools-btn ui-action-btn" :disabled="isBusy" @click="openEditor(slot.file)">Open</button>
+          </li>
+        </ul>
+        <p class="text-[0.625rem]" style="color: var(--text-muted)">
+          Edit gold, items, actors, switches and variables. Saving needs the game closed, and the saves folder is backed up first.
+        </p>
+      </section>
+      <RpgmSaveEditor v-model="editorOpen" :game-id="gameId" :file="editorFile" @saved="loadSaveSlots" />
     </template>
 
     <template v-else-if="tools && engine === 'unity' && unity">
