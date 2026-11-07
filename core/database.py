@@ -442,6 +442,13 @@ def init_db() -> None:
         _ = cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_game_links_identity ON game_links(source, external_id)"
         )
+        # itch slugs used to keep their case; fold them so identities match exactly.
+        _ = cursor.execute(
+            "UPDATE OR IGNORE game_links SET external_id = lower(external_id) WHERE source = 'itch' AND external_id <> lower(external_id)"
+        )
+        _ = cursor.execute(
+            "DELETE FROM game_links WHERE source = 'itch' AND external_id <> lower(external_id)"
+        )
         _ = cursor.execute("""
             CREATE TABLE IF NOT EXISTS companion_tools (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1520,10 +1527,30 @@ def update_setting(key: str, value: str) -> None:
     update_settings({key: value})
 
 
-def update_settings(values: Mapping[str, str]) -> None:
+def update_settings(
+    values: Mapping[str, str], *, custom_play_statuses: Sequence[str] | None = None
+) -> None:
+    """Write settings (and optionally the custom play statuses) in one transaction."""
+    removed: list[str] = []
+    if custom_play_statuses is not None:
+        # Match case-insensitively like the reset below, so a case-only rename keeps its games.
+        kept = {str(status).strip().casefold() for status in custom_play_statuses}
+        removed = [
+            status for status in get_custom_play_statuses() if status.casefold() not in kept
+        ]
+        values = {
+            **values,
+            "custom_play_statuses": json.dumps(
+                [str(status).strip() for status in custom_play_statuses]
+            ),
+        }
     with closing(get_connection()) as conn:
-        cursor = conn.cursor()
-        _ = cursor.executemany(
+        for status in removed:
+            _ = conn.execute(
+                "UPDATE games SET play_status = ? WHERE play_status = ? COLLATE NOCASE",
+                (DEFAULT_PLAY_STATUS, status),
+            )
+        _ = conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             list(values.items()),
         )
@@ -1570,22 +1597,7 @@ def get_custom_play_statuses() -> list[str]:
 
 
 def update_custom_play_statuses(statuses: Sequence[str]) -> None:
-    # Match case-insensitively like the reset below, so a case-only rename keeps its games.
-    kept = {str(status).strip().casefold() for status in statuses}
-    removed = [
-        status for status in get_custom_play_statuses() if status.casefold() not in kept
-    ]
-    with closing(get_connection()) as conn:
-        for status in removed:
-            _ = conn.execute(
-                "UPDATE games SET play_status = ? WHERE play_status = ? COLLATE NOCASE",
-                (DEFAULT_PLAY_STATUS, status),
-            )
-        _ = conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            ("custom_play_statuses", json.dumps([str(status).strip() for status in statuses])),
-        )
-        conn.commit()
+    update_settings({}, custom_play_statuses=statuses)
 
 
 # Collection Operations

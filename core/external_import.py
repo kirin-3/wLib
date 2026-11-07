@@ -243,7 +243,9 @@ def open_snapshot(path: str) -> Generator[sqlite3.Connection, None, None]:
             recover.commit()
         finally:
             recover.close()
-        conn = sqlite3.connect(f"file:{copy_path}?mode=ro", uri=True)
+        # as_uri() escapes '?', '#' and '%' in the file name, which a raw
+        # "file:" string would read as URI syntax.
+        conn = sqlite3.connect(f"{Path(copy_path).as_uri()}?mode=ro", uri=True)
         try:
             conn.row_factory = sqlite3.Row
             yield conn

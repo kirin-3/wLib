@@ -9,10 +9,12 @@ from typing import TypedDict, final, override
 
 
 # Host id -> domains it serves from. Order matters only for readability.
+# The in-app hosts (pixeldrain, mega, buzzheavier) list only the domains their
+# download adapters accept, or the UI would offer downloads that cannot start.
 HOST_DOMAINS: dict[str, tuple[str, ...]] = {
     "pixeldrain": ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"),
-    "mega": ("mega.nz", "mega.co.nz", "mega.io"),
-    "buzzheavier": ("buzzheavier.com", "bzzhr.to", "bzzhr.co"),
+    "mega": ("mega.nz", "mega.co.nz"),
+    "buzzheavier": ("buzzheavier.com", "bzzhr.to"),
     "gofile": ("gofile.io",),
     "datanodes": ("datanodes.to",),
     "mixdrop": ("mixdrop.ag", "mixdrop.co", "mixdrop.to", "mixdrop.ps", "mixdrop.sx"),

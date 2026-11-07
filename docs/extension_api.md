@@ -81,7 +81,7 @@ Sends scraped metadata directly to wLib to preemptively fill the "Add Game" moda
 
 - **Store pages:** The body also accepts `pageUrl` and `links: [{source, id, url}]`. A title and either an F95 thread URL or at least one valid HTTP(S) link are required. With a catalog, metadata for the page’s own ID takes priority over fallback page metadata. Without it, the extension’s title and cover are used.
 - **Action:** Emits `wlib-extension-add` payload to the Vue frontend, which catches the event and displays the UI form pre-populated with the data above.
-- **Errors:** `{"success": false, "error": "..."}` with HTTP 400 for an invalid body or `Content-Length` (limit 1 MB), or HTTP 503 while the app window is not ready yet.
+- **Errors:** `{"success": false, "error": "..."}` with HTTP 400 for an invalid body or `Content-Length`, HTTP 413 for a body over the 1 MB limit, or HTTP 503 while the app window is not ready yet.
 - **Response:**
   ```json
   {
@@ -106,7 +106,7 @@ Saves the thread or store page directly as a library game with an empty executab
   }
   ```
 - **Action:** Calls the desktop API's `add_game` with `exe_path` set to an empty string, then emits `wlib-refresh-library` when the window is ready. The save can succeed while the window is unavailable.
-- **Response:** The `add_game` result, including `success`, `id`, `title`, and `metadata_pending` on success. A duplicate thread returns HTTP 409 with `{"success": false, "error_code": "duplicate_url", "error": "..."}`. Invalid bodies return HTTP 400; an API that is not ready returns HTTP 503.
+- **Response:** The `add_game` result, including `success`, `id`, `title`, and `metadata_pending` on success. A duplicate thread returns HTTP 409 with `{"success": false, "error_code": "duplicate_url", "error": "..."}`. Invalid bodies return HTTP 400 and bodies over 1 MB return HTTP 413; an API that is not ready returns HTTP 503.
 
 ### 5. Bridge for Background Fetches
 **`GET /api/bridge` (WebSocket)**
@@ -184,7 +184,7 @@ On F95 thread pages, the content script injects a floating widget near the upper
 **`POST /api/thread-links`** accepts `{url, links: [{source, id, url}]}` for a
 library game's F95 thread. It uses the same origin rules and 1 MB body limit
 as Wishlist. Success is HTTP 200; a missing game is 404, an invalid request is
-400, a foreign origin is 403, and a database still initializing after 8
+400, a body over 1 MB is 413, a foreign origin is 403, and a database still initializing after 8
 seconds at startup is 503. It replaces only links with `f95_post`
 origin. An empty visible list removes those rows; the content script sends
 nothing when the page still hides its links. This route never fetches F95.

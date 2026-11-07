@@ -261,3 +261,97 @@ def test_save_backup_keep_setting_roundtrip_and_validation(api):
     for bad in (0, 100, -1, 2.5, "x", "", None, True, [1], {"a": 1}, "\u0663"):
         assert api.save_settings({"save_backup_keep": bad})["success"] is False, bad
     assert api.get_settings()["save_backup_keep"] == 3
+
+
+def test_save_settings_writes_nothing_when_the_database_is_locked(api, monkeypatch):
+    import sqlite3
+
+    from core import database
+    from core.database import get_custom_play_statuses, get_setting
+
+    assert api.save_settings({"proton_path": "/old", "custom_play_statuses": ["Backlog"]})["success"]
+    original = database.get_connection
+
+    class LockedConnection:
+        """Fails the commit of any transaction that writes urm_rpa_path."""
+
+        def __init__(self, conn):
+            self._conn = conn
+            self._locked = False
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def _note(self, params):
+            self._locked = self._locked or "urm_rpa_path" in repr(params)
+
+        def execute(self, sql, params=()):
+            self._note(params)
+            return self._conn.execute(sql, params)
+
+        def executemany(self, sql, rows):
+            rows = list(rows)
+            self._note(rows)
+            return self._conn.executemany(sql, rows)
+
+        def cursor(self):
+            connection, real = self, self._conn.cursor()
+
+            class Cursor:
+                def __getattr__(self, name):
+                    return getattr(real, name)
+
+                def execute(self, sql, params=()):
+                    connection._note(params)
+                    return real.execute(sql, params)
+
+                def executemany(self, sql, rows):
+                    rows = list(rows)
+                    connection._note(rows)
+                    return real.executemany(sql, rows)
+
+            return Cursor()
+
+        def commit(self):
+            if self._locked:
+                raise sqlite3.OperationalError("database is locked")
+            self._conn.commit()
+
+    def connection():
+        return LockedConnection(original())
+
+    monkeypatch.setattr(database, "get_connection", connection)
+    result = api.save_settings(
+        {"proton_path": "/new", "urm_rpa_path": "/urm", "custom_play_statuses": []}
+    )
+    monkeypatch.setattr(database, "get_connection", original)
+
+    assert result == {"success": False, "error": "database is locked"}
+    assert get_setting("proton_path") == "/old"
+    assert not get_setting("urm_rpa_path")
+    assert get_custom_play_statuses() == ["Backlog"]
+
+
+def test_save_settings_does_not_touch_the_catalog_when_the_save_fails(api, monkeypatch):
+    import sqlite3
+
+    from core import database
+    from core.database import update_setting as write
+
+    write("catalog_enabled", "1")
+    removed = []
+    monkeypatch.setattr(api.catalog, "remove", lambda: removed.append(True))
+
+    real_update = database.update_settings
+
+    def locked(values, **kwargs):
+        # The backup-count write is the one that hits the lock.
+        if "save_backup_keep" in values:
+            raise sqlite3.OperationalError("database is locked")
+        real_update(values, **kwargs)
+
+    monkeypatch.setattr(database, "update_settings", locked)
+    result = api.save_settings({"catalog_enabled": False, "save_backup_keep": 3})
+    assert result["success"] is False
+    assert removed == []
+    assert database.get_setting("catalog_enabled") == "1"

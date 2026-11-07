@@ -7,7 +7,7 @@ import ssl
 import time
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrllibRequest
@@ -88,7 +88,9 @@ def urllib_transport(request: Request) -> Response:
     except HTTPError as exc:
         with exc:
             return Response(exc.code, exc.read(), dict(exc.headers))
-    except (TimeoutError, socket.timeout, URLError) as exc:
+    except (TimeoutError, socket.timeout, URLError, HTTPException) as exc:
+        # HTTPException covers IncompleteRead (a truncated body) and a dropped
+        # connection, so they are retried like a timeout.
         raise ConnectionError(f"{request.url}: {exc}") from exc
 
 

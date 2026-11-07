@@ -78,3 +78,12 @@ def test_mirror_url_is_decoded_once():
     )
     mirror = parse_download_links(html)["builds"][0]["mirrors"][0]
     assert mirror["url"] == "https://example.com/g.zip?dl=1&param=2&not=3&amp=4"
+
+
+def test_domains_the_download_adapters_reject_are_not_named_as_in_app_hosts():
+    html = ('<html data-logged-in="true"><article class="message-threadStarterPost"><div class="bbWrapper">'
+            '<b>DOWNLOAD</b><br><b>Win: <a href="https://mega.nz/file/a#b">MEGA</a> - '
+            '<a href="https://mega.io/file/c#d">MEGA</a> - <a href="https://bzzhr.co/e">BZZHR</a></b>'
+            '</div></article></html>')
+    mirrors = parse_download_links(html)["builds"][0]["mirrors"]
+    assert [m["host"] for m in mirrors] == ["mega", "mega.io", "bzzhr.co"]

@@ -179,3 +179,19 @@ def test_a_second_run_skips_while_one_holds_the_lock(tmp_path):
         assert acquired
         code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "ryuugames"], transport=transport)
     assert code == 0 and transport.requests == []
+
+
+def test_failed_link_rebuild_still_finishes_the_run(tmp_path, monkeypatch):
+    import pytest
+
+    from catalog_server import runner
+
+    def broken(_catalog):
+        raise RuntimeError("links failed")
+
+    monkeypatch.setattr(runner, "rebuild_links", broken)
+    ctx, clock = make_context(tmp_path, FakeTransport())
+    with pytest.raises(RuntimeError):
+        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=None, work_dir=str(tmp_path), now=clock.iso)
+    latest = ctx.state.recent_runs()[0]
+    assert latest["finished_at"] and latest["published"] is None

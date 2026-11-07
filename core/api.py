@@ -1990,6 +1990,8 @@ class Api:
             return self._backup_error_payload(exc)
 
         self.cover_cache.wake()
+        # Imported games can change which shortcuts Steam should show.
+        self._schedule_steam_sync()
         return {"success": True, **payload}
 
     def detect_external_library(self, source: str) -> dict[str, object]:
@@ -5450,8 +5452,7 @@ class Api:
             SAVE_BACKUP_KEEP_MAX,
             get_setting,
             normalize_play_status,
-            update_custom_play_statuses,
-            update_setting,
+            update_settings,
         )
 
         if not isinstance(settings, Mapping):
@@ -5570,7 +5571,12 @@ class Api:
                 }
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
-        update_setting_fn = cast(Callable[[str, str], None], update_setting)
+        # Collect every write and commit them together, so a locked database
+        # cannot leave only some of the settings saved.
+        pending: dict[str, str] = {}
+
+        def update_setting_fn(key: str, value: str) -> None:
+            pending[key] = value
 
         def get_payload_or_existing(key: str, default: str = "") -> str:
             if key in settings_map:
@@ -5644,18 +5650,25 @@ class Api:
                     or str(raw_detection).strip().lower() == "true"
                     else "false",
                 )
+            catalog_change: bool | None = None
             if "catalog_enabled" in settings_map:
                 was_enabled = get_setting_fn("catalog_enabled") != "0"
                 catalog_enabled = settings_map["catalog_enabled"] is not False
                 update_setting_fn("catalog_enabled", "1" if catalog_enabled else "0")
-                if not catalog_enabled:
-                    self.catalog.remove()
-                elif not was_enabled:
-                    _ = self.catalog.start_background(force=True)
+                if not catalog_enabled or not was_enabled:
+                    catalog_change = catalog_enabled
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
-            if "custom_play_statuses" in settings_map:
-                update_custom_play_statuses(custom_statuses)
+            update_settings(
+                pending,
+                custom_play_statuses=custom_statuses
+                if "custom_play_statuses" in settings_map
+                else None,
+            )
+            if catalog_change is False:
+                self.catalog.remove()
+            elif catalog_change is True:
+                _ = self.catalog.start_background(force=True)
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}

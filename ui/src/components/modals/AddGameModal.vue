@@ -60,6 +60,8 @@ const platformCapabilities = ref<PlatformCapabilities>({
 });
 const isSubmitting = ref(false);
 
+// A fast add (the browser mock) can set and clear `saving` before a deferred
+// watcher runs, so it would never see the change; watch synchronously.
 watch(
   () => props.saving,
   (saving) => {
@@ -67,6 +69,7 @@ watch(
       isSubmitting.value = false;
     }
   },
+  { flush: "sync" },
 );
 const launchModeOptions = computed(() =>
   getLaunchModeOptions(

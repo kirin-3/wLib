@@ -125,3 +125,26 @@ def test_retries_give_up_after_three_attempts(tmp_path):
     with pytest.raises(ConnectionError):
         pacer.request("dlsite", "https://www.dlsite.com/x")
     assert pacer.sent["dlsite"] == 3
+
+
+def test_urllib_transport_turns_a_truncated_read_into_a_retryable_error(monkeypatch):
+    from http.client import IncompleteRead
+
+    from catalog_server import net
+
+    class Truncated:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self):
+            raise IncompleteRead(b"partial", 10)
+
+    monkeypatch.setattr(net, "urlopen", lambda *_a, **_k: Truncated())
+    with pytest.raises(ConnectionError):
+        net.urllib_transport(net.Request("GET", "https://example.com/x"))

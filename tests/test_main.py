@@ -1212,7 +1212,7 @@ def test_extension_wishlist_saves_without_executable_and_rejects_duplicate(
     ("origin", "oversized", "expected_status"),
     [
         ("https://example.com", False, 403),
-        ("chrome-extension://wlib", True, 400),
+        ("chrome-extension://wlib", True, 413),
     ],
 )
 def test_extension_wishlist_rejects_web_origin_and_oversized_body(
@@ -1229,10 +1229,18 @@ def test_extension_wishlist_rejects_web_origin_and_oversized_body(
             "Content-Length",
             str(main.MAX_EXTENSION_BODY_BYTES + 1) if oversized else "2",
         )
-        connection.endheaders(b"{}" if not oversized else None)
+        # The oversized body is sent in full, as a browser would, so the reply
+        # must arrive as a 413 rather than a connection reset.
+        connection.endheaders(
+            b"{}" if not oversized else b" " * (main.MAX_EXTENSION_BODY_BYTES + 1)
+        )
         reply = connection.getresponse()
         assert reply.status == expected_status
-        assert json.loads(reply.read())["success"] is False
+        body = json.loads(reply.read())
+        assert body["success"] is False
+        if oversized:
+            assert body["error"] == "Request body is too large"
+            assert reply.getheader("Access-Control-Allow-Origin") == origin
         api.add_game.assert_not_called()
     finally:
         connection.close()

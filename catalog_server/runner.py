@@ -134,10 +134,10 @@ def run(
             f" ({outcome.detail})" if outcome.detail else "",
         )
         result.sources[name] = outcome
-    links = rebuild_links(catalog)
-    log.info("links: %d", links)
     published: str | None = None
     try:
+        links = rebuild_links(catalog)
+        log.info("links: %d", links)
         if storage is not None:
             snapshot = build_snapshot(catalog, os.path.join(work_dir, "snapshots"), now())
             try:
@@ -146,6 +146,6 @@ def run(
             finally:
                 os.remove(snapshot.path)
     finally:
-        # A failed publish still closes the run, with nothing marked published.
+        # A failed link rebuild or publish still closes the run, with nothing marked published.
         state.finish_run(result.run_id, now(), published)
     return result

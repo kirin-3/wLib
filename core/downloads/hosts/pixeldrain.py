@@ -20,16 +20,22 @@ def urlopen(request: Request, timeout: int = 30) -> object:
     return open_host(request, ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"), timeout)
 
 
-def _id(url: str) -> str:
+def _path(url: str) -> str:
+    """The link's path on a Pixeldrain domain, or '' for any other URL."""
     parsed = urlsplit(url)
     if parsed.scheme != "https" or (parsed.hostname or "").removeprefix("www.") not in ("pixeldrain.com", "pixeldrain.net", "pixeldra.in"):
         return ""
-    match = re.fullmatch(r"/(?:u|d)/([a-zA-Z0-9_-]+)/?", parsed.path)
+    return parsed.path
+
+
+def _id(url: str) -> str:
+    # Only /u/ links are single files; /d/ links are folders (filesystem shares).
+    match = re.fullmatch(r"/u/([a-zA-Z0-9_-]+)/?", _path(url))
     return match.group(1) if match else ""
 
 
 def matches(url: str) -> bool:
-    return bool(_id(url))
+    return bool(re.fullmatch(r"/(?:u|d)/[a-zA-Z0-9_-]+(?:/.*)?", _path(url)))
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -75,6 +81,8 @@ def verify_key(api_key: str) -> str:
 def probe(url: str, api_key: str | None = None) -> FileInfo:
     file_id = _id(url)
     if not file_id:
+        if _path(url).startswith("/d/"):
+            raise DownloadError("Pixeldrain folder links are not supported; open in browser")
         raise DownloadError("unsupported Pixeldrain link")
     headers = _headers(credentials.get(credentials.PIXELDRAIN_API_KEY) if api_key is None else api_key)
     base = f"https://pixeldrain.com/api/file/{file_id}"

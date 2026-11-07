@@ -73,6 +73,9 @@ OAUTH_CALLBACKS = {
     "/gdrive/callback": ("complete_gdrive_callback", "Google Drive"),
 }
 MAX_EXTENSION_BODY_BYTES = 1024 * 1024
+# An oversized body is read and dropped up to this size so the client gets the
+# 413 reply; anything larger is cut off with a connection reset.
+MAX_DISCARDED_BODY_BYTES = 64 * 1024 * 1024
 # Stays under the extension's 10 s request timeout.
 DATABASE_READY_TIMEOUT = 8.0
 RENDERER_DIAGNOSTICS_MAX_BYTES = 512 * 1024
@@ -793,8 +796,16 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return
-        if 0 < length <= MAX_EXTENSION_BODY_BYTES:
-            _ = self.rfile.read(length)
+        if not 0 < length <= MAX_DISCARDED_BODY_BYTES:
+            return
+        try:
+            while length > 0:
+                chunk = self.rfile.read(min(length, 64 * 1024))
+                if not chunk:
+                    break
+                length -= len(chunk)
+        except OSError:
+            pass
 
     def _wait_for_database(self) -> bool:
         # main() serves this port before Api() has run init_db(), so database
@@ -1186,6 +1197,26 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         allowed_origin = self._get_allowed_origin()
         if allowed_origin is None:
             self._reject_origin()
+            return
+
+        try:
+            body_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            body_length = 0
+        if body_length > MAX_EXTENSION_BODY_BYTES:
+            # Reply first, then drop the body: closing with it unread would
+            # reset the connection before the client reads the 413.
+            self.close_connection = True
+            self.send_response(413)
+            self._send_cors_headers(allowed_origin)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            _ = self.wfile.write(
+                b'{"success": false, "error": "Request body is too large"}'
+            )
+            self.wfile.flush()
+            self._discard_request_body()
             return
 
         if self.path == "/api/runner-event":

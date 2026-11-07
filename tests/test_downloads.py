@@ -255,3 +255,12 @@ def test_manager_turns_resolve_timeout_into_a_cause(tmp_path, monkeypatch):
     job = manager.status()[0]
     assert job['job_id'] == job_id and job['stage'] == 'failed'
     assert 'timed out' in str(job['error'])
+
+
+def test_pixeldrain_folder_links_are_reported_as_unsupported(monkeypatch):
+    opened = []
+    monkeypatch.setattr(pixeldrain, 'urlopen', lambda *a, **k: opened.append(a))
+    assert pixeldrain.matches('https://pixeldrain.com/d/abc123')
+    with pytest.raises(DownloadError, match='folder links are not supported'):
+        pixeldrain.probe('https://pixeldrain.com/d/abc123', api_key='')
+    assert opened == []

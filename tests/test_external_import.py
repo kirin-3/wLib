@@ -1776,3 +1776,19 @@ def test_xlibrary_reader_imports_store_links_and_link_only_games(tmp_path):
     games = {game["title"]: game for game in get_all_games()}
     assert games["DLsite Only"]["f95_url"] == ""
     assert games["DLsite Only"]["exe_path"] == ""
+
+
+@pytest.mark.parametrize("name", ["library#1.db", "what?.db", "100%.db"])
+def test_open_snapshot_reads_files_with_uri_characters_in_the_name(tmp_path, name):
+    from core.external_import import open_snapshot
+
+    source = tmp_path / name
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE games (title TEXT)")
+        conn.execute("INSERT INTO games VALUES ('Demo')")
+    conn.close()
+
+    with open_snapshot(str(source)) as snapshot:
+        assert [row["title"] for row in snapshot.execute("SELECT title FROM games")] == ["Demo"]
+        with pytest.raises(sqlite3.OperationalError):
+            snapshot.execute("INSERT INTO games VALUES ('x')")

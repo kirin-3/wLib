@@ -23,7 +23,7 @@
             const creator = host.slice(0, -'.itch.io'.length);
             match = path.match(/^\/([^/]+)(?:\/|$)/);
             if (!match || creator.includes('.')) return null;
-            source = 'itch'; id = `${creator}/${match[1]}`;
+            source = 'itch'; id = `${creator}/${match[1].toLowerCase()}`;
         } else if (['dmm.co.jp','dmm.com','fanza.com'].some(domain => host === domain || host.endsWith('.' + domain))) {
             if (!/\/detail(?:\/|$)/i.test(path)) return null;
             match = (path + (query.size ? '?' + query.toString() : '')).match(/(?:^|[/?&])cid=([a-z_0-9]+)(?:\/|&|$)/i) || path.match(/\/detail\/([a-z_0-9]+)(?:\/|$)/i);

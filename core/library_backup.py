@@ -1355,6 +1355,18 @@ def _import_fields_for_game(
                 LAUNCH_CONFIG_FIELDS,
             )
         )
+        override = fields.get("save_path_override")
+        if isinstance(override, str) and override.strip():
+            # Same rules as set_game_save_folder; an unusable path keeps the local value.
+            from core.game_saves import GameSavesError, validate_save_override
+            from core.host_platform import get_data_subdir
+
+            try:
+                fields["save_path_override"] = validate_save_override(
+                    override, get_data_subdir("save-backups")
+                )
+            except GameSavesError:
+                _ = fields.pop("save_path_override")
     if SECTION_EXECUTABLE_PATHS in sections:
         fields.update(
             _normalized_fields(

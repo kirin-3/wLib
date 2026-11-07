@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -2626,6 +2627,58 @@ def test_importing_launch_config_without_override_keeps_local_value(tmp_path):
     assert result["success"] is True
     assert get_all_games()[0]["save_path_override"] == "/local/saves"
     assert get_all_games()[0]["command_line_args"] == "-x"
+
+
+@pytest.mark.parametrize("kind", ["relative", "backups_root", "file"])
+def test_unusable_imported_save_path_override_keeps_local_value(tmp_path, kind):
+    from core.host_platform import get_data_subdir
+
+    a_file = tmp_path / "saves.txt"
+    a_file.write_text("x")
+    bad = {
+        "relative": "saves/here",
+        "backups_root": os.path.join(get_data_subdir("save-backups"), "1"),
+        "file": str(a_file),
+    }[kind]
+    game_id = add_game("Local", "/game.exe", f95_url="https://f95zone.to/threads/x.1/")
+    assert game_id is not None
+    update_game(game_id, {"save_path_override": "/local/saves"})
+    path = write_backup(
+        tmp_path / "bad.json",
+        base_backup(
+            [
+                {
+                    "metadata": {"title": "Local", "f95_url": "https://f95zone.to/threads/x.1/"},
+                    SECTION_LAUNCH_CONFIG: {"save_path_override": bad, "command_line_args": "-x"},
+                },
+                {
+                    "metadata": {"title": "New", "f95_url": "https://f95zone.to/threads/y.2/"},
+                    SECTION_LAUNCH_CONFIG: {"save_path_override": bad},
+                },
+            ]
+        ),
+    )
+
+    result = Api().import_library_backup(
+        str(path), {"sections": [SECTION_LAUNCH_CONFIG], "merge_mode": "overwrite"}
+    )
+
+    assert result["success"] is True
+    games = {g["title"]: g for g in get_all_games()}
+    assert games["Local"]["save_path_override"] == "/local/saves"
+    assert games["Local"]["command_line_args"] == "-x"
+    assert not games["New"]["save_path_override"]
+
+
+def test_backup_import_refreshes_steam_shortcuts(tmp_path):
+    api = Api()
+    api.steam_sync = MagicMock()
+    path = write_backup(
+        tmp_path / "steam.json", base_backup([{"metadata": {"title": "Steam game"}}])
+    )
+
+    assert api.import_library_backup(str(path))["success"] is True
+    api.steam_sync.schedule.assert_called_once_with()
 
 
 def test_companion_export_sections_and_no_ids():

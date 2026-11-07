@@ -84,7 +84,8 @@ def parse_store_link(url: str) -> StoreLink | None:
         match = re.match(r"/([^/]+)(?:/|$)", path)
         if not match or "." in creator:
             return None
-        source, identity = "itch", f"{creator}/{match[1]}"
+        # itch.io slugs are case-insensitive, like the creator subdomain.
+        source, identity = "itch", f"{creator}/{match[1].lower()}"
     elif any(
         host == domain or host.endswith("." + domain)
         for domain in ("dmm.co.jp", "dmm.com", "fanza.com")

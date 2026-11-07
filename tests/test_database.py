@@ -312,6 +312,21 @@ def test_init_db_rebuilds_every_sync_trigger_with_safe_bump():
     assert all("COALESCE" in str(sql) for _, sql in rows)
 
 
+def test_init_db_folds_itch_link_case_and_drops_duplicates():
+    game_id = add_game("Itch game", "")
+    with closing(get_connection()) as conn:
+        for external_id in ("creator/My-Game", "creator/my-game", "creator/Other"):
+            conn.execute(
+                "INSERT INTO game_links (game_id, source, external_id, url, origin) VALUES (?, 'itch', ?, ?, 'page')",
+                (game_id, external_id, f"https://creator.itch.io/{external_id.split('/')[1]}"),
+            )
+        conn.commit()
+    init_db()
+    with closing(get_connection()) as conn:
+        ids = sorted(row[0] for row in conn.execute("SELECT external_id FROM game_links WHERE source = 'itch'"))
+    assert ids == ["creator/my-game", "creator/other"]
+
+
 def test_journal_migrates_old_schema_and_cascades():
     game_id = add_game("Older game", "/game")
     conn = get_connection()

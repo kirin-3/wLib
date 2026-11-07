@@ -50,6 +50,11 @@
     "id": "creator/my-game"
   },
   {
+    "url": "https://Creator.itch.io/My-Game",
+    "source": "itch",
+    "id": "creator/my-game"
+  },
+  {
     "url": "https://creator.itch.io/",
     "source": null,
     "id": null
