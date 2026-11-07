@@ -26,6 +26,7 @@ from core.game_saves import (
     LOOSE_SAVE_PATTERNS as LOOSE_SAVE_PATTERNS,
     copy_folder_contents,
     is_within,
+    loose_save_files,
 )
 from core.host_platform import host_command, host_which, is_flatpak
 
@@ -1388,21 +1389,12 @@ def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | N
 
 def infolder_save_relpaths(root: str) -> list[str]:
     """Relative in-folder save paths under root (dirs + loose save files)."""
-    import glob
-
     found: list[str] = []
     for rel in INFOLDER_SAVE_DIRS:
         if os.path.isdir(os.path.join(root, rel)):
             found.append(rel)
-    for pattern in LOOSE_SAVE_PATTERNS:
-        # Escape the install path: a folder named "Game [v1.0]" would otherwise
-        # be read as a glob character class and its loose saves would be missed.
-        for path in glob.glob(os.path.join(glob.escape(root), pattern)):
-            try:
-                if os.path.isfile(path) and not os.path.islink(path):
-                    found.append(os.path.relpath(path, root))
-            except OSError:
-                continue
+    for path in loose_save_files(root):
+        found.append(os.path.relpath(path, root))
     return found
 
 
@@ -1970,16 +1962,45 @@ def install_archive(
             destination, dest_real, guard = _resolve_destination(engine)
 
         override_rel: str | None = None
+        # Whether override_rel is relative to the install folder (the archive
+        # root) rather than the executable's folder.
+        override_from_install = False
         if old_root and os.path.isdir(old_root):
             _progress("carrying saves")
             _ = copy_infolder_saves(old_root, staging_install_dir)
+            # The executable can sit below the install folder (Game/bin/x.exe);
+            # saves kept beside that subfolder are deleted with the old
+            # install, so carry them relative to the install folder too.
+            wraps_exe = bool(
+                old_install
+                and _real(old_install) != _real(old_root)
+                and os.path.isdir(old_install)
+            )
+            if wraps_exe:
+                _ = copy_infolder_saves(old_install, staging)
             override_rel = override_relpath(old_override, old_root)
+            if override_rel is None and wraps_exe:
+                override_rel = override_relpath(old_override, old_install)
+                override_from_install = override_rel is not None
             if override_rel is not None:
                 _ = copy_override_saves(
-                    old_override, override_rel, staging_install_dir
+                    old_override,
+                    override_rel,
+                    staging if override_from_install else staging_install_dir,
                 )
+            if override_rel == ".":
+                # The saves folder is the game folder itself. Its save files
+                # cannot be told apart from game files, so only the known
+                # patterns were carried; keep the old folder for the rest.
+                guard = {
+                    "removable": False,
+                    "reason": "The saves folder is the game folder itself, so the old folder was kept in case it holds other saves.",
+                }
             check_symlinks_inside_staging(staging)
 
+        picked_rel = (
+            _relative_inside(picked_exe, staging) if picked_exe else None
+        ) or ""
         _progress("moving into place")
         old_backup = ""
         try:
@@ -2032,7 +2053,16 @@ def install_archive(
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
 
-        exe_path = _pick_exe(destination, old_exe, old_root, title)
+        # Reuse the executable picked in staging: carried saves can add
+        # folders beside a wrapper folder, which would stop the scan from
+        # descending into it.
+        exe_path = ""
+        if picked_rel:
+            candidate = os.path.join(destination, picked_rel)
+            if os.path.isfile(candidate):
+                exe_path = candidate
+        if not exe_path:
+            exe_path = _pick_exe(destination, old_exe, old_root, title)
         # A new game is still added with the details the user entered; the
         # dialog then asks for the executable inside the extracted folder.
         # The same goes for a wishlisted game, which has no executable to keep.
@@ -2091,7 +2121,10 @@ def install_archive(
                         continue
             if override_rel is not None:
                 new_override = os.path.normpath(
-                    os.path.join(new_install_dir, override_rel)
+                    os.path.join(
+                        destination if override_from_install else new_install_dir,
+                        override_rel,
+                    )
                 )
                 if new_override != os.path.normpath(old_override):
                     fields["save_path_override"] = new_override

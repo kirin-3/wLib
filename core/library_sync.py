@@ -666,6 +666,11 @@ class SyncManager:
         # (revision, modified_at) of a remote file a push-only run read and
         # left for a full sync to apply.
         self._newer_remote: tuple[str, str] | None = None
+        # Remote revision of a later sync that needs the user to choose a
+        # library, and why ("conflict": both sides changed; "removal": the
+        # sync file would remove most of this library).
+        self._choice_revision: str | None = None
+        self._choice_reason: str = ""
         # (state, PKCE verifier, expiry, provider)
         self._pending: tuple[str, str, float, str] | None = None
         self._stop: threading.Event = threading.Event()
@@ -718,6 +723,14 @@ class SyncManager:
             "gdrive_available": not gdrive_reason,
             "gdrive_unavailable_reason": gdrive_reason,
             "connecting": connecting,
+            # Why a choice is needed: "first" connection, "conflict" (both
+            # sides changed) or "removal" (the sync file would empty most of
+            # this library).
+            "choice_reason": (
+                (self._choice_reason or "first")
+                if enabled and self._state == "needs_choice"
+                else ""
+            ),
         }
 
     def _error(self, error: Exception) -> dict[str, object]:
@@ -775,6 +788,7 @@ class SyncManager:
         self._state, self._error_code = "idle", ""
         self._first_pending = None
         self._newer_remote = None
+        self._choice_revision, self._choice_reason = None, ""
 
     def set_folder(self, folder: object) -> dict[str, object]:
         selected = folder if isinstance(folder, str) else ""
@@ -976,8 +990,18 @@ class SyncManager:
         revision = location.revision()
         first = not self._setting("last_synced_at")
         self._first_revision = revision if first else None
-        if choice is not None and not first:
+        if choice is not None and not first and self._choice_revision is None:
             raise SyncError("No library choice is needed.", "invalid_sync_choice")
+        if (
+            not first
+            and choice is None
+            and self._choice_revision is not None
+            and self._choice_revision == revision
+        ):
+            # Still waiting for the user's answer about this remote file;
+            # don't download it again or resolve it behind their back.
+            self._state = "needs_choice"
+            return
         local_modified = self._setting("local_modified_at")
         local_changed = self.local_changed()
         remote_changed = revision != last_revision
@@ -985,6 +1009,11 @@ class SyncManager:
             database.update_setting("sync_last_error", "")
             return
         if revision is None:
+            if first and database.get_game_count() == 0:
+                # Nothing to share yet. Pushing an empty library would make it
+                # the newest file, and a folder sync tool that has not yet
+                # delivered the real file would spread it to other devices.
+                return
             self._push(location, None)
             return
         pending = self._first_pending
@@ -1054,14 +1083,91 @@ class SyncManager:
         if remote_changed:
             assert backup is not None
             remote_time = str(cast(dict[str, object], backup["sync"])["modified_at"])
-            if not local_changed or timestamp(remote_time) >= timestamp(local_modified):
+            # The file can get a new revision without new content (a sync tool
+            # rewrote it). Its change time is then still the one this device
+            # last synced, so only the local side changed.
+            remote_content_changed = timestamp(remote_time) != timestamp(
+                self._setting("last_synced_at")
+            )
+            if choice is not None:
+                self._resolve_choice(choice, location, backup, revision, local_modified)
+                return
+            if remote_content_changed and local_changed:
+                # Both sides changed since the last sync. Newest-wins would
+                # silently drop one side's work, so ask instead.
+                self._ask_choice(revision, "conflict")
+                return
+            if not remote_content_changed and not local_changed:
+                # Same content under a new revision: remember the revision so
+                # the next run does not download the file again.
+                database.update_setting("sync_last_revision", revision)
+                self._choice_revision, self._choice_reason = None, ""
+                return
+            if remote_content_changed:
+                if self._removes_most_games(backup):
+                    self._ask_choice(revision, "removal")
+                    return
                 if push_only:
                     self._newer_remote = (revision, remote_time)
                 else:
                     self._pull(backup, revision, local_modified)
                 return
+        self._choice_revision, self._choice_reason = None, ""
         if local_changed:
             self._push(location, revision)
+
+    def _ask_choice(self, revision: str, reason: str) -> None:
+        self._state = "needs_choice"
+        self._choice_revision, self._choice_reason = revision, reason
+
+    @staticmethod
+    def _removes_most_games(backup: dict[str, object]) -> bool:
+        """True when mirroring backup would empty most of this library.
+
+        A device that synced before its folder sync tool delivered the real
+        file can push an empty or near-empty library; mirroring it would
+        delete every game here without a word.
+        """
+        local_count = database.get_game_count()
+        games = backup.get("games")
+        remote_count = len(cast(list[object], games)) if isinstance(games, list) else 0
+        if local_count == 0:
+            return False
+        if remote_count == 0:
+            return True
+        return local_count >= 10 and remote_count * 2 < local_count
+
+    def _resolve_choice(
+        self,
+        choice: str,
+        location: SyncLocation,
+        backup: dict[str, object],
+        revision: str,
+        local_modified: str,
+    ) -> None:
+        """Apply the user's answer to a later-sync choice.
+
+        The pending choice is cleared only once the answer was applied, so
+        the retry after a conflicting local edit can still use it.
+        """
+        if choice == "use-remote":
+            self._pull(backup, revision, local_modified)
+        elif choice == "use-local":
+            self._push(location, revision)
+        else:
+            result = apply_library_backup(
+                backup, {"sections": SYNC_SECTIONS}, sync=True
+            )
+            if self._on_pull is not None:
+                self._on_pull()
+            self._push(location, revision)
+            if result["ambiguous"]:
+                database.update_setting(
+                    "sync_last_error",
+                    "Some games matched more than one local game. They were kept as separate games; remove the duplicates you don't need.",
+                )
+        self._choice_revision, self._choice_reason = None, ""
+        self._newer_remote = None
 
     def _bumped_local_modified_at(self) -> str:
         # Mirror the SQLite bump trigger: never move backwards under clock skew.
@@ -1327,6 +1433,7 @@ class SyncManager:
         self._state, self._error_code = "idle", ""
         self._first_pending = None
         self._newer_remote = None
+        self._choice_revision, self._choice_reason = None, ""
 
     def disconnect(self) -> dict[str, object]:
         with self._lock:
@@ -1356,6 +1463,10 @@ class SyncManager:
         def watch() -> None:
             while not self._stop.wait(60):
                 try:
+                    # While a choice or passphrase is pending, a push-only run
+                    # could only repeat the question; leave it to the user.
+                    if self._state in ("needs_choice", "needs_passphrase"):
+                        continue
                     if self._auto_push_due():
                         _ = self.start_run(push_only=True)
                 except Exception:  # Keep auto-sync alive through transient DB/OS errors.

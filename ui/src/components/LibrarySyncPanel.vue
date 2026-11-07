@@ -25,6 +25,10 @@ let errorFromStatus = false;
 let browsing = false;
 const disabled = computed(() => loading.value || busy.value || status.value.state === "syncing");
 const connected = computed(() => Boolean(status.value.location));
+const choiceMessage = computed(() => ({
+  conflict: "This machine and the sync file both changed since the last sync.",
+  removal: "The sync file would remove most of the games on this machine.",
+})[status.value.choice_reason as "conflict" | "removal"] ?? "Both this machine and the sync file have games.");
 const stateLabel = computed(() => ({ off: "Sync is off", idle: "Ready to sync", syncing: "Syncing your library...", needs_choice: "Choose which library to use", needs_passphrase: "Passphrase required", error: "Sync needs attention" })[status.value.state || "off"]);
 const lastSynced = computed(() => status.value.last_synced_at ? new Date(status.value.last_synced_at).toLocaleString() : "Not synced yet");
 
@@ -149,7 +153,7 @@ onBeforeUnmount(() => {
       <h3 id="sync-heading" class="ui-section-heading text-lg font-semibold"><IconCloud class="ui-section-icon" />Library sync</h3>
       <p class="sync-description">Keep one library across your machines in a folder, your Dropbox app folder, or Google Drive.</p>
       <p v-if="status.mock" class="sync-description">Browser preview with mock data. No files are synced.</p>
-      <p class="sync-description sync-note">Sync shares game metadata, ratings, notes, playtime, and general settings. Executable paths and launch options stay on this machine. Use one machine at a time; the newer library replaces the older one, including deletions.</p>
+      <p class="sync-description sync-note">Sync shares game metadata, ratings, notes, playtime, and general settings. Executable paths and launch options stay on this machine. Use one machine at a time; a newer library replaces the older one, including deletions. If both changed, you choose which to keep.</p>
       <div class="sync-field">
         <label for="sync-location">Sync location</label>
         <div class="sync-controls">
@@ -189,7 +193,7 @@ onBeforeUnmount(() => {
         <section ref="dialogElement" class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title" tabindex="-1">
           <template v-if="dialog === 'choice'">
             <h3 id="sync-dialog-title">Choose which library to use</h3>
-            <p>Both this machine and the sync file have games. No library has been changed yet.</p>
+            <p>{{ choiceMessage }} No library has been changed yet.</p>
             <button type="button" :disabled="busy" @click="choose('use-remote')"><strong>Use sync file</strong><span>Replace this library, including deletions. Keep local launch options for matching games.</span></button>
             <button type="button" :disabled="busy" @click="choose('use-local')"><strong>Use this machine</strong><span>Replace the sync file with this machine's library.</span></button>
             <button type="button" :disabled="busy" @click="choose('merge-once')"><strong>Merge once</strong><span>Combine both libraries, using sync file values for matches, then upload. Delete nothing.</span></button>

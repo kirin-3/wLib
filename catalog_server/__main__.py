@@ -49,6 +49,7 @@ class Args(argparse.Namespace):
     sources: list[str] = []
     until_swept: list[str] = []
     no_publish: bool = False
+    force_publish: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = run_parser.add_argument(
         "--no-publish", action="store_true", help="skip the snapshot and upload"
+    )
+    _ = run_parser.add_argument(
+        "--force-publish",
+        action="store_true",
+        help="publish even when the catalog is empty or a source lost over half its rows",
     )
     _ = commands.add_parser("status", help="show recent runs and source cursors")
     return parser
@@ -180,6 +186,7 @@ def main(
                 [name for name in SOURCES if name in selected],
                 storage=storage,
                 work_dir=folder,
+                force_publish=args.force_publish,
             )
         finally:
             catalog.close()
@@ -191,7 +198,7 @@ def main(
         if name in result.sources and not result.sources[name].sweep_completed
         and result.sources[name].status != "ok"
     ]
-    return 1 if failed or unswept else 0
+    return 1 if failed or unswept or result.publish_refused else 0
 
 
 if __name__ == "__main__":

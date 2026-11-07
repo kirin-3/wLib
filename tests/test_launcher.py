@@ -181,7 +181,7 @@ def test_running_registry_duplicate_and_exit(monkeypatch, tmp_path, logging, cal
     with (
         patch("subprocess.Popen", return_value=process) as popen,
         patch("core.launcher.get_setting", return_value="true" if logging else "false"),
-        patch("builtins.open", mock_open()),
+        patch("core.launcher._open_debug_log", mock_open()),
         patch("threading.Thread") as thread,
         patch("os.killpg", side_effect=ProcessLookupError, create=True),
     ):
@@ -402,7 +402,7 @@ def test_logging_falls_back_to_temp_dir_for_read_only_game_folder():
             "core.launcher.get_setting",
             side_effect=lambda key: "true" if key == "enable_logging" else "false",
         ),
-        patch("builtins.open", side_effect=fake_open),
+        patch("core.launcher._open_debug_log", side_effect=fake_open),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
     ):
@@ -620,7 +620,7 @@ def test_launch_logging_limits_wine_debug_output(monkeypatch, proton_version):
             "core.launcher.get_setting",
             side_effect=lambda key: "true" if key == "enable_logging" else "",
         ),
-        patch("builtins.open"),
+        patch("core.launcher._open_debug_log"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread"),
     ):
@@ -882,7 +882,7 @@ def test_windows_launch_reports_periodic_and_final_playtime(
         patch(
             "core.launcher._ElevatedProcess", side_effect=elevated_process
         ) as elevate,
-        patch("builtins.open") as open_log,
+        patch("core.launcher._open_debug_log") as open_log,
     ):
         result = Launcher().launch(
             r"C:\Games\game.exe",
@@ -3699,3 +3699,72 @@ def test_windows_launch_skips_performance_tools(monkeypatch):
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
         assert Launcher().launch(r"C:\games\game.exe", gamemode=True, mangohud=True)["success"]
         assert popen.call_args.args[0] == [r"C:\games\game.exe"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux")
+def test_debug_log_never_writes_through_a_planted_symlink(tmp_path):
+    from core.launcher import _open_debug_log
+
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    link = tmp_path / "game_wlib.log"
+    link.symlink_to(victim)
+
+    with pytest.raises(OSError):
+        _ = _open_debug_log(str(link))
+    assert victim.read_text() == "keep"
+
+    plain = tmp_path / "other_wlib.log"
+    plain.write_text("old")
+    with _open_debug_log(str(plain)) as log:
+        _ = log.write("new")
+    assert plain.read_text() == "new"
+
+
+@pytest.mark.parametrize(
+    ("sandboxed", "custom", "expected"),
+    [
+        (True, "", "sandbox/12/prefix"),
+        (True, "/custom/prefix", "/custom/prefix"),
+        (False, "", "/global/prefix"),
+    ],
+)
+def test_sandboxed_wine_game_gets_its_own_prefix(
+    monkeypatch, tmp_path, sandboxed, custom, expected
+):
+    # A shared prefix is writable inside the sandbox, so a sandboxed game must
+    # not run in the one unsandboxed games use.
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.prepare_sandbox_home",
+        lambda _: str(tmp_path / "home"),
+    )
+    monkeypatch.setattr(
+        "core.launcher.game_sandbox.get_sandbox_status",
+        lambda: {"status": "ready", "path": "bwrap"},
+    )
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("os.makedirs"),
+        patch(
+            "core.launcher.get_setting",
+            side_effect=lambda key: "/global/prefix" if key == "wine_prefix_path" else "",
+        ),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(
+            "/games/Game.exe",
+            custom_prefix=custom,
+            game_id=12,
+            sandbox_enabled=sandboxed,
+            launch_mode="wine_proton",
+        )
+    assert result["success"], result
+    prefix = popen.call_args.kwargs["env"]["WINEPREFIX"]
+    if expected.startswith("/"):
+        assert prefix == expected
+    else:
+        assert prefix == str(tmp_path / expected)

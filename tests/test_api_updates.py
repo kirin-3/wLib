@@ -2614,6 +2614,26 @@ def test_resolve_runtime_install_target_empty_overrides_use_global_settings(tmp_
     assert target["resolved_prefix"] == str(global_prefix / "proton_compat" / "pfx")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="sandboxed prefixes are Linux-only")
+def test_resolve_runtime_install_target_uses_a_sandboxed_games_own_prefix(tmp_path):
+    from core.database import add_game, update_game
+    from core.game_sandbox import sandbox_wine_prefix
+
+    api = Api()
+    update_setting("wine_prefix_path", str(tmp_path / "global-prefix"))
+    update_setting("proton_path", "")
+    sandboxed = add_game("Boxed", "/games/boxed.exe")
+    plain = add_game("Plain", "/games/plain.exe")
+    assert sandboxed is not None and plain is not None
+    update_game(sandboxed, {"sandbox_enabled": 1})
+
+    boxed = api._resolve_runtime_install_target("", "", sandboxed)
+    shared = api._resolve_runtime_install_target("", "", plain)
+
+    assert boxed["base_prefix"] == sandbox_wine_prefix(sandboxed)
+    assert shared["base_prefix"] == str(tmp_path / "global-prefix")
+
+
 def test_get_install_status_derives_from_requested_prefix(tmp_path, monkeypatch):
     # An empty runner means system Wine when it is installed.
     monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine")

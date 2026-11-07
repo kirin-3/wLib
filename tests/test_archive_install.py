@@ -1867,6 +1867,41 @@ def test_install_override_equal_to_old_root_is_repointed_not_copied(
     assert (new_dir / "Game.exe").read_bytes() == b"new"  # not clobbered by the old copy
 
 
+def test_install_keeps_old_folder_when_override_is_the_game_folder(
+    tmp_path, monkeypatch
+):
+    db, lib, old_dir, game_id, archive = _override_game(tmp_path, monkeypatch)
+    db.update_game(game_id, {"save_path_override": str(old_dir)})
+    (old_dir / "slot1.dat").write_text("unknown save")
+
+    from core.archive_install import install_archive
+
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Game",
+        version="2.0",
+        game_id=game_id,
+        remove_old=True,
+    )
+
+    assert result["removed_old"] is False
+    assert "saves folder" in str(result["kept_old_folder_reason"])
+    assert (old_dir / "slot1.dat").read_text() == "unknown save"
+
+
+@pytest.mark.parametrize(
+    "name", ["Save01.rvdata2", "Save1.rvdata", "Save1.rxdata", "Save01.lsd", "SLOT1.SAV"]
+)
+def test_infolder_saves_include_classic_rpg_maker_files(tmp_path, name):
+    root = tmp_path / "game"
+    root.mkdir()
+    (root / name).write_text("save")
+    (root / "Game.ini").write_text("x")
+    assert infolder_save_relpaths(str(root)) == [name]
+
+
 @pytest.mark.parametrize("known_engine", [True, False])
 def test_install_detects_engine_before_destination(tmp_path, monkeypatch, known_engine):
     db = _isolated_db(tmp_path, monkeypatch)
@@ -2156,6 +2191,26 @@ def test_update_removes_whole_old_install_when_exe_is_nested(tmp_path, monkeypat
     assert result["old_folder"] == str(lib / "Game" / "1.0")
     assert not (lib / "Game" / "1.0").exists()
     assert (lib / "Game" / "2.0" / "Game" / "Game.exe").read_bytes() == b"2.0"
+
+
+def test_update_carries_saves_beside_a_nested_exe(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    first = _install_nested(tmp_path, "{title}/{version}", "1.0")
+    game_id = int(str(first["game_id"]))
+    old = tmp_path / "lib" / "Game" / "1.0"
+    (old / "save").mkdir()
+    (old / "save" / "file1.rmmzsave").write_text("slot")
+    (old / "UserSaves").mkdir()
+    (old / "UserSaves" / "a.dat").write_text("user")
+    db.update_game(game_id, {"save_path_override": str(old / "UserSaves")})
+
+    result = _install_nested(tmp_path, "{title}/{version}", "2.0", game_id, "Game-2.0.zip")
+
+    new = tmp_path / "lib" / "Game" / "2.0"
+    assert result["removed_old"] is True
+    assert (new / "save" / "file1.rmmzsave").read_text() == "slot"
+    assert (new / "UserSaves" / "a.dat").read_text() == "user"
+    assert db.get_all_games()[0]["save_path_override"] == str(new / "UserSaves")
 
 
 def test_in_place_update_works_when_exe_is_nested(tmp_path, monkeypatch):

@@ -45,7 +45,7 @@ export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
 
 export const hasAvailableUpdate = (
   game: Pick<GameRecord, "version" | "latest_version"> &
-    { skipped_version: GameRecord["skipped_version"] } &
+    { skipped_version?: GameRecord["skipped_version"] } &
     Partial<Pick<GameRecord, "exe_path">>,
 ): boolean => {
   if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">))

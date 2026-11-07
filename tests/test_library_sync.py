@@ -177,8 +177,12 @@ def test_empty_side_automatic(local_empty):
     assert location.writes == (0 if local_empty else 1)
 
 
-@pytest.mark.parametrize("winner", ["remote", "local"])
-def test_both_changed_newest_wins(winner):
+@pytest.mark.parametrize("remote_newer", [True, False])
+@pytest.mark.parametrize(
+    ("choice", "rating", "writes"),
+    [("use-remote", "7", 0), ("use-local", "9", 1), ("merge-once", "7", 1)],
+)
+def test_both_changed_asks_instead_of_newest_wins(remote_newer, choice, rating, writes):
     location = MemoryLocation(remote_backup())
     sync = manager(location)
     sync.run()
@@ -187,14 +191,80 @@ def test_both_changed_newest_wins(winner):
     database.update_setting("sync_local_modified_at", "2026-10-09T12:00:00Z")
     location.change(
         remote_backup(
-            modified=(
-                "2026-10-09T13:00:00Z" if winner == "remote" else "2026-10-09T11:00:00Z"
-            )
+            modified=("2026-10-09T13:00:00Z" if remote_newer else "2026-10-09T11:00:00Z")
         )
     )
+    status = sync.run()
+    # Neither side's change time decides: one of them would be lost silently.
+    assert status["state"] == "needs_choice"
+    assert status["choice_reason"] == "conflict"
+    assert database.get_all_games()[0]["rating"] == "9"
+    assert location.writes == 0
+    reads = location.reads
+    # The watcher and the exit push keep the question open without
+    # downloading the file again.
+    assert sync.run(push_only=True)["state"] == "needs_choice"
+    assert location.reads == reads and location.writes == 0
+
+    assert sync.run(choice)["state"] == "idle"
+    assert database.get_all_games()[0]["rating"] == rating
+    assert location.writes == writes
+    assert sync.run()["state"] == "idle"
+
+
+def test_rewritten_remote_with_same_content_is_not_a_conflict():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
     sync.run()
-    assert database.get_all_games()[0]["rating"] == ("7" if winner == "remote" else "9")
-    assert location.writes == (0 if winner == "remote" else 1)
+    game = database.get_all_games()[0]
+    database.update_game(game["id"], {"rating": "9"})
+    # A sync tool rewrote the file: new revision, same change time.
+    location.change(remote_backup())
+    assert sync.run()["state"] == "idle"
+    assert location.writes == 1
+    assert json.loads(location.data)["games"][0]["user_state"]["rating"] == "9"
+
+
+def test_rewritten_remote_without_local_changes_is_read_once():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    location.change(remote_backup())
+    assert sync.run()["state"] == "idle"
+    reads = location.reads
+    assert sync.run()["state"] == "idle"
+    assert location.reads == reads and location.writes == 0
+    assert [game["title"] for game in database.get_all_games()] == ["Remote"]
+
+
+def test_remote_that_empties_the_library_asks_first():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    location.change(remote_backup(title="", modified="2026-10-09T11:00:00Z"))
+    status = sync.run()
+    assert status["state"] == "needs_choice"
+    assert status["choice_reason"] == "removal"
+    assert [game["title"] for game in database.get_all_games()] == ["Remote"]
+    assert sync.run("use-local")["state"] == "idle"
+    assert json.loads(location.data)["games"][0]["metadata"]["title"] == "Remote"
+
+
+def test_new_empty_device_does_not_push_an_empty_library():
+    location = MemoryLocation()
+    sync = manager(location)
+    assert sync.run()["state"] == "idle"
+    assert location.writes == 0
+    database.add_game("Local", "/local.exe")
+    sync.run()
+    assert location.writes == 1
+
+
+def test_choice_is_refused_when_nothing_is_pending():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    assert sync.run("use-local")["error_code"] == "invalid_sync_choice"
 
 
 def test_remote_only_and_unavailable_leave_local_untouched():
@@ -227,7 +297,9 @@ def test_encrypted_join_changed_passphrase_and_disable():
     assert sync.run()["state"] == "needs_passphrase"
     assert location.writes == 0
     assert sync.unlock("second")["success"]
-    sync.run()
+    # The local rating edit and the re-encrypted remote both changed.
+    assert sync.run()["state"] == "needs_choice"
+    assert sync.run("use-remote")["state"] == "idle"
     assert sync.set_passphrase(None)["success"]
     sync.run()
     assert json.loads(location.data)["format"] == "wlib.library_migration"
@@ -678,13 +750,29 @@ def test_auto_push_reads_a_newer_remote_once_while_local_edits_wait():
     database.add_game("Local edit", "/local.exe")
     location.change(remote_backup("Newer remote", "2099-01-01T00:00:00Z"))
     reads = location.reads
-    # The newer remote wins, but only a full sync applies it. The watcher
-    # must not download it again every minute meanwhile.
+    # Both sides changed, so the user picks. The watcher must not download
+    # the file again every minute meanwhile, or push over it.
+    for _ in range(3):
+        assert sync.run(push_only=True)["state"] == "needs_choice"
+    assert location.reads == reads + 1 and location.writes == 0
+    assert sync.run()["state"] == "needs_choice"
+    assert location.reads == reads + 1
+    sync.run("use-remote")
+    assert location.reads == reads + 2
+    assert [game["title"] for game in database.get_all_games()] == ["Newer remote"]
+
+
+def test_auto_push_reads_a_newer_remote_once_without_local_edits():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    location.change(remote_backup("Newer remote", "2099-01-01T00:00:00Z"))
+    reads = location.reads
+    # Only a full sync applies a newer remote; push-only runs read it once.
     for _ in range(3):
         sync.run(push_only=True)
     assert location.reads == reads + 1 and location.writes == 0
     sync.run()
-    assert location.reads == reads + 2
     assert [game["title"] for game in database.get_all_games()] == ["Newer remote"]
 
 

@@ -393,7 +393,7 @@ const gamesWithErrors = computed(() => {
 });
 
 const persistedUpdates = computed(() => {
-  return games.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
+  return games.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game));
 });
 
 const selectedUpdateIds = ref(new Set<number>());

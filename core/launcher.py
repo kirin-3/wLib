@@ -482,6 +482,22 @@ def _spawn_sandbox_process(
     return processes[0]
 
 
+def _open_debug_log(path: str) -> IO[str]:
+    """Open a game's debug log for writing without following a symlink.
+
+    The log sits in the game folder, which a sandboxed game can write. A
+    plain open() would follow a symlink it left there and truncate the file
+    it points at outside the sandbox.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o644)
+    try:
+        return os.fdopen(descriptor, "w")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 class Launcher:
     def __init__(self):
         self._running: dict[int, RunningGame] = {}
@@ -1285,13 +1301,15 @@ class Launcher:
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     try:
-                        log_file = open(log_path, "w")
+                        log_file = _open_debug_log(log_path)
                     except OSError:
-                        # Read-only game folder: log to the temp dir instead of failing the launch.
+                        # Read-only game folder, or the log name is a symlink
+                        # (a sandboxed game can plant one): log to the temp
+                        # dir instead of failing the launch.
                         log_path = path_module.join(
                             tempfile.gettempdir(), path_module.basename(log_path)
                         )
-                        log_file = open(log_path, "w")
+                        log_file = _open_debug_log(log_path)
                     print(f"Debug logging enabled. Outputting to {log_path}")
                     for note in performance_notes:
                         _ = log_file.write(note + "\n")
@@ -1719,16 +1737,32 @@ class Launcher:
         proton_path = resolve_runner(proton_path)
 
         # A WINEPREFIX= in the launch arguments is the most specific choice.
+        # A sandboxed game never shares the global prefix; see
+        # game_sandbox.sandbox_wine_prefix.
         wine_prefix = path_module.expanduser(
             (
                 user_env.get("WINEPREFIX")
-                or custom_prefix
+                or (
+                    custom_prefix
+                    if is_windows()
+                    else game_sandbox.sandboxed_prefix_override(
+                        custom_prefix, sandboxed, game_id
+                    )
+                )
                 or get_setting("wine_prefix_path")
                 or ""
             ).strip()
         )
         if wine_prefix:
             wine_prefix = path_module.abspath(wine_prefix)
+            if (
+                not is_windows()
+                and sandboxed
+                and game_id is not None
+                and wine_prefix == game_sandbox.sandbox_wine_prefix(game_id)
+            ):
+                # wLib owns this prefix, so it creates it like the default one.
+                os.makedirs(wine_prefix, exist_ok=True)
 
         if not wine_prefix:
             # We must supply a prefix for Proton to function at all.

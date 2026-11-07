@@ -416,6 +416,31 @@ def resolve_game_folder(exe_path: str, launch_mode: str = "auto") -> str:
     return folder
 
 
+def sandbox_wine_prefix(game_id: int) -> str:
+    """Wine/Proton prefix of a sandboxed game that has no custom prefix.
+
+    The sandbox mounts the prefix read-write, so a shared one would let a
+    sandboxed game plant DLLs or registry entries that later run unsandboxed
+    in other games. Each sandboxed game gets its own prefix instead.
+    """
+    return os.path.join(sandbox_folder(game_id), "prefix")
+
+
+def sandboxed_prefix_override(
+    custom_prefix: str, sandboxed: bool, game_id: int | None
+) -> str:
+    """The prefix a game uses instead of the shared one, or "" for none.
+
+    A custom prefix always wins. Otherwise a sandboxed Linux game uses its
+    own prefix; Windows sandboxing (Sandboxie) does not run Wine.
+    """
+    if custom_prefix.strip():
+        return custom_prefix
+    if not sandboxed or game_id is None or os.name == "nt":
+        return ""
+    return sandbox_wine_prefix(game_id)
+
+
 def prepare_sandbox_home(game_id: int) -> str:
     home = os.path.join(sandbox_folder(game_id), "home")
     os.makedirs(home, exist_ok=True)

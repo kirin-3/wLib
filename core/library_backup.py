@@ -32,13 +32,12 @@ from core.database import (
     get_all_games,
     get_connection,
     get_all_play_sessions,
-    find_matching_game_row,
     get_setting,
     replace_game_links,
     normalize_launch_mode,
     normalize_play_status,
 )
-from core.f95zone import normalize_thread_url, thread_urls_match
+from core.f95zone import normalize_thread_url, thread_match_key, thread_urls_match
 from core.host_platform import is_windows
 from core.store_links import MATCHABLE_SOURCES, coerce_store_links
 
@@ -743,22 +742,94 @@ def _sync_uid(value: object) -> str:
     return text
 
 
+class _LocalGameIndex:
+    """Local games grouped by every identity an imported game can match on.
+
+    Built once per import so matching each imported game is a few lookups
+    instead of a scan (with URL parsing) of the whole library. Each group
+    keeps the library's order, which decides ties.
+    """
+
+    def __init__(self, local_games: Sequence[Mapping[str, object]]) -> None:
+        self.order: dict[int, int] = {}
+        self.by_uid: dict[str, list[Mapping[str, object]]] = {}
+        self.by_thread: dict[str, list[Mapping[str, object]]] = {}
+        self.by_link: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+        self.by_identity: dict[tuple[str, str], list[Mapping[str, object]]] = {}
+        self.by_title: dict[str, list[Mapping[str, object]]] = {}
+        for position, game in enumerate(local_games):
+            self.order[id(game)] = position
+            uid = game.get("sync_uid")
+            if isinstance(uid, str) and uid:
+                self.by_uid.setdefault(uid, []).append(game)
+            key = thread_match_key(game.get("f95_url"))
+            if key:
+                self.by_thread.setdefault(key, []).append(game)
+            for link_key in _local_link_keys(game):
+                self.by_link.setdefault(link_key, []).append(game)
+            identity = _fallback_identity_key(game)
+            self.by_identity.setdefault(identity, []).append(game)
+            self.by_title.setdefault(identity[0], []).append(game)
+
+    def linked(self, keys: set[tuple[str, str]]) -> list[Mapping[str, object]]:
+        found: dict[int, Mapping[str, object]] = {}
+        for key in keys:
+            for game in self.by_link.get(key, ()):
+                found[id(game)] = game
+        return sorted(found.values(), key=lambda game: self.order[id(game)])
+
+
+class _ThreadOwners:
+    """Which row holds each thread during an import transaction.
+
+    Answers what find_matching_game_row would (the lowest id whose URL names
+    the same thread) from one read of the table, updated as rows are written,
+    instead of re-reading and re-parsing every URL for each imported game.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor) -> None:
+        self._ids: dict[str, set[int]] = {}
+        self._keys: dict[int, str] = {}
+        rows = cast(
+            list[sqlite3.Row],
+            cursor.execute(
+                "SELECT id, f95_url FROM games WHERE f95_url IS NOT NULL AND TRIM(f95_url) != ''"
+            ).fetchall(),
+        )
+        for row in rows:
+            self.set(int(str(cast(object, row["id"]))), cast(object, row["f95_url"]))
+
+    def set(self, game_id: int, url: object) -> None:
+        old = self._keys.pop(game_id, "")
+        if old:
+            self._ids[old].discard(game_id)
+        key = thread_match_key(url)
+        if key:
+            self._keys[game_id] = key
+            self._ids.setdefault(key, set()).add(game_id)
+
+    def owner(self, url: object) -> int | None:
+        ids = self._ids.get(thread_match_key(url))
+        return min(ids) if ids else None
+
+
 def _match_imported_game(
     imported_game: Mapping[str, object],
     local_games: Sequence[Mapping[str, object]],
     *,
     sync: bool = False,
+    index: _LocalGameIndex | None = None,
 ) -> dict[str, object]:
+    if index is None:
+        index = _LocalGameIndex(local_games)
     metadata = _game_section(imported_game, "metadata")
     title = _coerce_text(metadata.get("title")).strip()
     # The sync identity survives title and thread changes made on another
     # device, so it decides before any metadata-based match.
     sync_uid = _sync_uid(imported_game.get("uid"))
     if sync_uid:
-        uid_matches = [
-            # Stored values are already lowercase hex (generated or validated).
-            game for game in local_games if game.get("sync_uid") == sync_uid
-        ]
+        # Stored values are already lowercase hex (generated or validated).
+        uid_matches = index.by_uid.get(sync_uid, [])
         if len(uid_matches) == 1:
             return {
                 "status": "matched",
@@ -774,17 +845,8 @@ def _match_imported_game(
         for link in coerce_store_links(metadata.get("links"))
         if link["source"] in MATCHABLE_SOURCES
     }
-    # Local links are already normalized database rows; re-parsing them for
-    # every imported game would make large imports quadratic in URL parsing.
-    linked_games = (
-        [
-            game
-            for game in local_games
-            if incoming_links.intersection(_local_link_keys(game))
-        ]
-        if incoming_links
-        else []
-    )
+    # Local links are already normalized database rows, indexed once.
+    linked_games = index.linked(incoming_links) if incoming_links else []
     link_match: dict[str, object] = {}
     if len(linked_games) > 1:
         link_match = {
@@ -808,11 +870,7 @@ def _match_imported_game(
             }
 
     if f95_url:
-        f95_matches = [
-            game
-            for game in local_games
-            if thread_urls_match(game.get("f95_url"), f95_url)
-        ]
+        f95_matches = index.by_thread.get(thread_match_key(f95_url), [])
         if len(f95_matches) == 1:
             return {
                 "status": "matched",
@@ -837,9 +895,8 @@ def _match_imported_game(
         # share a title and developer stay separate entries.
         url_less_matches = [
             game
-            for game in local_games
-            if _fallback_identity_key(game) == (title_key, developer_key)
-            and not _coerce_text(game.get("f95_url")).strip()
+            for game in index.by_identity.get((title_key, developer_key), [])
+            if not _coerce_text(game.get("f95_url")).strip()
         ]
         if len(url_less_matches) == 1:
             return {
@@ -870,9 +927,8 @@ def _match_imported_game(
     if title_key and (developer_key or exe_key or sync):
         fallback_matches = [
             game
-            for game in local_games
-            if _fallback_identity_key(game) == (title_key, developer_key)
-            and (
+            for game in index.by_identity.get((title_key, developer_key), [])
+            if (
                 developer_key
                 or sync
                 or _coerce_text(game.get("exe_path")).strip() == exe_key
@@ -905,9 +961,8 @@ def _match_imported_game(
         # or a different executable are never merged on title alone.
         title_matches = [
             game
-            for game in local_games
-            if _normalize_identity_text(game.get("title")) == title_key
-            and not _coerce_text(game.get("f95_url")).strip()
+            for game in index.by_title.get(title_key, [])
+            if not _coerce_text(game.get("f95_url")).strip()
             and not _coerce_text(game.get("developer")).strip()
             and (not exe_key or not _coerce_text(game.get("exe_path")).strip())
         ]
@@ -935,8 +990,11 @@ def _build_import_plan(
     backup: Mapping[str, object], *, sync: bool = False
 ) -> list[dict[str, object]]:
     local_games = _local_games()
+    index = _LocalGameIndex(local_games)
     plan = [
-        _match_imported_game(_coerce_mapping(game), local_games, sync=sync)
+        _match_imported_game(
+            _coerce_mapping(game), local_games, sync=sync, index=index
+        )
         for game in _coerce_sequence(backup.get("games"))
     ]
     _release_duplicate_claims(plan)
@@ -1920,6 +1978,7 @@ def apply_library_backup(
                     cursor, backup, merge_mode
                 )
 
+            owners = _ThreadOwners(cursor)
             for item in plan:
                 imported_game = _coerce_mapping(item.get("game"))
                 status = str(item.get("status") or "")
@@ -1942,14 +2001,11 @@ def apply_library_backup(
                     # the same thread under an old and a new slug). A later
                     # copy merges into the row created earlier in this import
                     # instead of adding a second game for the same thread.
-                    duplicate_row = find_matching_game_row(
-                        cursor,
+                    local_id = owners.owner(
                         _game_section(imported_game, SECTION_METADATA).get(
                             "f95_url"
-                        ),
+                        )
                     )
-                    if duplicate_row is not None:
-                        local_id = int(str(cast(object, duplicate_row["id"])))
 
                 if local_id is not None:
                     fields = _import_fields_for_game(
@@ -1980,13 +2036,11 @@ def apply_library_backup(
                     if merge_mode == "fill_missing":
                         fields = _filter_fill_missing(cursor, local_id, fields)
                     url_owner = (
-                        find_matching_game_row(cursor, fields["f95_url"])
+                        owners.owner(fields["f95_url"])
                         if fields.get("f95_url")
                         else None
                     )
-                    if url_owner is not None and int(
-                        str(cast(object, url_owner["id"]))
-                    ) != local_id:
+                    if url_owner is not None and url_owner != local_id:
                         # The backup repeats a thread that another row already
                         # holds (often one created earlier in this import).
                         # Keep this row's URL instead of aborting the import.
@@ -2003,6 +2057,8 @@ def apply_library_backup(
                             }
                         )
                     _update_game_row(cursor, local_id, fields)
+                    if "f95_url" in fields:
+                        owners.set(local_id, fields["f95_url"])
                     game_id = local_id
                     updated += 1
                     updated_ids.append(local_id)
@@ -2020,11 +2076,12 @@ def apply_library_backup(
                     if (
                         status == "sync_separate"
                         and fields.get("f95_url")
-                        and find_matching_game_row(cursor, fields["f95_url"]) is not None
+                        and owners.owner(fields["f95_url"]) is not None
                     ):
                         # The thread already belongs to a candidate row.
                         _ = fields.pop("f95_url")
                     game_id = _insert_game(cursor, fields)
+                    owners.set(game_id, fields.get("f95_url"))
                     created += 1
                     created_ids.append(game_id)
                 _adopt_sync_uid(cursor, game_id, imported_game.get("uid"))

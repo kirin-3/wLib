@@ -463,6 +463,26 @@ def test_restore_with_keep_one_never_prunes_its_own_source(tmp_path):
     assert set(list_backups(str(root / "1"))) == {first.name, info.backup.name}
 
 
+def test_restore_stamps_files_newer_than_the_other_renpy_copy(tmp_path):
+    # Ren'Py loads whichever of its two save copies is newer, so a restored
+    # save must not keep the backup's old time.
+    saves = tmp_path / "saves"
+    first = _write(saves / "1-1-LT1.save", "good")
+    os.utime(first, (1_000_000_000, 1_000_000_000))
+    root = tmp_path / "backups"
+    backup = backup_saves(str(saves), str(root), 1, 5, now=NOW)
+    _ = _write(saves / "1-1-LT1.save", "bad")
+    other_copy = _write(tmp_path / "game-saves" / "1-1-LT1.save", "bad")
+
+    _ = import_saves(
+        backup.path, str(saves), str(root), 1, 5, now=datetime(2026, 10, 24)
+    )
+
+    restored = saves / "1-1-LT1.save"
+    assert restored.read_text() == "good"
+    assert restored.stat().st_mtime >= os.stat(other_copy).st_mtime
+
+
 # ── 2.6 Override validation and backup lookup ────────────────────────────
 
 
@@ -682,6 +702,23 @@ def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch
         "/games/Story.sh", "Story", windows=False, game_id=12, sandbox_enabled=True
     )
     assert resolve_effective_folder("", locations) == str(sandbox)
+
+
+def test_sandboxed_wine_game_saves_are_found_in_its_own_prefix(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(game_saves, "get_setting", lambda _key: str(tmp_path / "global"))
+    saves = (
+        tmp_path
+        / "data/sandbox/12/prefix/drive_c/users/steamuser/AppData/Roaming/Zelda"
+    )
+    _write(saves / "save.dat")
+    _write(tmp_path / "global/drive_c/users/steamuser/AppData/Roaming/Zelda/save.dat")
+
+    locations = detect_save_locations(
+        "/games/Zelda/Game.exe", "Zelda", windows=False, game_id=12, sandbox_enabled=True
+    )
+
+    assert resolve_effective_folder("", locations) == str(saves)
 
 
 def test_sandbox_windows_profile_detection(tmp_path, monkeypatch):

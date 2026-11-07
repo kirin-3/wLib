@@ -35,6 +35,10 @@ class MemoryStorage:
     def delete(self, key):
         del self.objects[key]
 
+    def get_bytes(self, key):
+        item = self.objects.get(key)
+        return None if item is None else item["data"]
+
 
 def _snapshot(tmp_path, stamp="2026-10-27T05:12:09Z"):
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -114,3 +118,20 @@ def test_logs_name_keys_and_sizes_but_no_credentials(tmp_path, caplog, monkeypat
     assert "v1/manifest.json" in text and "bytes" in text
     for secret in ("AKIDSECRETVALUE", "SUPERSECRETKEY"):
         assert secret not in text
+
+
+def test_publish_refusal_rules():
+    from catalog_server.publish import publish_refusal
+
+    def counts(**values):
+        return {name: {"count": value} for name, value in values.items()}
+
+    assert publish_refusal(None, counts(f95=0, dlsite=0)) == "the catalog is empty"
+    assert publish_refusal(None, counts(f95=10)) == ""
+    assert publish_refusal(counts(f95=1000, dlsite=50), counts(f95=600, dlsite=50)) == ""
+    assert (
+        publish_refusal(counts(f95=28000, dlsite=50), counts(f95=8100, dlsite=50))
+        == "f95 dropped from 28000 to 8100 rows"
+    )
+    # A source that was never published can't drop.
+    assert publish_refusal(counts(f95=100), counts(f95=100, dlsite=0)) == ""

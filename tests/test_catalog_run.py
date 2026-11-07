@@ -150,12 +150,50 @@ def test_cli_sources_none_only_publishes(tmp_path):
     storage = MemoryStorage()
     transport = FakeTransport()
     code = main(
-        ["--data-dir", str(tmp_path), "run", "--sources", "none"],
+        ["--data-dir", str(tmp_path), "run", "--sources", "none", "--force-publish"],
         transport=transport,
         storage_factory=lambda: storage,
     )
     assert code == 0 and transport.requests == []
     assert "v1/manifest.json" in storage.objects
+
+
+def test_cli_refuses_to_publish_an_empty_catalog(tmp_path):
+    from test_catalog_publish import MemoryStorage
+
+    storage = MemoryStorage()
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--sources", "none"],
+        transport=FakeTransport(),
+        storage_factory=lambda: storage,
+    )
+    assert code == 1
+    assert storage.objects == {}
+    assert not list((tmp_path / "snapshots").glob("*"))
+
+
+def test_run_refuses_a_catalog_that_lost_most_of_a_source(tmp_path):
+    import json
+
+    from test_catalog_publish import MemoryStorage
+
+    from catalog_server.publish import MANIFEST_KEY
+
+    ctx, clock = make_context(tmp_path, FakeTransport())
+    storage = MemoryStorage()
+    previous = {"sources": {"f95": {"count": 1000, "updated_at": None}}}
+    storage.put_bytes(MANIFEST_KEY, json.dumps(previous).encode(), "application/json", "")
+    ctx.catalog.conn.execute(
+        "INSERT INTO f95_threads (thread_id, title, url, first_seen, last_seen) "
+        + "VALUES (1, 'Only one', 'https://f95zone.to/threads/1/', 'now', 'now')"
+    )
+    ctx.catalog.conn.commit()
+
+    result = run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=storage, work_dir=str(tmp_path), now=clock.iso)
+
+    assert result.publish_refused == "f95 dropped from 1000 to 1 rows"
+    assert json.loads(storage.objects[MANIFEST_KEY]["data"]) == previous
+    assert ctx.state.recent_runs()[0]["published"] is None
 
 
 def test_failed_publish_still_finishes_the_run(tmp_path):
@@ -165,7 +203,7 @@ def test_failed_publish_still_finishes_the_run(tmp_path):
 
     ctx, clock = make_context(tmp_path, FakeTransport())
     with pytest.raises(ConnectionError):
-        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=MemoryStorage(fail_on="v1/"), work_dir=str(tmp_path), now=clock.iso)
+        run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=MemoryStorage(fail_on="v1/"), work_dir=str(tmp_path), now=clock.iso, force_publish=True)
     latest = ctx.state.recent_runs()[0]
     assert latest["finished_at"] and latest["published"] is None
     assert not list((tmp_path / "snapshots").iterdir())

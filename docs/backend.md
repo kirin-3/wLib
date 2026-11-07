@@ -67,7 +67,7 @@ the catalog.
 
 ## Library sync and encrypted backups
 
-`core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. Newest wins for the whole library; simultaneous use from several machines is unsupported.
+`core/library_sync.py` contains `SyncManager`, `FolderLocation`, `DropboxLocation`, and `GoogleDriveLocation`. All locations expose revision/read/write methods. Sync shares metadata, user state, and general settings using `wlib.library_migration` v1 plus a UTC `sync.modified_at` and hostname `sync.device`. Machine paths, launch settings, and local cover files are excluded. When only one side changed since the last sync, that side replaces the other for the whole library. When both changed, or when the sync file would remove most of the local games (an empty file from a device whose folder sync had not delivered the real one yet), `_run_once` stops in `needs_choice` with `choice_reason` `conflict` or `removal` and waits for Use sync file, Use this machine or Merge once; push-only runs and the exit push never resolve it. A first sync on an empty library with no sync file pushes nothing. A new revision whose `sync.modified_at` equals `sync_last_synced_at` (a sync tool rewrote the file) counts as unchanged. Simultaneous use from several machines is unsupported.
 
 First connection pauses at `needs_choice` if both libraries contain games. `use-remote` mirrors the file including deletions, `use-local` replaces the file, and `merge-once` imports without deletions then uploads. Sync uses conservative F95 thread, exact store-link, then title/developer matching, with unique-title matching for manual games without a developer; ambiguous candidates are preserved and reported. Mirror apply saves every backup section to `<data dir>/sync/last-local.json` before applying in one database transaction. Local edits during downloads cause re-evaluation; uploads retain any edits made after the payload was captured.
 
@@ -289,7 +289,12 @@ The launcher wraps the final mode-specific argv before `host_command`. bwrap
 uses private user/PID/IPC/UTS namespaces, a private `/tmp` and `/run`, read-only
 system and runtime mounts, selected display/audio sockets, a writable game
 folder and Wine prefix, and `<data dir>/sandbox/<id>/home` at the real HOME
-path. On non-NixOS hosts, `/bin`, `/sbin` and `/lib*` entries that are symlinks
+path. A sandboxed Wine/Proton game without a custom prefix (or a `WINEPREFIX=`
+launch argument) runs in its own prefix, `<data dir>/sandbox/<id>/prefix`
+(`game_sandbox.sandbox_wine_prefix`), never the global one: the prefix is
+writable inside the sandbox, so sharing it would let the game plant DLLs or
+registry entries that later run unsandboxed in other games. Save detection and
+the game's Winecfg, Winetricks and RTP actions resolve the same prefix. On non-NixOS hosts, `/bin`, `/sbin` and `/lib*` entries that are symlinks
 on the host are recreated as symlinks, so 32-bit loaders resolve, and
 `/dev/ntsync` is passed through when present. It does not expose the session
 D-Bus. An in-namespace shell supervises launcher stubs until their detached

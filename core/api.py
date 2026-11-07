@@ -554,11 +554,28 @@ class Api:
             return {"success": False, "error": str(exc)}
 
     def _resolve_runtime_install_target(
-        self, prefix_path: str | None = None, proton_path: str | None = None
+        self,
+        prefix_path: str | None = None,
+        proton_path: str | None = None,
+        game_id: object = None,
     ) -> RuntimeInstallTarget:
         from core.database import get_setting
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
+        coerced_id = self._coerce_db_id(game_id) if game_id is not None else None
+        if coerced_id is not None and not (prefix_path or "").strip():
+            # A game's tools must reach the prefix it actually runs in: its
+            # own prefix when it is sandboxed (game_sandbox.sandbox_wine_prefix).
+            from core.database import get_game
+            from core.game_sandbox import sandboxed_prefix_override
+
+            row = get_game(coerced_id)
+            if row is not None and not is_windows():
+                prefix_path = sandboxed_prefix_override(
+                    str(row.get("custom_prefix") or ""),
+                    bool(row.get("sandbox_enabled")),
+                    coerced_id,
+                )
 
         # Like the launcher, an empty per-game value (what the UI sends when no
         # override is set) means "use the global setting", not "use nothing".
@@ -597,9 +614,12 @@ class Api:
         }
 
     def _build_runtime_install_env(
-        self, prefix_path: str | None = None, proton_path: str | None = None
+        self,
+        prefix_path: str | None = None,
+        proton_path: str | None = None,
+        game_id: object = None,
     ) -> tuple[dict[str, str], RuntimeInstallTarget]:
-        target = self._resolve_runtime_install_target(prefix_path, proton_path)
+        target = self._resolve_runtime_install_target(prefix_path, proton_path, game_id)
         env = os.environ.copy()
         if target["is_proton"]:
             from core.umu import build_umu_invocation, locate_umu, runtime_status
@@ -4543,13 +4563,21 @@ class Api:
     def _prefix_tool_running(self) -> bool:
         return self._prefix_tool is not None and self._prefix_tool.poll() is None
 
-    def open_wine_prefix_tool(self, tool: str, prefix_path: str = "", proton_path: str = "") -> dict[str, object]:
+    def open_wine_prefix_tool(
+        self,
+        tool: str,
+        prefix_path: str = "",
+        proton_path: str = "",
+        game_id: object = None,
+    ) -> dict[str, object]:
         if not is_linux():
             return unsupported_on_host("Wine prefix tools")
         if tool not in ("winecfg", "winetricks"):
             return {"success": False, "error": "Unknown Wine prefix tool."}
         try:
-            env, target = self._build_runtime_install_env(prefix_path, proton_path)
+            env, target = self._build_runtime_install_env(
+                prefix_path, proton_path, game_id
+            )
             if tool == "winetricks":
                 if not target["is_proton"] and not host_which("wine"):
                     raise ValueError("Wine is not installed. Install Wine first, then try again.")
@@ -4704,7 +4732,10 @@ class Api:
         return {"success": True}
 
     def install_rpgmaker_rtp(
-        self, prefix_path: str | None = None, proton_path: str | None = None
+        self,
+        prefix_path: str | None = None,
+        proton_path: str | None = None,
+        game_id: object = None,
     ) -> dict[str, object]:
         """
         Downloads and installs RPG Maker VX Ace, VX, XP, and 2003 RTPs into the configured wine prefix.
@@ -4719,7 +4750,9 @@ class Api:
         import zipfile
 
         try:
-            env, target = self._build_runtime_install_env(prefix_path, proton_path)
+            env, target = self._build_runtime_install_env(
+                prefix_path, proton_path, game_id
+            )
         except (OSError, ValueError) as exc:
             return {
                 "success": False,

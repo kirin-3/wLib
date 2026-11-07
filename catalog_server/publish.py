@@ -19,6 +19,7 @@ from core.catalog_format import (
     SNAPSHOT_SHA256,
     SNAPSHOT_SIZE,
     SNAPSHOT_UNCOMPRESSED_SIZE,
+    SOURCE_COUNT,
 )
 
 from .config import SNAPSHOTS_TO_KEEP, R2Config
@@ -38,6 +39,59 @@ class Storage(Protocol):
     def list_keys(self, prefix: str) -> list[str]: ...
 
     def delete(self, key: str) -> None: ...
+
+    def get_bytes(self, key: str) -> bytes | None:
+        """The object's content, or None when it does not exist."""
+        ...
+
+
+# A source whose row count falls below this share of the published count is
+# treated as a broken run (lost data folder, changed feed), not real removals.
+MIN_KEPT_SHARE = 0.5
+
+
+def published_sources(storage: Storage) -> dict[str, dict[str, object]] | None:
+    """Source counts in the live manifest, or None when there is none."""
+    data = storage.get_bytes(MANIFEST_KEY)
+    if data is None:
+        return None
+    try:
+        manifest = cast(object, json.loads(data))
+    except ValueError:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    sources = cast(dict[str, object], manifest).get(MANIFEST_SOURCES)
+    if not isinstance(sources, dict):
+        return None
+    return {
+        str(name): cast(dict[str, object], value)
+        for name, value in cast(dict[str, object], sources).items()
+        if isinstance(value, dict)
+    }
+
+
+def _count(value: Mapping[str, object] | None) -> int:
+    raw = (value or {}).get(SOURCE_COUNT)
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+
+
+def publish_refusal(
+    previous: Mapping[str, Mapping[str, object]] | None,
+    current: Mapping[str, Mapping[str, object]],
+) -> str:
+    """Why publishing `current` over `previous` looks like a broken run, or "".
+
+    Every client replaces its catalog with what is published, so an empty or
+    mostly emptied catalog must never go out without an explicit override.
+    """
+    if sum(_count(value) for value in current.values()) == 0:
+        return "the catalog is empty"
+    for name, before in (previous or {}).items():
+        old, new = _count(before), _count(current.get(name))
+        if old and new < old * MIN_KEPT_SHARE:
+            return f"{name} dropped from {old} to {new} rows"
+    return ""
 
 
 class R2Storage:
@@ -90,6 +144,19 @@ class R2Storage:
 
     def delete(self, key: str) -> None:
         _ = self._call("delete_object", Key=key)
+
+    def get_bytes(self, key: str) -> bytes | None:
+        try:
+            response = cast(dict[str, object], self._call("get_object", Key=key))
+        except Exception as exc:
+            error = cast(dict[str, object], getattr(exc, "response", None) or {})
+            code = cast(dict[str, object], error.get("Error") or {}).get("Code")
+            if code in ("NoSuchKey", "404"):
+                return None
+            raise
+        body = response["Body"]
+        read = cast(Callable[[], bytes], getattr(body, "read"))
+        return read()
 
 
 def build_manifest(

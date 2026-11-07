@@ -147,7 +147,8 @@ const performanceTools = ref({ gamemode: false, mangohud: false });
 const performanceDefaults = ref({ gamemode: false, mangohud: false });
 const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
   try {
-    const result = await api.openWinePrefixTool(tool, customPrefix.value, protonVersion.value);
+    const gameId = typeof props.game?.id === "number" ? props.game.id : null;
+    const result = await api.openWinePrefixTool(tool, useCustomPrefix.value ? customPrefix.value : "", protonVersion.value, gameId);
     if (!result.success) throw new Error(result.error || "Unknown error");
     notify(`Opening ${tool === "winecfg" ? "Winecfg" : "Winetricks"}…`, "success");
   } catch (error) { notifyError(String(error)); }
@@ -675,6 +676,120 @@ watch(() => [props.modelValue, props.game?.id, activeTab.value, platformCapabili
 
 const lastSyncedId = ref<number | null>(null);
 
+const parseGameTags = (raw: GameRecord["tags"]): string[] => {
+  if (typeof raw === "string" && raw) {
+    return raw.split(",").map((t) => t.trim()).filter(Boolean);
+  }
+  if (Array.isArray(raw)) {
+    return raw.map((tag) => String(tag).trim()).filter(Boolean);
+  }
+  return [];
+};
+
+// What a game record holds for each form field, keyed like formSnapshot().
+const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
+  gamemode: g.gamemode || "default",
+  mangohud: g.mangohud || "default",
+  sandbox_enabled: !!g.sandbox_enabled,
+  block_network: !!g.block_network,
+  title: g.title || "",
+  exe_path: g.exe_path || "",
+  f95_url: g.f95_url || "",
+  version: g.version || "",
+  developer: g.developer || "",
+  finished_version: g.finished_version || "",
+  command_line_args: g.command_line_args || "",
+  cover_image: g.cover_image_path || g.cover_image || "",
+  engine: normalizeEngine(g.engine),
+  run_japanese_locale: !!g.run_japanese_locale,
+  run_wayland: !!g.run_wayland,
+  auto_inject_ce: !!g.auto_inject_ce,
+  use_custom_prefix: !!g.custom_prefix,
+  custom_prefix: g.custom_prefix || "",
+  proton_version: g.proton_version || "",
+  launch_mode: normalizeLaunchMode(g.launch_mode),
+  collections: [...(g.collections || [])],
+  progress: g.progress || "",
+  note_links: (g.note_links || []).map(link => ({ ...link })),
+});
+
+const formSetters: Record<string, (value: unknown) => void> = {
+  gamemode: (v) => { gamemode.value = v as typeof gamemode.value; },
+  mangohud: (v) => { mangohud.value = v as typeof mangohud.value; },
+  sandbox_enabled: (v) => { sandboxEnabled.value = !!v; },
+  block_network: (v) => { blockNetwork.value = !!v; },
+  title: (v) => { title.value = String(v); },
+  exe_path: (v) => { exePath.value = String(v); },
+  f95_url: (v) => { f95Url.value = String(v); },
+  version: (v) => { version.value = String(v); },
+  developer: (v) => { developer.value = String(v); },
+  finished_version: (v) => { finishedVersion.value = String(v); },
+  command_line_args: (v) => { commandLineArgs.value = String(v); },
+  cover_image: (v) => { coverImage.value = String(v); },
+  engine: (v) => { engine.value = v as EngineOption; },
+  run_japanese_locale: (v) => { runJapaneseLocale.value = !!v; },
+  run_wayland: (v) => { runWayland.value = !!v; },
+  auto_inject_ce: (v) => { autoInjectCe.value = !!v; },
+  use_custom_prefix: (v) => { useCustomPrefix.value = !!v; },
+  custom_prefix: (v) => { customPrefix.value = String(v); },
+  proton_version: (v) => { protonVersion.value = String(v); },
+  launch_mode: (v) => { launchMode.value = v as LaunchMode; },
+  collections: (v) => { collectionMembership.value = [...(v as string[])]; },
+  progress: (v) => { notes.value = String(v); },
+  note_links: (v) => { noteLinks.value = (v as NoteLink[]).map(link => ({ ...link })); },
+};
+
+const gameQuickValues = (g: GameRecord): Record<string, unknown> => ({
+  play_status: normalizePlayStatus(g.play_status, g.status),
+  is_favorite: g.is_favorite ? 1 : 0,
+  tags: parseGameTags(g.tags).join(", "),
+  rating_graphics: g.rating_graphics || 0,
+  rating_story: g.rating_story || 0,
+  rating_fappability: g.rating_fappability || 0,
+  rating_gameplay: g.rating_gameplay || 0,
+});
+
+const quickSetters: Record<string, (value: unknown) => void> = {
+  play_status: (v) => { playStatus.value = v as PlayStatus; },
+  is_favorite: (v) => { isFavorite.value = !!v; },
+  tags: (v) => { tags.value = parseGameTags(String(v)); },
+  rating_graphics: (v) => { ratingGraphics.value = Number(v) || 0; },
+  rating_story: (v) => { ratingStory.value = Number(v) || 0; },
+  rating_fappability: (v) => { ratingFappability.value = Number(v) || 0; },
+  rating_gameplay: (v) => { ratingGameplay.value = Number(v) || 0; },
+};
+
+// The game changed behind the open modal (an update install rewrote its
+// version and executable, or a metadata fetch filled it in). Take the new
+// value for every field the user has not touched, so Play and Save don't use
+// stale values; fields with unsaved edits keep them.
+const refreshUntouchedFields = (g: GameRecord) => {
+  const merge = (
+    current: Record<string, unknown>,
+    baseline: Record<string, unknown>,
+    incoming: Record<string, unknown>,
+    setters: Record<string, (value: unknown) => void>,
+  ) => {
+    for (const [key, value] of Object.entries(incoming)) {
+      const saved = JSON.stringify(baseline[key]);
+      if (JSON.stringify(current[key]) !== saved || JSON.stringify(value) === saved) continue;
+      setters[key]?.(value);
+      baseline[key] = value;
+    }
+  };
+  let baseline: Record<string, unknown>;
+  try {
+    baseline = JSON.parse(savedSnapshot.value || "{}") as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  merge(JSON.parse(formSnapshot()) as Record<string, unknown>, baseline, gameFormValues(g), formSetters);
+  savedSnapshot.value = JSON.stringify(baseline);
+  const quickBaseline = { ...savedQuickFields.value };
+  merge(quickFields(), quickBaseline, gameQuickValues(g), quickSetters);
+  savedQuickFields.value = quickBaseline;
+};
+
 watch(
   () => [props.modelValue, props.game] as const,
   ([isOpen, g]) => {
@@ -750,6 +865,8 @@ watch(
         savedQuickFields.value = quickFields();
         lightboxIndex.value = null;
         failedScreenshots.value = new Set();
+      } else if (savedSnapshot.value) {
+        refreshUntouchedFields(g);
       }
     } else if (!isOpen) {
       lastSyncedId.value = null;
@@ -1351,7 +1468,7 @@ const installRtpsToPrefix = async () => {
   const gameId = props.game.id;
   notify("RTP installation has started in the background. It may take several minutes to complete.");
   try {
-    const res = await api.installRpgmakerRtp(customPrefix.value, protonVersion.value);
+    const res = await api.installRpgmakerRtp(useCustomPrefix.value ? customPrefix.value : "", protonVersion.value, gameId);
     if (!isCurrentGame(gameId)) return;
     if (res && res.success === false) {
       notifyError("Failed to install RTPs: " + (res.error || "Unknown error"));
@@ -2213,7 +2330,7 @@ const removeAttachment = async (name: string) => {
               <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(exePath, sandboxStatus).disabled" />
             </label>
             <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }} <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
-            <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
+            <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Wine/Proton games use their own Wine prefix unless a custom prefix is set. Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
             <div class="flex flex-wrap gap-2">
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
             </div>

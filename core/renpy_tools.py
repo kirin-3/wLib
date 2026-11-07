@@ -489,9 +489,18 @@ def extract_archives(
     skipped_scripts = skipped_existing = skipped_unsafe = skipped_invalid = 0
     tasks: list[_Task] = []
     used_targets: set[str] = set()
-    # In place, two archives can hold the same file. Ren'Py reads the first
-    # archive in name order, which is the order listed, so the first one wins.
+    # In place, two archives can hold the same file. Ren'Py sorts archives by
+    # their path under game/ without the extension, in reverse, and takes a
+    # file from the first archive that has it (patch.rpa beats archive.rpa).
+    # Loose files beat every archive, so the copy written here must be the
+    # one Ren'Py used, or it would shadow the patch from now on.
     planned: set[str] = set()
+    if mode == "in_place":
+        archives = sorted(
+            archives,
+            key=lambda archive: str(archive["name"])[: -len(".rpa")],
+            reverse=True,
+        )
     for archive in archives:
         path = str(archive["path"])
         name = str(archive["name"])

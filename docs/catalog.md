@@ -132,6 +132,14 @@ and run history; never published). A `run.lock` in that folder prevents
 overlapping runs: a second invocation logs that another run is in progress and
 exits 0.
 
+Before uploading, a run reads the live manifest and refuses to publish when the
+catalog is empty or any source has fewer than half the rows the manifest lists
+(`publish_refusal` in `catalog_server/publish.py`). That catches a lost or
+mistyped data folder and a feed change that ends sweeps early, both of which
+would otherwise replace every client's catalog. The run logs the reason, keeps
+the previous manifest, and exits 1. Pass `--force-publish` when the drop is
+intended.
+
 Each run does, for every selected source, its incremental fetch and then
 advances the full-listing sweep. F95 sweeps with whatever is left of its
 hourly budget, so it re-crawls continuously. DLsite and Ryuugames have no
@@ -139,7 +147,7 @@ budget; VNDB waits out its 150-request, five-minute budget within a run.
 DLsite, Ryuugames and VNDB start a new full sweep only once a week after the
 last one completed. Interrupted sweeps resume from their cursor. `--until-swept` waits out request budgets
 instead of stopping, so the first F95 load (about 311 pages) takes about 3.5 hours.
-The exit code is 1 when a source failed, 2 when publishing was requested
+The exit code is 1 when a source failed or publishing was refused, 2 when publishing was requested
 without R2 credentials.
 
 Publishing needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`

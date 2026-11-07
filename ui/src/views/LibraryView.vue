@@ -230,7 +230,7 @@ const tableColumns: Array<{ key: SortField; label: string; class?: string }> = [
 ];
 
 const updateCount = computed(
-  () => games.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length,
+  () => games.value.filter((game) => hasAvailableUpdate(game)).length,
 );
 const collections: Array<{
   value: FilterCollection;
@@ -549,7 +549,7 @@ const filteredGames = computed(() => {
     result = result.filter((g) => g.is_favorite);
   }
   if (filterCollection.value === "Updates available")
-    result = result.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }));
+    result = result.filter((game) => hasAvailableUpdate(game));
   if (filterCollection.value === "Unplayed update")
     result = result.filter(hasUnplayedUpdate);
   if (filterCollection.value === "New since finished")
@@ -597,7 +597,7 @@ const selectedGames = computed(() => filteredGames.value.filter((game) => select
 const bulkBusy = ref(false);
 const bulkChecking = ref(false);
 const bulkCollection = ref("");
-const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })));
+const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate(game)));
 const eligibleChecks = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
 let bulkStatusTimer: ReturnType<typeof setInterval> | undefined;
 const refreshBulkStatus = async () => { try { bulkChecking.value = (await api.getUpdateStatus()).running; } catch { /* Keep the last known state. */ } };
@@ -634,7 +634,7 @@ const bulkAction = async (action: string, value = "") => {
         if ((action === "add") === has) return null;
         return api.setGameCollections(game.id, action === "add" ? [...old, value] : old.filter((name) => name.toLowerCase() !== value.toLowerCase()));
       }
-      if (!hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })) return null;
+      if (!hasAvailableUpdate(game)) return null;
       return action === "updated" ? api.markGameUpdated(game) : api.updateGame(game.id, { skipped_version: game.latest_version || "" });
     }, (game) => {
       if (action === "status") return statusSnapshot(game, (id, fields) => api.updateGame(id, fields));
@@ -2384,6 +2384,8 @@ onUnmounted(() => {
                     v-if="gameCoverSrc(game)"
                     :src="gameCoverSrc(game)"
                     @error="gameCoverError($event, game)"
+                    loading="lazy"
+                    decoding="async"
                     alt=""
                     class="w-8 h-8 rounded object-cover shrink-0"
                   />
@@ -2429,7 +2431,7 @@ onUnmounted(() => {
                     game.version || "Unknown"
                   }}</span>
                   <span
-                    v-if="hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
+                    v-if="hasAvailableUpdate(game)"
                     class="update-pill"
                     :title="`Update available: ${game.latest_version}`"
                   >
@@ -2561,6 +2563,8 @@ onUnmounted(() => {
               v-if="gameCoverSrc(game)"
               :src="gameCoverSrc(game)"
               @error="gameCoverError($event, game)"
+              loading="lazy"
+              decoding="async"
               :alt="game.title"
               class="absolute inset-0 w-full h-full object-cover rounded-t-xl"
               :class="[
@@ -2597,7 +2601,7 @@ onUnmounted(() => {
                 ><IconStarFilled class="w-3 h-3 text-yellow-400"
               /></span>
               <span
-                v-if="isImageTileLayout && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
+                v-if="isImageTileLayout && hasAvailableUpdate(game)"
                 class="update-pill update-pill-on-art"
                 :title="`Update available: ${game.latest_version}`"
               >
@@ -2710,7 +2714,7 @@ onUnmounted(() => {
               <span v-if="isWishlisted(game)" class="wishlist-pill">Wishlist</span>
               <span v-if="isWishlisted(game) && game.thread_completed" class="finished-pill">Finished</span>
               <span
-                v-if="hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })"
+                v-if="hasAvailableUpdate(game)"
                 class="update-pill"
                 :title="`Update available: ${game.latest_version}`"
               >
@@ -2827,14 +2831,14 @@ onUnmounted(() => {
               Check update
             </button>
             <button
-              v-if="hasAvailableUpdate({ ...contextMenu.game, skipped_version: contextMenu.game.skipped_version })"
+              v-if="hasAvailableUpdate(contextMenu.game)"
               @click="runContextAction('mark-updated')"
               :disabled="markingUpdatedIds.has(contextMenu.game.id)"
             >
               Mark as updated to {{ contextMenu.game.latest_version }}
             </button>
             <button
-              v-if="isUpdateSkipped(contextMenu.game) || hasAvailableUpdate({ ...contextMenu.game, skipped_version: contextMenu.game.skipped_version })"
+              v-if="isUpdateSkipped(contextMenu.game) || hasAvailableUpdate(contextMenu.game)"
               class="min-h-11"
               @click="runContextAction('skip-version')"
             >{{ isUpdateSkipped(contextMenu.game) ? `Stop skipping ${contextMenu.game.skipped_version}` : `Skip version ${contextMenu.game.latest_version}` }}</button>

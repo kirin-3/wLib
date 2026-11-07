@@ -88,7 +88,7 @@ const isNavCollapsed = ref(getInitialNavCollapsed());
 const navCollapsed = computed(() => tvModeActive.value || isNavCollapsed.value);
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 const updateCountGames = ref<GameRecord[]>([]);
-const availableUpdateCount = computed(() => updateCountGames.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })).length);
+const availableUpdateCount = computed(() => updateCountGames.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game)).length);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;

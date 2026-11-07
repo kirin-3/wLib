@@ -31,7 +31,40 @@ INFOLDER_SAVE_DIRS = (
     "SaveData",
     "savedata",
 )
-LOOSE_SAVE_PATTERNS = ("*.sav", "*.rpgsave", "*.rmmzsave", "*.save")
+# Loose save files next to the executable. RPG Maker XP (.rxdata), VX
+# (.rvdata), VX Ace (.rvdata2) and 2000/2003 (.lsd) write SaveNN files there.
+# Matched case-insensitively: Windows games often write upper-case names.
+LOOSE_SAVE_PATTERNS = (
+    "*.sav",
+    "*.rpgsave",
+    "*.rmmzsave",
+    "*.save",
+    "*.rvdata2",
+    "*.rvdata",
+    "*.rxdata",
+    "*.lsd",
+)
+
+
+def loose_save_files(folder: str) -> list[str]:
+    """Regular (non-symlink) files directly in folder matching a save pattern."""
+    import fnmatch
+
+    found: list[str] = []
+    try:
+        entries = sorted(os.scandir(folder), key=lambda entry: entry.name)
+    except OSError:
+        return found
+    for entry in entries:
+        name = entry.name.lower()
+        if not any(fnmatch.fnmatchcase(name, pattern) for pattern in LOOSE_SAVE_PATTERNS):
+            continue
+        try:
+            if entry.is_file(follow_symlinks=False):
+                found.append(entry.path)
+        except OSError:
+            continue
+    return found
 
 BACKUP_NAME_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})(?:-(\d+))?$", re.ASCII
@@ -247,15 +280,13 @@ def detect_save_locations(
                 )
 
         # Loose save files (.dat excluded: too many games ship data as .dat)
-        for ext in LOOSE_SAVE_PATTERNS:
-            found = glob.glob(os.path.join(game_dir, ext))
-            if found:
-                add(
-                    game_dir,
-                    "Game Folder",
-                    f"Found {len(found)} {ext} file(s) in game directory",
-                )
-                break  # Don't duplicate the game_dir
+        found = loose_save_files(game_dir)
+        if found:
+            add(
+                game_dir,
+                "Game Folder",
+                f"Found {len(found)} save file(s) in game directory",
+            )
 
     # ── 2. Check Ren'Py native save path (~/.renpy/) ──
     if windows:
@@ -350,6 +381,12 @@ def detect_save_locations(
             continue
 
     # ── 3. Check Wine prefix AppData folders ──
+    if not windows:
+        from core.game_sandbox import sandboxed_prefix_override
+
+        custom_prefix = sandboxed_prefix_override(
+            custom_prefix, sandbox_enabled, game_id
+        )
     wine_prefix = (
         custom_prefix if custom_prefix else str(get_setting("wine_prefix_path") or "")
     )
@@ -610,8 +647,16 @@ def _scan_tree(root: str) -> _Tree:
     return tree
 
 
-def _copy_tree(source: str, destination: str, tree: _Tree) -> None:
-    """Copy the scanned tree, never writing through a link in `destination`."""
+def _copy_tree(
+    source: str, destination: str, tree: _Tree, *, touch: bool = False
+) -> None:
+    """Copy the scanned tree, never writing through a link in `destination`.
+
+    `touch` stamps each copied file with the current time instead of the
+    source's. Ren'Py keeps every save in two folders and loads whichever
+    copy is newer, so a restored save that kept its old time would lose to
+    the newer copy it was meant to replace.
+    """
     os.makedirs(destination, exist_ok=True)
     root_real = os.path.realpath(destination)
     for rel in tree.dirs:
@@ -636,6 +681,8 @@ def _copy_tree(source: str, destination: str, tree: _Tree) -> None:
         os.close(descriptor)
         try:
             _ = shutil.copy2(os.path.join(source, rel), temporary)
+            if touch:
+                os.utime(temporary, None)
             os.replace(temporary, target)
         finally:
             try:
@@ -799,7 +846,7 @@ def import_saves(
             ) from exc
 
     try:
-        _copy_tree(source, saves_dir, tree)
+        _copy_tree(source, saves_dir, tree, touch=True)
     except (OSError, shutil.Error) as exc:
         hint = (
             f" Your previous saves were backed up as {backup.name}." if backup else ""

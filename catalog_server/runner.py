@@ -11,7 +11,7 @@ from core.catalog_format import SOURCE_COUNT, SOURCE_UPDATED_AT
 
 from .links import rebuild_links
 from .net import BudgetExhausted, Pacer, RateLimited
-from .publish import Storage, publish
+from .publish import Storage, publish, publish_refusal, published_sources
 from .snapshot import build_snapshot
 from .sources import Source, SourceContext
 from .sources.f95 import load_names
@@ -34,6 +34,8 @@ class RunResult:
     run_id: int
     sources: dict[str, SourceResult] = field(default_factory=dict)
     manifest: dict[str, object] | None = None
+    # Why the snapshot was not published, when the safety check refused it.
+    publish_refused: str = ""
 
 
 def _run_sweep(source: Source, ctx: SourceContext) -> bool:
@@ -109,6 +111,7 @@ def run(
     storage: Storage | None,
     work_dir: str,
     now: Callable[[], str] = utc_now,
+    force_publish: bool = False,
 ) -> RunResult:
     result = RunResult(run_id=state.start_run(now()))
     load_names(catalog)
@@ -139,12 +142,23 @@ def run(
         links = rebuild_links(catalog)
         log.info("links: %d", links)
         if storage is not None:
-            snapshot = build_snapshot(catalog, os.path.join(work_dir, "snapshots"), now())
-            try:
-                result.manifest = publish(storage, snapshot, manifest_sources(catalog, state))
-                published = snapshot.name
-            finally:
-                os.remove(snapshot.path)
+            counts = manifest_sources(catalog, state)
+            refusal = publish_refusal(published_sources(storage), counts)
+            if refusal and not force_publish:
+                result.publish_refused = refusal
+                log.error(
+                    "not publishing: %s; pass --force-publish if this is intended",
+                    refusal,
+                )
+            else:
+                snapshot = build_snapshot(
+                    catalog, os.path.join(work_dir, "snapshots"), now()
+                )
+                try:
+                    result.manifest = publish(storage, snapshot, counts)
+                    published = snapshot.name
+                finally:
+                    os.remove(snapshot.path)
     finally:
         # A failed link rebuild or publish still closes the run, with nothing marked published.
         state.finish_run(result.run_id, now(), published)

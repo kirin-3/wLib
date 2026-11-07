@@ -93,6 +93,18 @@ def normalize_thread_url(url: object) -> str:
     return urlunparse((scheme, netloc, path, "", "", ""))
 
 
+def thread_match_key(url: object) -> str:
+    """Key that is equal for two URLs exactly when thread_urls_match is true.
+
+    Lets callers index many URLs once instead of comparing every pair.
+    """
+    normalized = normalize_thread_url(url)
+    if not normalized:
+        return ""
+    thread_id = extract_thread_id(normalized)
+    return f"id:{thread_id}" if thread_id else f"url:{normalized}"
+
+
 def thread_urls_match(left: object, right: object) -> bool:
     left_normalized = normalize_thread_url(left)
     right_normalized = normalize_thread_url(right)

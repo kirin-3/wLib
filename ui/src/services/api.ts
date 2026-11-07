@@ -519,6 +519,8 @@ export interface LibrarySyncStatus extends ApiBasicResponse {
   gdrive_available?: boolean;
   gdrive_unavailable_reason?: string;
   connecting?: boolean;
+  /** Why a library choice is needed; set while state is "needs_choice". */
+  choice_reason?: "" | "first" | "conflict" | "removal";
 }
 
 export interface LibraryBackupInspectResponse extends ApiBasicResponse {
@@ -1185,7 +1187,7 @@ const writeMockCompanions = (store: MockCompanions) => localStorage.setItem("wli
 
 const MOCK_GAME_SAVES_STORAGE_KEY = "wlib-mock-game-saves";
 const MOCK_SAVE_DETECTED: SaveLocation[] = [
-  { path: "/mock/game", type: "Game Folder", description: "Found 2 *.sav file(s) in game directory", eligible: false },
+  { path: "/mock/game", type: "Game Folder", description: "Found 2 save file(s) in game directory", eligible: false },
   { path: "~/.renpy/MockGame-1234567890", type: "Ren'Py", description: "Ren'Py native save folder", eligible: true },
 ];
 
@@ -1848,7 +1850,7 @@ class ApiService {
   }
 
   async markGameUpdated(game: GameRecord): Promise<ApiBasicResponse> {
-    if (!hasAvailableUpdate({ ...game, skipped_version: game.skipped_version })) return { success: false, error: "No newer version is available." };
+    if (!hasAvailableUpdate(game)) return { success: false, error: "No newer version is available." };
     return this.updateGame(game.id, { version: String(game.latest_version).trim() });
   }
 
@@ -2118,8 +2120,9 @@ class ApiService {
     return this.invoke("get_performance_tools", refresh);
   }
 
-  async openWinePrefixTool(tool: "winecfg" | "winetricks", prefix: string, runner: string): Promise<ApiBasicResponse> {
-    return this.invoke("open_wine_prefix_tool", tool, prefix, runner);
+  /** `gameId` targets that game's prefix (its own one when sandboxed) when `prefix` is empty. */
+  async openWinePrefixTool(tool: "winecfg" | "winetricks", prefix: string, runner: string, gameId: number | null = null): Promise<ApiBasicResponse> {
+    return this.invoke("open_wine_prefix_tool", tool, prefix, runner, gameId);
   }
 
   async getSandboxStatus(): Promise<SandboxStatus> {
@@ -2360,9 +2363,10 @@ class ApiService {
 
   async installRpgmakerRtp(
     prefix_path: string | null = null,
-    proton_path: string | null = null
+    proton_path: string | null = null,
+    game_id: number | null = null,
   ): Promise<ApiBasicResponse> {
-    return this.invoke<ApiBasicResponse>("install_rpgmaker_rtp", prefix_path, proton_path);
+    return this.invoke<ApiBasicResponse>("install_rpgmaker_rtp", prefix_path, proton_path, game_id);
   }
 
   async downloadProtonGe(): Promise<DownloadProtonResponse> {
@@ -3464,7 +3468,7 @@ class ApiService {
           success: true,
           mock: true,
           version,
-          has_update: hasAvailableUpdate({ ...game, skipped_version: game.skipped_version }),
+          has_update: hasAvailableUpdate(game),
           skipped: isUpdateSkipped(game),
           newly_finished: newlyFinished,
           metadata_updated: 0,

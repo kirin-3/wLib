@@ -376,15 +376,16 @@ def test_in_place_skips_scripts_and_existing(tmp_path):
     assert result["skipped"] == 3
 
 
-def test_in_place_first_archive_wins_for_shared_files(tmp_path):
-    # Ren'Py reads the first archive in name order, so that copy is the one kept.
+def test_in_place_highest_named_archive_wins_for_shared_files(tmp_path):
+    # Ren'Py sorts archives in reverse name order and uses the first that has
+    # the file, so b.rpa (like patch.rpa over archive.rpa) is the copy kept.
     game = make_game(tmp_path)
-    build_rpa(game / "game" / "a.rpa", {"bg/room.png": b"from-a"})
-    build_rpa(game / "game" / "b.rpa", {"bg/room.png": b"from-b", "other.png": b"o"})
+    build_rpa(game / "game" / "a.rpa", {"bg/room.png": b"from-a", "other.png": b"o"})
+    build_rpa(game / "game" / "b.rpa", {"bg/room.png": b"from-b"})
 
     result = extract_archives(str(game), "in_place", "", no_progress, never)
 
-    assert (game / "game" / "bg" / "room.png").read_bytes() == b"from-a"
+    assert (game / "game" / "bg" / "room.png").read_bytes() == b"from-b"
     assert (game / "game" / "other.png").read_bytes() == b"o"
     assert result["files"] == 2
     assert result["skipped_existing"] == 1
