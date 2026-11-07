@@ -2010,7 +2010,8 @@ def test_runner_endpoints_require_token_and_notify_window(monkeypatch, tmp_path)
     monkeypatch.setattr(steam_runner, 'get_data_dir', lambda: str(tmp_path))
     token = steam_runner.runner_token()
     assert steam_runner.runner_token() == token
-    assert (tmp_path / 'runner-token').stat().st_mode & 0o077 == 0
+    if os.name != 'nt':  # Windows has no POSIX mode bits; the profile folder guards it.
+        assert (tmp_path / 'runner-token').stat().st_mode & 0o077 == 0
     api = MagicMock()
     api.get_running_games.return_value = [12]
     api.reserve_runner_launch.return_value = 'Busy installing'

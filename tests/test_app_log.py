@@ -117,6 +117,10 @@ def test_rotation(tmp_path, monkeypatch):
     ]
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows cannot rename an open file; the helper (Steam runner) is Linux-only",
+)
 def test_helper_log_never_rotates_and_follows_the_apps_rotation(tmp_path, monkeypatch):
     monkeypatch.setattr(app_log, "MAX_BYTES", 200)
     app_log.setup_app_log(str(tmp_path), rotate=False)

@@ -3721,6 +3721,7 @@ def test_debug_log_never_writes_through_a_planted_symlink(tmp_path):
     assert plain.read_text() == "new"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Wine prefixes are Linux-only")
 @pytest.mark.parametrize(
     ("sandboxed", "custom", "expected"),
     [

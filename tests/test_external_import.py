@@ -1778,7 +1778,15 @@ def test_xlibrary_reader_imports_store_links_and_link_only_games(tmp_path):
     assert games["DLsite Only"]["exe_path"] == ""
 
 
-@pytest.mark.parametrize("name", ["library#1.db", "what?.db", "100%.db"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "library#1.db",
+        # Windows does not allow "?" in file names.
+        pytest.param("what?.db", marks=pytest.mark.skipif(os.name == "nt", reason="not a valid Windows file name")),
+        "100%.db",
+    ],
+)
 def test_open_snapshot_reads_files_with_uri_characters_in_the_name(tmp_path, name):
     from core.external_import import open_snapshot
 

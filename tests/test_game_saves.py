@@ -704,6 +704,7 @@ def test_sandbox_renpy_detection_includes_real_and_sandbox(tmp_path, monkeypatch
     assert resolve_effective_folder("", locations) == str(sandbox)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Wine prefixes are Linux-only")
 def test_sandboxed_wine_game_saves_are_found_in_its_own_prefix(tmp_path, monkeypatch):
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(game_saves, "get_setting", lambda _key: str(tmp_path / "global"))
