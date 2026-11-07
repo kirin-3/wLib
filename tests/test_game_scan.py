@@ -383,3 +383,32 @@ def test_find_launcher_skips_helpers_installers_and_guides(tmp_path, monkeypatch
     twine.mkdir()
     (twine / "Helpless.html").write_text("<html></html>")
     assert game_scan.find_launcher(str(twine)) == str(twine / "Helpless.html")
+
+
+def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(tmp_path, monkeypatch):
+    from core.game_scan import detect_engine, find_launcher, inspect_game_path
+
+    monkeypatch.setattr("core.game_scan.is_linux", lambda: True)
+    only = tmp_path / "only"
+    only.mkdir()
+    (only / "game.swf").touch()
+    assert find_launcher(str(only)) == str(only / "game.swf")
+    assert inspect_game_path(str(only / "game.swf"))["engine"] == "Flash"
+    assert detect_engine(str(only), str(only / "game.swf")) == "Flash"
+
+    both = tmp_path / "both"
+    both.mkdir()
+    (both / "aaa.swf").touch()
+    (both / "index.html").touch()
+    assert find_launcher(str(both)) == str(both / "index.html")
+
+    other_page = tmp_path / "other"
+    other_page.mkdir()
+    (other_page / "aaa.swf").touch()
+    (other_page / "zzz.html").touch()
+    assert find_launcher(str(other_page)) == str(other_page / "zzz.html")
+
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "g.swf").touch()
+    assert [g["engine"] for g in scan_games_folder(str(tmp_path / "lib").rsplit("/lib", 1)[0])
+            if g["exe_path"].endswith("g.swf")] == ["Flash"]

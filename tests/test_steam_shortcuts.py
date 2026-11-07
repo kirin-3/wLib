@@ -62,20 +62,26 @@ def test_planner(wanted, link, record, running, retry, expected):
     assert plan(desired, links, records, running, retry_removed=retry).get(1) == expected
 
 
-def test_desired_games_excludes_wishlist_missing_and_browser(tmp_path):
+def test_desired_games_excludes_wishlist_missing_and_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr('core.database.get_setting', lambda key: None)
     from core.steam_shortcuts import desired_games
     game = tmp_path / 'game'
     game.write_text('')
     html = tmp_path / 'index.html'
     html.write_text('')
+    swf = tmp_path / 'game.swf'
+    swf.write_text('')
     games = [
         {'id': 1, 'title': 'Installed', 'exe_path': str(game), 'steam_shortcut': 1},
         {'id': 2, 'title': 'Wishlist', 'exe_path': ''},
         {'id': 3, 'title': 'Missing', 'exe_path': str(tmp_path / 'missing')},
-        {'id': 4, 'title': 'Browser', 'exe_path': str(html)},
+        {'id': 4, 'title': 'Browser', 'exe_path': str(html), 'html_player': 'browser'},
         {'id': 5, 'title': 'Unmarked', 'exe_path': str(game)},
+        {'id': 6, 'title': 'Built-in player', 'exe_path': str(html), 'html_player': 'builtin'},
+        {'id': 7, 'title': 'Default player', 'exe_path': str(html)},
+        {'id': 8, 'title': 'Flash', 'exe_path': str(swf), 'html_player': 'browser'},
     ]
-    assert set(desired_games(games, 'all-installed', tmp_path / 'script')) == {1, 5}
+    assert set(desired_games(games, 'all-installed', tmp_path / 'script')) == {1, 5, 6, 7, 8}
     assert set(desired_games(games, 'marked', tmp_path / 'script')) == {1}
     assert not desired_games(games, 'off', tmp_path / 'script')
 

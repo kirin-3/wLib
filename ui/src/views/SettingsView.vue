@@ -118,6 +118,19 @@ const enableLogging = ref(false);
 const gamemodeEnabled = ref(false);
 const mangohudEnabled = ref(false);
 const performanceTools = ref({ gamemode: false, mangohud: false });
+const htmlBuiltinPlayer = ref(true);
+const saveHtmlBuiltinPlayer = async (event: Event) => {
+  const value = (event.target as HTMLInputElement).checked;
+  const previous = htmlBuiltinPlayer.value;
+  htmlBuiltinPlayer.value = value;
+  try {
+    const result = await api.saveSettings({ html_builtin_player: value });
+    if (!result.success) throw new Error(result.error || "Unknown error");
+  } catch (error) {
+    htmlBuiltinPlayer.value = previous;
+    notifyError(`Failed to save the HTML game player: ${String(error)}`);
+  }
+};
 const savePerformanceTool = async (tool: "gamemode" | "mangohud", event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
   const state = tool === "gamemode" ? gamemodeEnabled : mangohudEnabled;
@@ -282,6 +295,7 @@ const applySettings = (data: SettingsResponse) => {
   enableLogging.value = !!data.enable_logging;
   gamemodeEnabled.value = !!data.gamemode_enabled;
   mangohudEnabled.value = !!data.mangohud_enabled;
+  htmlBuiltinPlayer.value = data.html_builtin_player !== false;
   applyKeepSetting(data.save_backup_keep);
   savedValues.value = formValues();
 };
@@ -1240,6 +1254,28 @@ const browseUrm = async () => {
               @change="toggleLogging"
               class="sr-only peer"
               aria-label="Enable debug logging"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div data-settings-row="general-static-5" data-settings-bound v-show="settingsRowVisible('general-static-5')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+              Play HTML games in the built-in player
+            </h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              Runs HTML and Flash (.swf) games in a wLib window, so playtime, Stop, sandboxing and No internet work. Turn off to open HTML games in your system browser. Each game can override this.
+            </p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              role="switch"
+              :checked="htmlBuiltinPlayer"
+              @change="saveHtmlBuiltinPlayer"
+              class="sr-only peer"
+              aria-label="Play HTML games in the built-in player"
             />
             <div class="ui-toggle"></div>
           </label>

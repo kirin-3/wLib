@@ -3428,3 +3428,36 @@ def test_two_weak_matches_do_not_merge_into_one_game():
     # The exact title keeps the match, even though it comes second.
     matched = next(item for item in plan if item["status"] == "matched")
     assert matched["game"]["metadata"]["title"] == "Twin"
+
+
+def test_html_player_backup_sync_and_old_import():
+    game_id = add_game("Web", "/game/index.html")
+    update_game(game_id, {"html_player": "browser"})
+    update_setting("html_builtin_player", "false")
+    update_setting("html_player_notice_shown", "true")
+    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    assert backup["games"][0]["launch_config"]["html_player"] == "browser"
+    assert backup["settings"]["general"]["html_builtin_player"] == "false"
+    # The note flag is device-local.
+    assert "html_player_notice_shown" not in backup["settings"]["general"]
+    sync = build_sync_backup("2026-10-25T00:00:00Z", "device")
+    assert sync["games"][0]["user_state"]["html_player"] == "browser"
+    update_game(game_id, {"html_player": "builtin"})
+    update_setting("html_builtin_player", "true")
+    apply_library_backup(backup)
+    assert get_all_games()[0]["html_player"] == "browser"
+    assert get_setting("html_builtin_player") == "false"
+    bad = base_backup([{"metadata": {"title": "Bad"}, "launch_config": {"html_player": "netscape"}}])
+    apply_library_backup(bad)
+    assert next(g for g in get_all_games() if g["title"] == "Bad")["html_player"] == ""
+    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {}}])
+    apply_library_backup(old)
+    assert next(g for g in get_all_games() if g["title"] == "Old")["html_player"] == ""
+
+
+def test_sync_payload_without_html_player_keeps_local_choice():
+    game_id = add_game("Web2", "/game/index.html", f95_url="https://f95zone.to/threads/web2.777/")
+    update_game(game_id, {"html_player": "browser"})
+    payload = base_backup([{"metadata": {"title": "Web2", "f95_url": "https://f95zone.to/threads/web2.777/"}, "user_state": {"play_status": "Playing"}}])
+    apply_library_backup(payload, {"sections": ["user_state"]})
+    assert get_all_games()[0]["html_player"] == "browser"

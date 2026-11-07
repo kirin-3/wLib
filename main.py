@@ -43,6 +43,20 @@ if __name__ == "__main__" and "--launch" in sys.argv:
         raise SystemExit(2)
     raise SystemExit(run(launch_id))
 
+# The built-in web game player is its own process: it never loads the API,
+# the database or the extension server.
+if __name__ == "__main__" and "--play-web" in sys.argv:
+    from core import web_player
+
+    try:
+        _player_args = web_player.parse_args(
+            sys.argv[sys.argv.index("--play-web") + 1 :]
+        )
+    except web_player.UsageError as exc:
+        print(f"{exc}\n{web_player.USAGE}", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(web_player.run(_player_args))
+
 from core.api import APP_VERSION, Api  # noqa: E402
 from core.app_log import setup_app_log  # noqa: E402
 from core.diagnostics import record_renderer_stage  # noqa: E402

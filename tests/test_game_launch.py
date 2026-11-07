@@ -19,7 +19,7 @@ def test_request_from_game_maps_launch_settings():
 @pytest.mark.parametrize("path", ["", "/game.html", "/game.htm"])
 def test_request_refuses_wishlist_and_browser_games(path):
     with pytest.raises(ValueError):
-        request_from_game({"exe_path": path})
+        request_from_game({"exe_path": path, "html_player": "browser"})
 
 
 def test_early_ticks_and_tool_overrides(monkeypatch):

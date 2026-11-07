@@ -246,6 +246,7 @@ def detect_save_locations(
     windows: bool | None = None,
     game_id: int | None = None,
     sandbox_enabled: bool = False,
+    web_player: bool = False,
     _profile_home: str | None = None,
 ) -> list[SaveLocation]:
     """Searches common save locations for a game.
@@ -258,6 +259,21 @@ def detect_save_locations(
 
     results: list[SaveLocation] = []
     profile_home = _profile_home or os.path.expanduser("~")
+    if web_player and game_id is not None and _profile_home is None:
+        # The built-in player keeps browser storage here whether or not the
+        # game is sandboxed, so the sandbox setting does not matter.
+        from core.game_sandbox import web_player_folder
+
+        storage = web_player_folder(game_id)
+        if os.path.isdir(storage):
+            results.append(
+                {
+                    "path": storage,
+                    "type": "Web Player",
+                    "description": "Built-in web player storage (browser saves, cookies and cache)",
+                    "eligible": True,
+                }
+            )
     if sandbox_enabled and game_id is not None:
         from core.game_sandbox import sandbox_folder
 

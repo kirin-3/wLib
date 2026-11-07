@@ -62,5 +62,11 @@ def test_game_steam_state_reports_why_a_game_is_ineligible(monkeypatch, tmp_path
     page.write_text('')
     cases = {str(present): (True, ''), str(tmp_path / 'gone.exe'): (False, 'missing_file'), str(page): (False, 'browser_game')}
     for path, (eligible, reason) in cases.items():
-        state = api.get_game_steam_state(database.add_game(path, path))
+        game_id = database.add_game(path, path)
+        if path == str(page):
+            database.update_game(game_id, {'html_player': 'browser'})
+        state = api.get_game_steam_state(game_id)
         assert (state['eligible'], state['reason']) == (eligible, reason)
+    # The built-in player runs HTML as a process, so Steam can launch it.
+    builtin = api.get_game_steam_state(database.add_game('Built-in', str(page)))
+    assert (builtin['eligible'], builtin['reason']) == (True, '')

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SandboxStatus } from '../services/api';
+import type { WebPlayer } from './webPlayer';
 
 export const sandboxStatusMessage = (status: SandboxStatus | null): string => {
   if (!status) return 'Checking sandbox tool…';
@@ -8,20 +9,20 @@ export const sandboxStatusMessage = (status: SandboxStatus | null): string => {
   return `Unusable. ${status.reason}`;
 };
 
-export const sandboxSwitchState = (target: string, status: SandboxStatus | null) => {
-  const html = /\.html?$/i.test(target.trim());
+export const sandboxSwitchState = (player: WebPlayer, status: SandboxStatus | null) => {
+  const browser = player === 'browser';
   return {
-    disabled: html,
-    needsSettings: !html && status !== null && status.status !== 'ready',
-    note: html ? 'Browser games open in your system browser and cannot be sandboxed.'
+    disabled: browser,
+    needsSettings: !browser && status !== null && status.status !== 'ready',
+    note: browser ? 'Games that open in your system browser cannot be sandboxed.'
       : status === null ? 'Checking sandbox tool…'
       : status.status !== 'ready' ? 'Sandbox tool not installed'
       : 'Each game has separate sandbox storage. Its game folder stays writable.',
   };
 };
 
-export const networkSwitchState = (target: string, platform: string, sandboxEnabled: boolean) => {
-  if (/\.html?$/i.test(target.trim())) return { disabled: true, note: 'Browser games cannot be blocked from the network.' };
+export const networkSwitchState = (player: WebPlayer, platform: string, sandboxEnabled: boolean) => {
+  if (player === 'browser') return { disabled: true, note: 'Games that open in your system browser cannot be blocked from the network.' };
   if (platform === 'windows' && !sandboxEnabled) return { disabled: true, note: 'No internet needs Run in sandbox on Windows.' };
   return { disabled: false, note: 'In-game online features, including online translation, stop working.' };
 };

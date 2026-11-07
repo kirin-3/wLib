@@ -432,7 +432,7 @@ def test_stop_native_missing_and_windows_error(monkeypatch):
 def test_html_game_is_untracked():
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen"):
         launcher = Launcher()
-        assert launcher.launch("/tmp/game.html", game_id=1)["success"]
+        assert launcher.launch("/tmp/game.html", game_id=1, html_player="browser")["success"]
         assert launcher.get_running_games() == []
 
 
@@ -1615,7 +1615,7 @@ def test_launch_html_game(mock_abspath, mock_popen, mock_exists):
 
 def test_launch_html_escapes_url_characters():
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen") as popen:
-        result = Launcher().launch("/games/Chapter#1/100% ? café.html")
+        result = Launcher().launch("/games/Chapter#1/100% ? café.html", html_player="browser")
     assert result["success"] is True
     assert popen.call_args.args[0] == [
         "xdg-open",
@@ -2675,7 +2675,7 @@ def test_sandboxed_html_is_exempt(monkeypatch):
         patch("core.launcher.game_sandbox.get_sandbox_status") as status,
     ):
         result = Launcher().launch(
-            "/games/index.html", game_id=12, sandbox_enabled=True
+            "/games/index.html", game_id=12, sandbox_enabled=True, html_player="browser"
         )
     assert result["success"] and not result["tracks_playtime"]
     assert popen.call_args.args[0][0] == "xdg-open"
@@ -3525,7 +3525,7 @@ def test_browser_ignores_network_preference(monkeypatch):
     probe = MagicMock()
     monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", probe)
     with patch("os.path.exists", return_value=True), patch("subprocess.Popen"), patch("threading.Thread"):
-        assert Launcher().launch("/tmp/game.html", game_id=1, block_network=True)["success"]
+        assert Launcher().launch("/tmp/game.html", game_id=1, block_network=True, html_player="browser")["success"]
     probe.assert_not_called()
 
 
@@ -3628,7 +3628,7 @@ def test_sandbox_performance_tools_and_browser(tmp_path, monkeypatch):
         assert popen.call_args.args[0] == ["bwrap", "/usr/bin/mangohud", str(game)]
         html = tmp_path / "game.html"
         html.touch()
-        assert Launcher().launch(str(html), gamemode=True, mangohud=True)["success"]
+        assert Launcher().launch(str(html), gamemode=True, mangohud=True, html_player="browser")["success"]
         assert popen.call_args.args[0][0] == "xdg-open"
 
 

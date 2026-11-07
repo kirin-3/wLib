@@ -92,6 +92,7 @@ Stores the library records and their associated configuration flags.
 | `run_wayland` | `BOOLEAN` | Applies Linux Wayland compatibility settings; preserved but ignored on Windows. |
 | `auto_inject_ce` | `BOOLEAN` | Enables Cheat Engine injection for Linux Wine/Proton launches. |
 | `block_network` | `BOOLEAN DEFAULT 0` | Per-game No internet preference, shared by all launch targets and carried by backup and sync. |
+| `html_player` | `TEXT DEFAULT ''` | Where an `.html`/`.htm` target opens: `''` (follow the `html_builtin_player` setting), `builtin` or `browser`. Unknown values normalize to `''`. Included in launch configuration backups and synced. |
 | `gamemode`, `mangohud` | `TEXT DEFAULT 'default'` | Per-game launch overrides: `default`, `on`, or `off`. Included in launch configuration backups, not synced. |
 | `sandbox_enabled` | `BOOLEAN DEFAULT 0` | Per-game sandbox preference, shared by all launch targets. Added additively with sandboxing off for existing games. New games follow `sandbox_new_games` unless explicitly set. Machine-specific launch configuration: exported when selected, never synced. |
 | `custom_prefix` | `TEXT` | Per-game Wine prefix override, used on Linux. |
@@ -263,4 +264,4 @@ from exports and sync; applying backups or sync preserves existing covers.
 
 `init_db()` adds nullable `cover_cache` and `cover_cache_url` columns. Dedicated helpers read the work list, list referenced names, clear one/all rows, and set both fields guarded by the current `cover_image_path`. Neither column is in `SYNC_GAME_COLUMNS` or the generic `update_game` allowlist. Cache writes and purge never change the sync timestamp. JSON exports, semantic backups and sync omit both columns and all files in `covers/cache/`; imports preserve existing cache columns. The background downloader shares F95 pacing, and purge removes only this cache while disabling downloads until the next launch.
 
-`gamemode_enabled` and `mangohud_enabled` are general boolean settings, both defaulting to `false`.
+`gamemode_enabled` and `mangohud_enabled` are general boolean settings, both defaulting to `false`. `html_builtin_player` ("Play HTML games in the built-in player") is a general boolean setting that is exported and synced; an absent row reads as `true`. `html_player_notice_shown` is a device-local flag (not exported or synced) set after the one-time built-in player note.

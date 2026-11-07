@@ -12,6 +12,7 @@ import { VALID_SORT_FIELDS } from "../utils/libraryViewState";
 import { validateCustomPlayStatuses } from "../utils/playStatus";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../utils/libraryGames";
+import { HTML_PLAYER_FIRST_USE_NOTICE, resolveWebPlayer } from "../utils/webPlayer";
 export type { LaunchMode } from "../utils/launchMode";
 export { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../utils/platformPolicy";
 
@@ -671,6 +672,8 @@ export interface GameRecord {
   links?: StoreLink[];
   gamemode?: "default" | "on" | "off";
   mangohud?: "default" | "on" | "off";
+  // Where an .html target opens: "" follows the Settings default.
+  html_player?: "" | "builtin" | "browser";
   sandbox_enabled?: boolean;
   block_network?: boolean;
   // Set once the user edits the tags; F95 backfill then never refills them.
@@ -809,6 +812,7 @@ export interface PlatformCapabilities {
 export interface SettingsPayload {
   gamemode_enabled?: boolean;
   mangohud_enabled?: boolean;
+  html_builtin_player?: boolean;
   sandbox_new_games?: boolean;
   sandboxie_custom_path?: string;
   update_notifications?: boolean;
@@ -927,6 +931,7 @@ interface MockToolRun {
 export interface SettingsResponse {
   gamemode_enabled: boolean;
   mangohud_enabled: boolean;
+  html_builtin_player: boolean;
   sandbox_new_games: boolean;
   sandboxie_custom_path: string;
   tag_colors: Record<string, string>;
@@ -1031,6 +1036,7 @@ const MOCK_ATTACHMENTS_STORAGE_KEY = "wlib-mock-attachments";
 const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   gamemode_enabled: false,
   mangohud_enabled: false,
+  html_builtin_player: true,
   sandbox_new_games: false,
   sandboxie_custom_path: "",
   tag_colors: {},
@@ -1419,6 +1425,7 @@ const normalizeMockSettings = (value: unknown): SettingsResponse => {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
     gamemode_enabled: source.gamemode_enabled === true,
     mangohud_enabled: source.mangohud_enabled === true,
+    html_builtin_player: source.html_builtin_player !== false,
     sandbox_new_games: source.sandbox_new_games === true,
     sandboxie_custom_path: typeof source.sandboxie_custom_path === "string" ? source.sandboxie_custom_path : "",
     tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
@@ -2658,7 +2665,7 @@ class ApiService {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          gamemode: "default", mangohud: "default", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
+          gamemode: "default", mangohud: "default", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -2723,7 +2730,13 @@ class ApiService {
         const mode = args[8] || "auto";
         if (!game?.sandbox_enabled && (mode === "wine_proton" || (mode === "auto" && /\.(exe|bat)$/i.test(String(args[1]))))) this._mockCompanionWine.add(gameId);
         else this._mockCompanionWine.delete(gameId);
-        if (!/\.html?$/i.test(String(args[1])) || args[8] === "custom") this._mockRunningGames.add(gameId);
+        // Only system-browser launches have no process to track.
+        const player = resolveWebPlayer(String(args[1]), mode, game?.html_player, readMockSettings().html_builtin_player, "linux");
+        if (player !== "browser") this._mockRunningGames.add(gameId);
+        if (player === "builtin" && /\.html?$/i.test(String(args[1])) && !game?.html_player && localStorage.getItem("wlib-mock-html-player-note") !== "shown") {
+          localStorage.setItem("wlib-mock-html-player-note", "shown");
+          return { success: true, mock: true, notice: HTML_PLAYER_FIRST_USE_NOTICE };
+        }
         return { success: true, mock: true };
       }
       case "get_running_games":

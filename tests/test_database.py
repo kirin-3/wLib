@@ -2084,3 +2084,25 @@ def test_default_downloads_folder_follows_a_moved_windows_downloads(monkeypatch)
     assert database.default_downloads_folder() == r"D:\Downloads"
     monkeypatch.setattr(database, "windows_known_folder", lambda _folder: "")
     assert database.default_downloads_folder().endswith("Downloads")
+
+
+def test_html_player_migration_and_normalization():
+    game_id = add_game("Older web game", "/game/index.html")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN html_player")
+        conn.commit()
+    init_db()
+    assert get_game(game_id)["html_player"] == ""
+    for value, expected in [("builtin", "builtin"), ("browser", "browser"), (" Browser ", "browser"), ("firefox", ""), ("", "")]:
+        update_game(game_id, {"html_player": value})
+        assert get_game(game_id)["html_player"] == expected
+
+
+def test_html_builtin_player_setting_defaults_on():
+    from core.database import html_builtin_player_enabled
+
+    assert get_setting("html_builtin_player") is None
+    assert html_builtin_player_enabled()
+    update_setting("html_builtin_player", "false")
+    assert not html_builtin_player_enabled()

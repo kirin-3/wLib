@@ -2437,6 +2437,12 @@ class Api:
             _ = retire_sandbox_folder(coerced_id)
         except Exception as exc:
             print(f"[wLib] Failed to move the sandbox of game {coerced_id}: {exc}")
+        try:
+            from core.game_sandbox import retire_web_player_folder
+
+            _ = retire_web_player_folder(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to move the web player storage of game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -5570,6 +5576,7 @@ class Api:
             "sandbox_new_games": get_setting_fn("sandbox_new_games") == "true",
             "gamemode_enabled": get_setting_fn("gamemode_enabled") == "true",
             "mangohud_enabled": get_setting_fn("mangohud_enabled") == "true",
+            "html_builtin_player": get_setting_fn("html_builtin_player") != "false",
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -5842,7 +5849,7 @@ class Api:
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
             update_setting_fn("enable_logging", enable_logging)
-            for tool_key in ("gamemode_enabled", "mangohud_enabled"):
+            for tool_key in ("gamemode_enabled", "mangohud_enabled", "html_builtin_player"):
                 if tool_key in settings_map:
                     update_setting_fn(tool_key, "true" if settings_map[tool_key] is True else "false")
             if "sandbox_new_games" in settings_map:
@@ -5962,12 +5969,12 @@ class Api:
         """Opens a native file dialog to select an executable or HTML game."""
         file_types = (
             (
-                "Windows Game Files (*.exe;*.bat;*.cmd;*.jar;*.html;*.htm)",
+                "Windows Game Files (*.exe;*.bat;*.cmd;*.jar;*.html;*.htm;*.swf)",
                 "All files (*.*)",
             )
             if is_windows()
             else (
-                "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm)",
+                "Game Files (*.exe;*.sh;*.AppImage;*.html;*.htm;*.swf)",
                 "All files (*.*)",
             )
         )
@@ -6910,6 +6917,18 @@ class Api:
         detected: list[dict[str, object]] = []
         if not override:
             native = normalize_launch_mode(row.get("launch_mode")) == "native"
+            from core.database import html_builtin_player_enabled
+            from core.web_launch import resolve_web_player
+
+            uses_player = (
+                resolve_web_player(
+                    row.get("exe_path"),
+                    row.get("launch_mode"),
+                    row.get("html_player"),
+                    html_builtin_player_enabled(),
+                )
+                == "builtin"
+            )
             locations = detect_save_locations(
                 str(row.get("exe_path") or ""),
                 str(row.get("title") or ""),
@@ -6918,6 +6937,7 @@ class Api:
                 windows=is_windows(),
                 game_id=coerced_id,
                 sandbox_enabled=bool(row.get("sandbox_enabled")),
+                web_player=uses_player,
             )
             detected = [dict(location) for location in locations]
             effective = resolve_effective_folder("", locations)

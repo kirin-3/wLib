@@ -24,7 +24,7 @@ export const usesWineProtonControls = (value: unknown): boolean => {
   return mode === "auto" || mode === "wine_proton";
 };
 
-const NATIVE_EXTENSIONS = [".sh", ".jar", ".html", ".htm"];
+const NATIVE_EXTENSIONS = [".sh", ".jar", ".html", ".htm", ".swf"];
 
 // Mirrors launcher.execute_host_native for the cases decidable by extension alone.
 export const isClearlyNativeTarget = (path: string): boolean => {

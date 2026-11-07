@@ -149,9 +149,13 @@ def plan(
 
 def desired_games(games: list[dict[str, object]], mode: str, script: Path) -> dict[int, dict[str, object]]:
     """Build shortcut fields for installed games selected by the local mode."""
+    from core.database import html_builtin_player_enabled
+    from core.web_launch import resolve_web_player
+
     desired: dict[int, dict[str, object]] = {}
     if mode == 'off':
         return desired
+    builtin_setting = html_builtin_player_enabled()
     for game in games:
         game_id = game.get('id')
         exe = os.path.expanduser(str(game.get('exe_path') or '').strip())
@@ -160,7 +164,8 @@ def desired_games(games: list[dict[str, object]], mode: str, script: Path) -> di
             continue
         if mode == 'marked' and not game.get('steam_shortcut'):
             continue
-        if Path(exe).suffix.lower() in ('.html', '.htm') and launch_mode in ('auto', 'native'):
+        # Only games that open in the system browser have no process to launch.
+        if resolve_web_player(exe, launch_mode, game.get('html_player'), builtin_setting) == 'browser':
             continue
         desired[game_id] = {'AppName': str(game.get('title') or ''),
                             'Exe': f'"{script}"', 'StartDir': f'"{Path(exe).parent}"',

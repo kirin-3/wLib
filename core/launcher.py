@@ -34,6 +34,7 @@ from .host_platform import (
     host_command,
     host_system_layout,
     host_which,
+    is_flatpak,
     is_windows,
     no_console_window,
     open_windows_system_target,
@@ -573,6 +574,57 @@ def is_packaged_runtime_library_path(raw_path: str) -> bool:
     return "base_library.zip" in runtime_files or any(
         entry.startswith("libpython") for entry in runtime_files
     )
+
+
+def web_player_command() -> list[str]:
+    """argv prefix that starts the built-in web player from a frozen or source run."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--play-web"]
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # A venv's python is a symlink chain that a sandbox does not contain, so run
+    # the real interpreter and hand it the venv's packages (see web_player_env).
+    interpreter = os.path.realpath(sys.executable) if sys.prefix != sys.base_prefix else sys.executable
+    return [interpreter, os.path.join(repo_root, "main.py"), "--play-web"]
+
+
+def web_player_env(env: dict[str, str]) -> dict[str, str]:
+    """Source runs inside a venv: point the real interpreter at the venv's packages."""
+    if getattr(sys, "frozen", False) or sys.prefix == sys.base_prefix:
+        return env
+    import site
+
+    paths = [path for path in site.getsitepackages() if os.path.isdir(path)]
+    existing = env.get("PYTHONPATH", "")
+    env = env.copy()
+    env["PYTHONPATH"] = os.pathsep.join([*paths, *([existing] if existing else [])])
+    return env
+
+
+def web_player_runtime_paths() -> tuple[str, ...]:
+    """Read-only folders the player needs inside a sandbox: wLib's own files and Python."""
+    if getattr(sys, "frozen", False):
+        candidates = [
+            os.environ.get("APPDIR", ""),
+            str(getattr(sys, "_MEIPASS", "") or ""),
+            os.path.dirname(os.path.realpath(sys.executable)),
+        ]
+    else:
+        candidates = [
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            sys.prefix,
+            sys.base_prefix,
+            os.path.dirname(os.path.dirname(os.path.realpath(sys.executable))),
+        ]
+    folders: list[str] = []
+    for candidate in candidates:
+        if not candidate or not os.path.isdir(candidate):
+            continue
+        real = os.path.realpath(candidate)
+        if any(os.path.commonpath((real, kept)) == kept for kept in folders):
+            continue
+        folders = [kept for kept in folders if os.path.commonpath((real, kept)) != real]
+        folders.append(real)
+    return tuple(folders)
 
 
 def without_packaged_runtime_env(env_vars: dict[str, str]) -> dict[str, str]:
@@ -1295,6 +1347,7 @@ class Launcher:
         block_network: bool = False,
         gamemode: bool = False,
         mangohud: bool = False,
+        html_player: str = "",
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -1384,16 +1437,34 @@ class Launcher:
         # Command, the RPGMaker runner and a forced Wine/Proton launch run a
         # real process even when the selected target happens to be an .html
         # file, so those still get the sandbox.
-        browser_launch = ext in (".html", ".htm") and (
-            is_windows() or launch_mode in ("auto", "native")
+        from .web_launch import resolve_web_player
+
+        web_kind = resolve_web_player(
+            exe_path,
+            launch_mode,
+            html_player,
+            # Only HTML follows the setting; skip the lookup for other targets.
+            ext not in (".html", ".htm") or get_setting("html_builtin_player") != "false",
+            windows=is_windows(),
         )
+        browser_launch = web_kind == "browser"
+        # Flatpak runs the player inside the app itself, not on the host, and
+        # uses Flatpak's own sub-sandbox instead of bubblewrap.
+        flatpak_player = web_kind == "builtin" and is_flatpak()
         sandboxed = bool(sandbox_enabled and not browser_launch)
         performance_tools: list[str] = []
         performance_notes: list[str] = []
         for enabled, binary, name in ((gamemode, "gamemoderun", "GameMode"), (mangohud, "mangohud", "MangoHud")):
             if not enabled:
                 continue
-            reason = "Windows" if is_windows() else "browser launch" if browser_launch else "sandboxed" if binary == "gamemoderun" and sandboxed else ""
+            reason = (
+                "Windows" if is_windows()
+                else "browser launch" if browser_launch
+                # The Flatpak player runs inside the app, where host tools are absent.
+                else "Flatpak web player" if flatpak_player
+                else "sandboxed" if binary == "gamemoderun" and sandboxed
+                else ""
+            )
             if not reason:
                 tool_path = host_which(binary)
                 if tool_path:
@@ -1412,7 +1483,7 @@ class Launcher:
                 "error": "No internet needs Run in sandbox on Windows.",
             }
         network_status: game_sandbox.SandboxStatus | None = None
-        if block and not is_windows():
+        if block and not is_windows() and not flatpak_player:
             # Results that were not Ready are never cached, so this re-probes them.
             network_status = game_sandbox.get_sandbox_status()
             if network_status["status"] != "ready":
@@ -1422,7 +1493,12 @@ class Launcher:
                     "error": f"Cannot block network: {network_status['reason']}",
                 }
         sandbox_status: game_sandbox.SandboxStatus | None = None
-        if sandboxed:
+        if sandboxed and flatpak_player and (game_id is None or game_id <= 0):
+            return {
+                "success": False,
+                "error": "Sandboxed games need a library game ID.",
+            }
+        if sandboxed and not flatpak_player:
             if game_id is None or game_id <= 0:
                 return {
                     "success": False,
@@ -1465,6 +1541,8 @@ class Launcher:
             runtime_paths: tuple[str, ...] = (),
             wine_context: WineContext | None = None,
             umu_run: bool = False,
+            writable_paths: tuple[str, ...] = (),
+            early_exit_seconds: float = 0.0,
         ) -> dict[str, object]:
             cmd = wrap_performance_tools(cmd, performance_tools, args)
 
@@ -1568,10 +1646,14 @@ class Launcher:
                     assert game_id is not None
                     # The game folder is a write-through path, so it must not be the profile.
                     game_sandbox.check_writable_mounts(
-                        (game_dir,), os.path.expanduser("~")
+                        (game_dir, *writable_paths), os.path.expanduser("~")
                     )
                     entry.sandbox_box = game_sandbox.configure_sandboxie_box(
-                        sandbox_status["path"], game_id, game_dir, block_network=block
+                        sandbox_status["path"],
+                        game_id,
+                        game_dir,
+                        block_network=block,
+                        extra_write_paths=writable_paths,
                     )
                     entry.sandbox_tool = sandbox_status["path"]
                     cmd = [entry.sandbox_tool, f"/box:{entry.sandbox_box}", *cmd]
@@ -1629,9 +1711,10 @@ class Launcher:
                         umu_runtime=umu_runtime,
                         umu_var=umu_var,
                         network=block,
+                        writable_paths=writable_paths,
                     )
                     entry.kill_info = None
-                elif block and not is_windows():
+                elif block and not is_windows() and not flatpak_player:
                     assert network_status is not None
                     cmd = game_sandbox.build_network_bwrap_argv(
                         cmd, cwd=effective_cwd, bwrap=network_status["path"]
@@ -1655,15 +1738,24 @@ class Launcher:
 
                 # bwrap passes its environment on to the game.
                 popen_env = (
-                    game_sandbox.sandbox_environment(env_vars)
-                    if sandboxed and not is_windows()
+                    game_sandbox.sandbox_environment(
+                        env_vars,
+                        extra_names=game_sandbox.PLAYER_ENV_NAMES
+                        if web_kind == "builtin"
+                        else frozenset(),
+                    )
+                    # flatpak-spawn passes only its --env values to the sub-sandbox,
+                    # and needs the session bus to reach the Flatpak portal.
+                    if sandboxed and not is_windows() and not flatpak_player
                     else env_vars
                 )
                 try:
 
                     def start_game(creationflags: int = 0) -> "subprocess.Popen[bytes]":
                         return subprocess.Popen(
-                            host_command(
+                            cmd
+                            if flatpak_player
+                            else host_command(
                                 cmd, env=popen_env, cwd=effective_cwd, supervise=True
                             ),
                             env=popen_env,
@@ -1872,6 +1964,28 @@ class Launcher:
                                 max(0, int(now - last_saved_time)), True
                             )
 
+                if early_exit_seconds > 0:
+                    # A sub-sandbox that cannot start exits at once; report that
+                    # as a failed launch instead of a game that ended.
+                    try:
+                        _ = game_proc.wait(timeout=early_exit_seconds)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    else:
+                        if game_proc.returncode != 0:
+                            with self._running_lock:
+                                if game_id is not None and self._running.get(game_id) is entry:
+                                    del self._running[game_id]
+                            if log_file is not None:
+                                log_file.close()
+                            return {
+                                "success": False,
+                                "error": (
+                                    "The web player exited before its window opened "
+                                    + f"(status {game_proc.returncode})."
+                                ),
+                            }
+
                 threading.Thread(target=track_playtime_thread, daemon=True).start()
 
                 if sandboxed and umu_run and run_ce:
@@ -1923,6 +2037,73 @@ class Launcher:
                 runtime_paths=(game_sandbox.runtime_folder(runner_status["path"]),),
             )
 
+        def execute_web_player() -> dict[str, object]:
+            """Run the built-in player as a tracked process (sandbox, No internet, Stop)."""
+            if game_id is not None and game_id > 0:
+                profile = game_sandbox.web_player_folder(game_id)
+            else:
+                profile = tempfile.mkdtemp(prefix="wlib-web-player-")
+            os.makedirs(profile, exist_ok=True)
+            entry_name = path_module.basename(exe_path)
+            player = [
+                *web_player_command(),
+                "--root",
+                game_dir,
+                "--entry",
+                entry_name,
+                "--profile",
+                profile,
+                "--title",
+                game_title or entry_name,
+            ]
+            if ext == ".swf":
+                player.append("--flash")
+            if block:
+                player.append("--offline")
+            # Links cannot leave a sandboxed or offline player.
+            player += ["--links", "ignore" if (sandboxed or block) else "open"]
+            player_env = web_player_env(without_wine_proton_env(env.copy()))
+            player_env.update(user_env)
+            if sandboxed:
+                # The sandbox is the security boundary; Chromium's own cannot nest.
+                player_env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+            runtime_paths: tuple[str, ...] = ()
+            command = player
+            # In Flatpak, "Run in sandbox" and "No internet" both need a new
+            # instance from the Flatpak portal; bubblewrap is not used.
+            flatpak_spawned = flatpak_player and (sandboxed or block)
+            if flatpak_player:
+                if flatpak_spawned:
+                    command = game_sandbox.flatpak_player_argv(
+                        player,
+                        game_dir=game_dir,
+                        profile=profile,
+                        network_blocked=block,
+                        environment=player_env,
+                        sandbox=sandboxed,
+                    )
+            elif sandboxed:
+                runtime_paths = web_player_runtime_paths()
+            print(f"Opening web game in the built-in player: {' '.join(player)}")
+            result = execute_process(
+                command,
+                player_env,
+                runtime_paths=runtime_paths,
+                writable_paths=(profile,) if sandboxed and not flatpak_player else (),
+                early_exit_seconds=2.0 if flatpak_spawned else 0.0,
+            )
+            if (
+                result.get("success")
+                and ext != ".swf"
+                and not html_player
+                and get_setting("html_player_notice_shown") != "true"
+            ):
+                from .database import update_setting
+
+                update_setting("html_player_notice_shown", "true")
+                result["notice"] = "html_player_first_use"
+            return result
+
         def execute_html_game() -> dict[str, object]:
             # Convert to absolute path and file:// URL for proper browser handling
             abs_path = path_module.abspath(exe_path)
@@ -1960,6 +2141,8 @@ class Launcher:
                 return {"success": False, "error": str(e)}
 
         def execute_host_native(strict_native: bool) -> dict[str, object] | None:
+            if web_kind == "builtin":
+                return execute_web_player()
             process_env = build_host_tool_env(env)
 
             # Unzipping often drops the exec bit; Wine can't run these either.
@@ -2047,6 +2230,8 @@ class Launcher:
                 return execute_process(
                     build_command(["java", "-jar", exe_path], args), process_env
                 )
+            if web_kind == "builtin":
+                return execute_web_player()
             if ext in (".html", ".htm"):
                 return execute_html_game()
             return {

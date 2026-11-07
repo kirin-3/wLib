@@ -54,8 +54,21 @@ SANDBOX_ENV_PREFIXES = (
 )
 
 
+# Qt and Chromium settings the built-in web player needs from its own runtime.
+PLAYER_ENV_NAMES = frozenset(
+    {
+        "QT_QPA_PLATFORM", "QT_PLUGIN_PATH", "QT_QUICK_BACKEND", "QT_OPENGL",
+        "QSG_RHI_BACKEND", "QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX",
+        "QTWEBENGINE_RESOURCES_PATH", "QTWEBENGINE_LOCALES_PATH", "QML2_IMPORT_PATH",
+        "PYTHONHOME", "PYTHONPATH", "DEV_MODE",
+    }
+)
+
+
 def sandbox_environment(
-    environment: Mapping[str, str], host: Mapping[str, str] | None = None
+    environment: Mapping[str, str],
+    host: Mapping[str, str] | None = None,
+    extra_names: frozenset[str] | None = None,
 ) -> dict[str, str]:
     """The environment a sandboxed game is started with.
 
@@ -67,6 +80,7 @@ def sandbox_environment(
         key: value
         for key, value in environment.items()
         if key in SANDBOX_ENV_NAMES
+        or key in (extra_names or ())
         or key.startswith(SANDBOX_ENV_PREFIXES)
         or host_env.get(key) != value
     }
@@ -301,10 +315,12 @@ def build_bwrap_argv(
     umu_runtime: str = "",
     umu_var: str = "",
     network: bool = False,
+    writable_paths: tuple[str, ...] = (),
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
     check_readonly_mounts(readonly_paths, home)
+    check_writable_mounts(writable_paths, home)
     argv = [bwrap, *BWRAP_NAMESPACE_OPTIONS]
     if network:
         argv.append("--unshare-net")
@@ -410,6 +426,9 @@ def build_bwrap_argv(
     argv += ["--bind", game_dir, game_dir]
     if prefix:
         argv += ["--bind", prefix, prefix]
+    for writable in writable_paths:
+        if writable:
+            argv += ["--bind", writable, writable]
     argv += ["--ro-bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"]
     runtime = env.get("XDG_RUNTIME_DIR", "")
     if runtime:
@@ -452,16 +471,51 @@ def sandbox_folder(game_id: int) -> str:
 REMOVED_SANDBOX_KEEP_SECONDS = 30 * 24 * 60 * 60
 
 
-def retire_sandbox_folder(game_id: int) -> str | None:
-    """Move a removed game's sandbox aside; return the new path, or None.
+def flatpak_player_argv(
+    player_command: list[str],
+    *,
+    game_dir: str,
+    profile: str,
+    network_blocked: bool,
+    environment: Mapping[str, str] | None = None,
+    sandbox: bool = True,
+) -> list[str]:
+    """Run the built-in player in a new Flatpak instance through the portal.
 
-    A later game that gets the same ID must not inherit its home or Wine
-    prefix. The folder can hold saves, so it stays in `sandbox/removed/` for
-    30 days before `prune_removed_sandboxes` deletes it.
+    With `sandbox`, the sub-sandbox sees only the game folder and the player's
+    storage folder (both read-write), the display, sound and GPU, and no other
+    user files. Without it, the instance keeps the app's permissions and is
+    used only to remove network access.
     """
+    argv = ["flatpak-spawn", *(["--sandbox"] if sandbox else []), "--watch-bus"]
+    if sandbox:
+        argv += [
+            f"--sandbox-expose-path={game_dir}",
+            f"--sandbox-expose-path={profile}",
+            "--sandbox-flag=share-display",
+            "--sandbox-flag=share-sound",
+            "--sandbox-flag=share-gpu",
+        ]
+    if network_blocked:
+        argv.append("--no-network")
+    for key in sorted(PLAYER_ENV_NAMES):
+        value = (environment or {}).get(key)
+        if value:
+            argv.append(f"--env={key}={value}")
+    return [*argv, "--", *player_command]
+
+
+def web_player_folder(game_id: int) -> str:
+    from core.host_platform import get_data_dir
+
+    if isinstance(game_id, bool) or game_id <= 0:
+        raise ValueError("The web player needs a valid library game ID.")
+    return os.path.join(get_data_dir(), "web-player", str(game_id))
+
+
+def _retire_folder(folder: str, game_id: int) -> str | None:
     from datetime import datetime
 
-    folder = sandbox_folder(game_id)
     if not os.path.isdir(folder) or os.path.islink(folder):
         return None
     removed_root = os.path.join(os.path.dirname(folder), "removed")
@@ -474,28 +528,44 @@ def retire_sandbox_folder(game_id: int) -> str | None:
     return target
 
 
+def retire_web_player_folder(game_id: int) -> str | None:
+    """Move a removed game's built-in player storage to web-player/removed/."""
+    return _retire_folder(web_player_folder(game_id), game_id)
+
+
+def retire_sandbox_folder(game_id: int) -> str | None:
+    """Move a removed game's sandbox aside; return the new path, or None.
+
+    A later game that gets the same ID must not inherit its home or Wine
+    prefix. The folder can hold saves, so it stays in `sandbox/removed/` for
+    30 days before `prune_removed_sandboxes` deletes it.
+    """
+    return _retire_folder(sandbox_folder(game_id), game_id)
+
+
 def prune_removed_sandboxes(now: float | None = None) -> int:
-    """Delete sandboxes of removed games older than 30 days; return the count."""
+    """Delete sandboxes and player storage of removed games older than 30 days; return the count."""
     import shutil
     import time
 
     from core.host_platform import get_data_dir
 
-    root = os.path.join(get_data_dir(), "sandbox", "removed")
     cutoff = (time.time() if now is None else now) - REMOVED_SANDBOX_KEEP_SECONDS
     removed = 0
-    try:
-        entries = list(os.scandir(root))
-    except OSError:
-        return 0
-    for entry in entries:
+    for parent in ("sandbox", "web-player"):
+        root = os.path.join(get_data_dir(), parent, "removed")
         try:
-            if entry.is_symlink() or not entry.is_dir() or entry.stat().st_mtime >= cutoff:
-                continue
+            entries = list(os.scandir(root))
         except OSError:
             continue
-        shutil.rmtree(entry.path, ignore_errors=True)
-        removed += 0 if os.path.exists(entry.path) else 1
+        for entry in entries:
+            try:
+                if entry.is_symlink() or not entry.is_dir() or entry.stat().st_mtime >= cutoff:
+                    continue
+            except OSError:
+                continue
+            shutil.rmtree(entry.path, ignore_errors=True)
+            removed += 0 if os.path.exists(entry.path) else 1
     return removed
 
 
@@ -582,7 +652,11 @@ def build_network_bwrap_argv(
 
 
 def configure_sandboxie_box(
-    start: str, game_id: int, game_dir: str, block_network: bool = False
+    start: str,
+    game_id: int,
+    game_dir: str,
+    block_network: bool = False,
+    extra_write_paths: tuple[str, ...] = (),
 ) -> str:
     box = f"wLib_{game_id}"
     root = sandbox_folder(game_id)
@@ -605,6 +679,13 @@ def configure_sandboxie_box(
         ("OpenFilePath", ntpath.normpath(game_dir).rstrip("\\/") + "\\"),
     ]:
         _ = _sandboxie_call(ini, ["set", box, key, value])
+    # Pass-through write paths (the built-in player's storage folder). "set"
+    # above reset the list, so a path removed since the last launch is dropped.
+    for extra in extra_write_paths:
+        if extra:
+            _ = _sandboxie_call(
+                ini, ["append", box, "OpenFilePath", ntpath.normpath(extra).rstrip("\\/") + "\\"]
+            )
     _ = _sandboxie_call(start, ["/reload"])
     return box
 

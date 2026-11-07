@@ -12,7 +12,7 @@ import {
 } from "./launchMode.ts";
 
 test("only unambiguous host-native extensions count as clearly native", () => {
-  for (const path of ["a/game.sh", "g.jar", "i.html", "i.htm", "G.SH", "  game.sh \n"])
+  for (const path of ["a/game.sh", "g.jar", "i.html", "i.htm", "G.SH", "  game.sh \n", "flash/game.swf", "G.SWF"])
     assert.equal(isClearlyNativeTarget(path), true, path);
   for (const path of ["Game.exe", "run.bat", "game.x86_64", "game", "", null as unknown as string, undefined as unknown as string])
     assert.equal(isClearlyNativeTarget(path), false, String(path));

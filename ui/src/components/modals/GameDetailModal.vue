@@ -8,6 +8,8 @@ import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
+import { HTML_PLAYER_OPTIONS, isHtmlTarget, normalizeHtmlPlayer, resolveWebPlayer } from "../../utils/webPlayer";
+import type { HtmlPlayerChoice } from "../../utils/webPlayer";
 import type { SandboxStatus } from "../../services/api";
 import GameCompanionTools from "../GameCompanionTools.vue";
 import TagColorPicker from "../TagColorPicker.vue";
@@ -128,6 +130,8 @@ const gamemode = ref<"default" | "on" | "off">("default");
 const mangohud = ref<"default" | "on" | "off">("default");
 const performanceTools = ref({ gamemode: false, mangohud: false });
 const performanceDefaults = ref({ gamemode: false, mangohud: false });
+const htmlPlayer = ref<HtmlPlayerChoice>("");
+const htmlBuiltinDefault = ref(true);
 const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
   try {
     const gameId = typeof props.game?.id === "number" ? props.game.id : null;
@@ -266,6 +270,17 @@ const autoInjectCe = ref(false);
 const customPrefix = ref("");
 const protonVersion = ref("");
 const launchMode = ref<LaunchMode>("auto");
+// Which player the default target opens in, as the launcher will resolve it.
+const resolvedPlayer = computed(() =>
+  resolveWebPlayer(exePath.value, launchMode.value, htmlPlayer.value, htmlBuiltinDefault.value, platformCapabilities.value.platform),
+);
+// "Opens in" applies to any HTML launch target, default or additional.
+const htmlTargetPath = computed(() =>
+  [exePath.value, ...launchTargets.value.map((target) => target.exe_path)].find(isHtmlTarget) ?? "",
+);
+const resolvedHtmlPlayer = computed(() =>
+  resolveWebPlayer(htmlTargetPath.value, launchMode.value, htmlPlayer.value, htmlBuiltinDefault.value, platformCapabilities.value.platform),
+);
 const platformCapabilities = ref<PlatformCapabilities>({
   ...CONSERVATIVE_PLATFORM_CAPABILITIES,
 });
@@ -585,6 +600,7 @@ const formSnapshot = (): string =>
   JSON.stringify({
     gamemode: gamemode.value,
     mangohud: mangohud.value,
+    html_player: htmlPlayer.value,
     sandbox_enabled: sandboxEnabled.value,
     block_network: blockNetwork.value,
     title: title.value,
@@ -680,6 +696,7 @@ const userEditedTagFields = (): Record<string, unknown> =>
 const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   gamemode: g.gamemode || "default",
   mangohud: g.mangohud || "default",
+  html_player: normalizeHtmlPlayer(g.html_player),
   sandbox_enabled: !!g.sandbox_enabled,
   block_network: !!g.block_network,
   title: g.title || "",
@@ -706,6 +723,7 @@ const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
 const formSetters: Record<string, (value: unknown) => void> = {
   gamemode: (v) => { gamemode.value = v as typeof gamemode.value; },
   mangohud: (v) => { mangohud.value = v as typeof mangohud.value; },
+  html_player: (v) => { htmlPlayer.value = normalizeHtmlPlayer(v); },
   sandbox_enabled: (v) => { sandboxEnabled.value = !!v; },
   block_network: (v) => { blockNetwork.value = !!v; },
   title: (v) => { title.value = String(v); },
@@ -807,6 +825,7 @@ watch(
         autoInjectCe.value = g.auto_inject_ce ? true : false;
         gamemode.value = g.gamemode || "default";
         mangohud.value = g.mangohud || "default";
+        htmlPlayer.value = normalizeHtmlPlayer(g.html_player);
         sandboxEnabled.value = !!g.sandbox_enabled;
         blockNetwork.value = !!g.block_network;
         sandboxStatus.value = null;
@@ -894,9 +913,13 @@ watch(
       void Promise.all(loaders);
       const capabilities = await loadPlatformCapabilities();
       platformCapabilities.value = capabilities;
+      // The HTML player default applies on every platform; GameMode/MangoHud only on Linux.
+      void api.getSettings().then(value => {
+        htmlBuiltinDefault.value = value.html_builtin_player !== false;
+        performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled };
+      }).catch(console.error);
       if (capabilities.platform === "linux") {
         void api.getPerformanceTools().then(value => { performanceTools.value = value; }).catch(console.error);
-        void api.getSettings().then(value => { performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled }; }).catch(console.error);
       }
       if (capabilities.rpgmaker_linux) {
         void loadRpgmakerLinuxRunnerStatus();
@@ -1577,6 +1600,7 @@ const save = async () => {
       engine: normalizeEngine(engine.value),
       gamemode: gamemode.value,
       mangohud: mangohud.value,
+      html_player: htmlPlayer.value,
       sandbox_enabled: sandboxEnabled.value,
       block_network: blockNetwork.value,
       run_japanese_locale: platformCapabilities.value.wine_proton
@@ -2336,12 +2360,19 @@ const removeAttachment = async (name: string) => {
             <p v-if="steamState.eligible && steamState.mode === 'all-installed'" class="text-xs" style="color:var(--text-secondary)">All installed games are included; this mark is saved for marked mode.</p>
           </div>
           <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
+          <div v-if="htmlTargetPath" class="space-y-2">
+            <label for="detail-html-player" class="modal-label">Opens in</label>
+            <select id="detail-html-player" v-model="htmlPlayer" class="modal-input w-full">
+              <option v-for="option in HTML_PLAYER_OPTIONS" :key="option.value" :value="option.value">{{ option.value === '' ? `Use Settings default (${htmlBuiltinDefault ? 'Built-in player' : 'System browser'})` : option.label }}</option>
+            </select>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ resolvedHtmlPlayer === 'builtin' ? "The built-in player runs the game in a wLib window with playtime, Stop, sandbox and No internet. Its saves are kept by wLib." : resolvedHtmlPlayer === 'browser' ? "Opens your default browser. Playtime, Stop, sandbox and No internet do not apply, and saves stay in that browser." : "This launch mode runs the file as a program, not in a player." }}</p>
+          </div>
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">
               <span>Run in sandbox</span>
-              <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(exePath, sandboxStatus).disabled" />
+              <input v-model="sandboxEnabled" type="checkbox" role="switch" class="sandbox-switch" :disabled="sandboxSwitchState(resolvedPlayer, sandboxStatus).disabled" />
             </label>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(exePath, sandboxStatus).note }} <button v-if="sandboxSwitchState(exePath, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ sandboxSwitchState(resolvedPlayer, sandboxStatus).note }} <button v-if="sandboxSwitchState(resolvedPlayer, sandboxStatus).needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate('/settings#sandbox')">Set up</button></p>
             <p class="text-xs" style="color:var(--text-secondary)">Sandboxed Wine/Proton games use their own Wine prefix unless a custom prefix is set. Sandboxed Proton games create a temporary runtime copy on each launch and cannot use Cheat Engine auto-injection.</p>
             <div class="flex flex-wrap gap-2">
               <button class="modal-btn" @click="openSandboxFolder">Open sandbox folder</button>
@@ -2350,9 +2381,9 @@ const removeAttachment = async (name: string) => {
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">
               <span>No internet</span>
-              <input v-model="blockNetwork" type="checkbox" role="switch" class="sandbox-switch" :disabled="networkSwitchState(exePath, platformCapabilities.platform, sandboxEnabled).disabled" />
+              <input v-model="blockNetwork" type="checkbox" role="switch" class="sandbox-switch" :disabled="networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).disabled" />
             </label>
-            <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(exePath, platformCapabilities.platform, sandboxEnabled).note }}</p>
+            <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).note }}</p>
           </div>
           <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-2 gap-4">
             <div v-for="tool in (['gamemode', 'mangohud'] as const)" :key="tool">

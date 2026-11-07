@@ -15,6 +15,15 @@ uv pip compile requirements-dev.txt --python-version 3.12 --python-platform wind
 
 The Linux platform is `manylinux_2_35` (Ubuntu 22.04, the CI runner), because the pinned Qt wheels need glibc 2.34 or newer. `tests/test_release_version.py` fails when a lock no longer has an exact pin from `requirements.txt`.
 
+## Bundled Ruffle
+
+The built-in web game player runs Flash with Ruffle's self-hosted web build.
+
+- `@ruffle-rs/ruffle` is a `ui` devDependency pinned to an exact nightly version in `ui/package.json` and locked by `package-lock.json`.
+- The `wlib-copy-ruffle` plugin in `ui/vite.config.js` copies `ruffle.js`, the `.wasm` files and the `LICENSE_*` files into `ui/dist/ruffle/` after `npm run build`. Nothing imports them, so the app bundle size does not change.
+- `scripts/build.sh` bundles all of `ui/dist`, so AppImage, tar.gz, Flatpak, Windows and AUR builds ship `ui/dist/ruffle/` without extra steps. The player serves it at `wlib-game://ruffle/`.
+- To update Ruffle, run `cd ui && npm install --save-dev --save-exact @ruffle-rs/ruffle@<version>`, rebuild, and check one AS2 and one AS3 `.swf` in the player. Ruffle is dual-licensed MIT and Apache-2.0; both license files stay in the bundle.
+
 ## Release version check
 
 The release workflow's first job runs `scripts/check-release-version.py <tag>` on tag pushes. It fails when the tag is not `v` + `APP_VERSION` from `core/api.py`, or when `extension/manifest.json` has the version the previous release tag shipped (AMO signs each version once). Manual dry runs skip it.

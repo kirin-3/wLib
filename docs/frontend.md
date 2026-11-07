@@ -292,6 +292,10 @@ Status is polled every 1 second while a download or runtime preparation job runs
 `getUmuRuntimeStatus`, `downloadUmu`, `prepareUmuRuntime`, and
 `cancelUmuRuntimePrepare` with typed responses and browser mocks.
 
+## Built-in web player controls
+
+Settings → General has "Play HTML games in the built-in player" (`html_builtin_player`, on by default). Game Detail's Launch tab shows an "Opens in" select (Use Settings default / Built-in player / System browser, stored as the game's `html_player`) only while the selected target is `.html` or `.htm`; `.swf` targets always use the player. `utils/webPlayer.ts` mirrors the backend resolver (`core/web_launch.py`): `resolveWebPlayer` returns `builtin`, `browser` or `null` (not a web launch, for example Wine/Proton or Custom Command on Linux), and `sandboxSwitchState` and `networkSwitchState` take that result, so only system-browser launches disable "Run in sandbox" and "No internet". When a launch result carries `notice: "html_player_first_use"`, `LibraryView.vue` shows a one-time toast (`launchNoticeMessage`) saying the game now uses the built-in player, that browser saves do not carry over, and how to switch the game back to System browser. The browser mock in `services/api.ts` tracks built-in player games as running and returns the notice once.
+
 ## Sandbox controls
 
 Settings includes `SandboxSettings.vue` at `/settings#sandbox`. It shows tool
@@ -303,7 +307,7 @@ custom `Start.exe` picker and Clear. "Sandbox new games" saves immediately;
 report the changed count. Running games keep their current mode.
 
 Game Detail's Launch tab saves "Run in sandbox" with the other launch settings.
-HTML targets disable the switch with an explanation. A missing tool leaves the
+Games that open in the system browser disable the switch with an explanation. A missing tool leaves the
 stored preference visible and editable, with a link to Settings → Sandbox.
 "Open sandbox folder" opens the game's persistent storage. Launch failures
 `sandbox_missing` and `sandbox_unusable` offer a Settings action in the error

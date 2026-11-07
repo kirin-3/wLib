@@ -55,7 +55,7 @@ _GENERIC_LAUNCHER_STEMS = ("game", "start", "launcher", "main", "run")
 _INTERNAL_DIR_PREFIXES = (".wlib-staging-", ".wlib-trash-")
 _INTERNAL_DIR_MARKERS = (".wlib-old-", ".wlib-new-")
 _LAUNCHER_EXTENSIONS = (
-    ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar"
+    ".exe", ".bat", ".cmd", ".sh", ".x86", ".x86_64", ".html", ".htm", ".jar", ".swf"
 )
 
 
@@ -115,6 +115,8 @@ def detect_engine(game_dir: str, exe_path: str = "") -> str:
         return "Godot"
     if exe_path.lower().endswith((".html", ".htm")):
         return "HTML"
+    if exe_path.lower().endswith(".swf"):
+        return "Flash"
     return ""
 
 
@@ -217,6 +219,10 @@ def find_launcher(
         if name in (f.lower() for f in files):
             return os.path.join(game_dir, next(f for f in files if f.lower() == name))
     if files:
+        # A Flash file is the last resort, after any other web page.
+        files = [name for name in files if not name.lower().endswith(".swf")] + [
+            name for name in files if name.lower().endswith(".swf")
+        ]
         return os.path.join(game_dir, files[0])
     if depth > 1:
         subdirs = [

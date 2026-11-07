@@ -300,6 +300,7 @@ def test_update_game_validates_save_override_like_the_saves_api(saves_api, tmp_p
 
 
 def test_saves_api_backup_needs_a_folder(saves_api, tmp_path):
+
     api, _root = saves_api
     game_id = _saves_game(tmp_path)
     assert api.backup_game_saves(game_id)["success"] is False
@@ -310,6 +311,7 @@ def test_saves_api_backup_needs_a_folder(saves_api, tmp_path):
 
 
 def test_saves_api_detects_single_folder_and_ignores_exe_folder(saves_api, tmp_path):
+
     api, _root = saves_api
     game_id = _saves_game(tmp_path)
     _write_save(tmp_path / "game" / "slot.save")
@@ -323,6 +325,7 @@ def test_saves_api_detects_single_folder_and_ignores_exe_folder(saves_api, tmp_p
 
 
 def test_saves_api_busy_guard(saves_api, tmp_path):
+
     api, _root = saves_api
     game_id = _saves_game(tmp_path)
     saves = tmp_path / "saves"
@@ -346,6 +349,7 @@ def test_saves_api_busy_guard(saves_api, tmp_path):
 
 
 def test_saves_api_busy_guard_released_after_exception(saves_api, tmp_path):
+
     api, _root = saves_api
     with pytest.raises(RuntimeError):
         with api._save_operation(7):
@@ -553,6 +557,7 @@ def _mark_running(api, game_id, prefix=""):
 
 
 def test_save_restore_refused_while_game_runs(saves_api, tmp_path):
+
     api, _root = saves_api
     game_id = _saves_game(tmp_path)
     saves = tmp_path / "my-saves"
@@ -722,3 +727,51 @@ def test_cancel_archive_install_only_before_the_move(monkeypatch):
     status = api.get_archive_install_status()
     assert status["cancellable"] is False and status["done"] == 5
     assert api.cancel_archive_install()["error_code"] == "not_cancellable"
+
+
+def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monkeypatch):
+    import os
+
+    from core import game_sandbox
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    api = Api()
+    game_id = add_game(title="Game", exe_path="index.html")
+    storage = game_sandbox.web_player_folder(game_id)
+    os.makedirs(storage)
+    with open(os.path.join(storage, "save.dat"), "w") as handle:
+        handle.write("x")
+    assert api.delete_game(game_id)["success"] is True
+    assert not os.path.exists(storage)
+    (kept,) = (tmp_path / "data" / "web-player" / "removed").iterdir()
+    assert kept.name.startswith(f"{game_id}_") and (kept / "save.dat").read_text() == "x"
+    assert game_sandbox.prune_removed_sandboxes() == 0
+    later = kept.stat().st_mtime + game_sandbox.REMOVED_SANDBOX_KEEP_SECONDS + 1
+    assert game_sandbox.prune_removed_sandboxes(now=later) == 1
+    assert not kept.exists()
+
+
+def test_builtin_player_saves_are_detected_and_refuse_changes_while_running(saves_api, tmp_path, monkeypatch):
+    from core import game_sandbox
+
+    from core.database import update_game
+
+    api, _root = saves_api
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    html = tmp_path / "web" / "index.html"
+    _write_save(html)
+    game_id = add_game("Web", str(html))
+    assert game_id is not None
+    storage = game_sandbox.web_player_folder(game_id)
+    _write_save(__import__("pathlib").Path(storage) / "data" / "state.bin", "s")
+    info = api.get_game_saves(game_id)
+    assert info["effective"] == storage and info["detected"][0]["type"] == "Web Player"
+    # The system browser keeps its saves elsewhere.
+    update_game(game_id, {"html_player": "browser"})
+    assert api.get_game_saves(game_id)["effective"] == ""
+    update_game(game_id, {"html_player": ""})
+    monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    source = tmp_path / "incoming"
+    _write_save(source / "a.save", "a")
+    refused = api.import_game_saves(game_id, str(source))
+    assert refused["success"] is False and "Close the game" in str(refused["error"])

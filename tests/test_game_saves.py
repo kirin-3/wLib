@@ -770,3 +770,30 @@ def test_windows_finds_saves_in_a_moved_documents_folder(tmp_path, monkeypatch):
     results = detect_save_locations("/games/Zelda/Game.exe", "Zelda", windows=True)
 
     assert str(saves) in {r["path"] for r in results}
+
+
+@pytest.mark.parametrize("sandboxed", [True, False])
+def test_builtin_web_player_storage_is_a_save_location(tmp_path, monkeypatch, sandboxed):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    storage = tmp_path / "data/web-player/5"
+    _write(storage / "data/Local Storage/leveldb/000003.log")
+    locations = detect_save_locations(
+        "/games/web/index.html", "Web", windows=False, game_id=5,
+        sandbox_enabled=sandboxed, web_player=True,
+    )
+    assert {"path": str(storage), "type": "Web Player"}.items() <= locations[0].items()
+    assert locations[0]["eligible"]
+    assert resolve_effective_folder("", locations) == str(storage)
+    # A System browser game keeps its saves outside wLib's data folder.
+    locations = detect_save_locations(
+        "/games/web/index.html", "Web", windows=False, game_id=5,
+        sandbox_enabled=sandboxed, web_player=False,
+    )
+    assert str(storage) not in {item["path"] for item in locations}
+
+
+def test_web_player_storage_missing_is_not_listed(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    assert not detect_save_locations(
+        "/games/web/index.html", "Web", windows=False, game_id=5, web_player=True
+    )

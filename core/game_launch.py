@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 
 from core.database import normalize_launch_mode
 from core.launcher import Launcher
-
+from core.web_launch import resolve_web_player as resolve_web_player
 
 def _normalize_compare_path(value: object) -> str:
     raw = str(value or "")
@@ -28,7 +28,9 @@ def request_from_game(game: Mapping[str, object]) -> dict[str, object]:
     if not path:
         raise ValueError("Wishlisted games cannot be launched.")
     mode = normalize_launch_mode(game.get("launch_mode"))
-    if os.path.splitext(path)[1].lower() in (".htm", ".html") and mode in ("auto", "native"):
+    from core.database import html_builtin_player_enabled
+
+    if resolve_web_player(path, mode, game.get("html_player"), html_builtin_player_enabled()) == "browser":
         raise ValueError("Browser games cannot be launched by the runner.")
     return {
         "exe_path": path,
@@ -103,9 +105,6 @@ def launch_tracked(
             target_path or os.path.expanduser(canonical_path),
         )
 
-    if request.get("require_tracked") and os.path.splitext(target_path)[1].lower() in (".htm", ".html") and normalize_launch_mode(launch_mode) in ("auto", "native"):
-        return {"success": False, "error": "Browser games cannot be launched by the runner."}
-
     print(
         f"Launching {target_path} (Args: {command_line_args}, JP Locale: {run_japanese_locale}, Wayland: {run_wayland}, Auto Inject CE: {auto_inject_ce}, Custom Prefix: {custom_prefix}, Proton Version: {proton_version}, Launch Mode: {launch_mode})"
     )
@@ -131,6 +130,13 @@ def launch_tracked(
     def tool_enabled(name: str) -> bool:
         override = normalize_tool_override(stored_game.get(name))
         return override == "on" or (override == "default" and get_setting(f"{name}_enabled") == "true")
+
+    from core.database import html_builtin_player_enabled
+
+    if request.get("require_tracked") and resolve_web_player(
+        target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
+    ) == "browser":
+        return {"success": False, "error": "Browser games cannot be launched by the runner."}
 
     from core.host_platform import is_linux
 
@@ -206,6 +212,12 @@ def launch_tracked(
             game_title=str(stored_game.get("title") or ""),
             gamemode=tool_enabled("gamemode"),
             mangohud=tool_enabled("mangohud"),
+            # Only passed when set, so launchers without the option keep working.
+            **(
+                {"html_player": str(stored_game["html_player"])}
+                if stored_game.get("html_player")
+                else {}
+            ),
         )
     except Exception as exc:
         # Launcher setup can still fail outside its own error paths (for

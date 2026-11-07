@@ -50,6 +50,7 @@ GENERAL_SETTINGS_KEYS = (
     "sandbox_new_games",
     "gamemode_enabled",
     "mangohud_enabled",
+    "html_builtin_player",
 )
 SAVE_BACKUP_KEEP_MAX = 99
 TAG_COLOR_SWATCHES = (
@@ -64,6 +65,7 @@ TAG_COLOR_SWATCHES = (
 )
 SYNC_GAME_COLUMNS = (
     "block_network",
+    "html_player",
     "title",
     "developer",
     "engine",
@@ -196,6 +198,17 @@ def normalize_launch_mode(launch_mode: object) -> str:
     if normalized in _CANONICAL_LAUNCH_MODE_SET:
         return normalized
     return DEFAULT_LAUNCH_MODE
+
+
+def normalize_html_player(value: object) -> str:
+    """Per-game HTML player choice: '' (use the setting), 'builtin' or 'browser'."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"builtin", "browser"} else ""
+
+
+def html_builtin_player_enabled() -> bool:
+    """The "Play HTML games in the built-in player" setting; absent reads as on."""
+    return get_setting("html_builtin_player") != "false"
 
 
 def normalize_tool_override(value: object) -> str:
@@ -676,6 +689,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
         ("gamemode", "TEXT DEFAULT 'default'"),
         ("mangohud", "TEXT DEFAULT 'default'"),
+        ("html_player", "TEXT DEFAULT ''"),
         ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
         ("block_network", "BOOLEAN DEFAULT 0"),
         ("custom_prefix", "TEXT DEFAULT ''"),
@@ -1331,6 +1345,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "block_network",
         "gamemode",
         "mangohud",
+        "html_player",
         "custom_prefix",
         "proton_version",
         "save_path_override",
@@ -1381,6 +1396,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     for tool in ("gamemode", "mangohud"):
         if tool in safe_fields:
             safe_fields[tool] = normalize_tool_override(safe_fields[tool])
+    if "html_player" in safe_fields:
+        safe_fields["html_player"] = normalize_html_player(safe_fields["html_player"])
     if "launch_mode" in safe_fields:
         safe_fields["launch_mode"] = normalize_launch_mode(safe_fields["launch_mode"])
 

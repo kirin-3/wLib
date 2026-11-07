@@ -94,6 +94,7 @@ METADATA_FIELDS = (
 )
 USER_STATE_FIELDS = (
     "block_network",
+    "html_player",
     "play_status",
     "finished_version",
     "last_played_version",
@@ -115,6 +116,7 @@ LAUNCH_CONFIG_FIELDS = (
     "command_line_args",
     "gamemode",
     "mangohud",
+    "html_player",
     "launch_mode",
     "run_japanese_locale",
     "run_wayland",
@@ -141,7 +143,7 @@ PATH_SETTINGS_KEYS = (
     "sandboxie_custom_path",
 )
 BOOLEAN_SETTINGS_KEYS = frozenset(
-    {"enable_logging", "download_detection_enabled", "sandbox_new_games", "gamemode_enabled", "mangohud_enabled"}
+    {"enable_logging", "download_detection_enabled", "sandbox_new_games", "gamemode_enabled", "mangohud_enabled", "html_builtin_player"}
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})
@@ -1445,6 +1447,8 @@ def _normalize_game_field(field: str, value: object) -> object:
         return normalize_play_status(value)
     if field in {"gamemode", "mangohud"}:
         return database.normalize_tool_override(value)
+    if field == "html_player":
+        return database.normalize_html_player(value)
     if field == "launch_mode":
         return normalize_launch_mode(value)
     if field == "collections":
@@ -2028,6 +2032,8 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
         return text in ("", database.DEFAULT_LAUNCH_MODE)
     if field in ("gamemode", "mangohud"):
         return database.normalize_tool_override(local_value) == "default"
+    if field == "html_player":
+        return database.normalize_html_player(local_value) == ""
     if field == "play_status":
         if local_value is None:
             return True
