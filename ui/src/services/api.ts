@@ -348,7 +348,7 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
   downloaded_by_wlib?: boolean;
 }
 
-export interface UpdateMirror { link_id: string; host: string; label: string; part: string; split: boolean }
+export interface UpdateMirror { link_id: string; host: string; label: string; part: string; split: boolean; /** False when wLib cannot download it itself (a direct Buzzheavier link). */ in_app?: boolean }
 export interface UpdateBuild { label: string; section: string; platform: string; kind: string; mirrors: UpdateMirror[] }
 export interface UpdateDownloadLinks extends ApiBasicResponse { version?: string; builds?: UpdateBuild[] }
 export interface UpdateDownloadJob { job_id: string; game_id: number; stage: string; bytes: number; total: number | null; speed: number; error: string; archive_path: string }
@@ -1759,9 +1759,31 @@ class ApiService {
     return this.invoke<PathCheckResponse>("check_path", path, kind);
   }
 
+  private libraryBatchDepth = 0;
+  private libraryBatchChanged = false;
+
+  /** Run several library changes with one library refresh at the end. */
+  async withLibraryBatch<T>(run: () => Promise<T>): Promise<T> {
+    this.libraryBatchDepth++;
+    try {
+      return await run();
+    } finally {
+      this.libraryBatchDepth--;
+      if (!this.libraryBatchDepth && this.libraryBatchChanged) {
+        this.libraryBatchChanged = false;
+        window.dispatchEvent(new Event("wlib-refresh-library"));
+      }
+    }
+  }
+
+  private notifyLibraryChange(): void {
+    if (this.libraryBatchDepth) this.libraryBatchChanged = true;
+    else window.dispatchEvent(new Event("wlib-refresh-library"));
+  }
+
   private async invokeLibraryChange<T extends ApiBasicResponse>(method: string, ...args: unknown[]): Promise<T> {
     const result = await this.invoke<T>(method, ...args);
-    if (result?.success) window.dispatchEvent(new Event("wlib-refresh-library"));
+    if (result?.success) this.notifyLibraryChange();
     return result;
   }
 

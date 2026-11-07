@@ -736,6 +736,27 @@ def start_runtime_renderer_diagnostics() -> None:
     ).start()
 
 
+def wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
+    """Wait until nothing listens on 127.0.0.1:port; True once it is free.
+
+    A wLib that is still closing keeps its page server on this port after it
+    released the single-instance port, and a window started meanwhile loads
+    from the old server or none at all."""
+    deadline = time.monotonic() + timeout
+    while True:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+        finally:
+            probe.close()
+        time.sleep(0.2)
+
+
 def start_webview(
     webview_module: WebviewModule, *, dev_mode: bool, icon_path: str | None
 ) -> None:
@@ -753,12 +774,20 @@ def start_webview(
         )
         return
 
+    # The fixed port keeps the page origin, and so its saved UI state, the
+    # same across runs. If the old process never lets go, a free port still
+    # gives a working window.
+    port: int | None = (
+        PYWEBVIEW_HTTP_PORT if wait_for_port_free(PYWEBVIEW_HTTP_PORT) else None
+    )
+    if port is None:
+        print(f"[wLib] Port {PYWEBVIEW_HTTP_PORT} is still in use; using a free port.")
     webview_module.start(
         func=start_runtime_renderer_diagnostics,
         gui="qt",
         debug=False,
         http_server=True,
-        http_port=PYWEBVIEW_HTTP_PORT,
+        http_port=port,
         private_mode=False,
         storage_path=storage_path,
         icon=icon_path,
@@ -806,6 +835,19 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 length -= len(chunk)
         except OSError:
             pass
+
+    def _runner_request(self) -> bool:
+        """True for a request from wLib's own Steam runner (see steam_runner.runner_token)."""
+        import secrets
+
+        from core.steam_runner import RUNNER_HEADER, runner_token
+
+        sent = self.headers.get(RUNNER_HEADER) or ""
+        try:
+            expected = runner_token()
+        except OSError:
+            return False
+        return bool(sent) and secrets.compare_digest(sent, expected)
 
     def _wait_for_database(self) -> bool:
         # main() serves this port before Api() has run init_db(), so database
@@ -1111,7 +1153,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             _ = self.wfile.write(json.dumps(check_payload).encode())
         elif urlparse(self.path).path == "/api/running":
-            if not self.headers.get(EXTENSION_REQUEST_HEADER):
+            if not self._runner_request():
                 self._reject_origin()
                 return
             ready = api_ref is not None and window_ref is not None and self._wait_for_database()
@@ -1154,6 +1196,14 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             if isinstance(resolved_f95_url, str) and resolved_f95_url:
                                 resolved_url = resolved_f95_url
 
+                    # Raising alone leaves a minimized or hidden window where
+                    # it is; bring it back first.
+                    try:
+                        cast(_ShowableWindow, cast(object, active_window)).show()
+                        if window_minimized.is_set():
+                            cast(_ShowableWindow, cast(object, active_window)).restore()
+                    except Exception:
+                        pass
                     active_window.on_top = True
                     active_window.on_top = False
                     # Tell the frontend to open the edit modal for this game
@@ -1219,8 +1269,42 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self._discard_request_body()
             return
 
+        if self.path == "/api/launch-check":
+            if not self._runner_request():
+                self._reject_origin()
+                return
+            check_status, check_result = 200, {"success": True}
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= MAX_EXTENSION_BODY_BYTES:
+                    raise ValueError("Invalid Content-Length")
+                raw_check = cast(object, json.loads(self.rfile.read(length)))
+                if not isinstance(raw_check, dict):
+                    raise ValueError("Invalid launch check")
+                check = cast(dict[str, object], raw_check)
+                launch_id = check.get("gameId")
+                if not isinstance(launch_id, int) or isinstance(launch_id, bool) or launch_id <= 0:
+                    raise ValueError("Invalid game ID")
+                if api_ref is not None:
+                    reason = api_ref.reserve_runner_launch(
+                        launch_id,
+                        str(check.get("prefix") or ""),
+                        sandboxed=check.get("sandboxed") is True,
+                        umu=check.get("umu") is True,
+                        blocked=check.get("blocked") is True,
+                        title=str(check.get("title") or ""),
+                    )
+                    if reason:
+                        check_result = {"success": False, "error": reason}
+            except (ValueError, TypeError, OSError):
+                check_status, check_result = 400, {"success": False, "error": "Invalid launch check"}
+            self.send_response(check_status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            _ = self.wfile.write(json.dumps(check_result).encode())
+            return
         if self.path == "/api/runner-event":
-            if not self.headers.get(EXTENSION_REQUEST_HEADER):
+            if not self._runner_request():
                 self._reject_origin()
                 return
             try:
@@ -1235,6 +1319,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid runner event")
                 if not window_ref:
                     raise ValueError("Application window is not ready")
+                ended_id = payload.get("gameId")
+                if (
+                    payload.get("state") in ("ended", "error")
+                    and api_ref is not None
+                    and isinstance(ended_id, int)
+                ):
+                    api_ref.release_runner_launch(ended_id)
                 active_window = cast(ExtensionWindow, window_ref)
                 _ = active_window.evaluate_js("window.dispatchEvent(new Event('wlib-refresh-library'))")
                 if payload.get("state") == "error":
@@ -1409,6 +1500,33 @@ def bind_extension_server() -> ThreadingHTTPServer | None:
     except OSError as e:
         print(f"Failed to start extension HTTP server: {e}")
         return None
+
+
+window_minimized = threading.Event()
+
+
+class _ShowableWindow(Protocol):
+    def show(self) -> None: ...
+
+    def restore(self) -> None: ...
+
+
+class _EventHook(Protocol):
+    def __iadd__(self, handler: Callable[[], None]) -> "_EventHook": ...
+
+
+def track_minimized(window: object) -> None:
+    """Keep window_minimized current, so "Open in wLib" restores only a
+    minimized window (restoring a maximized one would shrink it)."""
+    events = cast(object, getattr(window, "events", None))
+    for name, handler in (
+        ("minimized", window_minimized.set),
+        ("restored", window_minimized.clear),
+        ("maximized", window_minimized.clear),
+    ):
+        hook = cast(_EventHook | None, getattr(events, name, None))
+        if hook is not None:
+            hook += handler
 
 
 def focus_running_instance() -> bool:
@@ -1637,6 +1755,7 @@ def main() -> None:
             background_color="#101014",
         )
         window_ref = window
+        track_minimized(window)
         api.set_window(window)
         cleanup_legacy_browser_data_async()
 

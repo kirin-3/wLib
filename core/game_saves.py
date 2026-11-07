@@ -149,17 +149,39 @@ def _renpy_children(base: str, title_clean: str, game_name: str) -> list[str]:
     return matched
 
 
+def _name_tokens(value: str) -> list[str]:
+    """Lower-case words of a folder or game name, splitting camelCase too."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+    return [token for token in re.split(r"[^0-9a-z]+", spaced.casefold()) if token]
+
+
 def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
-    """The Windows/Wine folder-name match used for AppData and Documents."""
-    entry_lower = entry.lower()
-    if game_name and game_name.lower() in entry_lower:
+    """Folder-name match for AppData, Documents and ~/.config style roots.
+
+    These roots hold many unrelated folders, so a match needs the whole title,
+    the executable's name, or every longer title word as a whole word: one
+    shared word must not turn ~/.config/libreoffice or autostart into saves.
+    """
+    entry_tokens = _name_tokens(entry)
+    entry_key = "".join(entry_tokens)
+    if not entry_key:
+        return False
+    title_tokens = _name_tokens(title_clean)
+    title_key = "".join(title_tokens)
+    game_key = "".join(_name_tokens(game_name))
+    # The executable's name as a whole word ("run-data" for run.exe), even a
+    # generic one; never as part of a word ("autostart" for start.exe).
+    if game_key and (entry_key == game_key or game_key in entry_tokens):
         return True
-    words = (
-        [word for word in title_clean.lower().split() if len(word) >= 4]
-        if title_clean
-        else []
-    )
-    return any(word in entry_lower for word in words)
+    if game_key in _GENERIC_EXE_STEMS:
+        game_key = ""
+    for key in (title_key, game_key):
+        if key and len(key) >= 8 and key in entry_key:
+            return True
+    if title_key and entry_key == title_key:
+        return True
+    words = [word for word in title_tokens if len(word) >= 4]
+    return bool(words) and all(word in entry_tokens for word in words)
 
 
 # Executable stems shared by many unrelated games (RPG Maker's Game.exe and
@@ -364,12 +386,7 @@ def detect_save_locations(
             continue
         try:
             for entry in os.listdir(base):
-                words = [
-                    word for word in title_clean.casefold().split() if len(word) >= 4
-                ]
-                if (game_name and game_name.casefold() in entry.casefold()) or any(
-                    word in entry.casefold() for word in words
-                ):
+                if _name_matches_game(entry, title_clean, game_name):
                     candidate = os.path.join(base, entry)
                     if os.path.isdir(candidate):
                         add(
@@ -482,11 +499,17 @@ def detect_save_locations(
 
 
 def _dedupe(results: Sequence[SaveLocation]) -> list[SaveLocation]:
+    # By real path: Proton links "My Documents" to "Documents", so the same
+    # folder is found twice and would block the automatic choice.
     seen: set[str] = set()
     unique: list[SaveLocation] = []
     for result in results:
-        if result["path"] not in seen:
-            seen.add(result["path"])
+        try:
+            key = os.path.normcase(os.path.realpath(result["path"]))
+        except (OSError, ValueError):
+            key = result["path"]
+        if key not in seen:
+            seen.add(key)
             unique.append(result)
     return unique
 

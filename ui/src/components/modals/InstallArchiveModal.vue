@@ -21,7 +21,7 @@ const props = defineProps<{
   preselectedArchive?: string;
   seed?: InstallArchiveSeed | undefined;
 }>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
+const emit = defineEmits<{ "update:modelValue": [value: boolean]; installed: [archivePath: string] }>();
 
 type Phase = "pick" | "inspecting" | "ready" | "installing" | "done";
 
@@ -424,6 +424,7 @@ const install = async () => {
     }
     result.value = res;
     phase.value = "done";
+    emit("installed", archive.value.trim());
   } catch (e) {
     installError.value = e instanceof Error ? e.message : String(e);
     phase.value = "ready";

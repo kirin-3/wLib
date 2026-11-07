@@ -58,6 +58,9 @@ _f95_last_request_finished: float | None = None
 # Background cover downloads wait one interval after a foreground request, so a
 # bulk check or import that sends its next request right away keeps its turn.
 _f95_last_foreground_finished: float | None = None
+# After F95Zone answers 429, no request is sent until this time.monotonic().
+_f95_cooldown_until: float = 0.0
+RATE_LIMIT_COOLDOWN_SECONDS = 60.0
 # Extension-first window: set only by a plain-HTTP `blocked` result, kept in
 # memory only, 15 minutes. While active and an eligible extension is connected,
 # F95 requests go straight to the extension without trying plain HTTP first.
@@ -137,7 +140,15 @@ def _run_paced_f95_request[T](
     request followed by an extension request never overlap and stay spaced.
     """
     global _f95_last_request_finished, _f95_last_foreground_finished
+    global _f95_cooldown_until
     with _f95_request_slot(background=background):
+        wait = _f95_cooldown_until - time.monotonic()
+        if wait > 0:
+            # Every further request would be refused too and extends the ban.
+            raise _F95RequestError(
+                "rate_limited",
+                f"Rate limited by F95Zone; try again in {int(wait) + 1} seconds",
+            )
         if _f95_last_request_finished is not None:
             remaining = get_request_interval_seconds() - (
                 time.monotonic() - _f95_last_request_finished
@@ -146,6 +157,10 @@ def _run_paced_f95_request[T](
                 time.sleep(remaining)
         try:
             return transport()
+        except HTTPError as exc:
+            if exc.code == 429:
+                _f95_cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN_SECONDS
+            raise
         finally:
             _f95_last_request_finished = time.monotonic()
             if not background:
@@ -172,9 +187,13 @@ def _urllib_f95_get(url: str) -> tuple[int, str]:
             )
     except HTTPError as exc:
         with exc:
-            return exc.code, _decode_body(
-                exc.read(), exc.headers.get_content_charset()
-            )
+            try:
+                body = exc.read()
+            except (HTTPException, OSError):
+                # A cut-off error page still carries its status; one bad
+                # response must not abort the whole update check.
+                body = b""
+            return exc.code, _decode_body(body, exc.headers.get_content_charset())
     except (TimeoutError, socket.timeout) as exc:
         raise _F95RequestError(
             "navigation_timeout", "F95Zone request timed out"
@@ -190,8 +209,16 @@ def _urllib_f95_get(url: str) -> tuple[int, str]:
         raise _F95RequestError("scraper_error", str(exc)) from exc
 
 
+def _note_rate_limit(status: int) -> None:
+    global _f95_cooldown_until
+    if status == 429:
+        _f95_cooldown_until = time.monotonic() + RATE_LIMIT_COOLDOWN_SECONDS
+
+
 def _f95_get(url: str) -> tuple[int, str]:
-    return _run_paced_f95_request(lambda: _urllib_f95_get(url))
+    status, body = _run_paced_f95_request(lambda: _urllib_f95_get(url))
+    _note_rate_limit(status)
+    return status, body
 
 
 def _f95_get_via_extension(url: str) -> tuple[int, str]:
@@ -213,7 +240,9 @@ def _f95_get_via_extension(url: str) -> tuple[int, str]:
         )
         return response.status, response.body
 
-    return _run_paced_f95_request(_transport)
+    status, body = _run_paced_f95_request(_transport)
+    _note_rate_limit(status)
+    return status, body
 
 
 # A managed challenge loads /h/ scripts; rendered pages only carry the passive
@@ -644,11 +673,16 @@ class Scraper:
         combined = f"{page_title}\n{page_html}"
         if status == 429:
             return {"code": "rate_limited", "error": "Rate limited by F95Zone"}
-        if status == 404 or any(
-            marker in combined
-            for marker in (
-                "requested thread could not be found",
-                "requested page could not be found",
+        # A reply can quote XenForo's "not found" text; only a page without
+        # the thread heading is the error page itself.
+        if status == 404 or (
+            not has_thread_heading
+            and any(
+                marker in combined
+                for marker in (
+                    "requested thread could not be found",
+                    "requested page could not be found",
+                )
             )
         ):
             return {
@@ -1017,6 +1051,9 @@ def f95_get_bytes(url: str, max_bytes: int) -> bytes:
             data = response.read(max_bytes + 1)
             if len(data) > max_bytes:
                 raise ValueError("The image is larger than 20 MiB.")
+            length = str(response.headers.get("Content-Length") or "")
+            if length.isdigit() and int(length) != len(data):
+                raise ValueError("The cover download was cut off")
             return data
     return _run_paced_f95_request(transport, background=True)
 

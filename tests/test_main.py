@@ -1994,23 +1994,43 @@ def test_cached_cover_route_rejects_invalid_names(name):
     handler.send_error.assert_called_once_with(404)
 
 
-def test_runner_endpoints_require_header_and_notify_window(monkeypatch):
+def test_runner_endpoints_require_token_and_notify_window(monkeypatch, tmp_path):
+    from core import steam_runner
+
+    monkeypatch.setattr(steam_runner, 'get_data_dir', lambda: str(tmp_path))
+    token = steam_runner.runner_token()
+    assert steam_runner.runner_token() == token
+    assert (tmp_path / 'runner-token').stat().st_mode & 0o077 == 0
     api = MagicMock()
     api.get_running_games.return_value = [12]
+    api.reserve_runner_launch.return_value = 'Busy installing'
     monkeypatch.setattr(main, 'api_ref', api)
     window = MagicMock()
     monkeypatch.setattr(main, 'window_ref', window)
     denied = _make_extension_handler('/api/running')
     denied.do_GET()
     denied.send_response.assert_called_once_with(403)
-    handler = _make_extension_handler('/api/running', headers={'X-wLib-Extension': '1'})
+    # The extension header alone is not enough: a sandboxed game can send it.
+    denied = _make_extension_handler('/api/running', headers={'X-wLib-Extension': '1'})
+    denied.do_GET()
+    denied.send_response.assert_called_once_with(403)
+    runner = {'X-wLib-Extension': '1', 'X-wLib-Runner': token}
+    handler = _make_extension_handler('/api/running', headers=runner)
     handler.do_GET()
     assert json.loads(handler.wfile.getvalue())['games'] == [12]
+    payload = b'{"gameId": 12, "prefix": "/p", "sandboxed": true}'
+    handler = _make_extension_handler('/api/launch-check', headers={**runner, 'Content-Length': str(len(payload))})
+    handler.__dict__['rfile'] = BytesIO(payload)
+    handler.do_POST()
+    assert json.loads(handler.wfile.getvalue()) == {'success': False, 'error': 'Busy installing'}
+    assert api.reserve_runner_launch.call_args.args == (12, '/p')
+    assert api.reserve_runner_launch.call_args.kwargs['sandboxed'] is True
     payload = b'{"gameId": 12, "state": "ended"}'
-    handler = _make_extension_handler('/api/runner-event', headers={'X-wLib-Extension': '1', 'Content-Length': str(len(payload))})
+    handler = _make_extension_handler('/api/runner-event', headers={**runner, 'Content-Length': str(len(payload))})
     handler.__dict__['rfile'] = BytesIO(payload)
     handler.do_POST()
     handler.send_response.assert_called_once_with(200)
+    api.release_runner_launch.assert_called_once_with(12)
     assert 'wlib-refresh-library' in window.evaluate_js.call_args.args[0]
 
 
@@ -2018,3 +2038,17 @@ def test_gaming_mode_start_url_for_production_and_dev():
     for url in ('/tmp/ui/dist/index.html', 'http://localhost:5173'):
         assert main.gaming_mode_start_url(url, True) == f'{url}?gamingMode=1'
         assert main.gaming_mode_start_url(url, False) == url
+
+
+def test_wait_for_port_free_waits_for_a_closing_instance():
+    import socket as socket_module
+
+    holder = socket_module.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    port = holder.getsockname()[1]
+    try:
+        assert main.wait_for_port_free(port, timeout=0.3) is False
+    finally:
+        holder.close()
+    assert main.wait_for_port_free(port, timeout=1) is True

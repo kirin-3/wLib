@@ -46,6 +46,8 @@ MANIFEST_URL_ENV = "WLIB_CATALOG_MANIFEST_URL"
 CATALOG_FILE = "catalog.db"
 SIDECAR_FILE = "catalog.json"
 CHECK_INTERVAL_SECONDS = 12 * 60 * 60
+# After a failed check (offline, server error) the next start tries again sooner.
+FAILED_CHECK_RETRY_SECONDS = 15 * 60
 MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
@@ -243,7 +245,12 @@ class CatalogClient:
             return {"success": True, "skipped": "disabled"}
         sidecar = self._read_sidecar()
         last = _parse_time(sidecar.get("last_check"))
-        if not force and last is not None and self._clock() - last < CHECK_INTERVAL_SECONDS:
+        interval = (
+            FAILED_CHECK_RETRY_SECONDS
+            if sidecar.get("last_error")
+            else CHECK_INTERVAL_SECONDS
+        )
+        if not force and last is not None and self._clock() - last < interval:
             return {"success": True, "skipped": "recent"}
         sidecar["last_check"] = _utc_now(self._clock)
         try:

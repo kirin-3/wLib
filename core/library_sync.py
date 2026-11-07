@@ -55,12 +55,49 @@ GDRIVE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GDRIVE_API = "https://www.googleapis.com/drive/v3/"
 GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/"
 CALLBACK_UNAVAILABLE = "The local callback server on port 8183 is unavailable."
+# How often the watcher checks the sync file for changes from other devices.
+FULL_SYNC_INTERVAL = 300.0
+FULL_SYNC_RETRY_MAX = 1800.0
+# Errors a timed retry cannot fix.
+NO_RETRY_ERRORS = frozenset(
+    {
+        "dropbox_auth_failed",
+        "gdrive_auth_failed",
+        "invalid_sync_file",
+        "sync_off",
+        "invalid_sync_choice",
+        "dropbox_full",
+        "gdrive_full",
+    }
+)
 
 
 class SyncError(Exception):
-    def __init__(self, message: str, error_code: str = "location_unavailable") -> None:
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "location_unavailable",
+        retry_after: float = 0.0,
+    ) -> None:
         super().__init__(message)
         self.error_code: str = error_code
+        # Seconds the provider asked us to wait before the next request.
+        self.retry_after: float = retry_after
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float:
+    try:
+        return max(0.0, float(str(exc.headers.get("Retry-After") or "")))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rate_limited(provider: str, exc: urllib.error.HTTPError) -> SyncError:
+    return SyncError(
+        f"{provider} is limiting requests. wLib will try again later.",
+        "rate_limited",
+        _retry_after(exc) or 60.0,
+    )
 
 
 class SyncConflict(SyncError):
@@ -274,11 +311,27 @@ def _token_request(
 ) -> dict[str, object]:
     try:
         return _json_object(_form_post(url, parameters))
-    except (OSError, urllib.error.URLError, SyncError) as exc:
-        # SyncError: a non-JSON reply (e.g. an HTML error page) is a sign-in
-        # failure, not a broken sync file.
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise _rate_limited(provider, exc) from exc
+        if exc.code >= 500:
+            raise SyncError(
+                f"{provider} is unavailable. wLib will try again later."
+            ) from exc
+        # 400/401: the grant was refused or revoked; only a new sign-in helps.
         raise SyncError(
-            f"{provider} sign-in could not be completed. Connect again.", error_code
+            f"{provider} sign-in could not be completed. Sign in again.", error_code
+        ) from exc
+    except (OSError, urllib.error.URLError) as exc:
+        # Offline or a timeout: the sign-in may still be fine.
+        raise SyncError(
+            f"{provider} could not be reached. wLib will try again later."
+        ) from exc
+    except SyncError as exc:
+        # A non-JSON reply (an HTML page from a captive portal or proxy) says
+        # nothing about the sign-in.
+        raise SyncError(
+            f"{provider} sent an unexpected reply. wLib will try again later."
         ) from exc
 
 
@@ -381,16 +434,31 @@ class DropboxLocation(_OAuthLocation):
                         f"{self.provider} sign-in expired. Connect again.",
                         self.auth_error,
                     ) from exc
+                if exc.code == 429 or exc.code == 503:
+                    raise _rate_limited(self.provider, exc) from exc
+                if exc.code >= 500:
+                    raise SyncError(
+                        "Dropbox is unavailable. wLib will try again later."
+                    ) from exc
                 if exc.code == 409:
-                    if endpoint == "files/upload":
-                        raise SyncConflict() from exc
                     try:
                         error = _json_object(exc.read())
                     except SyncError:
                         error = {}
-                    if str(error.get("error_summary", "")).startswith(
-                        "path/not_found"
-                    ):
+                    summary = str(error.get("error_summary", ""))
+                    if "insufficient_space" in summary:
+                        raise SyncError(
+                            "Your Dropbox is full. Free up space, then sync again.",
+                            "dropbox_full",
+                        ) from exc
+                    if endpoint == "files/upload":
+                        if "conflict" in summary or not summary:
+                            raise SyncConflict() from exc
+                        raise SyncError(
+                            "Dropbox refused the upload. Check the app folder and permissions.",
+                            "dropbox_request_failed",
+                        ) from exc
+                    if summary.startswith("path/not_found"):
                         if endpoint == "files/get_metadata":
                             return b"null", ""
                         if endpoint == "files/download":
@@ -402,7 +470,9 @@ class DropboxLocation(_OAuthLocation):
                     "dropbox_request_failed",
                 ) from exc
             except (OSError, urllib.error.URLError) as exc:
-                raise SyncError("Dropbox is unavailable. Try again later.") from exc
+                raise SyncError(
+                    "Dropbox could not be reached. wLib will try again later."
+                ) from exc
         raise SyncError(
             "Dropbox sign-in expired. Connect again.", "dropbox_auth_failed"
         )
@@ -455,12 +525,17 @@ class DropboxLocation(_OAuthLocation):
 
     def account_name(self) -> str:
         data, _ = self._request("users/get_current_account")
-        name = _json_object(data).get("name")
-        return (
+        account = _json_object(data)
+        name = account.get("name")
+        display = (
             str(cast(dict[str, object], name).get("display_name") or "Dropbox")
             if isinstance(name, dict)
             else "Dropbox"
         )
+        # Display names repeat across people; the email tells accounts apart,
+        # which signing in again relies on to keep the sync state.
+        email = str(account.get("email") or "")
+        return f"{display} ({email})" if email else display
 
     def revoke(self) -> None:
         _ = self._request("auth/token/revoke")
@@ -531,12 +606,32 @@ class GoogleDriveLocation(_OAuthLocation):
                     # The resolved file was deleted before download/upload:
                     # retry so the next attempt re-resolves it.
                     raise SyncConflict() from exc
+                if exc.code == 429:
+                    raise _rate_limited("Google Drive", exc) from exc
+                if exc.code >= 500:
+                    raise SyncError(
+                        "Google Drive is unavailable. wLib will try again later."
+                    ) from exc
+                if exc.code == 403:
+                    try:
+                        reason = exc.read().decode("utf-8", "replace")
+                    except OSError:
+                        reason = ""
+                    if "storageQuotaExceeded" in reason:
+                        raise SyncError(
+                            "Your Google Drive is full. Free up space, then sync again.",
+                            "gdrive_full",
+                        ) from exc
+                    if "RateLimitExceeded" in reason or "rateLimitExceeded" in reason:
+                        raise _rate_limited("Google Drive", exc) from exc
                 raise SyncError(
                     "Google Drive rejected the request. Check the connection and permissions.",
                     "gdrive_request_failed",
                 ) from exc
             except (OSError, urllib.error.URLError) as exc:
-                raise SyncError("Google Drive is unavailable. Try again later.") from exc
+                raise SyncError(
+                    "Google Drive could not be reached. wLib will try again later."
+                ) from exc
         raise SyncError("Google sign-in expired. Connect again.", "gdrive_auth_failed")
 
     def _lookup(self) -> tuple[str, str] | None:
@@ -676,6 +771,10 @@ class SyncManager:
         self._stop: threading.Event = threading.Event()
         self._worker: threading.Thread | None = None
         self._timer: threading.Thread | None = None
+        # time.monotonic() after which the watcher starts a full sync, so
+        # changes from other devices arrive and a failed run is retried.
+        self._next_full_run: float = 0.0
+        self._failures: int = 0
 
     def _setting(self, key: str) -> str:
         return database.get_setting("sync_" + key) or ""
@@ -751,6 +850,13 @@ class SyncManager:
             else "error"
         )
         self._error_code = code
+        self._failures += 1
+        # Back off after failures: 1, 2, 4 ... minutes up to 30, or as long as
+        # the provider asked.
+        delay = min(FULL_SYNC_RETRY_MAX, 60.0 * (1 << min(self._failures - 1, 5)))
+        if isinstance(error, SyncError) and error.retry_after:
+            delay = max(delay, error.retry_after)
+        self._next_full_run = time.monotonic() + delay
         database.update_setting("sync_last_error", message)
         return {**self.status(), "success": False, "error": message, "error_code": code}
 
@@ -966,6 +1072,9 @@ class SyncManager:
                 try:
                     self._run_once(choice, push_only=push_only)
                     self._error_code = ""
+                    self._failures = 0
+                    if not push_only:
+                        self._next_full_run = time.monotonic() + FULL_SYNC_INTERVAL
                     if self._state == "syncing":
                         self._state = "idle"
                     return self.status()
@@ -1342,6 +1451,9 @@ class SyncManager:
                 location = GoogleDriveLocation(refresh)
                 location.accept_token(token)
                 name = location.account_name()
+                if self._reconnect_same("gdrive", name, refresh):
+                    self._gdrive = location
+                    return self.status()
                 # Same account, same grant: revoking the old token would kill the new one.
                 database.update_setting("sync_gdrive_refresh_token", "")
                 self._gdrive = None
@@ -1384,6 +1496,9 @@ class SyncManager:
                 location = DropboxLocation(refresh)
                 location.accept_token(token)
                 name = location.account_name()
+                if self._reconnect_same("dropbox", name, refresh):
+                    self._dropbox = location
+                    return self.status()
                 self._disconnect_locked()
                 self._dropbox = location
                 self._reset_connection(
@@ -1397,6 +1512,26 @@ class SyncManager:
                 return self.status()
             except Exception as error:
                 return self._error(error)
+
+    def _reconnect_same(self, provider: str, account: str, refresh: str) -> bool:
+        """Signing in again to the account in use keeps its sync state.
+
+        Only the token changes; the last revision, sync time and encryption key
+        stay, so the next run is a normal sync, not a first connection."""
+        if (
+            self._setting("location") != provider
+            or self._setting(provider + "_account") != account
+        ):
+            return False
+        database.update_settings(
+            {
+                f"sync_{provider}_refresh_token": refresh,
+                "sync_last_error": "",
+            }
+        )
+        self._state, self._error_code = "idle", ""
+        self._failures, self._next_full_run = 0, 0.0
+        return True
 
     def _disconnect_locked(self) -> None:
         for provider, cached, cls in (
@@ -1467,7 +1602,15 @@ class SyncManager:
                     # could only repeat the question; leave it to the user.
                     if self._state in ("needs_choice", "needs_passphrase"):
                         continue
-                    if self._auto_push_due():
+                    if not self._setting("location"):
+                        continue
+                    # A rejected sign-in or a broken file needs the user;
+                    # retrying on a timer would only repeat the error.
+                    if self._state == "error" and self._error_code in NO_RETRY_ERRORS:
+                        continue
+                    if time.monotonic() >= self._next_full_run:
+                        _ = self.start_run()
+                    elif self._state != "error" and self._auto_push_due():
                         _ = self.start_run(push_only=True)
                 except Exception:  # Keep auto-sync alive through transient DB/OS errors.
                     pass

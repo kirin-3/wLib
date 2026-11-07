@@ -876,3 +876,26 @@ test('injected tab fetch prefers the page fetch and guards redirects and size', 
   const offsite = await vm.runInContext('bridgeTabFetch("https://f95zone.to/threads/1/", 1024, 1000)', context);
   assert.deepEqual({ ...offsite }, { ok: false, error: 'offsite_redirect' });
 });
+
+test('a later thread page never takes a reply image as the cover', () => {
+  const firstPostImg = { src: 'https://attachments.f95zone.to/first.jpg', getAttribute: () => null };
+  const run = (starter, pathname) => vm.runInNewContext(`${parser}\nextractGameInfo()`, {
+    getThreadIdentity: () => ({ canonicalUrl: 'https://f95zone.to/threads/game.123/', id: '123' }),
+    location: { pathname },
+    document: {
+      querySelector: (selector) => {
+        if (selector === 'h1.p-title-value') {
+          return { textContent: 'Game [Dev]', querySelectorAll: () => [], cloneNode() { return { textContent: 'Game [Dev]', querySelectorAll: () => [] }; } };
+        }
+        if (selector === '.message-threadStarterPost') return starter;
+        if (selector === '.message-inner') return { querySelector: () => firstPostImg };
+        return null;
+      },
+      querySelectorAll: () => [],
+    },
+    console,
+  });
+  assert.equal(run(null, '/threads/game.123/page-4').coverImage, '');
+  assert.equal(run(null, '/threads/game.123/page-12').coverImage, '');
+  assert.equal(run(null, '/threads/game.123/').coverImage, 'https://attachments.f95zone.to/first.jpg');
+});

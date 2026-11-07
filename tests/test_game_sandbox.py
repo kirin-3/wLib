@@ -636,3 +636,16 @@ def test_flatpak_host_layout_is_read_from_the_host(monkeypatch):
 
 def test_wine_service_names_fit_proc_comm():
     assert all(len(name) <= 15 for name in sandbox._WINE_SERVICE_PATTERN.split("|"))
+
+
+def test_sandbox_environment_drops_host_secrets():
+    host = {"PATH": "/usr/bin", "DISPLAY": ":0", "GITHUB_TOKEN": "secret",
+            "SSH_AUTH_SOCK": "/run/ssh", "LC_ALL": "C", "DXVK_HUD": "1"}
+    env = {**host, "WINEPREFIX": "/p", "LANG": "ja_JP.UTF-8", "MY_FLAG": "1"}
+    result = sandbox.sandbox_environment(env, host)
+    assert "GITHUB_TOKEN" not in result and "SSH_AUTH_SOCK" not in result
+    assert result["PATH"] == "/usr/bin" and result["DISPLAY"] == ":0"
+    assert result["WINEPREFIX"] == "/p" and result["LC_ALL"] == "C"
+    # Set by wLib or the user's launch options, so kept.
+    assert result["MY_FLAG"] == "1" and result["LANG"] == "ja_JP.UTF-8"
+    assert "--die-with-parent" not in sandbox.BWRAP_NAMESPACE_OPTIONS

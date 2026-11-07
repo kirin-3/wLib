@@ -365,12 +365,12 @@ def response(payload, headers=None):
     return result
 
 
-def http_error(code, payload=None):
+def http_error(code, payload=None, headers=None):
     return HTTPError(
         "https://api.dropboxapi.com/2/test",
         code,
         "error",
-        {},
+        headers or {},
         io.BytesIO(json.dumps(payload or {}).encode()),
     )
 
@@ -1227,7 +1227,9 @@ def test_gdrive_404_is_conflict(monkeypatch):
         _ = GoogleDriveLocation("refresh").write(b"data", "abc")
 
 
-def test_token_non_json_is_auth_failed(monkeypatch):
+def test_token_non_json_is_not_auth_failed(monkeypatch):
+    # A captive portal or proxy page says nothing about the sign-in; it must
+    # not tell the user to sign in again.
     monkeypatch.setattr(
         "core.library_sync._form_post", lambda url, params: b"<html>nope</html>"
     )
@@ -1237,7 +1239,98 @@ def test_token_non_json_is_auth_failed(monkeypatch):
         _ = _token_request(
             "https://example.com/token", {"a": "b"}, "Dropbox", "dropbox_auth_failed"
         )
+    assert exc.value.error_code == "location_unavailable"
+
+
+def test_token_offline_is_not_auth_failed(monkeypatch):
+    from core.library_sync import _token_request
+
+    def offline(url, params):
+        raise URLError("no route")
+
+    monkeypatch.setattr("core.library_sync._form_post", offline)
+    with pytest.raises(SyncError) as exc:
+        _ = _token_request("https://x/token", {}, "Dropbox", "dropbox_auth_failed")
+    assert exc.value.error_code == "location_unavailable"
+
+    def refused(url, params):
+        raise http_error(400, {"error": "invalid_grant"})
+
+    monkeypatch.setattr("core.library_sync._form_post", refused)
+    with pytest.raises(SyncError) as exc:
+        _ = _token_request("https://x/token", {}, "Dropbox", "dropbox_auth_failed")
     assert exc.value.error_code == "dropbox_auth_failed"
+
+    def limited(url, params):
+        raise http_error(429, {}, {"Retry-After": "120"})
+
+    monkeypatch.setattr("core.library_sync._form_post", limited)
+    with pytest.raises(SyncError) as exc:
+        _ = _token_request("https://x/token", {}, "Dropbox", "dropbox_auth_failed")
+    assert exc.value.error_code == "rate_limited"
+    assert exc.value.retry_after == 120
+
+
+def test_dropbox_full_and_rate_limit_are_not_conflicts(monkeypatch):
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a", "expires_in": 3600}),
+            http_error(409, {"error_summary": "path/insufficient_space/.."}),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    location = DropboxLocation("refresh")
+    with pytest.raises(SyncError) as exc:
+        location.write(b"file", "r")
+    assert exc.value.error_code == "dropbox_full"
+    mock.side_effect = [http_error(429, {}, {"Retry-After": "30"})]
+    with pytest.raises(SyncError) as exc:
+        location.write(b"file", "r")
+    assert exc.value.error_code == "rate_limited"
+    assert exc.value.retry_after == 30
+
+
+def test_failed_run_schedules_backoff_and_success_schedules_pull():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    before = time.monotonic()
+    sync._error(SyncError("offline"))
+    assert sync._next_full_run >= before + 60
+    sync._error(SyncError("offline"))
+    assert sync._next_full_run >= before + 120
+    sync._error(SyncError("slow down", "rate_limited", 900))
+    assert sync._next_full_run >= before + 900
+    sync.run()
+    assert sync._failures == 0
+    assert sync._next_full_run >= before + 300
+
+
+def test_reconnect_same_account_keeps_sync_state(monkeypatch):
+    sync = SyncManager()
+    sync.server_available = True
+    database.update_settings(
+        {
+            "sync_location": "dropbox",
+            "sync_dropbox_refresh_token": "old",
+            "sync_dropbox_account": "Tester",
+            "sync_last_revision": "rev-1",
+            "sync_last_synced_at": "2026-01-01T00:00:00Z",
+            "sync_encryption_key": "key",
+        }
+    )
+    query = parse_qs(urlparse(sync.connect_dropbox()["url"]).query)
+    monkeypatch.setattr(
+        "core.library_sync._token_request",
+        lambda *args: {"refresh_token": "new", "access_token": "access"},
+    )
+    monkeypatch.setattr(DropboxLocation, "account_name", lambda self: "Tester")
+    revoke = MagicMock()
+    monkeypatch.setattr(DropboxLocation, "revoke", revoke)
+    assert sync.complete_dropbox("code", query["state"][0])["success"]
+    assert database.get_setting("sync_dropbox_refresh_token") == "new"
+    assert database.get_setting("sync_last_revision") == "rev-1"
+    assert database.get_setting("sync_encryption_key") == "key"
+    revoke.assert_not_called()
 
 
 def test_choice_when_not_first_is_rejected():
@@ -1504,3 +1597,14 @@ def test_note_links_round_trip_between_libraries(tmp_path, monkeypatch):
     database.init_db()
     assert manager(location).run()["state"] == "idle"
     assert database.get_all_games()[0]["note_links"] == links
+
+
+def test_dropbox_account_name_includes_email(monkeypatch):
+    mock = MagicMock(
+        side_effect=[
+            response({"access_token": "a", "expires_in": 3600}),
+            response({"name": {"display_name": "Sam"}, "email": "sam@example.com"}),
+        ]
+    )
+    monkeypatch.setattr("urllib.request.urlopen", mock)
+    assert DropboxLocation("refresh").account_name() == "Sam (sam@example.com)"

@@ -22,14 +22,53 @@ from core.host_platform import (
 )
 
 
+# No --die-with-parent: a sandboxed game keeps running when wLib quits, like
+# every other game. Stopping bwrap still ends the whole PID namespace.
 BWRAP_NAMESPACE_OPTIONS = (
     "--unshare-user",
     "--unshare-pid",
     "--unshare-ipc",
     "--unshare-uts",
     "--unshare-cgroup-try",
-    "--die-with-parent",
 )
+
+# Host variables a sandboxed game may see. Everything else from wLib's own
+# environment (tokens, SSH/GPG agents, cloud credentials) stays outside.
+SANDBOX_ENV_NAMES = frozenset(
+    {
+        "PATH", "LANG", "LANGUAGE", "TERM", "TZ", "USER", "LOGNAME", "SHELL",
+        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR",
+        "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP",
+        "XDG_DATA_DIRS", "XDG_CONFIG_DIRS", "XMODIFIERS", "GTK_IM_MODULE",
+        "QT_IM_MODULE", "SDL_IM_MODULE", "PULSE_SERVER", "PULSE_SINK",
+        "PIPEWIRE_RUNTIME_DIR", "LD_LIBRARY_PATH", "LIBGL_ALWAYS_SOFTWARE",
+        "GAMEID", "STORE", "SteamAppId", "SteamGameId", "SteamOverlayGameId",
+    }
+)
+SANDBOX_ENV_PREFIXES = (
+    "LC_", "WINE", "PROTON", "DXVK_", "VKD3D_", "MESA_", "__GL", "__NV",
+    "__VK", "VK_", "NVIDIA_", "DRI_", "LIBGL_", "SDL_", "MANGOHUD", "ENABLE_VK",
+    "STEAM_", "UMU_", "PRESSURE_VESSEL_", "WLIB_", "GST_", "ALSA_",
+    "RADV_", "AMD_", "INTEL_", "ANV_", "PULSE_",
+)
+
+
+def sandbox_environment(
+    environment: Mapping[str, str], host: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """The environment a sandboxed game is started with.
+
+    Keeps display, audio, locale and graphics/Wine settings from the host, and
+    every variable wLib or the user's launch options set or changed. Drops
+    the rest of wLib's own environment."""
+    host_env = os.environ if host is None else host
+    return {
+        key: value
+        for key, value in environment.items()
+        if key in SANDBOX_ENV_NAMES
+        or key.startswith(SANDBOX_ENV_PREFIXES)
+        or host_env.get(key) != value
+    }
 
 
 class SandboxStatus(TypedDict):

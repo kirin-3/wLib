@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { confirmAction } from "../../utils/confirm";
+import { addLeaveGuard } from "../../utils/leaveGuard";
 import { useControllerActions } from "../../utils/controllerActions";
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
@@ -1050,6 +1051,9 @@ const close = () => {
   loadingAttachments.value = false;
   attachingFile.value = false;
   removingAttachment.value = null;
+  // Closed on purpose: a navigation right after must not ask again.
+  removeLeaveGuard?.();
+  removeLeaveGuard = null;
   emit("update:modelValue", false);
 };
 
@@ -1065,6 +1069,21 @@ const requestClose = async (): Promise<boolean> => {
 
 // The library calls this before switching the open modal to another game.
 defineExpose({ requestClose });
+
+// Navigation away from the library (a toast button, an extension request)
+// would unmount this modal with its edits; ask first, as closing does.
+let removeLeaveGuard: (() => void) | null = null;
+watch(
+  () => props.modelValue,
+  (open) => {
+    removeLeaveGuard?.();
+    removeLeaveGuard = open
+      ? addLeaveGuard(async () => !hasUnsavedChanges.value || (await confirmAction({ title: "Discard changes", message: "Discard unsaved changes to this game?", confirmLabel: "Discard", danger: true })))
+      : null;
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => { removeLeaveGuard?.(); removeLeaveGuard = null; });
 
 // Links that leave the modal for Settings must pass the same discard prompt.
 const closeAndNavigate = async (hash: string) => {

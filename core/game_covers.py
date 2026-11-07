@@ -44,6 +44,26 @@ def cover_path(name: object) -> Path | None:
     return path
 
 
+def image_looks_complete(data: bytes) -> bool:
+    """False for an image whose end is missing (a download cut off midway).
+
+    Checks the end marker of the formats that have one; others pass."""
+    try:
+        kind = _image_type(data[:64])
+    except ValueError:
+        return True
+    if kind == "jpg":
+        # Some encoders append padding or metadata after the end marker.
+        return b"\xff\xd9" in data[-1024:]
+    if kind == "png":
+        return b"IEND" in data[-16:]
+    if kind == "gif":
+        return data.rstrip(b"\x00").endswith(b"\x3b")
+    if kind == "webp":
+        return len(data) >= int.from_bytes(data[4:8], "little") + 8
+    return True
+
+
 def _image_type(header: bytes) -> str:
     if header.startswith(b"\xff\xd8\xff"):
         return "jpg"
@@ -288,6 +308,9 @@ class CoverCacheService:
                 continue
             try:
                 data = f95_get_bytes(url, MAX_COVER_SIZE)
+                if not image_looks_complete(data):
+                    # Cached for good otherwise: the URL never changes.
+                    raise ValueError("The cover download was cut off")
                 with self._store_lock:
                     if self.disabled or self._stop.is_set():
                         return

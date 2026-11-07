@@ -161,8 +161,8 @@ onBeforeUnmount(() => {
             <option value="">None</option><option value="folder">Folder</option><option value="dropbox">Dropbox</option><option value="gdrive">Google Drive</option>
           </select>
           <button v-if="location === 'folder'" type="button" :class="connected ? 'sync-btn' : 'sync-primary'" :disabled="disabled" @click="browseFolder">Choose folder</button>
-          <button v-if="location === 'dropbox' && status.location !== 'dropbox'" type="button" :class="connected ? 'sync-btn' : 'sync-primary'" :disabled="disabled || !status.dropbox_available" @click="act(() => api.connectDropbox())">Connect Dropbox</button>
-          <button v-if="location === 'gdrive' && status.location !== 'gdrive'" type="button" :class="connected ? 'sync-btn' : 'sync-primary'" :disabled="disabled || !status.gdrive_available" @click="act(() => api.connectGdrive())">Connect Google Drive</button>
+          <button v-if="location === 'dropbox' && (status.location !== 'dropbox' || status.error_code === 'dropbox_auth_failed')" type="button" :class="connected && status.location !== 'dropbox' ? 'sync-btn' : 'sync-primary'" :disabled="disabled || !status.dropbox_available" @click="act(() => api.connectDropbox())">{{ status.location === 'dropbox' ? 'Sign in again' : 'Connect Dropbox' }}</button>
+          <button v-if="location === 'gdrive' && (status.location !== 'gdrive' || status.error_code === 'gdrive_auth_failed')" type="button" :class="connected && status.location !== 'gdrive' ? 'sync-btn' : 'sync-primary'" :disabled="disabled || !status.gdrive_available" @click="act(() => api.connectGdrive())">{{ status.location === 'gdrive' ? 'Sign in again' : 'Connect Google Drive' }}</button>
           <button v-if="connected" type="button" class="sync-btn" :disabled="disabled" @click="act(() => api.disconnectSync())">Disconnect</button>
         </div>
       </div>

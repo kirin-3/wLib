@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { confirmLeave } from "../utils/leaveGuard";
 import { createRouter, createWebHashHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
 import LibraryView from "../views/LibraryView.vue";
@@ -52,5 +53,9 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes,
 });
+
+// Leaving a view unmounts its open editors; ask first when one has unsaved
+// changes (a toast button or an extension request can navigate any time).
+router.beforeEach(async (to, from) => to.path === from.path || (await confirmLeave()));
 
 export default router;

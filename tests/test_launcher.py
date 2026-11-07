@@ -3768,3 +3768,27 @@ def test_sandboxed_wine_game_gets_its_own_prefix(
         assert prefix == expected
     else:
         assert prefix == str(tmp_path / expected)
+
+
+def test_network_blocked_game_cannot_share_prefix_with_networked_game():
+    from core.launcher import Launcher, RunningGame
+
+    launcher = Launcher()
+    launcher._running[1] = RunningGame(None, None, prefix="/p", title="Online")
+    blocked = RunningGame(None, None, prefix="/p", network_blocked=True)
+    assert "Online" in (launcher._prefix_conflict_locked(blocked, 2) or "")
+    plain = RunningGame(None, None, prefix="/p")
+    assert launcher._prefix_conflict_locked(plain, 2) is None
+    # Games another wLib process runs are checked too, and released.
+    sandboxed = RunningGame(None, None, prefix="/q", sandboxed=True, title="Runner")
+    assert launcher.reserve_external(3, sandboxed) is None
+    assert "Runner" in (launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) or "")
+    assert launcher.game_using_prefix("/q") == "Runner"
+    launcher.release_external(3)
+    assert launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) is None
+    # A runner that died without reporting its end no longer holds the prefix.
+    assert launcher.reserve_external(5, sandboxed) is None
+    launcher.external_alive = lambda game_id: False
+    assert launcher._prefix_conflict_locked(RunningGame(None, None, prefix="/q"), 4) is None
+    assert 5 not in launcher._external
+    launcher.shutdown()

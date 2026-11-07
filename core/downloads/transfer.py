@@ -2,6 +2,7 @@
 """Shared archive transfer and validation."""
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -15,6 +16,15 @@ from core.host_platform import get_data_subdir
 
 class DownloadError(Exception):
     """An expected, user-visible download failure."""
+
+
+def disk_error(exc: OSError) -> DownloadError:
+    """A write failure in the downloads folder, said as what it is."""
+    if exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", -1)):
+        return DownloadError("Not enough disk space for the download")
+    return DownloadError(
+        f"Could not save the download: {exc.strerror or exc.__class__.__name__}"
+    )
 
 
 class Decryptor(Protocol):
@@ -92,7 +102,10 @@ def transfer(
                 done += len(data)
                 if info.decryptor:
                     data = info.decryptor.update(data)
-                _ = output.write(data)
+                try:
+                    _ = output.write(data)
+                except OSError as exc:
+                    raise disk_error(exc) from exc
                 progress(done, info.size)
         if cancel.is_set():
             raise DownloadError("cancelled")

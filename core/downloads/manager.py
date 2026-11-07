@@ -2,6 +2,7 @@
 """Background download jobs and staging lifecycle."""
 from __future__ import annotations
 
+import errno
 import threading
 import time
 import uuid
@@ -134,7 +135,15 @@ class DownloadManager:
         except Exception as exc:
             with self._lock:
                 job.stage = 'cancelled' if job.cancel.is_set() or str(exc) == 'cancelled' else 'failed'
-                job.error = '' if job.stage == 'cancelled' else (str(exc) if isinstance(exc, DownloadError) else 'network error')
+                if job.stage == 'cancelled':
+                    job.error = ''
+                elif isinstance(exc, DownloadError):
+                    job.error = str(exc)
+                elif isinstance(exc, OSError) and exc.errno in (errno.ENOSPC, getattr(errno, 'EDQUOT', -1)):
+                    job.error = 'Not enough disk space for the download'
+                else:
+                    job.error = 'network error'
+
 
     def status(self) -> list[dict[str, object]]:
         with self._lock:

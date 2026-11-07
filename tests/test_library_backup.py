@@ -521,7 +521,7 @@ def test_older_backup_without_collections_leaves_them_unchanged(tmp_path):
     assert game["collections"] == ["Backlog"]
 
 
-def test_imported_membership_for_unknown_collection_is_ignored(tmp_path):
+def test_imported_membership_registers_its_collection(tmp_path):
     api = Api()
     add_game(
         "Ghost member",
@@ -557,7 +557,10 @@ def test_imported_membership_for_unknown_collection_is_ignored(tmp_path):
     result = api.import_library_backup(str(source))
     assert result["success"]
     game = get_all_games()[0]
-    assert game["collections"] == ["Backlog"]
+    # The membership stays visible (and in later exports) because the import
+    # registers the collection it names.
+    assert game["collections"] == ["Ghost", "Backlog"]
+    assert get_collections() == ["Backlog", "Ghost"]
 
 
 def test_custom_status_and_urm_settings_round_trip(tmp_path):
@@ -3317,3 +3320,20 @@ def test_url_less_title_match_keeps_local_thread_data():
     assert game["latest_version"] == "1.0"
     assert game["engine"] == "Ren'Py"
     assert [link["id"] for link in get_game_links(game_id)] == ["v1"]
+
+
+def test_merge_import_keeps_local_collections_and_blank_lists():
+    from core.library_backup import apply_library_backup, build_library_backup
+
+    create_collection("Local")
+    game_id = add_game(title="Mine", exe_path="/g/mine.exe")
+    from core.database import set_game_collections
+
+    set_game_collections(game_id, ["Local"])
+    backup = build_library_backup({"sections": [SECTION_USER_STATE, "settings_general"]})
+    backup["settings"]["general"]["collections"] = "[]"
+    backup["settings"]["general"]["custom_play_statuses"] = ""
+    backup["games"] = []
+    _ = apply_library_backup(backup, {"sections": [SECTION_USER_STATE, "settings_general"]})
+    assert get_collections() == ["Local"]
+    assert get_all_games()[0]["collections"] == ["Local"]

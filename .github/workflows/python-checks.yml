@@ -7,6 +7,8 @@ on:
     branches:
       - master
   workflow_dispatch:
+  # The release workflow runs these checks before it builds anything.
+  workflow_call:
 
 permissions:
   contents: read
@@ -18,8 +20,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -38,7 +39,7 @@ jobs:
             libxkbcommon-x11-0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -51,16 +52,39 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: bash scripts/check-python-clean.sh
 
+  linux-frontend-checks:
+    name: Frontend and Extension Checks (Linux)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      # test:unit also runs the extension tests in tests/*.test.cjs.
+      - name: Run frontend checks
+        working-directory: ui
+        run: |
+          npm ci
+          npm run test:unit
+          npm run typecheck
+          npm run build
+
   windows-checks:
     name: Windows Checks (Python 3.12)
     runs-on: windows-2022
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -70,7 +94,7 @@ jobs:
             requirements-windows.txt
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'npm'

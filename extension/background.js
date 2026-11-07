@@ -868,8 +868,10 @@ function finishResolve(entry, result) {
         if (typeof result[field] === 'string') answer[field] = result[field];
     }
     sendResolveMessage(answer);
-    // A copy of this URL that loads after the request ends is closed on sight.
-    resolveFinishedUrls.set(entry.url, Date.now() + 60000);
+    // A late copy of this URL (Zen and Firefox can load it twice) is closed
+    // on sight, but only briefly and only after a success: after a failure
+    // the user's own "Open in browser" loads the same URL and must stay.
+    if (answer.ok) resolveFinishedUrls.set(entry.url, Date.now() + 10000);
     for (const tabId of entry.duplicates) closeTab(tabId);
     if (entry.tabWindowId != null && entry.tabWindowId !== entry.windowId) {
         try { const p = chrome.tabs.remove(entry.tabId); p?.catch?.(()=>{}); } catch (_) {}

@@ -318,6 +318,10 @@ class Api:
         self._prefix_tool_name: str = ""
         self.launcher.prefix_guard_lock = self._status_lock
         self.launcher.prefix_guard = self._prefix_tool_conflict
+        if is_linux():
+            from core.steam_runner import runner_pid
+
+            self.launcher.external_alive = lambda game_id: runner_pid(game_id) is not None
         from core.umu import UmuDownload, UmuRuntimePrepare
 
         self._umu_download: UmuDownload = UmuDownload()
@@ -2331,6 +2335,18 @@ class Api:
                     "error": "Game was not found",
                     "error_code": "game_not_found",
                 }
+            # A running game would keep writing playtime to a deleted row, and
+            # an install or mod tool would recreate files for it.
+            if coerced_id in self.get_running_games():
+                return {
+                    "success": False,
+                    "error": "Close the game before removing it.",
+                    "error_code": "game_running",
+                }
+            with self._status_lock:
+                busy = self._game_busy_reason(coerced_id)
+            if busy:
+                return {"success": False, "error": busy, "error_code": "game_busy"}
             self.cover_cache.delete_game(coerced_id)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not delete game"}
@@ -2348,15 +2364,22 @@ class Api:
         except Exception as exc:
             print(f"[wLib] Failed to remove cover for game {coerced_id}: {exc}")
         try:
-            import shutil
+            from datetime import datetime
 
             from core.game_saves import game_backup_dir
 
+            # Save backups outlive the library entry: they move aside, out of
+            # reach of a later game that gets the same ID.
             backup_dir = game_backup_dir(self._save_backups_root(), coerced_id)
             if os.path.isdir(backup_dir) and not os.path.islink(backup_dir):
-                shutil.rmtree(backup_dir)
+                removed_root = os.path.join(self._save_backups_root(), "removed")
+                os.makedirs(removed_root, exist_ok=True)
+                stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                os.replace(
+                    backup_dir, os.path.join(removed_root, f"{coerced_id}_{stamp}")
+                )
         except Exception as exc:
-            print(f"[wLib] Failed to remove save backups for game {coerced_id}: {exc}")
+            print(f"[wLib] Failed to keep save backups for game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
@@ -4547,6 +4570,40 @@ class Api:
         ):
             return "A Wine runtime install is running on this prefix. Wait for it to finish."
         return None
+
+    def reserve_runner_launch(
+        self,
+        game_id: int,
+        prefix: str,
+        *,
+        sandboxed: bool,
+        umu: bool,
+        blocked: bool,
+        title: str,
+    ) -> str | None:
+        """Check a Steam-shortcut launch against this app's busy games, prefix
+        tools and running games, and hold its prefix until it ends.
+
+        Returns why the launch must be refused, or None."""
+        from core.launcher import RunningGame
+
+        with self._status_lock:
+            reason = self._prefix_tool_conflict(prefix, game_id)
+            if reason:
+                return reason
+            entry = RunningGame(
+                None,
+                None,
+                prefix=prefix,
+                sandboxed=sandboxed,
+                umu=umu,
+                network_blocked=blocked,
+                title=title or f"Game {game_id}",
+            )
+            return self.launcher.reserve_external(game_id, entry)
+
+    def release_runner_launch(self, game_id: int) -> None:
+        self.launcher.release_external(game_id)
 
     def _game_busy_reason(self, game_id: int) -> str | None:
         """Why the game's files are in use by wLib, or None. Caller holds _status_lock."""

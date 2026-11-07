@@ -451,6 +451,7 @@ class RunningGame:
     game_exe: str = ""
     host_native: bool = True
     umu: bool = False
+    network_blocked: bool = False
 
 
 def _spawn_sandbox_process(
@@ -507,6 +508,14 @@ class Launcher:
         # Called as prefix_guard(prefix, game_id) under prefix_guard_lock;
         # returns why the launch must be refused, or None.
         self.prefix_guard: Callable[[str, int | None], str | None] | None = None
+        # Called as external_guard(entry, game_id) after prefix_guard; lets a
+        # separate launcher process (the Steam runner) ask the main app.
+        self.external_guard: Callable[["RunningGame", int | None], str | None] | None = None
+        # Games another wLib process launched, keyed by game ID, so prefix
+        # checks here also see them. external_alive(game_id) drops the entry
+        # of a runner that died without reporting its end.
+        self._external: dict[int, RunningGame] = {}
+        self.external_alive: Callable[[int], bool] | None = None
         # Set while shutting down so exit callbacks skip the (closed) UI window.
         self.shutting_down: bool = False
         _ = atexit.register(self.shutdown)
@@ -516,7 +525,58 @@ class Launcher:
         if not normalized:
             return None
         with self._running_lock:
-            return next((entry.title for entry in self._running.values() if game_sandbox.normalize_prefix(entry.prefix) == normalized), None)
+            self._prune_external_locked()
+            return next((entry.title for entry in (*self._running.values(), *self._external.values()) if game_sandbox.normalize_prefix(entry.prefix) == normalized), None)
+
+    def _prefix_conflict_locked(
+        self, entry: "RunningGame", game_id: int | None
+    ) -> str | None:
+        """Why entry cannot share its prefix with a running game. Caller holds _running_lock."""
+        if not entry.prefix:
+            return None
+        self._prune_external_locked()
+        for other_id, other in (*self._running.items(), *self._external.items()):
+            if other_id == game_id or entry.prefix != other.prefix:
+                continue
+            # Processes started on a shared wineserver (explorer, services,
+            # COM servers) outlive one game's sandbox or network block, so
+            # a sandboxed, umu or network-blocked game cannot share a prefix
+            # with a game that runs differently.
+            if (
+                entry.sandboxed
+                or other.sandboxed
+                or entry.umu
+                or other.umu
+                or entry.network_blocked != other.network_blocked
+            ):
+                return f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games."
+        return None
+
+    def _prune_external_locked(self) -> None:
+        if self.external_alive is None:
+            return
+        for game_id in list(self._external):
+            try:
+                alive = self.external_alive(game_id)
+            except Exception:
+                alive = True
+            if not alive:
+                del self._external[game_id]
+
+    def reserve_external(self, game_id: int, entry: "RunningGame") -> str | None:
+        """Record a game another wLib process is starting, or say why it can't start."""
+        with self._running_lock:
+            if game_id in self._running:
+                return f"{self._running[game_id].title} is already running."
+            conflict = self._prefix_conflict_locked(entry, game_id)
+            if conflict:
+                return conflict
+            self._external[game_id] = entry
+            return None
+
+    def release_external(self, game_id: int) -> None:
+        with self._running_lock:
+            _ = self._external.pop(game_id, None)
 
     def shutdown(self) -> None:
         """Flush accumulated playtime and close logs for all running games upon exit."""
@@ -1197,6 +1257,7 @@ class Launcher:
                 game_exe=path_module.abspath(exe_path),
                 host_native=not is_wine_executable,
                 umu=umu_run,
+                network_blocked=block,
             )
             # Serialize the prefix-tool check and running-game reservation.
             # Prefix tools take these locks in the same order.
@@ -1212,19 +1273,22 @@ class Launcher:
                             "code": "already_running",
                             "error": "Game is already running",
                         }
-                    for other in self._running.values():
-                        if (
-                            prefix
-                            and prefix == other.prefix
-                            and (sandboxed or other.sandboxed or umu_run or other.umu)
-                        ):
-                            return {
-                                "success": False,
-                                "code": "prefix_in_use",
-                                "error": f"{other.title} is already running on this Wine prefix. Use a separate custom prefix to run both games.",
-                            }
+                    conflict = self._prefix_conflict_locked(entry, game_id)
+                    if conflict:
+                        return {
+                            "success": False,
+                            "code": "prefix_in_use",
+                            "error": conflict,
+                        }
                     if game_id is not None:
                         self._running[game_id] = entry
+                if self.external_guard:
+                    error = self.external_guard(entry, game_id)
+                    if error:
+                        with self._running_lock:
+                            if game_id is not None and self._running.get(game_id) is entry:
+                                del self._running[game_id]
+                        return {"success": False, "code": "prefix_in_use" if prefix else "game_busy", "error": error}
             try:
                 if sandboxed and sandbox_status is not None and is_windows():
                     assert game_id is not None
@@ -1315,14 +1379,20 @@ class Launcher:
                         _ = log_file.write(note + "\n")
                     log_file.flush()
 
+                # bwrap passes its environment on to the game.
+                popen_env = (
+                    game_sandbox.sandbox_environment(env_vars)
+                    if sandboxed and not is_windows()
+                    else env_vars
+                )
                 try:
 
                     def start_game() -> "subprocess.Popen[bytes]":
                         return subprocess.Popen(
                             host_command(
-                                cmd, env=env_vars, cwd=effective_cwd, supervise=True
+                                cmd, env=popen_env, cwd=effective_cwd, supervise=True
                             ),
-                            env=env_vars,
+                            env=popen_env,
                             stdout=log_file
                             if log_file is not None
                             else subprocess.DEVNULL,

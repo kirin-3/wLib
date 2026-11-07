@@ -237,3 +237,27 @@ def test_feed_screens_replace_previous_list(tmp_path):
     parsed, _ = parse_page(payload)
     ctx.catalog.upsert("f95_threads", "thread_id", parsed, "later")
     assert json.loads(rows(ctx.catalog, "SELECT screens FROM f95_threads")[0][0]) == []
+
+
+def test_page_without_total_does_not_end_the_sweep():
+    assert parse_page({"status": "ok", "msg": {"data": []}})[1] is None
+    assert parse_page({"status": "ok", "msg": {"data": [], "pagination": {"total": 0}}})[1] is None
+
+
+def test_first_page_without_total_fails_instead_of_completing(tmp_path):
+    payload = fixture_json("f95_latest_page.json")
+    payload["msg"].pop("pagination", None)
+    ctx, _ = make_context(tmp_path, lambda request: json_response(payload))
+    result = run_source(F95Source(), ctx)
+    assert result.status == "error" and not result.sweep_completed
+    # Later pages fall back to the count page 1 reported.
+    entries = _entries()
+    pages = {1: _page(1, entries[:2], total=2)}
+    second = fixture_json("f95_latest_page.json")
+    second["msg"]["data"] = entries[2:]
+    second["msg"].pop("pagination", None)
+    pages[2] = json_response(second)
+    (tmp_path / "b").mkdir()
+    ctx, _ = make_context(tmp_path / "b", lambda request: pages[_page_number(request)])
+    assert F95Source().sweep_step(ctx) is False
+    assert F95Source().sweep_step(ctx) is True

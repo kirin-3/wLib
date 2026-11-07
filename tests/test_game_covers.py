@@ -22,12 +22,16 @@ def isolated_db(tmp_path, monkeypatch):
     database.init_db()
 
 
+# A complete PNG ends with its IEND chunk; cut-off downloads are not cached.
+PNG_END = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+
+
 @pytest.fixture(params=["png", "avif"])
 def image(tmp_path, request):
     file = tmp_path / "image.txt"
     file.write_bytes(
         (Path(__file__).parent / "fixtures/playnite/avif/cover.png").read_bytes()
-        if request.param == "avif" else b"\x89PNG\r\n\x1a\nfixture"
+        if request.param == "avif" else b"\x89PNG\r\n\x1a\nfixture" + PNG_END
     )
     return file
 
@@ -382,7 +386,7 @@ def test_cache_fill_replace_remove_failure_and_sweep(monkeypatch):
         calls.append(url)
         if "fail" in url:
             raise ValueError("challenge")
-        return b"\x89PNG\r\n\x1a\nimage"
+        return b"\x89PNG\r\n\x1a\nimage" + PNG_END
     monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
     service = game_covers.CoverCacheService()
     orphan = game_covers.store_cached_cover(fetch(url, 1))
@@ -423,7 +427,7 @@ def test_cache_retries_failed_covers_and_survives_database_errors(monkeypatch):
         attempts.append(url)
         if len(attempts) == 1:
             raise ValueError("challenge")
-        return b"\x89PNG\r\n\x1a\nimage"
+        return b"\x89PNG\r\n\x1a\nimage" + PNG_END
 
     monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
     now = [1000.0]
@@ -467,7 +471,7 @@ def test_cache_inflight_download_is_discarded(monkeypatch, action):
     def fetch(*args):
         entered.set()
         assert release.wait(3)
-        return b"\x89PNG\r\n\x1a\nimage"
+        return b"\x89PNG\r\n\x1a\nimage" + PNG_END
     monkeypatch.setattr(scraper, "f95_get_bytes", fetch)
     service = game_covers.CoverCacheService()
     thread = threading.Thread(target=service._fill)
@@ -506,3 +510,11 @@ def test_cache_purge_preserves_local_covers_and_resets_api(image, monkeypatch):
     assert game_covers.cover_path(local).is_file()
     api.cover_cache._fill()
     assert api.get_cover_cache_status()["bytes"] == 0
+
+
+def test_cut_off_cover_is_not_cached():
+    assert game_covers.image_looks_complete(b"\x89PNG\r\n\x1a\nimage" + PNG_END)
+    assert not game_covers.image_looks_complete(b"\x89PNG\r\n\x1a\nimage")
+    assert game_covers.image_looks_complete(b"\xff\xd8\xff\xe0data\xff\xd9")
+    assert not game_covers.image_looks_complete(b"\xff\xd8\xff\xe0data")
+    assert not game_covers.image_looks_complete(b"RIFF\x20\x00\x00\x00WEBPVP8 ")

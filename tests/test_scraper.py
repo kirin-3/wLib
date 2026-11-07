@@ -1560,3 +1560,47 @@ def test_unclosed_tag_in_spoiler_keeps_later_store_links():
     )
     links = scraper_module._StoreHeaderParser().collect(html)
     assert [(link["source"], link["id"]) for link in links] == [("steam", "123")]
+
+
+def test_rate_limit_starts_a_cooldown(monkeypatch):
+    import core.scraper as scraper_module
+
+    monkeypatch.setattr(scraper_module, "get_request_interval_seconds", lambda: 0)
+    calls = []
+
+    def fake_get(url):
+        calls.append(url)
+        return 429, ""
+
+    monkeypatch.setattr(scraper_module, "_urllib_f95_get", fake_get)
+    assert scraper_module._f95_get("https://f95zone.to/a") == (429, "")
+    with pytest.raises(scraper_module._F95RequestError) as exc:
+        scraper_module._f95_get("https://f95zone.to/b")
+    assert exc.value.code == "rate_limited" and len(calls) == 1
+
+
+def test_cut_off_error_body_keeps_status(monkeypatch):
+    import io
+    from http.client import IncompleteRead
+    from urllib.error import HTTPError
+
+    import core.scraper as scraper_module
+
+    class Broken(io.BytesIO):
+        def read(self, *args):
+            raise IncompleteRead(b"partial")
+
+    def fail(*args, **kwargs):
+        from email.message import Message
+
+        raise HTTPError("https://f95zone.to/x", 503, "err", Message(), Broken())
+
+    monkeypatch.setattr(scraper_module, "urlopen", fail)
+    assert scraper_module._urllib_f95_get("https://f95zone.to/x") == (503, "")
+
+
+def test_quoted_not_found_text_does_not_mark_thread_deleted():
+    from core.scraper import Scraper
+
+    html = '<h1 class="p-title-value">My Game</h1><blockquote>The requested thread could not be found.</blockquote>'
+    assert Scraper()._classify_page_issue(200, "My Game", html) is None

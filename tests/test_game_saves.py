@@ -729,3 +729,25 @@ def test_sandbox_windows_profile_detection(tmp_path, monkeypatch):
         "/games/Story.exe", "Story", windows=True, game_id=12, sandbox_enabled=True
     )
     assert str(saved) in {item["path"] for item in locations}
+
+
+def test_profile_folders_need_a_real_name_match(tmp_path):
+    home = tmp_path / "home"
+    for name in ("autostart", "libreoffice", "OfficeAffairs", "pulse"):
+        (home / ".config" / name).mkdir(parents=True)
+    results = detect_save_locations(
+        "/games/oa/start.exe", "Office Affairs", windows=False, _profile_home=str(home)
+    )
+    assert [os.path.basename(r["path"]) for r in results] == ["OfficeAffairs"]
+
+
+def test_my_documents_link_is_not_a_second_location(tmp_path):
+    user = tmp_path / "prefix" / "drive_c" / "users" / "steamuser"
+    saves = user / "Documents" / "Zelda Quest"
+    saves.mkdir(parents=True)
+    os.symlink("Documents", user / "My Documents")
+    results = detect_save_locations(
+        "/games/z/zq.exe", "Zelda Quest", custom_prefix=str(tmp_path / "prefix"), windows=False,
+        _profile_home=str(tmp_path / "nohome"),
+    )
+    assert len([r for r in results if r["eligible"]]) == 1

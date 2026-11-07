@@ -223,6 +223,8 @@ async function initThreadPageExtension() {
         sendRuntimeMessage({action:"saveThreadLinks", payload:{url:gameInfo.url, links}}, () => {});
     }
     gameInfo.existsInWLib = checkResult.exists;
+    // Closed wLib: "not in library" would be a guess, so the widget says so.
+    gameInfo.wlibReachable = checkResult.reachable;
     gameInfo.playStatus = checkResult.playStatus;
     gameInfo.wishlisted = checkResult.wishlisted;
     gameInfo.appOutdated = checkResult.appOutdated;
@@ -472,8 +474,12 @@ function extractGameInfo() {
             info.title = fullTitleText;
         }
 
+        // The opening post holds the version and cover. On page 2 and later
+        // the first post on the page is a reply (often the thread starter's
+        // own update post), so those pages contribute neither.
+        const laterPage = typeof location !== 'undefined' && /\/page-(?:[2-9]|\d{2,})/.test(location.pathname || '');
         if (!info.version) {
-            const firstPost = document.querySelector('.message-body .bbWrapper');
+            const firstPost = laterPage ? null : document.querySelector('.message-body .bbWrapper');
             if (firstPost) {
                 const htmlPatterns = [
                     /<b>\s*(?:Current\s+)?Version\s*<\/b>\s*:?\s*v?([^<\n]+)/i,
@@ -529,11 +535,13 @@ function extractGameInfo() {
             }
         });
 
-        const zoomer = document.querySelector('.lbContainer-zoomer[data-src]');
-        if (zoomer) {
-            info.coverImage = zoomer.getAttribute('data-src');
+        const coverPost = laterPage ? null : document.querySelector('.message-inner');
+        const zoomer = coverPost ? coverPost.querySelector('.lbContainer-zoomer[data-src]') : null;
+        const zoomSrc = zoomer && typeof zoomer.getAttribute === 'function' ? zoomer.getAttribute('data-src') : '';
+        if (zoomSrc) {
+            info.coverImage = zoomSrc;
         } else {
-            const firstPost = document.querySelector('.message-inner');
+            const firstPost = coverPost;
             if (firstPost) {
                 const firstImg = firstPost.querySelector('.bbImage');
                 if (firstImg) {
@@ -640,7 +648,10 @@ async function injectUI(gameInfo) {
     const actionRow = document.createElement('div');
     actionRow.className = 'wlib-action-row';
 
-    if (gameInfo.existsInWLib) {
+    const unreachable = gameInfo.wlibReachable === false;
+    if (unreachable) {
+        setActionButtonContent(btn, 'Check again', 'externalLink', 'default');
+    } else if (gameInfo.existsInWLib) {
         setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
     } else {
         setActionButtonContent(btn, 'Add to wLib', 'libraryPlus', 'default');
@@ -670,6 +681,7 @@ async function injectUI(gameInfo) {
     const statusEl = document.createElement('div');
     statusEl.className = 'wlib-status';
     statusEl.setAttribute('aria-live', 'polite');
+    if (unreachable) statusEl.textContent = wlibConnectionStatusMessage();
 
     const collapsedToggle = document.createElement('button');
     collapsedToggle.type = 'button';
@@ -695,6 +707,19 @@ async function injectUI(gameInfo) {
     btn.addEventListener('click', () => {
         btn.disabled = true;
         statusEl.textContent = '';
+
+        if (unreachable) {
+            void checkGameInWLib(gameInfo.url, gameInfo.links || []).then(result => {
+                if (!result.reachable) {
+                    statusEl.textContent = wlibConnectionStatusMessage();
+                    btn.disabled = false;
+                    return;
+                }
+                container.remove();
+                void initThreadPageExtension();
+            });
+            return;
+        }
 
         if (gameInfo.existsInWLib) {
             setActionButtonContent(btn, 'Opening...', 'externalLink', 'open');
@@ -746,7 +771,7 @@ async function injectUI(gameInfo) {
         }
     });
 
-    if (!gameInfo.existsInWLib) {
+    if (!gameInfo.existsInWLib && !unreachable) {
         const wishlistBtn = document.createElement('button');
         wishlistBtn.type = 'button';
         wishlistBtn.className = 'wlib-add-btn wlib-wishlist-btn';

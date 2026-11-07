@@ -8,10 +8,13 @@ const jobs = ref<UpdateDownloadJob[]>([]);
 const runningGames = ref<number[]>([]);
 const selectedGame = ref<GameRecord | null>(null);
 const handled = new Set<string>();
+const installers = new Map<string, () => Promise<void>>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 let enabled = false;
 let polling = false;
 let installDialogOpen = false;
+// The downloaded update the install dialog was opened for, until it is installed.
+let offered: UpdateDownloadJob | null = null;
 const active = (job: UpdateDownloadJob) => ['resolving','needs_user','downloading','verifying'].includes(job.stage);
 
 async function poll() {
@@ -35,8 +38,10 @@ async function poll() {
           return;
         }
         installDialogOpen = true;
+        offered = job;
         openInstallArchive({gameId:job.game_id,archivePath:job.archive_path});
       };
+      installers.set(job.job_id, install);
       if (running.includes(job.game_id)) notify('Download complete. Close the game to install the update.', 'info', '', {label:'Install update',run:()=>{void install();}});
       else void install();
     }
@@ -49,7 +54,23 @@ async function poll() {
 export function useUpdateDownloads() {
   return {
     jobs, runningGames, selectedGame,
-    setInstallDialogOpen(value: boolean) { installDialogOpen = value; },
+    setInstallDialogOpen(value: boolean) {
+      installDialogOpen = value;
+      // Closed without installing: the archive is still in the downloads
+      // folder, so keep a way back to it.
+      if (!value && offered) {
+        const job = offered;
+        offered = null;
+        const install = installers.get(job.job_id);
+        if (install) notify('The downloaded update was not installed.', 'info', '', {label:'Install update',run:()=>{void install();}});
+      }
+    },
+    markInstalled(archivePath: string) {
+      if (offered && offered.archive_path === archivePath) {
+        installers.delete(offered.job_id);
+        offered = null;
+      }
+    },
     open(game: GameRecord) { selectedGame.value = game; },
     close() { selectedGame.value = null; },
     jobFor(gameId: number) { return jobs.value.find(job=>job.game_id===gameId && active(job)); },

@@ -530,8 +530,23 @@ const restoreLibraryViewState = () => {
   applyLibraryViewState(restoreSavedLibraryViewState(localStorage));
 };
 
+// Sorting depends only on the games and the sort order, so typing in the
+// search box re-filters an already sorted list instead of sorting again.
+const sortedGames = computed(() =>
+  [...games.value].sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value)),
+);
+// The search filter follows typing after a short pause; clearing is instant.
+const appliedSearch = ref("");
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(searchQuery, (value) => {
+  if (searchTimer) clearTimeout(searchTimer);
+  if (!value.trim()) { appliedSearch.value = ""; return; }
+  searchTimer = setTimeout(() => { appliedSearch.value = value; }, 150);
+}, { immediate: true });
+onUnmounted(() => { if (searchTimer) clearTimeout(searchTimer); });
+
 const filteredGames = computed(() => {
-  let result = games.value.filter((game) => !isPendingRemoval(game.id));
+  let result = sortedGames.value.filter((game) => !isPendingRemoval(game.id));
   // The selected collection tab limits everything below it.
   if (activeCollection.value) {
     const activeKey = activeCollection.value.toLowerCase();
@@ -541,9 +556,9 @@ const filteredGames = computed(() => {
       ),
     );
   }
-  if (searchQuery.value.trim())
+  if (appliedSearch.value.trim())
     result = result.filter((game) =>
-      matchesGameSearch(game, searchQuery.value),
+      matchesGameSearch(game, appliedSearch.value),
     );
   if (filterCollection.value === "Favorites") {
     result = result.filter((g) => g.is_favorite);
@@ -579,7 +594,6 @@ const filteredGames = computed(() => {
   if (filterTags.value.length) {
     result = result.filter((game) => matchesTagFilter(game, filterTags.value));
   }
-  result.sort((a, b) => compareLibraryGames(a, b, sortBy.value, sortDir.value));
   return result;
 });
 
@@ -622,7 +636,8 @@ const bulkAction = async (action: string, value = "") => {
   }
   bulkBusy.value = true;
   try {
-    const result = await runBulk(games, async (game) => {
+    // One library refresh for the whole batch, not one per game.
+    const result = await api.withLibraryBatch(() => runBulk(games, async (game) => {
       if (action === "status") return normalizePlayStatus(game.play_status, game.status) === value ? null : api.updateGame(game.id, { play_status: value });
       if (action === "favorite" || action === "unfavorite") {
         const favorite = action === "favorite";
@@ -642,8 +657,8 @@ const bulkAction = async (action: string, value = "") => {
       if (action === "add" || action === "remove-collection") { const old = [...(game.collections || [])]; return () => api.setGameCollections(game.id, old); }
       const fields = action === "skip" ? { skipped_version: game.skipped_version || "" } : { is_favorite: !!game.is_favorite };
       return () => api.updateGame(game.id, fields);
-    });
-    if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, result.undo);
+    }));
+    if (result.changed) notifyUndo(`${result.changed} changed, ${result.skipped} skipped${result.failed ? `, ${result.failed} failed` : ""}.`, () => api.withLibraryBatch(result.undo));
     else notifyError(`No games changed; ${result.skipped} skipped, ${result.failed} failed.`);
   } finally { bulkBusy.value = false; }
 };
@@ -967,6 +982,12 @@ const modalUpdateState = ref<ModalUpdateState>({
   message: "",
 });
 let modalUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
+// The game the modal's update check and its notice belong to.
+const modalUpdateGameId = ref<number | null>(null);
+const idleUpdateState: ModalUpdateState = { running: false, type: "", message: "" };
+const shownModalUpdateState = computed(() =>
+  selectedGame.value && modalUpdateGameId.value === selectedGame.value.id ? modalUpdateState.value : idleUpdateState,
+);
 
 const clearModalUpdateState = () => {
   if (modalUpdateTimeout) {
@@ -1518,8 +1539,17 @@ const handleModalUpdateCheck = async (gameId: number) => {
   const game = games.value.find((entry) => entry.id === gameId) || selectedGame.value;
   if (!game) return;
 
+  modalUpdateGameId.value = game.id;
   modalUpdateState.value = { running: true, type: "", message: "" };
   const feedback = await runSingleGameUpdateCheck(game);
+  if (modalUpdateGameId.value !== game.id) return;
+  if (!showDetailModal.value || selectedGame.value?.id !== game.id) {
+    // Another game is open now: report the result as a toast, not on it.
+    clearModalUpdateState();
+    if (feedback.type === "error") notifyError(feedback.message);
+    else if (feedback.type === "success") notify(feedback.message, "success");
+    return;
+  }
   showModalUpdateNotice(feedback.type, feedback.message);
 };
 
@@ -3006,7 +3036,7 @@ onUnmounted(() => {
         v-model="showDetailModal"
         :game="selectedGame"
         :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
-        :update-check-state="modalUpdateState"
+        :update-check-state="shownModalUpdateState"
         @updated="handleGameUpdated"
         @remove="scheduleRemoval([$event])"
         @launch="launchGameFast"

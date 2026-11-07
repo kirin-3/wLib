@@ -1737,11 +1737,22 @@ def _import_library_folders(
     return 2
 
 
+# General settings that hold a list or map. Outside a mirror sync an empty one
+# from the other side means "none there", not "remove mine".
+_COLLECTION_SETTING_KEYS = (
+    "collections",
+    "custom_play_statuses",
+    "tag_colors",
+    "library_filter_presets",
+)
+
+
 def _import_setting_groups(
     cursor: sqlite3.Cursor,
     backup: Mapping[str, object],
     sections: set[str],
     merge_mode: str = "overwrite",
+    mirror: bool = False,
 ) -> int:
     settings = _coerce_mapping(backup.get("settings"))
     groups: list[tuple[str, Sequence[str]]] = []
@@ -1766,6 +1777,26 @@ def _import_setting_groups(
                 and key not in NON_PATH_SETTINGS_KEYS
                 and not _is_host_path_setting(value.strip())
             ):
+                continue
+            if (
+                not mirror
+                and key in _COLLECTION_SETTING_KEYS
+                and value.strip() in ("", "[]", "{}")
+            ):
+                continue
+            if key == "collections" and not mirror:
+                # Keep this machine's collections and add the backup's.
+                try:
+                    incoming = cast(object, json.loads(value))
+                except ValueError:
+                    incoming = []
+                names = (
+                    [name for name in cast(list[object], incoming) if isinstance(name, str)]
+                    if isinstance(incoming, list)
+                    else []
+                )
+                if database.register_collection_names(cursor, names):
+                    updated += 1
                 continue
             if merge_mode == "fill_missing":
                 row = cast(
@@ -2158,8 +2189,14 @@ def apply_library_backup(
                     _replace_launch_targets(cursor, game_id, imported_game)
 
             settings_updated = _import_setting_groups(
-                cursor, backup, sections, merge_mode
+                cursor, backup, sections, merge_mode, mirror
             )
+            if SECTION_USER_STATE in sections and not mirror:
+                # Memberships of collections this machine lacks would stay
+                # hidden, and the next export or sync would drop them.
+                _ = database.register_collection_names(
+                    cursor, _imported_membership_names(backup)
+                )
             if mirror:
                 for game_id in original_ids - keep_ids:
                     row = cast(
@@ -2279,6 +2316,15 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
             for item in ambiguous_games
         ],
     }
+
+
+def _imported_membership_names(backup: Mapping[str, object]) -> list[str]:
+    names: list[str] = []
+    for raw_game in _coerce_sequence(_coerce_mapping(backup).get("games")):
+        user_state = _game_section(_coerce_mapping(raw_game), SECTION_USER_STATE)
+        names_json = _collections_json_text(user_state.get("collections"))
+        names.extend(cast(list[str], json.loads(names_json)))
+    return names
 
 
 def _register_imported_collections(backup: Mapping[str, object]) -> None:

@@ -25,16 +25,25 @@ export const scheduleRemoval = (games: GameRecord[], deleteGame?: DeleteGame): v
   ids.forEach((id) => pendingRemovalIds.add(id));
   notifyUndo(ids.length === 1 ? `${games.find((game) => game.id === ids[0])?.title} removed from library.` : `${ids.length} games removed from library.`, async () => cancelRemoval(ids), {
     onExpire: async () => {
-      const remove: DeleteGame = deleteGame || (async (id) => (await import("../services/api")).api.deleteGame(id));
+      const service = deleteGame ? null : (await import("../services/api")).api;
+      const remove: DeleteGame = deleteGame || ((id) => service!.deleteGame(id));
       let failed = 0;
-      for (const id of ids) {
+      let reason = "";
+      const removeAll = async () => { for (const id of ids) {
         let removed = false;
-        try { removed = !!(await remove(id)).success; }
+        try {
+          const result = await remove(id);
+          removed = !!result.success;
+          if (!removed && !reason) reason = result.error || "";
+        }
         catch { removed = false; }
         if (removed) committedIds.add(id);
         else { failed++; pendingRemovalIds.delete(id); }
-      }
-      if (failed) notifyError(`Could not remove ${failed} game${failed === 1 ? "" : "s"}.`);
+      } };
+      // One library refresh for the whole batch.
+      if (service) await service.withLibraryBatch(removeAll);
+      else await removeAll();
+      if (failed) notifyError(`Could not remove ${failed} game${failed === 1 ? "" : "s"}.${reason ? ` ${reason}` : ""}`);
       if (typeof window !== "undefined") window.dispatchEvent(new Event("wlib-refresh-library"));
     },
   });

@@ -1634,6 +1634,30 @@ def _read_collections(cursor: sqlite3.Cursor) -> list[str]:
     return _validated_collection_list(row[0])
 
 
+def register_collection_names(cursor: sqlite3.Cursor, names: Sequence[str]) -> int:
+    """Add valid names missing from the collections registry; returns how many.
+
+    Membership only shows for registered collections, so an import that brings
+    memberships must also bring their names."""
+    collections = _read_collections(cursor)
+    known = {name.casefold() for name in collections}
+    added = 0
+    for raw in names:
+        name = str(raw or "").strip()
+        if (
+            not 1 <= len(name) <= 40
+            or name.casefold() in known
+            or name.casefold() in RESERVED_COLLECTION_KEYS
+        ):
+            continue
+        collections.append(name)
+        known.add(name.casefold())
+        added += 1
+    if added:
+        _write_collections_setting(cursor, collections)
+    return added
+
+
 def get_collections() -> list[str]:
     return _validated_collection_list(get_setting("collections"))
 

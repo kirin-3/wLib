@@ -29,7 +29,18 @@ _VERSION_SUFFIX_RE = re.compile(
 )
 _SKIPPED_EXECUTABLES_RE = re.compile(
     r"^(unins\w*|unitycrashhandler\w*|notification_helper|crashpad_handler|crashreport\w*|"
-    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*)(?:\.exe)?$",
+    + r"dxsetup|dxwebsetup|vc_?redist\S*|ue4prereqsetup\S*|python\w*|zsync\w*|"
+    # NW.js/Electron helpers and dependency installers shipped next to the game.
+    + r"chrome[-_]sandbox|chrome_crashpad_handler|nacl_helper\S*|xdg-open|"
+    + r"install[-_ ]?(?:deps|dependencies|prereq\w*|requirements)\S*)"
+    + r"(?:\.exe|\.sh|\.bat|\.cmd)?$",
+    re.I,
+)
+# HTML files that document the game rather than run it.
+_DOCUMENT_HTML_RE = re.compile(
+    # Whole words only: "Helpless.html" or "Manual Labor.html" may be the game.
+    r"(?<![a-z])(walkthrough|guide|readme|read_me|changelog|change_log|credits|licen[cs]e|"
+    + r"faq|cheats?|patch[-_ ]?notes|instructions)(?![a-z])",
     re.I,
 )
 # `<Game>-32.exe` is the 32-bit twin of `<Game>.exe` when both exist, but it
@@ -174,6 +185,10 @@ def find_launcher(
             or (not os.path.splitext(entry.name)[1] and is_elf(entry.path))
         )
         and not _SKIPPED_EXECUTABLES_RE.match(entry.name)
+        and not (
+            entry.name.lower().endswith((".html", ".htm"))
+            and _DOCUMENT_HTML_RE.search(entry.name)
+        )
     ]
     # Prefer the 64-bit build, but use a lone -32.exe rather than report that
     # the folder has no launchable file.

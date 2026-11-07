@@ -96,6 +96,32 @@ let updateCountRequest = 0;
 let wasUpdateRunning = false;
 const notifiedFinishedIds = new Set<number>();
 
+// Sync problems are shown on the Sync nav item and once as a toast, so they
+// are not missed while another view is open.
+const syncAttention = ref(false);
+let syncPollInterval: ReturnType<typeof setInterval> | null = null;
+let lastSyncProblem = "";
+const pollSyncStatus = async () => {
+  try {
+    const status = await api.getSyncStatus();
+    const state = status.state || "off";
+    const problem = state === "error" || state === "needs_choice" || state === "needs_passphrase";
+    syncAttention.value = problem;
+    const key = problem ? `${state}:${status.last_error || ""}` : "";
+    if (key && key !== lastSyncProblem && router.currentRoute.value.path !== "/sync") {
+      const message = state === "needs_choice"
+        ? "Sync is waiting for you to choose which library to keep."
+        : state === "needs_passphrase"
+          ? "Sync needs the passphrase for the sync file."
+          : status.last_error || "Sync needs attention.";
+      notify(message, "error", "Library sync", { label: "Open Sync", run: () => void router.push("/sync") });
+    }
+    lastSyncProblem = key;
+  } catch (error) {
+    console.error("Failed to read sync status", error);
+  }
+};
+
 // Install-from-archive dialog (global so any view or toast can open it).
 const showInstallModal = ref(false);
 watch(showInstallModal, value => updateDownloads.setInstallDialogOpen(value));
@@ -315,6 +341,8 @@ onMounted(() => {
     document.addEventListener("visibilitychange", reportWindowFocus);
     void reportWindowFocus();
     updatePollInterval = setInterval(pollLibraryUpdates, 5000);
+    void pollSyncStatus();
+    syncPollInterval = setInterval(pollSyncStatus, 15000);
     try {
       const extensionSync = await api.getStartupExtensionSyncStatus();
       if (extensionSync?.success && extensionSync?.updated) {
@@ -365,6 +393,7 @@ onUnmounted(() => {
   window.removeEventListener("blur", reportWindowFocus);
   document.removeEventListener("visibilitychange", reportWindowFocus);
   if (updatePollInterval) clearInterval(updatePollInterval);
+  if (syncPollInterval) clearInterval(syncPollInterval);
 });
 </script>
 
@@ -481,9 +510,9 @@ onUnmounted(() => {
 
           <router-link
             to="/sync"
-            :title="navCollapsed ? 'Sync' : ''"
+            :title="navCollapsed ? 'Sync' : syncAttention ? 'Sync needs attention' : ''"
             :class="[
-              'nav-link flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              'nav-link relative flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
               navCollapsed ? 'justify-center' : 'gap-3',
             ]"
             active-class="nav-active"
@@ -495,6 +524,14 @@ onUnmounted(() => {
               :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
               >Sync</span
             >
+            <span
+              v-if="syncAttention"
+              class="rounded-full w-2 h-2"
+              :class="navCollapsed ? 'absolute top-1 right-1' : 'ml-auto'"
+              style="background: #ef4444"
+              aria-label="Sync needs attention"
+              role="img"
+            ></span>
           </router-link>
 
           <router-link
@@ -673,6 +710,7 @@ onUnmounted(() => {
       <InstallArchiveModal
         v-model="showInstallModal"
         :game="installGame"
+        @installed="updateDownloads.markInstalled"
         :preselected-archive="installArchivePath"
         :seed="installSeed"
       />

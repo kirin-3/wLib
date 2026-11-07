@@ -360,3 +360,26 @@ def test_scan_ignores_symlinked_subdir(tmp_path):
     except OSError:
         pytest.skip("symlinks need privileges")
     assert find_launcher(str(folder)) == ""
+
+
+def test_find_launcher_skips_helpers_installers_and_guides(tmp_path, monkeypatch):
+    import core.game_scan as game_scan
+
+    monkeypatch.setattr(game_scan, "is_linux", lambda: True)
+    game = tmp_path / "Game"
+    game.mkdir()
+    elf = b"\x7fELF" + b"\0" * 60
+    for name in ("chrome-sandbox", "nw"):
+        (game / name).write_bytes(elf)
+    (game / "install-deps.sh").write_text("#!/bin/sh\n")
+    (game / "Walkthrough.html").write_text("<html></html>")
+    assert game_scan.find_launcher(str(game)) == str(game / "nw")
+    guide_only = tmp_path / "Guide"
+    guide_only.mkdir()
+    (guide_only / "walkthrough.html").write_text("<html></html>")
+    (guide_only / "Story.html").write_text("<html></html>")
+    assert game_scan.find_launcher(str(guide_only)) == str(guide_only / "Story.html")
+    twine = tmp_path / "Twine"
+    twine.mkdir()
+    (twine / "Helpless.html").write_text("<html></html>")
+    assert game_scan.find_launcher(str(twine)) == str(twine / "Helpless.html")

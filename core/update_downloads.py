@@ -21,6 +21,15 @@ class _Link:
     created: float
 
 
+def _in_app(host: str, url: str) -> bool:
+    """Whether wLib can download this mirror itself.
+
+    A Buzzheavier file is only reachable through its share page, which the
+    extension opens for F95Zone's masked /dl/ links; a direct Buzzheavier link
+    has no such page to resolve, so it is opened in the browser."""
+    return host != 'buzzheavier' or url.startswith('https://f95zone.to/dl/')
+
+
 @final
 class UpdateDownloads:
     def __init__(self, manager: DownloadManager) -> None:
@@ -54,7 +63,8 @@ class UpdateDownloads:
                 identifier = uuid.uuid4().hex
                 key = (build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
                 new_links[identifier] = _Link(game_id, key, mirror['url'], now)
-                mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split']})
+                mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split'],
+                                'in_app':_in_app(mirror['host'], mirror['url'])})
             output.append({**{k:v for k,v in build.items() if k != 'mirrors'}, 'mirrors':mirrors})
         with self.lock:
             if self.generations.get(game_id) != generation:
@@ -107,6 +117,8 @@ class UpdateDownloads:
         if link.key[4]:
             raise DownloadError('Split archives are not supported yet; open in browser')
         url, host = link.url, link.key[3]
+        if not _in_app(host, url):
+            raise DownloadError('This Buzzheavier link cannot be downloaded in-app; open in browser')
         def resolve(progress: Callable[[str], None], cancel: threading.Event) -> dict[str, object]:
             if url.startswith('https://f95zone.to/dl/'):
                 return scraper.resolve_download_link(url, host, progress, cancel)

@@ -10,7 +10,7 @@ The packaging pipeline integrates the Python backend, Vue frontend, bundled brow
 
 ## Continuous Verification
 
-Backend changes are validated separately from release packaging through `.github/workflows/python-checks.yml`.
+Backend changes are validated through `.github/workflows/python-checks.yml`, which runs the backend checks on Linux and Windows and the frontend and extension checks on both. All actions are pinned to commit SHAs.
 
 - The workflow runs on pull requests, pushes to `master`, and manual dispatches on Ubuntu and Windows runners.
 - It targets Python 3.12, matching the supported backend development toolchain and the GitHub Actions build environment.
@@ -21,7 +21,7 @@ Backend changes are validated separately from release packaging through `.github
 
 ## Release Automation
 
-`.github/workflows/release.yml` first validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Tagged signing uses the `JWT_USER` and `JWT_SECRET` repository secrets for the add-on developer account. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums.
+`.github/workflows/release.yml` first runs `python-checks.yml` as a reusable workflow, then validates the browser extension, signing the Firefox XPI for tagged releases and producing an unsigned XPI for manual branch builds. Tagged signing uses the `JWT_USER` and `JWT_SECRET` repository secrets for the add-on developer account. Linux (`ubuntu-22.04`) and Windows (`windows-2022`) then build in parallel using the same extension artifact. The Windows job runs both the frozen smoke check and MSI lifecycle validation before uploading its ZIP, MSI, and checksums; the Linux job runs `--smoke-test` against the extracted tarball and the AppImage. Release jobs use Node from `.nvmrc` and read-only repository access; only the publish job can write.
 
 Publishing waits for both platform builds and attaches their artifacts to one GitHub Release with a commit-based changelog. The publish job also adds the signed Firefox XPI as `wlib-firefox-<extension version>.xpi` and an `updates.json` manifest pointing at it, so installed Firefox add-ons update themselves. Branch dispatches upload test artifacts without publishing a release. Windows versions use three numeric parts; CI removes the leading `v` from the tag or dispatch input. Use a three-part tag such as `v1.2.3` for a release (or the same form for a manual dispatch), because the Windows MSI and frozen build reject suffixes such as `-rc1` or `-test`. Optional Authenticode signing uses the `WLIB_SIGNING_CERT_BASE64` and `WLIB_SIGNING_CERT_PASSWORD` repository secrets and the `WLIB_SIGNING_TIMESTAMP_URL` repository variable.
 

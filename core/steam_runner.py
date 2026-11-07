@@ -12,6 +12,33 @@ from typing import cast
 from core.host_platform import get_data_dir
 
 
+RUNNER_HEADER = 'X-wLib-Runner'
+
+
+def runner_token(data_dir: str | None = None) -> str:
+    """Shared secret for the runner endpoints of the local server.
+
+    The file is private to the user and outside every sandbox, so a game
+    that can reach 127.0.0.1 still cannot pose as the runner."""
+    import secrets
+
+    path = Path(data_dir or get_data_dir()) / 'runner-token'
+    try:
+        token = path.read_text(encoding='ascii').strip()
+        if len(token) >= 32:
+            return token
+    except (OSError, UnicodeDecodeError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(32)
+    temporary = path.with_name(f'.runner-token.{os.getpid()}')
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='ascii') as stream:
+        _ = stream.write(token)
+    os.replace(temporary, path)
+    return token
+
+
 def _path(game_id: int, data_dir: str | None = None) -> Path:
     if game_id <= 0:
         raise ValueError('Invalid game ID')
@@ -98,8 +125,13 @@ def _window_request(path: str, payload: dict[str, object] | None = None) -> dict
     from urllib.request import Request, urlopen
 
     body = json.dumps(payload).encode() if payload is not None else None
+    try:
+        token = runner_token()
+    except OSError:
+        token = ''
     request = Request('http://127.0.0.1:8183' + path, data=body,
-                      headers={'X-wLib-Extension': '1', 'Content-Type': 'application/json'})
+                      headers={'X-wLib-Extension': '1', RUNNER_HEADER: token,
+                               'Content-Type': 'application/json'})
     try:
         with cast(HTTPResponse, urlopen(request, timeout=2)) as response:
             return cast(dict[str, object], json.loads(response.read()))
@@ -164,6 +196,22 @@ def run(game_id: int) -> int:
         report_error(game_id, f'{game.get("title") or "Game"} is already running.')
         return 3
     launcher = Launcher()
+
+    def ask_window(entry: object, launch_id: int | None) -> str | None:
+        # The open wLib window knows about installs, mod tools, prefix tools
+        # and the games it runs; without a window there is nothing to clash with.
+        from core.launcher import RunningGame
+
+        assert isinstance(entry, RunningGame)
+        answer = _window_request('/api/launch-check', {
+            'gameId': launch_id, 'prefix': entry.prefix, 'sandboxed': entry.sandboxed,
+            'umu': entry.umu, 'blocked': entry.network_blocked, 'title': entry.title,
+        })
+        if answer is None or answer.get('success') is not False:
+            return None
+        return str(answer.get('error') or 'This game cannot start right now.')
+
+    launcher.external_guard = ask_window
     done = threading.Event()
     stop_requested = threading.Event()
     previous = [(sig, signal.getsignal(sig)) for sig in (signal.SIGTERM, signal.SIGINT)]

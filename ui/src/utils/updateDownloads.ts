@@ -3,7 +3,7 @@ import type { UpdateBuild, UpdateMirror } from "../services/api";
 
 export type HostPlatform = "linux" | "windows";
 export const inAppMirror = (mirror: UpdateMirror): boolean =>
-  !mirror.split && ["pixeldrain", "mega", "buzzheavier"].includes(mirror.host.toLowerCase());
+  !mirror.split && mirror.in_app !== false && ["pixeldrain", "mega", "buzzheavier"].includes(mirror.host.toLowerCase());
 export const suitable = (build: UpdateBuild, host: HostPlatform): boolean =>
   (host === "linux" ? ["linux", "windows/linux", "windows", "all", "unknown"] : ["windows", "windows/linux", "all", "unknown"]).includes(build.platform);
 export function orderBuilds(builds: UpdateBuild[], host: HostPlatform): { suitable: UpdateBuild[]; other: UpdateBuild[] } {
@@ -24,6 +24,9 @@ export function preselect(builds: UpdateBuild[], host: HostPlatform): { build: U
 export function downloadFailureMessage(error: string): string {
   const lower = error.toLowerCase();
   // Most specific first: several messages also mention the browser or extension.
+  if (lower.includes("disk space")) return `${error}. Free up space and retry.`;
+  if (lower.includes("could not save the download")) return `${error}. Check the wLib data folder and retry.`;
+  if (lower.includes("quota")) return `${error}. Wait for the host's quota to reset or try another mirror.`;
   if (lower.includes("permission") || lower.includes("buzzheavier downloads")) return `${error}. Turn on Buzzheavier downloads in the wLib extension settings.`;
   if (lower.includes("sign in") || lower.includes("login")) return `${error}. Sign in to F95Zone in your browser and retry.`;
   if (lower.includes("challenge") || lower.includes("timed out")) return `${error}.`;

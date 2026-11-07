@@ -2533,3 +2533,22 @@ def test_install_falls_back_to_7zip_for_deflate64(tmp_path, monkeypatch):
     assert result["success"] is True
     assert open(str(result["exe_path"]), "rb").read() == b"x" * 4096
     assert len(db.get_all_games()) == 1
+
+
+def test_extract_zip_decodes_shift_jis_names(tmp_path):
+    import zipfile as zf_module
+
+    from core.archive_install import extract_zip
+
+    archive = tmp_path / "jp.zip"
+    name = "ゲーム/セーブ.txt"
+    encoded = name.encode("cp932")
+    placeholder = "p" * len(encoded)
+    with zf_module.ZipFile(archive, "w") as zf:
+        zf.writestr(placeholder, b"data")
+    # Store the name as Shift-JIS bytes without the UTF-8 flag, as Japanese
+    # Windows archivers do.
+    archive.write_bytes(archive.read_bytes().replace(placeholder.encode(), encoded))
+    staging = tmp_path / "out"
+    extract_zip(str(archive), str(staging))
+    assert (staging / "ゲーム" / "セーブ.txt").read_bytes() == b"data"

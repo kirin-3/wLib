@@ -632,7 +632,7 @@ def test_mod_tool_refused_while_archive_update_runs(tmp_path):
         pass
 
 
-def test_delete_game_removes_its_save_backups(tmp_path, monkeypatch):
+def test_delete_game_keeps_its_save_backups_aside(tmp_path, monkeypatch):
     root = tmp_path / "save-backups"
     monkeypatch.setattr(Api, "_save_backups_root", staticmethod(lambda: str(root)))
     api = Api()
@@ -642,7 +642,21 @@ def test_delete_game_removes_its_save_backups(tmp_path, monkeypatch):
     (root / str(other_id)).mkdir()
     assert api.delete_game(game_id)["success"] is True
     assert not (root / str(game_id)).exists()
+    kept = list((root / "removed").iterdir())
+    assert len(kept) == 1 and kept[0].name.startswith(f"{game_id}_")
+    assert (kept[0] / "20260101-000000").is_dir()
     assert (root / str(other_id)).is_dir()
+
+
+def test_delete_game_refuses_running_or_busy_game(monkeypatch):
+    api = Api()
+    game_id = add_game(title="Game", exe_path="game.exe")
+    monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    assert api.delete_game(game_id)["error_code"] == "game_running"
+    monkeypatch.setattr(api, "get_running_games", lambda: [])
+    with api._tool_run(game_id, "extract"):
+        assert api.delete_game(game_id)["error_code"] == "game_busy"
+    assert api.delete_game(game_id)["success"] is True
 
 
 def test_cover_change_reports_locked_database(tmp_path, monkeypatch):

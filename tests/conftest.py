@@ -17,3 +17,11 @@ def _no_catalog_startup_check(monkeypatch):
     from core.catalog import CatalogClient
 
     monkeypatch.setattr(CatalogClient, "start_background", lambda self, force=False: False)
+
+
+@pytest.fixture(autouse=True)
+def _no_f95_rate_limit_cooldown(monkeypatch):
+    """A 429 in one test must not hold back F95 requests in the next."""
+    import core.scraper
+
+    monkeypatch.setattr(core.scraper, "_f95_cooldown_until", 0.0)

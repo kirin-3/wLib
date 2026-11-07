@@ -70,7 +70,8 @@ def matches(url: str) -> bool:
 def classify_error(status: int, body: str = '') -> str:
     if status in (404, 410) or body.strip(' []') in ('-9', '-16'):
         return 'link expired or removed'
-    if status == 429 or body.strip(' []') in ('-4', '-17', '-18'):
+    # 509: the file transfer itself hit the bandwidth quota.
+    if status in (429, 509) or body.strip(' []') in ('-4', '-17', '-18'):
         return 'transfer quota or rate limit reached'
     return 'network error'
 

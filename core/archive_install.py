@@ -713,12 +713,34 @@ def _extract_tool_via_local_scratch(
     return True
 
 
-def _zip_entry_name(info: zipfile.ZipInfo) -> str:
-    """Entry name, recovering UTF-8 names stored without the UTF-8 flag (bit 11)."""
-    name = info.filename
-    if not info.flag_bits & 0x800:
+def _zip_name_encoding(infos: list[zipfile.ZipInfo]) -> str:
+    """Encoding of the names stored without the UTF-8 flag (bit 11).
+
+    zipfile reads those as cp437. Most such archives were made with UTF-8
+    names anyway; Japanese Windows tools write Shift-JIS (cp932). One encoding
+    is chosen for the whole archive so a cp437 name is never half-converted.
+    """
+    raw = [
+        info.filename.encode("cp437")
+        for info in infos
+        if not info.flag_bits & 0x800 and not info.filename.isascii()
+    ]
+    for encoding in ("utf-8", "cp932"):
         try:
-            name = name.encode("cp437").decode("utf-8")
+            for name in raw:
+                _ = name.decode(encoding)
+        except UnicodeError:
+            continue
+        return encoding
+    return "cp437"
+
+
+def _zip_entry_name(info: zipfile.ZipInfo, encoding: str = "utf-8") -> str:
+    """Entry name, decoding names stored without the UTF-8 flag with `encoding`."""
+    name = info.filename
+    if not info.flag_bits & 0x800 and encoding != "cp437":
+        try:
+            name = name.encode("cp437").decode(encoding)
         except UnicodeError:
             pass
     return name.replace("\\", "/")
@@ -747,6 +769,7 @@ def extract_zip(
     try:
         with zipfile.ZipFile(archive_path, "r") as zf:
             infos = zf.infolist()
+            name_encoding = _zip_name_encoding(infos)
             # Pre-validate every entry before writing anything.
             names: list[str] = []
             for info in infos:
@@ -754,7 +777,7 @@ def extract_zip(
                     raise ArchiveInstallError(
                         f"Archive is password-protected or encrypted: {info.filename!r}"
                     )
-                name = _zip_entry_name(info)
+                name = _zip_entry_name(info, name_encoding)
                 if name == "" or (name.endswith("/") and name.strip("/") == ""):
                     raise ArchiveSafetyError(f"Archive entry is unsafe: {name!r}")
                 check_archive_entry_safe(name)

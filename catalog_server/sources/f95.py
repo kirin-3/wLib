@@ -38,8 +38,8 @@ def _int_list(value: object) -> list[int]:
     return [item for item in cast(list[object], value) if isinstance(item, int)]
 
 
-def parse_page(payload: object) -> tuple[list[dict[str, object]], int]:
-    """Return the page's rows and the total page count."""
+def parse_page(payload: object) -> tuple[list[dict[str, object]], int | None]:
+    """Return the page's rows and the total page count (None when missing)."""
     if not isinstance(payload, dict):
         raise ValueError("F95 response is not an object")
     body = cast(dict[str, object], payload)
@@ -47,10 +47,11 @@ def parse_page(payload: object) -> tuple[list[dict[str, object]], int]:
         raise ValueError(f"F95 response status: {body.get('status')!r}")
     msg = cast(dict[str, object], body["msg"])
     pagination = msg.get("pagination")
-    total = 0
+    total: int | None = None
     if isinstance(pagination, dict):
         raw_total = cast(dict[str, object], pagination).get("total")
-        total = raw_total if isinstance(raw_total, int) else 0
+        if isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total > 0:
+            total = raw_total
     rows: list[dict[str, object]] = []
     for item in cast(list[object], msg.get("data") or []):
         if not isinstance(item, dict):
@@ -122,7 +123,7 @@ def load_names(catalog: CatalogStore, path: str = TAGS_FILE) -> None:
 class F95Source:
     name: str = "f95"
 
-    def _fetch(self, ctx: SourceContext, page: int) -> tuple[list[dict[str, object]], int]:
+    def _fetch(self, ctx: SourceContext, page: int) -> tuple[list[dict[str, object]], int | None]:
         response = ctx.pacer.request(
             self.name,
             LATEST_DATA_URL.format(page=page),
@@ -142,7 +143,11 @@ class F95Source:
             rows, total = self._fetch(ctx, page)
             stamps = [row["ts"] for row in rows if isinstance(row["ts"], int)]
             newest = max([newest, *stamps])
-            if not stamps or all(ts <= high_water for ts in stamps) or page >= total:
+            if (
+                not stamps
+                or all(ts <= high_water for ts in stamps)
+                or (total is not None and page >= total)
+            ):
                 break
             page += 1
         # Only advance once every page above the old mark was stored.
@@ -155,7 +160,16 @@ class F95Source:
     def sweep_step(self, ctx: SourceContext) -> bool:
         page = ctx.state.get(self.name, "sweep_page", 1)
         page = page if isinstance(page, int) and page > 0 else 1
-        rows, total = self._fetch(ctx, page)
+        rows, fetched_total = self._fetch(ctx, page)
+        if fetched_total is None:
+            # A reply without its page count must not end the sweep: page 1
+            # would look like the last page and every other game would be
+            # marked removed. Use the count from an earlier page of this sweep.
+            stored = ctx.state.get(self.name, "sweep_total_pages")
+            if not isinstance(stored, int) or stored <= 0 or page == 1:
+                raise ValueError(f"F95 returned page {page} without a page count")
+            fetched_total = stored
+        total = fetched_total
         if page == 1 and ctx.state.get(self.name, "hwm_ts") is None:
             stamps = [row["ts"] for row in rows if isinstance(row["ts"], int)]
             if stamps:

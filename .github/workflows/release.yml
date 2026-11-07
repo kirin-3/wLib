@@ -12,22 +12,27 @@ on:
         required: true
         default: 'v0.1.0'
 
+# Jobs get write access only where they need it (publish).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/python-checks.yml
+
   extension:
     name: Validate and Sign Extension
+    needs: checks
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
 
       - name: Lint Firefox extension
         run: npx --yes web-ext@10.7.0 lint --source-dir=extension --self-hosted
@@ -59,7 +64,7 @@ jobs:
           test -n "$(find "$RUNNER_TEMP/wlib-extension" -maxdepth 1 -name '*.xpi' -print -quit)"
 
       - name: Upload validated extension
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wlib-validated-extension
           retention-days: 1
@@ -74,7 +79,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -88,25 +93,25 @@ jobs:
           fi
 
       - name: Download validated extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: wlib-validated-extension
           path: ${{ runner.temp }}/wlib-extension
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.24.x'
           cache: false
@@ -156,8 +161,29 @@ jobs:
           chmod +x scripts/build.sh
           bash scripts/build.sh "${{ steps.version.outputs.version }}"
 
+      # The frozen build must start: imports, bundled assets and Qt plugins
+      # are only checked here, not by the source checks.
+      - name: Smoke test Linux build
+        env:
+          QT_QPA_PLATFORM: offscreen
+          # Runners may lack FUSE; run the AppImage from an extracted copy.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          set -euo pipefail
+          TARBALL="$(find dist -maxdepth 1 -name '*linux-x86_64.tar.gz' -print -quit)"
+          test -n "$TARBALL"
+          SMOKE="$RUNNER_TEMP/wlib-smoke"
+          mkdir -p "$SMOKE/data"
+          tar -xzf "$TARBALL" -C "$SMOKE"
+          BIN="$(find "$SMOKE" -maxdepth 2 -name wlib-bin -type f -print -quit)"
+          WLIB_DATA_DIR="$SMOKE/data" "$BIN" --smoke-test
+          APPIMAGE="$(find dist -maxdepth 1 -name '*.AppImage' -print -quit)"
+          test -n "$APPIMAGE"
+          chmod +x "$APPIMAGE"
+          WLIB_DATA_DIR="$SMOKE/data" "$APPIMAGE" --smoke-test
+
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wLib-${{ steps.version.outputs.version }}-linux
           retention-days: 1
@@ -178,8 +204,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Set version
         id: version
         shell: pwsh
@@ -192,13 +217,13 @@ jobs:
           "version=$($raw.TrimStart('v'))" >> $env:GITHUB_OUTPUT
 
       - name: Download validated extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: wlib-validated-extension
           path: ${{ runner.temp }}/wlib-extension
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -207,9 +232,9 @@ jobs:
             requirements-windows.txt
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
           cache: 'npm'
           cache-dependency-path: ui/package-lock.json
 
@@ -254,7 +279,7 @@ jobs:
             -MsiPath ".\dist\windows\wLib-${{ steps.version.outputs.version }}-windows-x64.msi"
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wLib-${{ steps.version.outputs.version }}-windows
           retention-days: 1
@@ -268,22 +293,24 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: [linux, windows]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: wLib-*-*
           path: release-artifacts
           merge-multiple: true
 
       - name: Download validated extension
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: wlib-validated-extension
           path: validated-extension
@@ -347,7 +374,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: wLib ${{ github.ref_name }}
           draft: false
@@ -386,7 +413,7 @@ jobs:
 
     steps:
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: wLib-${{ github.ref_name }}-linux
           path: linux-artifacts

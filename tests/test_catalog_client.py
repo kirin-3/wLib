@@ -398,3 +398,14 @@ def test_background_check_does_not_block(tmp_path, server, monkeypatch):
             break
         threading.Event().wait(0.02)
     assert client.status()["installed"] is True
+
+
+def test_failed_check_is_retried_after_15_minutes(tmp_path, server):
+    clock = Clock()
+    assert _client(tmp_path, clock).check()["success"] is False
+    server.requests.clear()
+    clock.now += 600
+    assert _client(tmp_path, clock).check()["skipped"] == "recent"
+    clock.now += 301
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    assert _client(tmp_path, clock).check()["success"] is True
