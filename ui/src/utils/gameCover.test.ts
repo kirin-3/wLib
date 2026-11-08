@@ -33,10 +33,10 @@ test("cache precedes remote and follows local, with error fallback", () => {
 
 test("card sources use copies when present and fall back to the original", () => {
   const base = { cover_local_url: "cs-local.gif", cover_image_path: "cs-remote.gif" };
-  assert.deepEqual(coverCardSources(base), { still: "", anim: "", original: "cs-local.gif" });
-  assert.deepEqual(coverCardSources(null), { still: "", anim: "", original: "" });
+  assert.deepEqual(coverCardSources(base), { still: "", anim: "", original: "cs-local.gif", frame: false });
+  assert.deepEqual(coverCardSources(null), { still: "", anim: "", original: "", frame: false });
   const both = { ...base, cover_card_still_url: "cs-a.still.webp", cover_card_anim_url: "cs-a.anim.webp" };
-  assert.deepEqual(coverCardSources(both), { still: "cs-a.still.webp", anim: "cs-a.anim.webp", original: "cs-local.gif" });
+  assert.deepEqual(coverCardSources(both), { still: "cs-a.still.webp", anim: "cs-a.anim.webp", original: "cs-local.gif", frame: false });
   // Too long for an animated copy: the original plays in the animated layer.
   const stillOnly = { ...base, cover_card_still_url: "cs-b.still.webp" };
   assert.equal(coverCardSources(stillOnly).anim, "cs-local.gif");
@@ -47,7 +47,16 @@ test("card sources use copies when present and fall back to the original", () =>
 test("failed animated copy falls back to the original; failed still falls back to the original", () => {
   const game = { cover_local_url: "cf-local.gif", cover_card_still_url: "cf.still.webp", cover_card_anim_url: "cf.anim.webp" };
   coverAnimError(fakeEvent("cf.anim.webp"));
-  assert.deepEqual(coverCardSources(game), { still: "cf.still.webp", anim: "cf-local.gif", original: "cf-local.gif" });
+  assert.deepEqual(coverCardSources(game), { still: "cf.still.webp", anim: "cf-local.gif", original: "cf-local.gif", frame: false });
   assert.equal(gameCoverError(fakeEvent("cf.still.webp"), game), true);
-  assert.deepEqual(coverCardSources(game), { still: "", anim: "", original: "cf-local.gif" });
+  assert.deepEqual(coverCardSources(game), { still: "", anim: "", original: "cf-local.gif", frame: false });
+  // An animated cover whose still copy failed draws its own still frame.
+  assert.deepEqual(coverCardSources({ ...game, cover_animated: true }), { still: "", anim: "cf-local.gif", original: "cf-local.gif", frame: true });
+});
+
+test("animated cover without card copies draws a still frame and keeps the animated layer", () => {
+  const game = { cover_local_url: "ca-local.webp", cover_animated: true };
+  assert.deepEqual(coverCardSources(game), { still: "", anim: "ca-local.webp", original: "ca-local.webp", frame: true });
+  assert.equal(coverCardSources({ cover_animated: true }).frame, false);
+  assert.equal(coverCardSources({ ...game, cover_card_still_url: "ca.still.webp" }).frame, false);
 });

@@ -414,6 +414,10 @@ class TorrentSupervisor:
         decision = seeding.decide_after_finish(torrent_settings.seed_mode())
         if decision == seeding.ASK:
             job.seed_state, job.phase = "awaiting_answer", "awaiting_seed_answer"
+            # An unanswered question must not seed in the meantime.
+            job.paused = True
+            if job.added:
+                _ = self._send({"cmd": "pause", "id": job.id})
         elif decision == seeding.SEED:
             job.seed_state, job.phase = "seeding", "seeding"
         else:
@@ -616,7 +620,9 @@ class TorrentSupervisor:
         job.stage = "paused" if paused else "downloading"
         job.phase = job.stage
         job.speed = job.upload_speed = 0
-        _ = self._send({"cmd": "pause" if paused else "resume", "id": job.id})
+        if job.added:
+            # A job the helper does not hold yet gets `paused` with its `add`.
+            _ = self._send({"cmd": "pause" if paused else "resume", "id": job.id})
 
     def pause(self, job_id: str) -> bool:
         with self._lock:

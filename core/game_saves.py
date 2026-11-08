@@ -175,12 +175,17 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
     title_tokens = _name_tokens(title_clean)
     title_key = "".join(title_tokens)
     game_key = "".join(_name_tokens(game_name))
-    # The executable's name as a whole word ("run-data" for run.exe), even a
-    # generic one; never as part of a word ("autostart" for start.exe).
-    if game_key and (entry_key == game_key or game_key in entry_tokens):
-        return True
+    # The executable's name as a whole word ("Story-Saves" for Story.exe);
+    # never as part of a word ("autostart" for start.exe).
     if game_key in _GENERIC_EXE_STEMS:
+        # Other apps share a generic name as a word (GameMaker for Game.exe,
+        # PrismLauncher for Launcher.exe), so it needs the name alone or
+        # with save words only ("run-data" for run.exe).
+        if entry_tokens[0] == game_key and all(t in _SAVE_WORDS for t in entry_tokens[1:]):
+            return True
         game_key = ""
+    elif game_key and (entry_key == game_key or game_key in entry_tokens):
+        return True
     for key in (title_key, game_key):
         if key and len(key) >= 8 and key in entry_key:
             return True
@@ -193,6 +198,9 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
 # Executable stems shared by many unrelated games (RPG Maker's Game.exe and
 # similar). They can't identify a game folder inside a shared container.
 _GENERIC_EXE_STEMS = frozenset({"game", "start", "launcher", "main", "run"})
+
+# Words a save folder adds after a generic executable name.
+_SAVE_WORDS = frozenset({"save", "saves", "savedata", "savegame", "savegames", "data", "userdata"})
 
 
 def _nested_game_folders(base: str, title: str, game_name: str) -> list[str]:

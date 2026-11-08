@@ -123,8 +123,35 @@ def test_failed_install_puts_a_moved_download_back(tmp_path, env, monkeypatch):
     monkeypatch.setattr(ai, "check_symlinks_inside_staging", boom)
     with pytest.raises(ArchiveInstallError):
         run(folder / "data", lib)
-    # Flattening already ran, so the files come back one level up.
-    assert (folder / "data" / "Game.exe").is_file() and (folder / "data" / "sub" / "readme.txt").is_file()
+    # Flattening already ran; the wrapper folder comes back too.
+    assert (game / "Game.exe").is_file() and (game / "sub" / "readme.txt").is_file()
+    assert [p.name for p in (folder / "data").iterdir()] == ["Game-0.8-pc"]
+
+
+def test_folder_update_can_be_retried_with_the_chosen_launch_file(tmp_path, env):
+    from core.archive_install import NoLauncherChosenError
+    import core.database as database
+
+    dest = tmp_path / "lib" / "DDB"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    game_id = database.add_game("DDB", str(dest / "Game.exe"), version="1.0")
+    # Two wrapper levels: one is flattened, the next is still a single folder.
+    folder, game = make_download(
+        tmp_path, wrapper="Wrap/Game", phase="ended",
+        files={"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"},
+    )
+    env.load()
+    options = {"library_folder": str(tmp_path / "lib"), "pattern": "{title}", "title": "Other", "version": "2.0",
+               "game_id": game_id, "source_kind": "folder"}
+    with pytest.raises(NoLauncherChosenError) as info:
+        install_archive(str(folder / "data"), **options)
+    chosen = next(c for c in info.value.candidates if c.endswith("PC/DDB/Game.exe"))
+    assert (game / "PC" / "DDB" / "Game.exe").is_file()
+
+    result = install_archive(str(folder / "data"), exe_relpath=chosen, **options)
+    assert result["success"] is True, result
+    assert str(result["exe_path"]).endswith("PC/DDB/Game.exe")
 
 
 def test_seeding_archive_survives_install_even_with_delete_ticked(tmp_path, env):

@@ -354,6 +354,30 @@ def test_retry_after_write_error_adds_the_torrent_again(make, tmp_path):
     assert stage(sup, job_id) == "downloading"
 
 
+def test_pause_before_the_helper_is_ready_does_not_fail_the_job(make, tmp_path):
+    sup = make("stalled", FAKE_READY_DELAY="0.5")
+    job_id = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "downloading")
+    assert sup.pause(job_id)
+    adds = wait_for(lambda: [c for c in log_commands(tmp_path) if c["cmd"] == "add"])
+    assert adds[0]["paused"] is True
+    time.sleep(0.2)
+    assert stage(sup, job_id) == "paused"
+    assert not any(c["cmd"] == "pause" for c in log_commands(tmp_path))
+
+
+def test_unanswered_seed_question_pauses_the_torrent(make, tmp_path):
+    sup = make()
+    job_id = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: job_of(sup, job_id)["seed_state"] == "awaiting_answer")
+    wait_for(lambda: any(c["cmd"] == "pause" and c["id"] == job_id for c in log_commands(tmp_path)))
+    assert job_of(sup, job_id)["paused"] is True
+
+    assert sup.answer_seed(job_id, True)
+    wait_for(lambda: any(c["cmd"] == "resume" and c["id"] == job_id for c in log_commands(tmp_path)))
+    assert job_of(sup, job_id)["seed_state"] == "seeding" and stage(sup, job_id) == "done"
+
+
 def test_second_job_for_the_same_torrent_does_not_share_a_live_folder(make):
     sup = make()
     first = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())

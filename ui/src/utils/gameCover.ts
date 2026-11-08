@@ -7,6 +7,7 @@ interface CoverGame {
   cover_image_path?: string;
   cover_card_still_url?: string;
   cover_card_anim_url?: string;
+  cover_animated?: boolean;
 }
 
 // Replacement files have fresh URLs. A failed URL is tried only once, across
@@ -31,17 +32,24 @@ export interface CoverCardSources {
   still: string;
   anim: string;
   original: string;
+  // Draw the original's first frame as the still layer.
+  frame: boolean;
 }
 
 // Dense views show the small copies when they exist and have not failed.
 // The animated layer needs a still copy, which also marks the cover as
 // animated: without a usable animated copy (too long to copy, or it failed to
-// load) the original plays there instead, so animation is never lost.
+// load) the original plays there instead, so animation is never lost. An
+// animated cover without a usable still copy (not made yet, or Qt cannot make
+// one) gets a still frame drawn from the original, so it never plays when the
+// animation setting says it must not.
 export function coverCardSources(game: CoverGame | null | undefined): CoverCardSources {
   const usable = (url: string | undefined): string => (url && !failedSources.has(url) ? url : "");
   const still = usable(game?.cover_card_still_url);
   const original = gameCoverSrc(game);
-  return { still, anim: still ? usable(game?.cover_card_anim_url) || original : "", original };
+  if (still) return { still, anim: usable(game?.cover_card_anim_url) || original, original, frame: false };
+  const frame = !!game?.cover_animated && !!original;
+  return { still: "", anim: frame ? original : "", original, frame };
 }
 
 export function coverAnimError(event: Event): void {

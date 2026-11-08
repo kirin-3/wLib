@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, BinaryIO, Callable
 
 from core import database
 from core.game_covers import cache_covers_dir, covers_dir
@@ -58,6 +58,90 @@ def card_paths(source_name: object) -> tuple[Path, Path] | None:
     if still is None or anim is None:
         return None
     return still, anim
+
+
+_animated_cache: dict[tuple[str, int, int], bool] = {}
+_animated_lock = threading.Lock()
+
+
+def _gif_animated(handle: "BinaryIO") -> bool:
+    """Whether a GIF has a second frame; walks the block structure only."""
+    head = handle.read(13)
+    if len(head) < 13 or head[:3] != b"GIF":
+        return False
+    if head[10] & 0x80:
+        _ = handle.seek(3 << ((head[10] & 0x07) + 1), os.SEEK_CUR)
+    frames = 0
+
+    def skip_sub_blocks() -> bool:
+        while True:
+            size = handle.read(1)
+            if not size:
+                return False
+            if size[0] == 0:
+                return True
+            _ = handle.seek(size[0], os.SEEK_CUR)
+
+    while True:
+        kind = handle.read(1)
+        if kind == b"\x2c":  # image descriptor
+            frames += 1
+            if frames > 1:
+                return True
+            desc = handle.read(9)
+            if len(desc) < 9:
+                return False
+            if desc[8] & 0x80:
+                _ = handle.seek(3 << ((desc[8] & 0x07) + 1), os.SEEK_CUR)
+            _ = handle.read(1)  # LZW minimum code size
+            if not skip_sub_blocks():
+                return False
+        elif kind == b"\x21":  # extension
+            _ = handle.read(1)
+            if not skip_sub_blocks():
+                return False
+        else:
+            return False
+
+
+def _is_animated_uncached(path: Path) -> bool:
+    with path.open("rb") as handle:
+        suffix = path.suffix.lower()
+        if suffix == ".gif":
+            return _gif_animated(handle)
+        head = handle.read(64)
+    if suffix == ".webp":
+        # The extended header (VP8X) carries an animation flag.
+        return head[:4] == b"RIFF" and head[8:16] == b"WEBPVP8X" and len(head) > 20 and bool(head[20] & 0x02)
+    if suffix == ".avif":
+        # An image sequence lists the `avis` brand in its `ftyp` box.
+        if head[4:8] != b"ftyp":
+            return False
+        size = int.from_bytes(head[:4], "big")
+        return b"avis" in head[8:min(size, len(head))]
+    return False
+
+
+def is_animated(path: Path) -> bool:
+    """Whether a cover file is animated (GIF, WebP or AVIF); False when unreadable."""
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    key = (str(path), info.st_mtime_ns, info.st_size)
+    with _animated_lock:
+        known = _animated_cache.get(key)
+    if known is not None:
+        return known
+    try:
+        result = _is_animated_uncached(path)
+    except OSError:
+        return False
+    with _animated_lock:
+        if len(_animated_cache) > 4096:
+            _animated_cache.clear()
+        _animated_cache[key] = result
+    return result
 
 
 def webp_writer_available() -> bool:

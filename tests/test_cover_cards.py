@@ -361,3 +361,31 @@ def test_copies_stay_out_of_export_and_dirty_tracking(tmp_path):
     assert "cards" not in after_export and "still.webp" not in after_export
     assert before_sync == after_sync
     assert json.loads(before_export).get("games") == json.loads(after_export).get("games")
+
+
+def test_is_animated_reads_gif_webp_and_avif_headers(tmp_path):
+    assert cover_cards.is_animated(put_cover(tmp_path, make_gif(frames=3)))
+    assert not cover_cards.is_animated(put_cover(tmp_path, make_gif(frames=1)))
+    vp8x = b"RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00"
+    assert cover_cards.is_animated(put_cover(tmp_path, vp8x + b"\x02" + b"\x00" * 9, "webp"))
+    assert not cover_cards.is_animated(put_cover(tmp_path, vp8x + b"\x00" + b"\x00" * 9, "webp"))
+    assert not cover_cards.is_animated(put_cover(tmp_path, b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 20, "webp"))
+    def ftyp(brands):
+        return struct.pack(">I", 16 + 4 * len(brands)) + b"ftypavif\x00\x00\x00\x00" + b"".join(brands)
+    assert cover_cards.is_animated(put_cover(tmp_path, ftyp([b"avif", b"avis"]), "avif"))
+    assert not cover_cards.is_animated(put_cover(tmp_path, ftyp([b"avif", b"mif1"]), "avif"))
+    assert not cover_cards.is_animated(put_cover(tmp_path, b"\x89PNG", "png"))
+    assert not cover_cards.is_animated(tmp_path / "missing.gif")
+
+
+def test_get_games_flags_an_animated_cover(tmp_path):
+    local = put_cover(tmp_path, make_gif())
+    _game(tmp_path, local=local)
+    api = _api()
+    assert api.get_games()[0].get("cover_animated") is True
+    cover_cards.make_card_copies(local)
+    game = api.get_games()[0]
+    assert "cover_card_still_url" in game and game.get("cover_animated") is True
+    static = put_cover(tmp_path, make_gif(frames=1))
+    _game(tmp_path, local=static)
+    assert [g.get("cover_animated", False) for g in api.get_games()] == [True, False]

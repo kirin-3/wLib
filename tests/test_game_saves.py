@@ -742,6 +742,17 @@ def test_profile_folders_need_a_real_name_match(tmp_path):
     assert [os.path.basename(r["path"]) for r in results] == ["OfficeAffairs"]
 
 
+@pytest.mark.parametrize(("exe", "own"), [("Game.exe", "Game-Saves"), ("Launcher.exe", "launcher")])
+def test_generic_exe_name_does_not_match_other_apps(tmp_path, exe, own):
+    home = tmp_path / "home"
+    for name in ("GameMaker", "GameMakerStudio2", "PrismLauncher", "heroic-launcher", own):
+        (home / ".config" / name).mkdir(parents=True, exist_ok=True)
+    results = detect_save_locations(
+        f"/games/x/{exe}", "Zq", windows=False, _profile_home=str(home)
+    )
+    assert [os.path.basename(r["path"]) for r in results] == [own]
+
+
 def test_my_documents_link_is_not_a_second_location(tmp_path):
     user = tmp_path / "prefix" / "drive_c" / "users" / "steamuser"
     saves = user / "Documents" / "Zelda Quest"

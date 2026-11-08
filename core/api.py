@@ -1561,13 +1561,15 @@ class Api:
                 "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
 
     def _add_local_cover_url(self, game: dict[str, object]) -> None:
-        from core.cover_cards import card_paths
+        from pathlib import Path
+
+        from core.cover_cards import card_paths, is_animated
         from core.game_covers import cover_path, cached_cover_path
 
         cached_url = game.pop("cover_cache_url", None)
         name = game.pop("cover_cache", None)
         cached = cached_cover_path(name)
-        shown: str | None = None
+        shown: Path | None = None
         if (
             self.library_sync.server_available
             and cached_url == game.get("cover_image_path")
@@ -1577,18 +1579,23 @@ class Api:
             game["cover_cache_url"] = (
                 f"http://127.0.0.1:8183/covers/cache/{cached.name}"
             )
-            shown = cached.name
+            shown = cached
         path = cover_path(game.get("cover_local"))
         if self.library_sync.server_available and path is not None and path.is_file():
             game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
-            shown = path.name
+            shown = path
         # Card copies belong to the source that is shown: local over cached.
-        copies = card_paths(shown) if shown else None
+        copies = card_paths(shown.name) if shown is not None else None
         if copies is not None and copies[0].is_file():
             base = "http://127.0.0.1:8183/covers/cards/"
             game["cover_card_still_url"] = base + copies[0].name
             if copies[1].is_file():
                 game["cover_card_anim_url"] = base + copies[1].name
+        if shown is not None and is_animated(shown):
+            # Without a usable still copy (not made yet, Qt cannot make one,
+            # or it failed to load) a view draws its own still frame, so the
+            # animation setting still applies.
+            game["cover_animated"] = True
 
     def get_cover_cache_status(self) -> dict[str, object]:
         try:

@@ -2409,6 +2409,9 @@ def install_archive(
     _check_cancel(cancel)
     staging = create_staging_dir(library_folder)
     moved_from = ""
+    # The wrapper folder that flattening removed, put back if a moved
+    # download is restored.
+    wrapper_name = ""
     try:
         if not folder_source:
             _progress("extracting")
@@ -2629,9 +2632,15 @@ def install_archive(
         if staging:
             restored = False
             if moved_from and os.path.isdir(staging):
-                # A moved download must survive a failed install.
+                # A moved download must survive a failed install, in its own
+                # layout: a retry's chosen launch file and the torrent's file
+                # list are both relative to it.
                 try:
-                    os.replace(staging, moved_from)
+                    if wrapper_name:
+                        os.makedirs(moved_from)
+                        os.replace(staging, os.path.join(moved_from, wrapper_name))
+                    else:
+                        os.replace(staging, moved_from)
                     restored = True
                 except OSError:
                     pass
