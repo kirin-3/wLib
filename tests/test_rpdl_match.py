@@ -116,3 +116,27 @@ def test_at_most_eight_best_first():
     assert len(out["results"]) == 8
     scores = [r["score"] for r in out["results"]]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_joined_season_or_sequel_number_counts():
+    assert m.title_score("Game", "GameSeason2-1.0") < m.HIDE_BELOW
+    assert m.title_score("Game Season 2", "GameSeason2-1.0") >= 90
+    assert m.title_score("Game Season 2", "GameSeason3-1.0") < m.HIDE_BELOW
+    assert m.title_score("Game 2", "Game2-1.0") > m.title_score("Game 2", "Game3-1.0") + 30
+    assert m.title_score("Area51", "Area 51-0.3") >= 90
+    assert m.title_score("Game", "Game-0.5-win10") >= 90
+    assert m.title_score("Game", "Game-1.0-pc64") >= 90
+
+
+def test_find_tries_the_next_query_when_all_results_score_too_low():
+    seen = []
+
+    def search(query):
+        seen.append(query)
+        if query == "Game Name [v0.5]":
+            return [_r(9, "OtherThing-1.0")]
+        return [_r(1, "GameName-0.5-pc")] if query == "Game Name" else []
+
+    out = m.find(search, "Game Name [v0.5]", "Dev", "0.5")
+    assert seen == ["Game Name [v0.5]", "Game Name"]
+    assert out["preselected_id"] == 1 and out["query"] == "Game Name"

@@ -570,6 +570,8 @@ class TorrentSupervisor:
                 f"Not enough disk space: {_size_text(meta.size)} needed, {_size_text(free)} free"
             )
         with self._lock:
+            if job.cancel.is_set():
+                raise DownloadError("cancelled")
             # Every job of one torrent uses the folder named after its hash, so
             # two live jobs would share (and later delete) each other's files.
             same = [j for j in self._jobs.values() if j is not job and j.info_hash == meta.info_hash]
@@ -587,6 +589,10 @@ class TorrentSupervisor:
         _ = (folder / "meta.torrent").write_bytes(data)
         with self._lock:
             job.folder = folder
+            if job.cancel.is_set():
+                # cancel() ran before the folder was set, so it could not delete it.
+                self._delete_folder(job)
+                raise DownloadError("cancelled")
             job.info_hash = meta.info_hash
             job.total = meta.size
             job.stage = "downloading"

@@ -29,3 +29,11 @@ test("refresh replaces the set, ignores errors, and a final tick beats a stale a
   await pending;
   assert.deepEqual([...runningGameIds.value], [1]);
 });
+
+test("a launch tick beats a stale refresh that started before it", async () => {
+  runningGameIds.value = new Set();
+  const pending = refreshRunningGames(async () => []);
+  applyPlaytimeTick({ gameId: 7, isFinal: false });
+  await pending;
+  assert.deepEqual([...runningGameIds.value], [7]);
+});

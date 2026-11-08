@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -397,3 +398,56 @@ def test_second_job_for_the_same_torrent_does_not_share_a_live_folder(make):
     info_hash = parse_torrent(torrent_bytes()).info_hash
     owners = [j for j in sup._jobs.values() if j.info_hash == info_hash]  # pyright: ignore[reportPrivateUsage]
     assert [j.id for j in owners] == [third]
+
+
+def _torrent_folders():
+    root = Path(os.environ["WLIB_DATA_DIR"]) / "downloads" / "torrents"
+    return [p for p in root.iterdir() if p.is_dir()] if root.is_dir() else []
+
+
+def test_cancel_during_disk_check_stops_the_start(make, tmp_path):
+    sup = make()
+    checking, release = threading.Event(), threading.Event()
+
+    def slow_free(path):
+        checking.set()
+        _ = release.wait(5)
+        return 100 * GIB
+
+    sup._free_space = slow_free  # pyright: ignore[reportPrivateUsage]
+    job_id = sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
+    assert checking.wait(5)
+    assert sup.cancel(job_id)
+    release.set()
+    wait_for(lambda: stage(sup, job_id) == "cancelled")
+    time.sleep(0.2)
+    assert stage(sup, job_id) == "cancelled"
+    assert _torrent_folders() == []
+    assert not any(c["cmd"] == "add" for c in log_commands(tmp_path))
+
+
+def test_cancel_while_files_are_written_deletes_the_folder(make, tmp_path, monkeypatch):
+    sup = make()
+    holder: dict[str, str] = {}
+    original = Path.write_bytes
+
+    def write_then_cancel(self, data):
+        written = original(self, data)
+        if self.name == "meta.torrent":
+            _ = sup.cancel(holder["id"])
+        return written
+
+    monkeypatch.setattr(Path, "write_bytes", write_then_cancel)
+    gate = threading.Event()
+
+    def fetch():
+        _ = gate.wait(5)
+        return torrent_bytes()
+
+    holder["id"] = sup.start(1, "Game", "1", 7, fetch)
+    gate.set()
+    wait_for(lambda: stage(sup, holder["id"]) == "cancelled")
+    time.sleep(0.2)
+    assert stage(sup, holder["id"]) == "cancelled"
+    assert _torrent_folders() == []
+    assert not any(c["cmd"] == "add" for c in log_commands(tmp_path))

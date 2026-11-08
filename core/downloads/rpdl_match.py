@@ -41,6 +41,7 @@ _VERSION_TOKEN = re.compile(r"^v?\d+(?:\.\d+)+[a-z]*$|^v\d+[a-z]*$")
 _CHAPTER_TOKEN = re.compile(r"^(?:ch|chap|chapter|ep|part|pt)\d+$")
 _FIX_TOKEN = re.compile(r"^fix(?:ed)?\d*$|^hotfix\d*$")
 _BRACKETS = re.compile(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}")
+_JOINED_NUMBER = re.compile(r"^([a-z]{2,})(\d+)$")
 
 
 def _plain(text: str) -> str:
@@ -69,10 +70,17 @@ def name_tokens(title: str) -> tuple[list[str], set[str]]:
             continue
         if versioned and not word.isdigit() and len(word) <= 3:
             continue
-        if word in MARKER_WORDS:
-            markers.add(word)
-            continue
-        tokens.append(_ROMAN.get(word, word))
+        # `Season2` or `Game2` as one word: split off the number so the
+        # marker and sequel checks see it.
+        joined = _JOINED_NUMBER.match(word)
+        if joined and joined.group(1) in RELEASE_WORDS:
+            continue  # `win10`, `pc64`: a platform word, not a name
+        parts = [joined.group(1), joined.group(2)] if joined else [word]
+        for part in parts:
+            if part in MARKER_WORDS:
+                markers.add(part)
+            else:
+                tokens.append(_ROMAN.get(part, part))
     return tokens, markers
 
 
@@ -229,11 +237,13 @@ def find(
     developer: str = "",
     version: object = None,
 ) -> dict[str, object]:
-    """Run the query plan through `search`, stopping at the first search with results."""
+    """Run the query plan through `search`, stopping at the first search with shown results."""
     for query in plan_queries(game_title, developer):
         found = search(query)
         if found:
             ranked = rank(cast(Sequence[Mapping[str, object]], found), game_title, version)
-            ranked["query"] = query
-            return ranked
+            # All results scored too low: try the next query.
+            if ranked["results"]:
+                ranked["query"] = query
+                return ranked
     return {"results": [], "preselected_id": None, "needs_choice": False, "query": ""}

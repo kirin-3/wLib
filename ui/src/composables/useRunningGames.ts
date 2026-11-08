@@ -31,6 +31,8 @@ export function applyPlaytimeTick(detail: PlaytimeTick | null | undefined): void
     refreshRequest++;
     runningGameIds.value.delete(gameId);
   } else if (!runningGameIds.value.has(gameId)) {
+    // A refresh already in flight may carry a list from before the launch.
+    refreshRequest++;
     runningGameIds.value.add(gameId);
   }
 }
