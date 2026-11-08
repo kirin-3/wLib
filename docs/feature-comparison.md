@@ -58,7 +58,7 @@ Snapshot from 2026-11-03
 | Skip / pin a version | ✅ skip | ❌ | ❌ | ✅ pin |
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
 | In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4 | ✅ ~20 hosts, JDownloader hand-off | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier | ✅ aria2: donor DDL, masked links, MEGAcmd |
-| Torrents / RPDL | ❌ | ✅ | ❌ | ✅ |
+| Torrents / RPDL | ✅ RPDL, with seeding | ✅ | ❌ | ✅ |
 | Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
 
@@ -82,7 +82,7 @@ Snapshot from 2026-11-03
 | Wine | ✅ | ✅ | ✅ (auto on PATH) | ❌ |
 | Proton / umu-launcher | ✅ umu, Proton-GE download | ✅ umu, GE-Proton/umu-proton download | ⚠️ manual wrapper | ❌ |
 | Native Linux runs of Windows builds | ✅ RPGM runner, NW.js fixes | ⚠️ EasyRPG | ❌ | ✅ mkxp-z, Ren'Py SDK, NW.js conversion |
-| Other runtimes | Java, HTML (Windows) | Java, HTML player, Flash/Ruffle, DOSBox, ScummVM | Per-extension emulator mapping | ❌ |
+| Other runtimes | Java, built-in HTML player, Flash/Ruffle | Java, HTML player, Flash/Ruffle, DOSBox, ScummVM | Per-extension emulator mapping | ❌ |
 | Japanese locale | ✅ | ✅ Locale Emulator | ❌ | ❌ |
 | Winecfg / Winetricks / runtime installs | ✅ | ❌ | ❌ | ❌ |
 | GameMode / MangoHud | ✅ | ❌ | ❌ | ❌ |

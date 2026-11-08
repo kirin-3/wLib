@@ -32,7 +32,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 **Highlights**
 
-- **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension, and install it over the old one with your saves moved across.
+- **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension or as an RPDL torrent, and install it over the old one with your saves moved across.
 - **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, Winetricks and per-game sandboxing are built in.
 - **Steam Deck ready.** Controller navigation, a TV mode that turns on in Gaming Mode, and games added to Steam as shortcuts.
 - **Light.** About 125 MB of RAM when idle, a third to a half of what the Electron-based managers use ([details](docs/feature-comparison.md)).
@@ -43,9 +43,9 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 ### Library
 
 - Grid, list, compact and banner views, with a card-size slider.
-- Cover art, tags with colors, ratings, play status (including your own statuses), Markdown notes and PDF, TXT or MD attachments.
+- Cover art (animated covers play always, on hover or never, and pause while a game runs), tags with colors, ratings, play status (including your own statuses), Markdown notes and PDF, TXT or MD attachments.
 - Collections as tabs, saved filters, and active filters shown as removable chips.
-- Select several games at once to change status, collections or favorites, check for updates, or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
+- Select several games at once to change status, collections, favorites, tags, engine, launch mode, sandbox or Wine/Proton prefix, back up saves, refresh covers, check for updates, or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
 - A wishlist that tells you when a game is marked Completed.
 - Playtime tracking and a per-version **Journal**. **Unplayed update** and **New since finished** collections show what's new.
 - Thread screenshots in the detail window, served from the shared game catalog.
@@ -55,8 +55,9 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 ### Updates and downloads
 
 - Check every game against F95Zone at once, or on a schedule. Games from Ryuugames without an F95 thread are checked against the catalog.
-- **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts.
-- Install a new game or an update from a `.zip`, `.7z` or `.rar`. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder.
+- **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
+- **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit.
+- Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
 - Desktop notifications for new releases and completed wishlist games (Linux).
 
@@ -64,7 +65,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 
 - Save backups with restore and merge after an update. Backups stay on your computer and are never synced.
 - **Ren'Py:** developer console switch, `.rpa` extraction and the URM toggle.
-- **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them.
+- **RPG Maker MV/MZ:** decrypt encrypted assets and switch the game to load them, and edit saves (gold, items, actors, switches, variables, or the raw data) with a backup before each write.
 - **Unity:** install, update or remove BepInEx 5 or 6, with a backup.
 
 ### Launching
@@ -80,7 +81,8 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - Add wLib and your installed games to Steam as non-Steam shortcuts (Linux). Games started from Steam still go through wLib's launcher and record playtime.
 - **Run in sandbox** uses bubblewrap on Linux and Sandboxie-Plus on Windows. If the tool is missing, the game doesn't launch, so it never runs unsandboxed by accident.
 - **No internet** cuts a single game off from the network on both Linux and Windows.
-- On Windows, `.exe`, `.bat` and `.cmd` files run directly, `.jar` games run through Java, and HTML games open in your browser.
+- HTML and Flash games play in a built-in player with playtime, Stop, sandbox and No internet. Each game keeps its own saves. Flash runs through Ruffle. You can still open a game in your browser instead.
+- On Windows, `.exe`, `.bat` and `.cmd` files run directly and `.jar` games run through Java.
 
 ### Controller and Steam Deck
 
@@ -90,7 +92,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 ### Sync and backup
 
 - Back up everything to one JSON file, optionally protected with a passphrase, and restore it on another machine, including between Linux and Windows.
-- Sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what is synced.
+- Sync between computers through a shared folder (Syncthing, MEGA and so on), Dropbox or Google Drive, with optional encryption. wLib keeps the last five synced copies so you can go back, and asks you when both computers changed. File paths and launch settings stay on each computer. The [privacy policy](PRIVACY.md) explains exactly what is synced.
 - Import your library from F95Checker, Atlas, XLibrary, f69 or Playnite.
 
 ### Interface
@@ -108,6 +110,7 @@ A short version of the [full feature comparison](docs/feature-comparison.md), re
 | RAM when idle (Windows)\* | ~125 MB | ~379 MB | ~281 MB | Not tested |
 | Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
 | In-app update downloads | Yes | Yes | Yes | Yes |
+| Torrents (RPDL) | Yes | Yes | No | Yes |
 | Proton / umu-launcher | Yes | Yes | Manual | No |
 | Sandbox and per-game internet block | Yes | Windows only | No | Yes (internet block Linux only) |
 | Controller / Steam Deck UI | Yes | Yes | No | No |
@@ -119,7 +122,7 @@ A short version of the [full feature comparison](docs/feature-comparison.md), re
 
 \* Tested on a fresh Windows 11 VM with empty libraries, using wLib 0.4.4, XLibrary 3.11.4 and Atlas 0.9.14.
 
-Other apps have things wLib doesn't yet, such as LewdCorner support, browsing the full catalog, torrents and machine translation. The [full comparison](docs/feature-comparison.md) lists them.
+Other apps have things wLib doesn't yet, such as LewdCorner support, browsing the full catalog and machine translation. The [full comparison](docs/feature-comparison.md) lists them.
 
 ## Screenshots
 
