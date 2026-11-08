@@ -412,3 +412,70 @@ def test_swf_is_a_lowest_priority_launch_target_with_flash_engine(tmp_path, monk
     (tmp_path / "lib" / "g.swf").touch()
     assert [g["engine"] for g in scan_games_folder(str(tmp_path))
             if g["exe_path"].endswith("g.swf")] == ["Flash"]
+
+
+def _touch(path, content=b"x"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
+def test_find_launcher_game_folder_next_to_walkthrough(tmp_path):
+    from core.game_scan import find_launcher
+
+    _touch(tmp_path / "DDB" / "Game.exe")
+    (tmp_path / "Walkthrough").mkdir()
+    _touch(tmp_path / "Walkthrough" / "notes.txt")
+    assert find_launcher(str(tmp_path)) == str(tmp_path / "DDB" / "Game.exe")
+
+
+def test_find_launcher_prefers_subfolder_named_like_title(tmp_path):
+    from core.game_scan import find_launcher
+
+    _touch(tmp_path / "DDB" / "Game.exe")
+    _touch(tmp_path / "Tools" / "Editor.exe")
+    assert find_launcher(str(tmp_path), preferred_title="DDB") == str(
+        tmp_path / "DDB" / "Game.exe"
+    )
+
+
+def test_find_launcher_ignores_extra_folders(tmp_path):
+    from core.game_scan import find_launcher
+
+    _touch(tmp_path / "Game" / "Game.exe")
+    _touch(tmp_path / "Extras" / "Viewer.exe")
+    assert find_launcher(str(tmp_path), preferred_title="Other") == str(
+        tmp_path / "Game" / "Game.exe"
+    )
+
+
+def test_find_launcher_ambiguous_subfolders_return_empty(tmp_path):
+    from core.game_scan import find_launcher
+
+    _touch(tmp_path / "PC" / "Game.exe")
+    _touch(tmp_path / "Mac" / "Game.exe")
+    assert find_launcher(str(tmp_path), preferred_title="Other") == ""
+
+
+def test_find_launcher_single_subfolder_unchanged(tmp_path):
+    from core.game_scan import find_launcher
+
+    _touch(tmp_path / "Only" / "Game.exe")
+    assert find_launcher(str(tmp_path)) == str(tmp_path / "Only" / "Game.exe")
+
+
+def test_find_launcher_directory_limit(tmp_path, monkeypatch):
+    import core.game_scan as game_scan
+
+    monkeypatch.setattr(game_scan, "_MAX_SCANNED_DIRS", 3)
+    for index in range(5):
+        (tmp_path / f"d{index}").mkdir()
+    _touch(tmp_path / "d4" / "Game.exe")
+    assert game_scan.find_launcher(str(tmp_path)) == ""
+
+
+def test_scan_games_folder_finds_launcher_next_to_extra_folder(tmp_path):
+    game = tmp_path / "Library" / "Cool Game-1.0"
+    _touch(game / "Cool Game" / "Cool.exe")
+    _touch(game / "Extras" / "Viewer.exe")
+    games = scan_games_folder(str(tmp_path / "Library"))
+    assert [g["exe_path"] for g in games] == [str(game / "Cool Game" / "Cool.exe")]

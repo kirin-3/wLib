@@ -871,14 +871,11 @@ def test_install_same_folder_no_launcher_restores_previous_install(
             game_id=int(game_id),
         )
 
-    # The failed update must leave the game on its previous, still-usable copy.
+    # An archive with no launch file is refused before anything changes.
     assert (dest / "Game.exe").read_text() == "old"
     assert (dest / "user-notes.txt").read_text() == "mine"
     assert db.get_all_games()[0]["exe_path"] == str(dest / "Game.exe")
-    kept = [path for path in lib.iterdir() if ".wlib-new-" in path.name]
-    assert len(kept) == 1
-    assert (kept[0] / "readme.txt").exists()
-    assert not [path for path in lib.iterdir() if ".wlib-old-" in path.name]
+    assert sorted(path.name for path in lib.iterdir()) == ["Game"]
 
 
 def test_install_same_folder_db_failure_restores_previous_install(
@@ -2406,6 +2403,12 @@ def test_install_same_folder_keeps_backup_for_target_outside_exe_folder(
     backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
     assert len(backups) == 1
     assert (backups[0] / "Tools" / "Mod.exe").read_text() == "mod"
+    mod = next(t for t in db.list_game_launch_targets(int(game_id)) if t["label"] == "Mod")
+    assert mod["exe_path"] == str(backups[0] / "Tools" / "Mod.exe")
+    unmoved = cast(list[dict[str, object]], result["unmoved_targets"])
+    assert [t["label"] for t in unmoved] == ["Mod"]
+    assert unmoved[0]["backup_folder"] == str(backups[0])
+    assert "Mod" in str(result["kept_old_folder_reason"])
 
 
 # Runs on every platform, so Windows CI checks parallel zip writes for real.
@@ -2906,3 +2909,187 @@ def test_old_seven_zip_without_the_utf8_switch_still_lists(monkeypatch):
     calls.clear()
     assert archive_install.list_tool_entries(tool, "a.7z") == ["Game.exe"]
     assert len(calls) == 1 and "-sccUTF-8" not in calls[0]
+
+
+def _ddb_game(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    dest = lib / "DDB"
+    dest.mkdir(parents=True)
+    (dest / "Game.exe").write_text("old")
+    (dest / "save.sav").write_text("save")
+    game_id = db.add_game("DDB", str(dest / "Game.exe"), version="1.0")
+    assert game_id is not None
+    return db, lib, dest, int(game_id)
+
+
+def test_list_launch_candidates_filters_and_limits(tmp_path):
+    from core.archive_install import list_launch_candidates
+
+    (tmp_path / "DDB").mkdir()
+    (tmp_path / "DDB" / "Game.exe").write_text("x")
+    (tmp_path / "DDB" / "unins000.exe").write_text("x")
+    (tmp_path / "DDB" / "notes.txt").write_text("x")
+    (tmp_path / "a" / "b" / "c" / "d" / "e").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "c" / "d" / "e" / "Deep.exe").write_text("x")
+    assert list_launch_candidates(str(tmp_path)) == ["DDB/Game.exe"]
+    for index in range(60):
+        (tmp_path / f"run{index:02d}.sh").write_text("x")
+    assert len(list_launch_candidates(str(tmp_path))) == 50
+
+
+def test_update_without_pick_lists_candidates_and_changes_nothing(tmp_path, monkeypatch):
+    from core.archive_install import NoLauncherChosenError, install_archive
+
+    db, lib, dest, game_id = _ddb_game(tmp_path, monkeypatch)
+    archive = tmp_path / "DDB-2.0.zip"
+    # Two game folders and no title match: no automatic pick.
+    _write_game_zip(archive, {"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"})
+    before = db.get_all_games()[0]["exe_path"]
+    with pytest.raises(NoLauncherChosenError) as info:
+        install_archive(
+            str(archive), library_folder=str(lib), pattern="{title}",
+            title="Other", version="2.0", game_id=game_id,
+        )
+    assert sorted(info.value.candidates) == ["Mac/DDB/Game.exe", "PC/DDB/Game.exe"]
+    assert db.get_all_games()[0]["exe_path"] == before
+    assert (dest / "Game.exe").read_text() == "old"
+    assert sorted(p.name for p in lib.iterdir()) == ["DDB"]
+
+
+def test_update_with_chosen_exe_relpath_completes(tmp_path, monkeypatch):
+    from core.archive_install import install_archive
+
+    db, lib, dest, game_id = _ddb_game(tmp_path, monkeypatch)
+    archive = tmp_path / "DDB-2.0.zip"
+    _write_game_zip(archive, {"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"})
+    result = install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}",
+        title="Other", version="2.0", game_id=game_id,
+        exe_relpath="PC/DDB/Game.exe", remove_old=True,
+    )
+    assert result["success"] is True, result
+    assert result["exe_path"] == str(lib / "Other" / "PC" / "DDB" / "Game.exe")
+    assert db.get_all_games()[0]["exe_path"] == result["exe_path"]
+
+
+@pytest.mark.parametrize(
+    "bad", ["/etc/passwd", "../x.exe", "a/../../x.exe", "missing.exe", "C:/x.exe", "PC"]
+)
+def test_update_rejects_invalid_exe_relpath(tmp_path, monkeypatch, bad):
+    from core.archive_install import install_archive
+
+    db, lib, dest, game_id = _ddb_game(tmp_path, monkeypatch)
+    archive = tmp_path / "DDB-2.0.zip"
+    _write_game_zip(archive, {"PC/DDB/Game.exe": b"n", "Mac/DDB/Game.exe": b"m"})
+    with pytest.raises(ArchiveInstallError):
+        install_archive(
+            str(archive), library_folder=str(lib), pattern="{title}",
+            title="Other", version="2.0", game_id=game_id, exe_relpath=bad,
+        )
+    assert (dest / "Game.exe").read_text() == "old"
+
+
+def test_update_archive_without_launch_file_changes_nothing(tmp_path, monkeypatch):
+    from core.archive_install import NoLauncherChosenError, install_archive
+
+    db, lib, dest, game_id = _ddb_game(tmp_path, monkeypatch)
+    archive = tmp_path / "DDB-2.0.zip"
+    _write_game_zip(archive, {"readme.txt": b"x"})
+    with pytest.raises(ArchiveInstallError, match="No launchable file") as info:
+        install_archive(
+            str(archive), library_folder=str(lib), pattern="{title}",
+            title="DDB", version="2.0", game_id=game_id,
+        )
+    assert not isinstance(info.value, NoLauncherChosenError)
+    assert (dest / "Game.exe").read_text() == "old"
+
+
+def test_update_season_layout_refuses_without_changes(tmp_path, monkeypatch):
+    from core.archive_install import install_archive
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    root = lib / "[Dev] Title"
+    (root / "Season 1").mkdir(parents=True)
+    (root / "Season 2").mkdir()
+    (root / "Season 1" / "game.sh").write_text("s1")
+    (root / "Season 2" / "game.sh").write_text("s2")
+    game_id = db.add_game("Title", str(root / "Season 1" / "game.sh"), version="1")
+    assert game_id is not None
+    assert db.add_game_launch_target(
+        int(game_id), "Season 2", str(root / "Season 2" / "game.sh")
+    )
+    archive = tmp_path / "Title-2.zip"
+    _write_game_zip(archive, {"game.sh": b"new", "data.bin": b"x"})
+    with pytest.raises(ArchiveInstallError, match="destination folder already exists"):
+        install_archive(
+            str(archive), library_folder=str(lib), pattern="[{creator}] {title}",
+            title="Title", creator="Dev", version="2", game_id=int(game_id),
+        )
+    assert (root / "Season 1" / "game.sh").read_text() == "s1"
+    assert (root / "Season 2" / "game.sh").read_text() == "s2"
+    assert sorted(p.name for p in lib.iterdir()) == ["[Dev] Title"]
+    assert db.get_all_games()[0]["exe_path"] == str(root / "Season 1" / "game.sh")
+    targets = db.list_game_launch_targets(int(game_id))
+    assert [t["exe_path"] for t in targets] == [str(root / "Season 2" / "game.sh")]
+
+
+def test_update_missing_sibling_target_points_at_backup(tmp_path, monkeypatch):
+    from core.archive_install import install_archive
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    dest = lib / "Title"
+    (dest / "Ep2").mkdir(parents=True)
+    (dest / "Game.sh").write_text("old")
+    (dest / "Ep2" / "Game.sh").write_text("ep2")
+    game_id = db.add_game("Title", str(dest / "Game.sh"), version="1")
+    assert game_id is not None
+    assert db.add_game_launch_target(int(game_id), "Ep2", str(dest / "Ep2" / "Game.sh"))
+    archive = tmp_path / "Title-2.zip"
+    _write_game_zip(archive, {"Game.sh": b"new", "data.bin": b"x"})
+    result = install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}",
+        title="Title", version="2", game_id=int(game_id), remove_old=True,
+    )
+    assert result["success"] is True, result
+    backups = [p for p in lib.iterdir() if ".wlib-old-" in p.name]
+    assert len(backups) == 1
+    ep2 = db.list_game_launch_targets(int(game_id))[0]
+    assert ep2["exe_path"] == str(backups[0] / "Ep2" / "Game.sh")
+    assert os.path.isfile(str(ep2["exe_path"]))
+    unmoved = cast(list[dict[str, object]], result["unmoved_targets"])
+    assert [t["label"] for t in unmoved] == ["Ep2"]
+    assert unmoved[0]["backup_folder"] == str(backups[0])
+    assert result["removed_old"] is False
+    assert "Ep2" in str(result["kept_old_folder_reason"])
+
+
+def test_update_keeps_default_target_label_and_names_it_in_results(tmp_path, monkeypatch):
+    from core.archive_install import install_archive
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    lib = tmp_path / "lib"
+    root = lib / "Title"
+    (root / "S1").mkdir(parents=True)
+    (root / "S2").mkdir()
+    (root / "S1" / "Game.sh").write_text("s1")
+    (root / "S2" / "Game.sh").write_text("s2")
+    game_id = db.add_game("Title", str(root / "S1" / "Game.sh"), version="1")
+    assert game_id is not None
+    db.update_game(int(game_id), {"default_target_label": "Season 1"})
+    assert db.add_game_launch_target(int(game_id), "Season 2", str(root / "S2" / "Game.sh"))
+    target_id = db.list_game_launch_targets(int(game_id))[0]["id"]
+    archive = tmp_path / "Title-2.zip"
+    _write_game_zip(archive, {"Game.sh": b"new"})
+    result = install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}/{version}",
+        title="Title", version="2", game_id=int(game_id), target_id=target_id,
+        remove_old=False,
+    )
+    assert result["success"] is True, result
+    game = db.get_all_games()[0]
+    assert game["default_target_label"] == "Season 1"
+    # The renamed default (outside the replaced folder) is never labelled "Default".
+    assert "Default" not in [t.get("label") for t in cast(list[dict[str, object]], result["unmoved_targets"])]

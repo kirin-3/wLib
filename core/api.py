@@ -6677,6 +6677,7 @@ class Api:
         engine = ""
         old_folder = ""
         old_exe = ""
+        old_title = old_version = ""
         if game_id is not None:
             from core.database import get_all_games
 
@@ -6696,6 +6697,8 @@ class Api:
                     version = latest
                 creator = str(game.get("developer") or "")
                 engine = str(game.get("engine") or "")
+                old_title = str(game.get("title") or "")
+                old_version = str(game.get("version") or "")
                 break
             if old_exe:
                 old_folder = os.path.dirname(os.path.abspath(old_exe))
@@ -6727,7 +6730,13 @@ class Api:
 
             row = get_game(game_id)
             own_targets = (
-                [{"label": "Default", "exe_path": str(row.get("exe_path") or "")}]
+                [
+                    {
+                        "label": str(row.get("default_target_label") or "").strip()
+                        or "Default",
+                        "exe_path": str(row.get("exe_path") or ""),
+                    }
+                ]
                 if row
                 else []
             )
@@ -6779,9 +6788,27 @@ class Api:
             self._update_downloads.manager.mark_open(archive_path)
         if in_torrents:
             torrent_supervisor.mark_open(archive_path)
+        outside_library_folders = bool(old_folder) and not any(
+            is_within(old_folder, os.path.expanduser(p)) for p in folders
+        )
+        suggested_library_folder = ""
+        if outside_library_folders:
+            from core.archive_install import suggest_library_folder
+
+            suggested_library_folder = suggest_library_folder(
+                old_exe,
+                pattern,
+                creator,
+                old_title or title,
+                old_version,
+                engine,
+                str(get_setting_fn("downloads_folder") or ""),
+            )
         return {
             "success": True,
             "source_kind": "folder" if folder_source else "archive",
+            "outside_library_folders": outside_library_folders,
+            "suggested_library_folder": suggested_library_folder,
             "torrent_source": in_torrents,
             "torrent_seeding": in_torrents and torrent_supervisor.is_seeding_path(archive_path),
             "downloaded_by_wlib": downloaded_by_wlib,
@@ -6862,7 +6889,12 @@ class Api:
         """Blocking install from an archive; the dialog polls status meanwhile."""
         import sqlite3
 
-        from core.archive_install import ArchiveInstallError, InstallCancelled, archive_stem
+        from core.archive_install import (
+            ArchiveInstallError,
+            InstallCancelled,
+            NoLauncherChosenError,
+            archive_stem,
+        )
         from core.archive_install import install_archive as run_install
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
@@ -7034,10 +7066,19 @@ class Api:
                 bytes_cb=_on_bytes,
                 cancel=self._archive_install_cancel,
                 source_kind=source_kind,
+                exe_relpath=str(payload.get("exe_relpath") or ""),
             )
         except InstallCancelled as exc:
             self._set_archive_install_status(running=False, stage="cancelled")
             return {"success": False, "error": str(exc), "error_code": "install_cancelled"}
+        except NoLauncherChosenError as exc:
+            self._set_archive_install_status(running=False, stage="failed")
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_code": "no_launcher_chosen",
+                "launch_candidates": exc.candidates,
+            }
         except ArchiveInstallError as exc:
             self._set_archive_install_status(running=False, stage="failed")
             return {"success": False, "error": str(exc)}

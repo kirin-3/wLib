@@ -376,6 +376,10 @@ export interface ArchiveInspectResponse extends ApiBasicResponse {
   remove_reason?: string;
   library_folder?: string;
   own_targets_inside?: string[];
+  /** The game being updated lies outside every listed library folder. */
+  outside_library_folders?: boolean;
+  /** Folder to offer as a new library folder ("" when none is safe to suggest). */
+  suggested_library_folder?: string;
   downloaded_by_wlib?: boolean;
   /** "folder" when the source is a game folder downloaded by a torrent. */
   source_kind?: "archive" | "folder";
@@ -439,10 +443,14 @@ export interface ArchiveInstallOptions {
   delete_archive?: boolean | undefined;
   /** "folder" installs a game folder from a finished torrent; archive_path then names that folder. */
   source_kind?: "archive" | "folder" | undefined;
+  /** Launch file inside the archive, chosen by the user when an update found none. */
+  exe_relpath?: string | undefined;
 }
 
 export interface ArchiveInstallResponse extends ApiBasicResponse {
   success: boolean;
+  /** Launch files in the archive (paths inside it) when an update could not pick one. */
+  launch_candidates?: string[];
   game_id?: number;
   exe_path?: string;
   destination?: string;
@@ -871,6 +879,8 @@ export interface GameRecord {
   custom_prefix?: string;
   proton_version?: string;
   save_path_override?: string;
+  /** Name of the default launch target; empty shows "Default". */
+  default_target_label?: string;
   launch_mode?: LaunchMode;
   is_favorite?: boolean;
   rating_graphics?: number;
@@ -3723,7 +3733,7 @@ class ApiService {
         const oldFolder = (chosen?.exe_path || game?.exe_path || "").split(/[/\\]/).slice(0, -1).join("/");
         const matches = settings.library_folders.filter((p) => oldFolder === p || oldFolder.startsWith(`${p.replace(/[/\\]+$/, "")}/`)).sort((a, b) => b.length - a.length);
         const folder = typeof args[3] === "string" && args[3] ? args[3] : matches[0] || settings.library_folder;
-        const ownTargets = [...gameTargets.filter((t) => t.id !== targetId), ...(targetId !== null && game ? [{ label: "Default", exe_path: game.exe_path }] : [])];
+        const ownTargets = [...gameTargets.filter((t) => t.id !== targetId), ...(targetId !== null && game ? [{ label: game.default_target_label?.trim() || "Default", exe_path: game.exe_path }] : [])];
         // Mirrors inspect_archive: the archive name is the primary guess, the
         // stored game only fills blanks (and overwrites the version when it has
         // a known latest_version).
@@ -3767,6 +3777,8 @@ class ApiService {
           old_folder: oldFolder,
           library_folder: folder,
           own_targets_inside: ownTargets.filter((t) => oldFolder && t.exe_path.startsWith(`${oldFolder}/`)).map((t) => t.label),
+          outside_library_folders: !!oldFolder && matches.length === 0,
+          suggested_library_folder: oldFolder && matches.length === 0 ? oldFolder.split("/").slice(0, -1).join("/") : "",
           removable: !!game,
           remove_reason: game ? "" : "No previous install.",
         };
@@ -3780,6 +3792,16 @@ class ApiService {
         // polls get_archive_install_status meanwhile.
         const options = isRecord(args[0]) ? args[0] : {};
         const total = 300 * 1024 ** 2;
+        if (/ambiguous/i.test(String(options.archive_path || "")) && !options.exe_relpath) {
+          // Mimics an update whose archive holds launch files but no clear pick.
+          return {
+            success: false,
+            mock: true,
+            error: "No launchable file could be picked automatically. Choose the file to launch.",
+            error_code: "no_launcher_chosen",
+            launch_candidates: ["PC/Game/Game.exe", "Mac/Game/Game.sh"],
+          };
+        }
         this._mockArchiveStatus = { running: true, stage: "extracting", done: 0, total, cancellable: true };
         return new Promise((resolve) => {
           let step = 0;

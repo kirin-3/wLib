@@ -165,19 +165,21 @@ def _best_launcher(
     )
 
 
-def find_launcher(
-    game_dir: str, depth: int = 2, preferred_title: str = ""
-) -> str:
-    """Best launch file in game_dir, looking one folder deeper when it holds none.
+# Known folders that hold extra content, not the game itself.
+_EXTRA_FOLDER_NAMES = frozenset(
+    {"walkthrough", "extras", "extra", "bonus", "patch", "patches", "mods", "mod", "tools"}
+)
+# Upper bound on directories read by one top-level `find_launcher` call.
+_MAX_SCANNED_DIRS = 200
 
-    `preferred_title` is passed to the name heuristic; callers that rename the
-    folder (archive installs) keep the guessed-title preference that way.
-    """
-    try:
-        entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
-    except OSError:
-        return ""
-    candidates = [
+
+def _squash(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _launcher_names(entries: list[os.DirEntry[str]]) -> list[str]:
+    """Names of the files in `entries` that can launch a game."""
+    return [
         entry.name
         for entry in entries
         if not entry.is_symlink()
@@ -192,6 +194,68 @@ def find_launcher(
             and _DOCUMENT_HTML_RE.search(entry.name)
         )
     ]
+
+
+def list_launcher_files(folder: str) -> list[str]:
+    """Launch-file names directly in `folder`, sorted, with find_launcher's filter."""
+    try:
+        entries = sorted(os.scandir(folder), key=lambda entry: entry.name.lower())
+    except OSError:
+        return []
+    return _launcher_names(entries)
+
+
+def _pick_subfolder_launcher(
+    found: list[tuple[str, str]], title: str
+) -> str | None:
+    """Choose one launcher from (folder name, launcher) pairs, or None if unclear."""
+    if len(found) == 1:
+        return found[0][1]
+    squashed_title = _squash(title)
+    if squashed_title:
+        matches = [
+            pair for pair in found
+            if _squash(pair[0]).startswith(squashed_title)
+        ]
+        if len(matches) == 1:
+            return matches[0][1]
+    kept = [pair for pair in found if pair[0].lower() not in _EXTRA_FOLDER_NAMES]
+    if len(kept) < len(found):
+        if len(kept) == 1:
+            return kept[0][1]
+        if squashed_title:
+            matches = [
+                pair for pair in kept
+                if _squash(pair[0]).startswith(squashed_title)
+            ]
+            if len(matches) == 1:
+                return matches[0][1]
+    return None
+
+
+def find_launcher(
+    game_dir: str, depth: int = 2, preferred_title: str = ""
+) -> str:
+    """Best launch file in game_dir, looking in its subfolders when it holds none.
+
+    `preferred_title` is passed to the name heuristic; callers that rename the
+    folder (archive installs) keep the guessed-title preference that way.
+    """
+    budget = [_MAX_SCANNED_DIRS]
+    return _find_launcher(game_dir, depth, preferred_title, budget)
+
+
+def _find_launcher(
+    game_dir: str, depth: int, preferred_title: str, budget: list[int]
+) -> str:
+    if budget[0] <= 0:
+        return ""
+    budget[0] -= 1
+    try:
+        entries = sorted(os.scandir(game_dir), key=lambda entry: entry.name.lower())
+    except OSError:
+        return ""
+    candidates = _launcher_names(entries)
     # Prefer the 64-bit build, but use a lone -32.exe rather than report that
     # the folder has no launchable file.
     files = [
@@ -233,8 +297,18 @@ def find_launcher(
             and entry.name.lower() not in ("__macosx", ".git")
             and not _is_internal_dir(entry.name)
         ]
-        if len(subdirs) == 1:
-            return find_launcher(subdirs[0], depth - 1, preferred_title)
+        found: list[tuple[str, str]] = []
+        for sub in subdirs:
+            launcher = _find_launcher(sub, depth - 1, preferred_title, budget)
+            if launcher:
+                found.append((os.path.basename(sub), launcher))
+        if budget[0] <= 0 and len(subdirs) > 1:
+            return ""
+        if found:
+            title = preferred_title or guess_title_and_version(
+                os.path.basename(game_dir)
+            )[0]
+            return _pick_subfolder_launcher(found, title) or ""
     return ""
 
 

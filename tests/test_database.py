@@ -2106,3 +2106,23 @@ def test_html_builtin_player_setting_defaults_on():
     assert html_builtin_player_enabled()
     update_setting("html_builtin_player", "false")
     assert not html_builtin_player_enabled()
+
+
+def test_default_target_label_column_migrates_and_is_trimmed():
+    game_id = add_game("Seasons", "/tmp/seasons.sh")
+    assert game_id is not None
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN default_target_label")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    assert get_all_games()[0]["default_target_label"] == ""
+    update_game(game_id, {"default_target_label": "   "})
+    assert get_all_games()[0]["default_target_label"] == ""
+    update_game(game_id, {"default_target_label": "  Season 1 "})
+    assert get_all_games()[0]["default_target_label"] == "Season 1"

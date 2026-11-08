@@ -470,6 +470,9 @@ def build_library_backup(
                 _zone_times(_pick_fields(_coerce_mapping(target), LAUNCH_TARGET_FIELDS))
                 for target in targets
             ]
+            exported_game["default_target_label"] = _coerce_text(
+                game.get("default_target_label")
+            ).strip()
         games.append(exported_game)
 
     backup: dict[str, object] = {
@@ -2309,6 +2312,26 @@ def apply_library_backup(
                         _replace_play_sessions(cursor, game_id, imported_game)
 
                 if SECTION_LAUNCH_TARGETS in sections:
+                    # Older backups have no key: the local name stays.
+                    if "default_target_label" in imported_game:
+                        imported_label = _coerce_text(
+                            imported_game.get("default_target_label")
+                        ).strip()
+                        keep_local_label = False
+                        if merge_mode == "fill_missing" and local_id is not None:
+                            row = cast(
+                                sqlite3.Row | None,
+                                cursor.execute(
+                                    "SELECT default_target_label FROM games WHERE id = ?",
+                                    (game_id,),
+                                ).fetchone(),
+                            )
+                            keep_local_label = bool(row is not None and str(row[0] or "").strip())
+                        if not keep_local_label:
+                            _ = cursor.execute(
+                                "UPDATE games SET default_target_label = ? WHERE id = ?",
+                                (imported_label, game_id),
+                            )
                     if merge_mode == "fill_missing" and local_id is not None:
                         # Read through the import cursor so targets written
                         # earlier in this uncommitted transaction count.

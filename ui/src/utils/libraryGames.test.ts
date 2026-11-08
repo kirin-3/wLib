@@ -5,6 +5,7 @@ import {
   buildTagFilterOptions,
   formatLastPlayed,
   formatPlaytime,
+  defaultTargetLabel,
   getEffectiveLaunchTargets,
   hasAdditionalLaunchTargets,
   compareLibraryGames,
@@ -378,4 +379,25 @@ test("additional launch targets are hidden while running or wishlisted", () => {
   assert.equal(hasAdditionalLaunchTargets(game, true), false);
   assert.equal(hasAdditionalLaunchTargets({ exe_path: "", launch_targets: [target] } as never, false), false);
   assert.equal(hasAdditionalLaunchTargets({ exe_path: "/g/a.sh", launch_targets: [] } as never, false), false);
+});
+
+test("defaultTargetLabel falls back to Default for empty, blank or missing names", () => {
+  assert.equal(defaultTargetLabel(undefined), "Default");
+  assert.equal(defaultTargetLabel({}), "Default");
+  assert.equal(defaultTargetLabel({ default_target_label: "   " }), "Default");
+});
+
+test("defaultTargetLabel returns the trimmed name", () => {
+  assert.equal(defaultTargetLabel({ default_target_label: " Season 1 " }), "Season 1");
+});
+
+test("getEffectiveLaunchTargets names the default entry", () => {
+  const targets = getEffectiveLaunchTargets({
+    id: 4,
+    exe_path: "/g/s1.sh",
+    default_target_label: "Season 1",
+    launch_targets: [],
+  });
+  assert.equal(targets[0]?.label, "Season 1");
+  assert.equal(targets[0]?.isDefault, true);
 });

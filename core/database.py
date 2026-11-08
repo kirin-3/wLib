@@ -713,6 +713,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("note_links", "TEXT DEFAULT '[]'"),
         ("screenshots", "TEXT DEFAULT '[]'"),
         ("save_path_override", "TEXT DEFAULT ''"),
+        # Optional name of the canonical default launch target ("" shows "Default").
+        ("default_target_label", "TEXT DEFAULT ''"),
         ("sync_uid", "TEXT"),
     ]
 
@@ -1352,6 +1354,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "custom_prefix",
         "proton_version",
         "save_path_override",
+        "default_target_label",
         "launch_mode",
         "play_status",
         "finished_version",
@@ -1396,6 +1399,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
     if "finished_version" in safe_fields:
         safe_fields["finished_version"] = str(safe_fields["finished_version"]).strip()
+    if "default_target_label" in safe_fields:
+        safe_fields["default_target_label"] = str(safe_fields["default_target_label"]).strip()
     for tool in ("gamemode", "mangohud"):
         if tool in safe_fields:
             safe_fields[tool] = normalize_tool_override(safe_fields[tool])

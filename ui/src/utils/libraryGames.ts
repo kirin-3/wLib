@@ -270,10 +270,15 @@ export const getGamePlayStatusMeta = (game: Pick<GameRecord, "play_status" | "st
 const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] =>
   [...targets].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
 
+/** Name of the canonical default launch target; empty shows "Default". */
+export const defaultTargetLabel = (
+  game: Pick<GameRecord, "default_target_label"> | null | undefined,
+): string => game?.default_target_label?.trim() || "Default";
+
 export const getEffectiveLaunchTargets = (
-  game: Pick<GameRecord, "id" | "exe_path" | "launch_targets">,
+  game: Pick<GameRecord, "id" | "exe_path" | "launch_targets" | "default_target_label">,
 ): EffectiveLaunchTarget[] => [
-  { id: `default-${game.id}`, label: "Default", exe_path: game.exe_path, isDefault: true },
+  { id: `default-${game.id}`, label: defaultTargetLabel(game), exe_path: game.exe_path, isDefault: true },
   ...sortLaunchTargets(game.launch_targets || []).map((target) => ({
     id: `target-${target.id}`,
     label: target.label,

@@ -4640,3 +4640,97 @@ def _run_update_check_wait(api) -> None:
     deadline = time.monotonic() + 5
     while api.get_update_status()["running"] and time.monotonic() < deadline:
         time.sleep(0.01)
+
+
+def test_api_install_archive_update_returns_launch_candidates(tmp_path):
+    api = Api()
+    library = tmp_path / "lib"
+    update_setting("library_folder", str(library))
+    old_dir = library / "Game"
+    old_dir.mkdir(parents=True)
+    old_exe = old_dir / "Game.exe"
+    old_exe.write_text("old")
+    game_id = add_game("Game", str(old_exe), version="1.0")
+    assert game_id is not None
+
+    archive = tmp_path / "Game-2.0.zip"
+    _write_archive(archive, {"PC/Game/Game.exe": b"a", "Mac/Game/Game.exe": b"b"})
+    options = {
+        "archive_path": str(archive),
+        "game_id": game_id,
+        "library_folder": str(library),
+        "pattern": "{title}",
+        "title": "Other",
+        "version": "2.0",
+    }
+    result = api.install_archive(options)
+    assert result["success"] is False
+    assert result["error_code"] == "no_launcher_chosen"
+    assert sorted(cast(list[str], result["launch_candidates"])) == [
+        "Mac/Game/Game.exe",
+        "PC/Game/Game.exe",
+    ]
+    assert old_exe.read_text() == "old"
+
+    chosen = api.install_archive({**options, "exe_relpath": "PC/Game/Game.exe"})
+    assert chosen["success"] is True
+    game = next(g for g in get_all_games() if g["id"] == game_id)
+    assert str(game["exe_path"]).endswith(os.path.join("PC", "Game", "Game.exe"))
+
+
+def _outside_setup(tmp_path, monkeypatch, exe_rel, *, pattern="{title}", version="0.4"):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    update_setting("library_folder", str(lib))
+    update_setting("library_folder_pattern", pattern)
+    archive = tmp_path / "Game-2.0.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Game.exe", b"new")
+    exe = tmp_path / exe_rel
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("old")
+    gid = add_game("Title", str(exe), version=version, developer="Dev")
+    return archive, gid, lib
+
+
+def test_inspect_archive_suggests_folder_by_pattern_suffix(tmp_path, monkeypatch):
+    archive, gid, _lib = _outside_setup(
+        tmp_path, monkeypatch, "InProgress/Dev/Title/0.4/Game.exe",
+        pattern="{creator}/{title}/{version}",
+    )
+    info = Api().inspect_archive(str(archive), gid)
+    assert info["outside_library_folders"] is True
+    assert info["suggested_library_folder"] == str(tmp_path / "InProgress")
+
+
+def test_inspect_archive_suggests_parent_when_pattern_differs(tmp_path, monkeypatch):
+    archive, gid, _lib = _outside_setup(tmp_path, monkeypatch, "InProgress/Odd/Game.exe")
+    info = Api().inspect_archive(str(archive), gid)
+    assert info["outside_library_folders"] is True
+    assert info["suggested_library_folder"] == str(tmp_path / "InProgress")
+
+
+def test_inspect_archive_refuses_home_suggestion(tmp_path, monkeypatch):
+    archive, gid, _lib = _outside_setup(tmp_path, monkeypatch, "home/Title/Game.exe")
+    info = Api().inspect_archive(str(archive), gid)
+    assert info["outside_library_folders"] is True
+    assert info["suggested_library_folder"] == ""
+
+
+def test_inspect_archive_refuses_downloads_suggestion(tmp_path, monkeypatch):
+    archive, gid, _lib = _outside_setup(tmp_path, monkeypatch, "home/Downloads/Title/Game.exe")
+    info = Api().inspect_archive(str(archive), gid)
+    assert info["outside_library_folders"] is True
+    assert info["suggested_library_folder"] == ""
+
+
+def test_inspect_archive_game_inside_library_has_no_suggestion(tmp_path, monkeypatch):
+    archive, gid, _lib = _outside_setup(tmp_path, monkeypatch, "lib/Title/Game.exe")
+    info = Api().inspect_archive(str(archive), gid)
+    assert info["outside_library_folders"] is False
+    assert info["suggested_library_folder"] == ""

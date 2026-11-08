@@ -105,6 +105,20 @@ class InstallCancelled(ArchiveInstallError):
         super().__init__("The install was cancelled. Nothing was changed.")
 
 
+class NoLauncherChosenError(ArchiveInstallError):
+    """An update's archive holds launch files, but none could be picked.
+
+    `candidates` lists them as paths relative to the extracted archive, so the
+    dialog can offer a choice and install again with `exe_relpath`.
+    """
+
+    def __init__(self, candidates: list[str]) -> None:
+        super().__init__(
+            "No launchable file could be picked automatically. Choose the file to launch."
+        )
+        self.candidates: list[str] = candidates
+
+
 def _check_cancel(cancel: threading.Event | None) -> None:
     if cancel is not None and cancel.is_set():
         raise InstallCancelled()
@@ -223,6 +237,58 @@ def build_destination(
     if base:
         return os.path.join(base, *segments)
     return os.path.join(*segments)
+
+
+def suggest_library_folder(
+    old_exe: str,
+    pattern: str,
+    creator: str,
+    title: str,
+    version: str,
+    engine: str,
+    downloads_folder: str = "",
+) -> str:
+    """Library folder to offer for a game installed outside every library folder.
+
+    Strips the folder pattern's segments from the previous install path, so
+    `.../InProgress/Dev/Title/0.4/Game.exe` with `{creator}/{title}/{version}`
+    gives `.../InProgress`. When the path does not follow the pattern, the
+    parent of the executable's folder is used. A drive root, the home folder,
+    and the Downloads folder are never suggested ("" then).
+    """
+    if not old_exe:
+        return ""
+    sentinel = os.path.abspath(os.sep + "wlib-base")
+    relative = os.path.relpath(
+        build_destination(sentinel, pattern, creator, title, version, engine), sentinel
+    )
+    segments = [part for part in re.split(r"[/\\]+", relative) if part and part != "."]
+    exe_dir = os.path.dirname(os.path.abspath(old_exe))
+    suggestion = ""
+    if segments:
+        current = exe_dir
+        while True:
+            parts = [p for p in re.split(r"[/\\]+", current) if p]
+            if len(parts) > len(segments) and [
+                p.casefold() for p in parts[-len(segments):]
+            ] == [seg.casefold() for seg in segments]:
+                suggestion = current
+                for _ in segments:
+                    suggestion = os.path.dirname(suggestion)
+                break
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+    if not suggestion:
+        suggestion = os.path.dirname(exe_dir)
+    suggestion_real = _real(suggestion)
+    refused = {_real("~"), _real(os.path.join("~", "Downloads"))}
+    if downloads_folder:
+        refused.add(_real(downloads_folder))
+    if _is_root(suggestion_real) or suggestion_real in refused:
+        return ""
+    return suggestion
 
 
 def check_volume_set(volumes: VolumeSet) -> None:
@@ -1449,6 +1515,19 @@ def apply_execute_bits(root: str) -> int:
     return changed
 
 
+def _single_wrapper_name(staging_dir: str) -> str:
+    """Name of the only top-level folder (ignoring junk), or "" when there is not one."""
+    junk = {"__macosx", ".ds_store", "thumbs.db", "desktop.ini"}
+    try:
+        names = [n for n in os.listdir(staging_dir) if n.lower() not in junk]
+    except OSError:
+        return ""
+    if len(names) != 1:
+        return ""
+    path = os.path.join(staging_dir, names[0])
+    return names[0] if os.path.isdir(path) and not os.path.islink(path) else ""
+
+
 def flatten_single_wrapper(staging_dir: str) -> bool:
     """Move a single top-level wrapper folder's contents up one level."""
     try:
@@ -1834,6 +1913,47 @@ def relocate_launch_targets(
     return updated, unmoved
 
 
+def _point_missing_at_backup(
+    updated: list[dict[str, object]],
+    unmoved: list[dict[str, object]],
+    destination: str,
+    old_backup: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """After an in-place swap, repoint targets the new tree lacks at the backup.
+
+    A target whose path is inside `destination` but whose file is not in the
+    new version points at the same relative path in `old_backup`, and is
+    listed as needing attention with the backup folder.
+    """
+    result: list[dict[str, object]] = []
+    repointed: list[dict[str, object]] = []
+    for target in updated:
+        exe = str(target.get("exe_path") or "")
+        rel = _relative_inside(exe, destination) if exe else None
+        if rel and not os.path.isfile(exe):
+            backup_path = os.path.join(old_backup, rel)
+            if os.path.isfile(backup_path):
+                next_target = dict(target)
+                next_target["exe_path"] = backup_path
+                result.append(next_target)
+                repointed.append({**next_target, "backup_folder": old_backup})
+                continue
+        result.append(target)
+    if not repointed:
+        return updated, unmoved
+    moved_ids = {t.get("id") for t in repointed if t.get("id") is not None}
+    kept = [
+        t
+        for t in unmoved
+        if t.get("id") is None or t.get("id") not in moved_ids
+    ]
+    # The default target has no id; match it on its old path instead.
+    repointed_default = any(t.get("id") is None for t in repointed)
+    if repointed_default:
+        kept = [t for t in kept if t.get("id") is not None]
+    return result, kept + repointed
+
+
 def remove_tree_collect(path: str) -> list[str]:
     """Remove a tree, collecting errors instead of aborting halfway."""
     errors: list[str] = []
@@ -1950,6 +2070,60 @@ def _pick_exe(
     return find_launcher(destination, depth=4, preferred_title=preferred_title)
 
 
+_MAX_LAUNCH_CANDIDATES = 50
+_MAX_CANDIDATE_DEPTH = 4
+
+
+def list_launch_candidates(root: str) -> list[str]:
+    """Launch files under `root` (depth 4, at most 50) as relative paths.
+
+    Uses the same file filter as `find_launcher`, so it never offers a file
+    the automatic pick would skip (crash reporters, installers, documents).
+    """
+    from core.game_scan import list_launcher_files
+
+    found: list[str] = []
+
+    def walk(folder: str, depth: int) -> None:
+        if len(found) >= _MAX_LAUNCH_CANDIDATES:
+            return
+        for name in list_launcher_files(folder):
+            if len(found) >= _MAX_LAUNCH_CANDIDATES:
+                return
+            found.append(os.path.relpath(os.path.join(folder, name), root))
+        if depth >= _MAX_CANDIDATE_DEPTH:
+            return
+        try:
+            entries = sorted(os.scandir(folder), key=lambda entry: entry.name.lower())
+        except OSError:
+            return
+        for entry in entries:
+            if (
+                not entry.is_symlink()
+                and entry.is_dir(follow_symlinks=False)
+                and entry.name.lower() not in ("__macosx", ".git")
+            ):
+                walk(entry.path, depth + 1)
+
+    walk(root, 1)
+    return [path.replace(os.sep, "/") for path in found]
+
+
+def _checked_exe_relpath(exe_relpath: str) -> str:
+    """Refuse an absolute or parent-escaping relative path."""
+    rel = str(exe_relpath or "").strip().replace("\\", "/")
+    parts = [part for part in rel.split("/") if part not in ("", ".")]
+    if (
+        not parts
+        or rel.startswith("/")
+        or os.path.isabs(rel)
+        or re.match(r"^[A-Za-z]:", rel)
+        or any(part == ".." for part in parts)
+    ):
+        raise ArchiveInstallError("The chosen launch file path is not valid.")
+    return "/".join(parts)
+
+
 def _torrent_area() -> str:
     from core.downloads.torrents import torrents_dir
 
@@ -2029,6 +2203,7 @@ def install_archive(
     bytes_cb: Callable[[int, int], None] | None = None,
     cancel: threading.Event | None = None,
     source_kind: str = "archive",
+    exe_relpath: str = "",
 ) -> dict[str, object]:
     """Full install orchestration per design §7 (filesystem + DB).
 
@@ -2039,6 +2214,9 @@ def install_archive(
     (total 0 when the archive does not say). Setting `cancel` stops the
     install with InstallCancelled at any point before the new version moves
     into place; after that it has no effect.
+
+    `exe_relpath` is the launch file inside the extracted archive that an
+    update uses when the automatic pick found none (see NoLauncherChosenError).
 
     Returns {"game_id", "exe_path", "destination", "unmoved_targets",
     "kept_old_folder_reason", "removed_old", "old_folder"}.
@@ -2061,6 +2239,7 @@ def install_archive(
                 pass
 
     folder_source = source_kind == "folder"
+    chosen_relpath = _checked_exe_relpath(exe_relpath) if exe_relpath.strip() else ""
     archive_path = os.path.expanduser(str(archive_path or "").strip())
     volumes: VolumeSet | None = None
     if folder_source:
@@ -2141,6 +2320,29 @@ def install_archive(
             [(creator, title)],
             engine,
             game_id,
+        )
+    # The previous-install root is ambiguous when it is a parent of the
+    # executable's folder and also holds another target of this game.
+    root_ambiguous = False
+    if old_install and old_root and _real(old_install) != _real(old_root):
+        own_paths: list[str] = []
+        if target_id is not None and default_exe:
+            own_paths.append(default_exe)
+        try:
+            own_paths.extend(
+                _absolute_game_path(t["exe_path"])
+                for t in list_game_launch_targets(int(str(game_id)))
+                if t["id"] != target_id
+            )
+        except (OSError, TypeError, ValueError):
+            pass
+        install_real = _real(old_install)
+        exe_dir_real = _real(old_root)
+        root_ambiguous = any(
+            path
+            and _is_within(_real(path), install_real)
+            and not _is_within(_real(path), exe_dir_real)
+            for path in own_paths
         )
     downloads_folder = ""
     try:
@@ -2266,7 +2468,9 @@ def install_archive(
                 except OSError:
                     pass
         _check_cancel(cancel)
-        _ = flatten_single_wrapper(staging)
+        wrapper_name = _single_wrapper_name(staging)
+        if not flatten_single_wrapper(staging):
+            wrapper_name = ""
         # Flattening moves a wrapper's entries up one level, which changes
         # what relative symlinks resolve to (staging/Game/link -> ../x means
         # something different at staging/link). Re-check after the move.
@@ -2277,12 +2481,51 @@ def install_archive(
         # the folder the new executable will run from, so pick that first.
         staging_install_dir = staging
         picked_exe = ""
-        if old_root or ("{engine}" in pattern and not engine.strip()):
+        if chosen_relpath:
+            chosen_path = os.path.join(staging, *chosen_relpath.split("/"))
+            if (
+                _relative_inside(chosen_path, staging) is None
+                or os.path.islink(chosen_path)
+                or not os.path.isfile(chosen_path)
+            ):
+                raise ArchiveInstallError(
+                    "The chosen launch file is not in the archive."
+                )
+            picked_exe = chosen_path
+        elif old_root or ("{engine}" in pattern and not engine.strip()):
             picked_exe = _pick_exe(staging, old_exe, old_root, title)
-            if picked_exe:
-                picked_dir = os.path.dirname(picked_exe)
-                if picked_dir and _relative_inside(picked_dir, staging) is not None:
-                    staging_install_dir = picked_dir
+        if old_root and not picked_exe:
+            # An update never changes the library or the old folder without a
+            # launch file: list what the archive holds so the user can choose.
+            candidates = list_launch_candidates(staging)
+            if candidates:
+                raise NoLauncherChosenError(candidates)
+            raise ArchiveInstallError(
+                "No launchable file was found in the archive. Nothing was changed."
+            )
+        if picked_exe:
+            picked_dir = os.path.dirname(picked_exe)
+            if picked_dir and _relative_inside(picked_dir, staging) is not None:
+                staging_install_dir = picked_dir
+        if root_ambiguous and picked_exe:
+            rel_to_root = _relative_inside(old_exe, old_install) or ""
+            rel_to_exedir = os.path.basename(old_exe)
+            picked_rel_now = _relative_inside(picked_exe, staging) or ""
+            # A wrapper folder that flattening removed still counts as the
+            # archive's own layout (`Bin/Game.exe` is a root-level `Bin`).
+            archive_rels = {
+                picked_rel_now.replace(os.sep, "/"),
+                f"{wrapper_name}/{picked_rel_now}".replace(os.sep, "/")
+                if wrapper_name
+                else "",
+            }
+            rel_to_root_posix = rel_to_root.replace(os.sep, "/")
+            if rel_to_root_posix not in archive_rels and picked_rel_now == rel_to_exedir:
+                # The new version has the executable where the target's own
+                # folder had it, so only that folder is the previous install.
+                old_install = old_root
+                old_real = _real(old_install)
+                destination, dest_real, guard = _resolve_destination(engine)
 
         if "{engine}" in pattern and not engine.strip():
             from core.game_scan import detect_engine
@@ -2496,11 +2739,20 @@ def install_archive(
                 ]
                 if target_id is not None and default_exe:
                     target_dicts.append(
-                        {"id": None, "label": "Default", "exe_path": default_exe}
+                        {
+                            "id": None,
+                            "label": str(old_game.get("default_target_label") or "").strip()
+                            or "Default",
+                            "exe_path": default_exe,
+                        }
                     )
                 updated_targets, unmoved = relocate_launch_targets(
                     old_root, new_install_dir, target_dicts
                 )
+                if old_backup:
+                    updated_targets, unmoved = _point_missing_at_backup(
+                        updated_targets, unmoved, destination, old_backup
+                    )
                 for before, after in zip(target_dicts, updated_targets):
                     if before["exe_path"] != after["exe_path"]:
                         try:
@@ -2528,15 +2780,19 @@ def install_archive(
                     if old_backup
                     else updated_targets + unmoved
                 )
+                def _target_inside(t: dict[str, object], root: str) -> bool:
+                    exe = str(t.get("exe_path") or "")
+                    return bool(exe) and _is_within(_real(exe), _real(root))
+
                 inside = next(
-                    (
-                        t
-                        for t in remaining
-                        if str(t.get("exe_path") or "")
-                        and _is_within(_real(str(t["exe_path"])), _real(old_install))
-                    ),
-                    None,
+                    (t for t in remaining if _target_inside(t, old_install)), None
                 )
+                if inside is None and old_backup:
+                    # A target repointed into the kept backup keeps it on disk.
+                    inside = next(
+                        (t for t in updated_targets if _target_inside(t, old_backup)),
+                        None,
+                    )
                 if inside is not None:
                     guard = {
                         "removable": False,

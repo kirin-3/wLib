@@ -12,7 +12,7 @@ import {
 import { notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, openInstallArchive, preselectLibraryFolder, formatLibraryFreeSpace, type InstallArchiveSeed } from "../../utils/installArchive";
-import { isWishlisted } from "../../utils/libraryGames";
+import { defaultTargetLabel, isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
 const props = defineProps<{
@@ -63,8 +63,15 @@ const folderEdited = ref(false);
 const targetId = ref<number | null>(null);
 const ownTargetsInside = ref<string[]>([]);
 const libraryFolderMissing = ref(false);
+// The game being updated lies outside every listed library folder.
+const outsideLibraryFolders = ref(false);
+const suggestedLibraryFolder = ref("");
+const addingLibraryFolder = ref(false);
+const addLibraryFolderError = ref("");
 const inspectError = ref("");
 const installError = ref("");
+// Launch files in the archive, listed when an update could not pick one.
+const launchCandidates = ref<string[]>([]);
 const installStage = ref("");
 const installDone = ref(0);
 const installTotal = ref(0);
@@ -191,8 +198,13 @@ const reset = () => {
   targetId.value = null;
   ownTargetsInside.value = [];
   libraryFolderMissing.value = false;
+  outsideLibraryFolders.value = false;
+  suggestedLibraryFolder.value = "";
+  addingLibraryFolder.value = false;
+  addLibraryFolderError.value = "";
   inspectError.value = "";
   installError.value = "";
+  launchCandidates.value = [];
   installStage.value = "";
   result.value = null;
   chosenExe.value = "";
@@ -286,6 +298,7 @@ const inspect = async () => {
   phase.value = "inspecting";
   inspectError.value = "";
   installError.value = "";
+  launchCandidates.value = [];
   duplicateGameId.value = null;
   try {
     const info = await api.inspectArchive(path, target.value?.id ?? null, targetId.value, folderEdited.value ? libraryFolder.value : null);
@@ -323,6 +336,8 @@ const inspect = async () => {
     if (!creator.value.trim() && !edited.has("creator")) creator.value = isUpdate.value ? (target.value?.developer || info.creator || "") : (info.creator || "");
     libraryFolder.value = preselectLibraryFolder(libraryFolder.value, info.library_folder, folderEdited.value);
     ownTargetsInside.value = info.own_targets_inside || [];
+    outsideLibraryFolders.value = !!info.outside_library_folders;
+    suggestedLibraryFolder.value = info.suggested_library_folder || "";
     destination.value = info.destination || "";
     enginePending.value = !!info.engine_pending;
     toolError.value = info.tool_error || "";
@@ -363,6 +378,45 @@ const browseArchive = async () => {
     }
   } catch (e) {
     console.error("Failed to browse archive", e);
+  }
+};
+
+// Adds a folder to the library folders without changing the default folder,
+// selects it, and inspects again so the destination preview follows.
+const addLibraryFolder = async (path: string) => {
+  if (!path || addingLibraryFolder.value) return;
+  addingLibraryFolder.value = true;
+  addLibraryFolderError.value = "";
+  try {
+    const before = libraryFolders.value.map((folder) => folder.path);
+    const defaultFolder = libraryFolders.value.find((folder) => folder.is_default)?.path || "";
+    const res = await api.saveSettings({
+      library_folders: before.includes(path) ? before : [...before, path],
+      library_folder: defaultFolder || path,
+    });
+    if (!props.modelValue) return;
+    if (res?.success === false) throw new Error(res.error || "Could not add the library folder");
+    const after = await api.listLibraryFolders();
+    if (!props.modelValue) return;
+    libraryFolders.value = after;
+    // The backend may store a canonical spelling of the path.
+    libraryFolder.value = after.find((folder) => !before.includes(folder.path))?.path ?? path;
+    libraryFolderMissing.value = false;
+    folderEdited.value = true;
+    await inspect();
+  } catch (e) {
+    addLibraryFolderError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    addingLibraryFolder.value = false;
+  }
+};
+
+const chooseFolderToAdd = async () => {
+  try {
+    const path = await api.browseDirectory(suggestedLibraryFolder.value || libraryFolder.value);
+    if (path && props.modelValue) await addLibraryFolder(path);
+  } catch (e) {
+    addLibraryFolderError.value = e instanceof Error ? e.message : String(e);
   }
 };
 
@@ -425,12 +479,13 @@ onBeforeUnmount(() => {
   lookupRequestId++;
 });
 
-const install = async () => {
+const install = async (exeRelpath = "") => {
   if (!canInstall.value) return;
   preview.cancel();
   lookupRequestId++;
   phase.value = "installing";
   installError.value = "";
+  launchCandidates.value = [];
   installStage.value = "starting";
   installDone.value = installTotal.value = 0;
   installCancellable.value = true;
@@ -455,9 +510,11 @@ const install = async () => {
       remove_old: removeOld.value,
       delete_archive: torrentSource.value ? false : deleteArchive.value,
       source_kind: sourceKind.value,
+      exe_relpath: exeRelpath || undefined,
     });
     if (!res?.success) {
       installError.value = res?.error || "Install failed.";
+      launchCandidates.value = Array.isArray(res?.launch_candidates) ? res.launch_candidates : [];
       if (res?.error_code === "install_cancelled") installError.value = "Install cancelled. Nothing was changed.";
       const payload = res as unknown as Record<string, unknown>;
       duplicateGameId.value =
@@ -477,6 +534,11 @@ const install = async () => {
     installCancellable.value = false;
     cancelRequested.value = false;
   }
+};
+
+// Runs the update again with the launch file the user chose from the list.
+const installWithExecutable = (relativePath: string) => {
+  void install(relativePath);
 };
 
 const seedForm = () => {
@@ -591,7 +653,7 @@ watch(phase, (next, prev) => {
         <div
           v-if="libraryFolderMissing"
           class="rounded-lg px-4 py-3 text-sm"
-          style="background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--warning-border)"
+          style="background: var(--bg-inset); color: var(--warning-text); border: 1px solid var(--border)"
         >
           Choose a library folder first — installs are placed inside it.
           <button @click="browseLibraryFolder" class="link-btn ml-2 font-semibold">Choose folder</button>
@@ -605,10 +667,36 @@ watch(phase, (next, prev) => {
           <p v-else class="text-sm font-mono break-all">{{ libraryFolders[0]?.path }} — {{ formatLibraryFreeSpace(libraryFolders[0]?.available ? libraryFolders[0]?.free_bytes ?? null : null) }}</p>
           <p v-if="selectedFolderUnavailable" class="text-xs" style="color: var(--warning-text)">This library folder is unavailable. Mount its drive or choose another folder.</p>
         </div>
+        <div
+          v-if="outsideLibraryFolders && isUpdate"
+          class="rounded-lg px-4 py-3 text-sm space-y-2"
+          style="background: var(--bg-inset); color: var(--warning-text); border: 1px solid var(--border)"
+          data-testid="outside-library-warning"
+        >
+          <p>
+            This game is outside your library folders.
+            <template v-if="libraryFolder">The update goes to <span class="font-mono break-all">{{ libraryFolder }}</span> instead of next to the current version.</template>
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-if="suggestedLibraryFolder"
+              type="button"
+              class="modal-btn"
+              :disabled="addingLibraryFolder || phase === 'installing'"
+              @click="addLibraryFolder(suggestedLibraryFolder)"
+            >
+              Add <span class="font-mono ml-1 break-all">{{ suggestedLibraryFolder }}</span>&nbsp;as a library folder
+            </button>
+            <button type="button" class="modal-btn" :disabled="addingLibraryFolder || phase === 'installing'" @click="chooseFolderToAdd">
+              Choose folder…
+            </button>
+          </div>
+          <p v-if="addLibraryFolderError" style="color: var(--error-text)">{{ addLibraryFolderError }}</p>
+        </div>
         <div v-if="target?.launch_targets?.length" class="space-y-2">
           <label for="install-part" class="text-sm">Part to update</label>
           <select id="install-part" v-model="targetId" @change="inspect()" :disabled="phase === 'installing'" class="modal-input w-full text-sm">
-            <option :value="null">Default</option>
+            <option :value="null">{{ defaultTargetLabel(target) }}</option>
             <option v-for="part in target.launch_targets" :key="part.id" :value="part.id">{{ part.label }}</option>
           </select>
         </div>
@@ -723,6 +811,20 @@ watch(phase, (next, prev) => {
 
         <p v-if="installError" class="text-sm" style="color: var(--error-text)">
           {{ installError }}
+          <span v-if="launchCandidates.length" class="block mt-2 space-y-1" data-testid="launch-candidates">
+            <span class="block text-xs" style="color: var(--text-secondary)">
+              Files found in the archive. Nothing was changed yet.
+            </span>
+            <button
+              v-for="candidate in launchCandidates"
+              :key="candidate"
+              type="button"
+              class="modal-btn block w-full text-left font-mono break-all justify-start"
+              @click="installWithExecutable(candidate)"
+            >
+              {{ candidate }}
+            </button>
+          </span>
           <span v-if="duplicateGameId !== null" class="block mt-2">
             <button type="button" class="modal-btn" @click="installIntoDuplicate">
               Install into that game instead
@@ -758,6 +860,9 @@ watch(phase, (next, prev) => {
             <ul class="list-disc ml-5">
               <li v-for="(target, index) in result.unmoved_targets" :key="index" class="font-mono">
                 {{ String((target as Record<string, unknown>).label || (target as Record<string, unknown>).exe_path) }}
+                <span v-if="(target as Record<string, unknown>).backup_folder" class="font-sans">
+                  (now points into the kept backup {{ String((target as Record<string, unknown>).backup_folder) }})
+                </span>
               </li>
             </ul>
           </div>
@@ -787,7 +892,7 @@ watch(phase, (next, prev) => {
         </button>
         <button
           v-else
-          @click="install"
+          @click="install()"
           :disabled="!canInstall"
           class="px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"

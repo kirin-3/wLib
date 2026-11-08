@@ -45,7 +45,7 @@ const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
-import { hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
+import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
 import type {
   GameAttachment,
   NoteLink,
@@ -146,6 +146,11 @@ const sandboxStatus = ref<SandboxStatus | null>(null);
 // Editable fields
 const title = ref("");
 const exePath = ref("");
+// Name of the default launch target ("" shows "Default"), renamed from its row.
+const defaultLabel = ref("");
+const editingDefaultLabel = ref(false);
+const defaultLabelDraft = ref("");
+const savingDefaultLabel = ref(false);
 const f95Url = ref("");
 const version = ref("");
 const developer = ref("");
@@ -811,6 +816,8 @@ watch(
         coverImageFailed.value = false;
         title.value = g.title || "";
         exePath.value = g.exe_path || "";
+        defaultLabel.value = g.default_target_label || "";
+        editingDefaultLabel.value = false;
         f95Url.value = g.f95_url || "";
         version.value = g.version || "";
         developer.value = g.developer || "";
@@ -1308,6 +1315,44 @@ const browseEditTargetPath = async () => {
   } catch (e) {
     console.error("Failed to browse launch target", e);
     notifyError("Error browsing file: " + String(e));
+  }
+};
+
+const defaultLabelInput = ref<HTMLInputElement | null>(null);
+
+const startRenameDefaultTarget = () => {
+  defaultLabelDraft.value = defaultLabel.value;
+  editingDefaultLabel.value = true;
+  void nextTick(() => defaultLabelInput.value?.focus());
+};
+
+const cancelRenameDefaultTarget = () => {
+  editingDefaultLabel.value = false;
+  defaultLabelDraft.value = "";
+};
+
+const saveDefaultTargetLabel = async () => {
+  if (savingDefaultLabel.value) return;
+  if (!props.game || typeof props.game.id !== "number") return;
+  const gameId = props.game.id;
+  const label = defaultLabelDraft.value.trim();
+  savingDefaultLabel.value = true;
+  try {
+    const res = await api.updateGame(gameId, { default_target_label: label });
+    if (res && res.success === false) {
+      notifyError("Failed to rename the default target: " + (res.error || "Unknown error"));
+      return;
+    }
+    if (isCurrentGame(gameId)) {
+      defaultLabel.value = label;
+      cancelRenameDefaultTarget();
+    }
+    emit("targets-changed");
+  } catch (e) {
+    console.error("Failed to rename the default target", e);
+    notifyError("Error renaming the default target: " + String(e));
+  } finally {
+    savingDefaultLabel.value = false;
   }
 };
 
@@ -2417,7 +2462,31 @@ const removeAttachment = async (name: string) => {
               <div class="launch-target-panel">
                 <div class="launch-target-row launch-target-card">
                   <div class="launch-target-main">
-                    <div class="launch-target-name">Default</div>
+                    <div v-if="editingDefaultLabel" class="launch-target-form">
+                      <label class="launch-target-field">
+                        <span class="launch-target-field-label">Label</span>
+                        <input
+                          ref="defaultLabelInput"
+                          v-model="defaultLabelDraft"
+                          type="text"
+                          class="modal-input w-full"
+                          placeholder="Default"
+                          @keydown.enter.prevent="saveDefaultTargetLabel"
+                          @keydown.esc.stop.prevent="cancelRenameDefaultTarget"
+                        />
+                      </label>
+                      <div class="launch-target-form-actions">
+                        <button @click="cancelRenameDefaultTarget" class="modal-btn">Cancel</button>
+                        <button
+                          @click="saveDefaultTargetLabel"
+                          :disabled="savingDefaultLabel"
+                          class="modal-btn ui-action-btn disabled:opacity-50"
+                        >
+                          {{ savingDefaultLabel ? "Saving..." : "Save Name" }}
+                        </button>
+                      </div>
+                    </div>
+                    <div v-else class="launch-target-name">{{ defaultTargetLabel({ default_target_label: defaultLabel }) }}</div>
                     <div class="launch-target-path" :title="exePath">
                       {{ exePath || "No executable selected" }}
                     </div>
@@ -2425,6 +2494,9 @@ const removeAttachment = async (name: string) => {
                   <button v-if="!isRunning && game && exePath.trim()" @click="launchGame" class="launch-target-action ui-play-btn ui-action-btn">
                     <IconPlayerPlayFilled class="ui-action-icon" />
                     Play
+                  </button>
+                  <button v-if="game && !editingDefaultLabel" @click="startRenameDefaultTarget" class="launch-target-action">
+                    Rename
                   </button>
                 </div>
 

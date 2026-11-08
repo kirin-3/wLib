@@ -3461,3 +3461,55 @@ def test_sync_payload_without_html_player_keeps_local_choice():
     payload = base_backup([{"metadata": {"title": "Web2", "f95_url": "https://f95zone.to/threads/web2.777/"}, "user_state": {"play_status": "Playing"}}])
     apply_library_backup(payload, {"sections": ["user_state"]})
     assert get_all_games()[0]["html_player"] == "browser"
+
+
+def _label(game_id: int) -> str:
+    return next(g for g in get_all_games() if g["id"] == game_id)["default_target_label"]
+
+
+def test_default_target_label_round_trips_with_launch_targets_section(tmp_path):
+    url = "https://f95zone.to/threads/seasons.321/"
+    game_id = add_game("Seasons", "/s1/game.sh", f95_url=url)
+    assert game_id is not None
+    update_game(game_id, {"default_target_label": "  Season 1  "})
+    api = Api()
+    exported = api.export_library_backup(
+        {"sections": [SECTION_METADATA, SECTION_LAUNCH_TARGETS]}, str(tmp_path / "with")
+    )
+    without = api.export_library_backup(
+        {"sections": [SECTION_METADATA]}, str(tmp_path / "without")
+    )
+    assert json.loads(Path(str(exported["path"])).read_text())["games"][0][
+        "default_target_label"
+    ] == "Season 1"
+    assert "default_target_label" not in json.loads(
+        Path(str(without["path"])).read_text()
+    )["games"][0]
+
+    # Section selected: the backup's name replaces the local one.
+    update_game(game_id, {"default_target_label": "Local"})
+    result = api.import_library_backup(
+        str(exported["path"]), {"sections": [SECTION_METADATA, SECTION_LAUNCH_TARGETS]}
+    )
+    assert result["success"] is True
+    assert _label(game_id) == "Season 1"
+
+    # Section not selected: the local name stays.
+    update_game(game_id, {"default_target_label": "Local"})
+    result = api.import_library_backup(str(exported["path"]), {"sections": [SECTION_METADATA]})
+    assert result["success"] is True
+    assert _label(game_id) == "Local"
+
+
+def test_old_backup_without_default_target_label_keeps_local_name(tmp_path):
+    url = "https://f95zone.to/threads/seasons.321/"
+    game_id = add_game("Seasons", "/s1/game.sh", f95_url=url)
+    assert game_id is not None
+    update_game(game_id, {"default_target_label": "Local"})
+    game = {
+        "metadata": {"title": "Seasons", "f95_url": url},
+        SECTION_LAUNCH_TARGETS: [],
+    }
+    path = write_backup(tmp_path / "old.json", base_backup([game]))
+    assert Api().import_library_backup(str(path))["success"] is True
+    assert _label(game_id) == "Local"
