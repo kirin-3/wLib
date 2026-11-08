@@ -230,7 +230,18 @@ def test_resume_does_not_redownload_finished_pieces(tmp_path):
         h.send(cmd="hello")
         ready = h.read_until(lambda e: e["event"] == "ready")
         h.send(cmd="add", id="j", dir=str(folder), paused=False)
-        seed_handle.connect_peer(("127.0.0.1", ready["port"]))
+        port = ready["port"]
+
+        # A dial that lands before the helper has added the torrent is
+        # dropped (seen on Windows), so dial again on every status until
+        # the seeder is connected.
+        def connected(t: dict) -> bool:
+            if t["peers"] or t["seeds"]:
+                return True
+            seed_handle.connect_peer(("127.0.0.1", port))
+            return False
+
+        _status_of(h, "j", connected)
         return h
 
     first = start()

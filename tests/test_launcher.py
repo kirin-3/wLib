@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -2559,8 +2560,15 @@ def _run_sandboxie_tracker(monkeypatch, pids, clock):
         patch("os.makedirs"),
         patch("subprocess.Popen") as popen,
         patch("threading.Thread") as thread,
-        patch("time.sleep", side_effect=lambda s: clock.__setitem__(0, clock[0] + s)),
-        patch("time.monotonic", side_effect=lambda: clock[0]),
+        # Patch only the launcher's clock: a global time.sleep patch would
+        # also count sleeps from other tests' background threads.
+        patch(
+            "core.launcher.time",
+            SimpleNamespace(
+                sleep=lambda s: clock.__setitem__(0, clock[0] + s),
+                monotonic=lambda: clock[0],
+            ),
+        ),
     ):
         popen.return_value.poll.return_value = 0
         assert launcher.launch(

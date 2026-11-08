@@ -90,6 +90,8 @@ ZIP_MAX_WORKERS = 32
 _COPY_CHUNK = 1024 * 1024
 # os.open() is text mode on Windows unless asked otherwise.
 _O_BINARY: int = getattr(os, "O_BINARY", 0)
+# os.utime takes a file descriptor on POSIX only.
+_UTIME_FD = os.utime in os.supports_fd
 
 _log = logging.getLogger("wlib.archive")
 
@@ -730,11 +732,17 @@ def copy_tree_parallel(
             try:
                 if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
                     _fchmod(fd, mode)  # create mode is filtered by the umask
-                os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
+                if _UTIME_FD:
+                    os.utime(fd, ns=(st.st_atime_ns, st.st_mtime_ns))
             except OSError:
                 pass
         finally:
             os.close(fd)
+        if not _UTIME_FD:  # Windows can't set times through a file descriptor
+            try:
+                os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
+            except OSError:
+                pass
 
     _run_parallel(_copy, _interleave_by_folder(files, key=lambda r: r), workers)
     # Folder times last: creating their entries above bumped them.

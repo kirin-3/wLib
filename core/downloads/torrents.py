@@ -80,7 +80,9 @@ def find_payload(data_dir: Path) -> tuple[str, str]:
     """
     from core.archive_volumes import volume_set
 
-    first_volumes: set[str] = set()
+    # Keyed by normcase so one archive found twice counts once; the value
+    # keeps the real path, since normcase lowercases it on Windows.
+    first_volumes: dict[str, str] = {}
     other_files = False
     for root, _dirs, names in os.walk(data_dir):
         for name in names:
@@ -89,15 +91,15 @@ def find_payload(data_dir: Path) -> tuple[str, str]:
             if _VOLUME_NAME.search(lower):
                 volumes = volume_set(path)
                 if volumes is not None and volumes.first:
-                    first_volumes.add(os.path.normcase(volumes.first))
+                    _ = first_volumes.setdefault(os.path.normcase(volumes.first), volumes.first)
                     continue
                 if lower.endswith(ARCHIVE_SUFFIXES):
-                    first_volumes.add(os.path.normcase(path))
+                    _ = first_volumes.setdefault(os.path.normcase(path), path)
                     continue
             if not lower.endswith(EXTRA_SUFFIXES):
                 other_files = True
     if len(first_volumes) == 1 and not other_files:
-        return "archive", next(iter(first_volumes))
+        return "archive", next(iter(first_volumes.values()))
     entries = [entry for entry in data_dir.iterdir()] if data_dir.is_dir() else []
     if len(entries) == 1 and entries[0].is_dir():
         return "folder", str(entries[0])

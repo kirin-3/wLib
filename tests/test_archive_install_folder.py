@@ -2,6 +2,7 @@
 """Installing a game folder downloaded by a torrent."""
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -151,7 +152,7 @@ def test_folder_update_can_be_retried_with_the_chosen_launch_file(tmp_path, env)
 
     result = install_archive(str(folder / "data"), exe_relpath=chosen, **options)
     assert result["success"] is True, result
-    assert str(result["exe_path"]).endswith("PC/DDB/Game.exe")
+    assert Path(result["exe_path"]).parts[-3:] == ("PC", "DDB", "Game.exe")
 
 
 def test_seeding_archive_survives_install_even_with_delete_ticked(tmp_path, env):
