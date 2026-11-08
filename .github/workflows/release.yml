@@ -153,6 +153,8 @@ jobs:
             ca-certificates libfuse2 libxcb-xkb1 libxcb-shape0 \
             libxcb-icccm4 libxcb-cursor0 libxcb-image0 libxcb-keysyms1 \
             libxcb-util1 libxcb-render-util0 libxkbcommon-x11-0 \
+            libegl1 libgl1 libopengl0 libnss3 libxcomposite1 libxdamage1 \
+            libxrandr2 libxtst6 libxkbfile1 libasound2 \
             flatpak flatpak-builder
 
       - name: Add Flathub remote
