@@ -40,7 +40,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "playStatus": "Playing",
     "wishlisted": false,
     "app_version": "0.4.6",
-    "extension_version": "1.2.4"
+    "extension_version": "1.2.5"
   }
   ```
 - **Contract Notes:**
@@ -118,7 +118,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (`protocol: 1`, JSON text messages):**
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.2.4", "can_fetch": true}
+  {"type": "hello", "protocol": 1, "extension_version": "1.2.5", "can_fetch": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -148,11 +148,11 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.2.4`, and its `MIN_APP_VERSION` floor is `0.4.6`.
+The bundled manifest is currently `1.2.5`, and its `MIN_APP_VERSION` floor is `0.4.6`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
-Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also introduced an update warning when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9` originally, raised to `0.4.6` in extension `1.2.4`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
+Extension version `1.0.12` updates itself without manual steps. In Chromium browsers the background worker reloads the unpacked extension once per synced version after a library check reports a newer `extension_version`, so the next F95Zone page runs the new files. In Firefox the manifest declares `browser_specific_settings.gecko.update_url` (`https://github.com/kirin-3/wLib/releases/latest/download/updates.json`) and each tagged release publishes the signed XPI plus an `updates.json` manifest, so Firefox installs new versions on its own update schedule. `1.0.12` also introduced an update warning when the reachable app is older than its `MIN_APP_VERSION` floor (`0.3.9` originally, raised to `0.4.6` in extension `1.2.5`): the thread widget shows "Your wLib app is out of date. Some actions may not work." while keeping the buttons enabled. A response with no `app_version` counts as outdated; an unreachable app shows no warning.
 
 Extension version `1.0.7` adds non-numeric title versions: after numeric/chapter/bare-v parsing fails, titles with at least two brackets use the trimmed first bracket as version. `Game [Final] [Dev]` sends version `Final` and developer `Dev`; a single developer bracket does not supply a version. The backend uses the same fallback and string comparison for updates. Release packaging requires a newly signed Firefox XPI.
 
