@@ -15,6 +15,7 @@ import json
 import os
 import queue
 import re
+import socket
 import sys
 import threading
 import time
@@ -109,6 +110,14 @@ def unsafe_paths(info: Mapping[bytes, object]) -> bool:
     return False
 
 
+def _free_port() -> int:
+    """A TCP port that is free now, for libtorrent to listen on."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("", 0))
+        address = cast(tuple[str, int], probe.getsockname())
+        return address[1]
+
+
 def _write_atomic(path: str, data: bytes) -> None:
     tmp = path + ".tmp"
     with open(tmp, "wb") as handle:
@@ -137,12 +146,16 @@ class Engine:
         self._entries: dict[str, _Entry] = {}
         self._pending_saves: int = 0
         self._last_autosave: float = time.monotonic()
+        # With port 0 libtorrent opens a different port on each interface,
+        # and listen_port() reports only the first one, which may not be the
+        # one peers or the tracker reach. Use one free port everywhere.
+        port = _free_port()
         settings: dict[str, object] = {
             "enable_dht": False,
             "enable_lsd": False,
             "enable_upnp": bool(options.get("port_mapping")),
             "enable_natpmp": bool(options.get("port_mapping")),
-            "listen_interfaces": "0.0.0.0:0,[::]:0",
+            "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
             "download_rate_limit": _limit(options.get("download_kib")),
             "upload_rate_limit": _limit(options.get("upload_kib")),
             "alert_mask": int(lt.alert.category_t.status_notification) | int(lt.alert.category_t.error_notification),
