@@ -592,18 +592,17 @@ class Api:
 
         get_setting_fn = cast(Callable[[str], object | None], get_setting)
         coerced_id = self._coerce_db_id(game_id) if game_id is not None else None
-        if coerced_id is not None and not (prefix_path or "").strip():
-            # A game's tools must reach the prefix it actually runs in: its
-            # own prefix when it is sandboxed (game_sandbox.sandbox_wine_prefix).
+        if coerced_id is not None and not is_windows():
             from core.database import get_game
-            from core.game_sandbox import sandboxed_prefix_override
 
             row = get_game(coerced_id)
-            if row is not None and not is_windows():
-                prefix_path = sandboxed_prefix_override(
-                    str(row.get("custom_prefix") or ""),
-                    bool(row.get("sandbox_enabled")),
-                    coerced_id,
+            if row is not None and bool(row.get("sandbox_enabled")):
+                # The sandbox mounts the game's prefix read-write, so the game
+                # can plant DLLs or registry entries there. Prefix tools and
+                # installers run on the host without the sandbox and would run
+                # that planted code (game_sandbox.sandbox_wine_prefix).
+                raise ValueError(
+                    "Wine prefix tools are not available for sandboxed games. Turn off the sandbox for this game first."
                 )
 
         # Like the launcher, an empty per-game value (what the UI sends when no

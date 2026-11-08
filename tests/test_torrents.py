@@ -340,3 +340,36 @@ def test_log_holds_no_passkey_or_announce_url(make, capsys, caplog, data_dir):
         assert needle not in text
     state = next((data_dir / "downloads" / "torrents").glob("*/state.json")).read_text()
     assert PASSKEY not in state
+
+
+def test_retry_after_write_error_adds_the_torrent_again(make, tmp_path):
+    sup = make("error_once")
+    job_id = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, job_id) == "failed")
+    assert job_of(sup, job_id)["error"] == "Files could not be written"
+    wait_for(lambda: any(c["cmd"] == "remove" for c in log_commands(tmp_path)))
+
+    assert sup.resume(job_id)
+    wait_for(lambda: sum(c["cmd"] == "add" for c in log_commands(tmp_path)) == 2)
+    assert stage(sup, job_id) == "downloading"
+
+
+def test_second_job_for_the_same_torrent_does_not_share_a_live_folder(make):
+    sup = make()
+    first = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, first) == "done")
+    assert job_of(sup, first)["seed_state"] == "awaiting_answer"
+
+    # Still waiting on the seed question: the folder is in use.
+    second = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, second) == "failed")
+    assert "already in your downloads" in job_of(sup, second)["error"]
+    assert stage(sup, first) == "done"
+
+    # Once nothing uses it, a new job takes the folder over.
+    assert sup.answer_seed(first, False)
+    third = sup.start(1, "Game", "1.0", 7, lambda: torrent_bytes())
+    wait_for(lambda: stage(sup, third) == "done")
+    info_hash = parse_torrent(torrent_bytes()).info_hash
+    owners = [j for j in sup._jobs.values() if j.info_hash == info_hash]  # pyright: ignore[reportPrivateUsage]
+    assert [j.id for j in owners] == [third]

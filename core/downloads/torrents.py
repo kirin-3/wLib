@@ -340,6 +340,7 @@ class TorrentSupervisor:
 
     def _add_to_helper(self, job: _Job) -> None:
         assert job.folder is not None
+        job.removed.clear()
         job.added = self._send({"cmd": "add", "id": job.id, "dir": str(job.folder), "paused": job.paused})
         job.waiting_since = self._clock()
         job.peerless_since = self._clock()
@@ -379,7 +380,6 @@ class TorrentSupervisor:
                 job.idle_since = None
             if item.get("state") == "error" and not job.paused:
                 self._fail(job, "Files could not be written")
-                _ = self._send({"cmd": "remove", "id": job.id})
                 continue
             if now - job.saved_at >= STATE_SAVE_SECONDS:
                 self._save_state(job)
@@ -466,8 +466,11 @@ class TorrentSupervisor:
                     self._fail(job, MSG_UNAVAILABLE)
             return
         job = self._jobs.get(str(event.get("id") or ""))
-        if job is None:
+        if job is None or job.stage in ("failed", "cancelled"):
+            # A late answer, such as to the `remove` that `_fail` sent.
             return
+        # An error with an id means the helper does not hold this torrent.
+        job.added = False
         if code in ("unsafe_paths", "bad_torrent"):
             self._fail(job, MSG_INVALID)
             if code == "unsafe_paths":
@@ -476,6 +479,10 @@ class TorrentSupervisor:
             self._fail(job, str(event.get("message") or "Torrent download failed"))
 
     def _fail(self, job: _Job, message: str) -> None:
+        if job.added:
+            # Drop it from the helper so a retry can add it again.
+            _ = self._send({"cmd": "remove", "id": job.id})
+            job.added = False
         job.stage = "failed"
         job.phase = "failed"
         job.error = message
@@ -559,8 +566,18 @@ class TorrentSupervisor:
                 f"Not enough disk space: {_size_text(meta.size)} needed, {_size_text(free)} free"
             )
         with self._lock:
-            if any(j is not job and j.info_hash == meta.info_hash and j.stage in ACTIVE_STAGES for j in self._jobs.values()):
-                raise DownloadError("This torrent is already downloading")
+            # Every job of one torrent uses the folder named after its hash, so
+            # two live jobs would share (and later delete) each other's files.
+            same = [j for j in self._jobs.values() if j is not job and j.info_hash == meta.info_hash]
+            if any(self._holds_torrent(j) for j in same):
+                raise DownloadError(
+                    "This torrent is already in your downloads. Install, retry or remove that download first."
+                )
+            # A failed or finished job that nothing uses hands its folder (and
+            # any data already in it) over to this job.
+            for old in same:
+                _ = self._jobs.pop(old.id, None)
+            job.info_hash = meta.info_hash
         folder = root / meta.info_hash
         (folder / "data").mkdir(parents=True, exist_ok=True)
         _ = (folder / "meta.torrent").write_bytes(data)
@@ -577,6 +594,17 @@ class TorrentSupervisor:
             if self._ready and not job.added:
                 self._add_to_helper(job)
             # Otherwise the helper's `ready` event adds every active job.
+
+    def _holds_torrent(self, job: _Job) -> bool:
+        """Whether `job` still uses its torrent: active, sharing, or open in an install."""
+        if job.stage in ACTIVE_STAGES or job.added:
+            return True
+        if job.stage == "done" and job.seed_state in ("seeding", "awaiting_answer"):
+            return True
+        if job.folder is None:
+            return False
+        folder = job.folder.resolve()
+        return any(p == folder or folder in p.parents for p in self._open)
 
     def status(self) -> list[dict[str, object]]:
         now = self._clock()

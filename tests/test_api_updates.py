@@ -2631,9 +2631,10 @@ def test_resolve_runtime_install_target_empty_overrides_use_global_settings(tmp_
 
 
 @pytest.mark.skipif(os.name == "nt", reason="sandboxed prefixes are Linux-only")
-def test_resolve_runtime_install_target_uses_a_sandboxed_games_own_prefix(tmp_path):
+def test_prefix_tools_refuse_a_sandboxed_game(tmp_path):
+    # The sandboxed game can write to its prefix, so host-side tools must not
+    # run in it.
     from core.database import add_game, update_game
-    from core.game_sandbox import sandbox_wine_prefix
 
     api = Api()
     update_setting("wine_prefix_path", str(tmp_path / "global-prefix"))
@@ -2643,11 +2644,19 @@ def test_resolve_runtime_install_target_uses_a_sandboxed_games_own_prefix(tmp_pa
     assert sandboxed is not None and plain is not None
     update_game(sandboxed, {"sandbox_enabled": 1})
 
-    boxed = api._resolve_runtime_install_target("", "", sandboxed)
+    with pytest.raises(ValueError, match="sandboxed"):
+        api._resolve_runtime_install_target("", "", sandboxed)
+    with pytest.raises(ValueError, match="sandboxed"):
+        api._resolve_runtime_install_target(str(tmp_path / "custom"), "", sandboxed)
     shared = api._resolve_runtime_install_target("", "", plain)
-
-    assert boxed["base_prefix"] == sandbox_wine_prefix(sandboxed)
     assert shared["base_prefix"] == str(tmp_path / "global-prefix")
+
+    tool = api.open_wine_prefix_tool("winecfg", "", "", sandboxed)
+    assert tool["success"] is False
+    assert "sandboxed" in str(tool["error"])
+    rtp = api.install_rpgmaker_rtp("", "", sandboxed)
+    assert rtp["success"] is False
+    assert "sandboxed" in str(rtp["error"])
 
 
 def test_get_install_status_derives_from_requested_prefix(tmp_path, monkeypatch):
