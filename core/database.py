@@ -526,7 +526,11 @@ def _backup_before_migration(conn: sqlite3.Connection) -> str | None:
     """
     folder = db_backup_dir()
     target = os.path.join(folder, f"wlib-{datetime.now():%Y%m%d-%H%M%S}.db")
-    partial = target + ".partial"
+    partial = f"{target}.{os.getpid()}.partial"
+    if os.path.exists(target):
+        # Made this same second, so it already holds the state before this
+        # update; a second copy could hold a half-updated one.
+        return target
     try:
         os.makedirs(folder, exist_ok=True)
         if os.path.exists(partial):

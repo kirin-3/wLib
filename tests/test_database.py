@@ -2172,6 +2172,31 @@ def test_init_db_copies_the_database_before_a_migration(monkeypatch):
 
 
 @pytest.mark.schema_fingerprint
+def test_a_second_update_in_the_same_second_keeps_the_first_copy(monkeypatch):
+    from datetime import datetime as real_datetime
+
+    from core import database
+
+    class FixedClock(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 1, 1, 12, 0, 0)
+
+    monkeypatch.setattr(database, "datetime", FixedClock)
+    first = add_game("First", "/games/first.exe")
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: 11)
+    init_db()
+    second = add_game("Second", "/games/second.exe")
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: 12)
+    init_db()
+    assert database.list_db_backups() == ["wlib-20260101-120000.db"]
+    copy = os.path.join(database.db_backup_dir(), "wlib-20260101-120000.db")
+    with closing(sqlite3.connect(copy)) as conn:
+        ids = [row[0] for row in conn.execute("SELECT id FROM games")]
+    assert ids == [first] and second not in ids
+
+
+@pytest.mark.schema_fingerprint
 def test_init_db_makes_no_copy_of_a_new_database(tmp_path, monkeypatch):
     from core import database
 
