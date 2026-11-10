@@ -32,6 +32,10 @@ from core.versions import normalize_version
 DATA_DIR = get_data_dir()
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
+# Copies of wlib.db made before a migration changes it; device-local.
+DB_BACKUP_DIR_NAME = "db-backups"
+DB_BACKUP_KEEP = 3
+_DB_BACKUP_RE = re.compile(r"wlib-\d{8}-\d{6}\.db")
 
 DEFAULT_PLAY_STATUS = "Not Started"
 DEFAULT_LAUNCH_MODE = "auto"
@@ -463,18 +467,108 @@ def _schema_state(conn: sqlite3.Connection, fingerprint: int) -> int:
     return (int.from_bytes(digest.digest()[:4], "big") & 0x7FFFFFFF) or 1
 
 
+class DatabaseDamagedError(RuntimeError):
+    """`wlib.db` failed SQLite's own check; the message tells the user what to do."""
+
+
+def db_backup_dir() -> str:
+    return os.path.join(os.path.dirname(DB_PATH), DB_BACKUP_DIR_NAME)
+
+
+def list_db_backups() -> list[str]:
+    """Names of the pre-migration copies, oldest first."""
+    try:
+        names = os.listdir(db_backup_dir())
+    except OSError:
+        return []
+    return sorted(name for name in names if _DB_BACKUP_RE.fullmatch(name))
+
+
+def _check_database(conn: sqlite3.Connection) -> None:
+    """Raise `DatabaseDamagedError` when SQLite reports a damaged file."""
+    try:
+        rows = cast(
+            list[tuple[object]], conn.execute("PRAGMA quick_check(1)").fetchall()
+        )
+        detail = "" if rows == [("ok",)] else str(rows[0][0] if rows else "no result")
+    except sqlite3.OperationalError:
+        # Locked or unreadable, not damaged; the caller's own query reports it.
+        raise
+    except sqlite3.DatabaseError as exc:
+        detail = str(exc)
+    if not detail:
+        return
+    detail = " ".join(detail.replace("*** in database main ***", "").split())
+    backups = list_db_backups()
+    if backups:
+        recovery = (
+            f"wLib made copies before earlier updates in {db_backup_dir()} "
+            f"(newest: {backups[-1]}). To use one, close wLib, move wlib.db, "
+            "wlib.db-wal and wlib.db-shm out of the data folder, then put the "
+            "copy there with the name wlib.db."
+        )
+    else:
+        recovery = (
+            "There is no local copy. Move wlib.db, wlib.db-wal and wlib.db-shm "
+            "out of the data folder to start with an empty library, then "
+            "import a library backup or connect sync again."
+        )
+    raise DatabaseDamagedError(
+        f"The library database {DB_PATH} is damaged ({detail}). {recovery}"
+    )
+
+
+def _backup_before_migration(conn: sqlite3.Connection) -> str | None:
+    """Copy the database to `db-backups/` and keep the newest few copies.
+
+    A failed copy is reported and does not stop the start: refusing to open
+    the library because the disk is full would be worse.
+    """
+    folder = db_backup_dir()
+    target = os.path.join(folder, f"wlib-{datetime.now():%Y%m%d-%H%M%S}.db")
+    partial = target + ".partial"
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if os.path.exists(partial):
+            os.remove(partial)
+        # The backup API also copies pages that are still in the WAL file.
+        with closing(sqlite3.connect(partial)) as copy:
+            conn.backup(copy)
+        os.replace(partial, target)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[wLib] Could not copy the database before its update: {exc}")
+        try:
+            os.remove(partial)
+        except OSError:
+            pass
+        return None
+    for name in list_db_backups()[:-DB_BACKUP_KEEP]:
+        try:
+            os.remove(os.path.join(folder, name))
+        except OSError:
+            pass
+    return target
+
+
 def init_db() -> None:
     """Create or upgrade the schema, skipping the work when it is current.
 
     `PRAGMA user_version` holds `_schema_state` from the last migration; a
-    fresh database starts at 0, so it always migrates.
+    fresh database starts at 0, so it always migrates. Every call first runs
+    SQLite's quick check, and a database that already holds a library is
+    copied to `db-backups/` before the migrations change it.
     """
     conn = get_connection()
     try:
+        _check_database(conn)
         fingerprint = schema_fingerprint()
         row = cast(tuple[int] | None, conn.execute("PRAGMA user_version").fetchone())
         if row is not None and row[0] == _schema_state(conn, fingerprint):
             return
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'games'"
+        ).fetchone():
+            _ = _backup_before_migration(conn)
         conn.row_factory = sqlite3.Row
         # WAL is stored in the database file, so setting it once covers every connection.
         _ = conn.execute("PRAGMA journal_mode=WAL;")

@@ -2007,7 +2007,15 @@ def main() -> None:
         },
     )
 
-    api = Api()
+    from core.database import DatabaseDamagedError
+
+    try:
+        api = Api()
+    except DatabaseDamagedError as exc:
+        if extension_server is not None:
+            extension_server.server_close()
+        show_fatal_startup_error(str(exc))
+        raise SystemExit(1) from exc
     api._start_steam_sync(os.path.join(get_bundle_root(), "wlib.png"))  # pyright: ignore[reportPrivateUsage]
     api_ref = api
     database_ready.set()

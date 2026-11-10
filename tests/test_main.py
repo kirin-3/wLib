@@ -2324,3 +2324,35 @@ def test_unpaired_bridge_is_refused(extension_server):
         extension_server, origin="chrome-extension://other", token="b" * 64
     )
     assert status == 403
+
+
+def test_main_reports_a_damaged_database_and_exits(monkeypatch):
+    from core.database import DatabaseDamagedError
+
+    shown = []
+    server = MagicMock()
+
+    def damaged_api():
+        raise DatabaseDamagedError("The library database is damaged.")
+
+    monkeypatch.setattr(main, "configure_ssl_certificates", lambda: None)
+    monkeypatch.setattr(main, "setup_app_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(main, "configure_qt_runtime_environment", lambda: {})
+    monkeypatch.setattr(main, "ensure_packaged_webview_cache_fresh", lambda: None)
+    monkeypatch.setattr(main, "load_webview_module", lambda: MagicMock())
+    monkeypatch.setattr(main, "log_renderer_diagnostics", lambda *_a, **_k: None)
+    monkeypatch.setattr(main, "collect_renderer_environment_snapshot", lambda dev_mode: {})
+    monkeypatch.setattr(main, "collect_pywebview_module_snapshot", lambda _module: {})
+    monkeypatch.setattr(main, "Api", damaged_api)
+    monkeypatch.setattr(main.threading, "Thread", MagicMock())
+    monkeypatch.setattr(main, "bind_extension_server", lambda: server)
+    monkeypatch.setattr(main, "show_fatal_startup_error", shown.append)
+    monkeypatch.setattr(main, "start_webview", lambda *_a, **_k: pytest.fail("started"))
+    monkeypatch.setattr(main.sys, "argv", ["main.py"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        main.main()
+
+    assert exit_info.value.code == 1
+    assert shown == ["The library database is damaged."]
+    server.server_close.assert_called_once()

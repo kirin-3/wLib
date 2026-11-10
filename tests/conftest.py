@@ -65,3 +65,5 @@ def _init_db_always_migrates(request, monkeypatch):
 
     counter = itertools.count(1)
     monkeypatch.setattr(core.database, "schema_fingerprint", lambda: next(counter))
+    # These forced migrations are not real upgrades, so they make no copy.
+    monkeypatch.setattr(core.database, "_backup_before_migration", lambda conn: None)

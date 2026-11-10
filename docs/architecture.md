@@ -117,6 +117,7 @@ flowchart TD
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
 | PDF, TXT and MD attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
 | Downloaded umu-launcher | `~/.local/share/wLib/umu/umu-run` | Unavailable (Linux only) |
+| Database copies made before a schema update (last three) | `~/.local/share/wLib/db-backups/` | `%LOCALAPPDATA%\wLib\db-backups\` |
 | Sync snapshots (last five) | `~/.local/share/wLib/sync/snapshots/` | `%LOCALAPPDATA%\wLib\sync\snapshots\` |
 | Sandboxes of removed games (30 days) | `~/.local/share/wLib/sandbox/removed/` | `%LOCALAPPDATA%\wLib\sandbox\removed\` |
 

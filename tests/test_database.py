@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import sqlite3
 import threading
 import time
 from contextlib import closing
@@ -2126,3 +2127,91 @@ def test_default_target_label_column_migrates_and_is_trimmed():
     assert get_all_games()[0]["default_target_label"] == ""
     update_game(game_id, {"default_target_label": "  Season 1 "})
     assert get_all_games()[0]["default_target_label"] == "Season 1"
+
+
+@pytest.mark.schema_fingerprint
+def test_init_db_copies_the_database_before_a_migration(monkeypatch):
+    from core import database
+
+    game_id = add_game("Kept Game", "/games/kept.exe")
+    assert database.list_db_backups() == []
+    init_db()
+    assert database.list_db_backups() == [], "a current schema needs no copy"
+
+    stamps = iter(f"wlib-2026010{day}-120000.db" for day in range(1, 9))
+    real_backup = database._backup_before_migration
+
+    def backup(conn):
+        target = real_backup(conn)
+        assert target is not None
+        renamed = os.path.join(os.path.dirname(target), next(stamps))
+        os.replace(target, renamed)
+        return renamed
+
+    monkeypatch.setattr(database, "_backup_before_migration", backup)
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: 12345)
+    init_db()
+    assert database.list_db_backups() == ["wlib-20260101-120000.db"]
+    copy = os.path.join(database.db_backup_dir(), "wlib-20260101-120000.db")
+    with closing(sqlite3.connect(copy)) as conn:
+        assert conn.execute(
+            "SELECT title FROM games WHERE id = ?", (game_id,)
+        ).fetchone() == ("Kept Game",)
+
+    for fingerprint in (2, 3, 4, 5):
+        monkeypatch.setattr(database, "schema_fingerprint", lambda value=fingerprint: value)
+        init_db()
+    # The rename above runs after the prune, so one more copy than the limit
+    # can be present; the oldest ones are gone.
+    assert database.list_db_backups()[-database.DB_BACKUP_KEEP :] == [
+        "wlib-20260103-120000.db",
+        "wlib-20260104-120000.db",
+        "wlib-20260105-120000.db",
+    ]
+    assert "wlib-20260101-120000.db" not in database.list_db_backups()
+
+
+@pytest.mark.schema_fingerprint
+def test_init_db_makes_no_copy_of_a_new_database(tmp_path, monkeypatch):
+    from core import database
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "fresh" / "wlib.db"))
+    os.makedirs(tmp_path / "fresh")
+    init_db()
+    assert database.list_db_backups() == []
+    assert not os.path.exists(database.db_backup_dir())
+
+
+@pytest.mark.schema_fingerprint
+def test_init_db_continues_when_the_copy_fails(monkeypatch, capsys):
+    from core import database
+
+    game_id = add_game("Kept Game", "/games/kept.exe")
+    with open(database.db_backup_dir(), "w", encoding="utf-8") as blocker:
+        _ = blocker.write("not a folder")
+    monkeypatch.setattr(database, "schema_fingerprint", lambda: 12345)
+    init_db()
+    assert "Could not copy the database" in capsys.readouterr().out
+    assert get_game(game_id)["title"] == "Kept Game"
+
+
+def test_init_db_reports_a_damaged_database(tmp_path, monkeypatch):
+    from core import database
+
+    damaged = tmp_path / "damaged" / "wlib.db"
+    damaged.parent.mkdir()
+    _ = damaged.write_bytes(b"this is not an SQLite file, " * 200)
+    monkeypatch.setattr(database, "DB_PATH", str(damaged))
+    with pytest.raises(database.DatabaseDamagedError) as error:
+        init_db()
+    assert str(damaged) in str(error.value)
+    assert "There is no local copy" in str(error.value)
+
+    backups = damaged.parent / database.DB_BACKUP_DIR_NAME
+    backups.mkdir()
+    _ = (backups / "wlib-20260101-120000.db").write_bytes(b"")
+    _ = (backups / "notes.txt").write_bytes(b"")
+    with pytest.raises(database.DatabaseDamagedError) as error:
+        init_db()
+    assert "newest: wlib-20260101-120000.db" in str(error.value)
+    assert damaged.read_bytes().startswith(b"this is not"), "the file is left as it is"
