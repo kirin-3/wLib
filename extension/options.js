@@ -15,3 +15,6 @@ for (const input of document.querySelectorAll('input[data-site]')) {
         else chrome.permissions.remove(permission, done);
     });
 }
+chrome.runtime.sendMessage?.({action:'pairingCode'}, response => {
+    document.getElementById('pairing-code').textContent = (!chrome.runtime.lastError && response?.code) || 'not available';
+});

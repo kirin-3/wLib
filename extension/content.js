@@ -140,6 +140,7 @@ function normalizeCheckResult(data) {
         playStatus,
         wishlisted: exists && Boolean(data.wishlisted),
         appOutdated: Boolean(data && typeof data === 'object' && data.appOutdated),
+        ...(data && typeof data === 'object' && typeof data.pairingNote === 'string' ? { pairingNote: data.pairingNote } : {}),
     };
 }
 
@@ -228,6 +229,7 @@ async function initThreadPageExtension() {
     gameInfo.playStatus = checkResult.playStatus;
     gameInfo.wishlisted = checkResult.wishlisted;
     gameInfo.appOutdated = checkResult.appOutdated;
+    gameInfo.pairingNote = checkResult.pairingNote || '';
     gameInfo.canAttachThread = checkResult.canAttachThread;
     injectUI(gameInfo);
 }
@@ -842,6 +844,12 @@ async function injectUI(gameInfo) {
         outdatedNote.className = 'wlib-outdated-warning';
         outdatedNote.textContent = 'Your wLib app is out of date. Some actions may not work.';
         body.appendChild(outdatedNote);
+    }
+    if (gameInfo.pairingNote) {
+        const pairingNote = document.createElement('p');
+        pairingNote.className = 'wlib-outdated-warning';
+        pairingNote.textContent = gameInfo.pairingNote;
+        body.appendChild(pairingNote);
     }
     body.appendChild(actionRow);
     if (libraryStatusBlock.childElementCount) {

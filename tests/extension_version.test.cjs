@@ -428,7 +428,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.5');
+  assert.equal(manifest.version, '1.2.6');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -661,6 +661,8 @@ const makeBridgeHarness = ({ canFetch = true, firefox = false } = {}) => {
   };
   vm.createContext(context);
   vm.runInContext(backgroundSource, context);
+  // No stored pairing token: the socket opens at once, without ?token=.
+  vm.runInContext('bridgeToken = ""', context);
   return { context, sent, instances, timeouts, intervals, storageWrites, storageListeners };
 };
 
@@ -898,4 +900,59 @@ test('a later thread page never takes a reply image as the cover', () => {
   assert.equal(run(null, '/threads/game.123/page-4').coverImage, '');
   assert.equal(run(null, '/threads/game.123/page-12').coverImage, '');
   assert.equal(run(null, '/threads/game.123/').coverImage, 'https://attachments.f95zone.to/first.jpg');
+});
+
+function makePairingContext(stored = {}) {
+  const requests = [];
+  const sockets = [];
+  const context = {
+    chrome: {
+      runtime: { onMessage: { addListener: () => {} }, getManifest: () => ({ version: '1.2.6' }) },
+      storage: {
+        local: {
+          get: async (key) => ({ [key]: stored[key] }),
+          set: async (items) => { Object.assign(stored, items); },
+        },
+      },
+    },
+    crypto: require('node:crypto').webcrypto,
+    TextEncoder,
+    WebSocket: class { constructor(url) { this.url = url; this.readyState = 0; sockets.push(this); } },
+    fetch: async (url, options) => { requests.push({ url, options }); return { ok: true, json: async () => ({ success: true }) }; },
+    AbortController, setTimeout, clearTimeout, setInterval, clearInterval, console,
+  };
+  vm.createContext(context);
+  vm.runInContext(backgroundSource, context);
+  return { context, requests, sockets, stored };
+}
+
+test('every wLib request and the bridge socket carry one stored pairing token', async () => {
+  const { context, requests, sockets, stored } = makePairingContext();
+  await vm.runInContext('fetchWLibJson("http://localhost:8183/api/check?url=x")', context);
+  await vm.runInContext('fetchWLibJson("http://localhost:8183/api/add", {method:"POST", headers:{"Content-Type":"application/json"}})', context);
+  const token = stored.wlibPairingToken;
+  assert.match(token, /^[0-9a-f]{64}$/);
+  assert.equal(requests[0].options.headers['X-wLib-Extension'], token);
+  assert.equal(requests[1].options.headers['X-wLib-Extension'], token);
+  assert.equal(requests[1].options.headers['Content-Type'], 'application/json');
+  vm.runInContext('ensureBridge()', context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(sockets.some((socket) => socket.url === `ws://localhost:8183/api/bridge?token=${token}`));
+  assert.ok(sockets.every((socket) => socket.url.endsWith(token)));
+});
+
+test('a saved pairing token is reused and its code is stable', async () => {
+  const saved = 'ab'.repeat(32);
+  const { context, requests } = makePairingContext({ wlibPairingToken: saved });
+  await vm.runInContext('fetchWLibJson("http://localhost:8183/api/check?url=x")', context);
+  assert.equal(requests[0].options.headers['X-wLib-Extension'], saved);
+  const expected = require('node:crypto').createHash('sha256').update(saved).digest('hex').toUpperCase();
+  assert.equal(await vm.runInContext('pairingCode()', context), `${expected.slice(0, 4)}-${expected.slice(4, 8)}`);
+});
+
+test('a refused check tells the widget to ask for approval in wLib', () => {
+  const { context } = makePairingContext();
+  const payload = vm.runInContext('normalizeCheckPayload({exists:false, app_version:"9.9.9", error_code:"pairing_required"})', context);
+  assert.match(payload.pairingNote, /Allow this browser extension/);
+  assert.equal(vm.runInContext('normalizeCheckPayload({exists:false, app_version:"9.9.9"})', context).pairingNote, undefined);
 });

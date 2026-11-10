@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 import time
 import uuid
@@ -53,6 +54,9 @@ class BridgeConnection:
 
     def __init__(self, send_text: Callable[[str], None] | None = None) -> None:
         self._send_text_fn = send_text
+        # Which extension pairing opened this socket, and how to cut it.
+        self.pairing_id = ""
+        self.shutdown: Callable[[], None] | None = None
         self._send_lock = threading.Lock()
         self._hello_ok = False
         self.can_fetch = False
@@ -128,6 +132,18 @@ def reset_for_tests() -> None:
         _last_disconnect_at = None
         _last_connection_seconds = None
         _last_fetch = None
+
+
+def close_paired_connections(pairing_id: str) -> None:
+    """Cut every bridge socket of a pairing that was just removed."""
+    with _lock:
+        matching = [conn for conn in _connections if conn.pairing_id == pairing_id]
+    for conn in matching:
+        if conn.shutdown is not None:
+            try:
+                conn.shutdown()
+            except OSError:
+                pass
 
 
 def _register_connection(conn: BridgeConnection) -> None:
@@ -424,7 +440,10 @@ def _send_raw(wfile: BinaryIO | BufferedIOBase, data: bytes) -> None:
 
 
 def serve_bridge_connection(
-    sock: object, rfile: BinaryIO | BufferedIOBase, wfile: BinaryIO | BufferedIOBase
+    sock: object,
+    rfile: BinaryIO | BufferedIOBase,
+    wfile: BinaryIO | BufferedIOBase,
+    pairing_id: str = "",
 ) -> None:
     """Run the bridge frame loop for one upgraded socket (blocking).
 
@@ -439,6 +458,9 @@ def serve_bridge_connection(
         _send_raw(wfile, extension_ws.encode_server_text(message))
 
     conn = BridgeConnection(send_text=_send_text)
+    conn.pairing_id = pairing_id
+    if isinstance(sock, socket.socket):
+        conn.shutdown = lambda: sock.shutdown(socket.SHUT_RDWR)
     _register_connection(conn)
     state = extension_ws.MessageState()
     try:

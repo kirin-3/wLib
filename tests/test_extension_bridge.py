@@ -471,3 +471,19 @@ def test_fetch_on_connection_closed_before_register_fails_fast(monkeypatch):
     assert time.monotonic() - started < 1
     assert sent == []
     assert not bridge._pending
+
+
+def test_removed_pairing_cuts_only_its_own_sockets():
+    from core import extension_bridge
+
+    cut: list[str] = []
+    for pairing_id in ("AAAA-1111", "BBBB-2222"):
+        conn = extension_bridge.BridgeConnection()
+        conn.pairing_id = pairing_id
+        conn.shutdown = lambda pairing_id=pairing_id: cut.append(pairing_id)
+        extension_bridge._register_connection(conn)
+    try:
+        extension_bridge.close_paired_connections("AAAA-1111")
+        assert cut == ["AAAA-1111"]
+    finally:
+        extension_bridge.reset_for_tests()

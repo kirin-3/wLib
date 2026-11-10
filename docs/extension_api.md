@@ -18,6 +18,18 @@ Requests without an `Origin` header remain supported for local service checks an
 
 Pages can still fire a header-less `GET` without an `Origin` (for example `<img src="http://127.0.0.1:8183/api/open?...">`). Because `GET /api/open` has a side effect, it additionally requires an allowed extension `Origin` or the `X-wLib-Extension` header, which the extension background worker always sends. Pages cannot add that header without a CORS preflight, and preflights from non-extension origins are rejected.
 
+## Extension Pairing
+An extension `Origin` alone is not trusted: every installed browser extension has one, and local programs send none. Each extension install makes a random 64-hex-character token (`chrome.storage.local`, key `wlibPairingToken`) and sends it as the `X-wLib-Extension` header on every request and as `?token=` on the bridge socket. `core/extension_pairing.py` serves a token only after the user allowed it in the app.
+
+- **First contact:** an unknown token becomes a pending request (at most 3 at once) and the server fires the `wlib-extension-pairing` window event. `App.vue` asks "Allow browser extension?" with the browser kind and a short code (the first 8 hex characters of the token's SHA-256, as `XXXX-XXXX`). The extension's options page shows the same code.
+- **Storage:** allowed tokens are stored as SHA-256 hashes in `<data dir>/extension-pairing.json` (mode 0600). The file is device-local and is never exported or synced. A refusal lasts until wLib restarts.
+- **Gated:** `/api/add`, `/api/wishlist`, `/api/thread-links`, `/api/bridge`, and `/api/open` with a `url` or `id`. These answer HTTP 403 with `error_code` `pairing_required`, `pairing_denied`, or `extension_outdated` (no token, or the old `1` value).
+- **`/api/check`** always answers HTTP 200. For an unpaired caller it returns `exists: false`, the `error` and `error_code` above, and the version fields, without a library lookup. This lets an old Chromium extension see the new `extension_version` and reload itself.
+- **Not gated:** a bare `GET /api/open` (it only shows the window; a second wLib instance sends it), `/covers/`, the OAuth callbacks, and the runner endpoints (they use `X-wLib-Runner`).
+- **Removal:** the Extension page lists allowed extensions. Removing one deletes its hash and closes its bridge sockets.
+- **Dev mode:** the Vite origin needs no token.
+- **App bridge methods:** `get_extension_pairing()`, `resolve_extension_pairing(request_id, allow)`, `revoke_extension_pairing(pairing_id)`.
+
 Because of that restriction, the extension does not call `GET /api/check` directly from the F95Zone page context. The content script sends a message to the extension background worker, and the worker performs the request from the extension origin.
 
 ## REST API Endpoints
@@ -40,7 +52,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "playStatus": "Playing",
     "wishlisted": false,
     "app_version": "0.4.6",
-    "extension_version": "1.2.5"
+    "extension_version": "1.2.6"
   }
   ```
 - **Contract Notes:**
@@ -56,7 +68,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
 ### 2. Focus the App & Open Game
 **`GET /api/open?url={page_url}&id={source:id}`**
 Requests that the OS brings the wLib window to the foreground and opens the modal to the specified game.
-- **Requires:** an extension `Origin` or the `X-wLib-Extension: 1` header; otherwise HTTP 403.
+- **Requires:** an extension `Origin` or the `X-wLib-Extension` header; otherwise HTTP 403. A call with `url` or `id` also requires a paired token (see Extension Pairing).
 - **Action:** The query accepts the same repeated IDs as `/api/check`. The response and `wlib-extension-open` detail include `gameId` when resolved, so games without an F95 thread can open. Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
 - **Response:**
   ```json
@@ -112,13 +124,13 @@ Saves the thread or store page directly as a library game with an empty executab
 **`GET /api/bridge` (WebSocket)**
 Lets a running browser retry a challenged or login-gated F95 request with its own cookies, without opening a tab. The app never sees cookies; it only receives the fetched HTML/JSON body.
 
-- **Handshake:** `GET /api/bridge` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
-- **Origin rules (stricter than the REST endpoints):** `Origin` must start with `chrome-extension://` or `moz-extension://`. Web origins (`https://example.com`), missing origins, missing upgrades (HTTP 400), and bad `Host` values (HTTP 403, same single-Host check as the other endpoints) are rejected before any message is exchanged.
+- **Handshake:** `GET /api/bridge?token=<pairing token>` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
+- **Origin rules (stricter than the REST endpoints):** `Origin` must start with `chrome-extension://` or `moz-extension://`. Web origins (`https://example.com`), missing origins, missing upgrades (HTTP 400), and bad `Host` values (HTTP 403, same single-Host check as the other endpoints) are rejected before any message is exchanged. A missing or unpaired token receives HTTP 403 (see Extension Pairing).
 - **Socket:** the upgraded socket uses a 60-second timeout (plain endpoints use 10 seconds). One handler thread is held per browser; idle stalled peers drop on timeout.
 - **Protocol (`protocol: 1`, JSON text messages):**
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.2.5", "can_fetch": true}
+  {"type": "hello", "protocol": 1, "extension_version": "1.2.6", "can_fetch": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -148,7 +160,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.2.5`, and its `MIN_APP_VERSION` floor is `0.4.6`.
+The bundled manifest is currently `1.2.6`, and its `MIN_APP_VERSION` floor is `0.4.6`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 

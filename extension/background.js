@@ -1,7 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// wLib's /api/open needs this header (or an extension Origin). Web pages can't
-// send it without a CORS preflight, which wLib rejects for non-extension origins.
-const WLIB_HEADERS = { "X-wLib-Extension": "1" };
+// wLib serves only an extension the user allowed in the app. This install's
+// random token goes out with every request in the X-wLib-Extension header
+// (and as ?token= on the bridge socket); wLib asks the user once to allow it.
+// Web pages can't send the header without a CORS preflight, which wLib rejects.
+const PAIRING_TOKEN_KEY = "wlibPairingToken";
+const PAIRING_TOKEN_RE = /^[0-9a-f]{64}$/;
+let pairingTokenPromise = null;
+
+function pairingToken() {
+    if (!pairingTokenPromise) {
+        pairingTokenPromise = (async () => {
+            const stored = await chrome.storage.local.get(PAIRING_TOKEN_KEY);
+            const saved = stored ? stored[PAIRING_TOKEN_KEY] : "";
+            if (typeof saved === "string" && PAIRING_TOKEN_RE.test(saved)) {
+                return saved;
+            }
+            const bytes = crypto.getRandomValues(new Uint8Array(32));
+            const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+            await chrome.storage.local.set({ [PAIRING_TOKEN_KEY]: token });
+            return token;
+        })();
+        // A failed read must not stick: the next request tries again.
+        pairingTokenPromise.catch(() => { pairingTokenPromise = null; });
+    }
+    return pairingTokenPromise;
+}
+
+// The short code wLib shows in its "allow this extension" question.
+async function pairingCode() {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(await pairingToken()));
+    const hex = Array.from(new Uint8Array(digest).slice(0, 4), (byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+    return `${hex.slice(0, 4)}-${hex.slice(4)}`;
+}
+
+const PAIRING_NOTES = {
+    pairing_required: "Allow this browser extension in the wLib app, then reload this page.",
+    pairing_denied: "wLib refused this browser extension. Restart wLib to ask again.",
+};
 
 // The desktop app may be starting, busy, or gone; its HTTP server may accept
 // a connection it never answers. Abort every request after a timeout so the
@@ -12,10 +47,13 @@ const WLIB_REQUEST_TIMEOUT_MS = 10000;
 // Resolves { response, data } with the JSON body already read, so the timeout
 // also covers a server that sends headers and then stalls the body.
 async function fetchWLibJson(url, options, timeoutMs = WLIB_REQUEST_TIMEOUT_MS) {
+    // Without a token wLib answers "not allowed", which is still an answer.
+    const token = await pairingToken().catch(() => "");
+    const headers = { ...((options && options.headers) || {}), "X-wLib-Extension": token || "1" };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await fetch(url, { ...(options || {}), signal: controller.signal });
+        const response = await fetch(url, { ...(options || {}), headers, signal: controller.signal });
         const data = await response.json();
         return { response, data };
     } finally {
@@ -78,6 +116,10 @@ function normalizeCheckPayload(data) {
         ? data.app_version.trim()
         : '';
     payload.appOutdated = !appVersion || compareVersions(appVersion, MIN_APP_VERSION) < 0;
+    const pairingNote = data && PAIRING_NOTES[data.error_code];
+    if (pairingNote) {
+        payload.pairingNote = pairingNote;
+    }
 
     return payload;
 }
@@ -167,8 +209,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         Promise.resolve(chrome.permissions.contains({origins:[origin]})).then(allowed => sendResponse({allowed})).catch(() => sendResponse({allowed:false}));
         return true;
     }
+    if (message.action === "pairingCode") {
+        pairingCode().then(code => sendResponse({ code })).catch(() => sendResponse({ code: "" }));
+        return true;
+    }
     if (message.action === "saveThreadLinks") {
-        fetchWLibJson("http://localhost:8183/api/thread-links", { method:"POST", headers:{"Content-Type":"application/json", ...WLIB_HEADERS}, body:JSON.stringify(message.payload) })
+        fetchWLibJson("http://localhost:8183/api/thread-links", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(message.payload) })
             .then(readWLibResponse).then(data => sendResponse({success:true,data}))
             .catch(error => sendResponse({success:false,error:error.message}));
         return true;
@@ -193,8 +239,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         fetchWLibJson("http://localhost:8183/api/add", {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
-                ...WLIB_HEADERS
+                "Content-Type": "application/json"
             },
             body: JSON.stringify(message.payload)
         })
@@ -215,7 +260,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "wishlistGameInWLib") {
         fetchWLibJson("http://localhost:8183/api/wishlist", {
             method: "POST",
-            headers: { "Content-Type": "application/json", ...WLIB_HEADERS },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 ...message.payload,
                 tags: Array.isArray(message.payload.tags)
@@ -233,7 +278,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === "openWLib") {
-        fetchWLibJson(`http://localhost:8183/api/open?${pageQuery(message)}`, { headers: WLIB_HEADERS })
+        fetchWLibJson(`http://localhost:8183/api/open?${pageQuery(message)}`)
             .then(readWLibResponse)
             .then(data => sendResponse({ success: true, data }))
             .catch(error => sendResponse({ success: false, error: error.message }));
@@ -491,12 +536,12 @@ async function bridgeGetCanFetch() {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.5");
+            return String(chrome.runtime.getManifest().version || "1.2.6");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.5";
+    return "1.2.6";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
@@ -619,6 +664,9 @@ async function bridgeHandleFetchMessage(message) {
     }
 }
 
+let bridgeToken = null;
+let bridgeTokenLoading = false;
+
 function ensureBridge() {
     try {
         if (typeof WebSocket === "undefined") {
@@ -627,9 +675,22 @@ function ensureBridge() {
         if (bridgeSocket && (bridgeSocket.readyState === 0 || bridgeSocket.readyState === 1)) {
             return;
         }
+        if (bridgeToken === null) {
+            // Read the token once, then come back; a failed read connects
+            // without it and wLib answers "not allowed".
+            if (!bridgeTokenLoading) {
+                bridgeTokenLoading = true;
+                pairingToken().catch(() => "").then((token) => {
+                    bridgeToken = token;
+                    bridgeTokenLoading = false;
+                    ensureBridge();
+                });
+            }
+            return;
+        }
         let socket;
         try {
-            socket = new WebSocket(BRIDGE_URL);
+            socket = new WebSocket(bridgeToken ? `${BRIDGE_URL}?token=${bridgeToken}` : BRIDGE_URL);
         } catch (error) {
             console.warn("wLib extension: bridge connect failed.", error);
             bridgeScheduleReconnect();

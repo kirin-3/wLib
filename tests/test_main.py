@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import main
+from conftest import PAIRED_EXTENSION_TOKEN
 
 _real_install_shutdown_signals = main.install_shutdown_signals
 _real_data_dir_problem = main.data_dir_problem
@@ -60,7 +61,11 @@ def _make_extension_handler(path, matching_game=None, headers=None):
     handler = main.ExtensionRequestHandler.__new__(main.ExtensionRequestHandler)
     handler.path = path
     message_headers = Message()
-    for key, value in (headers or {}).items():
+    # Paired by default (see conftest); a test of the gate sends its own header.
+    for key, value in {
+        "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+        **(headers or {}),
+    }.items():
         message_headers[key] = value
     handler.headers = message_headers
     handler.__dict__["wfile"] = BytesIO()
@@ -1111,6 +1116,7 @@ def test_extension_request_validates_host_and_origin(
             connection.putheader("Host", host)
         if origin is not None:
             connection.putheader("Origin", origin)
+        connection.putheader("X-wLib-Extension", PAIRED_EXTENSION_TOKEN)
         request_body = json.dumps(
             {"title": "Game", "url": "https://f95zone.to/threads/123/"}
         ).encode()
@@ -1134,8 +1140,18 @@ def test_extension_request_validates_host_and_origin(
     "headers,status",
     [
         ({}, 403),  # what <img src="http://127.0.0.1:8183/api/open?..."> sends
-        ({"X-wLib-Extension": "1"}, 200),
-        ({"Origin": "chrome-extension://wlib"}, 200),
+        # An extension Origin or the bare header is not enough to open a game.
+        ({"X-wLib-Extension": "1"}, 403),
+        ({"Origin": "chrome-extension://wlib"}, 403),
+        ({"X-wLib-Extension": "b" * 64}, 403),
+        ({"X-wLib-Extension": PAIRED_EXTENSION_TOKEN}, 200),
+        (
+            {
+                "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            },
+            200,
+        ),
     ],
 )
 def test_extension_open_requires_extension_origin_or_header(
@@ -1156,7 +1172,11 @@ def test_extension_open_requires_extension_origin_or_header(
         response = connection.getresponse()
         _ = response.read()
         assert response.status == status
-        assert window.evaluate_js.called is (status == 200)
+        opened = any(
+            "wlib-extension-open" in call.args[0]
+            for call in window.evaluate_js.call_args_list
+        )
+        assert opened is (status == 200)
     finally:
         connection.close()
 
@@ -1177,6 +1197,7 @@ def test_extension_add_always_replies_with_failure(
     try:
         connection.putrequest("POST", "/api/add", skip_host=True)
         connection.putheader("Host", "localhost:8183")
+        connection.putheader("X-wLib-Extension", PAIRED_EXTENSION_TOKEN)
         connection.putheader("Content-Length", content_length)
         # No body when the length is invalid: the server can't read it, and
         # unread data makes Windows reset the connection before the reply.
@@ -1221,7 +1242,7 @@ def test_extension_wishlist_saves_without_executable_and_rejects_duplicate(
                 "POST",
                 "/api/wishlist",
                 body,
-                headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+                headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
             )
             reply = connection.getresponse()
             return reply.status, json.loads(reply.read())
@@ -1259,6 +1280,7 @@ def test_extension_wishlist_rejects_web_origin_and_oversized_body(
         connection.putrequest("POST", "/api/wishlist", skip_host=True)
         connection.putheader("Host", "localhost:8183")
         connection.putheader("Origin", origin)
+        connection.putheader("X-wLib-Extension", PAIRED_EXTENSION_TOKEN)
         connection.putheader(
             "Content-Length",
             str(main.MAX_EXTENSION_BODY_BYTES + 1) if oversized else "2",
@@ -1299,7 +1321,7 @@ def test_extension_wishlist_requires_title_and_thread_url(
             "POST",
             "/api/wishlist",
             json.dumps(payload),
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
         )
         reply = connection.getresponse()
         assert reply.status == 400
@@ -1333,7 +1355,10 @@ def test_extension_check_remains_responsive_while_open_waits(
         with urlopen(
             Request(
                 f"http://{address}:{port}{path}",
-                headers={"Host": "localhost:8183", "X-wLib-Extension": "1"},
+                headers={
+                    "Host": "localhost:8183",
+                    "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+                },
             ),
             timeout=3,
         ) as response:
@@ -1669,7 +1694,7 @@ def test_extension_get_rejects_prefix_squat_paths(monkeypatch, extension_server,
         connection.request(
             "GET",
             f"{path}?url=https://f95zone.to/threads/demo.123/",
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
         )
         response = connection.getresponse()
         _ = response.read()
@@ -1723,10 +1748,17 @@ def test_extension_handler_times_out_slow_clients():
     assert main.ExtensionRequestHandler.timeout == 10
 
 
-def _bridge_request(server, *, origin=None, host="localhost:8183", upgrade=True):
+def _bridge_request(
+    server,
+    *,
+    origin=None,
+    host="localhost:8183",
+    upgrade=True,
+    token=PAIRED_EXTENSION_TOKEN,
+):
     connection = HTTPConnection(*server.server_address, timeout=3)
     try:
-        connection.putrequest("GET", "/api/bridge", skip_host=True)
+        connection.putrequest("GET", f"/api/bridge?token={token}", skip_host=True)
         connection.putheader("Host", host)
         if origin is not None:
             connection.putheader("Origin", origin)
@@ -1750,7 +1782,7 @@ def test_bridge_upgrades_for_extension_origin(extension_server, monkeypatch):
     served = {}
     served_event = threading.Event()
 
-    def fake_serve(sock, rfile, wfile):
+    def fake_serve(sock, rfile, wfile, pairing_id=""):
         served["timeout"] = sock.gettimeout()
         served_event.set()
         # Close immediately so the handler thread exits; the 101 was sent.
@@ -1788,7 +1820,7 @@ def test_bridge_handshake_uses_http_1_1_status_line(extension_server, monkeypatc
     )
     with socket.create_connection(extension_server.server_address, timeout=3) as sock:
         sock.sendall(
-            b"GET /api/bridge HTTP/1.1\r\n"
+            b"GET /api/bridge?token=" + PAIRED_EXTENSION_TOKEN.encode() + b" HTTP/1.1\r\n"
             b"Host: localhost:8183\r\n"
             b"Origin: moz-extension://wlib\r\n"
             b"Upgrade: websocket\r\n"
@@ -1846,7 +1878,7 @@ def test_store_page_wishlist_check_open_and_thread_links(
     monkeypatch.setattr(main, "api_ref", api)
     window = MagicMock()
     monkeypatch.setattr(main, "window_ref", window)
-    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib"}
+    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN}
     page = "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html"
     payload = {"title": "Work", "pageUrl": page, "links": [{"url": page}]}
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
@@ -1942,7 +1974,7 @@ def test_wishlist_waits_for_startup_database(
                     "url": "https://f95zone.to/threads/wishlist.555/",
                 }
             ),
-            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib"},
+            headers={"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN},
         )
         response = connection.getresponse()
         assert response.status == 503
@@ -1968,7 +2000,7 @@ def test_database_endpoints_wait_until_startup_has_run_init_db(
         "_build_check_payload",
         lambda _s, url, _ids: find_calls.append(url) or {"exists": False},
     )
-    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib"}
+    headers = {"Host": "localhost:8183", "Origin": "chrome-extension://wlib", "X-wLib-Extension": PAIRED_EXTENSION_TOKEN}
     links = json.dumps({"url": "https://f95zone.to/threads/123/", "links": []})
     connection = HTTPConnection(*extension_server.server_address, timeout=3)
     try:
@@ -2187,3 +2219,108 @@ def test_webview_profile_goes_to_the_data_folder(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "webview.platforms.qt", backend)
     main.point_qt_backend_at_storage(str(storage))
     assert backend._profile_storage_path == str(storage)  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_bare_open_only_shows_the_window(monkeypatch):
+    """A second wLib instance sends this without a pairing token."""
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    handler = _make_extension_handler("/api/open", headers={"X-wLib-Extension": "1"})
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    window.show.assert_called_once()
+    window.evaluate_js.assert_not_called()
+
+
+def _handler_reply(handler):
+    return json.loads(handler.wfile.getvalue())
+
+
+@pytest.mark.parametrize(
+    "token,code",
+    [
+        ("1", "extension_outdated"),
+        ("", "extension_outdated"),
+        ("b" * 64, "pairing_required"),
+    ],
+)
+@pytest.mark.parametrize("path", ["/api/add", "/api/wishlist", "/api/thread-links"])
+def test_unpaired_extension_cannot_post(monkeypatch, path, token, code):
+    window = MagicMock()
+    monkeypatch.setattr(main, "window_ref", window)
+    monkeypatch.setattr(main, "api_ref", MagicMock())
+    handler = _make_extension_handler(
+        path,
+        headers={
+            "Origin": "chrome-extension://other",
+            "X-wLib-Extension": token,
+            "Content-Length": "2",
+        },
+    )
+    handler.rfile = BytesIO(b"{}")
+    handler.do_POST()
+    handler.send_response.assert_called_once_with(403)
+    assert _handler_reply(handler)["error_code"] == code
+    main.api_ref.add_game.assert_not_called()
+    announced = [call.args[0] for call in window.evaluate_js.call_args_list]
+    assert announced == (
+        ["window.dispatchEvent(new Event('wlib-extension-pairing'))"]
+        if code == "pairing_required"
+        else []
+    )
+
+
+def test_unpaired_check_reports_versions_but_not_the_library():
+    handler = _make_extension_handler(
+        "/api/check?url=https://f95zone.to/threads/123/",
+        matching_game={"id": 1, "exe_path": "/g"},
+        headers={"Origin": "moz-extension://other", "X-wLib-Extension": "1"},
+    )
+    handler.do_GET()
+    handler.send_response.assert_called_once_with(200)
+    reply = _handler_reply(handler)
+    assert reply["exists"] is False
+    assert reply["error_code"] == "extension_outdated"
+    assert reply["app_version"] == main.APP_VERSION
+    assert "gameId" not in reply
+    handler._find_matching_game.assert_not_called()
+
+
+def test_pairing_request_is_allowed_then_removed(tmp_path):
+    from core.extension_pairing import PairingStore
+
+    store = PairingStore(str(tmp_path))
+    token = "c" * 64
+    assert store.check(token, "moz-extension://abc") == ("pending", True)
+    assert store.check(token, "moz-extension://abc") == ("pending", False)
+    request = store.snapshot()["pending"][0]
+    assert request["browser"] == "Firefox"
+    assert store.resolve(request["id"], True)
+    assert store.check(token) == ("paired", False)
+    # Only a hash reaches the disk, and a new process still knows it.
+    saved = (tmp_path / "extension-pairing.json").read_text()
+    assert token not in saved
+    assert PairingStore(str(tmp_path)).check(token) == ("paired", False)
+    assert store.revoke(request["id"])
+    assert store.check(token) == ("pending", True)
+
+
+def test_refused_pairing_stays_refused_and_requests_are_limited(tmp_path):
+    from core.extension_pairing import MAX_PENDING, PairingStore
+
+    store = PairingStore(str(tmp_path))
+    token = "d" * 64
+    assert store.check(token)[0] == "pending"
+    assert store.resolve(store.snapshot()["pending"][0]["id"], False)
+    assert store.check(token) == ("denied", False)
+    assert store.check("not-a-token") == ("invalid", False)
+    for index in range(MAX_PENDING):
+        assert store.check(f"{index:064x}")[0] == "pending"
+    assert store.check("e" * 64) == ("denied", False)
+
+
+def test_unpaired_bridge_is_refused(extension_server):
+    status, _headers, _body = _bridge_request(
+        extension_server, origin="chrome-extension://other", token="b" * 64
+    )
+    assert status == 403

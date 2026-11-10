@@ -92,6 +92,21 @@ RENDERER_DIAGNOSTICS_LOG = os.path.join(APP_DATA_DIR, "renderer-diagnostics.log"
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 VITE_DEV_SERVER = "http://localhost:5173"
 EXTENSION_REQUEST_HEADER = "X-wLib-Extension"
+# Answers for an extension the user has not allowed (core/extension_pairing.py).
+PAIRING_ERRORS: dict[str, dict[str, str]] = {
+    "pending": {
+        "error": "Allow this browser extension in the wLib app, then try again.",
+        "error_code": "pairing_required",
+    },
+    "denied": {
+        "error": "wLib refused this browser extension. Restart wLib to ask again.",
+        "error_code": "pairing_denied",
+    },
+    "invalid": {
+        "error": "Update the wLib browser extension to connect.",
+        "error_code": "extension_outdated",
+    },
+}
 # Sync sign-in redirects: path -> (Api method, provider name for the result page).
 OAUTH_CALLBACKS = {
     "/dropbox/callback": ("complete_dropbox_callback", "Dropbox"),
@@ -922,6 +937,44 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             return False
         return bool(sent) and secrets.compare_digest(sent, expected)
 
+    def _pairing_state(self, token: object) -> str:
+        """"paired", or why this caller may not use the extension endpoints.
+
+        An extension Origin alone proves nothing: every installed extension
+        has one, and local programs send none. The caller must also hold a
+        token the user allowed in the app (core/extension_pairing.py)."""
+        origin = (self.headers.get("Origin") or "").strip()
+        if DEV_MODE and origin == VITE_DEV_SERVER:
+            return "paired"
+        from core.extension_pairing import store
+
+        state, new_request = store().check(token, origin)
+        if new_request and window_ref:
+            try:
+                _ = cast(ExtensionWindow, window_ref).evaluate_js(
+                    "window.dispatchEvent(new Event('wlib-extension-pairing'))"
+                )
+            except Exception as exc:
+                print(f"[wLib] Failed to announce extension pairing request: {exc}")
+        return state
+
+    def _require_pairing(self, allowed_origin: str, token: object = None) -> bool:
+        """True for a paired caller; otherwise answers 403 and returns False."""
+        state = self._pairing_state(
+            self.headers.get(EXTENSION_REQUEST_HEADER) if token is None else token
+        )
+        if state == "paired":
+            return True
+        self._discard_request_body()
+        self.send_response(403)
+        self._send_cors_headers(allowed_origin)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        _ = self.wfile.write(
+            json.dumps({"success": False, **PAIRING_ERRORS[state]}).encode()
+        )
+        return False
+
     def _wait_for_database(self) -> bool:
         # main() serves this port before Api() has run init_db(), so database
         # endpoints wait for the schema instead of reading it mid-migration.
@@ -1066,6 +1119,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not self._is_bridge_origin_allowed(origin):
             self._reject_origin()
             return
+        # Browsers cannot set headers on a WebSocket, so the token is a query value.
+        from urllib.parse import parse_qs, urlparse
+
+        token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        if not self._require_pairing("", token):
+            return
 
         key = (self.headers.get("Sec-WebSocket-Key") or "").strip()
         if not key:
@@ -1108,7 +1167,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         try:
             from core import extension_bridge
 
-            extension_bridge.serve_bridge_connection(sock, self.rfile, self.wfile)
+            from core.extension_pairing import pairing_code, token_hash
+
+            extension_bridge.serve_bridge_connection(
+                sock, self.rfile, self.wfile, pairing_code(token_hash(token))
+            )
         except Exception as exc:
             print(f"[wLib] Bridge connection failed: {exc}")
         finally:
@@ -1191,6 +1254,13 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             check_url = query.get("url", [""])[0]
 
             check_payload: dict[str, object] = {"exists": False}
+            # An unpaired caller still gets 200 with the versions, so an old
+            # extension can see the new version and reload itself, but it
+            # learns nothing about the library.
+            pairing = self._pairing_state(self.headers.get(EXTENSION_REQUEST_HEADER))
+            if pairing != "paired":
+                check_payload.update(PAIRING_ERRORS[pairing])
+                check_url = ""
             if check_url and not self._wait_for_database():
                 self.send_response(503)
                 self._send_cors_headers(allowed_origin)
@@ -1251,6 +1321,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             query = parse_qs(urlparse(self.path).query)
             game_url = query.get("url", [""])[0]
+            # A bare call only shows the window (a second wLib instance does
+            # this); opening a game needs a paired extension.
+            if (game_url or query.get("id")) and not self._require_pairing(
+                allowed_origin
+            ):
+                return
             resolved_url = normalize_thread_url(game_url) or game_url
             resolved_game_id: int | None = None
 
@@ -1380,6 +1456,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             _ = self.wfile.write(json.dumps(check_result).encode())
+            return
+        if self.path in (
+            "/api/wishlist",
+            "/api/add",
+            "/api/thread-links",
+        ) and not self._require_pairing(allowed_origin):
             return
         if self.path == "/api/runner-event":
             if not self._runner_request():

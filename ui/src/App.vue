@@ -27,6 +27,8 @@ import { api, onWebviewReady, type DownloadOffer, type GameRecord } from "./serv
 import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
+import { confirmAction } from "./utils/confirm";
+import { answerPairingRequests, EXTENSION_PAIRING_EVENT } from "./utils/extensionPairing";
 import { dismissToast, notify, notifyUndo, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
 import { isPendingRemoval, settleRemovals } from "./utils/pendingRemovals";
 import { hasAvailableUpdate } from "./utils/libraryGames";
@@ -337,6 +339,11 @@ const handleExtensionOpen = (event: Event) => {
 
 const handleSteamCovers = () => { void convertSteamCovers(api); };
 
+// A browser extension that is not allowed yet asked to connect.
+const handleExtensionPairing = () => {
+  answerPairingRequests(api, confirmAction).catch((error) => console.error("Extension pairing failed", error));
+};
+
 const handleLaunchError = (event: Event) => {
   const message = (event as CustomEvent<{ error: string }>).detail?.error;
   if (message) notify(message, "error", "Game launch failed");
@@ -348,6 +355,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleGlobalShortcut);
   window.addEventListener("wlib-extension-add", handleExtensionAdd);
   window.addEventListener("wlib-extension-open", handleExtensionOpen);
+  window.addEventListener(EXTENSION_PAIRING_EVENT, handleExtensionPairing);
   window.addEventListener("wlib-refresh-library", refreshUpdateCount);
   window.addEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
 
@@ -355,6 +363,8 @@ onMounted(() => {
   onWebviewReady(async () => {
     void refreshUpdateCount();
     handleSteamCovers();
+    // Requests that arrived before the window could show a question.
+    handleExtensionPairing();
     void api.getStartupLaunchError().then(({ error }) => { if (error) notify(error, "error", "Game launch failed"); });
     updateDownloads.startPolling();
     void scanDownloadOffers();
@@ -411,6 +421,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", handleGlobalShortcut);
   window.removeEventListener("wlib-extension-add", handleExtensionAdd);
   window.removeEventListener("wlib-extension-open", handleExtensionOpen);
+  window.removeEventListener(EXTENSION_PAIRING_EVENT, handleExtensionPairing);
   window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
   window.removeEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
   window.removeEventListener("focus", handleWindowFocus);

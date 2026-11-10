@@ -4219,6 +4219,32 @@ class Api:
     def get_startup_launch_error(self) -> dict[str, str]:
         return {"error": os.environ.pop("WLIB_LAUNCH_ERROR", "") if "--show-launch-error" in sys.argv else ""}
 
+    def get_extension_pairing(self) -> dict[str, object]:
+        """Browser extensions that asked to connect, and the ones allowed."""
+        from core.extension_pairing import store
+
+        return {"success": True, **store().snapshot()}
+
+    def resolve_extension_pairing(
+        self, request_id: object, allow: object = False
+    ) -> dict[str, object]:
+        from core.extension_pairing import store
+
+        if not isinstance(request_id, str) or not store().resolve(
+            request_id, allow is True
+        ):
+            return {"success": False, "error": "The pairing request was not found"}
+        return {"success": True}
+
+    def revoke_extension_pairing(self, pairing_id: object) -> dict[str, object]:
+        from core import extension_bridge
+        from core.extension_pairing import store
+
+        if not isinstance(pairing_id, str) or not store().revoke(pairing_id):
+            return {"success": False, "error": "The browser extension was not found"}
+        extension_bridge.close_paired_connections(pairing_id)
+        return {"success": True}
+
     def get_game_play_sessions(self, game_id: int) -> dict[str, object]:
         from core.database import get_play_sessions
 

@@ -27,6 +27,21 @@ def _no_f95_rate_limit_cooldown(monkeypatch):
     monkeypatch.setattr(core.scraper, "_f95_cooldown_until", 0.0)
 
 
+PAIRED_EXTENSION_TOKEN = "a" * 64
+
+
+@pytest.fixture(autouse=True)
+def _isolated_extension_pairing(tmp_path_factory, monkeypatch):
+    """One allowed extension token per test, stored outside the real data folder."""
+    import core.extension_pairing as pairing
+
+    # Not tmp_path: several tests assert that their own folder stays empty.
+    store = pairing.PairingStore(str(tmp_path_factory.mktemp("pairing")))
+    _ = store.check(PAIRED_EXTENSION_TOKEN, "chrome-extension://paired")
+    assert store.resolve(store.snapshot()["pending"][0]["id"], True)
+    monkeypatch.setattr(pairing, "_store", store)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: takes several seconds (real network loopback)")
     config.addinivalue_line(

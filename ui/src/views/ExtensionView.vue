@@ -13,8 +13,10 @@ import {
   api,
   CONSERVATIVE_PLATFORM_CAPABILITIES,
   onWebviewReady,
+  type ExtensionPairingEntry,
   type PlatformCapabilities,
 } from "../services/api";
+import { confirmAction } from "../utils/confirm";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notifyError } from "../utils/toast";
 
@@ -51,6 +53,34 @@ const checkConnection = async () => {
     connectionStatus.value = "disconnected";
   }
   lastCheck.value = new Date().toLocaleTimeString();
+  void loadPairedExtensions();
+};
+
+const pairedExtensions = ref<ExtensionPairingEntry[]>([]);
+
+const loadPairedExtensions = async () => {
+  try {
+    pairedExtensions.value = (await api.getExtensionPairing()).paired || [];
+  } catch (error) {
+    console.error("Could not load allowed extensions", error);
+  }
+};
+
+const removePairedExtension = async (entry: ExtensionPairingEntry) => {
+  const confirmed = await confirmAction({
+    title: "Remove browser extension",
+    message: `Remove the ${entry.browser} extension with code ${entry.id}? It must ask again before it can connect.`,
+    confirmLabel: "Remove",
+    danger: true,
+  });
+  if (!confirmed) return;
+  try {
+    const result = await api.revokeExtensionPairing(entry.id);
+    if (result.success === false) notifyError(result.error || "Could not remove the extension");
+  } catch (error) {
+    notifyError("Could not remove the extension: " + String(error));
+  }
+  await loadPairedExtensions();
 };
 
 const openExtensionFolder = async () => {
@@ -194,6 +224,45 @@ onUnmounted(() => {
           <IconFolderOpen class="ui-action-icon" />
           Open Extension Folder
         </button>
+      </section>
+
+      <!-- Allowed browser extensions -->
+      <section class="ext-card rounded-xl p-6">
+        <h3
+          class="ui-section-heading text-lg font-semibold mb-2"
+          style="color: var(--text-primary)"
+        >
+          <IconPuzzle class="ui-section-icon" />
+          Allowed Browser Extensions
+        </h3>
+        <p class="text-sm mb-3" style="color: var(--text-secondary)">
+          wLib asks you once before a browser extension can connect. The code
+          matches the one on the extension's options page.
+        </p>
+        <p
+          v-if="!pairedExtensions.length"
+          class="text-sm"
+          style="color: var(--text-muted)"
+        >
+          No browser extension is allowed yet.
+        </p>
+        <ul v-else class="space-y-2">
+          <li
+            v-for="entry in pairedExtensions"
+            :key="entry.id"
+            class="flex items-center gap-3 text-sm"
+            style="color: var(--text-secondary)"
+          >
+            <span>{{ entry.browser }}</span>
+            <code class="ext-code">{{ entry.id }}</code>
+            <button
+              class="ext-btn ui-action-btn ml-auto"
+              @click="removePairedExtension(entry)"
+            >
+              Remove
+            </button>
+          </li>
+        </ul>
       </section>
 
       <!-- Installation Instructions -->

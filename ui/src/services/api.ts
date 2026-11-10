@@ -163,6 +163,19 @@ export interface ExtensionBridgeStatus {
   } | null;
 }
 
+export interface ExtensionPairingEntry {
+  /** Short code, also shown on the extension's options page. */
+  id: string;
+  browser: string;
+  origin: string;
+  at: string;
+}
+
+export interface ExtensionPairingResponse extends ApiBasicResponse {
+  pending: ExtensionPairingEntry[];
+  paired: ExtensionPairingEntry[];
+}
+
 export interface ExtensionServiceStatus extends ApiBasicResponse {
   success: boolean;
   reachable: boolean;
@@ -2235,6 +2248,18 @@ class ApiService {
     return this.invoke("save_steam_cover_png", token, data);
   }
 
+  async getExtensionPairing(): Promise<ExtensionPairingResponse> {
+    return this.invoke<ExtensionPairingResponse>("get_extension_pairing");
+  }
+
+  async resolveExtensionPairing(requestId: string, allow: boolean): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("resolve_extension_pairing", requestId, allow);
+  }
+
+  async revokeExtensionPairing(pairingId: string): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("revoke_extension_pairing", pairingId);
+  }
+
   async getStartupLaunchError(): Promise<{ error: string }> {
     return this.invoke<{ error: string }>("get_startup_launch_error");
   }
@@ -4100,6 +4125,11 @@ class ApiService {
         return { success: true };
       case "get_startup_launch_error":
         return { error: "" };
+      case "get_extension_pairing":
+        return { success: true, pending: [], paired: [] };
+      case "resolve_extension_pairing":
+      case "revoke_extension_pairing":
+        return { success: true, mock: true };
       case "get_startup_extension_sync_status":
         return {
           success: true,
