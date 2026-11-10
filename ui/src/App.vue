@@ -28,9 +28,10 @@ import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
 import { confirmAction } from "./utils/confirm";
+import { gamesStore } from "./composables/useGamesStore";
 import { answerPairingRequests, EXTENSION_PAIRING_EVENT } from "./utils/extensionPairing";
 import { dismissToast, notify, notifyUndo, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
-import { isPendingRemoval, settleRemovals } from "./utils/pendingRemovals";
+import { isPendingRemoval } from "./utils/pendingRemovals";
 import { hasAvailableUpdate } from "./utils/libraryGames";
 import { changedCoversOfFinishedRefresh, shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
 import {
@@ -89,12 +90,11 @@ const getInitialNavCollapsed = (): boolean => {
 const isNavCollapsed = ref(getInitialNavCollapsed());
 const navCollapsed = computed(() => tvModeActive.value || isNavCollapsed.value);
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
-const updateCountGames = ref<GameRecord[]>([]);
+const updateCountGames = gamesStore.games;
 const availableUpdateCount = computed(() => updateCountGames.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game)).length);
 let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;
-let updateCountRequest = 0;
 let wasUpdateRunning = false;
 let lastCoverRefreshToast = "";
 const notifiedFinishedIds = new Set<number>();
@@ -140,8 +140,8 @@ const handleInstallArchiveRequest = async (event: Event) => {
   let game: GameRecord | null = null;
   if (detail.gameId != null) {
     try {
-      const games = await api.getGames();
-      game = games.find((entry) => entry.id === detail.gameId) || null;
+      await gamesStore.refresh();
+      game = gamesStore.games.value.find((entry) => entry.id === detail.gameId) || null;
     } catch (error) {
       console.error("Failed to resolve game for install dialog", error);
     }
@@ -221,17 +221,9 @@ const reportWindowFocus = async () => {
   }
 };
 
-const refreshUpdateCount = async () => {
-  const request = ++updateCountRequest;
-  try {
-    const games = await api.getGames();
-    if (request !== updateCountRequest) return;
-    settleRemovals(games.map((game) => game.id));
-    updateCountGames.value = games;
-  } catch (error) {
-    console.error("Failed to refresh update count", error);
-  }
-};
+// The Library and Updates views refresh the same store, so one library
+// change costs one load, not one per listener.
+const refreshUpdateCount = () => gamesStore.refresh();
 
 // One toast per finished cover refresh. It lives here, not in the Library, so
 // it still appears when the user leaves the Library during the check.
@@ -415,7 +407,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   updateDownloads.stopPolling();
-  updateCountRequest++;
   window.removeEventListener("wlib-launch-error", handleLaunchError);
   window.removeEventListener("wlib-steam-covers", handleSteamCovers);
   window.removeEventListener("keydown", handleGlobalShortcut);

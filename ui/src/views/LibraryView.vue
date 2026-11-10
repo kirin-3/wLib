@@ -11,7 +11,9 @@ import {
 import GameCard from "../components/library/GameCard.vue";
 import GameRow from "../components/library/GameRow.vue";
 import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from "vue";
+import { gamesStore } from "../composables/useGamesStore";
+import { nextRenderLimit, RENDER_BATCH } from "../utils/gamesStore";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
 import { colorForTag, loadTagColors } from "../utils/tagColors";
@@ -78,7 +80,7 @@ import {
 import BulkActionBar from "../components/BulkActionBar.vue";
 import { isEngine } from "../utils/engines";
 import BulkWineDialog, { type WineChoice } from "../components/BulkWineDialog.vue";
-import { isPendingRemoval, scheduleRemoval, settleRemovals } from "../utils/pendingRemovals";
+import { isPendingRemoval, scheduleRemoval } from "../utils/pendingRemovals";
 import { useLibrarySelection } from "../composables/useLibrarySelection";
 import { modalStack } from "../utils/modalKeyboard";
 import { sandboxLaunchError } from "../utils/sandbox";
@@ -145,8 +147,10 @@ const readQueryValue = (value: unknown): string => {
 
 const route = useRoute();
 const router = useRouter();
-const games = ref<GameRecord[]>([]);
-const gamesLoaded = ref(false);
+// Shared with the other views. The list is shallow: change a game with
+// gamesStore.patch(), never by editing the object.
+const games = gamesStore.games;
+const gamesLoaded = gamesStore.loaded;
 const loadError = ref<string | null>(null);
 const displayState = computed(() => libraryDisplayState(gamesLoaded.value, loadError.value, games.value.length, filteredGames.value.length));
 const customStatuses = ref<string[]>([]);
@@ -594,6 +598,34 @@ const filteredGames = computed(() => {
 });
 
 watch(() => filteredGames.value.map((game) => game.id), (ids) => selection.prune(ids));
+
+// Only the first cards are in the page; more are added as the user scrolls
+// near the end. A large library would otherwise build every card at once.
+const renderLimit = ref(RENDER_BATCH);
+const renderedGames = computed(() =>
+  filteredGames.value.length > renderLimit.value
+    ? filteredGames.value.slice(0, renderLimit.value)
+    : filteredGames.value,
+);
+const growRenderedGames = (scroller: EventTarget | null) => {
+  const element = scroller instanceof Document ? scroller.scrollingElement : scroller;
+  if (!(element instanceof HTMLElement) || !element.querySelector(".library-cards, .library-table")) return;
+  renderLimit.value = nextRenderLimit(
+    renderLimit.value,
+    filteredGames.value.length,
+    element.scrollHeight - element.scrollTop - element.clientHeight,
+    element.clientHeight,
+  );
+};
+// A tall window may show every rendered card with no scrollbar, so no scroll
+// event would ever add more: add cards until the page is filled.
+const fillRenderedGames = async () => {
+  await nextTick();
+  let scroller = document.querySelector(".library-cards, .library-table")?.parentElement ?? null;
+  while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+  growRenderedGames(scroller ?? document);
+};
+watch([() => filteredGames.value.length, renderLimit, layoutMode, cardSize], () => void fillRenderedGames(), { flush: "post" });
 const handleCardClick = (game: GameRecord, event: MouseEvent | KeyboardEvent) => {
   const ids = filteredGames.value.map((item) => item.id);
   if (event.shiftKey) selection.selectRange(ids, game.id);
@@ -927,8 +959,7 @@ const gameInCollection = (game: GameRecord, name: string): boolean => {
 // both it and the library list. Updating before the save lets a second toggle
 // build on the first even while the first is still in flight.
 const setLocalMembership = (gameId: number, names: string[]) => {
-  const listed = games.value.find((entry) => entry.id === gameId);
-  if (listed) listed.collections = names;
+  gamesStore.patch(gameId, { collections: names });
   if (contextMenu.value?.game.id === gameId) contextMenu.value.game.collections = names;
 };
 
@@ -1097,27 +1128,18 @@ const toggleLaunchTargetMenu = (game: GameRecord) => {
     openLaunchTargetMenuId.value === game.id ? null : game.id;
 };
 
-let gamesRequest = 0;
 const loadGames = async () => {
-  const request = ++gamesRequest;
   if (!gamesLoaded.value) loadError.value = null;
-  try {
-    const data = await api.getGames();
-    if (request !== gamesRequest) return;
-    if (data) {
-      settleRemovals(data.map((game) => game.id));
-      games.value = data;
-      gamesLoaded.value = true;
-      loadError.value = null;
-      if (selectedGame.value) {
-        const selectedId = selectedGame.value.id;
-        const updated = data.find((g) => g.id === selectedId);
-        if (updated) selectedGame.value = updated;
-      }
-    }
-  } catch (e) {
-    if (request === gamesRequest && !gamesLoaded.value) loadError.value = "Your library could not be loaded.";
-    console.error("Failed to load games", e);
+  if (!(await gamesStore.refresh())) {
+    if (!gamesLoaded.value) loadError.value = "Your library could not be loaded.";
+    return;
+  }
+  loadError.value = null;
+  if (selectedGame.value) {
+    const selectedId = selectedGame.value.id;
+    const updated = games.value.find((g) => g.id === selectedId);
+    // An unchanged game keeps its object, so the open modal is left alone.
+    if (updated && updated !== toRaw(selectedGame.value)) selectedGame.value = updated;
   }
 };
 
@@ -1301,7 +1323,8 @@ watch(
     if (action === "open" && (queryUrl || extensionGameId(q.gameId))) {
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
       try {
-        const match = ((await api.getGames()) || []).find((g) =>
+        await gamesStore.refresh();
+        const match = games.value.find((g) =>
           extensionGameId(q.gameId) ? g.id === extensionGameId(q.gameId) : urlsMatchByThreadIdentity(g.f95_url, queryUrl),
         );
         if (match && showDetailModal.value && selectedGame.value && selectedGame.value.id !== match.id) {
@@ -1518,6 +1541,7 @@ const handleDocumentClick = () => {
   closeContextMenu(false);
 };
 const handleLibraryScroll = (event: Event) => {
+  growRenderedGames(event.target);
   if (!contextMenuElement.value?.contains(event.target as Node))
     closeContextMenu(false);
   if (!collectionTabMenuElement.value?.contains(event.target as Node))
@@ -1589,16 +1613,18 @@ const handlePlaytimeTick = (event: Event) => {
   const game = games.value.find((g) => g.id === gameId);
   if (!game) return;
 
-  game.playtime_seconds = (Number(game.playtime_seconds) || 0) + delta;
-  game.last_played = new Date().toISOString();
-  if (typeof detail.lastPlayedVersion === "string") game.last_played_version = detail.lastPlayedVersion;
+  const played = {
+    playtime_seconds: (Number(game.playtime_seconds) || 0) + delta,
+    last_played: new Date().toISOString(),
+    ...(typeof detail.lastPlayedVersion === "string" ? { last_played_version: detail.lastPlayedVersion } : {}),
+  };
+  gamesStore.patch(gameId, played);
 
   if (selectedGame.value && selectedGame.value.id === gameId) {
     selectedGame.value = {
       ...selectedGame.value,
-      playtime_seconds: game.playtime_seconds,
-      last_played: game.last_played,
-      last_played_version: game.last_played_version || "",
+      ...played,
+      last_played_version: played.last_played_version || game.last_played_version || "",
     };
   }
 };
@@ -1621,6 +1647,15 @@ watch(
   ],
   () => {
     persistLibraryViewState();
+  },
+  { deep: true },
+);
+
+// A new filter, sort or layout starts again from the first cards.
+watch(
+  [layoutMode, sortBy, sortDir, filterCollection, filterStatuses, filterInstallState, filterSources, filterEngines, filterTags, activeCollection, searchQuery],
+  () => {
+    renderLimit.value = RENDER_BATCH;
   },
   { deep: true },
 );
@@ -1698,6 +1733,7 @@ onMounted(() => {
   document.addEventListener("keydown", handleLibraryKeyboard);
   document.addEventListener("scroll", handleLibraryScroll, true);
   window.addEventListener("resize", handleDocumentClick);
+  window.addEventListener("resize", fillRenderedGames);
   onWebviewReady(() => {
     void loadTagColors().catch(console.error);
     void loadGames();
@@ -1707,10 +1743,10 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  gamesRequest++;
   settingsRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
+  window.removeEventListener("resize", fillRenderedGames);
   document.removeEventListener("click", handleDocumentClick);
   document.removeEventListener("keydown", handleLibraryKeyboard);
   document.removeEventListener("scroll", handleLibraryScroll, true);
@@ -2422,7 +2458,7 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <GameRow
-              v-for="(game, index) in filteredGames"
+              v-for="(game, index) in renderedGames"
               :key="game.id"
               :game="game"
               :selected="selectedIds.has(game.id)"
@@ -2450,7 +2486,7 @@ onUnmounted(() => {
         "
       >
         <GameCard
-          v-for="(game, index) in filteredGames"
+          v-for="(game, index) in renderedGames"
           :key="game.id"
           :game="game"
           :layout-mode="layoutMode"

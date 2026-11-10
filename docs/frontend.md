@@ -105,6 +105,14 @@ wLib uses `vue-router` for top-level views:
 
 State is mostly local to components and composables; the app intentionally avoids a heavyweight global store.
 
+## Shared games list
+`composables/useGamesStore.ts` exports `gamesStore`, the one library list for `App.vue`, the Library, Updates and Settings views (`utils/gamesStore.ts` holds the logic). Views call `gamesStore.refresh()` and read `gamesStore.games`; do not call `api.getGames()` in a view.
+
+- `refresh()` calls made in the same tick share one load. A call made during a load gets one more load after it. It resolves `false` on failure and keeps the old list.
+- A game whose data did not change keeps its object across loads, and an identical reload keeps the same array, so its card does not render again.
+- `games` is a `shallowRef`. Change a game locally with `gamesStore.patch(id, fields)`; an edit of the object in place does not update the page.
+- The Library puts the first 120 cards or rows in the page (`RENDER_BATCH`) and adds 120 more when the user scrolls near the end. A filter, sort, search or layout change starts again from 120. Counts, selection and bulk actions use the full filtered list.
+
 ## Undo and bulk actions
 
 Mark as updated, Skip version, Stop skipping, library removal, and bulk changes offer Undo for eight seconds. Hovering a toast or focusing one of its controls holds it; the timer restarts on release. Ctrl+Z invokes the newest Undo outside editable fields and dialogs. In controller mode, a new Undo offer receives focus so its timer stays held until focus leaves. Removal hides games immediately and deletes them only after the offer ends; closing or reloading does not flush pending removals.

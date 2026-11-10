@@ -22,7 +22,8 @@ import {
 import { api, onWebviewReady } from "../services/api";
 import { notify, notifyError, notifyUndo } from "../utils/toast";
 import { runBulk, versionSnapshot } from "../utils/bulkActions";
-import { isPendingRemoval, settleRemovals } from "../utils/pendingRemovals";
+import { isPendingRemoval } from "../utils/pendingRemovals";
+import { gamesStore } from "../composables/useGamesStore";
 import { openInstallArchive } from "../utils/installArchive";
 import {useUpdateDownloads} from "../composables/useUpdateDownloads";
 import { isSeeding, isTorrentJob, needsSeedAnswer, seedingLabel, torrentDetails, torrentStatusLine } from "../utils/torrentDownloads";
@@ -47,7 +48,7 @@ interface AppUpdateState {
 }
 
 const router = useRouter();
-const games = ref<GameRecord[]>([]);
+const games = gamesStore.games;
 const markingUpdatedIds = ref(new Set<number>());
 const recheckingIds = ref(new Set<number>());
 const downloadOffers = ref(new Map<number, DownloadOffer>());
@@ -211,18 +212,8 @@ const appUpdate = ref<AppUpdateState | null>(null);
 const appUpdateLoading = ref(true);
 const currentVersion = ref("");
 
-let gamesRequest = 0;
 const loadGames = async () => {
-  const request = ++gamesRequest;
-  try {
-    const res = await api.getGames();
-    if (request !== gamesRequest) return;
-    settleRemovals((res || []).map((game) => game.id));
-    games.value = res || [];
-  } catch (e) {
-    console.error("Failed to load games", e);
-    if (request === gamesRequest) games.value = [];
-  }
+  await gamesStore.refresh();
 };
 
 const loadAutoCheckSetting = async () => {
@@ -552,7 +543,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true;
-  gamesRequest++;
   offersRequest++;
   statusRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);

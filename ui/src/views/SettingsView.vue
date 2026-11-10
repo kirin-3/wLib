@@ -27,6 +27,7 @@ import {
   IconTool,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
+import { gamesStore } from "../composables/useGamesStore";
 import { notify, notifyError } from "../utils/toast";
 import { motionEnabled, saveMotionPreference } from "../utils/motionPreference";
 import { coverAnimation, saveCoverAnimation } from "../utils/coverAnimation";
@@ -897,8 +898,8 @@ const addStatus = () => {
 
 const removeStatus = async (name: string) => {
   try {
-    const games = await api.getGames();
-    const count = games.filter((game) => game.play_status?.toLowerCase() === name.toLowerCase()).length;
+    await gamesStore.refresh();
+    const count = gamesStore.games.value.filter((game) => game.play_status?.toLowerCase() === name.toLowerCase()).length;
     if (!(await confirmAction({ title: 'Remove status', message: `Remove '${name}'? This resets ${count} game${count === 1 ? '' : 's'} to Not Started.`, confirmLabel: 'Remove', danger: true }))) return;
     customStatuses.value = customStatuses.value.filter((status) => status !== name);
     statusError.value = "";
@@ -979,8 +980,8 @@ const moveCollection = async (name: string, offset: -1 | 1) => {
 const removeCollection = async (name: string) => {
   let count = 0;
   try {
-    const games = await api.getGames();
-    count = games.filter((game) =>
+    if (!(await gamesStore.refresh())) throw new Error("Library could not be loaded");
+    count = gamesStore.games.value.filter((game) =>
       (game.collections || []).some((entry) => entry.toLowerCase() === name.toLowerCase()),
     ).length;
   } catch (_error) {
