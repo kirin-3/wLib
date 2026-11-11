@@ -38,6 +38,7 @@ from core.host_platform import (
 )
 from core.game_saves import SaveLocation
 from core.game_tools import CancelFn, ProgressFn, game_tool_folder
+from core.bridge_exposure import hide_from_js, python_only
 from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
 from core.versions import normalize_version as normalize_version
@@ -289,17 +290,19 @@ class Api:
             print(f"[wLib] Failed to prune orphan attachments on startup: {exc}")
         from core.library_sync import SyncManager
 
-        self.library_sync: SyncManager = SyncManager(
-            on_pull=self._refresh_synced_library
+        self.library_sync: SyncManager = hide_from_js(
+            SyncManager(on_pull=self._refresh_synced_library)
         )
         from core.game_covers import CoverCacheService
 
         from core.cover_cards import CoverCardService
 
-        self.cover_cards: CoverCardService = CoverCardService(
-            on_copies_ready=self._notify_card_copies_ready
+        self.cover_cards: CoverCardService = hide_from_js(
+            CoverCardService(on_copies_ready=self._notify_card_copies_ready)
         )
-        self.cover_cache: CoverCacheService = CoverCacheService(on_change=self._cover_cache_changed)
+        self.cover_cache: CoverCacheService = hide_from_js(
+            CoverCacheService(on_change=self._cover_cache_changed)
+        )
         from core.downloads.manager import manager as download_manager
         from core.update_downloads import UpdateDownloads
 
@@ -318,8 +321,8 @@ class Api:
                 _torrent_exit_hook = True
         except Exception as exc:
             print(f"[wLib] Torrent startup failed: {type(exc).__name__}")
-        self.scraper: Scraper = Scraper()
-        self.launcher: Launcher = Launcher()
+        self.scraper: Scraper = hide_from_js(Scraper())
+        self.launcher: Launcher = hide_from_js(Launcher())
         self._update_running: bool = False
         self._update_cancelled: bool = False
         self._update_outcome: str = "idle"
@@ -410,8 +413,10 @@ class Api:
 
         # Read-only game catalog next to the library database; the startup
         # check runs on its own thread and never blocks or raises.
-        self.catalog: CatalogClient = CatalogClient(
-            get_data_dir(), app_version=APP_VERSION, enabled=self._catalog_enabled
+        self.catalog: CatalogClient = hide_from_js(
+            CatalogClient(
+                get_data_dir(), app_version=APP_VERSION, enabled=self._catalog_enabled
+            )
         )
         if self._catalog_enabled():
             _ = self.catalog.start_background()
@@ -425,8 +430,9 @@ class Api:
         except Exception:
             return None
 
+    @python_only
     def set_window(self, window: Window | None) -> None:
-        self.window = window
+        self.window = hide_from_js(window) if window is not None else None
 
     @staticmethod
     def _coerce_db_id(value: object) -> int | None:
@@ -894,6 +900,7 @@ class Api:
 
         return str(manifest_data.get("version", "")).strip()
 
+    @python_only
     def set_startup_extension_sync_status(
         self, status: ExtensionSyncStatus | None
     ) -> None:
@@ -947,6 +954,7 @@ class Api:
                 if not stat.S_ISLNK(mode):
                     os.chmod(entry, stat.S_IMODE(mode) | stat.S_IWUSR)
 
+    @python_only
     def sync_extension_files(self) -> ExtensionSyncStatus:
         import shutil
 
@@ -1965,12 +1973,14 @@ class Api:
     def connect_gdrive(self) -> dict[str, object]:
         return self._open_signin(self.library_sync.connect_gdrive(), "Google")
 
+    @python_only
     def complete_dropbox_callback(self, code: str, state: str) -> dict[str, object]:
         result = self.library_sync.complete_dropbox(code, state)
         if result.get("success"):
             _ = self.library_sync.start_run()
         return result
 
+    @python_only
     def complete_gdrive_callback(self, code: str, state: str) -> dict[str, object]:
         result = self.library_sync.complete_gdrive(code, state)
         if result.get("success"):
@@ -4073,7 +4083,9 @@ class Api:
         from pathlib import Path
         from core.steam_sync import SteamSync
 
-        self.steam_sync = SteamSync(Path(icon), on_conversions=self._notify_steam_covers)
+        self.steam_sync = hide_from_js(
+            SteamSync(Path(icon), on_conversions=self._notify_steam_covers)
+        )
         self.steam_sync.schedule()
 
     def _notify_steam_covers(self) -> None:
@@ -4779,6 +4791,7 @@ class Api:
             return "A Wine runtime install is running on this prefix. Wait for it to finish."
         return None
 
+    @python_only
     def reserve_runner_launch(
         self,
         game_id: int,
@@ -4810,6 +4823,7 @@ class Api:
             )
             return self.launcher.reserve_external(game_id, entry)
 
+    @python_only
     def release_runner_launch(self, game_id: int) -> None:
         self.launcher.release_external(game_id)
 

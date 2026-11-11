@@ -6,12 +6,24 @@ Update the fixture on purpose with ``WLIB_UPDATE_SNAPSHOT=1 pytest tests/test_js
 import inspect
 import json
 import os
+import re
 from pathlib import Path
 
+import pytest
+
 from core.api import Api
+from core.database import init_db
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "js_api_surface.json"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data(tmp_path, monkeypatch):
+    """Api() reads the database and prunes attachments, so keep it out of the real data folder."""
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "wlib.db"))
+    init_db()
 
 
 def walk(obj: object) -> dict[str, list[str]]:
@@ -76,3 +88,86 @@ def assert_matches_snapshot(actual: dict[str, list[str]]) -> None:
 
 def test_bridge_listing_matches_snapshot():
     assert_matches_snapshot(walk(Api()))
+
+
+HELPER_ATTRS = (
+    "window",
+    "steam_sync",
+    "scraper",
+    "launcher",
+    "library_sync",
+    "cover_cache",
+    "cover_cards",
+    "catalog",
+)
+
+PYTHON_ONLY_METHODS = (
+    "set_window",
+    "reserve_runner_launch",
+    "release_runner_launch",
+    "sync_extension_files",
+    "set_startup_extension_sync_status",
+    "complete_dropbox_callback",
+    "complete_gdrive_callback",
+)
+
+API_TS = Path(__file__).resolve().parent.parent / "ui" / "src" / "services" / "api.ts"
+INVOKE_RE = re.compile(r'\binvoke(?:LibraryChange)?\s*(?:<[^()"]*?>)?\s*\(\s*"([a-z0-9_]+)"')
+
+
+def test_bridge_lists_no_nested_names():
+    nested = sorted(name for name in walk(Api()) if "." in name)
+    assert nested == []
+
+
+class _StubWindow:
+    def evaluate_js(self, script: str) -> None:
+        pass
+
+    def destroy(self) -> None:
+        pass
+
+
+class _StubSteamSync:
+    def __init__(self, icon: object, on_conversions: object = None) -> None:
+        self.icon = icon
+
+    def schedule(self) -> None:
+        pass
+
+    def conversions(self) -> list[str]:
+        return []
+
+
+def test_runtime_helpers_are_not_listed(monkeypatch):
+    import core.api
+    import core.steam_sync
+
+    monkeypatch.setattr(core.api, "is_linux", lambda: True)
+    monkeypatch.setattr(core.steam_sync, "SteamSync", _StubSteamSync)
+    api = Api()
+    api.set_window(_StubWindow())  # pyright: ignore[reportArgumentType]
+    api._start_steam_sync("icon.png")  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(api.window, _StubWindow)
+    assert isinstance(api.steam_sync, _StubSteamSync)
+
+    listed = walk(api)
+    leaked = sorted(
+        name for name in listed if name.split(".", 1)[0] in HELPER_ATTRS
+    )
+    assert leaked == []
+
+
+def test_bridge_listing_equals_ui_calls():
+    called = set(INVOKE_RE.findall(API_TS.read_text(encoding="utf-8")))
+    listed = set(walk(Api()))
+    assert sorted(called - listed) == [], "api.ts calls names that the bridge does not list"
+    assert sorted(listed - called) == [], "the bridge lists names that api.ts does not call"
+
+
+def test_python_only_methods_stay_callable():
+    api = Api()
+    listed = walk(api)
+    for name in PYTHON_ONLY_METHODS:
+        assert callable(getattr(api, name)), name
+        assert name not in listed, name

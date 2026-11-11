@@ -65,12 +65,6 @@
   "cancel_update_download": [
     "job_id"
   ],
-  "catalog.check": [],
-  "catalog.remove": [],
-  "catalog.start_background": [
-    "force"
-  ],
-  "catalog.status": [],
   "check_all_updates": [
     "game_ids",
     "refresh_covers"
@@ -93,14 +87,6 @@
   "close_update_download_links": [
     "game_id"
   ],
-  "complete_dropbox_callback": [
-    "code",
-    "state"
-  ],
-  "complete_gdrive_callback": [
-    "code",
-    "state"
-  ],
   "connect_dropbox": [],
   "connect_gdrive": [],
   "connect_mega_account": [
@@ -115,21 +101,6 @@
     "username",
     "password"
   ],
-  "cover_cache.delete_game": [
-    "game_id"
-  ],
-  "cover_cache.on_change": [],
-  "cover_cache.purge": [],
-  "cover_cache.start": [],
-  "cover_cache.status": [],
-  "cover_cache.stop": [],
-  "cover_cache.wake": [],
-  "cover_cards.on_copies_ready": [],
-  "cover_cards.process_pending": [],
-  "cover_cards.start": [],
-  "cover_cards.stop": [],
-  "cover_cards.sweep": [],
-  "cover_cards.wake": [],
   "create_collection": [
     "name",
     "game_id"
@@ -331,92 +302,6 @@
     "proton_version",
     "launch_mode"
   ],
-  "launcher.external_alive": [],
-  "launcher.game_using_prefix": [
-    "prefix"
-  ],
-  "launcher.get_rpgmaker_linux_runner_status": [
-    "configured_path"
-  ],
-  "launcher.get_running_games": [],
-  "launcher.launch": [
-    "exe_path",
-    "command_line_args",
-    "run_japanese_locale",
-    "run_wayland",
-    "auto_inject_ce",
-    "custom_prefix",
-    "proton_version",
-    "launch_mode",
-    "on_exit_callback",
-    "game_id",
-    "sandbox_enabled",
-    "game_title",
-    "block_network",
-    "gamemode",
-    "mangohud",
-    "html_player"
-  ],
-  "launcher.launch_companion_tool": [
-    "game_id",
-    "tool"
-  ],
-  "launcher.list_launchable_tools": [
-    "game_id",
-    "tools"
-  ],
-  "launcher.prefix_guard": [
-    "prefix",
-    "game_id"
-  ],
-  "launcher.release_external": [
-    "game_id"
-  ],
-  "launcher.reserve_external": [
-    "game_id",
-    "entry"
-  ],
-  "launcher.shutdown": [],
-  "launcher.stop": [
-    "game_id"
-  ],
-  "library_sync.cancel_signin": [],
-  "library_sync.complete_dropbox": [
-    "code",
-    "state"
-  ],
-  "library_sync.complete_gdrive": [
-    "code",
-    "state"
-  ],
-  "library_sync.connect_dropbox": [],
-  "library_sync.connect_gdrive": [],
-  "library_sync.disconnect": [],
-  "library_sync.finish": [
-    "timeout"
-  ],
-  "library_sync.list_snapshots": [],
-  "library_sync.local_changed": [],
-  "library_sync.restore_snapshot": [
-    "name"
-  ],
-  "library_sync.run": [
-    "choice"
-  ],
-  "library_sync.set_folder": [
-    "folder"
-  ],
-  "library_sync.set_passphrase": [
-    "passphrase"
-  ],
-  "library_sync.start": [],
-  "library_sync.start_run": [
-    "choice"
-  ],
-  "library_sync.status": [],
-  "library_sync.unlock": [
-    "passphrase"
-  ],
   "list_bepinex_versions": [
     "game_id"
   ],
@@ -483,9 +368,6 @@
   "release_download_archive": [
     "path"
   ],
-  "release_runner_launch": [
-    "game_id"
-  ],
   "remove_game_attachment": [
     "game_id",
     "name"
@@ -500,10 +382,6 @@
   "reorder_launch_targets": [
     "game_id",
     "target_ids"
-  ],
-  "reserve_runner_launch": [
-    "game_id",
-    "prefix"
   ],
   "resolve_extension_pairing": [
     "request_id",
@@ -544,17 +422,6 @@
   "scan_games_folder": [
     "folder"
   ],
-  "scraper.check_versions": [
-    "urls",
-    "callback"
-  ],
-  "scraper.get_thread_metadata": [
-    "url"
-  ],
-  "scraper.get_thread_version": [
-    "url",
-    "include_metadata"
-  ],
   "set_auto_check_setting": [
     "frequency"
   ],
@@ -591,9 +458,6 @@
   "set_sandbox_for_all_games": [
     "enabled"
   ],
-  "set_startup_extension_sync_status": [
-    "status"
-  ],
   "set_steam_account": [
     "account"
   ],
@@ -614,9 +478,6 @@
     "game_id",
     "installed"
   ],
-  "set_window": [
-    "window"
-  ],
   "set_window_focused": [
     "focused"
   ],
@@ -635,7 +496,6 @@
   "stop_seeding": [
     "job_id"
   ],
-  "sync_extension_files": [],
   "sync_now": [],
   "sync_steam_shortcuts": [],
   "uninstall_bepinex": [

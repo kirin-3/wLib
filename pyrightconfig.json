@@ -25,6 +25,7 @@
   "typeCheckingMode": "recommended",
   "strict": [
     "core/api.py",
+    "core/bridge_exposure.py",
     "core/database.py",
     "core/extension_server.py",
     "core/launcher.py",
