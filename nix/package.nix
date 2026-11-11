@@ -25,9 +25,9 @@
 let
   fs = lib.fileset;
 
-  # Keep APP_VERSION in core/api.py the single source of truth.
+  # Keep APP_VERSION in core/app_version.py the single source of truth.
   version = builtins.head (
-    builtins.match ''.*APP_VERSION = "([^"]+)".*'' (builtins.readFile ../core/api.py)
+    builtins.match ''.*APP_VERSION = "([^"]+)".*'' (builtins.readFile ../core/app_version.py)
   );
 
   frontend = buildNpmPackage {

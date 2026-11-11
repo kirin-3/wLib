@@ -271,7 +271,7 @@ def test_scan_in_library_matches_case_variant_paths(tmp_path, monkeypatch):
             str(right)
         ).casefold()
 
-    monkeypatch.setattr("core.api.os.path.samefile", fake_samefile)
+    monkeypatch.setattr("os.path.samefile", fake_samefile)
 
     scanned = Api().scan_games_folder(str(tmp_path / "Games"))["games"]
 

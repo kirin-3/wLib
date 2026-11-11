@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from core.steam_shortcuts import atomic_write, read_vdf, rungameid, shortcut_appid, write_vdf
+from api_patching import patch_api_name
 
 
 def test_round_trip_and_preserve_other_shortcuts():
@@ -262,7 +263,7 @@ def test_unreadable_cover_is_converted_by_the_window(tmp_path, monkeypatch):
     assert notified == [True]
     api = Api()
     api.steam_sync = worker
-    monkeypatch.setattr('core.api.is_linux', lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     queued = api.get_steam_cover_conversions()['covers']
     assert [(c['token'], c['type']) for c in queued] == [('covers-' + cover.name + '.png', 'image/avif')]
     assert not api.save_steam_cover_png(queued[0]['token'], base64.b64encode(b'not png').decode())['success']

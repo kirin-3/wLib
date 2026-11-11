@@ -6,6 +6,7 @@ import time
 import pytest
 
 from core import steam_runner
+from api_patching import patch_api_name
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +51,7 @@ def test_window_merges_external_runs_and_refuses_second_launch(monkeypatch):
     from core.api import Api
 
     api = Api()
-    monkeypatch.setattr('core.api.is_linux', lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr(api.launcher, 'get_running_games', lambda: [1])
     monkeypatch.setattr(steam_runner, 'running_games', lambda: [2])
     monkeypatch.setattr(steam_runner, 'runner_pid', lambda _: 42)

@@ -4,7 +4,7 @@
 
 Usage: check-release-version.py <tag>
 
-- The tag must be `v` + APP_VERSION from core/api.py, so the app reports the
+- The tag must be `v` + APP_VERSION from core/app_version.py, so the app reports the
   version it was released as.
 - extension/manifest.json must have a version the previous release tag did
   not use: AMO accepts each extension version only once, so a reused version
@@ -26,9 +26,9 @@ _APP_VERSION_RE = re.compile(r'^APP_VERSION = "([^"]+)"$', re.MULTILINE)
 
 
 def app_version(root: Path = ROOT) -> str:
-    match = _APP_VERSION_RE.search((root / "core" / "api.py").read_text(encoding="utf-8"))
+    match = _APP_VERSION_RE.search((root / "core" / "app_version.py").read_text(encoding="utf-8"))
     if match is None:
-        raise SystemExit("APP_VERSION was not found in core/api.py.")
+        raise SystemExit("APP_VERSION was not found in core/app_version.py.")
     return match.group(1)
 
 
@@ -55,7 +55,7 @@ def problems(tag: str, root: Path = ROOT) -> list[str]:
     version = app_version(root)
     if tag != f"v{version}":
         found.append(
-            f"Tag {tag} does not match APP_VERSION {version} in core/api.py; "
+            f"Tag {tag} does not match APP_VERSION {version} in core/app_version.py; "
             + f"tag v{version} or update APP_VERSION."
         )
     current = manifest_version(

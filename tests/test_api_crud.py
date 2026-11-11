@@ -4,6 +4,7 @@ import pytest
 
 from core.api import Api
 from core.database import add_game, get_all_games, init_db, update_setting
+from api_patching import patch_api_name
 
 
 def test_added_game_metadata_saves_first_post_links(monkeypatch):
@@ -395,8 +396,8 @@ def test_sandbox_install_failure_is_reported_and_rechecked(monkeypatch):
     from core import game_sandbox
 
     api = Api()
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
-    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
     calls = []
 
     def status(**kwargs):
@@ -416,7 +417,7 @@ def test_sandbox_install_failure_is_reported_and_rechecked(monkeypatch):
         def start(self):
             self.target()
 
-    monkeypatch.setattr("core.api.threading.Thread", InlineThread)
+    monkeypatch.setattr("threading.Thread", InlineThread)
     assert api.install_sandbox_tool("bwrap")["success"]
     progress = api.get_sandbox_install_status()
     assert not progress["running"] and "cancelled" in progress["error"]
@@ -524,8 +525,8 @@ def test_performance_settings_round_trip():
 def test_performance_tool_detection_cache(monkeypatch):
     api = Api()
     calls = []
-    monkeypatch.setattr("core.api.is_windows", lambda: False)
-    monkeypatch.setattr("core.api.host_which", lambda name: calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None))
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
+    patch_api_name(monkeypatch, "host_which", lambda name: calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None))
     assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
     assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
     assert len(calls) == 2

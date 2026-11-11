@@ -13,6 +13,7 @@ from core.database import (
     init_db,
     update_setting,
 )
+from api_patching import patch_api_name
 
 
 @pytest.fixture(autouse=True)
@@ -27,8 +28,8 @@ def setup_test_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _linux_api_by_default(monkeypatch):
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
-    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
 
 
 def test_collection_api_methods():

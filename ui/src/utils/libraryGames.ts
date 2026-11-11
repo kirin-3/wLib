@@ -31,7 +31,7 @@ export const matchesSourceFilter = (
 };
 
 // "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
-// normalize_version() in core/api.py. String() matches the Python mirror, which
+// normalize_version() in core/versions.py. String() matches the Python mirror, which
 // coerces whatever a hand-edited or imported library row holds instead of
 // throwing on a non-string value.
 export const normalizeVersion = (version: string | null | undefined): string =>

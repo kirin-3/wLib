@@ -8,13 +8,14 @@ import pytest
 
 from core.api import Api
 from core.database import init_db
+from api_patching import patch_api_name
 
 
 @pytest.fixture(autouse=True)
 def _windows_api(tmp_path, monkeypatch):
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "windows-api.db"))
-    monkeypatch.setattr("core.api.is_linux", lambda: False)
-    monkeypatch.setattr("core.api.is_windows", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
+    patch_api_name(monkeypatch, "is_windows", lambda: True)
     monkeypatch.setattr("core.host_platform.sys.platform", "win32")
     init_db()
 
@@ -50,8 +51,9 @@ def test_windows_system_handler_is_used(monkeypatch, tmp_path):
     target = tmp_path / "Game.exe"
     target.write_bytes(b"MZ")
     opened: list[str] = []
-    monkeypatch.setattr(
-        "core.api.open_windows_system_target",
+    patch_api_name(
+        monkeypatch,
+        "open_windows_system_target",
         lambda path: (opened.append(path) is None, ""),
     )
 
@@ -106,7 +108,7 @@ def test_save_discovery_ignores_short_title_words(monkeypatch, tmp_path, windows
     )
     for name in ("TheTool", "Candy", "CatCache", "MOON-Saves", "run-data"):
         (appdata / name).mkdir(parents=True)
-    monkeypatch.setattr("core.api.is_windows", lambda: windows)
+    patch_api_name(monkeypatch, "is_windows", lambda: windows)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(appdata))
@@ -136,7 +138,7 @@ def test_save_discovery_uses_launcher_proton_prefix(monkeypatch, tmp_path, layou
     saves = pfx / "drive_c" / "users" / "steamuser" / "AppData" / "Roaming" / "MoonGame"
     saves.mkdir(parents=True)
     # Undo this module's Windows host fixture: the launcher's path helpers read it too.
-    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
     monkeypatch.setattr("core.host_platform.sys.platform", "linux")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))

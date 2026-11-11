@@ -484,7 +484,7 @@ class _InlineThread:
 
 def test_check_all_updates_limits_to_given_ids(monkeypatch):
     api = Api()
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
     monkeypatch.setattr(
         api.scraper, "get_thread_metadata", lambda *_a, **_k: {"success": False}
     )
@@ -1335,7 +1335,7 @@ def test_overwrite_keeps_fields_the_source_does_not_track(tmp_path):
 
 
 def _stub_update_check(monkeypatch, api: Api) -> list[list[str]]:
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
     monkeypatch.setattr(
         api.scraper, "get_thread_metadata", lambda *_a, **_k: {"success": False}
     )

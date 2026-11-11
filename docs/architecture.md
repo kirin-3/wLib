@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph "Backend Context (Python)"
         MAIN[main.py App Core]:::backend
-        API_PY[core/api.py]:::backend
+        API_PY[core/api.py + core/api_mixins/]:::backend
         DB[core/database.py]:::backend
         BACKUP[core/library_backup.py]:::backend
         SCRAPER[core/scraper.py]:::backend
@@ -77,7 +77,7 @@ flowchart TD
 
 | Area | Modules |
 |------|---------|
-| App shell and bridge | `main.py`, `core/api.py`, `core/database.py`, `core/host_platform.py` |
+| App shell and bridge | `main.py`, `core/api.py`, `core/api_mixins/`, `core/database.py`, `core/host_platform.py` |
 | Library migration and sync | `core/library_backup.py`, `core/library_sync.py`, `core/external_import.py`, `core/litedb.py`, `core/backup_format.py` |
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |

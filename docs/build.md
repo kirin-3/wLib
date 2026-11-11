@@ -28,7 +28,7 @@ The built-in web game player runs Flash with Ruffle's self-hosted web build.
 
 ## Release version check
 
-The release workflow's first job runs `scripts/check-release-version.py <tag>` on tag pushes. It fails when the tag is not `v` + `APP_VERSION` from `core/api.py`, or when `extension/manifest.json` has the version the previous release tag shipped (AMO signs each version once). Manual dry runs skip it.
+The release workflow's first job runs `scripts/check-release-version.py <tag>` on tag pushes. It fails when the tag is not `v` + `APP_VERSION` from `core/app_version.py`, or when `extension/manifest.json` has the version the previous release tag shipped (AMO signs each version once). Manual dry runs skip it.
 
 The Linux test image includes `binutils` (PyInstaller's `objdump`), `curl` (appimagetool download), and `file` (AppImage assembly). Windows checkouts can contain CRLF shell files; normalize shell scripts in a temporary Linux source copy for packaging/clean checks. Keep Linux node_modules in the container or the named volume.
 
@@ -90,7 +90,7 @@ Build options:
 
 | Option | Behavior |
 |--------|----------|
-| `-Version 1.2.0` | Three numeric parts without a `v` prefix; defaults to `APP_VERSION` in `core/api.py` when omitted |
+| `-Version 1.2.0` | Three numeric parts without a `v` prefix; defaults to `APP_VERSION` in `core/app_version.py` when omitted |
 | `-Python <path>` | Python interpreter used for dependency installation and PyInstaller; defaults to `python` |
 | `-SignedFirefoxXpi <path>` | Bundles an existing signed Firefox XPI; omitting it creates an unsigned local fallback |
 | `-OutputDirectory <path>` | Overrides `dist/windows/` |
@@ -249,7 +249,7 @@ The build prefers Flathub's `org.flatpak.Builder` when it is installed (the rele
 
 - The Vue frontend builds with `buildNpmPackage` and Node 22. Dependencies come from `ui/package-lock.json` through `importNpmLock`, so there is no npm dependency hash to update when the lockfile changes.
 - The Python side is a `python3.withPackages` environment from nixpkgs (pywebview, QtPy, PyQt6, PyQt6-WebEngine, certifi, cryptography, libtorrent-rasterbar). Add any new runtime dependency in `requirements.txt` to that list too.
-- The version is read from `APP_VERSION` in `core/api.py`.
+- The version is read from `APP_VERSION` in `core/app_version.py`.
 - `bin/wlib` runs the shared `packaging/wlib-launcher` with `WLIB_APP_DIR` pointing at `share/wlib`. The launcher's `./wlib-bin` is a wrapper that runs `main.py` with the Python environment and the Qt wrapper environment, so GPU detection, crash guard, SSL setup and launch logging work as in the other formats.
 - Runtime tools (glxinfo, xdg-open, gdbus, 7zz, bsdtar, bubblewrap and, unless `withWine = false`, Wine and winetricks) are appended to `PATH`, so user-installed versions win.
 - The install check runs `main.py --smoke-test` against temporary HOME and data directories.

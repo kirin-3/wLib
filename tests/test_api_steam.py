@@ -2,6 +2,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.api import Api
+from api_patching import patch_api_name
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +18,7 @@ def isolated_library(tmp_path, monkeypatch):
 
 def test_unsupported_bridge_methods(monkeypatch):
     api = Api()
-    monkeypatch.setattr('core.api.is_linux', lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
     for call in (api.get_steam_status, api.add_wlib_to_steam, api.sync_steam_shortcuts,
                  api.set_steam_games_mode, api.set_steam_account, api.set_game_steam_shortcut, api.get_game_steam_state):
         assert call()['code'] == 'unsupported'
@@ -36,7 +37,7 @@ def test_linux_bridge_sets_mode_mark_and_retries(monkeypatch):
     from core import database, steam_sync
     api = Api()
     api.steam_sync = MagicMock()
-    monkeypatch.setattr('core.api.is_linux', lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr(steam_sync, 'environment', lambda: {'account_id': '123', 'accounts': ['123'], 'mode': 'marked'})
     game = database.add_game('Game', '/example')
     database.put_steam_shortcut('123', game, 42, 'user_removed')
@@ -54,7 +55,7 @@ def test_linux_bridge_sets_mode_mark_and_retries(monkeypatch):
 def test_game_steam_state_reports_why_a_game_is_ineligible(monkeypatch, tmp_path):
     from core import database, steam_sync
     api = Api()
-    monkeypatch.setattr('core.api.is_linux', lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr(steam_sync, 'environment', lambda: {'account_id': '123', 'accounts': ['123'], 'mode': 'marked'})
     present = tmp_path / 'game.sh'
     present.write_text('')

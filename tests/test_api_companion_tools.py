@@ -5,6 +5,7 @@ import pytest
 
 from core import database as db
 from core.api import Api
+from api_patching import patch_api_name
 
 
 @pytest.fixture
@@ -18,7 +19,7 @@ def tools_api(tmp_path, monkeypatch):
 
 def test_companion_api_roundtrip(tools_api, monkeypatch):
     api = tools_api
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     game = db.add_game("Game", "/game.exe")
     assert api.save_companion_tool({"name": "Helper", "kind": "command", "arguments": "helper"})["success"]
     tool = api.list_companion_tools()["tools"][0]
@@ -39,7 +40,7 @@ def test_companion_api_roundtrip(tools_api, monkeypatch):
     assert not api.launch_companion_tool(game, 9999)["success"]
     assert not api.launch_companion_tool(9999, tool_id)["success"]
     assert not api.list_launchable_companion_tools(9999)["success"]
-    monkeypatch.setattr("core.api.is_linux", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
     assert api.launch_companion_tool(game, tool_id)["code"] == "unsupported_platform"
     assert api.list_launchable_companion_tools(game)["code"] == "unsupported_platform"
     assert api.list_companion_tools()["tools"]

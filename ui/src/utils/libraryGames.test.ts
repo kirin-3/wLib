@@ -152,7 +152,7 @@ test("tag filters treat names case-insensitively and merge casing variants", () 
 });
 
 test("versions normalize the same way the Python mirror does, including non-strings", () => {
-  // normalize_version() in core/api.py coerces with str(value or ""); the UI must
+  // normalize_version() in core/versions.py coerces with str(value or ""); the UI must
   // not throw on a version that arrived as a number or array, or a single bad
   // row breaks the whole library (updateCount and the sort read every game).
   assert.equal(normalizeVersion("v0.8"), "0.8");

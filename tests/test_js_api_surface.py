@@ -13,6 +13,7 @@ import pytest
 
 from core.api import Api
 from core.database import init_db
+from api_patching import patch_api_name
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "js_api_surface.json"
@@ -140,10 +141,9 @@ class _StubSteamSync:
 
 
 def test_runtime_helpers_are_not_listed(monkeypatch):
-    import core.api
     import core.steam_sync
 
-    monkeypatch.setattr(core.api, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr(core.steam_sync, "SteamSync", _StubSteamSync)
     api = Api()
     api.set_window(_StubWindow())  # pyright: ignore[reportArgumentType]
@@ -171,3 +171,33 @@ def test_python_only_methods_stay_callable():
     for name in PYTHON_ONLY_METHODS:
         assert callable(getattr(api, name)), name
         assert name not in listed, name
+
+
+def duplicate_class_names(cls: type) -> list[str]:
+    """Names that more than one class in ``cls.__mro__`` defines (dunder names excluded)."""
+    owners: dict[str, list[str]] = {}
+    for klass in cls.__mro__:
+        if klass is object:
+            continue
+        for name in vars(klass):
+            if name.startswith("__") and name.endswith("__"):
+                continue
+            owners.setdefault(name, []).append(klass.__qualname__)
+    return sorted(f"{name}: {', '.join(classes)}" for name, classes in owners.items() if len(classes) > 1)
+
+
+def test_each_api_name_is_defined_in_one_class():
+    assert duplicate_class_names(Api) == []
+
+
+def test_duplicate_check_finds_an_override():
+    class _Shadow(Api):
+        def get_games(self) -> list[object]:
+            return []
+
+        def _private_only(self) -> None:
+            pass
+
+    duplicates = duplicate_class_names(_Shadow)
+    assert [entry.split(":", 1)[0] for entry in duplicates] == ["get_games"]
+    assert "_Shadow" in duplicates[0]

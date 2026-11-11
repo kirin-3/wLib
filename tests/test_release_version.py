@@ -19,7 +19,7 @@ _spec.loader.exec_module(check)
 def _repo(tmp_path: Path, app_version: str, manifest_version: str) -> Path:
     (tmp_path / "core").mkdir(exist_ok=True)
     (tmp_path / "extension").mkdir(exist_ok=True)
-    (tmp_path / "core" / "api.py").write_text(f'APP_VERSION = "{app_version}"\n')
+    (tmp_path / "core" / "app_version.py").write_text(f'APP_VERSION = "{app_version}"\n')
     (tmp_path / "extension" / "manifest.json").write_text(
         json.dumps({"version": manifest_version})
     )

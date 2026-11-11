@@ -96,10 +96,10 @@ function Invoke-AuthenticodeSign([string]$Path) {
 }
 
 if (-not $Version) {
-    $ApiSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot "core\api.py") -Raw
+    $ApiSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot "core\app_version.py") -Raw
     $VersionMatch = [regex]::Match($ApiSource, 'APP_VERSION\s*=\s*"(?<version>[0-9]+(?:\.[0-9]+){2})"')
     if (-not $VersionMatch.Success) {
-        throw "Could not read APP_VERSION from core/api.py"
+        throw "Could not read APP_VERSION from core/app_version.py"
     }
     $Version = $VersionMatch.Groups["version"].Value
 }

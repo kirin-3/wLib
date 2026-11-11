@@ -1,9 +1,11 @@
 import sys
+import threading
 
 import pytest
 
 from core.api import Api
 from core.database import init_db
+from api_patching import patch_api_name
 
 
 def test_umu_api_and_unsupported_host(tmp_path, monkeypatch):
@@ -12,13 +14,13 @@ def test_umu_api_and_unsupported_host(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     init_db()
     api = Api()
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr("core.umu.host_which", lambda name: None)
     assert api.get_umu_status()["source"] == ""
     assert api.get_umu_runtime_status()["ready"] is False
     assert api.prepare_umu_runtime()["success"] is False
     assert api.cancel_umu_runtime_prepare()["success"] is False
-    monkeypatch.setattr("core.api.is_linux", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
     for method in (
         api.get_umu_status,
         api.download_umu,
@@ -32,15 +34,14 @@ def test_umu_api_and_unsupported_host(tmp_path, monkeypatch):
 
 def test_proton_installers_use_umu(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
-    import core.api as api_module
 
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "api.db"))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(api_module, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("/host/umu-run", "system"))
     monkeypatch.setattr("core.umu.runtime_status", lambda _: {"ready": True})
     monkeypatch.setattr("core.umu._wrapper_path", lambda: "/host/wrapper")
-    monkeypatch.setattr(api_module, "host_which", lambda _: None)
+    patch_api_name(monkeypatch, "host_which", lambda _: None)
 
     class InlineThread:
         def __init__(self, *, target, daemon):
@@ -49,7 +50,7 @@ def test_proton_installers_use_umu(tmp_path, monkeypatch):
         def start(self):
             self.target()
 
-    monkeypatch.setattr(api_module.threading, "Thread", InlineThread)
+    monkeypatch.setattr(threading, "Thread", InlineThread)
     commands = []
 
     def run(command, **kwargs):
@@ -80,7 +81,7 @@ def test_proton_installers_use_umu(tmp_path, monkeypatch):
     rtp_dir = tmp_path / "rtps"
     rtp_dir.mkdir()
     (rtp_dir / "setup.exe").write_bytes(b"MZ")
-    monkeypatch.setattr(api_module, "get_rtp_dir", lambda: str(rtp_dir))
+    patch_api_name(monkeypatch, "get_rtp_dir", lambda: str(rtp_dir))
     monkeypatch.setattr(
         api,
         "_get_rtp_packages",
@@ -103,7 +104,7 @@ def test_proton_installers_use_umu(tmp_path, monkeypatch):
 def test_runner_codenames_are_available_and_valid(tmp_path, monkeypatch):
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "api.db"))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     init_db()
     api = Api()
     runners = api.get_available_runners()["runners"]
@@ -118,12 +119,12 @@ def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     from core.database import add_game
 
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
-    monkeypatch.setattr("core.api.host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
     process = MagicMock()
     process.poll.return_value = None
     popen = MagicMock(return_value=process)
-    monkeypatch.setattr("core.api.subprocess.Popen", popen)
+    monkeypatch.setattr("subprocess.Popen", popen)
     api = Api()
     prefix = str(tmp_path / "prefix")
     assert api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["success"]
@@ -140,18 +141,18 @@ def test_prefix_tools_wine_commands_and_locks(tmp_path, monkeypatch):
     process.poll.return_value = 0
     assert api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["success"]
     assert popen.call_args.args[0] == ["/usr/bin/winetricks", "--gui"]
-    monkeypatch.setattr("core.api.is_linux", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
     assert not api.open_wine_prefix_tool("winecfg", prefix, "")["success"]
 
 
 def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("/host/umu-run", "system"))
     monkeypatch.setattr("core.umu.runtime_status", lambda _: {"ready": True})
     monkeypatch.setattr("core.umu._wrapper_path", lambda: "/host/wrapper")
-    monkeypatch.setattr("core.api.host_which", lambda name: "/usr/bin/zenity" if name == "zenity" else None)
+    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/zenity" if name == "zenity" else None)
     runner = tmp_path / "GE-Proton" / "proton"
     (runner.parent / "protonfixes").mkdir(parents=True)
     runner.touch()
@@ -160,7 +161,7 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     prefix.mkdir()
     (prefix / "drive_c").mkdir()
     popen = MagicMock(return_value=MagicMock(poll=lambda: None))
-    monkeypatch.setattr("core.api.subprocess.Popen", popen)
+    monkeypatch.setattr("subprocess.Popen", popen)
     api = Api()
     assert api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["success"]
     assert popen.call_args.args[0] == ["python3", "/host/wrapper", "winetricks", "--gui"]
@@ -175,7 +176,7 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
     api._prefix_tool = None
     (runner.parent / "protonfixes" / "winetricks").unlink()
     assert "GE-Proton" in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
-    monkeypatch.setattr("core.api.host_which", lambda _: None)
+    patch_api_name(monkeypatch, "host_which", lambda _: None)
     assert "zenity or kdialog" in api.open_wine_prefix_tool("winetricks", str(prefix), str(runner))["error"]
     monkeypatch.setattr(api.launcher, "game_using_prefix", lambda _: "Running game")
     assert "Running game" in api.open_wine_prefix_tool("winecfg", str(prefix), str(runner))["error"]
@@ -184,22 +185,22 @@ def test_prefix_tools_proton_environment_and_refusals(tmp_path, monkeypatch):
 def test_prefix_tool_refusals(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     api = Api()
     prefix = str(tmp_path / "prefix")
-    monkeypatch.setattr("core.api.host_which", lambda _: None)
+    patch_api_name(monkeypatch, "host_which", lambda _: None)
     assert "Wine is not installed" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
     assert "Wine is not installed" in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
-    monkeypatch.setattr("core.api.host_which", lambda name: "/usr/bin/wine" if name == "wine" else None)
+    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/wine" if name == "wine" else None)
     assert "zenity or kdialog" in api.open_wine_prefix_tool("winetricks", prefix, "/usr/bin/wine")["error"]
-    monkeypatch.setattr("core.api.host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
     api._deps_install_status["running"] = True
     assert "install" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
     api._deps_install_status["running"] = False
     api._rtp_install_status["running"] = True
     assert "install" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
     api._rtp_install_status["running"] = False
-    monkeypatch.setattr("core.api.subprocess.Popen", MagicMock(side_effect=OSError("spawn failed")))
+    monkeypatch.setattr("subprocess.Popen", MagicMock(side_effect=OSError("spawn failed")))
     assert "spawn failed" in api.open_wine_prefix_tool("winecfg", prefix, "/usr/bin/wine")["error"]
     monkeypatch.setattr("core.umu.locate_umu", lambda: ("", ""))
     assert "umu-launcher is missing" in api.open_wine_prefix_tool("winecfg", prefix, "/fake/proton")["error"]
@@ -210,8 +211,8 @@ def test_runtime_installs_and_launches_respect_shared_prefix(tmp_path, monkeypat
     from core.game_sandbox import normalize_prefix
     from core.launcher import RunningGame
 
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
-    monkeypatch.setattr("core.api.host_which", lambda name: f"/usr/bin/{name}")
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "host_which", lambda name: f"/usr/bin/{name}")
     api = Api()
     prefix = str(tmp_path / "prefix")
     api.launcher._running[1] = RunningGame(None, None, prefix=normalize_prefix(prefix), title="Playing")

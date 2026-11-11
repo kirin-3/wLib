@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import threading
 import hashlib
 import io
 import json
@@ -29,6 +30,7 @@ from core.database import (
     update_game,
     update_setting,
 )
+from api_patching import patch_api_name
 
 
 class _FakeDownloadResponse:
@@ -49,9 +51,7 @@ class _FakeDownloadResponse:
 def test_runner_discovery_native_flatpak_and_dedup(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(
-        "core.api.get_proton_dir", lambda: str(tmp_path / "wlib-proton")
-    )
+    patch_api_name(monkeypatch, "get_proton_dir", lambda: str(tmp_path / "wlib-proton"))
     monkeypatch.setattr(
         "shutil.which", lambda name: "/usr/bin/wine" if name == "wine" else None
     )
@@ -239,8 +239,8 @@ def setup_test_db(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _linux_api_by_default(monkeypatch):
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
-    monkeypatch.setattr("core.api.is_windows", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
 
 
 def _zip_bytes(files: dict[str, bytes]) -> bytes:
@@ -253,12 +253,12 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
 
 def _redirect_cheat_engine_dir(monkeypatch, tmp_path):
     ce_dir = tmp_path / "home" / ".local" / "share" / "wLib" / "CheatEngine"
-    monkeypatch.setattr("core.api.get_cheat_engine_dir", lambda: str(ce_dir))
+    patch_api_name(monkeypatch, "get_cheat_engine_dir", lambda: str(ce_dir))
     return ce_dir
 
 
 def _redirect_extension_dir(monkeypatch, persistent_dir):
-    monkeypatch.setattr("core.api.get_extension_dir", lambda: str(persistent_dir))
+    patch_api_name(monkeypatch, "get_extension_dir", lambda: str(persistent_dir))
 
 
 def _bundled_extension_version():
@@ -327,7 +327,7 @@ def test_download_proton_ge_streams_and_filters_tar(
         "urllib.request.urlopen", lambda *_args, **_kwargs: next(responses)
     )
     install_dir = tmp_path / "proton"
-    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(install_dir))
+    patch_api_name(monkeypatch, "get_proton_dir", lambda: str(install_dir))
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
 
     api = Api()
@@ -372,7 +372,7 @@ def test_download_proton_ge_does_not_follow_predictable_temp_symlink(
     predictable = tmp_path / "GE-Proton-test.tar.gz"
     predictable.symlink_to(victim)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+    patch_api_name(monkeypatch, "get_proton_dir", lambda: str(tmp_path / "proton"))
 
     release = {
         "tag_name": "GE-Proton-test",
@@ -408,7 +408,7 @@ def test_download_proton_ge_removes_partial_tarball_after_failure(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+    patch_api_name(monkeypatch, "get_proton_dir", lambda: str(tmp_path / "proton"))
 
     release = {
         "tag_name": "GE-Proton-test",
@@ -471,7 +471,7 @@ def test_download_proton_ge_picks_assets_for_host_arch(monkeypatch, tmp_path, ma
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("platform.machine", lambda: machine)
-    monkeypatch.setattr("core.api.get_proton_dir", lambda: str(tmp_path / "proton"))
+    patch_api_name(monkeypatch, "get_proton_dir", lambda: str(tmp_path / "proton"))
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
 
     Api().download_proton_ge()
@@ -670,7 +670,7 @@ def test_download_cheat_engine_preserves_existing_install_when_verification_fail
     existing_executable = _write_existing_cheat_engine(ce_dir)
     archive_data = _zip_bytes({"readme.txt": b"missing executable"})
     monkeypatch.setattr(
-        "core.api.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
+        "core.api_mixins.runtimes.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
     )
 
     monkeypatch.setattr(
@@ -716,7 +716,7 @@ def test_download_cheat_engine_replaces_install_after_verified_download(
     old_marker.write_text("old install", encoding="utf-8")
     archive_data = _zip_bytes({"Lunar Engine/lunarengine-x86_64.exe": b"new engine"})
     monkeypatch.setattr(
-        "core.api.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
+        "core.api_mixins.runtimes.LUNAR_ENGINE_SHA256", hashlib.sha256(archive_data).hexdigest()
     )
 
     monkeypatch.setattr(
@@ -928,7 +928,7 @@ def test_bulk_extract_failed_page_keeps_completion_and_screenshots(monkeypatch):
         "check_versions",
         lambda urls, callback: callback(urls[0], page_result) or {},
     )
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     assert api.check_all_updates()["success"]
 
@@ -1018,7 +1018,7 @@ def test_bulk_check_error_explains_extension_login(monkeypatch):
         "check_versions",
         lambda urls, callback: callback(urls[0], page_result) or {},
     )
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     assert api.check_all_updates()["success"]
 
@@ -1289,7 +1289,6 @@ def test_backfill_replaces_on_hold_prefix_with_normalization():
 
 
 def test_check_all_updates_thread_start_failure_resets_running(monkeypatch):
-    import core.api as api_module
 
     api = Api()
     _ = add_game(
@@ -1305,7 +1304,7 @@ def test_check_all_updates_thread_start_failure_resets_running(monkeypatch):
         def start(self):
             raise OSError("no thread")
 
-    monkeypatch.setattr(api_module.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(threading, "Thread", _FailingThread)
     result = api.check_all_updates()
     assert result["success"] is False
     status = api.get_update_status()
@@ -1370,7 +1369,7 @@ class _DeferredThread(_InlineThread):
 
 def test_add_game_returns_before_metadata_fetch(monkeypatch):
     api = Api()
-    monkeypatch.setattr("core.api.threading.Thread", _DeferredThread)
+    monkeypatch.setattr("threading.Thread", _DeferredThread)
 
     result = api.add_game(
         title="Pending",
@@ -1387,7 +1386,7 @@ def test_add_game_returns_before_metadata_fetch(monkeypatch):
 
 def test_add_game_backfills_missing_metadata(monkeypatch):
     api = Api()
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
@@ -1422,7 +1421,7 @@ def test_add_game_updates_thread_edit_metadata_without_overwriting_existing_fiel
     monkeypatch,
 ):
     api = Api()
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
@@ -1584,7 +1583,7 @@ def test_browse_file_uses_linux_fallback_order(monkeypatch, tmp_path):
     selected_file.write_text("demo")
     calls = []
 
-    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr(
         api,
         "_build_linux_browse_backends",
@@ -1615,7 +1614,7 @@ def test_browse_file_falls_back_after_portal_error_like_cancel(monkeypatch, tmp_
     selected_file.write_text("demo")
     calls = []
 
-    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr(
         api,
         "_build_linux_browse_backends",
@@ -1678,7 +1677,7 @@ def test_browse_file_stops_on_user_cancel_even_with_portal_stderr(monkeypatch):
     api = Api()
     calls = []
 
-    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr(
         api,
         "_build_linux_browse_backends",
@@ -1764,7 +1763,7 @@ def test_browse_directory_returns_empty_string_when_linux_picker_cancelled(monke
     api = Api()
     qt_calls = []
 
-    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setattr(
         api,
         "_build_linux_browse_backends",
@@ -1800,7 +1799,7 @@ def test_qt_browse_filters_pass_pywebview_validation(monkeypatch):
     api = Api()
     recorded: list[tuple[str, ...]] = []
 
-    monkeypatch.setattr("core.api.sys.platform", "win32")
+    monkeypatch.setattr("sys.platform", "win32")
 
     def fake_browse_qt_dialog(dialog_kind, directory="", file_types=()):
         _ = (dialog_kind, directory)
@@ -1869,7 +1868,7 @@ def test_browse_runner_file_uses_runner_filter_on_linux(monkeypatch):
     api = Api()
     recorded: dict[str, object] = {}
 
-    monkeypatch.setattr("core.api.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
 
     def fake_browse_linux_dialog(dialog_kind, directory="", file_types=()):
         recorded["dialog_kind"] = dialog_kind
@@ -2824,7 +2823,7 @@ def test_install_rpgmaker_dependencies_reports_background_failure(
             "/usr/bin/winetricks" if command == "winetricks" else "/usr/bin/wine"
         ),
     )
-    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr("threading.Thread", FakeThread)
     monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: FailedRunResult())
 
     result = api.install_rpgmaker_dependencies(str(prefix_path), "")
@@ -2840,7 +2839,7 @@ def test_install_rpgmaker_dependencies_reports_background_failure(
 def test_get_install_status_keeps_progress_shape_on_unsupported_hosts(monkeypatch):
     """Browsers/frontends type `deps`/`rtps` as full progress payloads."""
     api = Api()
-    monkeypatch.setattr("core.api.is_linux", lambda: False)
+    patch_api_name(monkeypatch, "is_linux", lambda: False)
 
     status = api.get_install_status("", "")
 
@@ -2864,7 +2863,7 @@ def test_installs_refuse_to_run_in_parallel(monkeypatch, tmp_path):
     prefix_path = str(tmp_path / "prefix")
     thread = MagicMock()  # never starts, so the first install stays "running"
     monkeypatch.setattr("shutil.which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr("core.api.threading.Thread", thread)
+    monkeypatch.setattr("threading.Thread", thread)
 
     assert api.install_rpgmaker_dependencies(prefix_path, "")["success"] is True
     for install in (api.install_rpgmaker_dependencies, api.install_rpgmaker_rtp):
@@ -2942,7 +2941,7 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
     monkeypatch.setattr(
         "shutil.which", lambda command: "/usr/bin/wine" if command == "wine" else None
     )
-    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr("threading.Thread", FakeThread)
     monkeypatch.setattr(
         api,
         "_open_url_with_targeted_tls_fallback",
@@ -2950,7 +2949,7 @@ def test_install_rpgmaker_rtp_reports_manual_guidance_when_tls_fallback_fails(
             URLError(ssl.SSLCertVerificationError("certificate verify failed"))
         ),
     )
-    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
+    patch_api_name(monkeypatch, "get_rtp_dir", lambda: str(rtp_dir))
 
     result = api.install_rpgmaker_rtp(str(prefix_path), "")
     status = api.get_install_status(str(prefix_path), "")
@@ -2983,8 +2982,8 @@ def test_install_rpgmaker_rtp_recovers_from_interrupted_download(monkeypatch, tm
         downloads.append(request.full_url)
         return io.BytesIO(_zip_bytes({"Setup.exe": b"MZ"}))
 
-    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
-    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    patch_api_name(monkeypatch, "get_rtp_dir", lambda: str(rtp_dir))
+    monkeypatch.setattr("threading.Thread", RunInline)
     monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
     monkeypatch.setattr("subprocess.run", MagicMock())
     monkeypatch.setattr(api, "_get_rtp_packages", lambda: packages)
@@ -3021,8 +3020,8 @@ def test_install_rpgmaker_rtp_drops_a_failed_exe_download(monkeypatch, tmp_path)
         def start(self):
             self._target()
 
-    monkeypatch.setattr("core.api.get_rtp_dir", lambda: str(rtp_dir))
-    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    patch_api_name(monkeypatch, "get_rtp_dir", lambda: str(rtp_dir))
+    monkeypatch.setattr("threading.Thread", RunInline)
     monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
     monkeypatch.setattr(
         "subprocess.run", MagicMock(side_effect=RuntimeError("wine failed"))
@@ -3054,10 +3053,11 @@ def test_install_rpgmaker_rtp_clears_running_status_after_unexpected_error(
                 # re-raise into install_rpgmaker_rtp's caller.
                 pass
 
-    monkeypatch.setattr("core.api.threading.Thread", RunInline)
+    monkeypatch.setattr("threading.Thread", RunInline)
     monkeypatch.setattr("shutil.which", lambda command: "/usr/bin/wine")
-    monkeypatch.setattr(
-        "core.api.get_rtp_dir",
+    patch_api_name(
+        monkeypatch,
+        "get_rtp_dir",
         lambda: (_ for _ in ()).throw(OSError("read-only RTP folder")),
     )
 
@@ -3275,7 +3275,7 @@ def test_bulk_page_fallback_stores_metadata_for_installed_game(monkeypatch):
         "check_versions",
         lambda urls, callback: callback(urls[0], page_result) or {},
     )
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     assert api.check_all_updates()["success"]
     game = get_all_games()[0]
@@ -3309,7 +3309,7 @@ def test_bulk_page_fallback_records_completion_for_wishlist_without_version_chan
     )
     fetch_metadata = MagicMock()
     monkeypatch.setattr(api.scraper, "get_thread_metadata", fetch_metadata)
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     assert api.check_all_updates()["success"]
     fetch_metadata.assert_not_called()
@@ -3790,10 +3790,11 @@ def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_
 
     monkeypatch.setattr(os.path, "isfile", _isfile)
     monkeypatch.setattr(host_platform.os.path, "isfile", _isfile)
-    monkeypatch.setattr("core.api.is_linux", lambda: True)
+    patch_api_name(monkeypatch, "is_linux", lambda: True)
     monkeypatch.setattr("core.umu.host_which", lambda name: "/usr/bin/wine" if name == "wine" else None)
-    monkeypatch.setattr(
-        "core.api.host_which",
+    patch_api_name(
+        monkeypatch,
+        "host_which",
         lambda name: (
             "/usr/bin/winetricks" if name == "winetricks" else f"/usr/bin/{name}"
         ),
@@ -3816,7 +3817,7 @@ def test_install_rpgmaker_dependencies_flatpak_uses_host_spawn(monkeypatch, tmp_
         captured.append(list(cmd))
         return OkRun()
 
-    monkeypatch.setattr("core.api.threading.Thread", FakeThread)
+    monkeypatch.setattr("threading.Thread", FakeThread)
     monkeypatch.setattr("subprocess.run", _fake_run)
 
     result = api.install_rpgmaker_dependencies(str(prefix_path), "")
@@ -3905,7 +3906,7 @@ def test_screenshots_only_result_passes_early_return_guard():
 
 def test_add_game_fetch_stores_screenshots(monkeypatch):
     api = Api()
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
     monkeypatch.setattr(
         api.scraper,
         "get_thread_metadata",
@@ -4110,7 +4111,7 @@ def test_bulk_notification_rules(
     update_setting("update_notifications", "off" if off else "on")
     sender = MagicMock()
     monkeypatch.setattr("core.desktop_notify.send_notification", sender)
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     def check(urls, callback):
         callback(urls[0], {"success": True, "version": "0.8"})
@@ -4159,7 +4160,7 @@ def test_newly_completed_wishlist_notification_and_auto_check_flag(monkeypatch):
     update_game(game_id, {"latest_version": "0.7"})
     sender = MagicMock()
     monkeypatch.setattr("core.desktop_notify.send_notification", sender)
-    monkeypatch.setattr("core.api.threading.Thread", _InlineThread)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     def check(urls, callback):
         callback(urls[0], {"success": True, "version": "0.8", "thread_completed": True})
