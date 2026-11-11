@@ -344,7 +344,8 @@ test("browser mock game tools report support and advance progress across polls",
   const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
   try {
     const { api } = await server.ssrLoadModule("/src/services/api.ts");
-    api._mockToolStepMs = 40;
+    const { mockBackend } = await server.ssrLoadModule("/src/services/mock/backend.ts");
+    mockBackend._mockToolStepMs = 40;
     const game = (id, engine) => ({ id, title: `G${id}`, engine, exe_path: `/g/${id}/run.sh` });
     localStorage.setItem(
       "wlib-mock-games",
