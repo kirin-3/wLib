@@ -1,0 +1,663 @@
+{
+  "add_game": [
+    "title",
+    "exe_path",
+    "f95_url",
+    "version",
+    "cover_image",
+    "tags",
+    "rating",
+    "developer",
+    "engine",
+    "run_japanese_locale",
+    "run_wayland",
+    "auto_inject_ce",
+    "custom_prefix",
+    "proton_version",
+    "launch_mode",
+    "command_line_args",
+    "links"
+  ],
+  "add_game_attachment": [
+    "game_id",
+    "source_path"
+  ],
+  "add_wlib_to_steam": [],
+  "answer_seed_prompt": [
+    "job_id",
+    "seed",
+    "remember"
+  ],
+  "backup_game_saves": [
+    "game_id"
+  ],
+  "browse_archive_file": [
+    "start_path"
+  ],
+  "browse_attachment_file": [
+    "start_path"
+  ],
+  "browse_backup_file": [
+    "start_path"
+  ],
+  "browse_directory": [
+    "start_path"
+  ],
+  "browse_external_library_file": [
+    "source",
+    "start_path"
+  ],
+  "browse_file": [
+    "start_path"
+  ],
+  "browse_runner_file": [
+    "start_path"
+  ],
+  "browse_urm_file": [
+    "start_path"
+  ],
+  "cancel_archive_install": [],
+  "cancel_game_tool": [
+    "game_id"
+  ],
+  "cancel_umu_runtime_prepare": [],
+  "cancel_update_check": [],
+  "cancel_update_download": [
+    "job_id"
+  ],
+  "catalog.check": [],
+  "catalog.remove": [],
+  "catalog.start_background": [
+    "force"
+  ],
+  "catalog.status": [],
+  "check_all_updates": [
+    "game_ids",
+    "refresh_covers"
+  ],
+  "check_app_updates": [],
+  "check_catalog_now": [],
+  "check_for_updates": [
+    "url"
+  ],
+  "check_path": [
+    "path",
+    "kind"
+  ],
+  "choose_game_cover": [
+    "game_id"
+  ],
+  "clear_game_cover": [
+    "game_id"
+  ],
+  "close_update_download_links": [
+    "game_id"
+  ],
+  "complete_dropbox_callback": [
+    "code",
+    "state"
+  ],
+  "complete_gdrive_callback": [
+    "code",
+    "state"
+  ],
+  "connect_dropbox": [],
+  "connect_gdrive": [],
+  "connect_mega_account": [
+    "email",
+    "password",
+    "code"
+  ],
+  "connect_pixeldrain_account": [
+    "api_key"
+  ],
+  "connect_rpdl_account": [
+    "username",
+    "password"
+  ],
+  "cover_cache.delete_game": [
+    "game_id"
+  ],
+  "cover_cache.on_change": [],
+  "cover_cache.purge": [],
+  "cover_cache.start": [],
+  "cover_cache.status": [],
+  "cover_cache.stop": [],
+  "cover_cache.wake": [],
+  "cover_cards.on_copies_ready": [],
+  "cover_cards.process_pending": [],
+  "cover_cards.start": [],
+  "cover_cards.stop": [],
+  "cover_cards.sweep": [],
+  "cover_cards.wake": [],
+  "create_collection": [
+    "name",
+    "game_id"
+  ],
+  "create_launch_target": [
+    "game_id",
+    "label",
+    "exe_path",
+    "sort_order"
+  ],
+  "decrypt_rpgm_assets": [
+    "game_id"
+  ],
+  "delete_collection": [
+    "name"
+  ],
+  "delete_companion_tool": [
+    "tool_id"
+  ],
+  "delete_game": [
+    "game_id"
+  ],
+  "delete_launch_target": [
+    "target_id"
+  ],
+  "detect_external_library": [
+    "source"
+  ],
+  "disconnect_mega_account": [],
+  "disconnect_pixeldrain_account": [],
+  "disconnect_rpdl_account": [],
+  "disconnect_sync": [],
+  "dismiss_download_offer": [
+    "key"
+  ],
+  "download_cheat_engine": [],
+  "download_proton_ge": [],
+  "download_umu": [],
+  "export_library_backup": [
+    "options",
+    "destination_path",
+    "passphrase"
+  ],
+  "extract_renpy_archives": [
+    "game_id",
+    "options"
+  ],
+  "find_download_offers": [],
+  "find_rpdl_torrents": [
+    "game_id",
+    "version",
+    "refresh"
+  ],
+  "find_save_files": [
+    "exe_path",
+    "title",
+    "engine",
+    "custom_prefix",
+    "proton_version"
+  ],
+  "get_app_version": [],
+  "get_archive_install_status": [],
+  "get_auto_check_setting": [],
+  "get_available_runners": [],
+  "get_catalog_status": [],
+  "get_collections": [],
+  "get_cover_cache_status": [],
+  "get_diagnostics": [],
+  "get_diagnostics_report": [],
+  "get_diagnostics_tools": [],
+  "get_download_accounts": [],
+  "get_executable_modified_time": [
+    "exe_path"
+  ],
+  "get_extension_pairing": [],
+  "get_extension_service_status": [],
+  "get_game_companion_tools": [
+    "game_id"
+  ],
+  "get_game_play_sessions": [
+    "game_id"
+  ],
+  "get_game_saves": [
+    "game_id"
+  ],
+  "get_game_screenshots": [
+    "game_id"
+  ],
+  "get_game_steam_state": [
+    "game_id"
+  ],
+  "get_game_tool_status": [
+    "game_id"
+  ],
+  "get_game_tool_support": [
+    "game_id"
+  ],
+  "get_game_tools": [
+    "game_id"
+  ],
+  "get_games": [],
+  "get_install_status": [
+    "prefix_path",
+    "proton_path"
+  ],
+  "get_launch_targets": [
+    "game_id"
+  ],
+  "get_performance_tools": [
+    "refresh"
+  ],
+  "get_platform_capabilities": [],
+  "get_proton_download_status": [],
+  "get_running_games": [],
+  "get_sandbox_install_info": [],
+  "get_sandbox_install_status": [],
+  "get_sandbox_status": [],
+  "get_settings": [],
+  "get_startup_extension_sync_status": [],
+  "get_startup_launch_error": [],
+  "get_steam_cover_conversions": [],
+  "get_steam_status": [],
+  "get_sync_status": [],
+  "get_system_deps_command": [],
+  "get_umu_download_status": [],
+  "get_umu_runtime_status": [],
+  "get_umu_status": [],
+  "get_update_download_links": [
+    "game_id"
+  ],
+  "get_update_download_status": [],
+  "get_update_status": [],
+  "get_urm_status": [
+    "game_id"
+  ],
+  "import_external_library": [
+    "source",
+    "path",
+    "options"
+  ],
+  "import_game_saves": [
+    "game_id",
+    "source"
+  ],
+  "import_library_backup": [
+    "path",
+    "options",
+    "passphrase"
+  ],
+  "inspect_archive": [
+    "path",
+    "game_id",
+    "target_id",
+    "library_folder"
+  ],
+  "inspect_external_library": [
+    "source",
+    "path"
+  ],
+  "inspect_game_path": [
+    "exe_path"
+  ],
+  "inspect_library_backup": [
+    "path",
+    "passphrase"
+  ],
+  "install_archive": [
+    "options"
+  ],
+  "install_bepinex": [
+    "game_id",
+    "options"
+  ],
+  "install_rpgmaker_dependencies": [
+    "prefix_path",
+    "proton_path"
+  ],
+  "install_rpgmaker_rtp": [
+    "prefix_path",
+    "proton_path",
+    "game_id"
+  ],
+  "install_sandbox_tool": [
+    "tool"
+  ],
+  "is_cheat_engine_installed": [],
+  "launch_companion_tool": [
+    "game_id",
+    "tool_id"
+  ],
+  "launch_game": [
+    "game_id",
+    "exe_path",
+    "command_line_args",
+    "run_japanese_locale",
+    "run_wayland",
+    "auto_inject_ce",
+    "custom_prefix",
+    "proton_version",
+    "launch_mode"
+  ],
+  "launcher.external_alive": [],
+  "launcher.game_using_prefix": [
+    "prefix"
+  ],
+  "launcher.get_rpgmaker_linux_runner_status": [
+    "configured_path"
+  ],
+  "launcher.get_running_games": [],
+  "launcher.launch": [
+    "exe_path",
+    "command_line_args",
+    "run_japanese_locale",
+    "run_wayland",
+    "auto_inject_ce",
+    "custom_prefix",
+    "proton_version",
+    "launch_mode",
+    "on_exit_callback",
+    "game_id",
+    "sandbox_enabled",
+    "game_title",
+    "block_network",
+    "gamemode",
+    "mangohud",
+    "html_player"
+  ],
+  "launcher.launch_companion_tool": [
+    "game_id",
+    "tool"
+  ],
+  "launcher.list_launchable_tools": [
+    "game_id",
+    "tools"
+  ],
+  "launcher.prefix_guard": [
+    "prefix",
+    "game_id"
+  ],
+  "launcher.release_external": [
+    "game_id"
+  ],
+  "launcher.reserve_external": [
+    "game_id",
+    "entry"
+  ],
+  "launcher.shutdown": [],
+  "launcher.stop": [
+    "game_id"
+  ],
+  "library_sync.cancel_signin": [],
+  "library_sync.complete_dropbox": [
+    "code",
+    "state"
+  ],
+  "library_sync.complete_gdrive": [
+    "code",
+    "state"
+  ],
+  "library_sync.connect_dropbox": [],
+  "library_sync.connect_gdrive": [],
+  "library_sync.disconnect": [],
+  "library_sync.finish": [
+    "timeout"
+  ],
+  "library_sync.list_snapshots": [],
+  "library_sync.local_changed": [],
+  "library_sync.restore_snapshot": [
+    "name"
+  ],
+  "library_sync.run": [
+    "choice"
+  ],
+  "library_sync.set_folder": [
+    "folder"
+  ],
+  "library_sync.set_passphrase": [
+    "passphrase"
+  ],
+  "library_sync.start": [],
+  "library_sync.start_run": [
+    "choice"
+  ],
+  "library_sync.status": [],
+  "library_sync.unlock": [
+    "passphrase"
+  ],
+  "list_bepinex_versions": [
+    "game_id"
+  ],
+  "list_companion_tools": [],
+  "list_game_attachments": [
+    "game_id"
+  ],
+  "list_launchable_companion_tools": [
+    "game_id"
+  ],
+  "list_library_folders": [],
+  "list_rpgm_saves": [
+    "game_id"
+  ],
+  "list_sync_snapshots": [],
+  "load_rpgm_save": [
+    "game_id",
+    "file"
+  ],
+  "lookup_thread_details": [
+    "url"
+  ],
+  "maybe_auto_check": [],
+  "open_dev_tools": [],
+  "open_extension_folder": [],
+  "open_folder": [
+    "path"
+  ],
+  "open_game_attachment": [
+    "game_id",
+    "name"
+  ],
+  "open_game_sandbox_folder": [
+    "game_id"
+  ],
+  "open_game_save_backup": [
+    "game_id",
+    "backup_name"
+  ],
+  "open_in_browser": [
+    "url"
+  ],
+  "open_log_folder": [],
+  "open_steam_keyboard": [],
+  "open_update_download_in_browser": [
+    "game_id",
+    "link_id"
+  ],
+  "open_wine_prefix_tool": [
+    "tool",
+    "prefix_path",
+    "proton_path",
+    "game_id"
+  ],
+  "pause_torrent": [
+    "job_id"
+  ],
+  "prepare_umu_runtime": [],
+  "preview_install_destination": [
+    "options"
+  ],
+  "purge_cover_cache": [],
+  "recheck_sandbox_status": [],
+  "release_download_archive": [
+    "path"
+  ],
+  "release_runner_launch": [
+    "game_id"
+  ],
+  "remove_game_attachment": [
+    "game_id",
+    "name"
+  ],
+  "rename_collection": [
+    "old_name",
+    "new_name"
+  ],
+  "reorder_collections": [
+    "names"
+  ],
+  "reorder_launch_targets": [
+    "game_id",
+    "target_ids"
+  ],
+  "reserve_runner_launch": [
+    "game_id",
+    "prefix"
+  ],
+  "resolve_extension_pairing": [
+    "request_id",
+    "allow"
+  ],
+  "resolve_sync_choice": [
+    "choice"
+  ],
+  "restore_bepinex": [
+    "game_id"
+  ],
+  "restore_game_saves_backup": [
+    "game_id",
+    "backup_name"
+  ],
+  "restore_sync_snapshot": [
+    "name"
+  ],
+  "resume_torrent": [
+    "job_id"
+  ],
+  "revoke_extension_pairing": [
+    "pairing_id"
+  ],
+  "save_companion_tool": [
+    "tool"
+  ],
+  "save_library_filter_presets": [
+    "presets"
+  ],
+  "save_settings": [
+    "settings"
+  ],
+  "save_steam_cover_png": [
+    "token",
+    "data"
+  ],
+  "scan_games_folder": [
+    "folder"
+  ],
+  "scraper.check_versions": [
+    "urls",
+    "callback"
+  ],
+  "scraper.get_thread_metadata": [
+    "url"
+  ],
+  "scraper.get_thread_version": [
+    "url",
+    "include_metadata"
+  ],
+  "set_auto_check_setting": [
+    "frequency"
+  ],
+  "set_game_collections": [
+    "game_id",
+    "names"
+  ],
+  "set_game_companion_tool_override": [
+    "game_id",
+    "tool_id",
+    "visible"
+  ],
+  "set_game_cover_file": [
+    "game_id",
+    "path"
+  ],
+  "set_game_save_folder": [
+    "game_id",
+    "path"
+  ],
+  "set_game_steam_shortcut": [
+    "game_id",
+    "enabled"
+  ],
+  "set_renpy_console": [
+    "game_id",
+    "enabled",
+    "developer"
+  ],
+  "set_rpgm_use_decrypted": [
+    "game_id",
+    "enabled"
+  ],
+  "set_sandbox_for_all_games": [
+    "enabled"
+  ],
+  "set_startup_extension_sync_status": [
+    "status"
+  ],
+  "set_steam_account": [
+    "account"
+  ],
+  "set_steam_games_mode": [
+    "mode"
+  ],
+  "set_sync_folder": [
+    "path"
+  ],
+  "set_sync_passphrase": [
+    "passphrase"
+  ],
+  "set_tag_color": [
+    "tag",
+    "swatch"
+  ],
+  "set_urm_installed": [
+    "game_id",
+    "installed"
+  ],
+  "set_window": [
+    "window"
+  ],
+  "set_window_focused": [
+    "focused"
+  ],
+  "start_rpdl_download": [
+    "game_id",
+    "torrent_id",
+    "version"
+  ],
+  "start_update_download": [
+    "game_id",
+    "link_id"
+  ],
+  "stop_game": [
+    "game_id"
+  ],
+  "stop_seeding": [
+    "job_id"
+  ],
+  "sync_extension_files": [],
+  "sync_now": [],
+  "sync_steam_shortcuts": [],
+  "uninstall_bepinex": [
+    "game_id",
+    "options"
+  ],
+  "unlock_sync": [
+    "passphrase"
+  ],
+  "update_game": [
+    "game_id",
+    "fields"
+  ],
+  "update_launch_target": [
+    "target_id",
+    "fields"
+  ],
+  "write_rpgm_save": [
+    "game_id",
+    "file",
+    "patches",
+    "size",
+    "mtime_ns"
+  ]
+}
