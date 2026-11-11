@@ -4,7 +4,12 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.catalog import CatalogClient
 
 
 def check_torrent_helper() -> int:
@@ -36,6 +41,22 @@ def check_torrent_helper() -> int:
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+CATALOG_WAIT_SECONDS = 120
+
+
+def wait_for_catalog_check(catalog: CatalogClient) -> None:
+    """Wait for the startup catalog check, which runs on a daemon thread.
+
+    It writes a temporary `.catalog-*` file in the data folder. On Windows an open
+    file cannot be deleted, so the temporary HOME cleanup fails while it runs.
+    """
+    deadline = time.monotonic() + CATALOG_WAIT_SECONDS
+    while catalog.status().get("checking"):
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"catalog check still running after {CATALOG_WAIT_SECONDS} s")
+        time.sleep(0.2)
 
 
 def main() -> None:
@@ -71,6 +92,7 @@ def main() -> None:
             )
 
         port = check_torrent_helper()
+        wait_for_catalog_check(api.catalog)
 
         print("Smoke check passed")
         print(f"Torrent helper listen port: {port}")
