@@ -26,6 +26,7 @@
   "strict": [
     "core/api.py",
     "core/database.py",
+    "core/extension_server.py",
     "core/launcher.py",
     "core/scraper.py",
     "main.py"

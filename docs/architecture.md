@@ -82,7 +82,7 @@ flowchart TD
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |
 | Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
-| Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
+| Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_server.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
 
 `core/versions.py` holds the normalized version comparison shared with the UI. See [Backend Systems](backend.md) for runtime behavior and [Database & Schema](database.md) for persistence.
@@ -152,7 +152,7 @@ wLib operates across two distinct contexts that never directly share memory:
    - Bootstraps the local SQLite database.
    - Starts the background game-catalog refresh when the catalog is enabled.
    - Removes app-owned legacy browser data in a background thread.
-   - Starts the `http.server` daemon thread for the browser extension.
+   - Binds the extension server from `core/extension_server.py` and serves it on a daemon thread for the browser extension.
    - Starts the library sync watcher and allows a final sync push on exit.
    - Instantiates the `pywebview` window and maps a Python class object (`Api`) to the JavaScript runtime.
    - Logs Qt and browser renderer diagnostics on both platforms; Linux release launchers handle GPU detection and the crash guard.
