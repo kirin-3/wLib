@@ -28,6 +28,7 @@ import { isNewerVersion } from "./utils/appVersion";
 import { motionEnabled } from "./utils/motionPreference";
 import { isDarkTheme, setThemePreference } from "./utils/themePreference";
 import { confirmAction } from "./utils/confirm";
+import { trackSyncProblem } from "./utils/syncProblem";
 import { gamesStore } from "./composables/useGamesStore";
 import { answerPairingRequests, EXTENSION_PAIRING_EVENT } from "./utils/extensionPairing";
 import { dismissToast, notify, notifyUndo, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
@@ -102,24 +103,36 @@ const notifiedFinishedIds = new Set<number>();
 // Sync problems are shown on the Sync nav item and once as a toast, so they
 // are not missed while another view is open.
 const syncAttention = ref(false);
+const syncState = ref("off");
+const syncNavTitle = computed(() => {
+  if (navCollapsed.value) return "Sync";
+  if (syncAttention.value) return "Sync needs attention";
+  if (syncState.value === "offline") return "Sync location is offline";
+  if (syncState.value === "paused") return "Sync is paused";
+  return "";
+});
 let syncPollInterval: ReturnType<typeof setInterval> | null = null;
 let lastSyncProblem = "";
+let syncToastId: number | null = null;
+const closeSyncToast = () => {
+  if (syncToastId !== null) dismissToast(syncToastId);
+  syncToastId = null;
+};
 const pollSyncStatus = async () => {
   try {
     const status = await api.getSyncStatus();
-    const state = status.state || "off";
-    const problem = state === "error" || state === "needs_choice" || state === "needs_passphrase";
-    syncAttention.value = problem;
-    const key = problem ? `${state}:${status.last_error || ""}` : "";
-    if (key && key !== lastSyncProblem && router.currentRoute.value.path !== "/sync") {
-      const message = state === "needs_choice"
-        ? "Sync is waiting for you to choose which library to keep."
-        : state === "needs_passphrase"
-          ? "Sync needs the passphrase for the sync file."
-          : status.last_error || "Sync needs attention.";
-      notify(message, "error", "Library sync", { label: "Open Sync", run: () => void router.push("/sync") });
+    const update = trackSyncProblem(lastSyncProblem, status);
+    syncState.value = status.state || "off";
+    syncAttention.value = update.attention;
+    if (update.close) closeSyncToast();
+    // On the Sync page the problem is already in view; record it so leaving
+    // the page does not show it again.
+    // A new problem replaces the toast of the previous one, also on that page.
+    if (update.show) closeSyncToast();
+    if (update.show && router.currentRoute.value.path !== "/sync") {
+      syncToastId = notify(update.show, "error", "Library sync", { label: "Open Sync", run: () => void router.push("/sync") });
     }
-    lastSyncProblem = key;
+    lastSyncProblem = update.key;
   } catch (error) {
     console.error("Failed to read sync status", error);
   }
@@ -536,7 +549,7 @@ onUnmounted(() => {
 
           <router-link
             to="/sync"
-            :title="navCollapsed ? 'Sync' : syncAttention ? 'Sync needs attention' : ''"
+            :title="syncNavTitle"
             :class="[
               'nav-link relative flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
               navCollapsed ? 'justify-center' : 'gap-3',

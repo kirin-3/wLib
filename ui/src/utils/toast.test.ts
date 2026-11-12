@@ -69,3 +69,48 @@ test("close expires undo, while undo runs without expiring", async (context) => 
   context.mock.timers.tick(8000);
   assert.equal(expired, 1);
 });
+
+test("the same error twice gives one toast", () => {
+  const before = toasts.length;
+  const first = notify("Sync failed.", "error", "Sync needs attention");
+  const second = notify("Sync failed.", "error", "Sync needs attention");
+  assert.notEqual(first, second);
+  assert.equal(toasts.length, before + 1);
+  assert.equal(toasts[toasts.length - 1]?.id, second);
+  dismissToast(second);
+});
+
+test("a repeated info toast restarts its timer", (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const before = toasts.length;
+  notify("Saved.", "info");
+  context.mock.timers.tick(3000);
+  const second = notify("Saved.", "info");
+  assert.equal(toasts.length, before + 1);
+  context.mock.timers.tick(2000);
+  assert.ok(toasts.some((toast) => toast.id === second));
+  context.mock.timers.tick(3000);
+  assert.ok(!toasts.some((toast) => toast.id === second));
+  assert.equal(toasts.length, before);
+});
+
+test("the same title with different text gives two toasts", () => {
+  const before = toasts.length;
+  const first = notify("One.", "error", "Sync");
+  const second = notify("Two.", "error", "Sync");
+  assert.equal(toasts.length, before + 2);
+  dismissToast(first);
+  dismissToast(second);
+});
+
+test("two Undo toasts with the same text both stay", async (context) => {
+  const { notifyUndo } = await import("./toast.ts");
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const before = toasts.length;
+  notifyUndo("Removed", async () => {});
+  notifyUndo("Removed", async () => {});
+  assert.equal(toasts.length, before + 2);
+  notify("Removed", "success");
+  assert.equal(toasts.length, before + 3);
+  for (const toast of toasts.slice(before)) dismissToast(toast.id);
+});

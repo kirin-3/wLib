@@ -1,8 +1,10 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import errno
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -276,7 +278,7 @@ def test_remote_only_and_unavailable_leave_local_untouched():
     assert database.get_all_games()[0]["title"] == "Replacement"
     location.unavailable = True
     before = database.get_all_games()
-    assert sync.run()["state"] == "error"
+    assert sync.run()["state"] == "offline"
     assert database.get_all_games() == before
 
 
@@ -1671,3 +1673,243 @@ def test_folder_write_removes_stale_temporary_files(tmp_path):
     _ = FolderLocation(str(tmp_path)).write(b"{}", None)
     assert not stale.exists()
     assert fresh.exists()
+
+
+GENERIC_FAILURE = "Sync could not be completed"
+
+
+@pytest.mark.parametrize(
+    ("err", "code"),
+    [
+        (errno.ENOTCONN, "location_unavailable"),
+        (errno.EIO, "location_unavailable"),
+        (errno.ESTALE, "location_unavailable"),
+        (errno.ENOSPC, "folder_full"),
+        (errno.EACCES, "folder_not_writable"),
+        (errno.EROFS, "folder_not_writable"),
+    ],
+)
+def test_folder_os_errors_have_readable_codes(tmp_path, monkeypatch, err, code):
+    location = FolderLocation(str(tmp_path))
+    rev = location.write(b"one", None)
+
+    def fail(*_args, **_kwargs):
+        raise OSError(err, os.strerror(err))
+
+    for call, patch in (
+        (location.revision, "stat"),
+        (location.read, "open"),
+        (lambda: location.write(b"two", rev), "open"),
+    ):
+        with monkeypatch.context() as patched:
+            patched.setattr(type(location.path), patch, fail)
+            with pytest.raises(SyncError) as exc:
+                call()
+        assert exc.value.error_code == code
+        assert GENERIC_FAILURE not in str(exc.value)
+    if code == "location_unavailable":
+        assert str(exc.value) == "The sync folder is unavailable. wLib will try again."
+
+    # is_dir() itself can raise on a disconnected mount.
+    monkeypatch.setattr(type(location.folder), "is_dir", fail)
+    with pytest.raises(SyncError) as exc:
+        location.revision()
+    assert exc.value.error_code == code
+    assert not location.available()
+
+
+def test_unreachable_location_is_offline_and_recovers(tmp_path):
+    folder = tmp_path / "sync"
+    folder.mkdir()
+    sync = manager(FolderLocation(str(folder)))
+    database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    shutil.rmtree(folder)
+    status = sync.run()
+    assert status["state"] == "offline"
+    assert status["error_code"] == "location_unavailable"
+    assert sync.status()["state"] == "offline"
+    assert GENERIC_FAILURE not in str(status["last_error"])
+    folder.mkdir()
+    assert sync.run()["state"] == "idle"
+
+
+def test_cloud_network_error_is_offline(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen", MagicMock(side_effect=URLError("no network"))
+    )
+    sync = manager(DropboxLocation("refresh"))
+    assert sync.run()["state"] == "offline"
+
+
+@pytest.mark.parametrize(
+    "code", ["folder_not_writable", "folder_full", "dropbox_auth_failed"]
+)
+def test_faults_the_user_must_fix_stay_errors(code):
+    sync = manager(MemoryLocation())
+    assert sync._error(SyncError("Broken", code))["state"] == "error"
+    assert sync.status()["state"] == "error"
+
+
+def started(sync, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sync, "start_run", lambda choice=None, *, push_only=False: calls.append(push_only)
+    )
+    return calls
+
+
+def test_offline_watch_tick_does_not_push(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    sync.run()
+    location.unavailable = True
+    assert sync.run()["state"] == "offline"
+    database.add_game("Local", "/local.exe")
+    monkeypatch.setattr(sync, "_auto_push_due", lambda: True)
+    calls = started(sync, monkeypatch)
+    sync._watch_tick()
+    assert calls == []
+
+
+def test_offline_folder_that_comes_back_syncs_on_next_tick(tmp_path, monkeypatch):
+    folder = tmp_path / "sync"
+    folder.mkdir()
+    sync = manager(FolderLocation(str(folder)))
+    sync.run()
+    folder.rmdir()
+    assert sync.run()["state"] == "offline"
+    calls = started(sync, monkeypatch)
+    sync._watch_tick()
+    assert calls == []
+    folder.mkdir()
+    sync._watch_tick()
+    assert calls == [False]
+
+
+def test_offline_cloud_location_waits_for_backoff(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    location.unavailable = True
+    assert sync.run()["state"] == "offline"
+    calls = started(sync, monkeypatch)
+    sync._watch_tick()
+    assert calls == []
+    sync._next_full_run = 0.0
+    sync._watch_tick()
+    assert calls == [False]
+
+
+def test_pause_blocks_every_start_point(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Local", "/local.exe")
+    sync.run()
+    assert sync.pause()["state"] == "paused"
+    assert sync.status()["paused"] is True
+    database.update_game(game_id, {"rating": "9"})
+    assert sync.start_run()["state"] == "paused"
+    assert sync._worker is None
+    api = Api()
+    api.library_sync = sync
+    assert api.sync_now()["state"] == "paused"
+    sync._next_full_run = 0.0
+    monkeypatch.setattr(sync, "_auto_push_due", lambda: True)
+    sync._watch_tick()
+    assert sync._worker is None
+    sync.finish()
+    assert location.writes == 1
+    # The pause is stored on this device, so a restart keeps it.
+    assert SyncManager(location).status()["state"] == "paused"
+
+
+def test_pause_lets_a_running_sync_finish():
+    import threading
+
+    location = MemoryLocation()
+    sync = manager(location)
+    database.add_game("Local", "/local.exe")
+    entered, release = threading.Event(), threading.Event()
+    original = location.revision
+
+    def slow_revision():
+        entered.set()
+        release.wait(timeout=2)
+        return original()
+
+    location.revision = slow_revision
+    sync.start_run()
+    assert entered.wait(timeout=2)
+    status = sync.pause()
+    assert status["state"] == "syncing" and status["paused"] is True
+    release.set()
+    sync._worker.join(timeout=2)
+    assert location.writes == 1
+    assert sync.status()["state"] == "paused"
+
+
+def test_resume_runs_a_full_sync_and_pushes_local_changes(monkeypatch):
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Local", "/local.exe")
+    sync.run()
+    sync.pause()
+    database.update_game(game_id, {"rating": "9"})
+    sync._failures, sync._next_full_run = 4, time.monotonic() + 999
+    runs = []
+    original = sync.run
+
+    def run(choice=None, *, push_only=False, wait=False):
+        runs.append(push_only)
+        return original(choice, push_only=push_only, wait=wait)
+
+    monkeypatch.setattr(sync, "run", run)
+    sync.resume()
+    sync._worker.join(timeout=2)
+    assert runs == [False]
+    assert sync._failures == 0
+    assert location.writes == 2
+    assert sync.status()["state"] == "idle"
+    assert sync.status()["paused"] is False
+
+
+def test_disconnect_and_new_folder_clear_the_pause(tmp_path):
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    sync = SyncManager()
+    sync.set_folder(str(first))
+    sync.pause()
+    # Re-selecting the same folder keeps the pause.
+    sync.set_folder(str(first))
+    assert sync.status()["state"] == "paused"
+    sync.set_folder(str(second))
+    assert sync.status()["paused"] is False
+    sync.pause()
+    sync.disconnect()
+    sync.set_folder(str(first))
+    assert sync.status()["paused"] is False
+
+
+def test_pause_is_not_exported_or_imported():
+    from core.library_backup import (
+        SECTION_SETTINGS_GENERAL,
+        apply_library_backup,
+        build_library_backup,
+    )
+
+    database.update_setting("sync_paused", "1")
+    exported = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})
+    assert "sync_paused" not in json.dumps(exported)
+    synced = build_sync_backup(utc_now(), "this-device")
+    assert "sync_paused" not in json.dumps(synced)
+
+    database.update_setting("sync_paused", "")
+    exported["settings"]["general"]["sync_paused"] = "1"
+    apply_library_backup(exported, {"sections": [SECTION_SETTINGS_GENERAL]})
+    assert not database.get_setting("sync_paused")
+    synced["settings"]["general"]["sync_paused"] = "1"
+    sync = manager(MemoryLocation(synced))
+    sync.run()
+    assert not database.get_setting("sync_paused")
+    assert sync.status()["paused"] is False

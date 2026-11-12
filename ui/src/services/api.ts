@@ -591,7 +591,7 @@ export interface LibraryBackupExportResponse extends ApiBasicResponse {
   encrypted?: boolean;
 }
 
-export type LibrarySyncState = "off" | "idle" | "syncing" | "needs_choice" | "needs_passphrase" | "error";
+export type LibrarySyncState = "off" | "idle" | "syncing" | "needs_choice" | "needs_passphrase" | "error" | "offline" | "paused";
 export type LibrarySyncChoice = "use-remote" | "use-local" | "merge-once";
 export interface SyncSnapshot {
   name: string;
@@ -612,6 +612,8 @@ export interface SyncSnapshotRestore extends ApiBasicResponse {
 
 export interface LibrarySyncStatus extends ApiBasicResponse {
   state?: LibrarySyncState;
+  /** True while this device is paused, also while a run started before the pause finishes. */
+  paused?: boolean;
   location?: "" | "folder" | "dropbox" | "gdrive";
   folder_path?: string;
   account?: string;
@@ -1821,6 +1823,8 @@ class ApiService {
   async connectGdrive(): Promise<LibrarySyncStatus> { return this.invoke("connect_gdrive"); }
   async disconnectSync(): Promise<LibrarySyncStatus> { return this.invoke("disconnect_sync"); }
   async syncNow(): Promise<LibrarySyncStatus> { return this.invoke("sync_now"); }
+  async pauseSync(): Promise<LibrarySyncStatus> { return this.invoke("pause_sync"); }
+  async resumeSync(): Promise<LibrarySyncStatus> { return this.invoke("resume_sync"); }
   async listSyncSnapshots(): Promise<SyncSnapshotList> { return this.invoke("list_sync_snapshots"); }
   async restoreSyncSnapshot(name: string): Promise<SyncSnapshotRestore> {
     const result = await this.invoke<SyncSnapshotRestore>("restore_sync_snapshot", name);

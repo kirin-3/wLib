@@ -809,6 +809,8 @@ export class MockBackend {
       case "connect_gdrive":
       case "disconnect_sync":
       case "sync_now":
+      case "pause_sync":
+      case "resume_sync":
       case "resolve_sync_choice":
       case "set_sync_passphrase":
       case "unlock_sync": {
@@ -819,10 +821,15 @@ export class MockBackend {
         // puts the syncer in "syncing" before it answers; the poll then reads
         // the finished state. connect_* only starts the OAuth round-trip and
         // answers with the sign-in URL instead of a status payload.
-        if (method === "set_sync_folder") Object.assign(status, { state: "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
-        if (method === "connect_dropbox") Object.assign(status, { state: "idle", location: "dropbox", account: "Browser mock account", last_error: "" });
-        if (method === "connect_gdrive") Object.assign(status, { state: "idle", location: "gdrive", account: "mock@example.com", last_error: "" });
-        if (method === "disconnect_sync") Object.assign(status, { state: "off", location: "", encrypted: false, account: "", folder_path: "", last_synced_at: "", last_device: "", last_error: "" });
+        // The pause stays when the same folder is picked again and goes with a
+        // new location or a disconnect, like SyncManager._reset_connection.
+        if (method === "set_sync_folder" && status.folder_path !== String(args[0])) status.paused = false;
+        if (method === "set_sync_folder") Object.assign(status, { state: status.paused ? "paused" : "idle", location: "folder", folder_path: String(args[0]), last_error: "" });
+        if (method === "pause_sync" && status.location) Object.assign(status, { paused: true, state: status.state === "syncing" ? "syncing" : "paused" });
+        if (method === "resume_sync") Object.assign(status, { paused: false, state: status.location ? "idle" : "off" });
+        if (method === "connect_dropbox") Object.assign(status, { state: "idle", paused: false, location: "dropbox", account: "Browser mock account", last_error: "" });
+        if (method === "connect_gdrive") Object.assign(status, { state: "idle", paused: false, location: "gdrive", account: "mock@example.com", last_error: "" });
+        if (method === "disconnect_sync") Object.assign(status, { state: "off", paused: false, location: "", encrypted: false, account: "", folder_path: "", last_synced_at: "", last_device: "", last_error: "" });
         if (method === "resolve_sync_choice") Object.assign(status, { state: "idle", last_error: "" });
         if (method === "set_sync_passphrase") status.encrypted = args[0] !== null;
         if (method === "unlock_sync") {
@@ -832,7 +839,8 @@ export class MockBackend {
         localStorage.setItem("wlib-mock-sync", JSON.stringify(status));
         // SyncManager.start_run() only reports a run when a location is set;
         // otherwise status() keeps answering "off".
-        if (status.location && ["set_sync_folder", "sync_now", "resolve_sync_choice", "set_sync_passphrase", "unlock_sync"].includes(method)) {
+        // A paused device starts no run (SyncManager.start_run returns status()).
+        if (status.location && !status.paused && ["set_sync_folder", "sync_now", "resume_sync", "resolve_sync_choice", "set_sync_passphrase", "unlock_sync"].includes(method)) {
           // The run is asynchronous: report "syncing" now and let the stored
           // status settle once the simulated run finishes.
           const running: LibrarySyncStatus = { ...status, state: "syncing", last_error: "" };
@@ -841,7 +849,7 @@ export class MockBackend {
             try {
               let finished: LibrarySyncStatus = { ...running };
               const stored = JSON.parse(localStorage.getItem("wlib-mock-sync") || "{}") as LibrarySyncStatus;
-              if (stored.state === "syncing") finished = { ...stored, state: "idle", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" };
+              if (stored.state === "syncing") finished = { ...stored, state: stored.paused ? "paused" : "idle", last_synced_at: new Date().toISOString(), last_device: "Browser mock device" };
               localStorage.setItem("wlib-mock-sync", JSON.stringify(finished));
             } catch { /* Ignore storage that vanished with the preview page. */ }
           }, 900);

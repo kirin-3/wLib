@@ -71,6 +71,12 @@ class SyncMixin(ApiBase):
     def sync_now(self) -> dict[str, object]:
         return self.library_sync.start_run()
 
+    def pause_sync(self) -> dict[str, object]:
+        return self.library_sync.pause()
+
+    def resume_sync(self) -> dict[str, object]:
+        return self.library_sync.resume()
+
     def resolve_sync_choice(self, choice: str) -> dict[str, object]:
         if choice not in ("use-remote", "use-local", "merge-once"):
             return {

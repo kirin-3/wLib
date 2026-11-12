@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -14,8 +15,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
-from contextlib import closing
+from collections.abc import Callable, Generator, Mapping
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, UTC
 from http.client import HTTPResponse
 from pathlib import Path
@@ -173,45 +174,87 @@ def _folder_write_lock(folder: Path) -> threading.Lock:
         return existing
 
 
+FOLDER_UNAVAILABLE = "The sync folder is unavailable. wLib will try again."
+# EDQUOT is missing on Windows.
+_FOLDER_FULL_ERRNOS = frozenset(
+    {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+)
+_FOLDER_NOT_WRITABLE_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+def _folder_error(exc: OSError) -> SyncError:
+    """Turn a raw folder OSError into a SyncError the user can read.
+
+    A disconnected network or FUSE mount raises ENOTCONN, EIO, ESTALE or
+    EHOSTDOWN; those and every other errno mean the folder cannot be reached.
+    """
+    if exc.errno in _FOLDER_FULL_ERRNOS:
+        return SyncError("The disk with the sync folder is full.", "folder_full")
+    if exc.errno in _FOLDER_NOT_WRITABLE_ERRNOS:
+        return SyncError(
+            "wLib cannot write to the sync folder. Check its permissions.",
+            "folder_not_writable",
+        )
+    return SyncError(FOLDER_UNAVAILABLE, "location_unavailable")
+
+
+@contextmanager
+def _folder_errors() -> Generator[None]:
+    try:
+        yield
+    except OSError as exc:
+        raise _folder_error(exc) from exc
+
+
 class FolderLocation:
     def __init__(self, folder: str) -> None:
         self.folder: Path = Path(os.path.expanduser(folder))
         self.path: Path = self.folder / SYNC_FILENAME
 
+    def available(self) -> bool:
+        try:
+            return self.folder.is_dir()
+        except OSError:
+            return False
+
     def _check_folder(self) -> None:
-        if not self.folder.is_dir():
-            raise SyncError("The sync folder is unavailable.")
+        with _folder_errors():
+            if not self.folder.is_dir():
+                raise SyncError(FOLDER_UNAVAILABLE, "location_unavailable")
 
     def revision(self) -> str | None:
-        self._check_folder()
-        try:
-            stat = self.path.stat()
-        except FileNotFoundError:
-            return None
-        return _folder_revision(stat)
+        with _folder_errors():
+            self._check_folder()
+            try:
+                stat = self.path.stat()
+            except FileNotFoundError:
+                return None
+            return _folder_revision(stat)
 
     def read(self) -> tuple[bytes, str]:
-        self._check_folder()
-        try:
-            with self.path.open("rb") as source:
-                stat = os.fstat(source.fileno())
-                data = source.read()
-        except FileNotFoundError as exc:
-            # Deleted between revision() and read(): retry as a conflict so
-            # the next attempt sees revision None and pushes.
-            raise SyncConflict() from exc
-        revision = _folder_revision(stat)
-        if self.revision() != revision:
-            raise SyncConflict()
-        return data, revision
+        with _folder_errors():
+            self._check_folder()
+            try:
+                with self.path.open("rb") as source:
+                    stat = os.fstat(source.fileno())
+                    data = source.read()
+            except FileNotFoundError as exc:
+                # Deleted between revision() and read(): retry as a conflict so
+                # the next attempt sees revision None and pushes.
+                raise SyncConflict() from exc
+            revision = _folder_revision(stat)
+            if self.revision() != revision:
+                raise SyncConflict()
+            return data, revision
 
     def write(self, data: bytes, expected_revision: str | None) -> str:
-        self._check_folder()
-        self._remove_stale_temporaries()
-        # Serialize writers for one folder: the revision check below is only
-        # meaningful if no other writer can slip in before os.replace.
-        with _folder_write_lock(self.folder):
-            return self._write_exclusive(data, expected_revision)
+        with _folder_errors():
+            self._check_folder()
+            self._remove_stale_temporaries()
+            # Serialize writers for one folder: the revision check below is
+            # only meaningful if no other writer can slip in before os.replace.
+            with _folder_write_lock(self.folder):
+                return self._write_exclusive(data, expected_revision)
 
     def _remove_stale_temporaries(self) -> None:
         """Delete temporary files a writer killed mid-write left behind.
@@ -825,17 +868,20 @@ class SyncManager:
         pending = self._pending
         # An expired sign-in can no longer complete, so it is not "connecting".
         connecting = pending is not None and time.monotonic() <= pending[2]
+        paused = enabled and self.paused()
+        if not enabled:
+            state = "off"
+        elif paused and self._state != "syncing":
+            # A run that started before the pause still reports "syncing".
+            state = "paused"
+        elif self._state != "idle":
+            state = self._state
+        else:
+            state = "error" if error else "idle"
         return {
             "success": True,
-            "state": (
-                (
-                    self._state
-                    if self._state != "idle"
-                    else ("error" if error else "idle")
-                )
-                if enabled
-                else "off"
-            ),
+            "state": state,
+            "paused": paused,
             "location": location,
             "folder_path": self._setting("folder_path"),
             "account": (
@@ -877,11 +923,13 @@ class SyncManager:
             if isinstance(error, (SyncError, BackupValidationError))
             else "Sync could not be completed. Check the location and try again."
         )
-        self._state = (
-            "needs_passphrase"
-            if code in ("passphrase_required", "decrypt_failed")
-            else "error"
-        )
+        if code in ("passphrase_required", "decrypt_failed"):
+            self._state = "needs_passphrase"
+        elif code == "location_unavailable":
+            # Not a fault the user must fix: wLib retries on its own.
+            self._state = "offline"
+        else:
+            self._state = "error"
         self._error_code = code
         self._failures += 1
         # Back off after failures: 1, 2, 4 ... minutes up to 30, or as long as
@@ -921,6 +969,7 @@ class SyncManager:
                 "sync_last_synced_at": "",
                 "sync_last_error": "",
                 "sync_last_device": "",
+                "sync_paused": "",
                 **values,
             }
         )
@@ -1594,6 +1643,7 @@ class SyncManager:
                     "last_synced_at",
                     "last_device",
                     "last_error",
+                    "paused",
                 )
             }
         )
@@ -1655,6 +1705,8 @@ class SyncManager:
         with self._worker_lock:
             if self._worker is not None and self._worker.is_alive():
                 return self.status()
+            if self.paused():
+                return self.status()
             if self._setting("location"):
                 self._state = "syncing"
             self._worker = threading.Thread(
@@ -1666,26 +1718,56 @@ class SyncManager:
             self._worker.start()
             return self.status()
 
+    def paused(self) -> bool:
+        return bool(self._setting("paused"))
+
+    def pause(self) -> dict[str, object]:
+        """Stop automatic, startup and exit sync on this device until resume().
+
+        It does not take self._lock, so it returns at once while a run holds
+        the lock; that run finishes normally.
+        """
+        if self._setting("location"):
+            database.update_setting("sync_paused", "1")
+        return self.status()
+
+    def resume(self) -> dict[str, object]:
+        database.update_setting("sync_paused", "")
+        self._failures, self._next_full_run = 0, 0.0
+        return self.start_run()
+
+    def _watch_tick(self) -> None:
+        if self.paused() or not self._setting("location"):
+            return
+        # While a choice or passphrase is pending, a push-only run could only
+        # repeat the question; leave it to the user.
+        if self._state in ("needs_choice", "needs_passphrase"):
+            return
+        # A rejected sign-in or a broken file needs the user; retrying on a
+        # timer would only repeat the error.
+        if self._state == "error" and self._error_code in NO_RETRY_ERRORS:
+            return
+        if self._state == "offline":
+            # A folder that is back syncs at once instead of after the backoff.
+            location = self._location_override or (
+                FolderLocation(self._setting("folder_path"))
+                if self._setting("location") == "folder"
+                else None
+            )
+            if isinstance(location, FolderLocation) and location.available():
+                self._next_full_run = 0.0
+        if time.monotonic() >= self._next_full_run:
+            _ = self.start_run()
+        elif self._state not in ("error", "offline") and self._auto_push_due():
+            _ = self.start_run(push_only=True)
+
     def start(self) -> None:
         _ = self.start_run()
 
         def watch() -> None:
             while not self._stop.wait(60):
                 try:
-                    # While a choice or passphrase is pending, a push-only run
-                    # could only repeat the question; leave it to the user.
-                    if self._state in ("needs_choice", "needs_passphrase"):
-                        continue
-                    if not self._setting("location"):
-                        continue
-                    # A rejected sign-in or a broken file needs the user;
-                    # retrying on a timer would only repeat the error.
-                    if self._state == "error" and self._error_code in NO_RETRY_ERRORS:
-                        continue
-                    if time.monotonic() >= self._next_full_run:
-                        _ = self.start_run()
-                    elif self._state != "error" and self._auto_push_due():
-                        _ = self.start_run(push_only=True)
+                    self._watch_tick()
                 except Exception:  # Keep auto-sync alive through transient DB/OS errors.
                     pass
 
@@ -1694,7 +1776,7 @@ class SyncManager:
 
     def finish(self, timeout: float = 10) -> None:
         self._stop.set()
-        if not self._setting("location"):
+        if not self._setting("location") or self.paused():
             return
 
         def final_push() -> None:

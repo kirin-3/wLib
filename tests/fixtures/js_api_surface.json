@@ -356,6 +356,7 @@
     "proton_path",
     "game_id"
   ],
+  "pause_sync": [],
   "pause_torrent": [
     "job_id"
   ],
@@ -400,6 +401,7 @@
   "restore_sync_snapshot": [
     "name"
   ],
+  "resume_sync": [],
   "resume_torrent": [
     "job_id"
   ],

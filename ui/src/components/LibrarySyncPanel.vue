@@ -33,7 +33,8 @@ const choiceMessage = computed(() => ({
   conflict: "This machine and the sync file both changed since the last sync.",
   removal: "The sync file would remove most of the games on this machine.",
 })[status.value.choice_reason as "conflict" | "removal"] ?? "Both this machine and the sync file have games.");
-const stateLabel = computed(() => ({ off: "Sync is off", idle: "Ready to sync", syncing: "Syncing your library...", needs_choice: "Choose which library to use", needs_passphrase: "Passphrase required", error: "Sync needs attention" })[status.value.state || "off"]);
+const stateLabel = computed(() => ({ off: "Sync is off", idle: "Ready to sync", syncing: "Syncing your library...", needs_choice: "Choose which library to use", needs_passphrase: "Passphrase required", error: "Sync needs attention", offline: "Sync location is offline", paused: "Sync is paused" })[status.value.state || "off"]);
+const paused = computed(() => Boolean(status.value.paused));
 const lastSynced = computed(() => status.value.last_synced_at ? new Date(status.value.last_synced_at).toLocaleString() : "Not synced yet");
 
 function closeDialog() {
@@ -223,9 +224,13 @@ onBeforeUnmount(() => {
         <strong>{{ loading ? "Loading sync status..." : stateLabel }}</strong>
         <dl v-if="connected"><div><dt>Last synced</dt><dd>{{ lastSynced }}</dd></div><div><dt>Last device</dt><dd>{{ status.last_device || "Not synced yet" }}</dd></div></dl>
       </div>
-      <p v-if="error || (status.last_error && status.state !== 'syncing')" class="sync-error" role="alert">{{ error || status.last_error }}</p>
+      <p v-if="error || (status.last_error && !['syncing', 'offline', 'paused'].includes(status.state || ''))" class="sync-error" role="alert">{{ error || status.last_error }}</p>
+      <p v-if="!error && status.state === 'offline'" class="sync-description">{{ status.last_error || "The sync location cannot be reached. wLib will try again." }}</p>
+      <p v-if="paused" class="sync-description">Changes on this machine are not synced until you click Resume.</p>
       <div class="sync-controls">
-        <button v-if="connected" type="button" :class="status.state === 'needs_choice' || status.state === 'needs_passphrase' ? 'sync-btn' : 'sync-primary'" :disabled="disabled" @click="act(() => api.syncNow())">{{ status.state === 'syncing' ? 'Syncing...' : 'Sync now' }}</button>
+        <button v-if="connected" type="button" :class="paused || status.state === 'needs_choice' || status.state === 'needs_passphrase' ? 'sync-btn' : 'sync-primary'" :disabled="disabled || paused" @click="act(() => api.syncNow())">{{ status.state === 'syncing' ? 'Syncing...' : 'Sync now' }}</button>
+        <button v-if="connected && paused" type="button" class="sync-primary" :disabled="loading || busy" @click="act(() => api.resumeSync())">Resume</button>
+        <button v-else-if="connected" type="button" class="sync-btn" :disabled="loading || busy" @click="act(() => api.pauseSync())">Pause sync</button>
         <button v-if="status.state === 'needs_choice'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'choice'">Choose library</button>
         <button v-if="status.state === 'needs_passphrase'" type="button" class="sync-primary" :disabled="disabled" @click="dialog = 'unlock'">Enter passphrase</button>
       </div>

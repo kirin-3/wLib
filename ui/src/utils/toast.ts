@@ -76,15 +76,22 @@ export const runNewestUndo = async (): Promise<void> => {
 
 // Errors and action toasts stay until dismissed so their text can be read
 // and their action can be taken. Plain info/success toasts auto-dismiss.
+// A toast with the same type, title and text as an open non-Undo toast
+// replaces it, so a repeated message shows once with a new timer. The old
+// toast's timer later finds nothing to dismiss.
 export const notify = (
   message: string,
   type: ToastType = "info",
   title = "",
   action?: ToastAction,
-): void => {
+): number => {
+  const duplicate = toasts.findIndex((toast) =>
+    !toast.undo && toast.type === type && toast.title === title && toast.message === message);
+  if (duplicate !== -1) toasts.splice(duplicate, 1);
   const id = nextToastId++;
   toasts.push({ id, type, title, message, action });
   if (type !== "error" && !action) setTimeout(() => dismissToast(id), 5000);
+  return id;
 };
 
-export const notifyError = (message: string, title = ""): void => notify(message, "error", title);
+export const notifyError = (message: string, title = ""): number => notify(message, "error", title);
