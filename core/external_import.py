@@ -592,7 +592,7 @@ def _translate_f95checker_game(
 
     resolved = [resolve_relative_path(item, base_dir) for item in raw_executables]
     kept = [apply_path_rule(item) for item in resolved]
-    for raw, candidate in zip(raw_executables, kept):
+    for raw, candidate in zip(raw_executables, kept, strict=True):
         if raw and not candidate:
             dropped += 1
     kept = [item for item in kept if item]

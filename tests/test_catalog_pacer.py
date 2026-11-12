@@ -32,7 +32,7 @@ def test_f95_budget_holds_across_two_runs(tmp_path):
     assert len(transport.requests) == 90
     # Every 3 s apart, and never more than 90 in any rolling hour.
     times = state.request_times("f95", 0)
-    assert all(b - a >= 3.0 for a, b in zip(times, times[1:]))
+    assert all(b - a >= 3.0 for a, b in zip(times, times[1:], strict=False))
 
 
 def test_waiting_for_budget_sleeps_until_the_window_frees(tmp_path):

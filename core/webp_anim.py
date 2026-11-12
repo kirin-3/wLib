@@ -76,7 +76,7 @@ def mux_animated_webp(
         raise ValueError("Invalid loop count")
     body = bytearray()
     any_alpha = False
-    for data, delay in zip(frames, delays_ms):
+    for data, delay in zip(frames, delays_ms, strict=True):
         parts, alpha = _frame_parts(data)
         any_alpha = any_alpha or alpha
         header = (

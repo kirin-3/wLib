@@ -1328,7 +1328,7 @@ class ApiBase:
         games_by_url = {g["f95_url"]: g for g in games_with_url}
         next_title_by_url = {
             g["f95_url"]: nxt["title"]
-            for g, nxt in zip(games_with_url, games_with_url[1:])
+            for g, nxt in zip(games_with_url, games_with_url[1:], strict=False)
         }
         current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
         previous_latest_versions = {

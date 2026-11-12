@@ -478,7 +478,7 @@ class StateStore:
         keys = ("last_success_at", "last_error", "last_error_at", "sweep_completed_at")
         if row is None:
             return dict.fromkeys(keys)
-        return dict(zip(keys, row))
+        return dict(zip(keys, row, strict=True))
 
     def recent_runs(self, limit: int = 5) -> list[dict[str, object]]:
         runs = _rows(self.conn.execute(

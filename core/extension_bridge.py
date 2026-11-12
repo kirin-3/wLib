@@ -488,7 +488,7 @@ def serve_bridge_connection(
                 break
             if kind == "ping":
                 try:
-                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_pong(payload)))
+                    conn.send_locked(lambda: _send_raw(wfile, extension_ws.encode_server_pong(payload)))  # noqa: B023 - send_locked calls it at once
                 except (OSError, ValueError):
                     break
                 continue

@@ -17,4 +17,11 @@ force-exclude = true
 # Whole rule groups are selected. Ruff is pinned in requirements-dev.lock, so
 # new rules in these groups arrive only with a deliberate Ruff upgrade, and that
 # upgrade must fix any new findings.
-select = ["E4", "E7", "E9", "F", "UP"]
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+ignore = [
+  # B009/B010: the fix (plain attribute access instead of getattr/setattr with a
+  # constant name) breaks basedpyright, for example for ctypes.WinDLL on Linux
+  # stubs or for attributes set on a generic object.
+  "B009",
+  "B010",
+]

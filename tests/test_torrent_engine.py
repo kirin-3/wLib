@@ -141,7 +141,7 @@ def test_unsafe_paths_refused(helper, tmp_path):
         }
         (folder / "meta.torrent").write_bytes(lt.bencode({"info": info, "announce": TRACKER}))
         helper.send(cmd="add", id=f"b{index}", dir=str(folder), paused=False)
-        event = helper.read_until(lambda e: e["event"] == "error" and e.get("id") == f"b{index}")
+        event = helper.read_until(lambda e, index=index: e["event"] == "error" and e.get("id") == f"b{index}")
         assert event["code"] == "unsafe_paths"
     assert not (tmp_path / "evil.txt").exists()
 

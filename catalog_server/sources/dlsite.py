@@ -52,7 +52,7 @@ def parse_listing(payload: object) -> tuple[list[dict[str, object]], int]:
     parts = _ITEM_SPLIT_RE.split(html)
     items: list[dict[str, object]] = []
     # split() yields [head, id1, chunk1, id2, chunk2, ...]
-    for product_id, chunk in zip(parts[1::2], parts[2::2]):
+    for product_id, chunk in zip(parts[1::2], parts[2::2], strict=True):
         maker = _MAKER_RE.search(chunk)
         tags_block = _TAGS_BLOCK_RE.search(chunk)
         items.append(

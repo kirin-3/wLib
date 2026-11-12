@@ -94,7 +94,7 @@ def test_database_concurrent_access():
 
     # Simulate multiple connections
     connections = []
-    for i in range(5):
+    for _ in range(5):
         conn = get_connection()
         connections.append(conn)
 
@@ -302,7 +302,7 @@ def test_launcher_proton_path_with_special_characters(monkeypatch):
             for proton_path in special_paths:
                 with patch(
                     "core.launcher.get_setting",
-                    side_effect=lambda key: {
+                    side_effect=lambda key, proton_path=proton_path: {
                         "proton_path": proton_path,
                         "wine_prefix_path": "",
                         "enable_logging": "false",
@@ -521,7 +521,7 @@ def test_database_with_duplicate_f95_urls():
             f95_url=url,
             version="2.0",
         )
-        assert False, "Expected sqlite3.IntegrityError for duplicate f95_url"
+        raise AssertionError("Expected sqlite3.IntegrityError for duplicate f95_url")
     except sqlite3.IntegrityError:
         pass
 

@@ -975,7 +975,7 @@ def extract_zip(
             # Folders first (sorted, so parents precede children), then files.
             folders: set[str] = set()
             files: list[tuple[zipfile.ZipInfo, str]] = []
-            for info, name in zip(infos, names):
+            for info, name in zip(infos, names, strict=True):
                 target = _target_inside_staging(staging_dir, name)
                 if name.endswith("/"):
                     folders.add(target)
@@ -2770,7 +2770,7 @@ def install_archive(
                     updated_targets, unmoved = _point_missing_at_backup(
                         updated_targets, unmoved, destination, old_backup
                     )
-                for before, after in zip(target_dicts, updated_targets):
+                for before, after in zip(target_dicts, updated_targets, strict=True):
                     if before["exe_path"] != after["exe_path"]:
                         try:
                             if before["id"] is None:

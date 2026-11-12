@@ -38,7 +38,7 @@ if __name__ == "__main__" and "--launch" in sys.argv:
             raise ValueError("Invalid game ID or unsupported platform")
     except (ValueError, IndexError):
         print("Usage: wlib --launch <game id>", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     raise SystemExit(run(launch_id))
 
 # The built-in web game player is its own process: it never loads the API,
@@ -52,7 +52,7 @@ if __name__ == "__main__" and "--play-web" in sys.argv:
         )
     except web_player.UsageError as exc:
         print(f"{exc}\n{web_player.USAGE}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     raise SystemExit(web_player.run(_player_args))
 
 # The torrent engine runs in its own process so a native crash cannot take the

@@ -104,7 +104,7 @@ def test_download_archive_validation(tmp_path, monkeypatch):
             umu.urllib.request,
             "urlopen",
             lambda request, **kwargs: Response(
-                release if request.full_url == umu._RELEASE_URL else data
+                release if request.full_url == umu._RELEASE_URL else data  # noqa: B023 - runs in this iteration
             ),
         )
         destination = tmp_path / "umu" / "umu-run"
@@ -268,8 +268,8 @@ def test_prepare_reports_failure_classes_and_environment(tmp_path, monkeypatch):
                 assert command == ["/host/umu-run", "createprefix"]
                 assert kwargs["env"]["WINEPREFIX"] == str(tmp_path / "prefix")
                 assert kwargs["env"]["PROTONPATH"] == "GE-Proton"
-                kwargs["stdout"].write(output)
-                self.returncode = returncode
+                kwargs["stdout"].write(output)  # noqa: B023 - runs in this iteration
+                self.returncode = returncode  # noqa: B023 - runs in this iteration
 
             def poll(self):
                 return self.returncode

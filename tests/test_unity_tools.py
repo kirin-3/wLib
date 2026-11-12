@@ -197,12 +197,13 @@ def test_install_rejects_unsafe_and_cancelled(tmp_path):
 
     import pytest
 
+    from core.archive_install import ArchiveSafetyError
     from core.unity_tools import install_build
 
     archive = tmp_path / "bad.zip"
     with zipfile.ZipFile(archive, "w") as z:
         z.writestr("../escape", "x")
-    with pytest.raises(Exception):
+    with pytest.raises(ArchiveSafetyError):
         install_build(str(tmp_path), str(archive), None, lambda *a: None, lambda: False)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["bad.zip"]
     with zipfile.ZipFile(archive, "w") as z:
