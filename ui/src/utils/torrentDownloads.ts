@@ -129,3 +129,18 @@ export function rpdlNote(response: RpdlSearchResponse | null): string {
   if (response.needs_choice) return "Several torrents match closely. Choose one.";
   return "";
 }
+
+export type RpdlPrimaryAction = "download" | "send";
+
+/** "send" hands the torrent to the external client's watch folder; "download" uses the built-in client. */
+export function rpdlPrimaryAction(watchFolder: string | null | undefined): RpdlPrimaryAction {
+  return (watchFolder ?? "").trim() ? "send" : "download";
+}
+
+export const rpdlPrimaryLabel = (action: RpdlPrimaryAction): string => action === "send" ? "Send to client" : "Download";
+
+/** The callout text after Send to client wrote the `.torrent` file. */
+export function torrentSentMessage(folder: string): string {
+  const where = folder.trim() ? `the watch folder (${folder.trim()})` : "the watch folder";
+  return `Sent to ${where}. Your torrent client will download it. When it finishes, install the update with "Install from archive".`;
+}

@@ -12,6 +12,8 @@ const settingsRowVisible = useSettingsRowVisibility();
 const loaded = ref(false);
 const seedMode = ref<TorrentSeedMode>("ask");
 const portMapping = ref(false);
+const watchFolder = ref("");
+const watchError = ref("");
 const text = ref<Record<TorrentField, string>>({ ratio: "1", hours: "", download: "", upload: "" });
 const errors = ref<Record<TorrentField, string>>({ ratio: "", hours: "", download: "", upload: "" });
 
@@ -20,6 +22,7 @@ const load = async () => {
     const data = await api.getSettings();
     seedMode.value = data.torrent_seed_mode;
     portMapping.value = data.torrent_port_mapping;
+    watchFolder.value = data.torrent_watch_folder || "";
     text.value = {
       ratio: torrentFieldText(data.torrent_seed_ratio),
       hours: torrentFieldText(data.torrent_seed_hours),
@@ -56,6 +59,31 @@ const savePortMapping = async (event: Event) => {
   portMapping.value = value;
   if (!(await save({ torrent_port_mapping: value }, "Could not save port mapping"))) portMapping.value = previous;
 };
+
+const saveWatchFolder = async (value: string) => {
+  try {
+    const result = await api.saveSettings({ torrent_watch_folder: value });
+    if (!result.success) {
+      watchError.value = result.error || "Could not save the watch folder";
+      return;
+    }
+    watchError.value = "";
+    watchFolder.value = value.trim();
+  } catch (error) {
+    watchError.value = error instanceof Error ? error.message : String(error);
+  }
+};
+
+const browseWatchFolder = async () => {
+  try {
+    const picked = await api.browseDirectory(watchFolder.value);
+    if (picked) await saveWatchFolder(picked);
+  } catch (error) {
+    notifyError(`Could not open the folder picker: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+const commitWatchFolder = (event: Event) => { void saveWatchFolder((event.target as HTMLInputElement).value); };
 
 const commit = async (field: TorrentField) => {
   const parsed = parseTorrentField(field, text.value[field]);
@@ -101,6 +129,20 @@ onMounted(() => onWebviewReady(() => { void load(); }));
           <p v-if="errors.hours" class="text-xs mt-1" style="color:var(--danger-text)" role="alert">{{ errors.hours }}</p>
         </div>
       </div>
+    </div>
+
+    <div data-settings-row="torrents-watch-folder" data-keywords="torrent watch folder external client qbittorrent transmission deluge send magnet" data-settings-bound v-show="settingsRowVisible('torrents-watch-folder')" class="ui-card-row p-4 rounded-lg space-y-3">
+      <div>
+        <label for="torrent-watch-folder" class="text-sm font-medium" style="color:var(--text-primary)">Watch folder</label>
+        <p class="text-xs mt-1" style="color:var(--text-muted)">When set, Download in the update dialog becomes Send to client. wLib puts the .torrent file in this folder, and your torrent client downloads it. This device only. Leave blank to download in wLib.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input id="torrent-watch-folder" :value="watchFolder" class="torrent-input flex-1 min-w-0" placeholder="No watch folder" spellcheck="false" :disabled="!loaded" :aria-invalid="!!watchError" aria-describedby="torrent-watch-folder-warning" @change="commitWatchFolder" />
+        <button class="ui-card-btn" :disabled="!loaded" @click="browseWatchFolder">Browse</button>
+        <button v-if="watchFolder" class="ui-card-btn" :disabled="!loaded" @click="saveWatchFolder('')">Clear</button>
+      </div>
+      <p v-if="watchError" class="text-xs" style="color:var(--danger-text)" role="alert">{{ watchError }}</p>
+      <p id="torrent-watch-folder-warning" class="text-xs" style="color:var(--warning-text)">.torrent files and magnet links contain your private RPDL passkey. Do not share them.</p>
     </div>
 
     <div data-settings-row="torrents-network" data-keywords="torrent speed limit upload download port upnp nat-pmp router" data-settings-bound v-show="settingsRowVisible('torrents-network')" class="ui-card-row p-4 rounded-lg space-y-3">

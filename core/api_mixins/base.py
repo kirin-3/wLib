@@ -2088,3 +2088,26 @@ class ApiBase:
         from core.host_platform import get_data_subdir
 
         return get_data_subdir("save-backups")
+
+    @staticmethod
+    def _fetch_checked_rpdl_torrent(torrent_id: int) -> bytes:
+        """The RPDL `.torrent` bytes, checked against RPDL's info hash when it has one.
+
+        Raises `rpdl.RpdlError` (or another `DownloadError`). The bytes hold the
+        user's passkey: never log them.
+        """
+        import re
+
+        from core.downloads.bencode import parse_torrent
+        from core.downloads.hosts import rpdl
+
+        data = rpdl.fetch_torrent(torrent_id)
+        try:
+            info_hash = str(rpdl.details(torrent_id).get("info_hash") or "")
+        except rpdl.RpdlError:
+            info_hash = ""  # Details are optional; the .torrent is enough.
+        # Only a hex v1 hash is comparable; RPDL may also send base32 or v2 hashes.
+        hex_hash = info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
+        if hex_hash and hex_hash != parse_torrent(data).info_hash:
+            raise rpdl.RpdlError(rpdl.KIND_INVALID, "RPDL sent an invalid response")
+        return data

@@ -228,6 +228,7 @@ class SettingsMixin(ApiBase):
             torrent_settings.DOWNLOAD_LIMIT_KEY,
             torrent_settings.UPLOAD_LIMIT_KEY,
             torrent_settings.PORT_MAPPING_KEY,
+            torrent_settings.EXPORT_WARNING_KEY,
         ):
             if torrent_key in settings_map:
                 clean = torrent_settings.normalize_for_save(
@@ -236,6 +237,13 @@ class SettingsMixin(ApiBase):
                 if clean is None:
                     return {"success": False, "error": "Enter a valid torrent setting"}
                 torrent_values[torrent_key] = clean
+        if torrent_settings.WATCH_FOLDER_KEY in settings_map:
+            watch = torrent_settings.normalize_watch_folder(
+                settings_map[torrent_settings.WATCH_FOLDER_KEY]
+            )
+            if watch is None:
+                return {"success": False, "error": torrent_settings.WATCH_FOLDER_ERROR}
+            torrent_values[torrent_settings.WATCH_FOLDER_KEY] = watch
         from core.database import get_library_folders, normalize_library_folders
 
         folder_pair: tuple[list[str], str] | None = None
@@ -447,7 +455,7 @@ class SettingsMixin(ApiBase):
                 self.catalog.remove()
             elif catalog_change is True:
                 _ = self.catalog.start_background(force=True)
-            if any(key in torrent_values for key in torrent_settings.DEVICE_LOCAL_KEYS):
+            if any(key in torrent_values for key in torrent_settings.HELPER_KEYS):
                 from core.downloads.torrents import supervisor as torrent_supervisor
 
                 torrent_supervisor.apply_limits()
@@ -468,6 +476,8 @@ class SettingsMixin(ApiBase):
             "torrent_download_limit_kib": download,
             "torrent_upload_limit_kib": upload,
             "torrent_port_mapping": ts.port_mapping(),
+            "torrent_watch_folder": ts.watch_folder(),
+            "torrent_export_warning_accepted": ts.export_warning_accepted(),
         }
 
     def save_library_filter_presets(self, presets: object = None) -> dict[str, object]:

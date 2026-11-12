@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 import threading
 from collections.abc import Callable, Mapping
@@ -220,7 +219,6 @@ class DownloadsMixin(ApiBase):
     ) -> dict[str, object]:
         from core import database
         from core.downloads import credentials
-        from core.downloads.bencode import parse_torrent
         from core.downloads.hosts import rpdl
         from core.downloads.torrents import supervisor
         from core.downloads.transfer import DownloadError
@@ -244,16 +242,7 @@ class DownloadsMixin(ApiBase):
         wanted_id = torrent_id
 
         def fetch() -> bytes:
-            data = rpdl.fetch_torrent(wanted_id)
-            try:
-                info_hash = str(rpdl.details(wanted_id).get("info_hash") or "")
-            except rpdl.RpdlError:
-                info_hash = ""  # Details are optional; the .torrent is enough.
-            # Only a hex v1 hash is comparable; RPDL may also send base32 or v2 hashes.
-            hex_hash = info_hash.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", info_hash) else ""
-            if hex_hash and hex_hash != parse_torrent(data).info_hash:
-                raise rpdl.RpdlError(rpdl.KIND_INVALID, "RPDL sent an invalid response")
-            return data
+            return self._fetch_checked_rpdl_torrent(wanted_id)
 
         try:
             job_id = supervisor.start(
@@ -266,6 +255,97 @@ class DownloadsMixin(ApiBase):
         except DownloadError as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True, "job_id": job_id}
+
+    def _export_rpdl_torrent(
+        self,
+        torrent_id: object,
+        kind: str,
+        export: Callable[[bytes], dict[str, object]],
+        folder: str = "",
+    ) -> dict[str, object]:
+        """Shared sign-in check, checked fetch and error mapping for the RPDL exports.
+
+        Logs only the torrent id and the result kind: never the bytes, magnet or trackers.
+        """
+        import logging
+
+        from core.downloads import credentials
+        from core.downloads.hosts import rpdl
+        from core.downloads.transfer import DownloadError
+
+        log = logging.getLogger("wlib.torrent_export")
+        if isinstance(torrent_id, bool) or not isinstance(torrent_id, int) or torrent_id <= 0:
+            return {"success": False, "error": "Choose a torrent first"}
+        if not (credentials.get(credentials.RPDL_TOKEN) or credentials.get(credentials.RPDL_USERNAME)):
+            return {"success": False, "error": rpdl.SIGN_IN_MESSAGE, "error_code": rpdl.KIND_SIGN_IN}
+        try:
+            data = self._fetch_checked_rpdl_torrent(torrent_id)
+            result = export(data)
+        except rpdl.RpdlError as exc:
+            log.info("RPDL torrent %s %s failed: %s", torrent_id, kind, exc.kind)
+            return {"success": False, "error": str(exc), "error_code": exc.kind}
+        except DownloadError as exc:
+            log.info("RPDL torrent %s %s failed", torrent_id, kind)
+            return {"success": False, "error": str(exc)}
+        except ValueError:
+            log.info("RPDL torrent %s %s failed: invalid torrent", torrent_id, kind)
+            return {
+                "success": False,
+                "error": "RPDL sent an invalid response",
+                "error_code": rpdl.KIND_INVALID,
+            }
+        except OSError as exc:
+            log.info("RPDL torrent %s %s failed: %s", torrent_id, kind, type(exc).__name__)
+            return {
+                "success": False,
+                "error": f"Could not write the .torrent file to {folder}: {exc.strerror or exc}",
+            }
+        log.info("RPDL torrent %s %s done", torrent_id, kind)
+        return result
+
+    @staticmethod
+    def _write_rpdl_torrent(folder: str, torrent_id: int, data: bytes) -> dict[str, object]:
+        from core.downloads.bencode import parse_torrent
+        from core.downloads.torrent_export import safe_file_name, write_torrent
+
+        name = safe_file_name(parse_torrent(data).name, f"rpdl-{torrent_id}")
+        return {"success": True, "path": write_torrent(folder, name, data)}
+
+    def save_rpdl_torrent(self, torrent_id: object = None, folder: object = None) -> dict[str, object]:
+        """Write the chosen RPDL torrent's `.torrent` file into a folder the user picked."""
+        if not isinstance(folder, str) or not os.path.isabs(folder) or not os.path.isdir(folder):
+            return {"success": False, "error": "Choose an existing folder"}
+        wanted = cast(int, torrent_id)
+        return self._export_rpdl_torrent(
+            torrent_id, "save", lambda data: self._write_rpdl_torrent(folder, wanted, data), folder
+        )
+
+    def get_rpdl_magnet(self, torrent_id: object = None) -> dict[str, object]:
+        """A magnet link for the chosen RPDL torrent. It holds the passkey: never log it."""
+        from core.downloads.torrent_export import magnet_link
+
+        return self._export_rpdl_torrent(
+            torrent_id, "magnet", lambda data: {"success": True, "magnet": magnet_link(data)}
+        )
+
+    def send_rpdl_torrent_to_watch_folder(self, torrent_id: object = None) -> dict[str, object]:
+        """Write the `.torrent` file into the watch folder. Never starts an in-app download."""
+        from core.downloads import torrent_settings
+
+        folder = torrent_settings.watch_folder()
+        if not folder:
+            return {"success": False, "error": "Set a watch folder in Settings first"}
+        if not os.path.isabs(folder) or not os.path.isdir(folder):
+            return {"success": False, "error": f"Watch folder not found: {folder}"}
+        if not os.access(folder, os.W_OK | os.X_OK):
+            return {"success": False, "error": f"Cannot write to the watch folder: {folder}"}
+        wanted = cast(int, torrent_id)
+        result = self._export_rpdl_torrent(
+            torrent_id, "send", lambda data: self._write_rpdl_torrent(folder, wanted, data), folder
+        )
+        if result.get("success"):
+            result["folder"] = folder
+        return result
 
     def pause_torrent(self, job_id: object = None) -> dict[str, object]:
         from core.downloads.torrents import supervisor

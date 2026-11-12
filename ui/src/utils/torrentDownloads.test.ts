@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   formatEta, formatSize, formatUploadDate, isSeeding, needsSeedAnswer, rpdlMarks, rpdlNote, rpdlPreselected,
-  seedingLabel, seedPromptText, torrentDetails, torrentInstallSource, torrentPercent, torrentStatusLine,
+  rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage, seedingLabel, seedPromptText, torrentDetails, torrentInstallSource, torrentPercent, torrentStatusLine,
 } from "./torrentDownloads.ts";
 import type { RpdlSearchResponse, RpdlTorrent, UpdateDownloadJob } from "../services/api.ts";
 
@@ -83,4 +83,20 @@ test("the RPDL note asks to sign in or to choose", () => {
   assert.match(rpdlNote(base), /Choose one/);
   assert.equal(rpdlNote({ ...base, needs_choice: false }), "");
   assert.equal(rpdlNote({ success: true, results: [] }), "");
+});
+
+test("primary RPDL action follows the watch folder", () => {
+  assert.equal(rpdlPrimaryAction(""), "download");
+  assert.equal(rpdlPrimaryAction("   "), "download");
+  assert.equal(rpdlPrimaryAction(undefined), "download");
+  assert.equal(rpdlPrimaryAction("/home/kim/watch"), "send");
+  assert.equal(rpdlPrimaryLabel("send"), "Send to client");
+  assert.equal(rpdlPrimaryLabel("download"), "Download");
+});
+
+test("sent message names the folder and the archive install", () => {
+  const text = torrentSentMessage(" /home/kim/watch ");
+  assert.match(text, /\(\/home\/kim\/watch\)/);
+  assert.match(text, /Install from archive/);
+  assert.match(torrentSentMessage(""), /^Sent to the watch folder\./);
 });

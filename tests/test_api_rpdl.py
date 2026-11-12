@@ -194,3 +194,132 @@ def test_torrent_controls_report_failures(api, monkeypatch):
     assert not api.answer_seed_prompt("ok", "yes")["success"]
     assert not api.answer_seed_prompt("no", False)["success"]
     assert api.stop_seeding("ok")["success"] and not api.stop_seeding("no")["success"]
+
+
+def export_setup(store, monkeypatch, data=None):
+    from test_torrents import torrent_bytes  # type: ignore[import-not-found]
+
+    from core.downloads.bencode import parse_torrent
+
+    store[credentials.RPDL_TOKEN] = "tok"
+    body = data if data is not None else torrent_bytes(name="Game: v1/2?")
+    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: body)
+    monkeypatch.setattr(rpdl, "details", lambda tid: {"info_hash": parse_torrent(body).info_hash})
+
+    class NoSupervisor:
+        def start(self, *args):
+            pytest.fail("an export must not start a download")
+
+    monkeypatch.setattr(torrents, "supervisor", NoSupervisor())
+    return body
+
+
+def test_save_writes_the_torrent_into_the_folder(api, store, monkeypatch, tmp_path):
+    body = export_setup(store, monkeypatch)
+    folder = tmp_path / "out"
+    folder.mkdir()
+    result = api.save_rpdl_torrent(5, str(folder))
+    assert result == {"success": True, "path": str(folder / "Game_ v1_2_.torrent")}
+    assert (folder / "Game_ v1_2_.torrent").read_bytes() == body
+
+
+def test_save_refuses_a_relative_or_missing_folder(api, store, monkeypatch, tmp_path):
+    export_setup(store, monkeypatch)
+    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL"))
+    for folder in ("relative", str(tmp_path / "missing"), None):
+        assert api.save_rpdl_torrent(5, folder) == {"success": False, "error": "Choose an existing folder"}
+    assert api.save_rpdl_torrent("x", str(tmp_path))["success"] is False
+
+
+def test_magnet_output(api, store, monkeypatch):
+    from core.downloads.bencode import parse_torrent
+
+    body = export_setup(store, monkeypatch)
+    result = api.get_rpdl_magnet(5)
+    assert result["success"] is True
+    magnet = str(result["magnet"])
+    assert magnet.startswith(f"magnet:?xt=urn:btih:{parse_torrent(body).info_hash}&dn=Game%3A%20v1%2F2%3F&tr=http")
+
+
+def test_send_needs_a_usable_watch_folder(api, store, monkeypatch, tmp_path):
+    from core.downloads import torrent_settings
+
+    export_setup(store, monkeypatch)
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: "")
+    result = api.send_rpdl_torrent_to_watch_folder(5)
+    assert result["success"] is False and "watch folder" in str(result["error"])
+    missing = str(tmp_path / "gone")
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: missing)
+    result = api.send_rpdl_torrent_to_watch_folder(5)
+    assert result["success"] is False and missing in str(result["error"])
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: str(locked))
+    monkeypatch.setattr("os.access", lambda path, mode: False)
+    result = api.send_rpdl_torrent_to_watch_folder(5)
+    assert result["success"] is False and str(locked) in str(result["error"])
+    assert list(locked.iterdir()) == []
+
+
+def test_send_writes_into_the_watch_folder(api, store, monkeypatch, tmp_path):
+    from core.downloads import torrent_settings
+
+    body = export_setup(store, monkeypatch)
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: str(tmp_path))
+    result = api.send_rpdl_torrent_to_watch_folder(5)
+    path = tmp_path / "Game_ v1_2_.torrent"
+    assert result == {"success": True, "path": str(path), "folder": str(tmp_path)}
+    assert path.read_bytes() == body
+
+
+def test_exports_need_sign_in(api, store, monkeypatch, tmp_path):
+    from core.downloads import torrent_settings
+
+    monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: pytest.fail("must not contact RPDL"))
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: str(tmp_path))
+    for result in (
+        api.save_rpdl_torrent(5, str(tmp_path)),
+        api.get_rpdl_magnet(5),
+        api.send_rpdl_torrent_to_watch_folder(5),
+    ):
+        assert result["success"] is False and result["error_code"] == rpdl.KIND_SIGN_IN
+
+
+def test_info_hash_mismatch_writes_no_file(api, store, monkeypatch, tmp_path):
+    from core.downloads import torrent_settings
+
+    export_setup(store, monkeypatch)
+    monkeypatch.setattr(rpdl, "details", lambda tid: {"info_hash": "0" * 40})
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.setattr(torrent_settings, "watch_folder", lambda: str(out))
+    for result in (
+        api.save_rpdl_torrent(5, str(out)),
+        api.get_rpdl_magnet(5),
+        api.send_rpdl_torrent_to_watch_folder(5),
+    ):
+        assert result["success"] is False and result["error_code"] == rpdl.KIND_INVALID
+    assert list(out.iterdir()) == []
+
+
+def test_html_answer_writes_no_file(api, store, monkeypatch, tmp_path):
+    export_setup(store, monkeypatch, data=b"<html>login</html>")
+    monkeypatch.setattr(rpdl, "details", lambda tid: {})
+    out = tmp_path / "out"
+    out.mkdir()
+    result = api.save_rpdl_torrent(5, str(out))
+    assert result["success"] is False and result["error_code"] == rpdl.KIND_INVALID
+    assert list(out.iterdir()) == []
+
+
+def test_exports_never_log_the_passkey(api, store, monkeypatch, tmp_path, caplog, capsys):
+    from test_torrents import PASSKEY  # type: ignore[import-not-found]
+
+    caplog.set_level("DEBUG")
+    export_setup(store, monkeypatch)
+    assert api.save_rpdl_torrent(5, str(tmp_path))["success"] is True
+    assert PASSKEY in str(api.get_rpdl_magnet(5)["magnet"])
+    captured = capsys.readouterr()
+    text = caplog.text + captured.out + captured.err
+    assert "torrent 5" in caplog.text
+    assert PASSKEY not in text and "SECRETQUERY" not in text and "magnet:" not in text

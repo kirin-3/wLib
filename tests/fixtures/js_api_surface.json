@@ -214,6 +214,9 @@
   ],
   "get_platform_capabilities": [],
   "get_proton_download_status": [],
+  "get_rpdl_magnet": [
+    "torrent_id"
+  ],
   "get_running_games": [],
   "get_sandbox_install_info": [],
   "get_sandbox_install_status": [],
@@ -414,6 +417,10 @@
   "save_library_filter_presets": [
     "presets"
   ],
+  "save_rpdl_torrent": [
+    "torrent_id",
+    "folder"
+  ],
   "save_settings": [
     "settings"
   ],
@@ -423,6 +430,9 @@
   ],
   "scan_games_folder": [
     "folder"
+  ],
+  "send_rpdl_torrent_to_watch_folder": [
+    "torrent_id"
   ],
   "set_auto_check_setting": [
     "frequency"

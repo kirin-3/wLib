@@ -111,3 +111,28 @@ def test_invalid_torrent_value_saves_nothing_else(monkeypatch):
     result = api.save_settings({"sandboxie_custom_path": "after", "torrent_download_limit_kib": "fast"})
     assert result["success"] is False
     assert get_setting("sandboxie_custom_path") == "before"
+
+
+def test_watch_folder_validation_and_round_trip(tmp_path):
+    init_db()
+    api = Api()
+    assert ts.watch_folder() == "" and ts.export_warning_accepted() is False
+    assert api.get_settings()["torrent_watch_folder"] == ""
+    assert api.save_settings({"torrent_watch_folder": str(tmp_path)})["success"]
+    assert ts.watch_folder() == str(tmp_path)
+    assert Api().get_settings()["torrent_watch_folder"] == str(tmp_path)
+    for bad in ("relative/path", str(tmp_path / "missing"), 5):
+        result = api.save_settings({"torrent_watch_folder": bad})
+        assert result == {"success": False, "error": "Watch folder must be an existing folder"}
+    assert ts.watch_folder() == str(tmp_path)
+    assert api.save_settings({"torrent_watch_folder": "  "})["success"]
+    assert ts.watch_folder() == "" and api.get_settings()["torrent_watch_folder"] == ""
+
+
+def test_export_warning_flag_round_trip():
+    init_db()
+    api = Api()
+    assert api.save_settings({"torrent_export_warning_accepted": True})["success"]
+    assert ts.export_warning_accepted() is True
+    assert api.get_settings()["torrent_export_warning_accepted"] is True
+    assert ts.WATCH_FOLDER_KEY in ts.DEVICE_LOCAL_KEYS and ts.EXPORT_WARNING_KEY in ts.DEVICE_LOCAL_KEYS

@@ -90,3 +90,34 @@ def parse_torrent(data: bytes) -> TorrentMeta:
         )
     except (IndexError, ValueError) as exc:
         raise ValueError("bad torrent") from exc
+
+
+def trackers(data: bytes) -> list[str]:
+    """`announce` then every `announce-list` tier, in file order, without duplicates.
+
+    Entries that are not byte strings, and tiers that are not lists, are skipped.
+    ValueError when the data is not a bencoded dictionary.
+    """
+    try:
+        top, _end = _decode(data, 0, 0, None)
+    except (IndexError, ValueError) as exc:
+        raise ValueError("bad torrent") from exc
+    if not isinstance(top, dict):
+        raise ValueError("bad torrent")
+    found: list[str] = []
+
+    def add(value: Value) -> None:
+        if not isinstance(value, bytes):
+            return
+        text = value.decode("utf-8", "replace").strip()
+        if text and text not in found:
+            found.append(text)
+
+    add(top.get(b"announce", b""))
+    tiers = top.get(b"announce-list")
+    if isinstance(tiers, list):
+        for tier in cast(list[Value], tiers):
+            if isinstance(tier, list):
+                for entry in cast(list[Value], tier):
+                    add(entry)
+    return found

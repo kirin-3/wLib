@@ -689,6 +689,14 @@ export class MockBackend {
           const removed = readMockSettings().custom_play_statuses.filter((name) => !(payload.custom_play_statuses as string[]).includes(name));
           localStorage.setItem("wlib-mock-games", JSON.stringify(readMockGames().map((game) => removed.some((name) => name.toLowerCase() === game.play_status?.toLowerCase()) ? { ...game, play_status: "Not Started" } : game)));
         }
+        if (Object.prototype.hasOwnProperty.call(payload, "torrent_watch_folder")) {
+          const watch = typeof payload.torrent_watch_folder === "string" ? payload.torrent_watch_folder.trim() : null;
+          // Mock rule: blank, or an absolute path that does not name a missing folder.
+          if (watch === null || (watch && (!watch.startsWith("/") || watch.includes("missing")))) {
+            return { success: false, error: "Watch folder must be an existing folder" };
+          }
+          payload.torrent_watch_folder = watch;
+        }
         if (Object.prototype.hasOwnProperty.call(payload, "save_backup_keep") && !isSaveBackupKeep(payload.save_backup_keep)) {
           return { success: false, error: "Save backups to keep must be 'all' or 1–99" };
         }
@@ -868,8 +876,10 @@ export class MockBackend {
       case "browse_backup_file":
       case "browse_archive_file":
       case "browse_external_library_file":
-      case "browse_directory":
         return "";
+      case "browse_directory":
+        // Preview helper: set localStorage "wlib-mock-browse-directory" to pick a folder.
+        return localStorage.getItem("wlib-mock-browse-directory") || "";
       case "browse_attachment_file":
         return "/mock/guide.md";
       // Bridges with no browser-side equivalent. Actions that need no host
@@ -1444,6 +1454,21 @@ export class MockBackend {
       case "start_rpdl_download":
         if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
         return { success: false, error: "Downloads are available in the desktop app" };
+      case "save_rpdl_torrent": {
+        if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
+        const folder = String(args[1] || "");
+        if (!folder.startsWith("/")) return { success: false, error: "Choose an existing folder" };
+        return { success: true, path: `${folder.replace(/\/+$/, "")}/MockGame-1.0-pc.torrent` };
+      }
+      case "get_rpdl_magnet":
+        if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
+        return { success: true, magnet: `magnet:?xt=urn:btih:${"0".repeat(40)}&dn=MockGame-1.0-pc&tr=http%3A%2F%2Ftracker.example%2Fannounce%2FMOCKPASSKEY` };
+      case "send_rpdl_torrent_to_watch_folder": {
+        if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
+        const folder = readMockSettings().torrent_watch_folder;
+        if (!folder) return { success: false, error: "Set a watch folder in Settings first" };
+        return { success: true, folder, path: `${folder.replace(/\/+$/, "")}/MockGame-1.0-pc.torrent` };
+      }
       case "pause_torrent":
       case "resume_torrent":
       case "answer_seed_prompt":

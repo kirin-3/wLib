@@ -3575,3 +3575,19 @@ def test_old_backup_without_default_target_label_keeps_local_name(tmp_path):
     path = write_backup(tmp_path / "old.json", base_backup([game]))
     assert Api().import_library_backup(str(path))["success"] is True
     assert _label(game_id) == "Local"
+
+
+def test_torrent_export_settings_never_leave_the_device(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path))
+    init_db()
+    watch = tmp_path / "watch-folder-SECRET"
+    watch.mkdir()
+    update_setting("torrent_watch_folder", str(watch))
+    update_setting("torrent_export_warning_accepted", "true")
+    backup = build_library_backup(
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]}
+    )
+    sync = build_sync_backup("2026-01-01T00:00:00Z", "device")
+    text = json.dumps(backup) + json.dumps(sync)
+    for value in ("torrent_watch_folder", "torrent_export_warning_accepted", "watch-folder-SECRET"):
+        assert value not in text

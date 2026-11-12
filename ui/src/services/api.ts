@@ -69,6 +69,18 @@ export interface RpdlSearchResponse extends ApiBasicResponse {
   query?: string;
   error_code?: string;
 }
+/** Result of Save .torrent or Send to client. `path` is the written `.torrent` file. */
+export interface RpdlTorrentExportResponse extends ApiBasicResponse {
+  path?: string;
+  /** The watch folder, only for Send to client. */
+  folder?: string;
+  error_code?: string;
+}
+/** The magnet holds the user's RPDL passkey: use it only for the clipboard write, never store or log it. */
+export interface RpdlMagnetResponse extends ApiBasicResponse {
+  magnet?: string;
+  error_code?: string;
+}
 export interface PixeldrainConnectResponse extends ApiBasicResponse { username?: string }
 export interface MegaConnectResponse extends ApiBasicResponse { email?: string; needs_code?: boolean }
 
@@ -1018,6 +1030,8 @@ export interface SettingsPayload {
   torrent_download_limit_kib?: number | string;
   torrent_upload_limit_kib?: number | string;
   torrent_port_mapping?: boolean;
+  torrent_watch_folder?: string;
+  torrent_export_warning_accepted?: boolean;
   custom_play_statuses?: string[];
   collections?: string[];
   library_filter_presets?: LibraryFilterPreset[];
@@ -1138,6 +1152,10 @@ export interface SettingsResponse {
   torrent_download_limit_kib: number;
   torrent_upload_limit_kib: number;
   torrent_port_mapping: boolean;
+  /** Device-local: an external client's watch folder; empty means none. */
+  torrent_watch_folder: string;
+  /** Device-local: the user accepted the one-time passkey warning. */
+  torrent_export_warning_accepted: boolean;
   tag_colors: Record<string, string>;
   update_notifications?: boolean;
   custom_play_statuses: string[];
@@ -1931,6 +1949,15 @@ class ApiService {
   }
   async startRpdlDownload(gameId: number, torrentId: number, version = ""): Promise<ApiBasicResponse & {job_id?: string}> {
     return this.invoke<ApiBasicResponse & {job_id?: string}>("start_rpdl_download", gameId, torrentId, version);
+  }
+  async saveRpdlTorrent(torrentId: number, folder: string): Promise<RpdlTorrentExportResponse> {
+    return this.invoke<RpdlTorrentExportResponse>("save_rpdl_torrent", torrentId, folder);
+  }
+  async getRpdlMagnet(torrentId: number): Promise<RpdlMagnetResponse> {
+    return this.invoke<RpdlMagnetResponse>("get_rpdl_magnet", torrentId);
+  }
+  async sendRpdlTorrentToWatchFolder(torrentId: number): Promise<RpdlTorrentExportResponse> {
+    return this.invoke<RpdlTorrentExportResponse>("send_rpdl_torrent_to_watch_folder", torrentId);
   }
   async pauseTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("pause_torrent", jobId); }
   async resumeTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("resume_torrent", jobId); }

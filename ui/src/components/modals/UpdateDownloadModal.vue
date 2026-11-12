@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue';
-import {IconAlertTriangle, IconCheck, IconChevronRight, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconPlayerPause, IconPlayerPlay, IconRefresh, IconX} from '@tabler/icons-vue';
+import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconPlayerPause, IconPlayerPlay, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
 import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
 import {downloadFailureMessage, inAppMirror, orderBuilds, preselect, suitable, type HostPlatform} from '../../utils/updateDownloads';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
-import {formatSize, formatUploadDate, isTorrentJob, rpdlMarks, rpdlNote, rpdlPreselected, torrentDetails, torrentPercent, torrentStatusLine} from '../../utils/torrentDownloads';
+import {formatSize, formatUploadDate, isTorrentJob, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentDetails, torrentPercent, torrentSentMessage, torrentStatusLine} from '../../utils/torrentDownloads';
+import {confirmAction} from '../../utils/confirm';
+import {copyText} from '../../utils/copyText';
 import {useModalKeyboard} from '../../utils/modalKeyboard';
 
 const downloads = useUpdateDownloads();
@@ -25,6 +27,14 @@ const chosenTorrent = ref<RpdlTorrent | null>(null);
 let userChose = false;
 let rpdlGeneration = 0;
 const busy = ref(false);
+// Device-local torrent export settings, read each time the dialog opens.
+const watchFolder = ref('');
+const exportWarningAccepted = ref(false);
+const exporting = ref(false);
+const exportNotice = ref('');
+const exportError = ref('');
+const sentMessage = ref('');
+const primaryAction = computed(()=>chosenTorrent.value ? rpdlPrimaryAction(watchFolder.value) : 'download');
 const platform = ref<HostPlatform>('linux');
 const modal = ref<HTMLElement | null>(null);
 let generation = 0;
@@ -40,7 +50,9 @@ async function load() {
   const current = ++generation;
   loading.value = true; error.value = ''; version.value = ''; builds.value = []; chosenBuild.value = null; chosenMirror.value = null;
   chosenTorrent.value = null; userChose = false;
+  exportNotice.value = ''; exportError.value = ''; sentMessage.value = '';
   void loadRpdl(false);
+  void loadExportSettings();
   try {
     const [response, capabilities] = await Promise.all([api.getUpdateDownloadLinks(game.value.id),loadPlatformCapabilities()]);
     if (current !== generation) return;
@@ -67,12 +79,62 @@ async function loadRpdl(refresh: boolean) {
   } catch (e) { if (current === rpdlGeneration) rpdlError.value = String(e instanceof Error ? e.message : e); }
   finally { if (current === rpdlGeneration) rpdlLoading.value = false; }
 }
+async function loadExportSettings() {
+  try {
+    const settings = await api.getSettings();
+    watchFolder.value = settings.torrent_watch_folder || '';
+    exportWarningAccepted.value = settings.torrent_export_warning_accepted === true;
+  } catch { watchFolder.value = ''; exportWarningAccepted.value = false; }
+}
 watch(game, current => { if (current) void load(); });
-function choose(build: UpdateBuild, mirror: UpdateMirror) { userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; }
-function chooseTorrent(torrent: RpdlTorrent) { userChose=true; chosenTorrent.value=torrent; chosenBuild.value=null; chosenMirror.value=null; }
-async function start() {
-  if (!game.value || busy.value || (!chosenMirror.value && !chosenTorrent.value)) return;
-  busy.value=true; error.value='';
+function choose(build: UpdateBuild, mirror: UpdateMirror) { userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; exportNotice.value=''; exportError.value=''; sentMessage.value=''; }
+function chooseTorrent(torrent: RpdlTorrent) { userChose=true; chosenTorrent.value=torrent; chosenBuild.value=null; chosenMirror.value=null; exportNotice.value=''; exportError.value=''; sentMessage.value=''; }
+// The one-time passkey warning. True when the export may run.
+async function passkeyWarningAccepted(): Promise<boolean> {
+  if (exportWarningAccepted.value) return true;
+  const accepted = await confirmAction({
+    title: 'Keep your passkey private',
+    message: 'The .torrent file and the magnet link contain your private RPDL passkey. Do not share them. Anyone with the passkey can use your RPDL account.',
+    confirmLabel: 'I understand',
+  });
+  if (!accepted) return false;
+  exportWarningAccepted.value = true;
+  try { await api.saveSettings({torrent_export_warning_accepted: true}); } catch { /* The warning shows again next time. */ }
+  return true;
+}
+// Runs one export action for the chosen torrent, after the passkey warning.
+async function runExport(action: (torrentId: number) => Promise<void>) {
+  const torrent = chosenTorrent.value;
+  if (!game.value || !torrent || exporting.value || busy.value) return;
+  error.value = ''; exportError.value = ''; exportNotice.value = ''; sentMessage.value = '';
+  if (!(await passkeyWarningAccepted())) return;
+  exporting.value = true;
+  try { await action(torrent.id); }
+  catch (e) { exportError.value = String(e instanceof Error ? e.message : e); }
+  finally { exporting.value = false; }
+}
+const saveTorrentFile = () => runExport(async torrentId => {
+  const folder = await api.browseDirectory('');
+  if (!folder) return;
+  const response = await api.saveRpdlTorrent(torrentId, folder);
+  if (!response.success) throw new Error(response.error || 'Could not save the .torrent file');
+  exportNotice.value = `Saved ${response.path || 'the .torrent file'}`;
+});
+const copyMagnet = () => runExport(async torrentId => {
+  const response = await api.getRpdlMagnet(torrentId);
+  if (!response.success || !response.magnet) throw new Error(response.error || 'Could not get the magnet link');
+  if (!(await copyText(response.magnet))) throw new Error('Could not copy the magnet link to the clipboard');
+  exportNotice.value = 'Magnet link copied';
+});
+const sendToClient = () => runExport(async torrentId => {
+  const response = await api.sendRpdlTorrentToWatchFolder(torrentId);
+  if (!response.success) throw new Error(response.error || 'Could not send the torrent to the watch folder');
+  sentMessage.value = torrentSentMessage(response.folder || watchFolder.value);
+});
+async function start(inApp = false) {
+  if (!game.value || busy.value || exporting.value || (!chosenMirror.value && !chosenTorrent.value)) return;
+  if (chosenTorrent.value && !inApp && primaryAction.value === 'send') { await sendToClient(); return; }
+  busy.value=true; error.value=''; exportError.value=''; exportNotice.value=''; sentMessage.value='';
   try {
     const response = chosenTorrent.value
       ? await api.startRpdlDownload(game.value.id,chosenTorrent.value.id,updateVersion.value)
@@ -272,6 +334,20 @@ const progressLabel = computed(()=>{
                 <span class="radio" aria-hidden="true"><IconCheck v-if="chosenTorrent?.id === torrent.id" class="w-3 h-3" stroke-width="3" /></span>
               </button>
             </div>
+            <div v-if="canDownloadTorrent" class="flex flex-wrap items-center gap-2" data-testid="rpdl-export-actions">
+              <button type="button" class="modal-btn" :disabled="exporting || busy" @click="saveTorrentFile"><IconDeviceFloppy class="w-4 h-4" />Save .torrent</button>
+              <button type="button" class="modal-btn" :disabled="exporting || busy" @click="copyMagnet"><IconCopy class="w-4 h-4" />Copy magnet</button>
+              <IconLoader2 v-if="exporting" class="w-4 h-4 animate-spin" style="color: var(--text-muted)" />
+              <p v-if="exportNotice" class="text-xs min-w-0 break-all" style="color: var(--text-secondary)" role="status">{{ exportNotice }}</p>
+            </div>
+            <div v-if="exportError" class="callout callout-danger" role="alert">
+              <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
+              <p class="break-words min-w-0">{{ exportError }}</p>
+            </div>
+            <div v-if="sentMessage" class="callout callout-success" role="status">
+              <IconCircleCheck class="w-4 h-4 shrink-0 mt-0.5" />
+              <p class="break-words min-w-0">{{ sentMessage }}</p>
+            </div>
             <div v-if="rpdlNoteText" class="callout">
               <IconInfoCircle class="w-4 h-4 shrink-0 mt-0.5" />
               <p>{{ rpdlNoteText }}</p>
@@ -306,14 +382,22 @@ const progressLabel = computed(()=>{
         <template v-if="!loading && (!job || job.stage === 'failed')">
           <button v-if="chosenMirror" class="modal-btn" @click="openBrowser"><IconExternalLink class="w-4 h-4" />Open in browser</button>
           <button
+            v-if="canDownloadTorrent && primaryAction === 'send'"
+            type="button"
+            class="link-btn text-sm"
+            :disabled="busy || exporting"
+            @click="start(true)"
+          >Download in wLib instead</button>
+          <button
             v-if="canDownload"
-            :disabled="busy"
-            @click="start"
+            :disabled="busy || exporting"
+            @click="start()"
             class="primary-btn px-6 py-2.5 rounded-lg text-sm font-bold inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <IconLoader2 v-if="busy" class="w-4 h-4 animate-spin" />
+            <IconLoader2 v-if="busy || (exporting && primaryAction === 'send')" class="w-4 h-4 animate-spin" />
+            <IconSend v-else-if="primaryAction === 'send'" class="w-4 h-4" />
             <IconDownload v-else class="w-4 h-4" />
-            Download
+            {{ rpdlPrimaryLabel(primaryAction) }}
           </button>
         </template>
       </footer>
@@ -409,6 +493,10 @@ const progressLabel = computed(()=>{
 }
 .callout-warn { color: var(--warning-text); background: var(--tag-yellow-bg); border-color: var(--tag-yellow-border); }
 .callout-danger { color: var(--danger-text); background: var(--danger-bg); border-color: var(--danger-border); }
+.callout-success { color: var(--success-text, var(--text-secondary)); background: var(--success-bg, var(--bg-raised)); border-color: var(--success-border, var(--border)); }
+.link-btn { color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.link-btn:hover:not(:disabled) { color: var(--text-primary); }
+.link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .progress-card {
   padding: 0.85rem 1rem;

@@ -17,6 +17,8 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   torrent_download_limit_kib: 0,
   torrent_upload_limit_kib: 0,
   torrent_port_mapping: false,
+  torrent_watch_folder: "",
+  torrent_export_warning_accepted: false,
   tag_colors: {},
   custom_play_statuses: [],
   collections: [],
@@ -120,6 +122,8 @@ export const normalizeMockSettings = (value: unknown): SettingsResponse => {
     torrent_download_limit_kib: typeof source.torrent_download_limit_kib === "number" && source.torrent_download_limit_kib > 0 ? Math.floor(source.torrent_download_limit_kib) : 0,
     torrent_upload_limit_kib: typeof source.torrent_upload_limit_kib === "number" && source.torrent_upload_limit_kib > 0 ? Math.floor(source.torrent_upload_limit_kib) : 0,
     torrent_port_mapping: source.torrent_port_mapping === true,
+    torrent_watch_folder: typeof source.torrent_watch_folder === "string" ? source.torrent_watch_folder : "",
+    torrent_export_warning_accepted: source.torrent_export_warning_accepted === true,
     tag_colors: typeof source.tag_colors === "object" && source.tag_colors !== null
       ? Object.fromEntries(Object.entries(source.tag_colors).filter(([name, swatch]) => name.trim() && typeof swatch === "string" && ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"].includes(swatch)).map(([name, swatch]) => [name.trim().toLowerCase(), swatch])) : {},
     collections: Array.isArray(source.collections) ? source.collections.filter((name): name is string => typeof name === "string") : [],
