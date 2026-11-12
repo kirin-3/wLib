@@ -1,0 +1,9 @@
+# Commits that only apply lint fixes. `git blame` skips them when you run:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub reads this file without extra setup.
+
+# chore: turn on Ruff UP rules
+65b50ace989c511cd317625a412644af809137bb
+
+# chore: turn on Ruff B rules
+e703412fb352b6ce97f3ad47a3d36e938c572c8c
