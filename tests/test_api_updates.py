@@ -1065,6 +1065,69 @@ def test_check_for_updates_succeeds_with_actionable_version(monkeypatch):
     assert result["has_update"] is True
 
 
+def test_check_for_updates_stores_page_rating(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/rated.123/"
+    game_id = add_game(title="Rated", exe_path="/tmp/r.exe", f95_url=url, version="1.0")
+    assert game_id is not None
+    page = {"success": True, "version": "1.1", "rating": 4.6, "rating_count": "120 reviews"}
+    monkeypatch.setattr(
+        api.scraper, "get_thread_version", lambda *_args, **_kwargs: dict(page)
+    )
+
+    assert api.check_for_updates(url)["success"] is True
+
+    game = get_all_games()[0]
+    assert game["rating"] == "4.6/5 (120 reviews)"
+    assert str(game["rating_updated_at"]).startswith("20")
+
+    _ = update_game(game_id, {"rating": "4.1/5 (30 reviews)", "rating_updated_at": "x"})
+    page.pop("rating")
+    page.pop("rating_count")
+    assert api.check_for_updates(url)["success"] is True
+    game = get_all_games()[0]
+    assert game["rating"] == "4.1/5 (30 reviews)"
+    assert game["rating_updated_at"] == "x"
+
+
+def test_store_f95_rating_without_count_and_out_of_range():
+    api = Api()
+    url = "https://f95zone.to/threads/rated.124/"
+    game_id = add_game(title="Rated", exe_path="/tmp/r.exe", f95_url=url)
+    assert game_id is not None
+
+    assert api._store_f95_rating_for_url(url, {"rating": 7.0}) == {}
+    assert get_all_games()[0]["rating"] == ""
+    assert api._store_f95_rating_for_url(url, {"rating": 4.25}) == {
+        game_id: {"rating": "", "rating_updated_at": ""}
+    }
+    assert get_all_games()[0]["rating"] == "4.2/5"
+    # The same text again is not a change, but the read time still moves.
+    assert api._store_f95_rating_for_url(url, {"rating": 4.2}) == {}
+
+
+def test_bulk_page_fallback_stores_rating(monkeypatch):
+    api = Api()
+    url = "https://f95zone.to/threads/rated.125/"
+    game_id = add_game("Rated", "/tmp/r.exe", f95_url=url, version="1.0")
+    assert game_id is not None
+    page = {
+        "success": True,
+        "version": "1.0",
+        "thread_completed": False,
+        "thread_main_post_checked_at": "2026-11-01T00:00:00+00:00",
+        "rating": 4.6,
+        "rating_count": "120 reviews",
+    }
+    monkeypatch.setattr(
+        api.scraper, "check_versions", lambda urls, callback: callback(urls[0], page) and {}
+    )
+
+    _run_update_check(api, [game_id])
+
+    assert get_all_games()[0]["rating"] == "4.6/5 (120 reviews)"
+
+
 def test_check_for_updates_matches_unnormalized_url(monkeypatch):
     api = Api()
     add_game(
@@ -1247,6 +1310,8 @@ def test_backfill_skips_tags_the_user_edited():
 
     tags = {g["title"]: g["tags"] for g in get_all_games()}
     assert tags == {"Marked": "", "Plain": "a, b"}
+    baselines = {g["title"]: g["f95_tags"] for g in get_all_games()}
+    assert baselines == {"Marked": None, "Plain": "a, b"}
 
 
 def test_backfill_fills_missing_developer_from_thread_title():
@@ -4566,13 +4631,13 @@ def _set_cover(game_id: int, cover: str) -> None:
 @pytest.mark.parametrize(
     ("thread_metadata", "expected_cover", "changed", "previous"),
     [
-        ({"success": True, "cover_image": "https://img/new.jpg"}, "https://img/new.jpg", True, "https://img/old.jpg"),
-        ({"success": True, "cover_image": "https://img/old.jpg"}, "https://img/old.jpg", False, ""),
-        ({"success": True, "cover_image": ""}, "https://img/old.jpg", False, ""),
-        ({"success": False, "error": "blocked"}, "https://img/old.jpg", False, ""),
+        ({"success": True, "cover_image": "https://img/new.jpg"}, "https://img/new.jpg", True, {"cover_image_path": "https://img/old.jpg"}),
+        ({"success": True, "cover_image": "https://img/old.jpg"}, "https://img/old.jpg", False, {}),
+        ({"success": True, "cover_image": ""}, "https://img/old.jpg", False, {}),
+        ({"success": False, "error": "blocked"}, "https://img/old.jpg", False, {}),
     ],
 )
-def test_refresh_covers_replaces_only_a_different_thread_cover(
+def test_refresh_info_replaces_only_a_different_thread_cover(
     monkeypatch, thread_metadata, expected_cover, changed, previous
 ):
     api = Api()
@@ -4593,12 +4658,13 @@ def test_refresh_covers_replaces_only_a_different_thread_cover(
     _run_update_check(api, [game_id], True)
 
     status = api.get_update_status()
-    assert status["refresh_covers"] is True
+    assert status["refresh_info"] is True
     assert fetch.call_count == 1
     assert get_all_games()[0]["cover_image_path"] == expected_cover
     entry = cast(list[dict[str, object]], status["results"])[0]
-    assert entry["cover_changed"] is changed
-    assert entry["previous_cover"] == previous
+    assert entry["info_changed"] is changed
+    assert entry["previous"] == previous
+    assert "cover_changed" not in entry and "previous_cover" not in entry
 
 
 def test_normal_update_check_never_overwrites_cover(monkeypatch):
@@ -4619,13 +4685,134 @@ def test_normal_update_check_never_overwrites_cover(monkeypatch):
     _run_update_check(api)
 
     status = api.get_update_status()
-    assert status["refresh_covers"] is False
+    assert status["refresh_info"] is False
     assert fetch.call_count == 0
     assert get_all_games()[0]["cover_image_path"] == "https://img/old.jpg"
-    assert "cover_changed" not in cast(list[dict[str, object]], status["results"])[0]
+    entry = cast(list[dict[str, object]], status["results"])[0]
+    assert "info_changed" not in entry and "previous" not in entry
 
 
-def test_refresh_covers_queues_only_f95_games(monkeypatch):
+def test_refresh_info_records_previous_values_for_a_mixed_run(monkeypatch):
+    api = Api()
+    urls = {
+        "all": "https://f95zone.to/threads/all.11/",
+        "rating": "https://f95zone.to/threads/rating.12/",
+        "none": "https://f95zone.to/threads/none.13/",
+        "baseline": "https://f95zone.to/threads/baseline.14/",
+    }
+    ids = {name: add_game(name, f"/tmp/{name}.sh", f95_url=url, version="1.0") for name, url in urls.items()}
+    assert all(game_id is not None for game_id in ids.values())
+    all_id, rating_id, none_id, baseline_id = (int(str(ids[name])) for name in urls)
+    _set_cover(all_id, "https://img/old.jpg")
+    _ = update_game(all_id, {"tags": "3dcg, my-pick", "f95_tags": "3dcg", "rating": "4.1/5 (30 reviews)", "rating_updated_at": "2026-01-01T00:00:00+00:00"})
+    _ = update_game(rating_id, {"tags": "rpg", "f95_tags": "rpg"})
+    _ = update_game(none_id, {"tags": "vn", "f95_tags": "vn", "rating": "4.0/5"})
+    # Edited tags with no baseline: only the baseline is recorded.
+    _ = update_game(baseline_id, {"tags": "3dcg", "tags_user_edited": True})
+
+    pages = {
+        urls["all"]: {"success": True, "cover_image": "https://img/new.jpg", "tags": ["3dcg", "sandbox"], "rating": 4.6, "rating_count": "120 reviews"},
+        urls["rating"]: {"success": True, "tags": ["rpg"], "rating": 3.2},
+        urls["none"]: {"success": True, "tags": ["vn"], "rating": 4.0},
+        urls["baseline"]: {"success": True, "tags": ["3dcg", "rpg"]},
+    }
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", lambda url: pages[url])
+
+    def batch(batch_urls, callback):
+        for url in batch_urls:
+            callback(url, {"success": True, "version": "1.0"})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    _run_update_check(api, list(ids.values()), True)
+
+    entries = {
+        int(str(entry["id"])): entry
+        for entry in cast(list[dict[str, object]], api.get_update_status()["results"])
+    }
+    assert entries[all_id]["info_changed"] is True
+    assert entries[all_id]["previous"] == {
+        "cover_image_path": "https://img/old.jpg",
+        "tags": "3dcg, my-pick",
+        "f95_tags": "3dcg",
+        "rating": "4.1/5 (30 reviews)",
+        "rating_updated_at": "2026-01-01T00:00:00+00:00",
+    }
+    assert entries[rating_id]["info_changed"] is True
+    assert entries[rating_id]["previous"] == {"rating": "", "rating_updated_at": ""}
+    assert entries[none_id]["info_changed"] is False
+    assert entries[none_id]["previous"] == {}
+    assert entries[baseline_id]["info_changed"] is False
+    assert entries[baseline_id]["previous"] == {"f95_tags": None}
+
+    games = {int(str(g["id"])): g for g in get_all_games()}
+    assert games[all_id]["tags"] == "3dcg, sandbox, my-pick"
+    assert games[all_id]["f95_tags"] == "3dcg, sandbox"
+    assert games[all_id]["rating"] == "4.6/5 (120 reviews)"
+    assert games[all_id]["cover_image_path"] == "https://img/new.jpg"
+    assert games[baseline_id]["tags"] == "3dcg"
+    assert games[baseline_id]["f95_tags"] == "3dcg, rpg"
+    assert games[baseline_id]["tags_user_edited"] == 1
+
+    # Undo restores every changed field, the NULL baseline included.
+    for game_id, entry in entries.items():
+        _ = api.update_game(game_id, cast(dict[str, object], entry["previous"]))
+    games = {int(str(g["id"])): g for g in get_all_games()}
+    assert games[all_id]["tags"] == "3dcg, my-pick"
+    assert games[all_id]["f95_tags"] == "3dcg"
+    assert games[all_id]["rating"] == "4.1/5 (30 reviews)"
+    assert games[all_id]["cover_image_path"] == "https://img/old.jpg"
+    assert games[baseline_id]["f95_tags"] is None
+
+
+def test_cancelled_refresh_keeps_written_results(monkeypatch):
+    api = Api()
+    first = "https://f95zone.to/threads/first.15/"
+    second = "https://f95zone.to/threads/second.16/"
+    first_id = add_game("First", "/tmp/1.sh", f95_url=first, version="1.0")
+    second_id = add_game("Second", "/tmp/2.sh", f95_url=second, version="1.0")
+    assert first_id is not None and second_id is not None
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_metadata",
+        lambda url: {"success": True, "rating": 4.5},
+    )
+
+    def batch(batch_urls, callback):
+        callback(batch_urls[0], {"success": True, "version": "1.0"})
+        _ = api.cancel_update_check()
+        callback(batch_urls[1], {"success": True, "version": "1.0"})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", batch)
+    _run_update_check(api, [first_id, second_id], True)
+
+    status = api.get_update_status()
+    assert status["outcome"] == "cancelled"
+    results = cast(list[dict[str, object]], status["results"])
+    assert [entry["id"] for entry in results] == [first_id]
+    assert results[0]["info_changed"] is True
+    ratings = {g["id"]: g["rating"] for g in get_all_games()}
+    assert ratings == {first_id: "4.5/5", second_id: ""}
+
+
+def test_refresh_info_leaves_out_ryuugames_only_games(monkeypatch):
+    from core.database import replace_game_links
+
+    api = Api()
+    monkeypatch.setattr(api, "_catalog_enabled", lambda: True)
+    ryuu_id = add_game("Ryuu", "/tmp/r.sh", version="1.0")
+    assert ryuu_id is not None
+    replace_game_links(ryuu_id, "page", [{"url": "https://www.ryuugames.com/?p=42"}])
+    monkeypatch.setattr(api.scraper, "check_versions", lambda urls, callback: {})
+
+    result = api.check_all_updates([ryuu_id], True)
+    assert result["success"] is True and result["total"] == 0
+    _run_update_check_wait(api)
+    assert api.get_update_status()["results"] == []
+
+
+def test_refresh_info_queues_only_f95_games(monkeypatch):
     api = Api()
     f95_id = add_game("F95", "/tmp/a.sh", f95_url="https://f95zone.to/threads/a.9/")
     local_id = add_game("Local", "/tmp/b.sh")

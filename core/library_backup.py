@@ -84,6 +84,7 @@ METADATA_FIELDS = (
     "engine",
     "tags",
     "tags_user_edited",
+    "f95_tags",
     "f95_url",
     "version",
     "latest_version",
@@ -101,6 +102,7 @@ USER_STATE_FIELDS = (
     "skipped_version",
     "is_favorite",
     "rating",
+    "rating_updated_at",
     "rating_graphics",
     "rating_story",
     "rating_fappability",
@@ -1446,6 +1448,9 @@ def _normalize_game_field(field: str, value: object) -> object:
         return normalize_thread_url(value)
     if field == "tags":
         return _coerce_text(value)
+    if field == "f95_tags":
+        # NULL means "no F95 tag baseline yet", which is not an empty list.
+        return None if value is None else _coerce_text(value)
     if field == "play_status":
         return normalize_play_status(value)
     if field in {"gamemode", "mangohud"}:

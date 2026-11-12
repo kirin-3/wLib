@@ -720,15 +720,15 @@ const bulkAction = async (action: string, value = "") => {
     await runBulkFields(games, (game) => isEngine(game.engine, value) ? null : bulkUpdate(game.id, { engine: value }), (game) => engineSnapshot(game, bulkUpdate));
     return;
   }
-  if (action === "refresh-covers") {
+  if (action === "refresh-info") {
     const ids = games.filter((game) => !!game.f95_url).map((game) => game.id);
     if (!ids.length || bulkChecking.value) return;
     bulkBusy.value = true;
     try {
-      const result = await api.checkAllUpdates(ids, { refreshCovers: true });
-      if (!result.success) throw new Error(result.error || "Could not start cover refresh");
+      const result = await api.checkAllUpdates(ids, { refreshInfo: true });
+      if (!result.success) throw new Error(result.error || "Could not start the F95 info refresh");
       bulkChecking.value = true;
-      notify(`Refreshing covers for ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "Cover refresh", { label: "Open Updates", run: () => { void router.push("/updates"); } });
+      notify(`Refreshing F95 info for ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "F95 info refresh", { label: "Open Updates", run: () => { void router.push("/updates"); } });
       void refreshBulkStatus();
     } catch (error) { notifyError(String(error)); } finally { bulkBusy.value = false; }
     return;

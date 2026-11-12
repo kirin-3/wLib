@@ -67,7 +67,7 @@
   ],
   "check_all_updates": [
     "game_ids",
-    "refresh_covers"
+    "refresh_info"
   ],
   "check_app_updates": [],
   "check_catalog_now": [],

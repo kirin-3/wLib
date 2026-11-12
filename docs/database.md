@@ -72,6 +72,7 @@ Stores the library records and their associated configuration flags.
 | `engine` | `TEXT` | Detected engine label (for example Ren'Py, RPGM, Unity, Unreal Engine, Godot, Wolf RPG, HTML). |
 | `tags` | `TEXT` | Comma-separated list of tags. |
 | `tags_user_edited` | `BOOLEAN DEFAULT 0` | Set when the user changed the tags (Game Detail or bulk Add/Remove tag). F95 metadata backfill never writes tags to such a game, even when empty. Exported and synced with `tags`; an older backup without the field leaves the local value unchanged. |
+| `f95_tags` | `TEXT` (nullable) | The last F95 tag list that wLib saw for the game (comma list, same format as `tags`). Written by F95 metadata backfill when it writes tags and by Refresh F95 info; user tag edits never change it. NULL means no baseline yet; an empty text is a real empty list. Refresh F95 info uses it to tell user-added and user-removed tags from F95 tags (`core/f95_tags.py`). Exported and synced with `tags`; an older backup without the field imports as NULL for a new game and keeps the local value for an existing one. |
 | `f95_url` | `TEXT` | F95Zone thread URL. Unique index protects against exact duplicates; the app also rejects equivalent F95 thread URL variants by thread identity. |
 | `version` | `TEXT` | The local downloaded version string. |
 | `latest_version` | `TEXT` | The remote version identified by the scraper. |
@@ -84,7 +85,8 @@ Stores the library records and their associated configuration flags.
 | `cover_local` | `TEXT` | Device-only random filename under `<data dir>/covers/`; NULL when unset. |
 | `note_links` | `TEXT DEFAULT '[]'` | Ordered JSON array of `{url, label}` objects, decoded on read and carried by backups and sync. URLs must be absolute HTTP(S), at most 2048 characters and unique by exact value; labels are trimmed and capped at 200 characters. |
 | `progress` | `TEXT` | Notes markdown shown in the game detail Notes tab (empty by default, saved with Save Changes, carried by backups and sync). |
-| `rating` | `TEXT` | Overall user rating. |
+| `rating` | `TEXT` | F95 community rating as text, `X.X/5 (count)` or `X.X/5`. Written by the extension add flow, by each thread-page read that finds a rating (update checks, Refresh F95 info), and by the catalog fill after a new catalog snapshot installs. The UI sorts by its first number. |
+| `rating_updated_at` | `TEXT DEFAULT ''` | When `rating` was read: UTC ISO time of the thread-page read, or the catalog's `built_at` for a catalog fill. Empty means unknown. The catalog replaces a rating only when it was built after this time (or the time is empty) and the value at one decimal differs. Exported, imported and synced with `rating`. |
 | `rating_graphics` | `REAL` | Graphics rating (0-5). |
 | `rating_story` | `REAL` | Story rating (0-5). |
 | `rating_fappability` | `REAL` | Fappability rating (0-5). |

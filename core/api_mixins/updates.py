@@ -41,6 +41,8 @@ class UpdatesMixin(ApiBase):
             newly_finished_ids = self._update_thread_edit_metadata_for_url(
                 url, version_info
             )
+            # Only a parsed thread page carries a rating.
+            _ = self._store_f95_rating_for_url(url, version_info)
 
             if not version_info.get("success"):
                 return self._build_scraper_error_payload(
@@ -126,7 +128,7 @@ class UpdatesMixin(ApiBase):
                 "current": getattr(self, "_update_current", ""),
                 "results": list(getattr(self, "_update_results", [])),
                 "delay_seconds": getattr(self, "_update_delay_seconds", 2),
-                "refresh_covers": getattr(self, "_update_refresh_covers", False),
+                "refresh_info": getattr(self, "_update_refresh_info", False),
             }
 
     def cancel_update_check(self) -> dict[str, bool]:

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import type { RefreshInfoPrevious } from "../services/api";
+
 // Shared rules for reading the bulk update-check status in the Updates view and
 // the global poll in App.vue. The backend reports `outcome` as a free string;
 // only these values are meaningful to the UI.
@@ -49,18 +51,19 @@ export const shouldScanDownloadsAfterCheck = (
   status.outcome !== "idle" &&
   (wasRunning || progressChanged);
 
-export interface CoverRefreshStatusLike extends UpdateCheckStatusLike {
-  refresh_covers?: boolean | undefined;
-  results: { id: number; cover_changed?: boolean | undefined; previous_cover?: string | undefined }[];
+export interface InfoRefreshStatusLike extends UpdateCheckStatusLike {
+  refresh_info?: boolean | undefined;
+  results: { id: number; info_changed?: boolean | undefined; previous?: RefreshInfoPrevious | undefined }[];
 }
 
-// Covers a finished cover-refresh run replaced. Cancelled runs count too: the
-// covers already changed stay changed, so the user can still undo them.
-export const changedCoversOfFinishedRefresh = (
-  status: CoverRefreshStatusLike,
-): { id: number; previous: string }[] =>
-  status.refresh_covers && !status.running && status.outcome && status.outcome !== "idle"
+// Games whose F95 info (cover, rating or tags) a finished "Refresh F95 info"
+// run changed, with the old values of the changed fields. Cancelled runs count
+// too: the changes already made stay, so the user can still undo them.
+export const changedInfoOfFinishedRefresh = (
+  status: InfoRefreshStatusLike,
+): { id: number; previous: RefreshInfoPrevious }[] =>
+  status.refresh_info && !status.running && status.outcome && status.outcome !== "idle"
     ? status.results
-        .filter((result) => result.cover_changed)
-        .map((result) => ({ id: result.id, previous: result.previous_cover ?? "" }))
+        .filter((result) => result.info_changed)
+        .map((result) => ({ id: result.id, previous: result.previous ?? {} }))
     : [];

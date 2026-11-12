@@ -193,3 +193,35 @@ def test_catalog_screenshots_and_mapping(catalog, tmp_path):
         assert screenshot_urls(url) == {"thumb": url, "full": url}
     catalog.execute("ALTER TABLE f95_threads DROP COLUMN screens")
     assert f95_thread_screenshots("123") is None
+
+
+def test_f95_thread_ratings_reads_built_at_and_chunks(catalog, tmp_path):
+    from core.game_lookup import f95_thread_ratings
+
+    catalog.execute("INSERT INTO meta (key, value) VALUES ('built_at', '2026-11-01T12:00:00Z')")
+    rows = [
+        (thread_id, f"T{thread_id}", 4.0 + (thread_id % 10) / 10, f"https://f95zone.to/threads/{thread_id}/")
+        for thread_id in range(1, 1201)
+    ]
+    catalog.executemany(
+        "INSERT INTO f95_threads (thread_id, title, rating, url, first_seen, last_seen) VALUES (?,?,?,?,'','')",
+        rows,
+    )
+    catalog.execute(
+        "INSERT INTO f95_threads (thread_id, title, rating, url, first_seen, last_seen) VALUES (5000,'None',NULL,'u','','')"
+    )
+    catalog.commit()
+
+    built_at, ratings = f95_thread_ratings([*range(1, 1201), 5000, 9999])
+    assert built_at == "2026-11-01T12:00:00Z"
+    assert len(ratings) == 1200
+    assert ratings[3] == pytest.approx(4.3)
+    assert 5000 not in ratings and 9999 not in ratings
+
+    database.update_setting("catalog_enabled", "0")
+    assert f95_thread_ratings([3]) == ("", {})
+    database.update_setting("catalog_enabled", "1")
+    catalog.close()
+    (tmp_path / "catalog.db").unlink()
+    assert f95_thread_ratings([3]) == ("", {})
+    assert not (tmp_path / "catalog.db").exists()

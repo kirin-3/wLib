@@ -78,6 +78,7 @@ SYNC_GAME_COLUMNS = (
     "engine",
     "tags",
     "tags_user_edited",
+    "f95_tags",
     "f95_url",
     "version",
     "latest_version",
@@ -89,6 +90,7 @@ SYNC_GAME_COLUMNS = (
     "skipped_version",
     "is_favorite",
     "rating",
+    "rating_updated_at",
     "rating_graphics",
     "rating_story",
     "rating_fappability",
@@ -776,7 +778,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("cover_cache_url", "TEXT"),
         ("tags", "TEXT DEFAULT ''"),
         ("tags_user_edited", "BOOLEAN DEFAULT 0"),
+        ("f95_tags", "TEXT"),
         ("rating", "TEXT DEFAULT ''"),
+        ("rating_updated_at", "TEXT DEFAULT ''"),
         ("command_line_args", "TEXT DEFAULT ''"),
         ("status", "TEXT DEFAULT ''"),
         ("rating_graphics", "REAL DEFAULT 0"),
@@ -1433,7 +1437,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "cover_image_path",
         "tags",
         "tags_user_edited",
+        "f95_tags",
         "rating",
+        "rating_updated_at",
         "command_line_args",
         "rating_graphics",
         "rating_story",
@@ -1461,8 +1467,11 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "thread_completed",
     }
     # Only allow known columns
+    # `f95_tags` may be set back to NULL ("no baseline yet"), as an undo does.
     safe_fields: dict[str, object] = {
-        k: v for k, v in fields.items() if k in allowed and v is not None
+        k: v
+        for k, v in fields.items()
+        if k in allowed and (v is not None or k == "f95_tags")
     }
     if not safe_fields:
         return {}

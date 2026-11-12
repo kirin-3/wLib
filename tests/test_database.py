@@ -1815,6 +1815,41 @@ def test_tags_user_edited_migration_and_update():
     assert get_all_games()[0]["tags_user_edited"] == 1
 
 
+def test_f95_tags_and_rating_updated_at_migration_and_update():
+    game_id = add_game("Rated", "/tmp/rated.exe")
+    assert game_id is not None
+    init_db()
+    conn = get_connection()
+    try:
+        conn.execute("DROP TRIGGER sync_games_update")
+        conn.execute("ALTER TABLE games DROP COLUMN f95_tags")
+        conn.execute("ALTER TABLE games DROP COLUMN rating_updated_at")
+        conn.commit()
+    finally:
+        conn.close()
+
+    init_db()
+
+    game = get_all_games()[0]
+    assert game["f95_tags"] is None
+    assert game["rating_updated_at"] == ""
+    applied = update_game(
+        game_id,
+        {"f95_tags": "3dcg, rpg", "rating_updated_at": "2026-11-01T00:00:00+00:00"},
+    )
+    assert applied == {
+        "f95_tags": "3dcg, rpg",
+        "rating_updated_at": "2026-11-01T00:00:00+00:00",
+    }
+    game = get_all_games()[0]
+    assert game["f95_tags"] == "3dcg, rpg"
+    assert game["rating_updated_at"] == "2026-11-01T00:00:00+00:00"
+    assert update_game(game_id, {"f95_tags": None}) == {"f95_tags": None}
+    assert get_all_games()[0]["f95_tags"] is None
+    assert "f95_tags" in SYNC_GAME_COLUMNS
+    assert "rating_updated_at" in SYNC_GAME_COLUMNS
+
+
 def test_save_backup_keep_validation():
     assert get_save_backup_keep() is None
     for raw, expected in (

@@ -460,3 +460,55 @@ def test_catalog_replace_waits_for_a_reader_on_windows(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         catalog._replace_retrying(str(source), str(target))
     assert len(attempts) == 1
+
+
+def test_on_installed_runs_only_after_a_new_snapshot_installs(tmp_path, server):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    clock = Clock()
+    calls: list[str] = []
+    client = _client(tmp_path, clock)
+    client.on_installed = lambda: calls.append(client.installed_sha256())
+
+    assert client.installed_sha256() == ""
+    assert client.check()["updated"] is True
+    assert len(calls) == 1 and calls[0]
+    # Same hash in the manifest: nothing new installs.
+    assert client.check(force=True)["updated"] is False
+    # Within the check interval: skipped.
+    assert client.check()["skipped"] == "recent"
+    assert len(calls) == 1
+
+
+def test_on_installed_error_does_not_fail_the_check(tmp_path, server):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    client = _client(tmp_path)
+
+    def broken() -> None:
+        raise RuntimeError("boom")
+
+    client.on_installed = broken
+    assert client.check() == {"success": True, "updated": True}
+    assert client.status()["last_error"] is None
+
+
+def test_first_background_run_calls_back_for_an_installed_snapshot(tmp_path, server):
+    server.publish(tmp_path, "2026-10-27T05:00:00Z")
+    clock = Clock()
+    _client(tmp_path, clock).check()
+    calls: list[int] = []
+    client = _client(tmp_path, clock)
+    client.on_installed = lambda: calls.append(1)
+
+    client._run_check(False)  # the check itself is "recent" and skipped
+    client._run_check(False)
+    assert calls == [1]
+
+
+def test_first_background_run_without_a_catalog_does_not_call_back(tmp_path):
+    calls: list[int] = []
+    client = CatalogClient(
+        str(tmp_path / "data"), app_version="9.9.9", enabled=lambda: False
+    )
+    client.on_installed = lambda: calls.append(1)
+    client._run_check(False)
+    assert calls == []

@@ -239,9 +239,18 @@ export interface BulkUpdateResultItem {
   error: string;
   error_code: string;
   browser_fallback?: "unavailable" | "failed" | "logged_out";
-  // Present on cover-refresh runs only.
-  cover_changed?: boolean;
-  previous_cover?: string;
+  // Present on "Refresh F95 info" runs only.
+  info_changed?: boolean;
+  previous?: RefreshInfoPrevious;
+}
+
+// Old values of only the fields that a "Refresh F95 info" run changed.
+export interface RefreshInfoPrevious {
+  cover_image_path?: string;
+  rating?: string;
+  rating_updated_at?: string;
+  tags?: string;
+  f95_tags?: string | null;
 }
 
 export interface UpdateStatusResponse extends ApiBasicResponse {
@@ -253,7 +262,7 @@ export interface UpdateStatusResponse extends ApiBasicResponse {
   current: string;
   results: BulkUpdateResultItem[];
   delay_seconds: number;
-  refresh_covers?: boolean;
+  refresh_info?: boolean;
 }
 
 export interface AutoCheckSettingResponse extends ApiBasicResponse {
@@ -856,6 +865,8 @@ export interface GameRecord {
   block_network?: boolean;
   // Set once the user edits the tags; F95 backfill then never refills them.
   tags_user_edited?: boolean;
+  // The last F95 tag list wLib saw; null means no baseline yet.
+  f95_tags?: string | null;
   id: number;
   title: string;
   exe_path: string;
@@ -872,6 +883,8 @@ export interface GameRecord {
   cover_image?: string;
   tags?: string | string[];
   rating?: string;
+  // When the F95 rating was read (UTC ISO); "" when unknown.
+  rating_updated_at?: string;
   developer?: string;
   engine?: string;
   status?: string;
@@ -1484,8 +1497,8 @@ class ApiService {
     return this.invokeLibraryChange<UpdateCheckResponse>("check_for_updates", url);
   }
 
-  async checkAllUpdates(gameIds?: number[], options?: { refreshCovers?: boolean }): Promise<BulkUpdateStartResponse> {
-    if (options?.refreshCovers) return this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds ?? null, true);
+  async checkAllUpdates(gameIds?: number[], options?: { refreshInfo?: boolean }): Promise<BulkUpdateStartResponse> {
+    if (options?.refreshInfo) return this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds ?? null, true);
     return gameIds === undefined ? this.invoke<BulkUpdateStartResponse>("check_all_updates") : this.invoke<BulkUpdateStartResponse>("check_all_updates", gameIds);
   }
 

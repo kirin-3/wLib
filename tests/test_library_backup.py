@@ -1548,6 +1548,68 @@ def test_tags_user_edited_round_trip_and_missing_field_preserves_local(tmp_path)
     assert get_all_games()[0]["tags_user_edited"] == 1
 
 
+def test_f95_tags_and_rating_updated_at_round_trip(tmp_path):
+    game_id = add_game("Rated", "", f95_url="https://f95zone.to/threads/rated.451/")
+    assert game_id is not None
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET f95_tags = ?, rating = ?, rating_updated_at = ? WHERE id = ?",
+        ("3dcg, rpg", "4.6/5 (120 reviews)", "2026-11-01T10:00:00+00:00", game_id),
+    )
+    conn.commit()
+    conn.close()
+
+    api = Api()
+    exported = api.export_library_backup(destination_path=str(tmp_path / "r.json"))
+    assert exported["success"] is True
+    path = Path(str(exported["path"]))
+    backup = json.loads(path.read_text(encoding="utf-8"))
+    assert backup["games"][0]["metadata"]["f95_tags"] == "3dcg, rpg"
+    assert (
+        backup["games"][0]["user_state"]["rating_updated_at"]
+        == "2026-11-01T10:00:00+00:00"
+    )
+
+    conn = get_connection()
+    conn.execute(
+        "UPDATE games SET f95_tags = NULL, rating = '', rating_updated_at = '' WHERE id = ?",
+        (game_id,),
+    )
+    conn.commit()
+    conn.close()
+    assert api.import_library_backup(
+        str(path), {"sections": [SECTION_METADATA, SECTION_USER_STATE]}
+    )["success"]
+    game = get_all_games()[0]
+    assert game["f95_tags"] == "3dcg, rpg"
+    assert game["rating"] == "4.6/5 (120 reviews)"
+    assert game["rating_updated_at"] == "2026-11-01T10:00:00+00:00"
+
+
+def test_old_export_without_f95_tags_imports_as_null(tmp_path):
+    api = Api()
+    path = write_backup(
+        tmp_path / "old.json",
+        base_backup(
+            [
+                {
+                    "metadata": {
+                        "title": "Old Export",
+                        "f95_url": "https://f95zone.to/threads/old.452/",
+                        "tags": "3dcg",
+                    }
+                }
+            ]
+        ),
+    )
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})[
+        "success"
+    ]
+    game = get_all_games()[0]
+    assert game["tags"] == "3dcg"
+    assert game["f95_tags"] is None
+
+
 def test_import_new_game_uses_metadata_without_metadata_section(tmp_path):
     api = Api()
     backup_path = write_backup(

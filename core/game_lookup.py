@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from core import database
 from core.catalog import CATALOG_FILE
+from core.catalog_format import META_BUILT_AT
 from core.store_links import StoreLink, link_from_id, parse_store_link
 
 
@@ -192,6 +193,45 @@ def f95_thread_screenshots(thread_id: str) -> list[str] | None:
     if row is None:
         return None
     return [url for url in _strings(row[0]) if url.startswith("https://")]
+
+
+def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]]:
+    """The catalog's ``built_at`` and its F95 rating for each known thread.
+
+    Reads the catalog read-only, in chunks of 500 IDs. Returns ``("", {})``
+    when the catalog is off, missing or unreadable. Rows with no rating are
+    left out; the caller decides which values to use.
+    """
+    ids = sorted({int(thread_id) for thread_id in thread_ids})
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    ratings: dict[int, float] = {}
+    try:
+        if database.get_setting("catalog_enabled") == "0" or not path.is_file():
+            return "", {}
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            row = cast(
+                tuple[object] | None,
+                conn.execute(
+                    "SELECT value FROM meta WHERE key = ?", (META_BUILT_AT,)
+                ).fetchone(),
+            )
+            built_at = str(row[0] or "").strip() if row else ""
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = cast(
+                    list[tuple[object, object]],
+                    conn.execute(
+                        f"SELECT thread_id, rating FROM f95_threads WHERE thread_id IN ({placeholders}) AND rating IS NOT NULL",
+                        chunk,
+                    ).fetchall(),
+                )
+                for thread_id, rating in rows:
+                    if isinstance(thread_id, int) and isinstance(rating, int | float):
+                        ratings[thread_id] = float(rating)
+    except (sqlite3.Error, OSError, ValueError):
+        return "", {}
+    return built_at, ratings
 
 
 def screenshot_urls(url: str) -> dict[str, str]:

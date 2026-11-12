@@ -20,7 +20,7 @@ from core import extension_bridge
 from core.store_links import StoreLink, parse_store_link
 from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
-type ScraperResultValue = bool | str | list[str] | list[StoreLink]
+type ScraperResultValue = bool | float | str | list[str] | list[StoreLink]
 type ScraperResult = Mapping[str, ScraperResultValue]
 type ScraperResultDict = dict[str, ScraperResultValue]
 type ThreadMetadata = dict[str, str | list[str]]
@@ -266,6 +266,78 @@ def _attribute(opening: str, name: str) -> str:
 
 def _text(html: str) -> str:
     return unescape(re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def _class_openings(html: str, class_name: str) -> Iterator[re.Match[str]]:
+    """Opening tags of any element whose class list has `class_name`."""
+    for match in re.finditer(r"<([a-zA-Z][\w-]*)\b[^>]*>", html):
+        if class_name in _attribute(match.group(), "class").split():
+            yield match
+
+
+def _class_block(html: str, class_name: str) -> str:
+    """Inner HTML of the first element of any tag that has `class_name`."""
+    for match in _class_openings(html, class_name):
+        block = next(_blocks(html[match.start() :], match.group(1), class_name), None)
+        if block is not None:
+            return block[1]
+    return ""
+
+
+def _first_number(text: str) -> float:
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    return float(match.group()) if match else 0.0
+
+
+def _extract_rating(html: str) -> tuple[float, str]:
+    """F95 average rating and review count text, as the extension reads them.
+
+    The current theme shows the average as a ring when signed in
+    (aria-label="4.6 out of 5") or as stars for guests (aria-label="4.6
+    stars"), with an "N reviews" count. The older bratr widget is the
+    fallback. Returns (0.0, "") when the page has no rating.
+    """
+    value = 0.0
+    for match in _class_openings(html, "f95rv-banner-ring"):
+        value = _first_number(_attribute(match.group(), "aria-label"))
+        if value > 0:
+            break
+    if value <= 0:
+        stars = _class_block(html, "f95rv-banner-stars")
+        for match in _class_openings(stars, "f95rv-stars"):
+            value = _first_number(_attribute(match.group(), "aria-label"))
+            if value > 0:
+                break
+    if value > 0:
+        count = re.sub(r"\s+", " ", _text(_class_block(html, "f95rv-banner-count")))
+        return value, count
+
+    widget = ""
+    for match in _class_openings(html, "bratr-rating"):
+        if "br-widget" in _attribute(match.group(), "class").split():
+            block = next(
+                _blocks(html[match.start() :], match.group(1), "bratr-rating"), None
+            )
+            widget = block[1] if block else ""
+            break
+    if not widget:
+        return 0.0, ""
+    for star in re.finditer(r"<a\b[^>]*>", widget, re.I):
+        opening = star.group()
+        raw_value = _attribute(opening, "data-rating-value")
+        if not raw_value.isdigit():
+            continue
+        classes = _attribute(opening, "class").split()
+        if "br-selected" in classes or "br-current" in classes:
+            value = float(raw_value)
+        fractional = next((c for c in classes if c.startswith("br-fractional-")), "")
+        percent = fractional.removeprefix("br-fractional-")
+        if percent.isdigit():
+            value = int(raw_value) - 1 + int(percent) / 100
+    if value <= 0:
+        return 0.0, ""
+    count = re.sub(r"\s+", " ", _text(_class_block(widget, "bratr-vote-content")))
+    return value, count
 
 
 def _blocks(html: str, tag: str, class_name: str = "") -> Iterator[tuple[str, str]]:
@@ -818,7 +890,7 @@ class Scraper:
             if edit_time:
                 last_edit = _attribute(edit_time.group(), "datetime")
                 break
-        return {
+        result: ScraperResultDict = {
             "success": True,
             "title": title,
             "version": version,
@@ -831,6 +903,11 @@ class Scraper:
             "thread_main_post_last_edit_at": last_edit,
             "thread_main_post_checked_at": datetime.now().astimezone().isoformat(),
         }
+        rating, rating_count = _extract_rating(html)
+        if rating > 0:
+            result["rating"] = rating
+            result["rating_count"] = rating_count
+        return result
 
     def _starter_hides_attachments(self, html: str) -> bool:
         """True when the starter post hides attachments from guests."""

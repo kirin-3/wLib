@@ -201,6 +201,63 @@ def test_thread_prefixes_choose_engine_and_completion(
     assert result["title"] == "Example & Game [v1.10] [Dev]"
 
 
+@pytest.mark.parametrize(
+    ("markup", "rating", "count"),
+    [
+        (
+            '<div class="f95rv-banner"><div class="f95rv-banner-ring" '
+            'aria-label="4.6 out of 5"><span>4.6</span></div>'
+            '<a class="f95rv-banner-count" href="#reviews">120 reviews</a></div>',
+            4.6,
+            "120 reviews",
+        ),
+        (
+            '<div class="f95rv-banner"><div class="f95rv-banner-stars">'
+            '<span class="f95rv-stars" aria-label="4.6 stars"></span></div>'
+            '<a class="f95rv-banner-count">\n  120 reviews\n</a></div>',
+            4.6,
+            "120 reviews",
+        ),
+        (
+            '<div class="f95rv-banner"><div class="f95rv-banner-stars">'
+            '<span class="f95rv-stars" aria-label="3.9 stars"></span></div></div>',
+            3.9,
+            "",
+        ),
+        (
+            '<div class="br-widget bratr-rating">'
+            '<a data-rating-value="1" class="br-selected"></a>'
+            '<a data-rating-value="2" class="br-selected"></a>'
+            '<a data-rating-value="3" class="br-selected"></a>'
+            '<a data-rating-value="4" class="br-selected"></a>'
+            '<a data-rating-value="5" class="br-fractional br-fractional-20"></a>'
+            '<span class="bratr-vote-content">35 votes</span></div>',
+            4.2,
+            "35 votes",
+        ),
+    ],
+)
+def test_rating_forms(thread_html, markup, rating, count):
+    html = thread_html.replace("</body>", f"{markup}</body>")
+    result = Scraper()._extract_page(html)
+    assert result["rating"] == pytest.approx(rating)
+    assert result["rating_count"] == count
+
+
+def test_review_list_stars_outside_banner_are_ignored(thread_html):
+    html = thread_html.replace(
+        "</body>", '<span class="f95rv-stars" aria-label="1 stars"></span></body>'
+    )
+    result = Scraper()._extract_page(html)
+    assert "rating" not in result
+
+
+def test_no_rating_markup_gives_no_rating(thread_html):
+    result = Scraper()._extract_page(thread_html)
+    assert "rating" not in result
+    assert "rating_count" not in result
+
+
 def test_reply_edit_ignored_when_starter_not_edited(thread_html):
     html = thread_html.replace(
         '<div class="message-lastEdit">Last edited: <time datetime="2026-10-08T09:00:00Z">yesterday</time></div>',

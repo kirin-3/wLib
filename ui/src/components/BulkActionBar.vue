@@ -159,7 +159,7 @@ const launchModeDisabled = (mode: string) => !props.games.some((game) => launchM
 const sandboxOnCount = computed(() => props.games.filter((game) => !game.sandbox_enabled).length);
 const sandboxOffCount = computed(() => props.games.filter((game) => game.sandbox_enabled).length);
 const savesDisabledReason = computed(() => (props.savesBusy ? "A save backup is running" : ""));
-const coversReason = computed(() => {
+const infoReason = computed(() => {
   if (!props.eligibleChecks) return "Selected games have no F95 thread";
   if (props.checking) return "An update check is running";
   return "";
@@ -263,7 +263,7 @@ const coversReason = computed(() => {
         <!-- Maintenance -->
         <template v-else-if="menu.id === 'maintenance'">
           <button role="menuitem" :disabled="busy || savesBusy" :title="savesDisabledReason || 'Back up the saves of each selected game that has a saves folder'" @click="run('backup-saves')">Back up saves</button>
-          <button role="menuitem" :disabled="busy || !!coversReason" :title="coversReason || 'Reads each selected game’s F95 thread, one paced request per game'" @click="run('refresh-covers')">Refresh covers</button>
+          <button role="menuitem" :disabled="busy || !!infoReason" :title="infoReason || 'Reads each selected game’s F95 thread, one paced request per game, and refreshes its cover, rating and F95 tags. Your own tag changes stay.'" @click="run('refresh-info')">Refresh F95 info</button>
         </template>
       </div>
     </div>

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 
 import {
   shouldAdoptBackgroundCheck,
-  shouldScanDownloadsAfterCheck, changedCoversOfFinishedRefresh,
+  shouldScanDownloadsAfterCheck, changedInfoOfFinishedRefresh,
   updateCheckProgressLabel,
 } from "./updateCheck.ts";
 
@@ -56,16 +56,19 @@ test("download offers are scanned for a finished check even if running was misse
   );
 });
 
-test("only a finished cover refresh reports changed covers", () => {
+test("only a finished F95 info refresh reports changed games", () => {
   const results = [
-    { id: 1, cover_changed: true, previous_cover: "old" },
-    { id: 2, cover_changed: false, previous_cover: "" },
-    { id: 3, cover_changed: true },
+    { id: 1, info_changed: true, previous: { cover_image_path: "old", rating: "4.1/5" } },
+    { id: 2, info_changed: false, previous: { f95_tags: null } },
+    { id: 3, info_changed: true },
   ];
-  const base = { running: false, checked: 3, outcome: "completed", refresh_covers: true, results };
-  assert.deepEqual(changedCoversOfFinishedRefresh(base), [{ id: 1, previous: "old" }, { id: 3, previous: "" }]);
-  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, outcome: "cancelled" }).length, 2);
-  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, running: true, outcome: "running" }), []);
-  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, refresh_covers: false }), []);
-  assert.deepEqual(changedCoversOfFinishedRefresh({ ...base, results: [] }), []);
+  const base = { running: false, checked: 3, outcome: "completed", refresh_info: true, results };
+  assert.deepEqual(changedInfoOfFinishedRefresh(base), [
+    { id: 1, previous: { cover_image_path: "old", rating: "4.1/5" } },
+    { id: 3, previous: {} },
+  ]);
+  assert.deepEqual(changedInfoOfFinishedRefresh({ ...base, outcome: "cancelled" }).length, 2);
+  assert.deepEqual(changedInfoOfFinishedRefresh({ ...base, running: true, outcome: "running" }), []);
+  assert.deepEqual(changedInfoOfFinishedRefresh({ ...base, refresh_info: false }), []);
+  assert.deepEqual(changedInfoOfFinishedRefresh({ ...base, results: [] }), []);
 });

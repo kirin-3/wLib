@@ -912,26 +912,55 @@ export class MockBackend {
         if (method === "check_all_updates") {
           const total = readMockGames().filter((game) => (game.f95_url || "").trim() && (!Array.isArray(args[0]) || args[0].includes(game.id))).length;
           if (Array.isArray(args[0]) && total) {
-            const refreshCovers = args[1] === true;
-            this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2, refresh_covers: refreshCovers };
+            const refreshInfo = args[1] === true;
+            this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2, refresh_info: refreshInfo };
             setTimeout(() => {
               if (!this._mockUpdateStatus?.running) return;
               let results: BulkUpdateResultItem[] = [];
-              if (refreshCovers) {
-                // Mirrors the backend: every F95 game reports cover_changed/previous_cover.
+              if (refreshInfo) {
+                // Mirrors the backend: every other F95 game gets a new cover,
+                // rating and tag, and reports the old values it replaced.
                 const stored = readMockGames();
+                const updates = new Map<number, Partial<GameRecord>>();
                 results = stored
                   .filter((game) => (game.f95_url || "").trim() && (args[0] as number[]).includes(game.id))
-                  .map((game, index) => ({
-                    id: game.id, title: game.title, current_version: game.version || "", latest_version: game.version || "",
-                    has_update: false, error: "", error_code: "",
-                    cover_changed: index % 2 === 0, previous_cover: game.cover_image_path || "",
-                  }));
-                const changed = new Map(results.filter((r) => r.cover_changed).map((r) => [r.id, `https://example.com/refreshed-${r.id}.jpg`]));
-                localStorage.setItem("wlib-mock-games", JSON.stringify(stored.map((game) => (changed.has(game.id) ? { ...game, cover_image_path: changed.get(game.id) } : game))));
+                  .map((game, index) => {
+                    const changed = index % 2 === 0;
+                    const tags = Array.isArray(game.tags) ? game.tags.join(", ") : game.tags || "";
+                    if (changed) {
+                      // The thread adds "sandbox". Like core/f95_tags.py: F95 tags
+                      // first (minus user removals), then the user-added tags.
+                      const split = (value: string) => value.split(",").map((tag) => tag.trim()).filter(Boolean);
+                      const key = (tag: string) => tag.toLowerCase();
+                      const current = split(tags);
+                      const baseline = split(game.f95_tags ?? tags);
+                      const f95 = [...baseline.filter((tag) => key(tag) !== "sandbox"), "sandbox"];
+                      const has = (list: string[], tag: string) => list.some((item) => key(item) === key(tag));
+                      const merged = [
+                        ...f95.filter((tag) => !has(baseline, tag) || has(current, tag)),
+                        ...current.filter((tag) => !has(baseline, tag) && !has(f95, tag)),
+                      ];
+                      updates.set(game.id, {
+                        cover_image_path: `https://example.com/refreshed-${game.id}.jpg`,
+                        rating: "4.6/5 (120 reviews)",
+                        rating_updated_at: new Date().toISOString(),
+                        tags: merged.join(", "),
+                        f95_tags: f95.join(", "),
+                      });
+                    }
+                    return {
+                      id: game.id, title: game.title, current_version: game.version || "", latest_version: game.version || "",
+                      has_update: false, error: "", error_code: "",
+                      info_changed: changed,
+                      previous: changed
+                        ? { cover_image_path: game.cover_image_path || "", rating: game.rating || "", rating_updated_at: game.rating_updated_at || "", tags, f95_tags: game.f95_tags ?? null }
+                        : {},
+                    };
+                  });
+                localStorage.setItem("wlib-mock-games", JSON.stringify(stored.map((game) => ({ ...game, ...updates.get(game.id) }))));
               }
               this._mockUpdateStatus = { ...this._mockUpdateStatus, running: false, outcome: "completed", checked: total, results };
-            }, refreshCovers ? 7000 : 3000);
+            }, refreshInfo ? 7000 : 3000);
           }
           return { success: true, mock: true, total, delay_seconds: 2 };
         }

@@ -135,3 +135,109 @@ def test_game_screenshots_use_catalog_without_changing_library(started, monkeypa
         assert result["screenshots"] == [{"thumb": "https://stored/a", "full": "https://stored/a"}]
     assert database.get_game(game_id) == before
     assert api.get_game_screenshots(-1)["success"] is False
+
+
+BUILT_AT = "2026-11-01T12:00:00Z"
+
+
+@pytest.fixture
+def rating_catalog(started, tmp_path, monkeypatch):
+    """A fake installed catalog next to the library database."""
+    import sqlite3
+
+    from catalog_server.store import CATALOG_SCHEMA
+
+    conn = sqlite3.connect(tmp_path / "catalog.db")
+    conn.executescript(CATALOG_SCHEMA)
+    conn.execute("INSERT INTO meta (key, value) VALUES ('built_at', ?)", (BUILT_AT,))
+    conn.commit()
+    conn.close()
+    sha = {"value": "sha-1"}
+    monkeypatch.setattr(CatalogClient, "installed_sha256", lambda self: sha["value"])
+
+    def add_thread(thread_id: int, rating: float | None) -> None:
+        with sqlite3.connect(tmp_path / "catalog.db") as catalog:
+            catalog.execute(
+                "INSERT OR REPLACE INTO f95_threads (thread_id, title, rating, url, first_seen, last_seen) VALUES (?, 'T', ?, 'u', '', '')",
+                (thread_id, rating),
+            )
+
+    return add_thread, sha
+
+
+def _rated_game(thread_id: int, rating: str = "", read_at: str = "") -> int:
+    from core import database
+
+    game_id = database.add_game("G", "", f"https://f95zone.to/threads/{thread_id}/")
+    assert game_id is not None
+    _ = database.update_game(game_id, {"rating": rating, "rating_updated_at": read_at})
+    return game_id
+
+
+def _rating(game_id: int) -> tuple[object, object]:
+    from core import database
+
+    game = database.get_game(game_id)
+    assert game is not None
+    return game["rating"], game["rating_updated_at"]
+
+
+def test_catalog_fill_follows_the_rating_rules(rating_catalog, monkeypatch):
+    add_thread, _sha = rating_catalog
+    empty = _rated_game(1)
+    newer_page = _rated_game(2, "4.7/5 (130 reviews)", "2026-11-02T08:00:00+00:00")
+    older_different = _rated_game(3, "4.4/5 (80 reviews)", "2026-10-01T08:00:00+00:00")
+    older_same = _rated_game(4, "4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00")
+    no_time = _rated_game(5, "3.0/5")
+    zero = _rated_game(6)
+    missing = _rated_game(7, "4.0/5 (5 reviews)")
+    for thread_id, rating in ((1, 4.3), (2, 4.6), (3, 4.6), (4, 4.62), (5, 3.5), (6, 0.0), (7, None)):
+        add_thread(thread_id, rating)
+
+    api = Api()
+    refreshed: list[int] = []
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: refreshed.append(1))
+
+    assert api._fill_ratings_from_catalog() == 3
+    assert _rating(empty) == ("4.3/5", BUILT_AT)
+    assert _rating(newer_page) == ("4.7/5 (130 reviews)", "2026-11-02T08:00:00+00:00")
+    assert _rating(older_different) == ("4.6/5", BUILT_AT)
+    assert _rating(older_same) == ("4.6/5 (120 reviews)", "2026-10-01T08:00:00+00:00")
+    assert _rating(no_time) == ("3.5/5", BUILT_AT)
+    assert _rating(zero) == ("", "")
+    assert _rating(missing) == ("4.0/5 (5 reviews)", "")
+    assert refreshed == [1]
+    assert get_setting("catalog_rating_fill_sha") == "sha-1"
+
+
+def test_catalog_fill_runs_once_per_snapshot(rating_catalog):
+    add_thread, sha = rating_catalog
+    game_id = _rated_game(1)
+    add_thread(1, 4.3)
+    api = Api()
+    assert api._fill_ratings_from_catalog() == 1
+
+    _ = Api()  # a restart with the same snapshot
+    from core import database
+
+    _ = database.update_game(game_id, {"rating": "", "rating_updated_at": ""})
+    assert api._fill_ratings_from_catalog() == 0
+    assert _rating(game_id) == ("", "")
+    sha["value"] = "sha-2"
+    assert api._fill_ratings_from_catalog() == 1
+    assert _rating(game_id) == ("4.3/5", BUILT_AT)
+
+
+def test_catalog_fill_does_nothing_when_the_catalog_is_off(rating_catalog):
+    add_thread, _sha = rating_catalog
+    game_id = _rated_game(1)
+    add_thread(1, 4.3)
+    update_setting("catalog_enabled", "0")
+    assert Api()._fill_ratings_from_catalog() == 0
+    assert _rating(game_id) == ("", "")
+    assert get_setting("catalog_rating_fill_sha") in (None, "")
+
+
+def test_catalog_fill_is_the_install_callback(started):
+    api = Api()
+    assert api.catalog.on_installed == api._fill_ratings_from_catalog

@@ -34,7 +34,7 @@ import { answerPairingRequests, EXTENSION_PAIRING_EVENT } from "./utils/extensio
 import { dismissToast, notify, notifyUndo, runNewestUndo, runUndo, setUndoHeld, toasts } from "./utils/toast";
 import { isPendingRemoval } from "./utils/pendingRemovals";
 import { hasAvailableUpdate } from "./utils/libraryGames";
-import { changedCoversOfFinishedRefresh, shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
+import { changedInfoOfFinishedRefresh, shouldScanDownloadsAfterCheck } from "./utils/updateCheck";
 import {
   INSTALL_ARCHIVE_EVENT,
   type InstallArchiveRequest,
@@ -97,7 +97,7 @@ let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;
 let wasUpdateRunning = false;
-let lastCoverRefreshToast = "";
+let lastInfoRefreshToast = "";
 const notifiedFinishedIds = new Set<number>();
 
 // Sync problems are shown on the Sync nav item and once as a toast, so they
@@ -238,25 +238,25 @@ const reportWindowFocus = async () => {
 // change costs one load, not one per listener.
 const refreshUpdateCount = () => gamesStore.refresh();
 
-// One toast per finished cover refresh. It lives here, not in the Library, so
-// it still appears when the user leaves the Library during the check.
-const announceCoverRefresh = (status: Awaited<ReturnType<typeof api.getUpdateStatus>>) => {
-  // A new run must toast even when it changes the same covers as the last one.
-  if (status.running && status.refresh_covers) lastCoverRefreshToast = "";
-  const changed = changedCoversOfFinishedRefresh(status);
+// One toast per finished "Refresh F95 info" run. It lives here, not in the
+// Library, so it still appears when the user leaves the Library during the check.
+const announceInfoRefresh = (status: Awaited<ReturnType<typeof api.getUpdateStatus>>) => {
+  // A new run must toast even when it changes the same games as the last one.
+  if (status.running && status.refresh_info) lastInfoRefreshToast = "";
+  const changed = changedInfoOfFinishedRefresh(status);
   if (!changed.length) return;
   const signature = JSON.stringify(changed);
-  if (signature === lastCoverRefreshToast) return;
-  lastCoverRefreshToast = signature;
-  notifyUndo(`${changed.length} cover${changed.length === 1 ? "" : "s"} changed.`, () =>
+  if (signature === lastInfoRefreshToast) return;
+  lastInfoRefreshToast = signature;
+  notifyUndo(`F95 info changed for ${changed.length} game${changed.length === 1 ? "" : "s"}.`, () =>
     api.withLibraryBatch(async () => {
       let failures = 0;
       for (const { id, previous } of changed) {
-        try { if (!(await api.updateGame(id, { cover_image_path: previous })).success) failures++; }
+        try { if (!(await api.updateGame(id, { ...previous })).success) failures++; }
         catch { failures++; }
       }
       window.dispatchEvent(new Event("wlib-refresh-library"));
-      if (failures) throw new Error(`Could not restore ${failures} cover${failures === 1 ? "" : "s"}.`);
+      if (failures) throw new Error(`Could not restore ${failures} game${failures === 1 ? "" : "s"}.`);
     }));
 };
 
@@ -285,7 +285,7 @@ const pollLibraryUpdates = async () => {
       void scanDownloadOffers();
     }
     wasUpdateRunning = !!status.running;
-    announceCoverRefresh(status);
+    announceInfoRefresh(status);
   } catch (error) {
     console.error("Failed to refresh update progress", error);
   } finally {

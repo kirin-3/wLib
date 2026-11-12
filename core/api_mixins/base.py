@@ -57,6 +57,10 @@ normalize_thread_url: Callable[[str], str] = cast(
 _torrent_exit_hook = False
 
 
+# Device-local: the catalog snapshot SHA-256 whose ratings were last filled.
+CATALOG_RATING_FILL_SETTING = "catalog_rating_fill_sha"
+
+
 class ApiBase:
     def __init__(self) -> None:
         self.window: Window | None = None
@@ -131,7 +135,7 @@ class ApiBase:
         self._update_current: str = ""
         self._update_results: list[dict[str, object]] = []
         self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
-        self._update_refresh_covers: bool = False
+        self._update_refresh_info: bool = False
         self._update_lock: threading.Lock = threading.Lock()
         self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
@@ -214,7 +218,10 @@ class ApiBase:
         # check runs on its own thread and never blocks or raises.
         self.catalog: CatalogClient = hide_from_js(
             CatalogClient(
-                get_data_dir(), app_version=APP_VERSION, enabled=self._catalog_enabled
+                get_data_dir(),
+                app_version=APP_VERSION,
+                enabled=self._catalog_enabled,
+                on_installed=self._fill_ratings_from_catalog,
             )
         )
         if self._catalog_enabled():
@@ -1054,6 +1061,8 @@ class ApiBase:
                     and self._is_missing_text(tags_current)
                 ):
                     fields["tags"] = tags_value
+                    # The tags came from F95, so they are the F95 baseline too.
+                    fields["f95_tags"] = tags_value
                 if cover_value and self._is_missing_text(cover_current):
                     fields["cover_image_path"] = cover_value
                 developer_current = str(cast(object, game["developer"]) or "").strip()
@@ -1075,51 +1084,229 @@ class ApiBase:
             self.cover_cache.wake()
         return updated_rows
 
-    def _update_cancelled_now(self) -> bool:
-        with self._update_lock:
-            return self._update_cancelled
-
-    def _refresh_cover_for_url(
+    def _store_f95_rating_for_url(
         self, url: str, metadata: Mapping[str, object]
-    ) -> str | None:
-        """Replace stored remote covers for ``url`` with the thread's cover.
+    ) -> dict[int, dict[str, object]]:
+        """Store the thread page's F95 rating on each game with ``url``.
 
-        Returns the previous cover URL when one game changed, else ``None``.
-        Only an explicit cover refresh calls this; the automatic backfill
-        never overwrites an existing cover.
+        Writes ``rating`` as "X.X/5 (count)" (or "X.X/5" with no count) and
+        ``rating_updated_at`` as the read time. A page with no rating changes
+        nothing. Returns, for each game whose rating text changed, its
+        previous ``rating`` and ``rating_updated_at``.
         """
+        from datetime import UTC, datetime
+
         normalized_url = normalize_thread_url(url)
-        cover_value = str(metadata.get("cover_image") or "").strip()
-        if not normalized_url or not cover_value:
-            return None
+        raw_rating = metadata.get("rating")
+        if (
+            not normalized_url
+            or isinstance(raw_rating, bool)
+            or not isinstance(raw_rating, int | float)
+            or not 0 < raw_rating <= 5
+        ):
+            return {}
+        count = str(metadata.get("rating_count") or "").strip()
+        rating_text = (
+            f"{raw_rating:.1f}/5 ({count})" if count else f"{raw_rating:.1f}/5"
+        )
+        read_at = datetime.now(UTC).isoformat()
 
         import sqlite3
 
         from core.database import get_connection
 
-        previous: str | None = None
+        previous: dict[int, dict[str, object]] = {}
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, cover_image_path FROM games WHERE f95_url = ?",
+                "SELECT id, rating, rating_updated_at FROM games WHERE f95_url = ?",
+                (normalized_url,),
+            )
+            rows = cast(list[sqlite3.Row], cursor.fetchall())
+            for game in rows:
+                game_id = cast(object, game["id"])
+                if not isinstance(game_id, int):
+                    continue
+                current = str(cast(object, game["rating"]) or "")
+                if current != rating_text:
+                    previous[game_id] = {
+                        "rating": current,
+                        "rating_updated_at": str(
+                            cast(object, game["rating_updated_at"]) or ""
+                        ),
+                    }
+            if rows:
+                _ = cursor.execute(
+                    "UPDATE games SET rating = ?, rating_updated_at = ? WHERE f95_url = ?",
+                    (rating_text, read_at, normalized_url),
+                )
+                conn.commit()
+        return previous
+
+    def _fill_ratings_from_catalog(self) -> int:
+        """Fill F95 ratings from the installed catalog, once per snapshot.
+
+        Runs on the catalog thread after a snapshot installs and once at
+        startup. A catalog rating fills an empty rating, and replaces a stored
+        one only when the catalog was built after that rating was read (or
+        the read time is unknown) and the value at one decimal differs. Zero,
+        missing and out-of-range catalog ratings are skipped. Tags are never
+        touched. Returns the number of games changed.
+        """
+        import re
+        import sqlite3
+        from datetime import UTC, datetime
+
+        from core.database import get_connection, get_setting, update_setting
+        from core.f95zone import extract_thread_id
+        from core.game_lookup import f95_thread_ratings
+
+        if not self._catalog_enabled():
+            return 0
+        snapshot_sha = self.catalog.installed_sha256()
+        if not snapshot_sha or get_setting(CATALOG_RATING_FILL_SETTING) == snapshot_sha:
+            return 0
+
+        def parse_time(value: object) -> datetime | None:
+            try:
+                parsed = datetime.fromisoformat(str(value or "").strip())
+            except ValueError:
+                return None
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+        changed = 0
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = cast(
+                list[sqlite3.Row],
+                conn.execute(
+                    "SELECT id, f95_url, rating, rating_updated_at FROM games WHERE f95_url IS NOT NULL AND f95_url != ''"
+                ).fetchall(),
+            )
+            games: list[tuple[int, int, str, str]] = []
+            for row in rows:
+                thread_id = extract_thread_id(cast(object, row["f95_url"]))
+                game_id = cast(object, row["id"])
+                if thread_id.isdigit() and isinstance(game_id, int):
+                    games.append(
+                        (
+                            game_id,
+                            int(thread_id),
+                            str(cast(object, row["rating"]) or "").strip(),
+                            str(cast(object, row["rating_updated_at"]) or "").strip(),
+                        )
+                    )
+            if not games:
+                update_setting(CATALOG_RATING_FILL_SETTING, snapshot_sha)
+                return 0
+            built_at, ratings = f95_thread_ratings([game[1] for game in games])
+            built_time = parse_time(built_at)
+            if built_time is None:
+                return 0  # an unreadable catalog; try again with the next run
+            for game_id, thread_id, stored, read_at in games:
+                catalog_rating = ratings.get(thread_id)
+                if catalog_rating is None or not 0 < catalog_rating <= 5:
+                    continue
+                if stored:
+                    read_time = parse_time(read_at)
+                    if read_time is not None and read_time >= built_time:
+                        continue
+                    match = re.search(r"\d+(?:\.\d+)?", stored)
+                    if match and round(float(match.group()), 1) == round(
+                        catalog_rating, 1
+                    ):
+                        continue
+                _ = conn.execute(
+                    "UPDATE games SET rating = ?, rating_updated_at = ? WHERE id = ?",
+                    (f"{round(catalog_rating, 1):.1f}/5", built_at, game_id),
+                )
+                changed += 1
+            if changed:
+                conn.commit()
+        update_setting(CATALOG_RATING_FILL_SETTING, snapshot_sha)
+        if changed:
+            self._refresh_synced_library()
+        return changed
+
+    def _update_cancelled_now(self) -> bool:
+        with self._update_lock:
+            return self._update_cancelled
+
+    def _refresh_f95_info_for_url(
+        self, url: str, metadata: Mapping[str, object]
+    ) -> dict[int, dict[str, object]]:
+        """Refresh the cover and the F95 tags of each game with ``url``.
+
+        Replaces a stored remote cover that differs from the thread's, and
+        merges the thread's tags with the user's tag changes
+        (``core.f95_tags``). Returns, for each game where a field changed,
+        the previous values of only the changed fields. Only "Refresh F95
+        info" calls this; the automatic backfill never overwrites a cover.
+        """
+        from core.f95_tags import merge_f95_tags, split_tags
+
+        normalized_url = normalize_thread_url(url)
+        if not normalized_url:
+            return {}
+        cover_value = str(metadata.get("cover_image") or "").strip()
+        f95_tags = split_tags(self._normalize_tags_csv(metadata.get("tags"))) or []
+
+        import sqlite3
+
+        from core.database import get_connection
+
+        changes: dict[int, dict[str, object]] = {}
+        cover_changed = False
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            _ = cursor.execute(
+                "SELECT id, cover_image_path, tags, f95_tags, tags_user_edited FROM games WHERE f95_url = ?",
                 (normalized_url,),
             )
             for game in cast(list[sqlite3.Row], cursor.fetchall()):
-                current = str(cast(object, game["cover_image_path"]) or "").strip()
-                if current == cover_value:
+                game_id = cast(object, game["id"])
+                if not isinstance(game_id, int):
                     continue
-                _ = cursor.execute(
-                    "UPDATE games SET cover_image_path = ? WHERE id = ?",
-                    (cover_value, cast(object, game["id"])),
+                fields: dict[str, object] = {}
+                previous: dict[str, object] = {}
+                current_cover = str(cast(object, game["cover_image_path"]) or "").strip()
+                if cover_value and current_cover != cover_value:
+                    fields["cover_image_path"] = cover_value
+                    previous["cover_image_path"] = current_cover
+                    cover_changed = True
+
+                stored_tags = str(cast(object, game["tags"]) or "")
+                raw_baseline = cast(object, game["f95_tags"])
+                stored_baseline = None if raw_baseline is None else str(raw_baseline)
+                tags, baseline = merge_f95_tags(
+                    split_tags(stored_tags) or [],
+                    split_tags(stored_baseline),
+                    f95_tags,
+                    bool(cast(object, game["tags_user_edited"])),
                 )
-                if previous is None:
-                    previous = current
-            if previous is not None:
+                new_tags = ", ".join(tags)
+                if new_tags != ", ".join(split_tags(stored_tags) or []):
+                    fields["tags"] = new_tags
+                    previous["tags"] = stored_tags
+                new_baseline = None if baseline is None else ", ".join(baseline)
+                if new_baseline != stored_baseline:
+                    fields["f95_tags"] = new_baseline
+                    previous["f95_tags"] = stored_baseline
+
+                if fields:
+                    set_clause = ", ".join(f"{key} = ?" for key in fields)
+                    _ = cursor.execute(
+                        f"UPDATE games SET {set_clause} WHERE id = ?",
+                        (*fields.values(), game_id),
+                    )
+                    changes[game_id] = previous
+            if changes:
                 conn.commit()
-        if previous is not None:
+        if cover_changed:
             self.cover_cache.wake()
-        return previous
+        return changes
 
     def _update_thread_edit_metadata_for_url(
         self, url: str, metadata: Mapping[str, object]
@@ -1242,15 +1429,18 @@ class ApiBase:
     def check_all_updates(
         self,
         game_ids: Sequence[int] | None = None,
-        refresh_covers: bool = False,
+        refresh_info: bool = False,
         *,
         automatic: bool = False,
     ) -> dict[str, object]:
         """Start a background thread to check all games for updates.
 
-        With ``refresh_covers`` the pass also reads each F95 thread and
-        replaces a stored remote cover URL that differs from the thread's.
-        Catalog-only (Ryuu) games are left out of such a pass.
+        With ``refresh_info`` the pass also reads each F95 thread and
+        refreshes the remote cover URL, the F95 rating and the F95 tags
+        (merged with the user's tag changes). Each result entry then has
+        ``info_changed`` and ``previous`` (the old values of the changed
+        fields) for one Undo. Catalog-only (Ryuu) games are left out of such
+        a pass.
         """
         from core.database import get_all_games
 
@@ -1287,7 +1477,7 @@ class ApiBase:
                     ),
                     None,
                 )
-                if ryuu_link and not refresh_covers:
+                if ryuu_link and not refresh_info:
                     ryuu_games.append((game, ryuu_link["url"]))
             if (
                 not isinstance(game_id, int)
@@ -1322,7 +1512,7 @@ class ApiBase:
             # The callback fires after a game finishes, so show the game being checked now.
             self._update_current = games_with_url[0]["title"] if games_with_url else ""
             self._update_results = []
-            self._update_refresh_covers = bool(refresh_covers)
+            self._update_refresh_info = bool(refresh_info)
             self._update_delay_seconds = self._get_bulk_check_delay_seconds()
 
         games_by_url = {g["f95_url"]: g for g in games_with_url}
@@ -1364,6 +1554,8 @@ class ApiBase:
                     skipped = False
                     newly_finished = False
                     thread_metadata: dict[str, object] | None = None
+                    # Previous rating of each game whose rating a page read changed.
+                    rating_previous: dict[int, dict[str, object]] = {}
                     wishlisted = not str(game.get("exe_path") or "").strip()
                     callback_error = str(result_dict.get("error") or "")
                     callback_error_code = str(result_dict.get("code") or "")
@@ -1460,6 +1652,9 @@ class ApiBase:
                                             url, metadata
                                         )
                                     )
+                                    rating_previous.update(
+                                        self._store_f95_rating_for_url(url, metadata)
+                                    )
                             except Exception:
                                 pass
                     elif result_dict.get("success"):
@@ -1480,10 +1675,15 @@ class ApiBase:
                             newly_finished = wishlisted and game["id"] in finished_ids
                         except Exception:
                             pass
+                        try:
+                            rating_previous.update(
+                                self._store_f95_rating_for_url(url, result_dict)
+                            )
+                        except Exception:
+                            pass
 
-                    cover_changed = False
-                    previous_cover = ""
-                    if refresh_covers and not self._update_cancelled_now():
+                    info_previous: dict[str, object] = {}
+                    if refresh_info and not self._update_cancelled_now():
                         try:
                             if thread_metadata is None:
                                 if "cover_image" in result_dict and (
@@ -1497,14 +1697,18 @@ class ApiBase:
                                         self.scraper.get_thread_metadata(url)
                                     )
                             if thread_metadata and thread_metadata.get("success"):
-                                replaced = self._refresh_cover_for_url(
+                                for game_id, old in self._store_f95_rating_for_url(
                                     url, thread_metadata
+                                ).items():
+                                    _ = rating_previous.setdefault(game_id, old)
+                                info_previous.update(
+                                    self._refresh_f95_info_for_url(
+                                        url, thread_metadata
+                                    ).get(game["id"], {})
                                 )
-                                if replaced is not None:
-                                    cover_changed = True
-                                    previous_cover = replaced
                         except Exception:
-                            pass  # A failed thread read keeps the current cover.
+                            pass  # A failed thread read keeps the current info.
+                        info_previous.update(rating_previous.get(game["id"], {}))
 
                     with self._update_lock:
                         result_entry: dict[str, object] = {
@@ -1520,9 +1724,14 @@ class ApiBase:
                         }
                         if callback_browser_fallback:
                             result_entry["browser_fallback"] = callback_browser_fallback
-                        if refresh_covers:
-                            result_entry["cover_changed"] = cover_changed
-                            result_entry["previous_cover"] = previous_cover
+                        if refresh_info:
+                            # Only a visible change counts; a new F95 tag
+                            # baseline alone is bookkeeping.
+                            result_entry["info_changed"] = any(
+                                field in info_previous
+                                for field in ("cover_image_path", "rating", "tags")
+                            )
+                            result_entry["previous"] = info_previous
                         self._update_results.append(result_entry)
                         self._update_checked += 1
                         self._update_current = next_title_by_url.get(url, "")

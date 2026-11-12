@@ -221,4 +221,21 @@ without merging or changing any game.
 
 The snapshot schema version remains 1 because screenshot storage is additive.
 
+### F95 rating fill
+
+`core/game_lookup.f95_thread_ratings(thread_ids)` returns the catalog's
+`meta.built_at` and `{thread_id: rating}` from `f95_threads.rating`, read-only
+in chunks of 500 IDs, and `("", {})` when the catalog is off, missing or
+unreadable. `CatalogClient(on_installed=...)` calls back on the catalog thread
+after a new snapshot installs, and once per app start (before the first
+background check) when a snapshot is already installed; a callback error is
+logged and never fails the check. `Api` passes `_fill_ratings_from_catalog`,
+which does nothing when the catalog is off or when the device-local setting
+`catalog_rating_fill_sha` already names the installed snapshot's SHA-256. It
+skips catalog ratings that are NULL, 0 or above 5, and writes `"X.X/5"` with
+`rating_updated_at = built_at` when the game has no rating, or when the stored
+rating has no read time or was read before `built_at` and differs at one
+decimal. All writes share one transaction, then one library refresh. The
+catalog never changes tags.
+
 Atlas import backfills screenshots for feed rows only when `screens` is NULL and refreshes imported rows. It strips query strings and fragments from imported cover and screenshot URLs.

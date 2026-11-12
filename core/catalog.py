@@ -143,8 +143,12 @@ class CatalogClient:
         enabled: Callable[[], bool] = lambda: True,
         opener: Opener = _urllib_open,
         clock: Callable[[], float] = time.time,
+        on_installed: Callable[[], object] | None = None,
     ) -> None:
         self.data_dir: str = data_dir
+        # Runs on the checking thread after a new snapshot installs.
+        self.on_installed: Callable[[], object] | None = on_installed
+        self._startup_callback_done: bool = False
         self._app_version: str = app_version
         self._enabled: Callable[[], bool] = enabled
         self._opener: Opener = opener
@@ -266,10 +270,24 @@ class CatalogClient:
         return True
 
     def _run_check(self, force: bool) -> None:
+        if not self._startup_callback_done:
+            # Once per start, the callback also sees a snapshot that an
+            # earlier run installed; the callback decides if it has work.
+            self._startup_callback_done = True
+            if self.installed_sha256():
+                self._call_on_installed()
         try:
             _ = self.check(force=force, _claimed=True)
         except Exception as exc:  # never let a catalog problem escape the thread
             print(f"[wLib] Catalog check failed: {exc}")
+
+    def _call_on_installed(self) -> None:
+        if self.on_installed is None:
+            return
+        try:
+            _ = self.on_installed()
+        except Exception as exc:  # a callback problem never fails the check
+            print(f"[wLib] Catalog install callback failed: {exc}")
 
     def check(self, *, force: bool = False, _claimed: bool = False) -> dict[str, object]:
         """Fetch the manifest and install a newer snapshot when there is one."""
@@ -307,7 +325,20 @@ class CatalogClient:
         sidecar["last_error"] = None
         if self._enabled():
             self._write_sidecar(sidecar)
+        if updated:
+            self._call_on_installed()
         return {"success": True, "updated": updated}
+
+    def installed_sha256(self) -> str:
+        """SHA-256 of the installed snapshot, or "" when none is installed."""
+        manifest = self._read_sidecar().get("manifest")
+        if not isinstance(manifest, dict) or not os.path.isfile(self.catalog_path):
+            return ""
+        snapshot = cast(dict[str, object], manifest).get(MANIFEST_SNAPSHOT)
+        if not isinstance(snapshot, dict):
+            return ""
+        digest = cast(dict[str, object], snapshot).get(SNAPSHOT_SHA256)
+        return digest if isinstance(digest, str) else ""
 
     def _fetch_manifest(self, url: str) -> dict[str, object]:
         with closing(self._opener(url, self._headers())) as response:
