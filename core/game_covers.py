@@ -12,7 +12,8 @@ import re
 import stat
 import tempfile
 from pathlib import Path
-from typing import BinaryIO, Callable
+from typing import BinaryIO
+from collections.abc import Callable
 from uuid import uuid4
 
 from core import database

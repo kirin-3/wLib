@@ -156,7 +156,7 @@ class _ExtractMeter:
         self._stop: threading.Event = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def __enter__(self) -> "_ExtractMeter":
+    def __enter__(self) -> _ExtractMeter:
         if self._report is not None:
             self._thread = threading.Thread(target=self._run, name="extract-meter", daemon=True)
             self._thread.start()

@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-import socket
 import ssl
 import threading
 import time
@@ -13,7 +12,7 @@ from datetime import datetime
 from html import unescape
 from html.parser import HTMLParser
 from http.client import HTTPException, HTTPResponse
-from typing import Protocol, TypeAlias, cast, override
+from typing import Protocol, cast, override
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -21,10 +20,10 @@ from core import extension_bridge
 from core.store_links import StoreLink, parse_store_link
 from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 
-ScraperResultValue: TypeAlias = bool | str | list[str] | list[StoreLink]
-ScraperResult: TypeAlias = Mapping[str, ScraperResultValue]
-ScraperResultDict: TypeAlias = dict[str, ScraperResultValue]
-ThreadMetadata: TypeAlias = dict[str, str | list[str]]
+type ScraperResultValue = bool | str | list[str] | list[StoreLink]
+type ScraperResult = Mapping[str, ScraperResultValue]
+type ScraperResultDict = dict[str, ScraperResultValue]
+type ThreadMetadata = dict[str, str | list[str]]
 
 
 class BatchResultCallback(Protocol):
@@ -194,7 +193,7 @@ def _urllib_f95_get(url: str) -> tuple[int, str]:
                 # response must not abort the whole update check.
                 body = b""
             return exc.code, _decode_body(body, exc.headers.get_content_charset())
-    except (TimeoutError, socket.timeout) as exc:
+    except TimeoutError as exc:
         raise _F95RequestError(
             "navigation_timeout", "F95Zone request timed out"
         ) from exc

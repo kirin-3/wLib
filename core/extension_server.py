@@ -13,7 +13,8 @@ import sys
 import threading
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Callable, Protocol, cast, override
+from typing import TYPE_CHECKING, Protocol, cast, override
+from collections.abc import Callable
 
 from core.api import APP_VERSION
 from core.f95zone import extract_thread_id, normalize_thread_url
@@ -433,9 +434,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 else f"{label} sign-in failed or expired. Return to wLib and connect again."
             )
             _ = self.wfile.write(
-                f"<!doctype html><html lang='en'><meta charset='utf-8'><title>wLib {label}</title><p>{message}</p></html>".encode(
-                    "utf-8"
-                )
+                f"<!doctype html><html lang='en'><meta charset='utf-8'><title>wLib {label}</title><p>{message}</p></html>".encode()
             )
         elif urlparse(self.path).path == "/api/check":
             from urllib.parse import urlparse, parse_qs

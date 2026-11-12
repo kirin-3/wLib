@@ -12,7 +12,7 @@ import json
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
@@ -125,7 +125,7 @@ class PairingStore:
                 "id": pairing_code(digest),
                 "browser": browser_name(origin),
                 "origin": origin[:128],
-                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "at": datetime.now(UTC).isoformat(timespec="seconds"),
             }
             return "pending", True
 

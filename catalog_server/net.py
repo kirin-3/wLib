@@ -2,7 +2,6 @@
 """Outgoing requests: one at a time per site, paced, with budgets kept in state.sqlite."""
 
 import json
-import socket
 import ssl
 import time
 from collections.abc import Callable, Collection, Mapping
@@ -88,7 +87,7 @@ def urllib_transport(request: Request) -> Response:
     except HTTPError as exc:
         with exc:
             return Response(exc.code, exc.read(), dict(exc.headers))
-    except (TimeoutError, socket.timeout, URLError, HTTPException) as exc:
+    except (TimeoutError, URLError, HTTPException) as exc:
         # HTTPException covers IncompleteRead (a truncated body) and a dropped
         # connection, so they are retried like a timeout.
         raise ConnectionError(f"{request.url}: {exc}") from exc

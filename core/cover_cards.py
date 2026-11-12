@@ -15,7 +15,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Callable
+from typing import TYPE_CHECKING, BinaryIO
+from collections.abc import Callable
 
 from core import database
 from core.game_covers import cache_covers_dir, covers_dir
@@ -64,7 +65,7 @@ _animated_cache: dict[tuple[str, int, int], bool] = {}
 _animated_lock = threading.Lock()
 
 
-def _gif_animated(handle: "BinaryIO") -> bool:
+def _gif_animated(handle: BinaryIO) -> bool:
     """Whether a GIF has a second frame; walks the block structure only."""
     head = handle.read(13)
     if len(head) < 13 or head[:3] != b"GIF":
@@ -153,7 +154,7 @@ def webp_writer_available() -> bool:
         return False
 
 
-def _encode(image: "QImage") -> bytes:
+def _encode(image: QImage) -> bytes:
     from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
     from PyQt6.QtGui import QImageWriter
 
@@ -182,7 +183,7 @@ def _write_atomic(path: Path, data: bytes) -> None:
             Path(temp).unlink(missing_ok=True)
 
 
-def _frame_delay(reader: "QImageReader") -> int:
+def _frame_delay(reader: QImageReader) -> int:
     delay = reader.nextImageDelay()
     return DEFAULT_DELAY_MS if delay <= 10 else delay
 

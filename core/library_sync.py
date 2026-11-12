@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from http.client import HTTPResponse
 from pathlib import Path
 from typing import Protocol, cast, final
@@ -128,7 +128,7 @@ class SyncLocation(Protocol):
 
 def utc_now() -> str:
     return (
-        datetime.now(timezone.utc)
+        datetime.now(UTC)
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z")
     )

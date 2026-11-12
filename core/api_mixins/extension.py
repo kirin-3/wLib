@@ -155,7 +155,7 @@ class ExtensionMixin(ApiBase):
                 chrome_manifest_path = os.path.join(chrome_new_dir, "manifest.json")
                 import json
 
-                with open(chrome_manifest_path, "r", encoding="utf-8") as f:
+                with open(chrome_manifest_path, encoding="utf-8") as f:
                     chrome_manifest = self._coerce_string_key_dict(
                         cast(object, json.load(f))
                     )

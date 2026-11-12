@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from collections.abc import Mapping
-from typing import BinaryIO, Callable, Protocol, cast
+from typing import BinaryIO, Protocol, cast
+from collections.abc import Callable
 
 from core.host_platform import get_data_subdir
 

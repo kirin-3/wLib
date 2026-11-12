@@ -6,7 +6,8 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Callable, final
+from typing import final
+from collections.abc import Callable
 
 from core import database, scraper
 from core.downloads.manager import DownloadManager

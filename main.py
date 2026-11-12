@@ -13,7 +13,8 @@ import sys
 import tempfile
 import threading
 import time
-from typing import IO, TYPE_CHECKING, Callable, Protocol, cast
+from typing import IO, TYPE_CHECKING, Protocol, cast
+from collections.abc import Callable
 
 # --smoke-test must never touch the user's real library. core.database resolves
 # the data directory at import time, so pick an isolated temporary one before
@@ -855,7 +856,7 @@ class _DestroyableWindow(Protocol):
 
 
 class _EventHook(Protocol):
-    def __iadd__(self, handler: Callable[[], None]) -> "_EventHook": ...
+    def __iadd__(self, handler: Callable[[], None]) -> _EventHook: ...
 
 
 def track_minimized(window: object) -> None:

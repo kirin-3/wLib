@@ -837,7 +837,7 @@ class Launcher:
         self.prefix_guard: Callable[[str, int | None], str | None] | None = None
         # Called as external_guard(entry, game_id) after prefix_guard; lets a
         # separate launcher process (the Steam runner) ask the main app.
-        self.external_guard: Callable[["RunningGame", int | None], str | None] | None = None
+        self.external_guard: Callable[[RunningGame, int | None], str | None] | None = None
         # Games another wLib process launched, keyed by game ID, so prefix
         # checks here also see them. external_alive(game_id) drops the entry
         # of a runner that died without reporting its end.

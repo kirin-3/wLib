@@ -8,7 +8,8 @@ import time
 import uuid
 from urllib.parse import urlsplit
 from pathlib import Path
-from typing import Callable, final
+from typing import final
+from collections.abc import Callable
 
 from core import extension_bridge
 from core.downloads.hosts import buzzheavier, mega, pixeldrain

@@ -8,7 +8,7 @@ Only live documents reached through the collection's primary index are read.
 from __future__ import annotations
 
 import struct
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from uuid import UUID
 from typing import cast, final
@@ -103,9 +103,9 @@ def _document(cursor: _Cursor, depth: int = 0) -> dict[str, object]:
         elif kind == 9:
             ms = body.number("<q")
             if ms == 253402300800000:
-                value = datetime.max.replace(tzinfo=timezone.utc)
+                value = datetime.max.replace(tzinfo=UTC)
             else:
-                value = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+                value = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
                     milliseconds=ms
                 )
         elif kind in (10, 127, 255):

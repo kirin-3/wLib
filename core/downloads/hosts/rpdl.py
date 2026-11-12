@@ -11,9 +11,10 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from http.client import HTTPResponse
-from typing import Callable, cast
+from typing import cast
+from collections.abc import Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request
@@ -238,7 +239,7 @@ def parse_date(value: object) -> int:
         except ValueError:
             return 0
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return int(parsed.timestamp())
     return 0
 

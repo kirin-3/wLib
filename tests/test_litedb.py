@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import struct
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from uuid import UUID
 
@@ -59,7 +59,7 @@ def test_real_litedb_fixture():
     assert len(rows) == 147
     assert all(row["Name"] != "Deleted game" for row in rows)
     assert rows[0]["_id"] == "00112233-4455-6677-8899-000000000001"
-    assert rows[0]["LastActivity"] == datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert rows[0]["LastActivity"] == datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
     assert rows[1]["Notes"] == "x" * 13000
 
 
@@ -99,7 +99,7 @@ def test_bson_subset():
         "guid": str(guid),
         "bytes": b"ab",
         "bool": True,
-        "date": datetime(1970, 1, 1, tzinfo=timezone.utc),
+        "date": datetime(1970, 1, 1, tzinfo=UTC),
         "null": None,
         "min": None,
         "max": None,

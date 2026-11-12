@@ -12,7 +12,7 @@ import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import cast
 
 from cryptography.exceptions import InvalidTag
@@ -587,7 +587,7 @@ def sync_snapshot_path(name: object) -> str | None:
 
 
 def _snapshot_name(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ") + ".json"
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%S-%fZ") + ".json"
 
 
 def write_sync_snapshot() -> str | None:
@@ -602,13 +602,13 @@ def write_sync_snapshot() -> str | None:
     legacy = os.path.join(os.path.dirname(folder), "last-local.json")
     if os.path.isfile(legacy):
         try:
-            moment = datetime.fromtimestamp(os.path.getmtime(legacy), timezone.utc)
+            moment = datetime.fromtimestamp(os.path.getmtime(legacy), UTC)
             os.replace(legacy, os.path.join(folder, _snapshot_name(moment)))
         except OSError:
             pass
     if not database.get_all_games():
         return None
-    name = _snapshot_name(datetime.now(timezone.utc))
+    name = _snapshot_name(datetime.now(UTC))
     _ = write_library_backup(os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS})
     names = sorted(entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry))
     for old in names[:-SYNC_SNAPSHOT_KEEP]:
@@ -641,7 +641,7 @@ def list_sync_snapshots() -> list[dict[str, object]]:
         snapshots.append(
             {
                 "name": name,
-                "created_at": stamp.replace(tzinfo=timezone.utc)
+                "created_at": stamp.replace(tzinfo=UTC)
                 .isoformat(timespec="seconds")
                 .replace("+00:00", "Z"),
                 "games": len(_coerce_sequence(backup.get("games"))),

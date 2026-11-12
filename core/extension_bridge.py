@@ -17,7 +17,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from io import BufferedIOBase
-from typing import BinaryIO, Callable, cast, final
+from typing import BinaryIO, cast, final
+from collections.abc import Callable
 
 from core import extension_ws
 

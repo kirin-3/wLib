@@ -24,7 +24,7 @@ import sqlite3
 import tempfile
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
@@ -278,7 +278,7 @@ def _unix_to_iso(timestamp: float) -> str:
     if timestamp >= 1e12:
         timestamp /= 1000.0
     try:
-        moment = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        moment = datetime.fromtimestamp(timestamp, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return ""
     if moment.year < 1971:

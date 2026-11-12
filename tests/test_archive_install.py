@@ -1219,7 +1219,7 @@ def test_zip_extract_cp437_utf8_filename(tmp_path):
 
     # Write a zip where UTF-8 bytes were written into an archive with bit 11 cleared.
     ascii_placeholder = b"cafe__game.exe"
-    utf8_target = "café_game.exe".encode("utf-8")
+    utf8_target = "café_game.exe".encode()
     assert len(ascii_placeholder) == len(utf8_target)
 
     buf = io.BytesIO()

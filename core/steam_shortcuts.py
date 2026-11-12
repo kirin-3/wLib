@@ -8,9 +8,8 @@ import struct
 import tempfile
 import zlib
 from pathlib import Path
-from typing import TypeAlias
 
-VdfValue: TypeAlias = str | int | dict[str, 'VdfValue']
+type VdfValue = str | int | dict[str, VdfValue]
 
 
 def read_vdf(data: bytes) -> dict[str, VdfValue]:
