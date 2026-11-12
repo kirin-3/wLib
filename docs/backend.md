@@ -338,18 +338,31 @@ registry entries that later run unsandboxed in other games. Save detection and
 the game's Winecfg, Winetricks and RTP actions resolve the same prefix. Removing a game moves its `sandbox/<id>/` folder to `sandbox/removed/<id>_<timestamp>/`, so a later game with the same ID starts clean; startup deletes removed sandboxes older than 30 days. On non-NixOS hosts, `/bin`, `/sbin` and `/lib*` entries that are symlinks
 on the host are recreated as symlinks, so 32-bit loaders resolve, and
 `/dev/ntsync` is passed through when present. It does not expose the session
-D-Bus. The game gets a filtered environment (`game_sandbox.sandbox_environment`):
+D-Bus: `DBUS_SESSION_BUS_ADDRESS` is set to an unusable path
+(`unix:path=/run/wlib-no-session-bus`) and `NO_AT_BRIDGE=1` is set, so libdbus
+and GTK's accessibility bridge get a connection error instead of starting a
+private bus that never exits. `/tmp/.X11-unix` is a new folder that the sandbox
+user owns, with only the host's X display sockets (`X<n>`, listed on the host
+by `host_platform.host_x11_sockets()`, also in Flatpak) bound in read-only, so
+nested X servers such as gamescope or Xvfb can create their own display. The game gets a filtered environment (`game_sandbox.sandbox_environment`):
 display, audio, locale, graphics and Wine/Proton variables from the host plus
 everything wLib or the launch options set, but none of wLib's other variables
 (tokens, SSH/GPG agents, credentials). bwrap runs without `--die-with-parent`,
 so a sandboxed game keeps running when wLib quits, like other games. An in-namespace shell supervises launcher stubs until their detached
-descendants exit. Stop terminates the outer bwrap process group and skips the
+descendants exit. It ignores D-Bus and accessibility bus helpers
+(`dbus-daemon`, `dbus-launch`, `dbus-broker`, `at-spi-bus-launcher`,
+`at-spi2-registryd`) when it counts processes, and kills every process left in
+the sandbox's PID namespace before it exits, because bwrap's init otherwise
+waits for those helpers. Stop terminates the outer bwrap process group and skips the
 host wineserver. Automatic Cheat Engine injection, when enabled, runs inside
 that same sandbox after its usual delay.
 
 No internet adds `--unshare-net` to the sandbox. With sandboxing off it uses a
 thin `bwrap --unshare-user --unshare-net --dev-bind / /` wrapper with the
-original working directory, so files, Stop, playtime and the host wineserver
+original working directory. Only `/tmp/.X11-unix` is private: a tmpfs that the
+namespace user owns, with the host's X display sockets bound in, so nested X
+servers can start (the host folder belongs to root, which shows as `nobody` in
+the user namespace). Files, Stop, playtime and the host wineserver
 behave as unsandboxed; only a private loopback remains. A missing or unusable
 bubblewrap refuses the launch with `network_block_unavailable`; Windows requires
 the sandbox (`network_block_needs_sandbox`). A network-blocked game cannot share a Wine prefix with a running game that has

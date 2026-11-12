@@ -200,7 +200,6 @@ def test_bwrap_mounts_and_ordering():
         ["--dev-bind-try", "/dev/ntsync", "/dev/ntsync"],
     ]:
         assert triple in triples
-    assert argv.index("--tmpfs") < argv.index("/tmp/.X11-unix")
     assert "/run/user/1000/bus" not in argv
     assert argv[-6:] == [
         "sh",
@@ -221,6 +220,59 @@ def test_bwrap_mounts_and_ordering():
     assert "/nix" in nix and "/run/current-system" in nix
     assert "/lib" not in nix and "/lib64" not in nix
     assert nix.index("/run") < nix.index("/run/current-system")
+
+
+def test_bwrap_gives_a_private_x11_folder_with_host_sockets():
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir="/games",
+        home="/home/u",
+        sandbox_home="/s",
+        cwd="/games",
+        x11_sockets=("X0", "X1"),
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    tmp = pairs.index(["--tmpfs", "/tmp"])
+    folder = pairs.index(["--dir", "/tmp/.X11-unix"])
+    assert tmp < folder
+    for name in ("X0", "X1"):
+        path = f"/tmp/.X11-unix/{name}"
+        assert triples.index(["--ro-bind-try", path, path]) > folder
+    # The host folder belongs to root (nobody in the namespace): never bind it.
+    assert ["--ro-bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"] not in triples
+    assert not any(t[0].endswith("bind") and t[1] == "/tmp/.X11-unix" for t in triples)
+    empty = sandbox.build_bwrap_argv(
+        ["true"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games"
+    )
+    assert "--dir" in empty and not any(a.startswith("/tmp/.X11-unix/") for a in empty)
+
+
+def test_bwrap_blocks_the_session_bus_autolaunch():
+    argv = sandbox.build_bwrap_argv(
+        ["true"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games"
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    pairs = [argv[i : i + 2] for i in range(len(argv) - 1)]
+    assert [
+        "--setenv",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/run/wlib-no-session-bus",
+    ] in triples
+    assert ["--setenv", "NO_AT_BRIDGE", "1"] in triples
+    assert ["--unsetenv", "DBUS_SESSION_BUS_ADDRESS"] not in pairs
+    assert ["--unsetenv", "DBUS_SYSTEM_BUS_ADDRESS"] in pairs
+
+
+def test_supervisor_ignores_bus_helpers():
+    names = sandbox._BUS_HELPER_PATTERN.split("|")
+    assert all(len(name) <= 15 for name in names)
+    for name in ("dbus-daemon", "dbus-launch", "at-spi-bus-laun", "at-spi2-registr"):
+        assert name in names
+    script = sandbox.SUPERVISOR
+    assert 'case "$pid" in 1|$$) continue;; esac' in script
+    assert f'case "$comm" in {sandbox._BUS_HELPER_PATTERN}) continue;; esac' in script
+    assert '[ "$n" -eq 0 ] && { kill -KILL -1 2>/dev/null; exit "$result"; }' in script
 
 
 def test_bwrap_mounts_system_certificates_and_audio_config():
@@ -357,6 +409,26 @@ def test_supervisor_keeps_setsid_child_alive(tmp_path):
     result = subprocess.run(argv, capture_output=True, text=True, timeout=8)
     assert result.returncode == 0, result.stderr
     assert 2.8 <= time.monotonic() - start < 7
+
+
+def test_supervisor_exits_with_a_bus_helper_left(tmp_path):
+    import shutil
+    import subprocess
+    import time
+
+    sleep = shutil.which("sleep")
+    if not sleep:
+        pytest.skip("sleep unavailable")
+    argv = integration_argv(tmp_path, ["sh", "-c", "./dbus-daemon 30 & exit 0"])
+    helper = tmp_path / "game" / "dbus-daemon"
+    shutil.copy(sleep, helper)
+    if subprocess.run([str(helper), "0"], capture_output=True).returncode:
+        pytest.skip("sleep does not run under another name")
+    start = time.monotonic()
+    # The helper holds the output pipe, so this returns only once it is gone.
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=8)
+    assert result.returncode == 0, result.stderr
+    assert time.monotonic() - start < 4
 
 
 def test_sigterm_ends_sandbox_tree(tmp_path):
@@ -594,7 +666,14 @@ def test_system_symlinks_and_network_argv(monkeypatch):
     assert ["--symlink", "usr/bin", "/bin"] in triples
     assert ["--ro-bind-try", "/lib64", "/lib64"] in triples
     assert "--unshare-net" in argv
-    assert sandbox.build_network_bwrap_argv(["game", "arg"], cwd="/games") == ["bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--chdir", "/games", "--", "game", "arg"]
+    assert sandbox.build_network_bwrap_argv(["game", "arg"], cwd="/games") == ["bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--chdir", "/games", "--", "game", "arg"]
+    assert sandbox.build_network_bwrap_argv(["game"], cwd="/games", x11_sockets=("X0", "X2")) == [
+        "bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/",
+        "--tmpfs", "/tmp/.X11-unix",
+        "--ro-bind-try", "/tmp/.X11-unix/X0", "/tmp/.X11-unix/X0",
+        "--ro-bind-try", "/tmp/.X11-unix/X2", "/tmp/.X11-unix/X2",
+        "--chdir", "/games", "--", "game",
+    ]
 
 
 def test_sandboxie_network_setting(monkeypatch, tmp_path):
@@ -636,6 +715,36 @@ def test_flatpak_host_layout_is_read_from_the_host(monkeypatch):
     monkeypatch.setattr(host_platform.subprocess, "run", run)
     assert host_platform.host_system_layout() == (True, {"/bin": "usr/bin"})
     assert "flatpak-spawn" in run.call_args.args[0]
+
+
+def test_host_x11_sockets_reads_the_folder(monkeypatch):
+    from core import host_platform
+
+    monkeypatch.setattr(host_platform, "is_flatpak", lambda: False)
+    listdir = Mock(return_value=["X1", "X0", "X0-lock", "Xa", "x2", ".hidden"])
+    monkeypatch.setattr(host_platform.os, "listdir", listdir)
+    assert host_platform.host_x11_sockets() == ("X0", "X1")
+    assert listdir.call_args.args[0] == "/tmp/.X11-unix"
+    monkeypatch.setattr(host_platform.os, "listdir", Mock(side_effect=OSError))
+    assert host_platform.host_x11_sockets() == ()
+
+
+def test_host_x11_sockets_asks_the_host_in_flatpak(monkeypatch):
+    from core import host_platform
+
+    monkeypatch.setattr(host_platform, "is_flatpak", lambda: True)
+    completed = subprocess.CompletedProcess([], 0, stdout="X0\nX1\nnot-x\n", stderr="")
+    run = Mock(return_value=completed)
+    monkeypatch.setattr(host_platform.subprocess, "run", run)
+    assert host_platform.host_x11_sockets() == ("X0", "X1")
+    assert "flatpak-spawn" in run.call_args.args[0]
+    assert run.call_args.args[0][-1] == "/tmp/.X11-unix"
+    run.return_value = subprocess.CompletedProcess([], 1, stdout="X0\n", stderr="")
+    assert host_platform.host_x11_sockets() == ()
+    run.side_effect = subprocess.TimeoutExpired("flatpak-spawn", 10)
+    assert host_platform.host_x11_sockets() == ()
+    run.side_effect = OSError
+    assert host_platform.host_x11_sockets() == ()
 
 
 def test_wine_service_names_fit_proc_comm():

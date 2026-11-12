@@ -3514,10 +3514,11 @@ def test_network_block_refuses_unavailable_and_windows_without_sandbox(monkeypat
 
 def test_network_block_wraps_unsandboxed_game(monkeypatch):
     monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda **kwargs: {"status": "ready", "reason": "", "path": "/usr/bin/bwrap", "version": ""})
+    monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0",))
     with patch("os.path.exists", return_value=True), patch("os.access", return_value=True), patch("subprocess.Popen") as popen, patch("threading.Thread"):
         result = Launcher().launch("/games/game.sh", launch_mode="native", block_network=True)
     assert result["success"]
-    assert popen.call_args.args[0] == ["/usr/bin/bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--chdir", "/games", "--", "/games/game.sh"]
+    assert popen.call_args.args[0] == ["/usr/bin/bwrap", "--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--ro-bind-try", "/tmp/.X11-unix/X0", "/tmp/.X11-unix/X0", "--chdir", "/games", "--", "/games/game.sh"]
 
 
 def test_offline_proton_requires_local_build(monkeypatch):
@@ -3619,6 +3620,27 @@ def test_missing_performance_tool_logged(tmp_path, monkeypatch):
     with patch("subprocess.Popen"), patch("threading.Thread"):
         assert Launcher().launch(str(game), gamemode=True)["success"]
     assert "GameMode skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts")
+def test_sandboxed_launch_passes_host_x11_sockets(tmp_path, monkeypatch):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    seen = {}
+
+    def build(cmd, **kwargs):
+        seen.update(kwargs)
+        return ["bwrap", *cmd]
+
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
+    monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", build)
+    monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
+    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0", "X1"))
+    with patch("subprocess.Popen"), patch("threading.Thread"):
+        assert Launcher().launch(str(game), game_id=1, sandbox_enabled=True)["success"]
+    assert seen["x11_sockets"] == ("X0", "X1")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")

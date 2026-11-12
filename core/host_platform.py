@@ -306,6 +306,43 @@ def host_system_layout() -> tuple[bool, dict[str, str]]:
     return nixos, host_links
 
 
+_X11_SOCKET_DIR = "/tmp/.X11-unix"
+
+
+def _is_x11_socket_name(name: str) -> bool:
+    return len(name) > 1 and name[0] == "X" and name[1:].isascii() and name[1:].isdigit()
+
+
+def host_x11_sockets() -> tuple[str, ...]:
+    """Return the X display socket names (`X0`, `X1`, ...) in the host's /tmp/.X11-unix.
+
+    Inside Flatpak the sandbox's own folder holds the Flatpak's display, not
+    the host's, so ask the host instead. Any failure gives an empty tuple.
+    """
+    if not is_flatpak():
+        try:
+            names = os.listdir(_X11_SOCKET_DIR)
+        except OSError:
+            return ()
+    else:
+        script = 'for p in "$1"/*; do [ -S "$p" ] && printf "%s\\n" "${p##*/}"; done; :'
+        try:
+            completed = subprocess.run(
+                [*_FLATPAK_SPAWN, "sh", "-c", script, "sh", _X11_SOCKET_DIR],
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ()
+        if completed.returncode != 0:
+            return ()
+        names = [line.strip() for line in (completed.stdout or "").splitlines()]
+    return tuple(sorted(name for name in names if _is_x11_socket_name(name)))
+
+
 def host_command(
     cmd: Sequence[str],
     env: Mapping[str, str] | None = None,

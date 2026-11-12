@@ -236,12 +236,36 @@ def _probe(host: str, custom: str) -> SandboxStatus:
     return result
 
 
-# The shell and bwrap's namespace init remain after the launched command exits.
-# Count before starting sleep, so the waiting helper itself cannot keep us alive.
+# D-Bus and accessibility bus helpers that a game or a library can start in
+# the sandbox. They never exit on their own, so they must not keep the game
+# counted as running. /proc comm holds 15 characters, so long names are cut.
+_BUS_HELPER_PATTERN = "|".join(
+    (
+        "dbus-daemon",
+        "dbus-launch",
+        "dbus-broker",
+        "dbus-broker-lau",
+        "at-spi-bus-laun",
+        "at-spi2-registr",
+    )
+)
+
+# bwrap's namespace init (PID 1) and this shell remain after the launched
+# command exits, and bus helpers are ignored. Count before starting sleep, so
+# the waiting helper itself cannot keep us alive. bwrap's init waits for every
+# child, so a leftover helper would keep the namespace alive: before exiting,
+# kill every other process in this PID namespace (`kill -1` cannot reach
+# outside it, and it skips this shell and PID 1).
 SUPERVISOR = (
     '"$@"; result=$?; while :; do n=0; '
-    "for p in /proc/[0-9]*; do n=$((n+1)); done; "
-    '[ "$n" -le 2 ] && exit "$result"; sleep 1; done'
+    "for p in /proc/[0-9]*; do "
+    'pid=${p#/proc/}; case "$pid" in 1|$$) continue;; esac; '
+    '{ read -r stat < "$p/stat"; } 2>/dev/null || continue; '
+    'comm=${stat#*[(]}; comm=${comm%) *}; '
+    f'case "$comm" in {_BUS_HELPER_PATTERN}) continue;; esac; '
+    "n=$((n+1)); done; "
+    '[ "$n" -eq 0 ] && { kill -KILL -1 2>/dev/null; exit "$result"; }; '
+    "sleep 1; done"
 )
 
 
@@ -298,6 +322,14 @@ def cheat_engine_wrapper(game_command: list[str], ce_command: list[str]) -> list
     return ["sh", "-c", script]
 
 
+def _x11_socket_binds(x11_sockets: tuple[str, ...]) -> list[str]:
+    argv: list[str] = []
+    for name in x11_sockets:
+        path = f"/tmp/.X11-unix/{name}"
+        argv += ["--ro-bind-try", path, path]
+    return argv
+
+
 def build_bwrap_argv(
     command: list[str],
     *,
@@ -316,6 +348,7 @@ def build_bwrap_argv(
     umu_var: str = "",
     network: bool = False,
     writable_paths: tuple[str, ...] = (),
+    x11_sockets: tuple[str, ...] = (),
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
     env = environment or {}
@@ -369,7 +402,12 @@ def build_bwrap_argv(
             argv += ["--symlink", target, path]
         else:
             argv += ["--ro-bind-try", path, path]
-    argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"]
+    # The sandbox user owns this /tmp/.X11-unix, so a nested X server
+    # (gamescope, Xvfb) can create its display here. Only the host's display
+    # sockets are bound in; the host folder belongs to root, which shows as
+    # nobody in the user namespace.
+    argv += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", "/tmp/.X11-unix"]
+    argv += ["--tmpfs", "/run"]
     if nixos:
         argv += ["--ro-bind-try", "/run/current-system", "/run/current-system"]
     for path in (
@@ -429,7 +467,7 @@ def build_bwrap_argv(
     for writable in writable_paths:
         if writable:
             argv += ["--bind", writable, writable]
-    argv += ["--ro-bind-try", "/tmp/.X11-unix", "/tmp/.X11-unix"]
+    argv += _x11_socket_binds(x11_sockets)
     runtime = env.get("XDG_RUNTIME_DIR", "")
     if runtime:
         for name in (
@@ -444,8 +482,15 @@ def build_bwrap_argv(
         "--ro-bind-try",
         authority,
         authority,
-        "--unsetenv",
+        # libdbus starts its own bus when no address is set, and that bus never
+        # exits. An address that cannot connect gives an error instead. The
+        # sandbox's /run is a new tmpfs, so the path never exists.
+        "--setenv",
         "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/run/wlib-no-session-bus",
+        "--setenv",
+        "NO_AT_BRIDGE",
+        "1",
         "--unsetenv",
         "DBUS_SYSTEM_BUS_ADDRESS",
         "--chdir",
@@ -634,9 +679,17 @@ def _sandboxie_call(tool: str, args: list[str]) -> str:
 
 
 def build_network_bwrap_argv(
-    command: list[str], *, cwd: str, bwrap: str = "bwrap"
+    command: list[str],
+    *,
+    cwd: str,
+    bwrap: str = "bwrap",
+    x11_sockets: tuple[str, ...] = (),
 ) -> list[str]:
-    """Net-only wrapper: the host filesystem and processes stay as they are."""
+    """Net-only wrapper: the host filesystem and processes stay as they are.
+
+    Only /tmp/.X11-unix is private: a tmpfs that the namespace user owns,
+    with the host's display sockets bound in, so a nested X server can start.
+    """
     return [
         bwrap,
         "--unshare-user",
@@ -644,6 +697,9 @@ def build_network_bwrap_argv(
         "--dev-bind",
         "/",
         "/",
+        "--tmpfs",
+        "/tmp/.X11-unix",
+        *_x11_socket_binds(x11_sockets),
         "--chdir",
         cwd,
         "--",

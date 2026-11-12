@@ -34,6 +34,7 @@ from .host_platform import (
     host_command,
     host_system_layout,
     host_which,
+    host_x11_sockets,
     is_flatpak,
     is_windows,
     no_console_window,
@@ -1717,12 +1718,16 @@ class Launcher:
                         umu_var=umu_var,
                         network=block,
                         writable_paths=writable_paths,
+                        x11_sockets=host_x11_sockets(),
                     )
                     entry.kill_info = None
                 elif block and not is_windows() and not flatpak_player:
                     assert network_status is not None
                     cmd = game_sandbox.build_network_bwrap_argv(
-                        cmd, cwd=effective_cwd, bwrap=network_status["path"]
+                        cmd,
+                        cwd=effective_cwd,
+                        bwrap=network_status["path"],
+                        x11_sockets=host_x11_sockets(),
                     )
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
