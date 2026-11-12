@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+import shutil
 import sys
+import tempfile
 
 import pytest
 
@@ -9,6 +11,32 @@ ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
+# core.database reads WLIB_DATA_DIR once, at import, into DATA_DIR and DB_PATH.
+# Set it before any test module imports core, so no import-time path points
+# at the real ~/.local/share/wLib.
+_SESSION_DATA_DIR = tempfile.mkdtemp(prefix="wlib-test-data-")
+os.environ["WLIB_DATA_DIR"] = _SESSION_DATA_DIR
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path_factory, monkeypatch):
+    """Give each test its own data folder and library database.
+
+    A test that only calls setenv("WLIB_DATA_DIR") does not move DB_PATH,
+    because core.database caches it at import. Patch both here.
+    """
+    import core.database
+
+    # Not tmp_path: several tests assert that their own folder stays empty.
+    data_dir = str(tmp_path_factory.mktemp("data"))
+    monkeypatch.setenv("WLIB_DATA_DIR", data_dir)
+    monkeypatch.setattr(core.database, "DATA_DIR", data_dir)
+    monkeypatch.setattr(core.database, "DB_PATH", os.path.join(data_dir, "wlib.db"))
+
+
+def pytest_sessionfinish(session, exitstatus):
+    shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

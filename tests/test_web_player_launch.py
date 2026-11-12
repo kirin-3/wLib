@@ -235,6 +235,9 @@ def test_flatpak_no_internet_without_sandbox_still_blocks_network(game_dir, monk
 
 
 def test_flatpak_sub_sandbox_keeps_session_bus_for_the_portal(game_dir, monkeypatch):
+    from core.database import init_db
+
+    init_db()  # the first web-player launch saves a notice flag in settings
     monkeypatch.setattr("core.launcher.is_flatpak", lambda: True)
     monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
     popen = MagicMock()

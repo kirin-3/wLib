@@ -2,7 +2,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.database import init_db
 from core.game_launch import launch_tracked, request_from_game
+
+
+@pytest.fixture(autouse=True)
+def _library_db():
+    # request_from_game reads settings from the (isolated) library database.
+    init_db()
 
 
 def test_request_from_game_maps_launch_settings():

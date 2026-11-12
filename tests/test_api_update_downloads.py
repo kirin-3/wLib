@@ -31,9 +31,11 @@ def test_opaque_links_refresh_and_browser(monkeypatch):
 
 
 def test_archive_inspection_identifies_staging(tmp_path, monkeypatch):
+    from core.database import init_db
     from core.downloads import transfer
     from core.downloads.manager import manager
 
+    init_db()
     stage = tmp_path / 'downloads'
     stage.mkdir()
     inside = stage / 'update.zip'
