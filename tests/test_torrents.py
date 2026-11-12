@@ -260,7 +260,7 @@ def test_restart_readds_jobs_paused_or_running_as_recorded(make, tmp_path, data_
     assert {j["stage"] for j in sup.status()} == {"downloading", "paused"}
 
 
-def test_cleanup_orphans_old_paused_and_keeps_seeding(make, data_dir):
+def test_cleanup_orphans_old_paused_and_keeps_seeding(make, data_dir, tmp_path):
     root = data_dir / "downloads" / "torrents"
     now = time.time()
 
@@ -279,6 +279,9 @@ def test_cleanup_orphans_old_paused_and_keeps_seeding(make, data_dir):
     (orphan / "data").mkdir(parents=True)
     sup = make("stalled")
     sup.load()
+    # load() deletes the expired job before the helper can open its files.
+    wait_for(lambda: any(c["cmd"] == "add" and c["id"] == "young" for c in log_commands(tmp_path)))
+    assert "old" not in {c["id"] for c in log_commands(tmp_path) if c["cmd"] == "add"}
     sup.cleanup(now=now)
     assert young.exists() and seeding.exists()
     assert not old.exists() and not failed_old.exists() and not orphan.exists()

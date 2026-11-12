@@ -796,12 +796,20 @@ class TorrentSupervisor:
     # --- startup ----------------------------------------------------------
 
     def load(self) -> None:
-        """Re-create jobs from `state.json` files and resume unfinished ones."""
+        """Re-create jobs from `state.json` files and resume unfinished ones.
+
+        Expired paused, failed or ended torrents are deleted here, before the
+        helper can open their files, so `cleanup()` never deletes a folder the
+        helper is using."""
         root = torrents_dir()
         resumed = False
+        now = time.time()
         for folder in sorted(root.iterdir()):
             state = _read_state(folder)
             if state is None:
+                continue
+            if _expired(state, now):
+                shutil.rmtree(folder, ignore_errors=True)
                 continue
             job = _Job(_int(state.get("game_id")), str(state.get("title") or ""), str(state.get("version") or ""), _int(state.get("rpdl_id")))
             job.id = str(state.get("job_id") or job.id)
@@ -862,8 +870,7 @@ class TorrentSupervisor:
                 if resolved not in known or state is None:
                     shutil.rmtree(folder, ignore_errors=True)
                     continue
-                touched = _float(state.get("updated"))
-                if state.get("phase") in ("paused", "failed", "ended") and touched < now - PAUSED_KEEP_SECONDS:
+                if _expired(state, now):
                     shutil.rmtree(folder, ignore_errors=True)
                     with self._lock:
                         for job_id in [j.id for j in self._jobs.values() if j.folder == folder]:
@@ -884,6 +891,14 @@ def _float(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
     return float(value)
+
+
+def _expired(state: dict[str, object], now: float) -> bool:
+    """True for a paused, failed or ended torrent untouched for PAUSED_KEEP_SECONDS."""
+    return (
+        state.get("phase") in ("paused", "failed", "ended")
+        and _float(state.get("updated")) < now - PAUSED_KEEP_SECONDS
+    )
 
 
 def _read_state(folder: Path) -> dict[str, object] | None:
