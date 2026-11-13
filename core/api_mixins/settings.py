@@ -87,6 +87,7 @@ class SettingsMixin(ApiBase):
             "sandbox_new_games": get_setting_fn("sandbox_new_games") == "true",
             "gamemode_enabled": get_setting_fn("gamemode_enabled") == "true",
             "mangohud_enabled": get_setting_fn("mangohud_enabled") == "true",
+            **self._gamescope_settings_payload(get_setting_fn),
             "html_builtin_player": get_setting_fn("html_builtin_player") != "false",
             "web_player_devtools": get_setting_fn("web_player_devtools") != "false",
             **self._torrent_settings_payload(),
@@ -218,6 +219,26 @@ class SettingsMixin(ApiBase):
             return {"success": False, "error": "Settings must be an object"}
 
         settings_map = cast(Mapping[str, object], settings)
+        # Checked first, so a bad gamescope value never leaves other settings half saved.
+        from core import gamescope
+
+        gamescope_values: dict[str, str] = {}
+        for gamescope_key in gamescope.SETTINGS_DEFAULTS:
+            if gamescope_key not in settings_map:
+                continue
+            raw_value = settings_map[gamescope_key]
+            if gamescope_key == "gamescope_enabled":
+                gamescope_values[gamescope_key] = "true" if raw_value is True else "false"
+                continue
+            if isinstance(raw_value, bool) or not (
+                raw_value is None or isinstance(raw_value, (str, int))
+            ):
+                return {"success": False, "field": gamescope_key, "error": f"Setting '{gamescope_key}' must be a string"}
+            text_value = "" if raw_value is None else str(raw_value)
+            error = gamescope.settings_error(gamescope_key, text_value)
+            if error:
+                return {"success": False, "field": gamescope_key, "error": error}
+            gamescope_values[gamescope_key] = gamescope.normalize_setting(gamescope_key, text_value)
         # Checked first, so a bad torrent value never leaves other settings half saved.
         from core.downloads import torrent_settings
 
@@ -451,6 +472,7 @@ class SettingsMixin(ApiBase):
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
             pending.update(torrent_values)
+            pending.update(gamescope_values)
             update_settings(
                 pending,
                 custom_play_statuses=custom_statuses
@@ -468,6 +490,19 @@ class SettingsMixin(ApiBase):
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}
+
+    @staticmethod
+    def _gamescope_settings_payload(
+        get_setting_fn: Callable[[str], object | None],
+    ) -> dict[str, object]:
+        from core import gamescope
+
+        payload: dict[str, object] = {}
+        for key, default in gamescope.SETTINGS_DEFAULTS.items():
+            raw = get_setting_fn(key)
+            value = gamescope.normalize_setting(key, default if raw is None else raw)
+            payload[key] = value == "true" if key == "gamescope_enabled" else value
+        return payload
 
     @staticmethod
     def _torrent_settings_payload() -> dict[str, object]:

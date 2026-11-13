@@ -5,10 +5,18 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping
+from typing import TypedDict
 
+from core import gamescope
 from core.database import normalize_launch_mode
+from core.gamescope import GamescopeOptions
 from core.launcher import Launcher
 from core.web_launch import resolve_web_player as resolve_web_player
+
+class _OptionalLaunchOptions(TypedDict, total=False):
+    html_player: str
+    gamescope: GamescopeOptions
+
 
 def _normalize_compare_path(value: object) -> str:
     raw = str(value or "")
@@ -131,6 +139,15 @@ def launch_tracked(
         override = normalize_tool_override(stored_game.get(name))
         return override == "on" or (override == "default" and get_setting(f"{name}_enabled") == "true")
 
+    gamescope_options: GamescopeOptions | None = None
+    if tool_enabled("gamescope"):
+        global_gamescope = {
+            key: value
+            for key in gamescope.SETTINGS_DEFAULTS
+            if (value := get_setting(key)) is not None
+        }
+        gamescope_options = gamescope.resolve_options(global_gamescope, stored_game)
+
     from core.database import html_builtin_player_enabled
 
     if request.get("require_tracked") and resolve_web_player(
@@ -195,6 +212,12 @@ def launch_tracked(
             if is_final:
                 release_lock()
 
+    optional_options: _OptionalLaunchOptions = {}
+    if stored_game.get("html_player"):
+        optional_options["html_player"] = str(stored_game["html_player"])
+    if gamescope_options is not None:
+        optional_options["gamescope"] = gamescope_options
+
     try:
         result = launcher.launch(
             target_path,
@@ -213,11 +236,7 @@ def launch_tracked(
             gamemode=tool_enabled("gamemode"),
             mangohud=tool_enabled("mangohud"),
             # Only passed when set, so launchers without the option keep working.
-            **(
-                {"html_player": str(stored_game["html_player"])}
-                if stored_game.get("html_player")
-                else {}
-            ),
+            **optional_options,
         )
     except Exception as exc:
         # Launcher setup can still fail outside its own error paths (for

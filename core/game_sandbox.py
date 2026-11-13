@@ -322,6 +322,37 @@ def cheat_engine_wrapper(game_command: list[str], ce_command: list[str]) -> list
     return ["sh", "-c", script]
 
 
+# Runs inside gamescope, just before bwrap: gamescope picks its display number
+# and Xauthority file only when it starts, so their binds are added here.
+# Arguments: <index> <full|x11> <bwrap argv...>. The binds go in front of the
+# argv element at <index>. "full" also binds the Xauthority file and
+# gamescope's Wayland socket; "x11" (the network-only wrapper, which already
+# sees the host filesystem) binds only the X socket.
+_GAMESCOPE_BINDS = (
+    '[ -n "$d" ] && set -- "$@" --ro-bind-try "/tmp/.X11-unix/X$d" "/tmp/.X11-unix/X$d"; '
+    'if [ "$mode" = full ]; then '
+    '[ -n "${XAUTHORITY:-}" ] && set -- "$@" --ro-bind-try "$XAUTHORITY" "$XAUTHORITY"; '
+    '[ -n "$w" ] && set -- "$@" --ro-bind-try "$w" "$w"; '
+    "fi; "
+)
+GAMESCOPE_BIND_SHIM = (
+    'i=$1; mode=$2; shift 2; c=$#; n=0; '
+    'd=${DISPLAY:-}; d=${d##*:}; d=${d%%.*}; case "$d" in ""|*[!0-9]*) d=;; esac; '
+    'w=${GAMESCOPE_WAYLAND_DISPLAY:-}; '
+    'case "$w" in ""|/*) ;; *) if [ -n "${XDG_RUNTIME_DIR:-}" ]; then w=$XDG_RUNTIME_DIR/$w; else w=; fi;; esac; '
+    # Rotate the arguments once, adding the binds before element <index>.
+    'while [ "$n" -lt "$c" ]; do '
+    f'if [ "$n" -eq "$i" ]; then {_GAMESCOPE_BINDS}fi; '
+    'set -- "$@" "$1"; shift; n=$((n+1)); done; '
+    f'if [ "$i" -ge "$c" ]; then {_GAMESCOPE_BINDS}fi; '
+    'exec "$@"'
+)
+
+
+def gamescope_bind_wrapper(bwrap_argv: list[str], index: int, mode: str) -> list[str]:
+    return ["sh", "-c", GAMESCOPE_BIND_SHIM, "sh", str(index), mode, *bwrap_argv]
+
+
 def _x11_socket_binds(x11_sockets: tuple[str, ...]) -> list[str]:
     argv: list[str] = []
     for name in x11_sockets:
@@ -349,8 +380,14 @@ def build_bwrap_argv(
     network: bool = False,
     writable_paths: tuple[str, ...] = (),
     x11_sockets: tuple[str, ...] = (),
+    gamescope: bool = False,
 ) -> list[str]:
-    """Pure argv builder; optional host paths are handled by bubblewrap's try flags."""
+    """Pure argv builder; optional host paths are handled by bubblewrap's try flags.
+
+    With `gamescope=True` the result runs inside gamescope: the host X sockets,
+    host Wayland socket and host Xauthority are left out, and the
+    `GAMESCOPE_BIND_SHIM` adds gamescope's own display when bwrap starts.
+    """
     env = environment or {}
     check_readonly_mounts(readonly_paths, home)
     check_writable_mounts(writable_paths, home)
@@ -467,21 +504,23 @@ def build_bwrap_argv(
     for writable in writable_paths:
         if writable:
             argv += ["--bind", writable, writable]
-    argv += _x11_socket_binds(x11_sockets)
+    # After every mount above (/tmp, /run), so these binds stay visible.
+    display_index = len(argv)
+    if not gamescope:
+        argv += _x11_socket_binds(x11_sockets)
     runtime = env.get("XDG_RUNTIME_DIR", "")
     if runtime:
         for name in (
-            (env.get("WAYLAND_DISPLAY") or "wayland-0"),
+            *(() if gamescope else ((env.get("WAYLAND_DISPLAY") or "wayland-0"),)),
             "pipewire-0",
             "pulse",
         ):
             path = name if name.startswith("/") else os.path.join(runtime, name)
             argv += ["--ro-bind-try", path, path]
-    authority = env.get("XAUTHORITY") or os.path.join(home, ".Xauthority")
+    if not gamescope:
+        authority = env.get("XAUTHORITY") or os.path.join(home, ".Xauthority")
+        argv += ["--ro-bind-try", authority, authority]
     argv += [
-        "--ro-bind-try",
-        authority,
-        authority,
         # libdbus starts its own bus when no address is set, and that bus never
         # exits. An address that cannot connect gives an error instead. The
         # sandbox's /run is a new tmpfs, so the path never exists.
@@ -502,6 +541,8 @@ def build_bwrap_argv(
         "sh",
         *command,
     ]
+    if gamescope:
+        return gamescope_bind_wrapper(argv, display_index, "full")
     return argv
 
 
@@ -684,13 +725,16 @@ def build_network_bwrap_argv(
     cwd: str,
     bwrap: str = "bwrap",
     x11_sockets: tuple[str, ...] = (),
+    gamescope: bool = False,
 ) -> list[str]:
     """Net-only wrapper: the host filesystem and processes stay as they are.
 
     Only /tmp/.X11-unix is private: a tmpfs that the namespace user owns,
     with the host's display sockets bound in, so a nested X server can start.
+    With `gamescope=True` it holds only gamescope's socket, bound when bwrap
+    starts inside gamescope.
     """
-    return [
+    head = [
         bwrap,
         "--unshare-user",
         "--unshare-net",
@@ -699,12 +743,11 @@ def build_network_bwrap_argv(
         "/",
         "--tmpfs",
         "/tmp/.X11-unix",
-        *_x11_socket_binds(x11_sockets),
-        "--chdir",
-        cwd,
-        "--",
-        *command,
     ]
+    tail = ["--chdir", cwd, "--", *command]
+    if gamescope:
+        return gamescope_bind_wrapper([*head, *tail], len(head), "x11")
+    return [*head, *_x11_socket_binds(x11_sockets), *tail]
 
 
 def configure_sandboxie_box(

@@ -1,6 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { useFieldAutosave } from "../composables/useFieldAutosave";
+import { useGamescopeSettings } from "../composables/useGamescopeSettings";
+import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS } from "../utils/gamescope";
+import type { GamescopeFilter, GamescopeScaler, GamescopeWindowMode } from "../services/api";
 import FieldSaveFeedback from "../components/FieldSaveFeedback.vue";
 import type { SettingsPayload } from "../services/api";
 import { mergeSettingsFields } from "../utils/settingsMerge";
@@ -120,6 +123,8 @@ const enableLogging = ref(false);
 const gamemodeEnabled = ref(false);
 const mangohudEnabled = ref(false);
 const performanceTools = ref({ gamemode: false, mangohud: false });
+const gamescope = useGamescopeSettings();
+const gamescopeInstalled = computed(() => gamescope.status.value?.installed === true);
 const htmlBuiltinPlayer = ref(true);
 const saveHtmlBuiltinPlayer = async (event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
@@ -310,6 +315,7 @@ const applySettings = (data: SettingsResponse) => {
   enableLogging.value = !!data.enable_logging;
   gamemodeEnabled.value = !!data.gamemode_enabled;
   mangohudEnabled.value = !!data.mangohud_enabled;
+  gamescope.apply(data);
   htmlBuiltinPlayer.value = data.html_builtin_player !== false;
   webPlayerDevtools.value = data.web_player_devtools !== false;
   applyKeepSetting(data.save_backup_keep);
@@ -456,6 +462,7 @@ const loadSettings = async () => {
 
     if (supportsLinuxRuntimes.value) {
       performanceTools.value = await api.getPerformanceTools().catch(() => ({ gamemode: false, mangohud: false }));
+      void gamescope.loadStatus();
       const runners = await api.getAvailableRunners();
       availableRunners.value = runners.runners || [];
       const ceCheck = await api.isCheatEngineInstalled();
@@ -1929,6 +1936,91 @@ const browseUrm = async () => {
               <div class="ui-toggle"></div>
             </label>
           </div>
+        </div>
+
+        <div data-settings-row="wine-proton-static-6" data-settings-bound data-keywords="gamescope scaler scaling upscale resolution fsr nis integer pixel art fullscreen" v-show="settingsRowVisible('wine-proton-static-6')" v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <h4 id="settings-gamescope-label" class="text-sm font-medium" style="color: var(--text-primary)">
+                Gamescope <span v-if="gamescope.status.value && !gamescopeInstalled" class="font-normal" style="color: var(--text-muted)">(not installed)</span>
+              </h4>
+              <p id="settings-gamescope-help" class="text-xs mt-1" style="color: var(--text-muted)">
+                Run games in gamescope to scale small games to your screen. Each game can override this on its Launch tab.
+                Scaling needs Fullscreen or an output resolution.
+              </p>
+            </div>
+            <label class="relative inline-flex items-center shrink-0" :class="gamescopeInstalled ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'">
+              <input type="checkbox" role="switch" aria-labelledby="settings-gamescope-label" aria-describedby="settings-gamescope-help" class="sr-only peer"
+                :checked="gamescope.values.gamescope_enabled" :disabled="!gamescopeInstalled"
+                @change="gamescope.save('gamescope_enabled', ($event.target as HTMLInputElement).checked)" />
+              <div class="ui-toggle"></div>
+            </label>
+          </div>
+          <div v-if="gamescope.status.value && !gamescopeInstalled" class="rounded-lg p-3 space-y-2 text-xs" style="background: var(--bg-surface); color: var(--text-secondary)">
+            <template v-if="gamescope.status.value.command">
+              <p>{{ gamescope.status.value.nixos ? "Add this to your NixOS system configuration:" : "Install gamescope with this command:" }}</p>
+              <code class="block break-all rounded px-2 py-1" style="background: var(--bg-inset); color: var(--text-primary)">{{ gamescope.status.value.command }}</code>
+            </template>
+            <p v-else>Install gamescope from your distribution's packages.</p>
+            <div class="flex flex-wrap gap-2">
+              <button v-if="gamescope.status.value.command" type="button" class="settings-btn" @click="gamescope.copyInstallCommand()">Copy command</button>
+              <button type="button" class="settings-btn disabled:opacity-50" :disabled="gamescope.checking.value" @click="gamescope.loadStatus(true)">
+                {{ gamescope.checking.value ? "Checking…" : "Check again" }}
+              </button>
+            </div>
+          </div>
+          <fieldset :disabled="!gamescopeInstalled" class="grid gap-3 sm:grid-cols-2" :class="{ 'opacity-50': !gamescopeInstalled }">
+            <legend class="sr-only">Gamescope options</legend>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">Window mode</span>
+              <select class="settings-input w-full" :value="gamescope.values.gamescope_window_mode"
+                @change="gamescope.save('gamescope_window_mode', ($event.target as HTMLSelectElement).value as GamescopeWindowMode)">
+                <option v-for="option in WINDOW_MODE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </label>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">FPS limit</span>
+              <input v-model="gamescope.drafts.gamescope_fps_limit" type="text" inputmode="numeric" class="settings-input w-full" placeholder="Off"
+                :aria-invalid="!!gamescope.errors.gamescope_fps_limit"
+                @input="gamescope.checkText('gamescope_fps_limit')" @blur="gamescope.commitText('gamescope_fps_limit')" @keydown.enter.prevent="gamescope.commitText('gamescope_fps_limit')" />
+              <span v-if="gamescope.errors.gamescope_fps_limit" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_fps_limit }}</span>
+            </label>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">Output resolution</span>
+              <input v-model="gamescope.drafts.gamescope_output_resolution" type="text" class="settings-input w-full" placeholder="Auto (for example 2560x1440)"
+                :aria-invalid="!!gamescope.errors.gamescope_output_resolution"
+                @input="gamescope.checkText('gamescope_output_resolution')" @blur="gamescope.commitText('gamescope_output_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_output_resolution')" />
+              <span v-if="gamescope.errors.gamescope_output_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_output_resolution }}</span>
+            </label>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">Game resolution</span>
+              <input v-model="gamescope.drafts.gamescope_game_resolution" type="text" class="settings-input w-full" placeholder="Auto (same as the output)"
+                :aria-invalid="!!gamescope.errors.gamescope_game_resolution"
+                @input="gamescope.checkText('gamescope_game_resolution')" @blur="gamescope.commitText('gamescope_game_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_game_resolution')" />
+              <span v-if="gamescope.errors.gamescope_game_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_game_resolution }}</span>
+            </label>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">Scaler</span>
+              <select class="settings-input w-full" :value="gamescope.values.gamescope_scaler"
+                @change="gamescope.save('gamescope_scaler', ($event.target as HTMLSelectElement).value as GamescopeScaler)">
+                <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </label>
+            <label class="text-xs space-y-1" style="color: var(--text-secondary)">
+              <span class="block">Filter</span>
+              <select class="settings-input w-full" :value="gamescope.values.gamescope_filter"
+                @change="gamescope.save('gamescope_filter', ($event.target as HTMLSelectElement).value as GamescopeFilter)">
+                <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </label>
+            <label class="text-xs space-y-1 sm:col-span-2" style="color: var(--text-secondary)">
+              <span class="block">Extra arguments</span>
+              <input v-model="gamescope.drafts.gamescope_args" type="text" class="settings-input w-full font-mono" placeholder="For example --hdr-enabled"
+                :aria-invalid="!!gamescope.errors.gamescope_args"
+                @input="gamescope.checkText('gamescope_args')" @blur="gamescope.commitText('gamescope_args')" @keydown.enter.prevent="gamescope.commitText('gamescope_args')" />
+              <span v-if="gamescope.errors.gamescope_args" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_args }}</span>
+            </label>
+          </fieldset>
         </div>
 
         <div data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">

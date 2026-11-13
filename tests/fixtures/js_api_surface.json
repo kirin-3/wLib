@@ -202,6 +202,9 @@
     "game_id"
   ],
   "get_games": [],
+  "get_gamescope_status": [
+    "refresh"
+  ],
   "get_install_status": [
     "prefix_path",
     "proton_path"

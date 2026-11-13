@@ -58,6 +58,8 @@ import type {
   RunnerInfo,
   UpdateGameResponse,
   GameToolEngine,
+  GamescopeFilter,
+  GamescopeScaler,
 } from "../../services/api";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../services/api";
 import {
@@ -68,7 +70,8 @@ import {
   usesWineProtonControls,
 } from "../../utils/launchMode";
 import type { LaunchMode } from "../../utils/launchMode";
-import { performanceToolState } from "../../utils/performanceTools";
+import { performanceToolName, performanceToolState } from "../../utils/performanceTools";
+import { FILTER_OPTIONS, SCALER_OPTIONS, argsError, gamescopeEnabledForGame, normalizeResolution, resolutionError } from "../../utils/gamescope";
 import { loadPlatformCapabilities } from "../../utils/platformCapabilities";
 import { showSteamGameControl, steamIneligibleNote, steamStateLabel } from "../../utils/steam";
 import {
@@ -128,8 +131,17 @@ const sandboxRouter = useRouter();
 const sandboxEnabled = ref(false);
 const gamemode = ref<"default" | "on" | "off">("default");
 const mangohud = ref<"default" | "on" | "off">("default");
-const performanceTools = ref({ gamemode: false, mangohud: false });
-const performanceDefaults = ref({ gamemode: false, mangohud: false });
+const gamescope = ref<"default" | "on" | "off">("default");
+const gamescopeResolution = ref("");
+const gamescopeScaler = ref<"" | GamescopeScaler>("");
+const gamescopeFilter = ref<"" | GamescopeFilter>("");
+const gamescopeArgs = ref("");
+const performanceTools = ref({ gamemode: false, mangohud: false, gamescope: false });
+const performanceDefaults = ref({ gamemode: false, mangohud: false, gamescope: false });
+const toolOverrides = { gamemode, mangohud, gamescope } as const;
+const gamescopeOn = computed(() => gamescopeEnabledForGame(gamescope.value, performanceDefaults.value.gamescope));
+const gamescopeResolutionError = computed(() => (gamescopeOn.value ? resolutionError(gamescopeResolution.value) : ""));
+const gamescopeArgsError = computed(() => (gamescopeOn.value ? argsError(gamescopeArgs.value) : ""));
 const htmlPlayer = ref<HtmlPlayerChoice>("");
 const htmlBuiltinDefault = ref(true);
 const openPrefixTool = async (tool: "winecfg" | "winetricks") => {
@@ -605,6 +617,11 @@ const formSnapshot = (): string =>
   JSON.stringify({
     gamemode: gamemode.value,
     mangohud: mangohud.value,
+    gamescope: gamescope.value,
+    gamescope_resolution: gamescopeResolution.value,
+    gamescope_scaler: gamescopeScaler.value,
+    gamescope_filter: gamescopeFilter.value,
+    gamescope_args: gamescopeArgs.value,
     html_player: htmlPlayer.value,
     sandbox_enabled: sandboxEnabled.value,
     block_network: blockNetwork.value,
@@ -701,6 +718,11 @@ const userEditedTagFields = (): Record<string, unknown> =>
 const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   gamemode: g.gamemode || "default",
   mangohud: g.mangohud || "default",
+  gamescope: g.gamescope || "default",
+  gamescope_resolution: g.gamescope_resolution || "",
+  gamescope_scaler: g.gamescope_scaler || "",
+  gamescope_filter: g.gamescope_filter || "",
+  gamescope_args: g.gamescope_args || "",
   html_player: normalizeHtmlPlayer(g.html_player),
   sandbox_enabled: !!g.sandbox_enabled,
   block_network: !!g.block_network,
@@ -728,6 +750,11 @@ const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
 const formSetters: Record<string, (value: unknown) => void> = {
   gamemode: (v) => { gamemode.value = v as typeof gamemode.value; },
   mangohud: (v) => { mangohud.value = v as typeof mangohud.value; },
+  gamescope: (v) => { gamescope.value = v as typeof gamescope.value; },
+  gamescope_resolution: (v) => { gamescopeResolution.value = String(v); },
+  gamescope_scaler: (v) => { gamescopeScaler.value = v as typeof gamescopeScaler.value; },
+  gamescope_filter: (v) => { gamescopeFilter.value = v as typeof gamescopeFilter.value; },
+  gamescope_args: (v) => { gamescopeArgs.value = String(v); },
   html_player: (v) => { htmlPlayer.value = normalizeHtmlPlayer(v); },
   sandbox_enabled: (v) => { sandboxEnabled.value = !!v; },
   block_network: (v) => { blockNetwork.value = !!v; },
@@ -832,6 +859,11 @@ watch(
         autoInjectCe.value = g.auto_inject_ce ? true : false;
         gamemode.value = g.gamemode || "default";
         mangohud.value = g.mangohud || "default";
+        gamescope.value = g.gamescope || "default";
+        gamescopeResolution.value = g.gamescope_resolution || "";
+        gamescopeScaler.value = g.gamescope_scaler || "";
+        gamescopeFilter.value = g.gamescope_filter || "";
+        gamescopeArgs.value = g.gamescope_args || "";
         htmlPlayer.value = normalizeHtmlPlayer(g.html_player);
         sandboxEnabled.value = !!g.sandbox_enabled;
         blockNetwork.value = !!g.block_network;
@@ -923,7 +955,7 @@ watch(
       // The HTML player default applies on every platform; GameMode/MangoHud only on Linux.
       void api.getSettings().then(value => {
         htmlBuiltinDefault.value = value.html_builtin_player !== false;
-        performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled };
+        performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled, gamescope: !!value.gamescope_enabled };
       }).catch(console.error);
       if (capabilities.platform === "linux") {
         void api.getPerformanceTools().then(value => { performanceTools.value = value; }).catch(console.error);
@@ -1619,6 +1651,12 @@ const save = async () => {
     notifyError("Game title is required.");
     return;
   }
+  if (gamescopeResolutionError.value || gamescopeArgsError.value) {
+    notifyError(`Gamescope: ${gamescopeResolutionError.value || gamescopeArgsError.value}`);
+    return;
+  }
+  if (gamescopeResolution.value.trim()) gamescopeResolution.value = normalizeResolution(gamescopeResolution.value);
+  gamescopeArgs.value = gamescopeArgs.value.trim();
   const gameId = props.game.id;
   // Snapshot before awaiting: the sync watcher replaces these if props.game changes mid-save.
   const previousCollections = [...(props.game.collections || [])];
@@ -1645,6 +1683,11 @@ const save = async () => {
       engine: normalizeEngine(engine.value),
       gamemode: gamemode.value,
       mangohud: mangohud.value,
+      gamescope: gamescope.value,
+      gamescope_resolution: gamescopeResolution.value,
+      gamescope_scaler: gamescopeScaler.value,
+      gamescope_filter: gamescopeFilter.value,
+      gamescope_args: gamescopeArgs.value,
       html_player: htmlPlayer.value,
       sandbox_enabled: sandboxEnabled.value,
       block_network: blockNetwork.value,
@@ -2431,12 +2474,39 @@ const removeAttachment = async (name: string) => {
             <p class="text-xs" style="color:var(--text-secondary)">{{ networkSwitchState(resolvedPlayer, platformCapabilities.platform, sandboxEnabled).note }}</p>
           </div>
           <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-2 gap-4">
-            <div v-for="tool in (['gamemode', 'mangohud'] as const)" :key="tool">
-              <label :for="`detail-${tool}`" class="modal-label">{{ tool === 'gamemode' ? 'GameMode' : 'MangoHud' }}</label>
-              <select :id="`detail-${tool}`"  :value="tool === 'gamemode' ? gamemode : mangohud" @change="tool === 'gamemode' ? gamemode = ($event.target as HTMLSelectElement).value as typeof gamemode : mangohud = ($event.target as HTMLSelectElement).value as typeof mangohud" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled).disabled">
+            <div v-for="tool in (['gamemode', 'mangohud', 'gamescope'] as const)" :key="tool">
+              <label :for="`detail-${tool}`" class="modal-label">{{ performanceToolName(tool) }}</label>
+              <select :id="`detail-${tool}`" :value="toolOverrides[tool].value" @change="toolOverrides[tool].value = ($event.target as HTMLSelectElement).value as 'default' | 'on' | 'off'" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled).disabled">
                 <option value="default">Default ({{ performanceDefaults[tool] ? 'On' : 'Off' }})</option><option value="on">On</option><option value="off">Off</option>
               </select>
               <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled).note }}</p>
+            </div>
+          </div>
+          <div v-if="platformCapabilities.platform === 'linux' && gamescopeOn" class="grid grid-cols-2 gap-4" data-testid="gamescope-overrides">
+            <p class="col-span-2 text-xs" style="color:var(--text-secondary)">Gamescope options for this game. Empty fields use the Settings values.</p>
+            <div>
+              <label for="detail-gamescope-resolution" class="modal-label">Game resolution</label>
+              <input id="detail-gamescope-resolution" v-model="gamescopeResolution" type="text" class="modal-input w-full" placeholder="Settings value (for example 816x624)" :aria-invalid="!!gamescopeResolutionError" />
+              <p v-if="gamescopeResolutionError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeResolutionError }}</p>
+            </div>
+            <div>
+              <label for="detail-gamescope-scaler" class="modal-label">Scaler</label>
+              <select id="detail-gamescope-scaler" v-model="gamescopeScaler" class="modal-input w-full">
+                <option value="">Settings value</option>
+                <option v-for="option in SCALER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="detail-gamescope-filter" class="modal-label">Filter</label>
+              <select id="detail-gamescope-filter" v-model="gamescopeFilter" class="modal-input w-full">
+                <option value="">Settings value</option>
+                <option v-for="option in FILTER_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label for="detail-gamescope-args" class="modal-label">Extra arguments</label>
+              <input id="detail-gamescope-args" v-model="gamescopeArgs" type="text" class="modal-input w-full font-mono" placeholder="Added after the Settings arguments" :aria-invalid="!!gamescopeArgsError" />
+              <p v-if="gamescopeArgsError" class="text-xs" role="alert" style="color:var(--danger-text)">{{ gamescopeArgsError }}</p>
             </div>
           </div>
           <div class="grid grid-cols-2 gap-4">

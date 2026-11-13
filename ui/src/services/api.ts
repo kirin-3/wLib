@@ -871,6 +871,12 @@ export interface GameRecord {
   links?: StoreLink[];
   gamemode?: "default" | "on" | "off";
   mangohud?: "default" | "on" | "off";
+  gamescope?: "default" | "on" | "off";
+  // Per-game gamescope overrides; "" uses the global value.
+  gamescope_resolution?: string;
+  gamescope_scaler?: "" | GamescopeScaler;
+  gamescope_filter?: "" | GamescopeFilter;
+  gamescope_args?: string;
   // Where an .html target opens: "" follows the Settings default.
   html_player?: "" | "builtin" | "browser";
   sandbox_enabled?: boolean;
@@ -1017,7 +1023,32 @@ export interface PlatformCapabilities {
 
 export type TorrentSeedMode = "ask" | "always" | "never";
 
-export interface SettingsPayload {
+export type GamescopeWindowMode = "fullscreen" | "borderless" | "windowed";
+export type GamescopeScaler = "auto" | "integer" | "fit" | "fill" | "stretch";
+export type GamescopeFilter = "linear" | "nearest" | "fsr" | "nis" | "pixel";
+
+/** Gamescope on the host, and the install command when it is missing. */
+export interface GamescopeStatus {
+  installed: boolean;
+  /** Empty when installed, or when no known package manager was found. */
+  command: string;
+  package_manager: string;
+  nixos: boolean;
+}
+
+/** Global gamescope settings. Resolutions are `WxH` or "" (Auto); FPS limit "" is Off. */
+export interface GamescopeSettings {
+  gamescope_enabled: boolean;
+  gamescope_window_mode: GamescopeWindowMode;
+  gamescope_output_resolution: string;
+  gamescope_game_resolution: string;
+  gamescope_scaler: GamescopeScaler;
+  gamescope_filter: GamescopeFilter;
+  gamescope_fps_limit: string;
+  gamescope_args: string;
+}
+
+export interface SettingsPayload extends Partial<GamescopeSettings> {
   gamemode_enabled?: boolean;
   mangohud_enabled?: boolean;
   html_builtin_player?: boolean;
@@ -1137,7 +1168,7 @@ export interface GameToolResult extends ApiBasicResponse {
   use_decrypted?: boolean;
 }
 
-export interface SettingsResponse {
+export interface SettingsResponse extends GamescopeSettings {
   gamemode_enabled: boolean;
   mangohud_enabled: boolean;
   html_builtin_player: boolean;
@@ -1736,8 +1767,12 @@ class ApiService {
     return this.invoke("open_log_folder");
   }
 
-  async getPerformanceTools(refresh = false): Promise<{ gamemode: boolean; mangohud: boolean }> {
+  async getPerformanceTools(refresh = false): Promise<{ gamemode: boolean; mangohud: boolean; gamescope: boolean }> {
     return this.invoke("get_performance_tools", refresh);
+  }
+
+  async getGamescopeStatus(refresh = false): Promise<GamescopeStatus> {
+    return this.invoke<GamescopeStatus>("get_gamescope_status", refresh);
   }
 
   /** `gameId` targets that game's prefix (its own one when sandboxed) when `prefix` is empty. */
@@ -1781,8 +1816,9 @@ class ApiService {
     return this.invoke<PlatformCapabilities>("get_platform_capabilities");
   }
 
-  async saveSettings(settings: SettingsPayload): Promise<ApiBasicResponse> {
-    return this.invoke<ApiBasicResponse>("save_settings", settings);
+  /** On a failure, `field` names the setting that was refused (gamescope fields). */
+  async saveSettings(settings: SettingsPayload): Promise<ApiBasicResponse & { field?: string }> {
+    return this.invoke<ApiBasicResponse & { field?: string }>("save_settings", settings);
   }
 
   async getCatalogStatus(): Promise<CatalogStatusResponse> {

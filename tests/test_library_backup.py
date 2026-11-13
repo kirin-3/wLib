@@ -3605,3 +3605,76 @@ def test_torrent_export_settings_never_leave_the_device(tmp_path, monkeypatch):
     text = json.dumps(backup) + json.dumps(sync)
     for value in ("torrent_watch_folder", "torrent_export_warning_accepted", "watch-folder-SECRET"):
         assert value not in text
+
+
+def test_gamescope_backup_round_trip_into_empty_library():
+    from core.database import get_connection
+
+    game_id = add_game("Pixel", "/game/Game.exe", f95_url="https://f95zone.to/threads/pixel.4242/")
+    update_game(
+        game_id,
+        {"gamescope": "on", "gamescope_resolution": "816x624", "gamescope_scaler": "integer"},
+    )
+    update_setting("gamescope_enabled", "true")
+    update_setting("gamescope_filter", "nearest")
+    backup = build_library_backup(
+        {"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]}
+    )
+    assert backup["games"][0]["launch_config"]["gamescope"] == "on"
+    assert backup["games"][0]["launch_config"]["gamescope_resolution"] == "816x624"
+    assert backup["settings"]["general"]["gamescope_filter"] == "nearest"
+    with get_connection() as conn:
+        conn.execute("DELETE FROM games")
+        conn.execute("UPDATE settings SET value = 'false' WHERE key = 'gamescope_enabled'")
+        conn.execute("UPDATE settings SET value = 'linear' WHERE key = 'gamescope_filter'")
+    apply_library_backup(backup)
+    imported = get_all_games()[0]
+    assert imported["gamescope"] == "on"
+    assert imported["gamescope_resolution"] == "816x624"
+    assert imported["gamescope_scaler"] == "integer"
+    assert get_setting("gamescope_enabled") == "true"
+    assert get_setting("gamescope_filter") == "nearest"
+
+
+def test_gamescope_older_backup_and_invalid_values_import_as_defaults():
+    old = base_backup([{"metadata": {"title": "Old"}, "launch_config": {"launch_mode": "native"}}])
+    apply_library_backup(old)
+    imported = next(game for game in get_all_games() if game["title"] == "Old")
+    assert imported["gamescope"] == "default"
+    assert [imported[c] for c in ("gamescope_resolution", "gamescope_scaler", "gamescope_filter", "gamescope_args")] == ["", "", "", ""]
+    bad = base_backup(
+        [
+            {
+                "metadata": {"title": "Bad"},
+                "launch_config": {
+                    "gamescope": "maybe",
+                    "gamescope_scaler": "bogus",
+                    "gamescope_resolution": "0x600",
+                    "gamescope_args": "-- nope",
+                },
+            }
+        ]
+    )
+    bad["settings"] = {"general": {"gamescope_scaler": "bogus", "gamescope_fps_limit": "9999", "gamescope_window_mode": "huge"}}
+    apply_library_backup(bad, {"sections": [SECTION_METADATA, SECTION_LAUNCH_CONFIG, SECTION_SETTINGS_GENERAL]})
+    imported = next(game for game in get_all_games() if game["title"] == "Bad")
+    assert imported["gamescope"] == "default"
+    assert imported["gamescope_scaler"] == ""
+    assert imported["gamescope_resolution"] == ""
+    assert imported["gamescope_args"] == ""
+    assert get_setting("gamescope_scaler") == "auto"
+    assert get_setting("gamescope_fps_limit") == ""
+    assert get_setting("gamescope_window_mode") == "fullscreen"
+
+
+def test_gamescope_global_settings_sync_merge():
+    update_setting("gamescope_enabled", "true")
+    update_setting("gamescope_output_resolution", "2560x1440")
+    sync = build_sync_backup("2026-11-13T00:00:00Z", "device")
+    assert sync["settings"]["general"]["gamescope_enabled"] == "true"
+    assert sync["settings"]["general"]["gamescope_output_resolution"] == "2560x1440"
+    update_setting("gamescope_enabled", "false")
+    update_setting("gamescope_output_resolution", "")
+    apply_library_backup(sync, {"sections": list(sync["selected_sections"])})
+    assert get_setting("gamescope_enabled") == "true"
+    assert get_setting("gamescope_output_resolution") == "2560x1440"

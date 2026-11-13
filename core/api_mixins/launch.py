@@ -417,8 +417,20 @@ class LaunchMixin(ApiBase):
 
     def get_performance_tools(self, refresh: bool = False) -> dict[str, bool]:
         if self._performance_tools is None or refresh:
-            self._performance_tools: dict[str, bool] | None = {name: bool(not is_windows() and host_which(binary)) for name, binary in (("gamemode", "gamemoderun"), ("mangohud", "mangohud"))}
+            self._performance_tools: dict[str, bool] | None = {name: bool(not is_windows() and host_which(binary)) for name, binary in (("gamemode", "gamemoderun"), ("mangohud", "mangohud"), ("gamescope", "gamescope"))}
         return dict(self._performance_tools)
+
+    def get_gamescope_status(self, refresh: bool = False) -> dict[str, object]:
+        """Whether gamescope is on the host, and the install command when it is not."""
+        installed = self.get_performance_tools(refresh).get("gamescope", False)
+        if installed or is_windows():
+            return {"installed": installed, "command": "", "package_manager": "", "nixos": False}
+        from core import gamescope
+        from core.host_platform import host_system_layout
+
+        nixos, _links = host_system_layout()
+        hint = gamescope.install_hint(host_which, nixos)
+        return {"installed": False, **hint}
 
     def launch_game(
         self,

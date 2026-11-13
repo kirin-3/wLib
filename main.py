@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import IO, TYPE_CHECKING, Protocol, cast
+from typing import IO, TYPE_CHECKING, Protocol, cast, final
 from collections.abc import Callable
 
 # --smoke-test must never touch the user's real library. core.database resolves
@@ -733,6 +733,74 @@ def load_webview_module() -> WebviewModule | None:
     return webview
 
 
+_screen_tracker: object | None = None
+
+
+def track_screen_size() -> None:
+    """Record the wLib window's screen size (physical pixels) for gamescope.
+
+    Runs once the window shows, then on the GUI thread whenever the window
+    moves to another screen. Qt objects are read only on the GUI thread.
+    """
+    global _screen_tracker
+    window = cast(RendererDiagnosticsWindow | None, window_ref)
+    if window is None or not window.events.shown.wait(30):
+        return
+    native = cast(object, window.native)
+    try:
+        from PyQt6 import QtCore as qt_core
+        from PyQt6.QtCore import QCoreApplication, QObject, Qt, pyqtSignal
+        from PyQt6.QtGui import QScreen, QWindow
+    except Exception:
+        return
+    app = QCoreApplication.instance()
+    if app is None or native is None:
+        return
+    from core import display_info
+
+    # pyqtSlot has no type hints; give it one so the methods keep theirs.
+    slot = cast(
+        Callable[..., Callable[[Callable[..., None]], Callable[..., None]]],
+        cast(object, getattr(qt_core, "pyqtSlot")),
+    )
+
+    @final
+    class _ScreenTracker(QObject):
+        attach = pyqtSignal()
+
+        def __init__(self) -> None:
+            super().__init__()
+            # Queued: the slot runs on the GUI thread, which owns this object.
+            connect = cast(Callable[[object, Qt.ConnectionType], object], self.attach.connect)
+            _ = connect(self._attach, Qt.ConnectionType.QueuedConnection)
+
+        # Real Qt slots: a queued call to a plain Python method would run in
+        # the thread that connected it, not in this object's (GUI) thread.
+        @slot()
+        def _attach(self) -> None:
+            handle_getter = getattr(native, "windowHandle", None)
+            handle = handle_getter() if callable(handle_getter) else None
+            if not isinstance(handle, QWindow):
+                return
+            connect = cast(Callable[[object], object], handle.screenChanged.connect)
+            _ = connect(self._update)
+            self._update(handle.screen())
+
+        @slot(QScreen)
+        def _update(self, screen: QScreen | None) -> None:
+            if screen is None:
+                display_info.set_screen_size(None, None)
+                return
+            size = screen.geometry().size()
+            ratio = screen.devicePixelRatio()
+            display_info.set_screen_size(round(size.width() * ratio), round(size.height() * ratio))
+
+    tracker = _ScreenTracker()
+    _ = tracker.moveToThread(app.thread())
+    _screen_tracker = tracker
+    tracker.attach.emit()
+
+
 def start_runtime_renderer_diagnostics() -> None:
     # PyWebView runs the ``func`` passed to start() on a non-daemon thread and
     # Python waits for it at exit. The probe waits up to 30 s + 60 s for window
@@ -1255,6 +1323,7 @@ def main() -> None:
                 api.cover_cards.start()
 
         threading.Thread(target=start_cover_cache, daemon=True).start()
+        threading.Thread(target=track_screen_size, daemon=True).start()
         api.library_sync.start()
         library_sync_started = True
 

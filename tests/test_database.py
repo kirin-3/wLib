@@ -2061,6 +2061,66 @@ def test_performance_tool_migration_and_overrides():
         assert get_game(game_id)["mangohud"] == expected
 
 
+def test_gamescope_columns_migrate_as_default_and_empty():
+    game_id = add_game("Older gamescope game", "/game")
+    columns = ("gamescope", "gamescope_resolution", "gamescope_scaler", "gamescope_filter", "gamescope_args")
+    with closing(get_connection()) as conn:
+        for column in columns:
+            conn.execute(f"ALTER TABLE games DROP COLUMN {column}")
+        conn.execute("DELETE FROM settings WHERE key LIKE 'gamescope_%'")
+        conn.commit()
+    init_db()
+    game = get_game(game_id)
+    assert game["gamescope"] == "default"
+    assert [game[column] for column in columns[1:]] == ["", "", "", ""]
+    assert get_setting("gamescope_enabled") == "false"
+    assert get_setting("gamescope_window_mode") == "fullscreen"
+    assert get_setting("gamescope_scaler") == "auto"
+    assert get_setting("gamescope_filter") == "linear"
+    for key in ("gamescope_output_resolution", "gamescope_game_resolution", "gamescope_fps_limit", "gamescope_args"):
+        assert get_setting(key) == ""
+
+
+def test_gamescope_fields_normalize_bad_values():
+    game_id = add_game("Gamescope game", "/game")
+    update_game(
+        game_id,
+        {
+            "gamescope": "sometimes",
+            "gamescope_resolution": "0x600",
+            "gamescope_scaler": "bogus",
+            "gamescope_filter": "blur",
+            "gamescope_args": '--hdr-enabled "unclosed',
+        },
+    )
+    game = get_game(game_id)
+    assert game["gamescope"] == "default"
+    assert game["gamescope_resolution"] == ""
+    assert game["gamescope_scaler"] == ""
+    assert game["gamescope_filter"] == ""
+    assert game["gamescope_args"] == ""
+
+
+def test_gamescope_fields_round_trip_valid_values():
+    game_id = add_game("Gamescope game", "/game")
+    update_game(
+        game_id,
+        {
+            "gamescope": "On",
+            "gamescope_resolution": " 816 x 624 ",
+            "gamescope_scaler": "Integer",
+            "gamescope_filter": "nearest",
+            "gamescope_args": "--force-grab-cursor",
+        },
+    )
+    game = get_game(game_id)
+    assert game["gamescope"] == "on"
+    assert game["gamescope_resolution"] == "816x624"
+    assert game["gamescope_scaler"] == "integer"
+    assert game["gamescope_filter"] == "nearest"
+    assert game["gamescope_args"] == "--force-grab-cursor"
+
+
 @pytest.mark.schema_fingerprint
 def test_init_db_skips_migrations_when_the_schema_is_current(monkeypatch):
     from core import database

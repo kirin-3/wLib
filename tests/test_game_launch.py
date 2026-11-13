@@ -50,3 +50,55 @@ def test_early_ticks_and_tool_overrides(monkeypatch):
     assert launcher.launch.call_args.kwargs["mangohud"] is False
     assert launcher.launch.call_args.kwargs["sandbox_enabled"] is True
     assert launcher.launch.call_args.kwargs["block_network"] is True
+
+
+def _launch_kwargs(monkeypatch, game):
+    monkeypatch.setattr("core.database.get_all_games", lambda: [game])
+    monkeypatch.setattr("core.database.list_game_launch_targets", lambda _: [])
+    import os
+
+    monkeypatch.setattr("core.game_run_lock.acquire_launch_lock", lambda _game_id: os.open(os.devnull, os.O_RDONLY))
+    launcher = MagicMock()
+    launcher.launch.return_value = {"success": True, "tracks_playtime": False}
+    assert launch_tracked(launcher, game["id"], request_from_game(game))["success"]
+    return launcher.launch.call_args.kwargs
+
+
+def test_gamescope_default_follows_global_on(monkeypatch):
+    from core.database import update_setting
+
+    update_setting("gamescope_enabled", "true")
+    update_setting("gamescope_filter", "fsr")
+    kwargs = _launch_kwargs(monkeypatch, {"id": 8, "exe_path": "/game", "gamescope": "default"})
+    assert kwargs["gamescope"]["filter"] == "fsr"
+    assert kwargs["gamescope"]["window_mode"] == "fullscreen"
+
+
+def test_gamescope_off_passes_nothing(monkeypatch):
+    from core.database import update_setting
+
+    update_setting("gamescope_enabled", "true")
+    kwargs = _launch_kwargs(monkeypatch, {"id": 8, "exe_path": "/game", "gamescope": "off"})
+    assert "gamescope" not in kwargs
+
+
+def test_gamescope_on_with_overrides(monkeypatch):
+    from core.database import update_setting
+
+    update_setting("gamescope_enabled", "false")
+    update_setting("gamescope_args", "--hdr-enabled")
+    game = {
+        "id": 8, "exe_path": "/game", "gamescope": "on",
+        "gamescope_resolution": "816x624", "gamescope_scaler": "integer",
+        "gamescope_filter": "", "gamescope_args": "--force-grab-cursor",
+    }
+    kwargs = _launch_kwargs(monkeypatch, game)
+    assert kwargs["gamescope"] == {
+        "window_mode": "fullscreen",
+        "output_resolution": "",
+        "game_resolution": "816x624",
+        "scaler": "integer",
+        "filter": "linear",
+        "fps_limit": "",
+        "args": ["--hdr-enabled", "--force-grab-cursor"],
+    }

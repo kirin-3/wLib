@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
+import type { GamescopeSettings, RpgmakerLinuxRunnerStatus, SaveBackupKeep, SettingsResponse } from "../api";
+import { FILTER_OPTIONS, SCALER_OPTIONS, WINDOW_MODE_OPTIONS, argsError, fpsLimitError, normalizeResolution } from "../../utils/gamescope";
 import type { LibraryFilterPreset } from "../../utils/libraryViewState";
 import { VALID_SORT_FIELDS } from "../../utils/libraryViewState";
 import { isRecord } from "./games";
@@ -8,6 +9,14 @@ const MOCK_SETTINGS_STORAGE_KEY = "wlib-mock-settings";
 export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   gamemode_enabled: false,
   mangohud_enabled: false,
+  gamescope_enabled: false,
+  gamescope_window_mode: "fullscreen",
+  gamescope_output_resolution: "",
+  gamescope_game_resolution: "",
+  gamescope_scaler: "auto",
+  gamescope_filter: "linear",
+  gamescope_fps_limit: "",
+  gamescope_args: "",
   html_builtin_player: true,
   web_player_devtools: true,
   sandbox_new_games: false,
@@ -114,6 +123,7 @@ export const normalizeMockSettings = (value: unknown): SettingsResponse => {
     custom_play_statuses: Array.isArray(source.custom_play_statuses) ? source.custom_play_statuses.filter((name): name is string => typeof name === "string") : [],
     gamemode_enabled: source.gamemode_enabled === true,
     mangohud_enabled: source.mangohud_enabled === true,
+    ...normalizeMockGamescope(source),
     html_builtin_player: source.html_builtin_player !== false,
     web_player_devtools: source.web_player_devtools !== false,
     sandbox_new_games: source.sandbox_new_games === true,
@@ -218,4 +228,20 @@ export const writeMockSettings = (settings: SettingsResponse): void => {
   } catch (_error) {
     // Ignore browser mock persistence failures and fall back to defaults.
   }
+};
+
+const normalizeMockGamescope = (source: Record<string, unknown>): GamescopeSettings => {
+  const text = (key: string): string => (typeof source[key] === "string" || typeof source[key] === "number" ? String(source[key]) : "");
+  const pick = <T extends string>(key: string, options: ReadonlyArray<{ value: T }>, fallback: T): T =>
+    options.find((option) => option.value === text(key))?.value ?? fallback;
+  return {
+    gamescope_enabled: source.gamescope_enabled === true,
+    gamescope_window_mode: pick("gamescope_window_mode", WINDOW_MODE_OPTIONS, "fullscreen"),
+    gamescope_output_resolution: normalizeResolution(text("gamescope_output_resolution")),
+    gamescope_game_resolution: normalizeResolution(text("gamescope_game_resolution")),
+    gamescope_scaler: pick("gamescope_scaler", SCALER_OPTIONS, "auto"),
+    gamescope_filter: pick("gamescope_filter", FILTER_OPTIONS, "linear"),
+    gamescope_fps_limit: fpsLimitError(text("gamescope_fps_limit")) ? "" : text("gamescope_fps_limit").trim(),
+    gamescope_args: argsError(text("gamescope_args")) ? "" : text("gamescope_args").trim(),
+  };
 };

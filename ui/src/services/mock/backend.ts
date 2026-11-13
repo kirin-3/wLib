@@ -5,6 +5,7 @@ import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../uti
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../utils/platformPolicy";
 import { validateCustomPlayStatuses } from "../../utils/playStatus";
 import { HTML_PLAYER_FIRST_USE_NOTICE, resolveWebPlayer } from "../../utils/webPlayer";
+import { argsError, fpsLimitError, resolutionError } from "../../utils/gamescope";
 import { mockAttachmentList, readMockAttachments, writeMockAttachments } from "./attachments";
 import { rewriteMockGameCollections, validateMockCollectionList, writeMockCollections } from "./collections";
 import { readMockCompanions, writeMockCompanions } from "./companions";
@@ -14,6 +15,15 @@ import { isRecord, readMockGames } from "./games";
 import { nextMockLaunchTargetId, readMockLaunchTargets, sortMockLaunchTargets, writeMockLaunchTargets } from "./launchTargets";
 import { mockRpgmSaves } from "./rpgm";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
+
+// Browser preview: gamescope reads as missing unless this key is "installed".
+const mockGamescopeInstalled = (): boolean => {
+  try {
+    return localStorage.getItem("wlib-mock-gamescope") === "installed";
+  } catch {
+    return false;
+  }
+};
 
 interface MockToolRun {
   action: string;
@@ -324,7 +334,7 @@ export class MockBackend {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          gamemode: "default", mangohud: "default", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
+          gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -696,6 +706,16 @@ export class MockBackend {
             return { success: false, error: "Watch folder must be an existing folder" };
           }
           payload.torrent_watch_folder = watch;
+        }
+        for (const [field, check] of [
+          ["gamescope_output_resolution", resolutionError],
+          ["gamescope_game_resolution", resolutionError],
+          ["gamescope_fps_limit", fpsLimitError],
+          ["gamescope_args", argsError],
+        ] as const) {
+          if (!Object.prototype.hasOwnProperty.call(payload, field)) continue;
+          const error = check(String(payload[field] ?? ""));
+          if (error) return { success: false, field, error };
         }
         if (Object.prototype.hasOwnProperty.call(payload, "save_backup_keep") && !isSaveBackupKeep(payload.save_backup_keep)) {
           return { success: false, error: "Save backups to keep must be 'all' or 1–99" };
@@ -1360,7 +1380,11 @@ export class MockBackend {
           rtps_installed: false,
         };
       case "get_performance_tools":
-        return { gamemode: false, mangohud: false };
+        return { gamemode: false, mangohud: false, gamescope: mockGamescopeInstalled() };
+      case "get_gamescope_status":
+        return mockGamescopeInstalled()
+          ? { installed: true, command: "", package_manager: "", nixos: false }
+          : { installed: false, command: "sudo pacman -S gamescope", package_manager: "pacman", nixos: false };
       case "open_wine_prefix_tool":
         return { success: false, error: "Wine prefix tools require the desktop app." };
       case "get_sandbox_status":

@@ -27,6 +27,7 @@ from core.store_links import (
     StoreLink,
     normalize_store_links,
 )
+from core import gamescope
 from core.versions import normalize_version
 
 DATA_DIR = get_data_dir()
@@ -54,6 +55,14 @@ GENERAL_SETTINGS_KEYS = (
     "sandbox_new_games",
     "gamemode_enabled",
     "mangohud_enabled",
+    "gamescope_enabled",
+    "gamescope_window_mode",
+    "gamescope_output_resolution",
+    "gamescope_game_resolution",
+    "gamescope_scaler",
+    "gamescope_filter",
+    "gamescope_fps_limit",
+    "gamescope_args",
     "html_builtin_player",
     "web_player_devtools",
     "torrent_seed_mode",
@@ -726,6 +735,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     )
     for key in ("gamemode_enabled", "mangohud_enabled"):
         _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
+    for key, value in gamescope.SETTINGS_DEFAULTS.items():
+        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandboxie_custom_path', '')"
     )
@@ -800,6 +811,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
         ("gamemode", "TEXT DEFAULT 'default'"),
         ("mangohud", "TEXT DEFAULT 'default'"),
+        ("gamescope", "TEXT DEFAULT 'default'"),
+        ("gamescope_resolution", "TEXT DEFAULT ''"),
+        ("gamescope_scaler", "TEXT DEFAULT ''"),
+        ("gamescope_filter", "TEXT DEFAULT ''"),
+        ("gamescope_args", "TEXT DEFAULT ''"),
         ("html_player", "TEXT DEFAULT ''"),
         ("sandbox_enabled", "BOOLEAN DEFAULT 0"),
         ("block_network", "BOOLEAN DEFAULT 0"),
@@ -1460,6 +1476,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "block_network",
         "gamemode",
         "mangohud",
+        "gamescope",
+        *gamescope.GAME_OVERRIDE_COLUMNS,
         "html_player",
         "custom_prefix",
         "proton_version",
@@ -1514,9 +1532,12 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         safe_fields["finished_version"] = str(safe_fields["finished_version"]).strip()
     if "default_target_label" in safe_fields:
         safe_fields["default_target_label"] = str(safe_fields["default_target_label"]).strip()
-    for tool in ("gamemode", "mangohud"):
+    for tool in ("gamemode", "mangohud", "gamescope"):
         if tool in safe_fields:
             safe_fields[tool] = normalize_tool_override(safe_fields[tool])
+    for column in gamescope.GAME_OVERRIDE_COLUMNS:
+        if column in safe_fields:
+            safe_fields[column] = gamescope.normalize_game_field(column, safe_fields[column])
     if "html_player" in safe_fields:
         safe_fields["html_player"] = normalize_html_player(safe_fields["html_player"])
     if "launch_mode" in safe_fields:

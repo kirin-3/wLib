@@ -28,7 +28,9 @@ from .database import (
     split_companion_arguments,
     web_player_devtools_enabled,
 )
-from . import game_sandbox
+from . import display_info, game_sandbox
+from . import gamescope as gamescope_mod
+from .gamescope import GamescopeOptions
 from .host_platform import (
     get_cheat_engine_dir,
     get_default_wine_prefix,
@@ -51,6 +53,27 @@ SANDBOX_LIST_FAILURE_LIMIT = 60
 def wrap_performance_tools(cmd: list[str], tools: list[str], user_args: list[str]) -> list[str]:
     existing = {os.path.basename(arg) for arg in user_args}
     return [*(tool for tool in tools if os.path.basename(tool) not in existing), *cmd]
+
+
+def gamescope_skip_reason(
+    *, windows: bool, browser_launch: bool, flatpak_player: bool, user_args: list[str]
+) -> str:
+    """Why a launch with gamescope enabled runs without it ('' when it does not skip).
+
+    "not installed" is decided later, by the host lookup.
+    """
+    if windows:
+        return "Windows"
+    if browser_launch:
+        return "browser launch"
+    # The Flatpak player runs inside the app, where host tools are absent.
+    if flatpak_player:
+        return "Flatpak web player"
+    if gamescope_mod.in_gamescope_session():
+        return "already in a gamescope session"
+    if gamescope_mod.args_start_gamescope(user_args):
+        return "arguments already start gamescope"
+    return ""
 
 
 def _host_path_module():
@@ -720,8 +743,19 @@ _WINE_BACKGROUND_NAMES = frozenset(
         "conhost.exe",
         "winemenubuilder",
         "winemenubuilder.exe",
+        # gamescope and its X server lead the group when the setting wraps
+        # the launch; they close after the game, so they are not the game.
+        "gamescope",
+        "gamescope-wl",
+        "xwayland",
     }
 )
+
+# Keeps gamescope open until every Wine process in the prefix has exited,
+# since a launcher stub can exit while the real game still runs.
+# Arguments: <wineserver> <game command...>.
+GAMESCOPE_WINE_WAIT = 'ws=$1; shift; "$@"; s=$?; "$ws" -w; exit $s'
+
 
 
 def _wine_group_pids(pgid: int) -> tuple[list[int], list[int]] | None:
@@ -1355,6 +1389,7 @@ class Launcher:
         gamemode: bool = False,
         mangohud: bool = False,
         html_player: str = "",
+        gamescope: GamescopeOptions | None = None,
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -1482,6 +1517,25 @@ class Launcher:
                 note = f"{name} skipped: {reason}"
                 performance_notes.append(note)
                 print(note)
+        gamescope_cmd: list[str] = []
+        if gamescope is not None:
+            reason = gamescope_skip_reason(
+                windows=is_windows(),
+                browser_launch=browser_launch,
+                flatpak_player=flatpak_player,
+                user_args=args,
+            )
+            if not reason:
+                gamescope_path = host_which("gamescope")
+                if gamescope_path:
+                    gamescope_cmd = gamescope_mod.gamescope_argv(
+                        gamescope, display_info.screen_size(), gamescope_path
+                    )
+                else:
+                    reason = "not installed"
+            note = f"Gamescope skipped: {reason}" if reason else f"Gamescope: {shlex.join(gamescope_cmd)} --"
+            performance_notes.append(note)
+            print(note)
         block = bool(block_network and not browser_launch)
         if block and is_windows() and not sandboxed:
             return {
@@ -1719,7 +1773,8 @@ class Launcher:
                         umu_var=umu_var,
                         network=block,
                         writable_paths=writable_paths,
-                        x11_sockets=host_x11_sockets(),
+                        x11_sockets=() if gamescope_cmd else host_x11_sockets(),
+                        gamescope=bool(gamescope_cmd),
                     )
                     entry.kill_info = None
                 elif block and not is_windows() and not flatpak_player:
@@ -1728,8 +1783,14 @@ class Launcher:
                         cmd,
                         cwd=effective_cwd,
                         bwrap=network_status["path"],
-                        x11_sockets=host_x11_sockets(),
+                        x11_sockets=() if gamescope_cmd else host_x11_sockets(),
+                        gamescope=bool(gamescope_cmd),
                     )
+                if gamescope_cmd:
+                    if is_wine_executable and not sandboxed and not umu_run and kill_info:
+                        cmd = ["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", kill_info[0], *cmd]
+                    # gamescope runs on the host, around bwrap when bwrap is used.
+                    cmd = [*gamescope_cmd, "--", *cmd]
                 if enable_logging:
                     log_path = path_module.splitext(exe_path)[0] + "_wlib.log"
                     try:

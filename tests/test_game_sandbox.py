@@ -770,3 +770,81 @@ def test_sandboxie_tools_run_without_a_console_window(monkeypatch):
     monkeypatch.setattr(sandbox, "no_console_window", lambda: 0x08000000)
     sandbox.terminate_box(r"C:\Sandboxie\Start.exe", "wLib_1")
     assert run.call_args.kwargs["creationflags"] == 0x08000000
+
+
+def _run_gamescope_shim(argv, tmp_path, env):
+    """Run the shim with a fake bwrap that prints its arguments, one per line."""
+    assert argv[:3] == ["sh", "-c", sandbox.GAMESCOPE_BIND_SHIM]
+    fake = tmp_path / "bwrap"
+    fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    fake.chmod(0o755)
+    argv = [*argv[:6], str(fake), *argv[7:]]
+    completed = subprocess.run(
+        argv,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return completed.stdout.splitlines()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh shim")
+def test_gamescope_sandbox_binds_only_gamescope_display(tmp_path):
+    argv = sandbox.build_bwrap_argv(
+        ["game"],
+        game_dir="/games",
+        home="/home/u",
+        sandbox_home="/s",
+        cwd="/games",
+        environment={"XDG_RUNTIME_DIR": "/run/user/1000", "WAYLAND_DISPLAY": "wayland-1", "XAUTHORITY": "/home/u/.Xauthority"},
+        x11_sockets=("X0", "X1"),
+        gamescope=True,
+    )
+    inner = argv[6:]
+    assert "/tmp/.X11-unix/X0" not in inner
+    assert "/run/user/1000/wayland-1" not in inner
+    assert "/home/u/.Xauthority" not in inner
+    assert "/run/user/1000/pipewire-0" in inner
+    out = _run_gamescope_shim(
+        argv,
+        tmp_path,
+        {
+            "DISPLAY": ":3",
+            "XAUTHORITY": "/run/user/1000/xauth_ab cd",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "GAMESCOPE_WAYLAND_DISPLAY": "gamescope-0",
+        },
+    )
+    triples = [out[i : i + 3] for i in range(len(out) - 2)]
+    pairs = [out[i : i + 2] for i in range(len(out) - 1)]
+    folder = pairs.index(["--dir", "/tmp/.X11-unix"])
+    run_tmpfs = pairs.index(["--tmpfs", "/run"])
+    x_bind = triples.index(["--ro-bind-try", "/tmp/.X11-unix/X3", "/tmp/.X11-unix/X3"])
+    auth = triples.index(["--ro-bind-try", "/run/user/1000/xauth_ab cd", "/run/user/1000/xauth_ab cd"])
+    wayland = triples.index(["--ro-bind-try", "/run/user/1000/gamescope-0", "/run/user/1000/gamescope-0"])
+    assert folder < run_tmpfs < x_bind < auth < wayland < out.index("--")
+    assert [a for a in out if a.startswith("/tmp/.X11-unix/")] == ["/tmp/.X11-unix/X3"] * 2
+    assert out[-1] == "game"
+    # Every original argument is kept, in order.
+    added = {x_bind, x_bind + 1, x_bind + 2, auth, auth + 1, auth + 2, wayland, wayland + 1, wayland + 2}
+    assert [a for i, a in enumerate(out) if i not in added] == inner[1:]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh shim")
+def test_gamescope_network_wrapper_binds_x_socket_after_tmpfs(tmp_path):
+    argv = sandbox.build_network_bwrap_argv(["game", "a b"], cwd="/games", x11_sockets=("X0",), gamescope=True)
+    out = _run_gamescope_shim(argv, tmp_path, {"DISPLAY": "unix:2.0", "XAUTHORITY": "/x", "GAMESCOPE_WAYLAND_DISPLAY": "gamescope-0", "XDG_RUNTIME_DIR": "/run/user/1"})
+    assert out == [
+        "--unshare-user", "--unshare-net", "--dev-bind", "/", "/",
+        "--tmpfs", "/tmp/.X11-unix",
+        "--ro-bind-try", "/tmp/.X11-unix/X2", "/tmp/.X11-unix/X2",
+        "--chdir", "/games", "--", "game", "a b",
+    ]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh shim")
+def test_gamescope_shim_without_display_adds_nothing(tmp_path):
+    argv = sandbox.build_network_bwrap_argv(["game"], cwd="/games", gamescope=True)
+    out = _run_gamescope_shim(argv, tmp_path, {})
+    assert out == ["--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--chdir", "/games", "--", "game"]

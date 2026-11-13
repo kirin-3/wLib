@@ -25,7 +25,7 @@ from core.backup_format import (
     SQLITE_INTEGER_MAX,
     BackupValidationError,
 )
-from core import database
+from core import database, gamescope
 from core.database import (
     DEFAULT_PLAY_STATUS,
     GENERAL_SETTINGS_KEYS,
@@ -118,6 +118,8 @@ LAUNCH_CONFIG_FIELDS = (
     "command_line_args",
     "gamemode",
     "mangohud",
+    "gamescope",
+    *gamescope.GAME_OVERRIDE_COLUMNS,
     "html_player",
     "launch_mode",
     "run_japanese_locale",
@@ -151,6 +153,7 @@ BOOLEAN_SETTINGS_KEYS = frozenset(
         "sandbox_new_games",
         "gamemode_enabled",
         "mangohud_enabled",
+        "gamescope_enabled",
         "html_builtin_player",
         "web_player_devtools",
     }
@@ -1461,8 +1464,10 @@ def _normalize_game_field(field: str, value: object) -> object:
         return None if value is None else _coerce_text(value)
     if field == "play_status":
         return normalize_play_status(value)
-    if field in {"gamemode", "mangohud"}:
+    if field in {"gamemode", "mangohud", "gamescope"}:
         return database.normalize_tool_override(value)
+    if field in gamescope.GAME_OVERRIDE_COLUMNS:
+        return gamescope.normalize_game_field(field, value)
     if field == "html_player":
         return database.normalize_html_player(value)
     if field == "launch_mode":
@@ -1733,6 +1738,9 @@ def _coerce_setting_value(key: str, raw: object) -> str:
         return "true"
     if key in BOOLEAN_SETTINGS_KEYS:
         return "true" if _coerce_bool(raw) else "false"
+    if key in gamescope.SETTINGS_DEFAULTS:
+        # An unknown or invalid value imports as the default.
+        return gamescope.normalize_setting(key, _coerce_text(raw))
     if key == "update_notifications":
         if isinstance(raw, bool | int | float):
             return "on" if _coerce_bool(raw) else "off"
@@ -2046,7 +2054,7 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
         # New games start on the default mode, which nobody chose.
         text = _coerce_text(local_value).strip().lower()
         return text in ("", database.DEFAULT_LAUNCH_MODE)
-    if field in ("gamemode", "mangohud"):
+    if field in ("gamemode", "mangohud", "gamescope"):
         return database.normalize_tool_override(local_value) == "default"
     if field == "html_player":
         return database.normalize_html_player(local_value) == ""

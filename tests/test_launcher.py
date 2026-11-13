@@ -3972,3 +3972,188 @@ def test_real_windows_browser_a_game_opened_is_not_the_game(tmp_path, monkeypatc
              f"Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{browser}' }} | Stop-Process -Force"],
             capture_output=True, check=False,
         )
+
+
+GAMESCOPE_PIXEL = {
+    "window_mode": "fullscreen",
+    "output_resolution": "",
+    "game_resolution": "816x624",
+    "scaler": "integer",
+    "filter": "nearest",
+    "fps_limit": "",
+    "args": [],
+}
+GAMESCOPE_PREFIX = ["/usr/bin/gamescope", "-f", "-w", "816", "-h", "624", "-S", "integer", "-F", "nearest", "--"]
+
+
+@pytest.fixture
+def _gamescope_host(monkeypatch):
+    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: False)
+    monkeypatch.setattr("core.launcher.display_info.screen_size", lambda: None)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        ({"windows": True}, "Windows"),
+        ({"browser_launch": True}, "browser launch"),
+        ({"flatpak_player": True}, "Flatpak web player"),
+        ({"user_args": ["/usr/bin/gamescope", "-f", "--", "%command%"]}, "arguments already start gamescope"),
+        ({}, ""),
+    ],
+)
+def test_gamescope_skip_reasons(monkeypatch, kwargs, reason):
+    from core.launcher import gamescope_skip_reason
+
+    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: False)
+    base = {"windows": False, "browser_launch": False, "flatpak_player": False, "user_args": []}
+    assert gamescope_skip_reason(**{**base, **kwargs}) == reason
+
+
+def test_gamescope_skip_reason_in_gamescope_session(monkeypatch):
+    from core.launcher import gamescope_skip_reason
+
+    monkeypatch.setattr("core.launcher.gamescope_mod.in_gamescope_session", lambda: True)
+    assert gamescope_skip_reason(windows=False, browser_launch=False, flatpak_player=False, user_args=[]) == "already in a gamescope session"
+
+
+@pytest.mark.parametrize("mode,args,expected", [
+    ("native", "", [*GAMESCOPE_PREFIX, "/opt/game/game.sh"]),
+    ("custom", "PROTON_LOG=1 %command% -windowed", [*GAMESCOPE_PREFIX, "/usr/bin/gamemoderun", "/usr/bin/mangohud", "/opt/game/game.sh", "-windowed"]),
+])
+def test_gamescope_wraps_native_and_command_launches(_gamescope_host, mode, args, expected):
+    tools = mode == "custom"
+    with (patch("os.path.exists", return_value=True),
+          patch("os.access", return_value=True),
+          patch("core.launcher.host_which", side_effect=lambda name: f"/usr/bin/{name}"),
+          patch("subprocess.Popen") as popen, patch("threading.Thread")):
+        result = Launcher().launch("/opt/game/game.sh", args, launch_mode=mode, gamemode=tools, mangohud=tools, gamescope=GAMESCOPE_PIXEL)
+    assert result["success"]
+    assert popen.call_args.args[0] == expected
+    if tools:
+        assert popen.call_args.kwargs["env"]["PROTON_LOG"] == "1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Wine launches run only on Linux hosts")
+def test_gamescope_wraps_proton_umu_launch_as_is(tmp_path, monkeypatch, _gamescope_host):
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/fake/proton")
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(str(exe), proton_version="/fake/proton", custom_prefix=str(tmp_path / "prefix"), game_id=42, gamescope=GAMESCOPE_PIXEL)
+    assert result["success"]
+    command = popen.call_args.args[0]
+    assert command[: len(GAMESCOPE_PREFIX)] == GAMESCOPE_PREFIX
+    assert command[len(GAMESCOPE_PREFIX)] == "python3"
+    assert "wineserver" not in " ".join(command)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Wine launches run only on Linux hosts")
+def test_gamescope_wine_launch_waits_for_wineserver(tmp_path, monkeypatch, _gamescope_host):
+    from core.launcher import GAMESCOPE_WINE_WAIT
+
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    monkeypatch.setattr("core.umu.resolve_runner", lambda _: "/usr/bin/wine")
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(str(exe), proton_version="/usr/bin/wine", custom_prefix=str(tmp_path / "prefix"), game_id=43, gamescope=GAMESCOPE_PIXEL)
+    assert result["success"]
+    command = popen.call_args.args[0]
+    rest = command[len(GAMESCOPE_PREFIX):]
+    assert command[: len(GAMESCOPE_PREFIX)] == GAMESCOPE_PREFIX
+    assert rest[:5] == ["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", "/usr/bin/wineserver"]
+    assert rest[5] == "/usr/bin/wine"
+    assert popen.call_args.kwargs["env"]["WINEPREFIX"] == str(tmp_path / "prefix")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh")
+def test_gamescope_wine_wait_script_keeps_exit_status(tmp_path):
+    from core.launcher import GAMESCOPE_WINE_WAIT
+
+    marker = tmp_path / "waited"
+    ws = tmp_path / "wineserver"
+    ws.write_text(f"#!/bin/sh\n[ \"$1\" = -w ] && touch {marker}\n")
+    ws.chmod(0o755)
+    done = subprocess.run(["sh", "-c", GAMESCOPE_WINE_WAIT, "sh", str(ws), "sh", "-c", "exit 7"], check=False)
+    assert done.returncode == 7
+    assert marker.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="The bwrap sandbox runs only on Linux hosts")
+@pytest.mark.parametrize("network_only", [False, True])
+def test_gamescope_runs_outside_bwrap(tmp_path, monkeypatch, _gamescope_host, network_only):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    seen = {}
+
+    def build(cmd, **kwargs):
+        seen.update(kwargs)
+        return ["bwrap", *cmd]
+
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.game_sandbox.get_sandbox_status", lambda: {"status": "ready", "path": "bwrap"})
+    monkeypatch.setattr("core.launcher.game_sandbox.build_bwrap_argv", build)
+    monkeypatch.setattr("core.launcher.game_sandbox.build_network_bwrap_argv", build)
+    monkeypatch.setattr("core.launcher._spawn_sandbox_process", lambda start: start())
+    monkeypatch.setattr("core.launcher.game_sandbox.check_writable_mounts", lambda *args: None)
+    monkeypatch.setattr("core.launcher.host_x11_sockets", lambda: ("X0",))
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(
+            str(game),
+            game_id=1,
+            sandbox_enabled=not network_only,
+            block_network=network_only,
+            gamescope=GAMESCOPE_PIXEL,
+        )["success"]
+    assert popen.call_args.args[0] == [*GAMESCOPE_PREFIX, "bwrap", str(game)]
+    assert seen["gamescope"] is True
+    assert seen["x11_sockets"] == ()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_not_installed_is_logged(tmp_path, monkeypatch, _gamescope_host):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: None)
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(str(game), gamescope=GAMESCOPE_PIXEL)["success"]
+    assert popen.call_args.args[0] == [str(game)]
+    assert "Gamescope skipped: not installed" in (tmp_path / "game_wlib.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_argv_is_logged_and_user_wrapper_skips(tmp_path, monkeypatch, _gamescope_host):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(str(game), gamescope=GAMESCOPE_PIXEL)["success"]
+        assert "Gamescope: /usr/bin/gamescope -f -w 816 -h 624 -S integer -F nearest --" in (tmp_path / "game_wlib.log").read_text()
+        assert Launcher().launch(str(game), "gamescope -f -- %command%", gamescope=GAMESCOPE_PIXEL)["success"]
+    assert popen.call_args.args[0] == ["gamescope", "-f", "--", str(game)]
+    assert "Gamescope skipped: arguments already start gamescope" in (tmp_path / "game_wlib.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_skipped_for_browser_launch(tmp_path, monkeypatch, _gamescope_host, capsys):
+    html = tmp_path / "game.html"
+    html.touch()
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(str(html), html_player="browser", gamescope=GAMESCOPE_PIXEL)["success"]
+    assert popen.call_args.args[0][0] == "xdg-open"
+    assert "Gamescope skipped: browser launch" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="/proc is Linux-only")
+def test_wine_group_ignores_gamescope_processes():
+    from core.launcher import _WINE_BACKGROUND_NAMES
+
+    assert {"gamescope", "gamescope-wl", "xwayland"} <= _WINE_BACKGROUND_NAMES

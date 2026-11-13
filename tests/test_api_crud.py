@@ -539,11 +539,90 @@ def test_performance_tool_detection_cache(monkeypatch):
     calls = []
     patch_api_name(monkeypatch, "is_windows", lambda: False)
     patch_api_name(monkeypatch, "host_which", lambda name: calls.append(name) or ("/bin/mangohud" if name == "mangohud" else None))
-    assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
-    assert api.get_performance_tools() == {"gamemode": False, "mangohud": True}
-    assert len(calls) == 2
+    expected = {"gamemode": False, "mangohud": True, "gamescope": False}
+    assert api.get_performance_tools() == expected
+    assert api.get_performance_tools() == expected
+    assert len(calls) == 3
     api.get_performance_tools(True)
-    assert len(calls) == 4
+    assert len(calls) == 6
+
+
+def test_gamescope_settings_defaults_and_round_trip():
+    api = Api()
+    settings = api.get_settings()
+    assert settings["gamescope_enabled"] is False
+    assert settings["gamescope_window_mode"] == "fullscreen"
+    assert settings["gamescope_scaler"] == "auto"
+    assert settings["gamescope_filter"] == "linear"
+    assert settings["gamescope_output_resolution"] == ""
+    assert settings["gamescope_fps_limit"] == ""
+    result = api.save_settings(
+        {
+            "gamescope_enabled": True,
+            "gamescope_window_mode": "borderless",
+            "gamescope_output_resolution": "2560 x 1440",
+            "gamescope_game_resolution": "",
+            "gamescope_scaler": "Integer",
+            "gamescope_filter": "nearest",
+            "gamescope_fps_limit": 60,
+            "gamescope_args": "--hdr-enabled",
+        }
+    )
+    assert result["success"]
+    settings = api.get_settings()
+    assert settings["gamescope_enabled"] is True
+    assert settings["gamescope_window_mode"] == "borderless"
+    assert settings["gamescope_output_resolution"] == "2560x1440"
+    assert settings["gamescope_scaler"] == "integer"
+    assert settings["gamescope_fps_limit"] == "60"
+    assert settings["gamescope_args"] == "--hdr-enabled"
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("gamescope_output_resolution", "0x600", "1 to 16384"),
+        ("gamescope_fps_limit", "0", "1 to 1000"),
+        ("gamescope_args", '--hdr-enabled "unclosed', "quoting is not closed"),
+        ("gamescope_args", "-f -- foo", "`--` is not allowed"),
+        ("gamescope_scaler", "bogus", "scaler"),
+    ],
+)
+def test_gamescope_settings_reject_bad_values(key, value, message):
+    from core.database import get_setting
+
+    api = Api()
+    before = get_setting(key)
+    result = api.save_settings({key: value, "gamemode_enabled": True})
+    assert result["success"] is False
+    assert result["field"] == key
+    assert message in result["error"]
+    assert get_setting(key) == before
+    assert get_setting("gamemode_enabled") != "true"
+
+
+def test_gamescope_status_install_hint(monkeypatch):
+    api = Api()
+    patch_api_name(monkeypatch, "is_windows", lambda: False)
+    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/pacman" if name == "pacman" else None)
+    import core.host_platform as host_platform
+
+    monkeypatch.setattr(host_platform, "host_system_layout", lambda: (False, {}))
+    assert api.get_gamescope_status(True) == {
+        "installed": False,
+        "command": "sudo pacman -S gamescope",
+        "package_manager": "pacman",
+        "nixos": False,
+    }
+    monkeypatch.setattr(host_platform, "host_system_layout", lambda: (True, {}))
+    assert api.get_gamescope_status(True)["command"] == "programs.gamescope.enable = true;"
+    patch_api_name(monkeypatch, "host_which", lambda name: "/usr/bin/gamescope" if name == "gamescope" else None)
+    assert api.get_gamescope_status(True) == {
+        "installed": True,
+        "command": "",
+        "package_manager": "",
+        "nixos": False,
+    }
 
 
 def test_performance_overrides_passed_to_launcher(monkeypatch):
