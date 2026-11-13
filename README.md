@@ -17,6 +17,10 @@
 </p>
 
 <p align="center">
+  <a href="https://thekirin.net/discord"><img src="https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord" /></a>
+</p>
+
+<p align="center">
   <a href="#installing">Install</a> ·
   <a href="#features">Features</a> ·
   <a href="#how-it-compares">Comparison</a> ·
