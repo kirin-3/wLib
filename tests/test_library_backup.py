@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import os
+from contextlib import closing
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock
@@ -3623,10 +3624,13 @@ def test_gamescope_backup_round_trip_into_empty_library():
     assert backup["games"][0]["launch_config"]["gamescope"] == "on"
     assert backup["games"][0]["launch_config"]["gamescope_resolution"] == "816x624"
     assert backup["settings"]["general"]["gamescope_filter"] == "nearest"
-    with get_connection() as conn:
+    # closing(): the connection's own context manager commits but leaves the
+    # file open, and Windows cannot delete an open database in teardown.
+    with closing(get_connection()) as conn:
         conn.execute("DELETE FROM games")
         conn.execute("UPDATE settings SET value = 'false' WHERE key = 'gamescope_enabled'")
         conn.execute("UPDATE settings SET value = 'linear' WHERE key = 'gamescope_filter'")
+        conn.commit()
     apply_library_backup(backup)
     imported = get_all_games()[0]
     assert imported["gamescope"] == "on"
