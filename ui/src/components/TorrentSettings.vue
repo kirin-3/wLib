@@ -14,8 +14,8 @@ const seedMode = ref<TorrentSeedMode>("ask");
 const portMapping = ref(false);
 const watchFolder = ref("");
 const watchError = ref("");
-const text = ref<Record<TorrentField, string>>({ ratio: "1", hours: "", download: "", upload: "" });
-const errors = ref<Record<TorrentField, string>>({ ratio: "", hours: "", download: "", upload: "" });
+const text = ref<Record<TorrentField, string>>({ ratio: "1", hours: "", upload: "" });
+const errors = ref<Record<TorrentField, string>>({ ratio: "", hours: "", upload: "" });
 
 const load = async () => {
   try {
@@ -26,7 +26,6 @@ const load = async () => {
     text.value = {
       ratio: torrentFieldText(data.torrent_seed_ratio),
       hours: torrentFieldText(data.torrent_seed_hours),
-      download: torrentFieldText(data.torrent_download_limit_kib),
       upload: torrentFieldText(data.torrent_upload_limit_kib),
     };
     loaded.value = true;
@@ -145,14 +144,9 @@ onMounted(() => onWebviewReady(() => { void load(); }));
       <p id="torrent-watch-folder-warning" class="text-xs" style="color:var(--warning-text)">.torrent files and magnet links contain your private RPDL passkey. Do not share them.</p>
     </div>
 
-    <div data-settings-row="torrents-network" data-keywords="torrent speed limit upload download port upnp nat-pmp router" data-settings-bound v-show="settingsRowVisible('torrents-network')" class="ui-card-row p-4 rounded-lg space-y-3">
-      <p class="text-xs" style="color:var(--text-muted)">Speed limits and port mapping apply to this device only. 0 or blank means unlimited.</p>
+    <div data-settings-row="torrents-network" data-keywords="torrent speed limit upload port upnp nat-pmp router" data-settings-bound v-show="settingsRowVisible('torrents-network')" class="ui-card-row p-4 rounded-lg space-y-3">
+      <p class="text-xs" style="color:var(--text-muted)">The upload limit and port mapping apply to this device only. 0 or blank means unlimited. The download limit is in Library &amp; Downloads, for file hosts and torrents together.</p>
       <div class="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label for="torrent-download-limit" class="text-sm font-medium" style="color:var(--text-primary)">Download limit (KiB/s)</label>
-          <input id="torrent-download-limit" v-model="text.download" inputmode="numeric" class="torrent-input w-full mt-1" placeholder="Unlimited" :disabled="!loaded" :aria-invalid="!!errors.download" @change="commit('download')" />
-          <p v-if="errors.download" class="text-xs mt-1" style="color:var(--danger-text)" role="alert">{{ errors.download }}</p>
-        </div>
         <div>
           <label for="torrent-upload-limit" class="text-sm font-medium" style="color:var(--text-primary)">Upload limit (KiB/s)</label>
           <input id="torrent-upload-limit" v-model="text.upload" inputmode="numeric" class="torrent-input w-full mt-1" placeholder="Unlimited" :disabled="!loaded" :aria-invalid="!!errors.upload" @change="commit('upload')" />

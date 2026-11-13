@@ -1913,3 +1913,28 @@ def test_pause_is_not_exported_or_imported():
     sync.run()
     assert not database.get_setting("sync_paused")
     assert sync.status()["paused"] is False
+
+
+def test_download_queue_is_not_synced():
+    from core.downloads import queue_settings
+
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    writes = location.writes
+    database.insert_download_job(
+        {"id": "QUEUEDJOB", "kind": "torrent", "game_id": game_id, "state": "queued",
+         "source": '{"rpdl_id": 7, "info_hash": "QUEUEDHASH"}'}
+    )
+    database.update_setting(queue_settings.LIMIT_KEY, "1234")
+    database.update_setting(queue_settings.MAX_ACTIVE_KEY, "3")
+    # Neither the queue nor its settings count as a library change.
+    assert not sync.local_changed()
+    database.update_game(game_id, {"rating": "9"})
+    _ = sync.run()
+    assert location.writes == writes + 1
+    pushed = location.data.decode()
+    assert "QUEUED" not in pushed
+    for key in queue_settings.KEYS:
+        assert key not in pushed

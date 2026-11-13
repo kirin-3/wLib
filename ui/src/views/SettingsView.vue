@@ -75,6 +75,7 @@ import CatalogSettings from "../components/CatalogSettings.vue";
 import SteamSettings from "../components/SteamSettings.vue";
 import FileHostAccounts from "../components/FileHostAccounts.vue";
 import TorrentSettings from "../components/TorrentSettings.vue";
+import { MAX_ACTIVE_DOWNLOADS, clampLimitKib } from "../utils/downloadQueue";
 
 const coverAnimationOptions = [
   { value: "always", label: "Always" },
@@ -119,6 +120,11 @@ const removeLibraryFolder = (path: string) => {
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
 const downloadDetectionEnabled = ref(true);
+// The download queue settings; the Downloads page has the same four (DownloadQuickSettings.vue).
+const downloadLimitKib = ref(0);
+const downloadMaxActive = ref(2);
+const downloadPauseWhilePlaying = ref(true);
+const downloadPauseOnBattery = ref(false);
 const enableLogging = ref(false);
 const gamemodeEnabled = ref(false);
 const mangohudEnabled = ref(false);
@@ -309,6 +315,10 @@ const applySettings = (data: SettingsResponse) => {
   libraryFolderPattern.value = data.library_folder_pattern || "{creator}/{title}/{version}";
   downloadsFolder.value = data.downloads_folder || "";
   downloadDetectionEnabled.value = data.download_detection_enabled !== false;
+  downloadLimitKib.value = data.download_limit_kib ?? 0;
+  downloadMaxActive.value = data.download_max_active ?? 2;
+  downloadPauseWhilePlaying.value = data.download_pause_while_playing !== false;
+  downloadPauseOnBattery.value = data.download_pause_on_battery === true;
   rpgmakerLinuxRunnerPath.value = data.rpgmaker_linux_runner_path || "";
   rpgmakerLinuxRunnerStatus.value =
     data.rpgmaker_linux_runner_status || defaultRpgmakerLinuxRunnerStatus;
@@ -334,6 +344,10 @@ const formValues = () => ({
   libraryFolderPattern: libraryFolderPattern.value,
   downloadsFolder: downloadsFolder.value,
   downloadDetectionEnabled: downloadDetectionEnabled.value,
+  downloadLimitKib: downloadLimitKib.value,
+  downloadMaxActive: downloadMaxActive.value,
+  downloadPauseWhilePlaying: downloadPauseWhilePlaying.value,
+  downloadPauseOnBattery: downloadPauseOnBattery.value,
 });
 const savedValues = ref(formValues());
 
@@ -348,6 +362,10 @@ const applyFormValues = (values: ReturnType<typeof formValues>) => {
   libraryFolderPattern.value = values.libraryFolderPattern;
   downloadsFolder.value = values.downloadsFolder;
   downloadDetectionEnabled.value = values.downloadDetectionEnabled;
+  downloadLimitKib.value = values.downloadLimitKib;
+  downloadMaxActive.value = values.downloadMaxActive;
+  downloadPauseWhilePlaying.value = values.downloadPauseWhilePlaying;
+  downloadPauseOnBattery.value = values.downloadPauseOnBattery;
 };
 
 // Coalesce overlapping reads while preserving focused and subsequently edited fields.
@@ -877,13 +895,19 @@ const patternSave = makeField(libraryFolderPattern, value => ({ library_folder_p
 const downloadsSave = makeField(downloadsFolder, value => ({ downloads_folder: value }), ["downloadsFolder"], values => values.downloadsFolder);
 const statusesSave = makeField(customStatuses, value => ({ custom_play_statuses: value }), ["customStatuses"], values => values.customStatuses);
 const detectionSave = makeField(downloadDetectionEnabled, value => ({ download_detection_enabled: value }), ["downloadDetectionEnabled"], values => values.downloadDetectionEnabled);
-const autosaves = [protonSave, prefixSave, runnerSave, urmSave, foldersSave, patternSave, downloadsSave, statusesSave, detectionSave];
+const limitSave = makeField(downloadLimitKib, value => ({ download_limit_kib: clampLimitKib(value) }), ["downloadLimitKib"], values => values.downloadLimitKib);
+const slotsSave = makeField(downloadMaxActive, value => ({ download_max_active: value }), ["downloadMaxActive"], values => values.downloadMaxActive);
+const playingSave = makeField(downloadPauseWhilePlaying, value => ({ download_pause_while_playing: value }), ["downloadPauseWhilePlaying"], values => values.downloadPauseWhilePlaying);
+const batterySave = makeField(downloadPauseOnBattery, value => ({ download_pause_on_battery: value }), ["downloadPauseOnBattery"], values => values.downloadPauseOnBattery);
+const autosaves = [protonSave, prefixSave, runnerSave, urmSave, foldersSave, patternSave, downloadsSave, statusesSave, detectionSave, limitSave, slotsSave, playingSave, batterySave];
 const resetAutosaveBaselines = () => {
   protonSave.resetSaved(protonPath.value); prefixSave.resetSaved(prefixPath.value);
   runnerSave.resetSaved(rpgmakerLinuxRunnerPath.value); urmSave.resetSaved(urmPath.value);
   foldersSave.resetSaved(libraryValue.value); patternSave.resetSaved(libraryFolderPattern.value);
   downloadsSave.resetSaved(downloadsFolder.value); statusesSave.resetSaved(customStatuses.value);
   detectionSave.resetSaved(downloadDetectionEnabled.value);
+  limitSave.resetSaved(downloadLimitKib.value); slotsSave.resetSaved(downloadMaxActive.value);
+  playingSave.resetSaved(downloadPauseWhilePlaying.value); batterySave.resetSaved(downloadPauseOnBattery.value);
 };
 const commitPattern = () => {
   libraryFolderPattern.value = libraryFolderPattern.value.trim() || "{creator}/{title}/{version}";
@@ -1033,7 +1057,7 @@ const shownSectionIds = ref<string[]>([]);
 const route = useRoute();
 const sectionRegistry = computed(() => [
   { id: "general", title: "General", keywords: "logging statuses collections" },
-  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives" },
+  { id: "library-downloads", title: "Library & Downloads", keywords: "folders archives download queue speed limit battery" },
   { id: "file-hosts", title: "File host accounts", keywords: "pixeldrain mega rpdl account api key premium download" },
   { id: "torrents", title: "Torrents", keywords: "torrent seed seeding ratio speed limit rpdl" },
   { id: "appearance", title: "Appearance", keywords: "theme dark light color" },
@@ -1604,6 +1628,47 @@ const browseUrm = async () => {
               aria-label="Detect downloaded updates"
             />
             <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" class="setting-row p-4 rounded-lg space-y-3" data-testid="settings-download-queue">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">In-app downloads</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">For file hosts and torrents together. The Downloads page shows the same settings. This device only.</p>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label class="text-sm space-y-1">
+              <span class="block" style="color: var(--text-secondary)">Speed limit (KiB/s, 0 for no limit)</span>
+              <input v-model.number="downloadLimitKib" type="number" min="0" step="64" class="settings-input w-full" :disabled="!!settingsLoadError || settingsLoading" @change="downloadLimitKib = clampLimitKib(downloadLimitKib); limitSave.commit()" />
+            </label>
+            <label class="text-sm space-y-1">
+              <span class="block" style="color: var(--text-secondary)">Downloads at the same time</span>
+              <select v-model.number="downloadMaxActive" class="settings-input w-full" :disabled="!!settingsLoadError || settingsLoading" @change="slotsSave.commit()">
+                <option v-for="count in MAX_ACTIVE_DOWNLOADS" :key="count" :value="count">{{ count }}</option>
+              </select>
+            </label>
+          </div>
+          <FieldSaveFeedback :state="limitSave.state.value" :error="limitSave.error.value" />
+          <FieldSaveFeedback :state="slotsSave.state.value" :error="slotsSave.error.value" />
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <span class="text-sm" style="color: var(--text-primary)">Pause downloads while a game runs</span>
+            <span class="flex items-center gap-2">
+              <FieldSaveFeedback :state="playingSave.state.value" :error="playingSave.error.value" />
+              <span class="relative inline-flex">
+                <input v-model="downloadPauseWhilePlaying" type="checkbox" class="sr-only peer" aria-label="Pause downloads while a game runs" :disabled="!!settingsLoadError || settingsLoading" @change="playingSave.commit()" />
+                <span class="ui-toggle"></span>
+              </span>
+            </span>
+          </label>
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <span class="text-sm" style="color: var(--text-primary)">Pause downloads on battery power</span>
+            <span class="flex items-center gap-2">
+              <FieldSaveFeedback :state="batterySave.state.value" :error="batterySave.error.value" />
+              <span class="relative inline-flex">
+                <input v-model="downloadPauseOnBattery" type="checkbox" class="sr-only peer" aria-label="Pause downloads on battery power" :disabled="!!settingsLoadError || settingsLoading" @change="batterySave.commit()" />
+                <span class="ui-toggle"></span>
+              </span>
+            </span>
           </label>
         </div>
       </section>

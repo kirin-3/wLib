@@ -21,9 +21,11 @@ PORT_MAPPING_KEY = "torrent_port_mapping"
 WATCH_FOLDER_KEY = "torrent_watch_folder"
 EXPORT_WARNING_KEY = "torrent_export_warning_accepted"
 
-# Keys that change the running torrent helper (speed limits, port mapping).
-HELPER_KEYS = (DOWNLOAD_LIMIT_KEY, UPLOAD_LIMIT_KEY, PORT_MAPPING_KEY)
-DEVICE_LOCAL_KEYS = (*HELPER_KEYS, WATCH_FOLDER_KEY, EXPORT_WARNING_KEY)
+# Keys that change the running torrent helper (upload limit, port mapping). The
+# download limit is the download queue's shared limit (`queue_settings`);
+# DOWNLOAD_LIMIT_KEY is only read once, to seed it.
+HELPER_KEYS = (UPLOAD_LIMIT_KEY, PORT_MAPPING_KEY)
+DEVICE_LOCAL_KEYS = (*HELPER_KEYS, DOWNLOAD_LIMIT_KEY, WATCH_FOLDER_KEY, EXPORT_WARNING_KEY)
 WATCH_FOLDER_ERROR = "Watch folder must be an existing folder"
 
 
@@ -97,8 +99,10 @@ def normalize_watch_folder(raw: object) -> str | None:
 
 
 def helper_options() -> dict[str, object]:
-    download, upload = limits_kib()
-    return {"download_kib": download, "upload_kib": upload, "port_mapping": port_mapping()}
+    """Options for the helper's `hello`. The download limit is the queue's share,
+    which the supervisor fills in; the old torrent download limit is not read."""
+    _, upload = limits_kib()
+    return {"download_kib": 0, "upload_kib": upload, "port_mapping": port_mapping()}
 
 
 def normalize_for_save(key: str, raw: object) -> str | None:

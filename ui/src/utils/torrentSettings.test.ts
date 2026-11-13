@@ -13,8 +13,8 @@ test("numbers are validated and blanks mean no limit", () => {
   assert.deepEqual(parseTorrentField("ratio", ""), { value: 0, error: "" });
   assert.deepEqual(parseTorrentField("hours", ""), { value: "", error: "" });
   assert.deepEqual(parseTorrentField("hours", " 12 "), { value: 12, error: "" });
-  assert.deepEqual(parseTorrentField("download", "500"), { value: 500, error: "" });
-  assert.equal(parseTorrentField("download", "1.5").value, null);
+  assert.deepEqual(parseTorrentField("upload", "500"), { value: 500, error: "" });
+  assert.equal(parseTorrentField("upload", "1.5").value, null);
   assert.equal(parseTorrentField("upload", "fast").value, null);
   assert.equal(parseTorrentField("ratio", "-1").value, null);
 });
@@ -25,4 +25,9 @@ test("fields map to settings keys and show zero as blank", () => {
   assert.equal(torrentFieldText(""), "");
   assert.equal(torrentFieldText(1), "1");
   assert.equal(torrentFieldText(undefined), "");
+});
+
+test("the torrent settings no longer hold a download limit", () => {
+  assert.deepEqual(["ratio", "hours", "upload"].map((field) => torrentFieldKey(field as "ratio" | "hours" | "upload")),
+    ["torrent_seed_ratio", "torrent_seed_hours", "torrent_upload_limit_kib"]);
 });

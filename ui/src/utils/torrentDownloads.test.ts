@@ -5,7 +5,8 @@ import {
   formatEta, formatSize, formatUploadDate, isSeeding, needsSeedAnswer, rpdlMarks, rpdlNote, rpdlPreselected,
   rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage, seedingLabel, seedPromptText, torrentDetails, torrentInstallSource, torrentPercent, torrentStatusLine,
 } from "./torrentDownloads.ts";
-import type { RpdlSearchResponse, RpdlTorrent, UpdateDownloadJob } from "../services/api.ts";
+import { awaitsSeedAnswer, groupDownloads, rowActions, sidebarBadge } from "./downloadQueue.ts";
+import type { DownloadQueueJob, RpdlSearchResponse, RpdlTorrent, UpdateDownloadJob } from "../services/api.ts";
 
 const job = (extra: Partial<UpdateDownloadJob> = {}): UpdateDownloadJob => ({
   job_id: "j", game_id: 1, stage: "downloading", bytes: 300, total: 1000, speed: 2048, error: "", archive_path: "",
@@ -99,4 +100,28 @@ test("sent message names the folder and the archive install", () => {
   assert.match(text, /\(\/home\/kim\/watch\)/);
   assert.match(text, /Install from archive/);
   assert.match(torrentSentMessage(""), /^Sent to the watch folder\./);
+});
+
+const finishedTorrent = (seed_state: string): DownloadQueueJob => ({
+  job_id: "t1", kind: "torrent", game_id: 1, title: "Eternum", version: "1.0", state: "ready", reason: "", position: 0,
+  error_code: "", error_text: "", bytes_done: 1000, bytes_total: 1000, speed: 0, eta: null, retries: 0,
+  retry_at: null, retry_in: null, created_at: 1, finished_at: 2, can_continue: true,
+  source: { rpdl_id: 7 }, details: { seed_state, archive_path: "/a.zip" },
+});
+
+test("a finished torrent with an open seeding question waits under Needs you", () => {
+  const asking = finishedTorrent("awaiting_answer");
+  assert.equal(awaitsSeedAnswer(asking), true);
+  assert.deepEqual(rowActions(asking), []);
+  assert.equal(groupDownloads([asking])[0]?.id, "needs");
+  assert.equal(sidebarBadge([asking]).warning, true);
+  const answered = finishedTorrent("seeding");
+  assert.equal(awaitsSeedAnswer(answered), false);
+  assert.equal(groupDownloads([answered])[0]?.id, "ready");
+});
+
+test("seeding torrents get their own section after Ready to install", () => {
+  const sections = groupDownloads([finishedTorrent("seeding")], [job({ stage: "done", seed_state: "seeding" })]);
+  assert.deepEqual(sections.map((s) => s.id), ["ready", "seeding"]);
+  assert.equal(sections[1]?.seeding.length, 1);
 });

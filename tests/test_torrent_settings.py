@@ -90,15 +90,16 @@ def test_settings_api_round_trip_and_validation(monkeypatch):
     monkeypatch.setattr(torrents.supervisor, "apply_limits", lambda: pushed.append(True))
     api = Api()
     assert api.save_settings({"torrent_seed_mode": "always", "torrent_seed_ratio": 2, "torrent_seed_hours": "",
-                              "torrent_download_limit_kib": 400, "torrent_upload_limit_kib": 100,
-                              "torrent_port_mapping": True})["success"]
+                              "torrent_upload_limit_kib": 100, "torrent_port_mapping": True})["success"]
     settings = api.get_settings()
     assert settings["torrent_seed_mode"] == "always" and settings["torrent_seed_ratio"] == 2.0
-    assert settings["torrent_seed_hours"] == "" and settings["torrent_download_limit_kib"] == 400
+    assert settings["torrent_seed_hours"] == ""
+    # The download limit is the shared download limit now (download_limit_kib).
+    assert "torrent_download_limit_kib" not in settings
     assert settings["torrent_upload_limit_kib"] == 100 and settings["torrent_port_mapping"] is True
     assert pushed
     assert api.save_settings({"torrent_seed_mode": "sometimes"})["success"] is False
-    assert api.save_settings({"torrent_download_limit_kib": "-5"})["success"] is False
+    assert api.save_settings({"torrent_upload_limit_kib": "-5"})["success"] is False
     assert Api().get_settings()["torrent_seed_mode"] == "always"
 
 
@@ -108,7 +109,7 @@ def test_invalid_torrent_value_saves_nothing_else(monkeypatch):
 
     api = Api()
     update_setting("sandboxie_custom_path", "before")
-    result = api.save_settings({"sandboxie_custom_path": "after", "torrent_download_limit_kib": "fast"})
+    result = api.save_settings({"sandboxie_custom_path": "after", "torrent_upload_limit_kib": "fast"})
     assert result["success"] is False
     assert get_setting("sandboxie_custom_path") == "before"
 
@@ -136,3 +137,49 @@ def test_export_warning_flag_round_trip():
     assert ts.export_warning_accepted() is True
     assert api.get_settings()["torrent_export_warning_accepted"] is True
     assert ts.WATCH_FOLDER_KEY in ts.DEVICE_LOCAL_KEYS and ts.EXPORT_WARNING_KEY in ts.DEVICE_LOCAL_KEYS
+
+
+def test_download_queue_settings_save_and_apply(monkeypatch):
+    from core.database import get_setting
+    from core.downloads import queue_settings
+
+    init_db()
+    api = Api()
+    applied: list[bool] = []
+    monkeypatch.setattr(api._download_queue, "apply_settings", lambda: applied.append(True))
+    assert api.get_settings()["download_max_active"] == 2
+    assert api.save_settings({"download_limit_kib": 2048, "download_max_active": 3,
+                              "download_pause_while_playing": False, "download_pause_on_battery": True})["success"]
+    assert applied == [True]
+    settings = api.get_settings()
+    assert (settings["download_limit_kib"], settings["download_max_active"]) == (2048, 3)
+    assert settings["download_pause_while_playing"] is False and settings["download_pause_on_battery"] is True
+    # A bad value saves nothing, also not the other keys sent with it.
+    update_setting("sandboxie_custom_path", "before")
+    result = api.save_settings({"sandboxie_custom_path": "after", "download_limit_kib": 1,
+                                "download_max_active": 9})
+    assert result["success"] is False and result["field"] == queue_settings.MAX_ACTIVE_KEY
+    assert get_setting("sandboxie_custom_path") == "before"
+    assert queue_settings.limit_kib() == 2048
+    assert applied == [True]
+
+
+def test_new_slot_number_starts_a_waiting_job():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_download_queue import FakeWorker  # type: ignore[import-not-found]
+
+    from core.downloads.queue import DownloadQueue
+
+    init_db()
+    api = Api()
+    worker = FakeWorker()
+    queue = DownloadQueue([worker], run_thread=False, free_space=lambda: 0)
+    api._download_queue = queue
+    ids = [queue.add("host", game_id, "G", "1", {}).id for game_id in (1, 2, 3)]
+    queue.tick()
+    assert queue.get(ids[2]).state == "queued"
+    assert api.save_settings({"download_max_active": 3})["success"]
+    assert queue.get(ids[2]).state == "running"

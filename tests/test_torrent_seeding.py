@@ -223,8 +223,10 @@ def test_speed_limits_reach_a_running_helper(make, monkeypatch, tmp_path):
     sup = make("stalled")
     sup.start(1, "Game", "1", 7, lambda: torrent_bytes())
     wait_for(lambda: any(c["cmd"] == "add" for c in log_commands(tmp_path)))
-    monkeypatch.setattr(torrent_settings, "limits_kib", lambda: (100, 50))
-    sup.apply_limits()
+    # The old torrent download limit is no longer read: the download limit
+    # is the download queue's share of the shared limit.
+    monkeypatch.setattr(torrent_settings, "limits_kib", lambda: (999, 50))
+    sup.set_download_limit(100)
     wait_for(lambda: any(c["cmd"] == "set_limits" for c in log_commands(tmp_path)))
     cmd = next(c for c in log_commands(tmp_path) if c["cmd"] == "set_limits")
     assert cmd["download_kib"] == 100 and cmd["upload_kib"] == 50

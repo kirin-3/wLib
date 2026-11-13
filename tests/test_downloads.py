@@ -126,83 +126,6 @@ def test_mega_hashcash_matches_sdk_threshold():
     assert int.from_bytes(hashlib.sha256(nonce + token * 262144).digest()[:4], 'big') <= threshold
 
 
-def test_manager_limits_transfers_and_cleans_staging(tmp_path, monkeypatch):
-    import os
-    import threading
-    import time
-    from core.downloads import manager as module
-    from core.downloads.manager import DownloadManager
-
-    entered = []
-    gate = threading.Event()
-    lock = threading.Lock()
-    class Stream(io.BytesIO):
-        def read(self, size=-1):
-            with lock:
-                if self not in entered:
-                    entered.append(self)
-            assert gate.wait(3)
-            return super().read(size)
-    monkeypatch.setattr(module, 'staging_dir', lambda: tmp_path)
-    monkeypatch.setattr('core.downloads.transfer.staging_dir', lambda: tmp_path)
-    monkeypatch.setattr(module.pixeldrain, 'probe', lambda url: FileInfo('game.zip', 4, lambda: Stream(b'PK\x03\x04')))
-    manager = DownloadManager()
-    def resolve(progress, cancel):
-        return {'ok': True, 'url': 'https://pixeldrain.com/u/file'}
-    ids = [manager.start(i, resolve) for i in (1, 2, 3)]
-    deadline = time.monotonic() + 2
-    while len(entered) < 2 and time.monotonic() < deadline:
-        time.sleep(.01)
-    assert len(entered) == 2
-    with pytest.raises(DownloadError, match='already running'):
-        manager.start(1, resolve)
-    gate.set()
-    deadline = time.monotonic() + 3
-    while any(job['stage'] != 'done' for job in manager.status()) and time.monotonic() < deadline:
-        time.sleep(.01)
-    assert {job['stage'] for job in manager.status()} == {'done'}
-    assert len(ids) == 3
-    old = tmp_path / 'old.zip'
-    old.write_bytes(b'old')
-    partial = tmp_path / 'partial.part'
-    partial.write_bytes(b'partial')
-    keep = tmp_path / 'keep.zip'
-    keep.write_bytes(b'keep')
-    for path in (old, keep):
-        os.utime(path, (1, 1))
-    manager.mark_open(str(keep))
-    manager.cleanup(now=8 * 86400)
-    assert not old.exists() and not partial.exists() and keep.exists()
-
-
-def test_manager_reports_resolve_progress_and_completion(tmp_path, monkeypatch):
-    import threading
-    import time
-    from core.downloads import manager as module
-    from core.downloads.manager import DownloadManager
-
-    waiting = threading.Event()
-    resume = threading.Event()
-    def resolve(progress, cancel):
-        progress('needs_user')
-        waiting.set()
-        assert resume.wait(2)
-        return {'ok': True, 'url': 'https://pixeldrain.com/u/file'}
-    monkeypatch.setattr('core.downloads.transfer.staging_dir', lambda: tmp_path)
-    monkeypatch.setattr(module.pixeldrain, 'probe', lambda url: FileInfo('update.zip', 4, lambda: io.BytesIO(b'PK\x03\x04')))
-    manager = DownloadManager()
-    manager.start(1, resolve)
-    assert waiting.wait(1)
-    assert manager.status()[0]['stage'] == 'needs_user'
-    resume.set()
-    deadline = time.monotonic() + 2
-    while manager.status()[0]['stage'] != 'done' and time.monotonic() < deadline:
-        time.sleep(.005)
-    result = manager.status()[0]
-    assert result['stage'] == 'done' and result['bytes'] == 4
-    assert (tmp_path / 'update.zip').exists()
-
-
 def test_host_redirects_reject_unrelated_servers():
     from core.downloads.network import allowed
 
@@ -237,24 +160,6 @@ def test_mega_requests_https_urls_and_maps_file_errors(monkeypatch):
 def test_pixeldrain_aliases_and_hotlink_limit():
     assert pixeldrain.matches('https://pixeldrain.net/u/abc')
     assert pixeldrain.classify_error(403) == 'transfer quota or rate limit reached'
-
-
-def test_manager_turns_resolve_timeout_into_a_cause(tmp_path, monkeypatch):
-    import time as clock
-    from core import extension_bridge
-    from core.downloads.manager import DownloadManager
-
-    def resolve(_progress, _cancel):
-        raise extension_bridge.BridgeFailed('extension did not resolve in time')
-
-    manager = DownloadManager()
-    job_id = manager.start(1, resolve)
-    deadline = clock.monotonic() + 2
-    while manager.status()[0]['stage'] == 'resolving' and clock.monotonic() < deadline:
-        clock.sleep(0.01)
-    job = manager.status()[0]
-    assert job['job_id'] == job_id and job['stage'] == 'failed'
-    assert 'timed out' in str(job['error'])
 
 
 def test_pixeldrain_folder_links_are_reported_as_unsupported(monkeypatch):
@@ -367,17 +272,326 @@ def test_open_range_accepts_only_a_matching_partial_answer():
     assert open_range(lambda headers: Answer(206, "bytes 0-99/100"), 10) is None
 
 
-def test_cleanup_keeps_recent_resumable_parts(tmp_path, monkeypatch):
+# --- file-host jobs in the download queue (HostWorker) ----------------------
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+PIXELDRAIN_URL = 'https://pixeldrain.com/u/SECRETFILEID'
+
+
+class _Gated(io.BytesIO):
+    """Hands out `hold` bytes at once, then the rest only after `gate` is set."""
+
+    def __init__(self, data, gate, offset=0, hold=0):
+        super().__init__(data[offset:])
+        self.gate = gate
+        self.hold = hold
+        self.sent = 0
+
+    def read(self, size=-1):
+        if self.sent >= self.hold:
+            assert self.gate.wait(5)
+        chunk = super().read(min(size, 64) if size and size > 0 else 64)
+        self.sent += len(chunk)
+        return chunk
+
+
+def _resumable_info(data, gate, opened, hold=0):
+    def stream():
+        opened.append(0)
+        return _Gated(data, gate, hold=hold if len(opened) == 1 else 0)
+
+    def resume(offset):
+        opened.append(offset)
+        return _Gated(data, gate, offset)
+
+    return FileInfo('game.zip', len(data), stream, resume_factory=resume, resume_key='pixeldrain:file')
+
+
+def _host_queue(tmp_path, monkeypatch, probe, relink=None, **options):
+    from core.database import init_db
+    from core.downloads import manager as manager_module
+    from core.downloads import workers as workers_module
+    from core.downloads.manager import DownloadManager
+    from core.downloads.pacing import SpeedLimiter
+    from core.downloads.queue import DownloadQueue
+    from core.downloads.workers import HostWorker
+
+    monkeypatch.setattr('core.downloads.transfer.staging_dir', lambda: tmp_path)
+    monkeypatch.setattr(manager_module, 'staging_dir', lambda: tmp_path)
+    monkeypatch.setattr(workers_module, 'staging_dir', lambda: tmp_path)
+    monkeypatch.setattr(manager_module.pixeldrain, 'probe', probe)
+    init_db()
+    manager = DownloadManager(limiter=SpeedLimiter())
+    queue = DownloadQueue([HostWorker(manager, relink)], run_thread=False,
+                          free_space=lambda: 10**12, **options)
+    return manager, queue
+
+
+def _resolve_to(url=PIXELDRAIN_URL, events=None):
+    def resolve(progress, cancel):
+        if events is not None:
+            events.append('resolved')
+        return {'ok': True, 'url': url}
+    return resolve
+
+
+def _add_host(queue, game_id, resolve=None, host='pixeldrain'):
+    from core.downloads.workers import HostContext
+
+    source = {'label': 'Win', 'section': '', 'platform': 'windows', 'host': host, 'part': ''}
+    return queue.add('host', game_id, 'Game', '1.0', source, HostContext(resolve or _resolve_to())).id
+
+
+def _until(queue, predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        queue.tick()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_job_added_without_a_free_slot_resolves_at_once_and_transfers_later(tmp_path, monkeypatch):
+    from core.database import update_setting
+    from core.downloads import queue_settings
+
+    gate = threading.Event()
+    data = b'PK\x03\x04' + b'a' * 400
+    _, queue = _host_queue(tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, []))
+    update_setting(queue_settings.MAX_ACTIVE_KEY, '1')
+    queue.apply_settings()
+    first = _add_host(queue, 1)
+    assert _until(queue, lambda: queue.get(first).state == 'running')
+    events = []
+    second = _add_host(queue, 2, _resolve_to(events=events))
+    # Resolved while no slot is free, then it waits.
+    assert _until(queue, lambda: events == ['resolved'] and queue.get(second).state == 'queued')
+    gate.set()
+    assert _until(queue, lambda: queue.get(first).state == 'ready')
+    assert _until(queue, lambda: queue.get(second).state == 'ready')
+    assert queue.get(second).details['archive_path']
+
+
+def test_resolve_needs_the_user_then_continues(tmp_path, monkeypatch):
+    waiting = threading.Event()
+    resume = threading.Event()
+
+    def resolve(progress, cancel):
+        progress('needs_user')
+        waiting.set()
+        assert resume.wait(3)
+        return {'ok': True, 'url': PIXELDRAIN_URL}
+
+    _, queue = _host_queue(tmp_path, monkeypatch, lambda url: FileInfo('update.zip', 4, lambda: io.BytesIO(b'PK\x03\x04')))
+    job_id = _add_host(queue, 1, resolve)
+    assert waiting.wait(2)
+    assert _until(queue, lambda: queue.get(job_id).state == 'attention')
+    assert queue.get(job_id).reason == 'browser_check'
+    resume.set()
+    assert _until(queue, lambda: queue.get(job_id).state == 'ready')
+    assert (tmp_path / 'update.zip').exists()
+
+
+def test_resolve_timeout_becomes_a_cause(tmp_path, monkeypatch):
+    from core import extension_bridge
+
+    def resolve(_progress, _cancel):
+        raise extension_bridge.BridgeFailed('extension did not resolve in time')
+
+    _, queue = _host_queue(tmp_path, monkeypatch, lambda url: pytest.fail('no probe'))
+    job_id = _add_host(queue, 1, resolve)
+    assert _until(queue, lambda: queue.get(job_id).state == 'attention')
+    job = queue.get(job_id)
+    assert job.error_code == 'check_timeout' and 'timed out' in job.error_text
+
+
+def test_paused_resumable_transfer_continues_from_its_partial_file(tmp_path, monkeypatch):
+    gate = threading.Event()
+    opened = []
+    data = b'PK\x03\x04' + bytes(range(256)) * 8
+    manager, queue = _host_queue(tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, opened, hold=256))
+    job_id = _add_host(queue, 1)
+    assert _until(queue, lambda: queue.get(job_id).bytes_done >= 256)
+    assert queue.pause(job_id)
+    gate.set()
+    assert _until(queue, lambda: manager.snapshot(job_id)['outcome'] == 'stopped')
+    (part,) = tmp_path.glob('resume-*.part')
+    kept = part.stat().st_size
+    assert kept > 0 and queue.get(job_id).source['part_file'] == part.name
+    assert queue.resume(job_id)
+    assert _until(queue, lambda: queue.get(job_id).state == 'ready')
+    assert opened == [0, kept]
+    assert (tmp_path / 'game.zip').read_bytes() == data
+    assert not list(tmp_path.glob('*.part'))
+
+
+def test_paused_mega_like_transfer_leaves_no_partial_file(tmp_path, monkeypatch):
+    gate = threading.Event()
+    opened = []
+    data = b'PK\x03\x04' + bytes(range(256)) * 8
+
+    def probe(url):
+        opened.append(0)
+        return FileInfo('game.zip', len(data), lambda: _Gated(data, gate, hold=256 if len(opened) == 1 else 0))
+
+    _, queue = _host_queue(tmp_path, monkeypatch, probe)
+    job_id = _add_host(queue, 1, host='mega')
+    assert _until(queue, lambda: queue.get(job_id).bytes_done >= 256)
+    assert queue.get(job_id).can_continue is False
+    assert queue.pause(job_id)
+    gate.set()
+    assert _until(queue, lambda: not list(tmp_path.glob('*.part')))
+    assert queue.resume(job_id)
+    assert _until(queue, lambda: queue.get(job_id).state == 'ready')
+    assert opened == [0, 0]
+
+
+def test_can_continue_follows_the_host(tmp_path, monkeypatch):
+    from core.downloads.queue import QueueJob
+    from core.downloads.workers import HostWorker
+
+    gate = threading.Event()
+    data = b'PK\x03\x04' + b'a' * 100
+    manager, queue = _host_queue(tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, []))
+    worker = HostWorker(manager)
+    # Before the probe: by host.
+    assert worker.snapshot(QueueJob(id='p', kind='host', game_id=1, source={'host': 'pixeldrain'})).can_continue
+    assert not worker.snapshot(QueueJob(id='m', kind='host', game_id=1, source={'host': 'mega'})).can_continue
+    # After the probe: from its FileInfo.
+    job_id = _add_host(queue, 1)
+    assert _until(queue, lambda: manager.snapshot(job_id)['part_name'] != '')
+    assert queue.get(job_id).can_continue is True
+    gate.set()
+
+
+def test_network_failure_keeps_the_resumable_partial_for_the_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr('core.downloads.transfer.RESUME_RETRY_DELAY_SECONDS', 0)
+    data = b'PK\x03\x04' + bytes(range(256)) * 10
+    offsets = []
+    attempts = []
+
+    def probe(url):
+        attempts.append(1)
+        fail = 700 if len(attempts) == 1 else None
+        return _resumable(data, offsets, fail_after=fail, resume_fails_after=0 if fail else None)
+
+    _, queue = _host_queue(tmp_path, monkeypatch, probe)
+    job_id = _add_host(queue, 1)
+    assert _until(queue, lambda: queue.get(job_id).state == 'retry_wait')
+    (part,) = tmp_path.glob('resume-*.part')
+    assert part.stat().st_size == 700
+    assert queue.retry(job_id)
+    assert _until(queue, lambda: queue.get(job_id).state == 'ready')
+    assert offsets[-1] == 700
+
+
+def test_cleanup_keeps_owned_partials_and_deletes_orphans(tmp_path, monkeypatch):
     import os
 
-    from core.downloads import manager as manager_module
+    from core.database import insert_download_job
+    from core.downloads.queue import DownloadQueue
 
-    monkeypatch.setattr(manager_module, "staging_dir", lambda: tmp_path)
-    recent = tmp_path / "resume-abc.part"
-    old = tmp_path / "resume-def.part"
-    orphan = tmp_path / "0123abcd.part"
-    for path in (recent, old, orphan):
-        path.write_bytes(b"x")
-    os.utime(old, (1, 1))
-    manager_module.DownloadManager().cleanup()
-    assert recent.exists() and not old.exists() and not orphan.exists()
+    manager, _ = _host_queue(tmp_path, monkeypatch, lambda url: pytest.fail('no probe'))
+    owned = tmp_path / 'resume-owned.part'
+    orphan = tmp_path / 'resume-orphan.part'
+    job_part = tmp_path / '0123abcd.part'
+    old_archive = tmp_path / 'old.zip'
+    for path in (owned, orphan, job_part, old_archive):
+        path.write_bytes(b'x')
+    os.utime(old_archive, (1, 1))
+    os.utime(owned, (1, 1))
+    insert_download_job({'id': 'keep', 'kind': 'host', 'game_id': 1, 'state': 'paused',
+                         'source': json.dumps({'host': 'pixeldrain', 'part_file': owned.name})})
+    from core.downloads.workers import HostWorker
+
+    DownloadQueue([HostWorker(manager)], run_thread=False, free_space=lambda: 0).load()
+    assert owned.exists()
+    assert not orphan.exists() and not job_part.exists() and not old_archive.exists()
+
+
+def test_failed_host_job_untouched_for_30_days_is_removed(tmp_path, monkeypatch):
+    from core.database import insert_download_job, list_download_jobs
+    from core.downloads.queue import DownloadQueue
+    from core.downloads.workers import HostWorker
+
+    manager, _ = _host_queue(tmp_path, monkeypatch, lambda url: pytest.fail('no probe'))
+    part = tmp_path / 'resume-old.part'
+    part.write_bytes(b'x')
+    old = time.time() - 31 * 86400
+    insert_download_job({'id': 'old', 'kind': 'host', 'game_id': 1, 'state': 'attention',
+                         'error_code': 'removed', 'updated_at': old, 'created_at': old,
+                         'source': json.dumps({'host': 'pixeldrain', 'part_file': part.name})})
+    queue = DownloadQueue([HostWorker(manager)], run_thread=False, free_space=lambda: 0)
+    queue.load()
+    assert queue.jobs() == [] and list_download_jobs() == []
+    assert not part.exists()
+
+
+def test_ready_job_whose_archive_was_cleaned_leaves_the_queue(tmp_path, monkeypatch):
+    import os
+
+    from core.database import insert_download_job
+    from core.downloads.queue import DownloadQueue
+    from core.downloads.workers import HostWorker
+
+    manager, _ = _host_queue(tmp_path, monkeypatch, lambda url: pytest.fail('no probe'))
+    fresh = tmp_path / 'fresh.zip'
+    stale = tmp_path / 'stale.zip'
+    for path in (fresh, stale):
+        path.write_bytes(b'PK')
+    os.utime(stale, (1, 1))
+    for job_id, path in (('fresh', fresh), ('stale', stale)):
+        insert_download_job({'id': job_id, 'kind': 'host', 'game_id': len(job_id), 'state': 'ready',
+                             'source': json.dumps({'host': 'pixeldrain', 'archive': path.name})})
+    queue = DownloadQueue([HostWorker(manager)], run_thread=False, free_space=lambda: 0)
+    queue.load()
+    assert [job.id for job in queue.jobs()] == ['fresh']
+    queue.refresh()
+    assert queue.get('fresh').details['archive_path'] == str(fresh)
+
+
+def test_remove_deletes_the_partial_file_and_the_finished_archive(tmp_path, monkeypatch):
+    gate = threading.Event()
+    data = b'PK\x03\x04' + bytes(range(256)) * 8
+    opened = []
+    manager, queue = _host_queue(tmp_path, monkeypatch, lambda url: _resumable_info(data, gate, opened, hold=256))
+    job_id = _add_host(queue, 1)
+    assert _until(queue, lambda: queue.get(job_id).bytes_done >= 256)
+    assert queue.pause(job_id)
+    gate.set()
+    assert _until(queue, lambda: manager.snapshot(job_id)['outcome'] == 'stopped')
+    assert list(tmp_path.glob('resume-*.part'))
+    assert queue.remove(job_id)
+    assert not list(tmp_path.glob('*.part'))
+    second = _add_host(queue, 2)
+    assert _until(queue, lambda: queue.get(second).state == 'ready')
+    archive = tmp_path / 'game.zip'
+    assert archive.exists()
+    assert queue.remove(second)
+    assert not archive.exists()
+
+
+def test_no_saved_row_or_log_line_holds_the_link(tmp_path, monkeypatch, capsys, caplog):
+    import logging
+
+    from core.database import list_download_jobs
+
+    caplog.set_level(logging.DEBUG)
+    masked = 'https://f95zone.to/dl/SECRETMASKED/'
+    data = b'PK\x03\x04' + b'a' * 100
+    _, queue = _host_queue(tmp_path, monkeypatch, lambda url: FileInfo('game.zip', len(data), lambda: io.BytesIO(data)))
+
+    def resolve(progress, cancel):
+        return {'ok': True, 'url': PIXELDRAIN_URL, 'share_url': masked}
+
+    job_id = _add_host(queue, 1, resolve)
+    assert _until(queue, lambda: queue.get(job_id).state == 'ready')
+    rows = json.dumps(list_download_jobs())
+    status = json.dumps(queue.status())
+    captured = capsys.readouterr()
+    text = rows + status + captured.out + captured.err + caplog.text
+    for secret in ('SECRETFILEID', 'SECRETMASKED', 'pixeldrain.com/u', 'f95zone.to/dl'):
+        assert secret not in text

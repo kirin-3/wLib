@@ -5,7 +5,6 @@ from core.api import Api
 from core.database import add_game, init_db
 from core.downloads import credentials, torrents
 from core.downloads.hosts import rpdl
-from core.downloads.transfer import DownloadError
 
 
 @pytest.fixture
@@ -105,14 +104,20 @@ def test_start_runs_a_torrent_job(api, store, monkeypatch):
         def status(self):
             return []
 
-        def start(self, game_id, title, version, rpdl_id, fetch):
-            started.update(game_id=game_id, title=title, version=version, rpdl_id=rpdl_id)
-            return "job1"
+        def start(self, game_id, title, version, rpdl_id, fetch, *, paused=False, job_id=""):
+            started.update(game_id=game_id, title=title, version=version, rpdl_id=rpdl_id,
+                           paused=paused, job_id=job_id)
+            return job_id
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
     result = api.start_rpdl_download(gid, 5, " 0.8 ")
-    assert result == {"success": True, "job_id": "job1"}
-    assert started == {"game_id": gid, "title": "Eternum", "version": "0.8", "rpdl_id": 5}
+    assert result["success"] is True
+    # Added to the queue, and prepared paused until it gets a slot.
+    assert started == {"game_id": gid, "title": "Eternum", "version": "0.8", "rpdl_id": 5,
+                       "paused": True, "job_id": result["job_id"]}
+    queued = api.get_download_queue()["jobs"]
+    assert [(job["job_id"], job["kind"], job["source"]) for job in queued] == [
+        (result["job_id"], "torrent", {"rpdl_id": 5})]
 
 
 def test_start_reports_a_job_already_running(api, store, monkeypatch):
@@ -123,11 +128,12 @@ def test_start_reports_a_job_already_running(api, store, monkeypatch):
         def status(self):
             return []
 
-        def start(self, *args):
-            raise DownloadError("A download is already running for this game")
+        def start(self, *args, **kwargs):
+            return kwargs["job_id"]
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
-    assert api.start_rpdl_download(gid, 5, "")["error"] == "A download is already running for this game"
+    assert api.start_rpdl_download(gid, 5, "")["success"] is True
+    assert api.start_rpdl_download(gid, 6, "")["error"] == "This game is already in the downloads"
 
 
 def test_fetch_checks_the_info_hash(api, store, monkeypatch):
@@ -144,9 +150,9 @@ def test_fetch_checks_the_info_hash(api, store, monkeypatch):
         def status(self):
             return []
 
-        def start(self, game_id, title, version, rpdl_id, fetch):
+        def start(self, game_id, title, version, rpdl_id, fetch, **kwargs):
             captured["fetch"] = fetch
-            return "j"
+            return kwargs["job_id"]
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
     monkeypatch.setattr(rpdl, "fetch_torrent", lambda tid: data)
@@ -186,10 +192,6 @@ def test_torrent_controls_report_failures(api, monkeypatch):
             return job_id == "ok"
 
     monkeypatch.setattr(torrents, "supervisor", FakeSupervisor())
-    assert api.pause_torrent("ok")["success"] and not api.pause_torrent("no")["success"]
-    assert api.resume_torrent("ok")["success"]
-    assert api.resume_torrent("low")["error"] == torrents.MSG_LOW_DISK
-    assert not api.resume_torrent(5)["success"]
     assert api.answer_seed_prompt("ok", True, True)["success"] and ("answer", "ok", True, True) in calls
     assert not api.answer_seed_prompt("ok", "yes")["success"]
     assert not api.answer_seed_prompt("no", False)["success"]

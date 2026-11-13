@@ -58,6 +58,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - Check every game against F95Zone at once, or on a schedule. Games from Ryuugames without an F95 thread are checked against the catalog.
 - **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
 - **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit.
+- **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
 - Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
 - Desktop notifications for new releases and completed wishlist games (Linux).

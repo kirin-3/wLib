@@ -21,6 +21,7 @@ import {
   IconPlayerTrackPrev,
   IconPuzzle,
   IconReload,
+  IconDownload,
   IconSettings,
   IconSun,
   IconX,
@@ -106,6 +107,13 @@ const notifiedFinishedIds = new Set<number>();
 // are not missed while another view is open.
 const syncAttention = ref(false);
 const syncState = ref("off");
+const downloadsNavTitle = computed(() => {
+  const {count, warning} = updateDownloads.badge.value;
+  const parts = ['Downloads'];
+  if (count) parts.push(`${count} unfinished`);
+  if (warning) parts.push('a download needs you');
+  return parts.join(', ');
+});
 const syncNavTitle = computed(() => {
   if (navCollapsed.value) return "Sync";
   if (syncAttention.value) return "Sync needs attention";
@@ -534,6 +542,42 @@ onUnmounted(() => {
               aria-hidden="true"
               >{{ availableUpdateCount }}</span
             >
+          </router-link>
+
+          <router-link
+            to="/downloads"
+            :title="downloadsNavTitle"
+            :aria-label="downloadsNavTitle"
+            :class="[
+              'nav-link relative flex items-center px-4 py-2.5 rounded-lg text-sm font-medium',
+              navCollapsed ? 'justify-center' : 'gap-3',
+            ]"
+            active-class="nav-active"
+            exact-active-class="nav-active"
+          >
+            <IconDownload class="shrink-0" :size="18" />
+            <span
+              class="whitespace-nowrap transition-opacity duration-150"
+              :class="navCollapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'"
+              >Downloads</span
+            >
+            <span
+              v-if="updateDownloads.badge.value.count"
+              class="rounded-full px-1.5 min-w-5 text-center text-[0.625rem] font-bold"
+              :class="navCollapsed ? 'absolute -top-1 -right-1' : 'ml-auto'"
+              style="background: var(--brand); color: var(--on-brand)"
+              aria-hidden="true"
+              data-testid="downloads-count"
+              >{{ updateDownloads.badge.value.count }}</span
+            >
+            <span
+              v-if="updateDownloads.badge.value.warning"
+              class="rounded-full w-2 h-2"
+              :class="navCollapsed ? 'absolute top-1 left-1' : updateDownloads.badge.value.count ? '' : 'ml-auto'"
+              style="background: #ef4444"
+              aria-hidden="true"
+              data-testid="downloads-warning"
+            ></span>
           </router-link>
 
           <router-link

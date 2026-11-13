@@ -11,6 +11,9 @@ from typing import cast
 from core.api_mixins.base import ApiBase, normalize_thread_url
 
 
+_NOT_FOUND = "The download was not found"
+
+
 class DownloadsMixin(ApiBase):
     def browse_archive_file(self, start_path: str = "") -> str:
         """Opens a native file dialog to select a game archive (.zip/.7z/.rar)."""
@@ -72,22 +75,100 @@ class DownloadsMixin(ApiBase):
         self._update_downloads.clear(game_id)
         return {"success": True}
 
-    def start_update_download(self, game_id: int, link_id: str) -> dict[str, object]:
+    def start_update_download(
+        self, game_id: int, link_id: str, replaces: object = None
+    ) -> dict[str, object]:
+        """Add the chosen mirror to the download queue (`replaces`: a failed job's id)."""
+        from core.downloads.queue import QueueError
         from core.downloads.transfer import DownloadError
 
         if game_id in self.get_running_games():
             return {"success": False, "error": "Close the game before downloading an update"}
+        replaced = replaces if isinstance(replaces, str) and replaces else None
         try:
-            return {"success": True, "job_id": self._update_downloads.start(game_id, link_id)}
-        except DownloadError as exc:
+            job_id = self._update_downloads.start(game_id, link_id, replaced)
+        except (DownloadError, QueueError) as exc:
             return {"success": False, "error": str(exc)}
+        return {"success": True, "job_id": job_id}
 
-    def get_update_download_status(self) -> dict[str, object]:
-        return {"success": True, "jobs": self._update_downloads.manager.status()}
+    # --- download queue -----------------------------------------------------
 
-    def cancel_update_download(self, job_id: str) -> dict[str, object]:
-        if not self._update_downloads.manager.cancel(job_id):
-            return {"success": False, "error": "Download is not running"}
+    def _queue_job_id(self, job_id: object) -> str | None:
+        if not isinstance(job_id, str) or self._download_queue.get(job_id) is None:
+            return None
+        return job_id
+
+    def get_download_queue(self, include_history: object = False) -> dict[str, object]:
+        """Every queued download, the queue summary and the seeding torrents."""
+        from core.downloads.torrents import supervisor
+
+        status = self._download_queue.status(include_history is True)
+        seeding = [
+            job for job in supervisor.status()
+            if job.get("stage") == "done" and job.get("seed_state") == "seeding"
+        ]
+        return {"success": True, **status, "seeding": seeding}
+
+    def reorder_downloads(self, job_ids: object = None) -> dict[str, object]:
+        if not isinstance(job_ids, list) or not all(
+            isinstance(item, str) for item in cast(list[object], job_ids)
+        ):
+            return {"success": False, "error": "The order must be a list of downloads"}
+        self._download_queue.reorder(cast(list[str], job_ids))
+        return {"success": True}
+
+    def start_download_now(self, job_id: object = None) -> dict[str, object]:
+        from core.downloads.queue import QueueError
+
+        wanted = self._queue_job_id(job_id)
+        if wanted is None:
+            return {"success": False, "error": _NOT_FOUND}
+        try:
+            outcome = self._download_queue.start_now(wanted)
+        except QueueError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "outcome": outcome}
+
+    def pause_download(self, job_id: object = None) -> dict[str, object]:
+        wanted = self._queue_job_id(job_id)
+        if wanted is None:
+            return {"success": False, "error": _NOT_FOUND}
+        if not self._download_queue.pause(wanted):
+            return {"success": False, "error": "This download cannot be paused"}
+        return {"success": True}
+
+    def resume_download(self, job_id: object = None) -> dict[str, object]:
+        wanted = self._queue_job_id(job_id)
+        if wanted is None:
+            return {"success": False, "error": _NOT_FOUND}
+        if not self._download_queue.resume(wanted):
+            return {"success": False, "error": "This download is not paused"}
+        return {"success": True}
+
+    def pause_all_downloads(self) -> dict[str, object]:
+        return {"success": True, "count": self._download_queue.pause_all()}
+
+    def resume_all_downloads(self) -> dict[str, object]:
+        return {"success": True, "count": self._download_queue.resume_all()}
+
+    def retry_download(self, job_id: object = None) -> dict[str, object]:
+        wanted = self._queue_job_id(job_id)
+        if wanted is None:
+            return {"success": False, "error": _NOT_FOUND}
+        if not self._download_queue.retry(wanted):
+            return {"success": False, "error": "This download has not failed"}
+        return {"success": True}
+
+    def remove_download(self, job_id: object = None) -> dict[str, object]:
+        wanted = self._queue_job_id(job_id)
+        if wanted is None or not self._download_queue.remove(wanted):
+            return {"success": False, "error": _NOT_FOUND}
+        return {"success": True}
+
+    def resume_downloads_now(self) -> dict[str, object]:
+        """Let downloads run until the current hold (game or battery) ends."""
+        if not self._download_queue.resume_now():
+            return {"success": False, "error": "Downloads are not waiting"}
         return {"success": True}
 
     def get_download_accounts(self) -> dict[str, object]:
@@ -215,13 +296,18 @@ class DownloadsMixin(ApiBase):
         return {"success": True, "signed_in": signed_in, **found}
 
     def start_rpdl_download(
-        self, game_id: object = None, torrent_id: object = None, version: object = None
+        self,
+        game_id: object = None,
+        torrent_id: object = None,
+        version: object = None,
+        replaces: object = None,
     ) -> dict[str, object]:
+        """Add an RPDL torrent to the download queue (`replaces`: a failed job's id)."""
         from core import database
         from core.downloads import credentials
         from core.downloads.hosts import rpdl
-        from core.downloads.torrents import supervisor
-        from core.downloads.transfer import DownloadError
+        from core.downloads.queue import QueueError
+        from core.downloads.workers import TorrentContext
 
         coerced_id = self._coerce_db_id(game_id)
         game = database.get_game(coerced_id) if coerced_id is not None else None
@@ -233,28 +319,24 @@ class DownloadsMixin(ApiBase):
             return {"success": False, "error": "Close the game before downloading an update"}
         if not (credentials.get(credentials.RPDL_TOKEN) or credentials.get(credentials.RPDL_USERNAME)):
             return {"success": False, "error": rpdl.SIGN_IN_MESSAGE, "error_code": rpdl.KIND_SIGN_IN}
-        if any(
-            job.get("game_id") == coerced_id
-            and job.get("stage") in ("resolving", "needs_user", "downloading", "verifying")
-            for job in self._update_downloads.manager.status()
-        ):
-            return {"success": False, "error": "A download is already running for this game"}
         wanted_id = torrent_id
 
         def fetch() -> bytes:
             return self._fetch_checked_rpdl_torrent(wanted_id)
 
         try:
-            job_id = supervisor.start(
+            job = self._download_queue.add(
+                "torrent",
                 coerced_id,
                 str(game.get("title") or ""),
                 version.strip() if isinstance(version, str) else "",
-                wanted_id,
-                fetch,
+                {"rpdl_id": wanted_id},
+                TorrentContext(fetch),
+                replaces=replaces if isinstance(replaces, str) and replaces else None,
             )
-        except DownloadError as exc:
+        except QueueError as exc:
             return {"success": False, "error": str(exc)}
-        return {"success": True, "job_id": job_id}
+        return {"success": True, "job_id": job.id}
 
     def _export_rpdl_torrent(
         self,
@@ -346,24 +428,6 @@ class DownloadsMixin(ApiBase):
         if result.get("success"):
             result["folder"] = folder
         return result
-
-    def pause_torrent(self, job_id: object = None) -> dict[str, object]:
-        from core.downloads.torrents import supervisor
-
-        if not isinstance(job_id, str) or not supervisor.pause(job_id):
-            return {"success": False, "error": "The torrent is not downloading"}
-        return {"success": True}
-
-    def resume_torrent(self, job_id: object = None) -> dict[str, object]:
-        from core.downloads.torrents import MSG_LOW_DISK, supervisor
-
-        if not isinstance(job_id, str):
-            return {"success": False, "error": "The torrent was not found"}
-        if not supervisor.resume(job_id):
-            job = next((j for j in supervisor.status() if j["job_id"] == job_id), None)
-            message = str(job["error"]) if job and job.get("error") == MSG_LOW_DISK else ""
-            return {"success": False, "error": message or "The torrent cannot be resumed"}
-        return {"success": True}
 
     def answer_seed_prompt(
         self, job_id: object = None, seed: object = None, remember: object = None
@@ -881,6 +945,8 @@ class DownloadsMixin(ApiBase):
         self._set_archive_install_status(running=False, stage="done")
         if torrent_source:
             torrent_supervisor.release(archive_path, installed=True)
+        # An installed download leaves "Ready to install".
+        _ = self._download_queue.installed(archive_path)
         installed_id = result.get("game_id")
         if incoming_links and isinstance(installed_id, int):
             from core.database import replace_game_links

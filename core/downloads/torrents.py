@@ -142,6 +142,8 @@ class _Job:
         self.payload: tuple[str, str] | None = None
         self.last_status_at: float | None = None
         self.seed_mode_note = ""
+        # Set by load(): whether state.json said the user paused it.
+        self.loaded_paused = False
 
     def eta(self) -> int | None:
         if self.stage != "downloading" or self.speed <= 0 or self.total <= 0:
@@ -182,6 +184,9 @@ class _Job:
             "installed": self.installed,
             "ratio_target": torrent_settings.seed_ratio() or 0,
             "hint": self.hint(now), "eta": self.eta(),
+            "auto_paused": self.auto_paused, "restarting": self.restarting,
+            "info_hash": self.info_hash, "loaded_paused": self.loaded_paused,
+            "rpdl_id": self.rpdl_id, "created": self.created,
         }
 
 
@@ -221,6 +226,8 @@ class TorrentSupervisor:
         self._restarts: list[float] = []
         self._open: set[Path] = set()
         self._last_disk_check = 0.0
+        # The download queue's share of the shared limit (KiB/s, 0 = unlimited).
+        self._download_kib = 0
 
     # --- helper lifecycle -------------------------------------------------
 
@@ -244,6 +251,7 @@ class TorrentSupervisor:
             threading.Thread(target=self._read, args=(proc,), daemon=True).start()
             hello: dict[str, object] = {"cmd": "hello"}
             hello.update(self._options())
+            hello["download_kib"] = self._download_kib
             _ = self._send(hello)
             return True
 
@@ -532,13 +540,31 @@ class TorrentSupervisor:
     # --- public API -------------------------------------------------------
 
     def start(
-        self, game_id: int, title: str, version: str, rpdl_id: int, fetch: Callable[[], bytes]
+        self,
+        game_id: int,
+        title: str,
+        version: str,
+        rpdl_id: int,
+        fetch: Callable[[], bytes],
+        *,
+        paused: bool = False,
+        job_id: str = "",
     ) -> str:
-        """Start a job: `fetch` returns the `.torrent` bytes (it may raise DownloadError)."""
+        """Start a job: `fetch` returns the `.torrent` bytes (it may raise DownloadError).
+
+        With `paused` the torrent is fetched, checked and added to the helper
+        paused; it moves data only after `resume()` (the download queue's slot).
+        """
         with self._lock:
             if any(j.game_id == game_id and j.stage in ACTIVE_STAGES for j in self._jobs.values()):
                 raise DownloadError("A download is already running for this game")
             job = _Job(game_id, title, version, rpdl_id)
+            if job_id:
+                old = self._jobs.get(job_id)
+                if old is not None and old.stage in ACTIVE_STAGES:
+                    raise DownloadError("A download is already running for this game")
+                job.id = job_id
+            job.paused = paused
             self._jobs[job.id] = job
         threading.Thread(target=self._run, args=(job, fetch), daemon=True).start()
         return job.id
@@ -597,8 +623,8 @@ class TorrentSupervisor:
                 raise DownloadError("cancelled")
             job.info_hash = meta.info_hash
             job.total = meta.size
-            job.stage = "downloading"
-            job.phase = "downloading"
+            job.stage = "paused" if job.paused else "downloading"
+            job.phase = job.stage
             self._save_state(job)
             if not self._spawn():
                 self._fail(job, MSG_UNAVAILABLE)
@@ -776,10 +802,41 @@ class TorrentSupervisor:
             return True
 
     def apply_limits(self) -> None:
-        """Push the current speed limits to a running helper."""
-        download, upload = torrent_settings.limits_kib()
+        """Push the current speed limits to a running helper.
+
+        The download limit is the queue's share of the shared limit
+        (`set_download_limit`); the upload limit comes from the settings.
+        """
+        _, upload = torrent_settings.limits_kib()
         with self._lock:
-            _ = self._send({"cmd": "set_limits", "download_kib": download, "upload_kib": upload})
+            _ = self._send({"cmd": "set_limits", "download_kib": self._download_kib, "upload_kib": upload})
+
+    def set_download_limit(self, kib: int) -> None:
+        """Set the torrents' download share in KiB/s (0 = unlimited) and push it."""
+        with self._lock:
+            kib = max(0, int(kib))
+            if kib == self._download_kib:
+                return
+            self._download_kib = kib
+        self.apply_limits()
+
+    def discard(self, job_id: str) -> bool:
+        """Forget a finished job and delete its folder, unless it still seeds."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.stage != "done":
+                return False
+            if job.seed_state in ("seeding", "awaiting_answer"):
+                return False
+            folder = job.folder.resolve() if job.folder is not None else None
+            if folder is not None and any(p == folder or folder in p.parents for p in self._open):
+                return False
+            if job.added:
+                _ = self._send({"cmd": "remove", "id": job.id})
+                job.added = False
+            self._delete_folder(job)
+            _ = self._jobs.pop(job_id, None)
+            return True
 
     def shutdown(self) -> None:
         """Ask the helper to save and exit; used when wLib quits."""
@@ -827,7 +884,10 @@ class TorrentSupervisor:
             phase = str(state.get("phase") or "")
             job.phase = phase
             if phase in ("downloading", "paused"):
-                job.stage = "paused" if job.paused else "downloading"
+                # The download queue decides when it moves data again.
+                job.loaded_paused = job.paused
+                job.paused = True
+                job.stage = "paused"
                 resumed = True
             elif phase in ("finished", "ended"):
                 job.stage = "done"

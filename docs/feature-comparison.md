@@ -57,8 +57,8 @@ Snapshot from 2026-11-03
 | Library update check | ✅ | ✅ | ✅ | ✅ |
 | Skip / pin a version | ✅ skip | ❌ | ❌ | ✅ pin |
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
-| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4 | ✅ ~20 hosts, JDownloader hand-off | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier | ✅ aria2: donor DDL, masked links, MEGAcmd |
-| Torrents / RPDL | ✅ RPDL, with seeding | ✅ | ❌ | ✅ |
+| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier | ✅ aria2: donor DDL, masked links, MEGAcmd |
+| Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue | ✅ | ❌ | ✅ |
 | Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
 

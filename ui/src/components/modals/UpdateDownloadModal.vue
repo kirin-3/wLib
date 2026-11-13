@@ -1,17 +1,21 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue';
-import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconPlayerPause, IconPlayerPlay, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
+import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
+import {useRouter} from 'vue-router';
 import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
 import {downloadFailureMessage, inAppMirror, orderBuilds, preselect, suitable, type HostPlatform} from '../../utils/updateDownloads';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
-import {formatSize, formatUploadDate, isTorrentJob, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentDetails, torrentPercent, torrentSentMessage, torrentStatusLine} from '../../utils/torrentDownloads';
+import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
+import {addedNotice} from '../../utils/downloadQueue';
+import {notify} from '../../utils/toast';
 import {confirmAction} from '../../utils/confirm';
 import {copyText} from '../../utils/copyText';
 import {useModalKeyboard} from '../../utils/modalKeyboard';
 
 const downloads = useUpdateDownloads();
+const router = useRouter();
 const game = downloads.selectedGame;
 const builds = ref<UpdateBuild[]>([]);
 const chosenBuild = ref<UpdateBuild | null>(null);
@@ -38,8 +42,6 @@ const primaryAction = computed(()=>chosenTorrent.value ? rpdlPrimaryAction(watch
 const platform = ref<HostPlatform>('linux');
 const modal = ref<HTMLElement | null>(null);
 let generation = 0;
-const job = computed(() => game.value ? [...downloads.jobs.value].reverse().find(j=>j.game_id===game.value?.id && !['done','cancelled'].includes(j.stage)) : undefined);
-const torrentJob = computed(() => job.value && isTorrentJob(job.value) ? job.value : undefined);
 const updateVersion = computed(() => (game.value?.latest_version || '').trim());
 const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
@@ -135,12 +137,19 @@ async function start(inApp = false) {
   if (!game.value || busy.value || exporting.value || (!chosenMirror.value && !chosenTorrent.value)) return;
   if (chosenTorrent.value && !inApp && primaryAction.value === 'send') { await sendToClient(); return; }
   busy.value=true; error.value=''; exportError.value=''; exportNotice.value=''; sentMessage.value='';
+  const current = game.value;
+  const replaces = downloads.replacing.value;
   try {
     const response = chosenTorrent.value
-      ? await api.startRpdlDownload(game.value.id,chosenTorrent.value.id,updateVersion.value)
-      : await api.startUpdateDownload(game.value.id,chosenMirror.value!.link_id);
+      ? await api.startRpdlDownload(current.id,chosenTorrent.value.id,updateVersion.value,replaces)
+      : await api.startUpdateDownload(current.id,chosenMirror.value!.link_id,replaces);
+    // On a refusal the picker stays open and shows why.
     if (!response.success) throw new Error(response.error || 'Could not start download');
     downloads.refresh();
+    close();
+    const settings = downloads.queue.value?.settings;
+    const waits = !!settings?.download_pause_while_playing && downloads.runningGames.value.includes(current.id);
+    notify(addedNotice(current.title, waits), 'success', '', {label: 'Open Downloads', run: () => { void router.push('/downloads'); }});
   } catch (e) { error.value=String(e instanceof Error ? e.message : e); }
   finally { busy.value=false; }
 }
@@ -155,27 +164,9 @@ async function openBrowser() {
 const canDownloadMirror = computed(()=>!!chosenMirror.value && !!chosenBuild.value && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
 const canDownloadTorrent = computed(()=>!!chosenTorrent.value && !!rpdl.value?.signed_in);
 const canDownload = computed(()=>canDownloadMirror.value || canDownloadTorrent.value);
-async function torrentAction(action: 'pause'|'resume') {
-  if (!torrentJob.value) return;
-  const response = action === 'pause' ? await api.pauseTorrent(torrentJob.value.job_id) : await api.resumeTorrent(torrentJob.value.job_id);
-  if (!response.success) error.value = response.error || 'Could not change the torrent';
-  downloads.refresh();
-}
-const percent = computed(()=>job.value ? (isTorrentJob(job.value) ? torrentPercent(job.value) : job.value.total ? Math.min(100,Math.round(job.value.bytes / job.value.total * 100)) : null) : null);
-const speedLabel = computed(()=>torrentJob.value ? torrentDetails(torrentJob.value) : job.value?.stage === 'downloading' && job.value.speed > 0 ? `${(job.value.speed / 1048576).toFixed(1)} MiB/s` : '');
 const buildTitle = (build: UpdateBuild) => (build.section ? build.section + ' · ' : '') + build.label;
 const platformLabel = (value: string) => value === 'unknown' ? 'Any platform' : value === 'all' ? 'All platforms' : value.split('/').map(part=>part.charAt(0).toUpperCase()+part.slice(1)).join(' / ');
 const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).replace(/\s/g,'').toLowerCase() !== build.label.replace(/\s/g,'').toLowerCase();
-const progressLabel = computed(()=>{
-  if (!job.value) return '';
-  if (isTorrentJob(job.value)) return torrentStatusLine(job.value);
-  if (job.value.stage === 'needs_user') return 'Finish the check in the browser window that opened.';
-  if (job.value.stage === 'resolving') return 'Resolving link…';
-  if (job.value.stage === 'verifying') return 'Verifying archive…';
-  if (job.value.stage === 'failed') return downloadFailureMessage(job.value.error);
-  const total = job.value.total ? ` / ${(job.value.total / 1048576).toFixed(1)} MiB` : '';
-  return `Downloading ${(job.value.bytes / 1048576).toFixed(1)} MiB${total}`;
-});
 </script>
 <template>
   <div v-if="game" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -355,31 +346,11 @@ const progressLabel = computed(()=>{
           </template>
         </section>
 
-        <div v-if="job" class="progress-card" :class="{ 'callout-danger': job.stage === 'failed' }">
-          <div class="flex items-center gap-3">
-            <IconAlertTriangle v-if="job.stage === 'failed'" class="w-4 h-4 shrink-0" />
-            <IconPlayerPause v-else-if="job.stage === 'paused'" class="w-4 h-4 shrink-0" />
-            <IconLoader2 v-else class="w-4 h-4 shrink-0 animate-spin" style="color: var(--brand)" />
-            <p class="text-sm flex-1 min-w-0" aria-live="polite">{{ progressLabel }}</p>
-            <span v-if="percent !== null && job.stage === 'downloading'" class="text-sm font-mono" style="color: var(--text-secondary)">{{ percent }}%</span>
-            <template v-if="torrentJob">
-              <button v-if="torrentJob.stage === 'downloading'" type="button" class="modal-btn" @click="torrentAction('pause')"><IconPlayerPause class="w-4 h-4" />Pause</button>
-              <button v-else-if="torrentJob.stage === 'paused' || torrentJob.stage === 'failed'" type="button" class="modal-btn" @click="torrentAction('resume')">
-                <IconPlayerPlay class="w-4 h-4" />{{ torrentJob.stage === 'failed' ? 'Retry' : 'Resume' }}
-              </button>
-            </template>
-          </div>
-          <div v-if="job.stage !== 'failed'" class="bar mt-3" role="progressbar" :aria-valuenow="percent ?? undefined" aria-valuemin="0" aria-valuemax="100">
-            <div class="bar-fill" :class="{ indeterminate: percent === null || job.stage !== 'downloading' || (!!torrentJob?.hint) }" :style="percent !== null && job.stage === 'downloading' && !torrentJob?.hint ? { width: percent + '%' } : undefined"></div>
-          </div>
-          <p v-if="speedLabel" class="text-xs mt-2" style="color: var(--text-muted)">{{ speedLabel }}</p>
-        </div>
       </div>
 
       <footer class="px-6 py-4 flex items-center justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
-        <button v-if="job && job.stage !== 'failed'" class="modal-btn" @click="api.cancelUpdateDownload(job.job_id)">Cancel download</button>
-        <button v-else @click="close" class="px-5 py-2.5 rounded-lg text-sm font-medium" style="color: var(--text-secondary)">Close</button>
-        <template v-if="!loading && (!job || job.stage === 'failed')">
+        <button @click="close" class="px-5 py-2.5 rounded-lg text-sm font-medium" style="color: var(--text-secondary)">Close</button>
+        <template v-if="!loading">
           <button v-if="chosenMirror" class="modal-btn" @click="openBrowser"><IconExternalLink class="w-4 h-4" />Open in browser</button>
           <button
             v-if="canDownloadTorrent && primaryAction === 'send'"
@@ -498,37 +469,6 @@ const progressLabel = computed(()=>{
 .link-btn:hover:not(:disabled) { color: var(--text-primary); }
 .link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.progress-card {
-  padding: 0.85rem 1rem;
-  border-radius: 0.75rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-}
-.bar {
-  position: relative;
-  height: 0.4rem;
-  border-radius: 9999px;
-  background: var(--bg-overlay);
-  overflow: hidden;
-}
-.bar-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--brand);
-  transition: width var(--motion-base) ease;
-}
-.bar-fill.indeterminate {
-  width: 35%;
-  animation: slide 1.2s ease-in-out infinite;
-}
-@keyframes slide {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(290%); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .bar-fill.indeterminate { animation: none; width: 100%; opacity: 0.5; }
-}
 
 .modal-btn {
   display: inline-flex;

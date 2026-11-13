@@ -91,6 +91,7 @@ class SettingsMixin(ApiBase):
             "html_builtin_player": get_setting_fn("html_builtin_player") != "false",
             "web_player_devtools": get_setting_fn("web_player_devtools") != "false",
             **self._torrent_settings_payload(),
+            **self._download_queue_settings_payload(),
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
             "rpgmaker_linux_runner_path": rpgmaker_linux_runner_path,
@@ -247,7 +248,6 @@ class SettingsMixin(ApiBase):
             torrent_settings.SEED_MODE_KEY,
             torrent_settings.SEED_RATIO_KEY,
             torrent_settings.SEED_HOURS_KEY,
-            torrent_settings.DOWNLOAD_LIMIT_KEY,
             torrent_settings.UPLOAD_LIMIT_KEY,
             torrent_settings.PORT_MAPPING_KEY,
             torrent_settings.EXPORT_WARNING_KEY,
@@ -266,6 +266,15 @@ class SettingsMixin(ApiBase):
             if watch is None:
                 return {"success": False, "error": torrent_settings.WATCH_FOLDER_ERROR}
             torrent_values[torrent_settings.WATCH_FOLDER_KEY] = watch
+        from core.downloads import queue_settings
+
+        queue_values: dict[str, str] = {}
+        for queue_key in queue_settings.KEYS:
+            if queue_key in settings_map:
+                clean = queue_settings.normalize_for_save(queue_key, settings_map[queue_key])
+                if clean is None:
+                    return {"success": False, "field": queue_key, "error": "Enter a valid download setting"}
+                queue_values[queue_key] = clean
         from core.database import get_library_folders, normalize_library_folders
 
         folder_pair: tuple[list[str], str] | None = None
@@ -472,6 +481,7 @@ class SettingsMixin(ApiBase):
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
             pending.update(torrent_values)
+            pending.update(queue_values)
             pending.update(gamescope_values)
             update_settings(
                 pending,
@@ -487,6 +497,8 @@ class SettingsMixin(ApiBase):
                 from core.downloads.torrents import supervisor as torrent_supervisor
 
                 torrent_supervisor.apply_limits()
+            if queue_values:
+                self._download_queue.apply_settings()
         except (OSError, sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not save settings"}
         return {"success": True}
@@ -505,16 +517,21 @@ class SettingsMixin(ApiBase):
         return payload
 
     @staticmethod
+    def _download_queue_settings_payload() -> dict[str, object]:
+        from core.downloads import queue_settings
+
+        return queue_settings.values()
+
+    @staticmethod
     def _torrent_settings_payload() -> dict[str, object]:
         from core.downloads import torrent_settings as ts
 
-        download, upload = ts.limits_kib()
+        _, upload = ts.limits_kib()
         ratio, hours = ts.seed_ratio(), ts.seed_hours()
         return {
             "torrent_seed_mode": ts.seed_mode(),
             "torrent_seed_ratio": ratio if ratio is not None else 0,
             "torrent_seed_hours": hours if hours is not None else "",
-            "torrent_download_limit_kib": download,
             "torrent_upload_limit_kib": upload,
             "torrent_port_mapping": ts.port_mapping(),
             "torrent_watch_folder": ts.watch_folder(),

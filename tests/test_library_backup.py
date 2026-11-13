@@ -3682,3 +3682,52 @@ def test_gamescope_global_settings_sync_merge():
     apply_library_backup(sync, {"sections": list(sync["selected_sections"])})
     assert get_setting("gamescope_enabled") == "true"
     assert get_setting("gamescope_output_resolution") == "2560x1440"
+
+
+def test_download_queue_and_its_settings_stay_out_of_backups_and_sync():
+    from core.database import insert_download_job
+    from core.downloads import queue_settings
+    from core.library_backup import SECTION_COVERS
+
+    init_db()
+    game_id = add_game("Queued", "/games/queued/game.sh")
+    insert_download_job(
+        {
+            "id": "QUEUEDJOB",
+            "kind": "host",
+            "game_id": game_id,
+            "title": "QUEUEDTITLE",
+            "version": "QUEUEDVERSION",
+            "state": "queued",
+            "source": json.dumps({"label": "QUEUEDBUILD", "host": "pixeldrain"}),
+        }
+    )
+    for key, value in (
+        (queue_settings.LIMIT_KEY, "4321"),
+        (queue_settings.MAX_ACTIVE_KEY, "4"),
+        (queue_settings.PAUSE_WHILE_PLAYING_KEY, "false"),
+        (queue_settings.PAUSE_ON_BATTERY_KEY, "true"),
+    ):
+        update_setting(key, value)
+    exported = json.dumps(
+        build_library_backup(
+            {
+                "sections": [
+                    SECTION_COVERS,
+                    SECTION_METADATA,
+                    SECTION_USER_STATE,
+                    SECTION_LAUNCH_CONFIG,
+                    SECTION_EXECUTABLE_PATHS,
+                    SECTION_LAUNCH_TARGETS,
+                    SECTION_SETTINGS_GENERAL,
+                    SECTION_SETTINGS_PATHS,
+                ]
+            }
+        )
+    )
+    synced = json.dumps(build_sync_backup("2026-11-13T00:00:00Z", "test-device"))
+    for text in (exported, synced):
+        assert "QUEUED" not in text.replace("Queued", "")
+        assert "download_jobs" not in text
+        for key in queue_settings.KEYS:
+            assert key not in text

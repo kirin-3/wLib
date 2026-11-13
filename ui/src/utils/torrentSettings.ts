@@ -7,7 +7,8 @@ export const SEED_MODE_OPTIONS: ReadonlyArray<{ value: TorrentSeedMode; label: s
   { value: "never", label: "Never seed" },
 ];
 
-export type TorrentField = "ratio" | "hours" | "download" | "upload";
+/** The download limit moved to the download queue settings (download_limit_kib). */
+export type TorrentField = "ratio" | "hours" | "upload";
 
 export interface ParsedField {
   /** The value to send, or null when the text is not valid. */
@@ -31,7 +32,6 @@ export function parseTorrentField(field: TorrentField, text: string): ParsedFiel
 const KEYS: Record<TorrentField, keyof SettingsPayload> = {
   ratio: "torrent_seed_ratio",
   hours: "torrent_seed_hours",
-  download: "torrent_download_limit_kib",
   upload: "torrent_upload_limit_kib",
 };
 

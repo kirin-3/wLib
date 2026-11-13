@@ -16,11 +16,21 @@ from collections.abc import Mapping
 from typing import BinaryIO, Protocol, cast
 from collections.abc import Callable
 
+from core.downloads.pacing import SpeedLimiter
 from core.host_platform import get_data_subdir
 
 
 class DownloadError(Exception):
     """An expected, user-visible download failure."""
+
+
+class DownloadPaused(DownloadError):
+    """The transfer stopped because its download was paused.
+
+    A resumable partial file is kept so the download continues from it."""
+
+    def __init__(self) -> None:
+        super().__init__("paused")
 
 
 def disk_error(exc: OSError) -> DownloadError:
@@ -54,7 +64,6 @@ class FileInfo:
 
 
 RESUME_PREFIX = "resume-"
-RESUME_KEEP_SECONDS = 7 * 24 * 60 * 60
 # Reconnects after the connection drops mid-file, before the job fails.
 RESUME_RETRIES = 3
 RESUME_RETRY_DELAY_SECONDS = 2.0
@@ -62,11 +71,21 @@ _active_parts: set[Path] = set()
 _active_parts_lock = threading.Lock()
 
 
-def _resume_part(directory: Path, info: FileInfo) -> Path | None:
+def resume_part_name(info: FileInfo) -> str:
+    """The partial file a resumable transfer of `info` uses, or "" when it cannot resume."""
     if info.resume_factory is None or not info.resume_key or info.size is None:
-        return None
+        return ""
     digest = hashlib.sha256(f"{info.resume_key}\0{info.size}".encode()).hexdigest()[:24]
-    return directory / f"{RESUME_PREFIX}{digest}.part"
+    return f"{RESUME_PREFIX}{digest}.part"
+
+
+def can_resume(info: FileInfo) -> bool:
+    return bool(resume_part_name(info))
+
+
+def _resume_part(directory: Path, info: FileInfo) -> Path | None:
+    name = resume_part_name(info)
+    return directory / name if name else None
 
 
 def open_range(
@@ -115,8 +134,25 @@ def transfer(
     verifying: Callable[[], None] | None = None,
     *,
     directory: Path | None = None,
+    pause: Event | None = None,
+    limiter: SpeedLimiter | None = None,
+    interrupt: Event | None = None,
 ) -> Path:
-    """Transfer to a temporary file, then validate and atomically publish it."""
+    """Transfer to a temporary file, then validate and atomically publish it.
+
+    `pause` stops the transfer with `DownloadPaused` and keeps a resumable
+    partial file. `limiter` paces the reads; its waits end at once when
+    `interrupt` (by default `cancel`) is set, which the caller sets together
+    with `cancel` or `pause`.
+    """
+    interrupt = interrupt or cancel
+
+    def check_stop() -> None:
+        if pause is not None and pause.is_set():
+            raise DownloadPaused()
+        if cancel.is_set():
+            raise DownloadError("cancelled")
+
     directory = directory or staging_dir()
     directory.mkdir(parents=True, exist_ok=True)
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
@@ -174,10 +210,12 @@ def transfer(
         with part.open("ab" if offset else "wb") as output:
             try:
                 while True:
-                    if cancel.is_set():
-                        raise DownloadError("cancelled")
+                    check_stop()
+                    size = limiter.chunk_size() if limiter is not None else 1024 * 1024
+                    if limiter is not None and not limiter.acquire(size, interrupt):
+                        check_stop()
                     try:
-                        data = stream.read(1024 * 1024)
+                        data = stream.read(size)
                     except (OSError, http.client.HTTPException) as exc:
                         if (
                             info.resume_factory is None
@@ -188,8 +226,8 @@ def transfer(
                         retries += 1
                         stream.close()
                         output.flush()
-                        if cancel.wait(RESUME_RETRY_DELAY_SECONDS):
-                            raise DownloadError("cancelled") from exc
+                        if interrupt.wait(RESUME_RETRY_DELAY_SECONDS):
+                            check_stop()
                         try:
                             resumed = info.resume_factory(done)
                         except (OSError, http.client.HTTPException) as retry_exc:
@@ -212,8 +250,7 @@ def transfer(
                     progress(done, info.size)
             finally:
                 stream.close()
-        if cancel.is_set():
-            raise DownloadError("cancelled")
+        check_stop()
         if verifying:
             verifying()
         if info.size is not None and done != info.size:
@@ -249,7 +286,7 @@ def transfer(
             with _active_parts_lock:
                 _active_parts.discard(resume_part)
         if keep_part and part.is_file():
-            # Touch it so the 7-day cleanup counts from the last attempt.
+            # Touch it: its download's last attempt.
             try:
                 os.utime(part)
             except OSError:
