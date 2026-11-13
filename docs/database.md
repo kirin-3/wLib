@@ -203,6 +203,25 @@ Each tracked launch adds one row. `(game_id, started_at)` is indexed; deleting a
 
 INSERT, UPDATE, and DELETE triggers on this table bump `sync_local_modified_at` using the same monotonic timestamp statement as game changes. Both new game version columns belong to `SYNC_GAME_COLUMNS`. Settings triggers are recreated on startup so upgrades also track the new `update_notifications` general setting (`on` by default, `off` to disable).
 
+### Table: `download_jobs`
+
+The device-local download queue that `core/downloads/queue.py` owns. One row per in-app download (file host or torrent). It is never exported, synced or included in diagnostics, has no sync triggers, and holds no download link, tracker address or passkey. `game_id` has no foreign key: the queue removes a deleted game's jobs together with their data (`DownloadQueue.forget_game`). Access goes through `list_download_jobs`, `insert_download_job` (appends at the end unless a `position` is given), `update_download_job` (refuses `id`, `kind` and `created_at`), `reorder_download_jobs` and `delete_download_job`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `TEXT PRIMARY KEY` | Job id; also the worker's job id. |
+| `kind` | `TEXT NOT NULL` | `host` or `torrent`. |
+| `game_id` | `INTEGER NOT NULL` | The game the download is for. |
+| `title`, `version` | `TEXT NOT NULL DEFAULT ''` | Shown on the row; `version` is the build's version. |
+| `position` | `INTEGER NOT NULL DEFAULT 0` | Queue order, lowest first (indexed). |
+| `state` | `TEXT NOT NULL` | `preparing`, `queued`, `retry_wait`, `held`, `running`, `paused`, `attention` or `ready`. |
+| `reason` | `TEXT NOT NULL DEFAULT ''` | Extra state detail, such as `game` or `battery` for `held`, or `seed_prompt`. |
+| `error_code`, `error_text` | `TEXT NOT NULL DEFAULT ''` | Failure code from `core/downloads/failures.py` and the original message. |
+| `source` | `TEXT NOT NULL DEFAULT '{}'` | JSON. Host: the build identity (`label`, `section`, `platform`, `host`, `part`). Torrent: `rpdl_id` and `info_hash`. |
+| `bytes_done`, `bytes_total` | `INTEGER` | Last known progress; `bytes_total` is null when unknown. |
+| `retries`, `retry_at` | `INTEGER`, `REAL` | Automatic network retries used, and the epoch time of the next one. |
+| `created_at`, `updated_at`, `finished_at` | `REAL` | Epoch seconds. |
+
 ### Table: `settings`
 A simple generic key-value store for application-wide persistence.
 
@@ -230,6 +249,8 @@ sync. Missing sandbox fields in older backups preserve a matched game's local
 value.
 
 Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder` (default), `library_folders` (JSON array of paths, seeded from the existing default), `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), `catalog_enabled` (`"1"`/`"0"`, missing means on, local-only), and `urm_rpa_path` (empty by default).
+
+Download queue settings (`core/downloads/queue_settings.py`) are device-local and not in `GENERAL_SETTINGS_KEYS`: `download_limit_kib` (shared download speed limit for file hosts and torrents in KiB/s, `0` = unlimited), `download_max_active` (downloads at once, `1`–`5`, default `2`), `download_pause_while_playing` (`true` by default) and `download_pause_on_battery` (`false` by default). A missing or invalid value reads as the default. When `download_limit_kib` was never saved, startup copies `torrent_download_limit_kib` into it once; the old key stays in place for older versions and is no longer read.
 
 `get_library_folders()` returns `(folders, default)` and repairs drift: a missing default is prepended, or the first listed folder becomes the default when none is set. A non-empty list always contains exactly one default. Settings strip paths and deduplicate by realpath; both keys can be cleared together.
 

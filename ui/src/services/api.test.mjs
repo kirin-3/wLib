@@ -654,8 +654,18 @@ test('update downloads expose browser mock payloads', async () => {
     const links = await api.getUpdateDownloadLinks(1);
     assert.equal(links.success,true);
     assert.equal(links.builds[0].mirrors[0].link_id,'mock-pixeldrain');
-    assert.deepEqual((await api.getUpdateDownloadStatus()).jobs,[]);
-    assert.equal((await api.startUpdateDownload(1,'mock-pixeldrain')).success,false);
+    const before = await api.getDownloadQueue();
+    assert.equal(before.success,true);
+    assert.equal(before.queue.max_active,2);
+    const added = await api.startUpdateDownload(1,'mock-pixeldrain');
+    assert.equal(added.success,true);
+    const after = await api.getDownloadQueue(true);
+    assert.ok(after.jobs.some((job)=>job.job_id===added.job_id));
+    assert.ok(Array.isArray(after.queue.history));
+    assert.equal((await api.pauseDownload(added.job_id)).success,true);
+    assert.equal((await api.getDownloadQueue()).jobs.find((job)=>job.job_id===added.job_id).state,'paused');
+    assert.equal((await api.removeDownload(added.job_id)).success,true);
+    assert.equal((await api.removeDownload('missing')).success,false);
     assert.equal((await api.openUpdateDownloadInBrowser(1,'mock-other')).success,true);
   } finally { await server.close(); delete globalThis.window; delete globalThis.localStorage; }
 });
@@ -679,8 +689,7 @@ test('RPDL bridge methods have browser mocks and forward arguments to the deskto
     assert.equal(found.signed_in,true);
     assert.equal(found.results[0].version_match,true);
     assert.equal(found.results[1].no_seeders,true);
-    assert.equal((await api.startRpdlDownload(1,1,'0.8')).success,false);
-    assert.equal((await api.pauseTorrent('j')).success,false);
+    assert.equal((await api.startRpdlDownload(1,1,'0.8')).success,true);
     assert.deepEqual(await api.disconnectRpdlAccount(),{success:true});
     const failed = await api.startRpdlDownload(1,1,'0.8');
     assert.match(failed.error,/Sign in to RPDL/);
@@ -691,7 +700,7 @@ test('RPDL bridge methods have browser mocks and forward arguments to the deskto
   globalThis.window = { pywebview: { api: {
     connect_rpdl_account: record('connect'), disconnect_rpdl_account: record('disconnect'),
     find_rpdl_torrents: record('find'), start_rpdl_download: record('start'),
-    pause_torrent: record('pause'), resume_torrent: record('resume'),
+    pause_download: record('pause'), resume_download: record('resume'),
     answer_seed_prompt: record('answer'), stop_seeding: record('stop'),
   } }, dispatchEvent() {} };
   const bridge = await createServer({server:{middlewareMode:true},appType:'custom'});
@@ -700,13 +709,13 @@ test('RPDL bridge methods have browser mocks and forward arguments to the deskto
     await api.connectRpdlAccount('kim','pw');
     await api.disconnectRpdlAccount();
     await api.findRpdlTorrents(3,'1.0',true);
-    await api.startRpdlDownload(3,9,'1.0');
-    await api.pauseTorrent('a');
-    await api.resumeTorrent('a');
+    await api.startRpdlDownload(3,9,'1.0','old');
+    await api.pauseDownload('a');
+    await api.resumeDownload('a');
     await api.answerSeedPrompt('a',true,true);
     await api.stopSeeding('a');
     assert.deepEqual(calls,[
-      ['connect','kim','pw'],['disconnect'],['find',3,'1.0',true],['start',3,9,'1.0'],
+      ['connect','kim','pw'],['disconnect'],['find',3,'1.0',true],['start',3,9,'1.0','old'],
       ['pause','a'],['resume','a'],['answer','a',true,true],['stop','a'],
     ]);
   } finally { await bridge.close(); delete globalThis.window; }

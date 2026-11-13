@@ -378,6 +378,77 @@ export interface LibraryFolder {
   free_bytes: number | null;
 }
 
+/** One game in an uninstall or move plan (`plan_game_uninstall`, `plan_game_move`). */
+export interface GameFilePlanEntry {
+  game_id: number;
+  title: string;
+  /** The folder that is deleted or moved. */
+  root: string;
+  root_source: "pattern" | "exe_dir" | "override" | "";
+  /** The unsafe-folder guard result for `root`. */
+  removable: boolean;
+  reason: string;
+  /** The saves folder when it exists, or "". */
+  saves_folder: string;
+  saves_inside_root: boolean;
+  /** Running, busy, not installed or not found. */
+  blocked_reason: string;
+  /** Move only: the final folder. */
+  target?: string;
+  same_device?: boolean;
+  /** Move only: target exists, destination inside the root, not enough space and so on. */
+  move_reason?: string;
+  size_bytes?: number | null;
+}
+export interface GameFilePlanResponse extends ApiBasicResponse {
+  games?: GameFilePlanEntry[];
+}
+export interface UninstallOptions {
+  backup_saves: boolean;
+  remove_from_library: boolean;
+  /** Folder chosen by the user for a game, keyed by game id. The backend checks it again. */
+  root_overrides?: Record<string, string>;
+}
+export interface UninstallResult {
+  game_id: number;
+  success: boolean;
+  error: string;
+  trash?: "library" | "recorded" | "in_place";
+}
+export interface UninstallGamesResponse extends ApiBasicResponse {
+  results?: UninstallResult[];
+  uninstalled?: number;
+  failed?: number;
+}
+export interface MoveSummary {
+  moved: number;
+  skipped: number;
+  cancelled: number;
+  failed: number;
+  first_reason: string;
+}
+export interface MoveCurrent {
+  game_id: number;
+  title: string;
+  bytes_done: number;
+  /** 0 for a rename on the same drive. */
+  bytes_total: number;
+  speed_bps: number;
+}
+export interface MoveStatus extends ApiBasicResponse {
+  running: boolean;
+  current: MoveCurrent | null;
+  waiting: number[];
+  /** "Moving position of total". */
+  position: number;
+  total: number;
+  /** Shows once, after the queue ends. */
+  summary?: MoveSummary;
+}
+export interface StartMoveResponse extends ApiBasicResponse {
+  queued?: number[];
+}
+
 export interface InstallDestinationOptions {
   library_folder?: string | undefined;
   title: string;
@@ -452,7 +523,92 @@ export interface UpdateDownloadJob {
   /** Seconds left, when known. */
   eta?: number | null;
 }
-export interface UpdateDownloadStatus extends ApiBasicResponse { jobs?: UpdateDownloadJob[] }
+
+/** Queue states (design D3). Only "running" uses a slot. */
+export type DownloadQueueState = "preparing" | "queued" | "retry_wait" | "held" | "running" | "paused" | "attention" | "ready";
+/** Failure codes from core/downloads/failures.py; the UI owns the words. */
+export type DownloadFailureCode =
+  | "network" | "removed" | "quota" | "challenge" | "invalid" | "disk" | "write" | "sign_in"
+  | "extension" | "check_timeout" | "permission" | "mirror_gone" | "engine" | "unknown";
+export interface DownloadJobDetails {
+  /** Worker step: resolving, needs_user, downloading, verifying, fetching, paused, done, ... */
+  stage?: string;
+  host?: string;
+  hint?: string;
+  peers?: number;
+  upload_speed?: number;
+  ratio?: number;
+  ratio_target?: number;
+  /** "", "awaiting_answer", "seeding" or "ended". */
+  seed_state?: string;
+  archive_path?: string;
+  folder_path?: string;
+  payload_kind?: "archive" | "folder" | "";
+  installed?: boolean;
+  restarting?: boolean;
+}
+export interface DownloadJobSource { label?: string; section?: string; platform?: string; host?: string; part?: string; rpdl_id?: number }
+export interface DownloadQueueJob {
+  job_id: string;
+  kind: "host" | "torrent";
+  game_id: number;
+  title: string;
+  version: string;
+  state: DownloadQueueState;
+  /** "game" or "battery" for held; "browser_check" for a check in the browser; "preparing" for a pause while preparing. */
+  reason: string;
+  position: number;
+  error_code: DownloadFailureCode | "";
+  error_text: string;
+  bytes_done: number;
+  bytes_total: number | null;
+  /** Bytes per second while running. */
+  speed: number;
+  eta: number | null;
+  retries: number;
+  /** Unix time of the next automatic retry. */
+  retry_at: number | null;
+  retry_in: number | null;
+  created_at: number;
+  finished_at: number | null;
+  /** False when a pause or hold would start the download over (MEGA). */
+  can_continue: boolean;
+  source: DownloadJobSource;
+  details: DownloadJobDetails;
+}
+export interface DownloadQueueSettings {
+  /** KiB/s for file hosts and torrents together; 0 means unlimited. */
+  download_limit_kib: number;
+  /** 1 to 5. */
+  download_max_active: number;
+  download_pause_while_playing: boolean;
+  download_pause_on_battery: boolean;
+}
+export interface DownloadForecast { needed: number; free: number | null; unknown: number; fits: boolean; missing: number }
+export interface DownloadQueueSummary {
+  max_active: number;
+  active: number;
+  /** The hold in force: "game", "battery", or "" (none, or overridden with Resume now). */
+  hold: "" | "game" | "battery";
+  hold_reason: "" | "game" | "battery";
+  hold_override: boolean;
+  /** Running downloads that cannot continue later, so a hold leaves them running. */
+  hold_keeps_running: string[];
+  speed: number;
+  peak: number;
+  /** One combined-speed sample per second, the last 5 minutes; only when asked for. */
+  history?: number[];
+  forecast: DownloadForecast;
+  settings: DownloadQueueSettings;
+}
+/** "started": it runs now; "yielded": a running download gave up its slot; "first": it waits at the top. */
+export interface StartDownloadNowResponse extends ApiBasicResponse { outcome?: "started" | "yielded" | "first" }
+export interface DownloadQueueStatus extends ApiBasicResponse {
+  jobs?: DownloadQueueJob[];
+  queue?: DownloadQueueSummary;
+  /** Torrent snapshots of finished torrents that still seed. */
+  seeding?: UpdateDownloadJob[];
+}
 
 export interface ArchiveInstallOptions {
   target_id?: number | null | undefined;
@@ -1059,8 +1215,11 @@ export interface SettingsPayload extends Partial<GamescopeSettings> {
   torrent_seed_mode?: TorrentSeedMode;
   torrent_seed_ratio?: number | string;
   torrent_seed_hours?: number | string;
-  torrent_download_limit_kib?: number | string;
   torrent_upload_limit_kib?: number | string;
+  download_limit_kib?: number | string;
+  download_max_active?: number | string;
+  download_pause_while_playing?: boolean;
+  download_pause_on_battery?: boolean;
   torrent_port_mapping?: boolean;
   torrent_watch_folder?: string;
   torrent_export_warning_accepted?: boolean;
@@ -1183,8 +1342,15 @@ export interface SettingsResponse extends GamescopeSettings {
   /** Optional seeding time limit in hours; empty means none. */
   torrent_seed_hours: number | "";
   /** Device-local: KiB/s, 0 means unlimited. */
-  torrent_download_limit_kib: number;
   torrent_upload_limit_kib: number;
+  /** Device-local: the shared download speed limit for file hosts and torrents, KiB/s; 0 means unlimited. */
+  download_limit_kib: number;
+  /** Device-local: downloads at once, 1 to 5. */
+  download_max_active: number;
+  /** Device-local: downloads wait while a game started from wLib runs. */
+  download_pause_while_playing: boolean;
+  /** Device-local: downloads wait while the computer runs on battery. */
+  download_pause_on_battery: boolean;
   torrent_port_mapping: boolean;
   /** Device-local: an external client's watch folder; empty means none. */
   torrent_watch_folder: string;
@@ -1971,23 +2137,65 @@ class ApiService {
     return this.invoke<LibraryFolder[]>("list_library_folders");
   }
 
+  async planGameUninstall(gameIds: number[], rootOverrides: Record<string, string> = {}): Promise<GameFilePlanResponse> {
+    return this.invoke<GameFilePlanResponse>("plan_game_uninstall", gameIds, rootOverrides);
+  }
+
+  async uninstallGames(gameIds: number[], options: UninstallOptions): Promise<UninstallGamesResponse> {
+    const result = await this.invoke<UninstallGamesResponse>("uninstall_games", gameIds, options);
+    if (result?.uninstalled) this.notifyLibraryChange();
+    return result;
+  }
+
+  async planGameMove(gameIds: number[], destParent: string, rootOverrides: Record<string, string> = {}): Promise<GameFilePlanResponse> {
+    return this.invoke<GameFilePlanResponse>("plan_game_move", gameIds, destParent, rootOverrides);
+  }
+
+  async startGameMove(gameIds: number[], destParent: string, rootOverrides: Record<string, string> = {}): Promise<StartMoveResponse> {
+    return this.invoke<StartMoveResponse>("start_game_move", gameIds, destParent, rootOverrides);
+  }
+
+  async getMoveStatus(): Promise<MoveStatus> {
+    return this.invoke<MoveStatus>("get_move_status");
+  }
+
+  async cancelGameMove(cancelAll = false): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("cancel_game_move", cancelAll);
+  }
+
   async getUpdateDownloadLinks(gameId: number): Promise<UpdateDownloadLinks> {
     return this.invoke<UpdateDownloadLinks>("get_update_download_links", gameId);
   }
   async closeUpdateDownloadLinks(gameId: number): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("close_update_download_links", gameId);
   }
-  async startUpdateDownload(gameId: number, linkId: string): Promise<ApiBasicResponse & {job_id?: string}> {
-    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_update_download", gameId, linkId);
+  /** Adds the mirror to the download queue; `replaces` is a failed download's id. */
+  async startUpdateDownload(gameId: number, linkId: string, replaces: string | null = null): Promise<ApiBasicResponse & {job_id?: string}> {
+    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_update_download", gameId, linkId, replaces);
   }
-  async getUpdateDownloadStatus(): Promise<UpdateDownloadStatus> {
-    return this.invoke<UpdateDownloadStatus>("get_update_download_status");
+  async getDownloadQueue(includeHistory = false): Promise<DownloadQueueStatus> {
+    return this.invoke<DownloadQueueStatus>("get_download_queue", includeHistory);
   }
+  async reorderDownloads(jobIds: string[]): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("reorder_downloads", jobIds);
+  }
+  /** outcome: "started", "yielded" (a running download gave up its slot) or "first" (next in line). */
+  async startDownloadNow(jobId: string): Promise<StartDownloadNowResponse> {
+    return this.invoke<StartDownloadNowResponse>("start_download_now", jobId);
+  }
+  async pauseDownload(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("pause_download", jobId); }
+  async resumeDownload(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("resume_download", jobId); }
+  async pauseAllDownloads(): Promise<ApiBasicResponse & {count?: number}> { return this.invoke<ApiBasicResponse & {count?: number}>("pause_all_downloads"); }
+  async resumeAllDownloads(): Promise<ApiBasicResponse & {count?: number}> { return this.invoke<ApiBasicResponse & {count?: number}>("resume_all_downloads"); }
+  async retryDownload(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("retry_download", jobId); }
+  async removeDownload(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("remove_download", jobId); }
+  /** Lets downloads run until the current hold (game or battery) ends. */
+  async resumeDownloadsNow(): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("resume_downloads_now"); }
   async findRpdlTorrents(gameId: number, version = "", refresh = false): Promise<RpdlSearchResponse> {
     return this.invoke<RpdlSearchResponse>("find_rpdl_torrents", gameId, version, refresh);
   }
-  async startRpdlDownload(gameId: number, torrentId: number, version = ""): Promise<ApiBasicResponse & {job_id?: string}> {
-    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_rpdl_download", gameId, torrentId, version);
+  async startRpdlDownload(gameId: number, torrentId: number, version = "", replaces: string | null = null): Promise<ApiBasicResponse & {job_id?: string}> {
+    return this.invoke<ApiBasicResponse & {job_id?: string}>("start_rpdl_download", gameId, torrentId, version, replaces);
   }
   async saveRpdlTorrent(torrentId: number, folder: string): Promise<RpdlTorrentExportResponse> {
     return this.invoke<RpdlTorrentExportResponse>("save_rpdl_torrent", torrentId, folder);
@@ -1998,15 +2206,10 @@ class ApiService {
   async sendRpdlTorrentToWatchFolder(torrentId: number): Promise<RpdlTorrentExportResponse> {
     return this.invoke<RpdlTorrentExportResponse>("send_rpdl_torrent_to_watch_folder", torrentId);
   }
-  async pauseTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("pause_torrent", jobId); }
-  async resumeTorrent(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("resume_torrent", jobId); }
   async answerSeedPrompt(jobId: string, seed: boolean, remember = false): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("answer_seed_prompt", jobId, seed, remember);
   }
   async stopSeeding(jobId: string): Promise<ApiBasicResponse> { return this.invoke<ApiBasicResponse>("stop_seeding", jobId); }
-  async cancelUpdateDownload(jobId: string): Promise<ApiBasicResponse> {
-    return this.invoke<ApiBasicResponse>("cancel_update_download", jobId);
-  }
   async openUpdateDownloadInBrowser(gameId: number, linkId: string): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("open_update_download_in_browser", gameId, linkId);
   }

@@ -6,6 +6,7 @@ import sqlite3
 import shlex
 import types
 import re
+import time
 import os
 import json
 from collections.abc import Callable, Mapping, Sequence
@@ -720,6 +721,35 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ = cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_play_sessions_game_started ON play_sessions(game_id, started_at)"
     )
+    # Device-local download queue (core/downloads/queue.py). No foreign key:
+    # the queue deletes a removed game's jobs together with their data. The
+    # rows never hold a download link, tracker address or passkey, and are
+    # never exported or synced.
+    _ = cursor.execute("""
+        CREATE TABLE IF NOT EXISTS download_jobs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            game_id INTEGER NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            error_code TEXT NOT NULL DEFAULT '',
+            error_text TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '{}',
+            bytes_done INTEGER NOT NULL DEFAULT 0,
+            bytes_total INTEGER,
+            retries INTEGER NOT NULL DEFAULT 0,
+            retry_at REAL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            finished_at REAL
+        )
+    """)
+    _ = cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_download_jobs_position ON download_jobs(position)"
+    )
 
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('proton_path', '')"
@@ -1320,6 +1350,102 @@ def delete_game(game_id: int) -> None:
         cursor = conn.cursor()
         _ = cursor.execute("DELETE FROM games WHERE id = ?", (game_id,))
         conn.commit()
+
+
+def _resolved_path(path: str) -> str:
+    expanded = os.path.abspath(os.path.expanduser(path))
+    try:
+        return os.path.realpath(expanded)
+    except OSError:
+        return expanded
+
+
+def _moved_path(value: object, old_root: str, new_root: str) -> str | None:
+    """`value` rebased from old_root to new_root, or None when it is outside."""
+    raw = str(value or "").strip()
+    if not raw or "://" in raw:
+        return None
+    path_real = _resolved_path(raw)
+    root_real = _resolved_path(old_root)
+    if path_real == root_real:
+        return new_root
+    prefix = root_real.rstrip(os.sep) + os.sep
+    if not path_real.startswith(prefix):
+        return None
+    return os.path.join(new_root, os.path.relpath(path_real, root_real))
+
+
+_REPOINT_GAME_COLUMNS = (
+    "exe_path",
+    "cover_image_path",
+    "custom_prefix",
+    "save_path_override",
+)
+
+
+def repoint_game_paths(game_id: int, old_root: str, new_root: str) -> dict[str, object]:
+    """Point the game's stored paths inside old_root at new_root, in one transaction.
+
+    Changes `exe_path`, `cover_image_path`, `custom_prefix`,
+    `save_path_override` and each launch target that is inside old_root.
+    Paths outside old_root stay. Returns the changed game columns and the
+    number of changed launch targets.
+    """
+    now_iso = local_now_iso()
+    with closing(get_connection()) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
+        row = cast(
+            sqlite3.Row | None,
+            conn.execute(
+                f"SELECT {', '.join(_REPOINT_GAME_COLUMNS)} FROM games WHERE id = ?",
+                (game_id,),
+            ).fetchone(),
+        )
+        if row is None:
+            raise sqlite3.IntegrityError("The game was not found.")
+        changed: dict[str, object] = {}
+        for column in _REPOINT_GAME_COLUMNS:
+            moved = _moved_path(cast(object, row[column]), old_root, new_root)
+            if moved is not None:
+                changed[column] = moved
+        if changed:
+            set_clause = ", ".join(f"{key} = ?" for key in changed)
+            _ = conn.execute(
+                f"UPDATE games SET {set_clause} WHERE id = ?",
+                (*changed.values(), game_id),
+            )
+        targets = cast(
+            list[sqlite3.Row],
+            conn.execute(
+                "SELECT id, exe_path FROM game_launch_targets WHERE game_id = ?",
+                (game_id,),
+            ).fetchall(),
+        )
+        moved_targets = 0
+        for target in targets:
+            moved = _moved_path(cast(object, target["exe_path"]), old_root, new_root)
+            if moved is None:
+                continue
+            _ = conn.execute(
+                "UPDATE game_launch_targets SET exe_path = ?, updated_at = ? WHERE id = ?",
+                (moved, now_iso, cast(object, target["id"])),
+            )
+            moved_targets += 1
+    return {"game": changed, "targets": moved_targets}
+
+
+def clear_game_install(game_id: int) -> None:
+    """Make a game wishlisted: empty its executable and delete its launch targets.
+
+    Playtime, notes, status, collections and every other field stay.
+    """
+    with closing(get_connection()) as conn, conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute("UPDATE games SET exe_path = '' WHERE id = ?", (game_id,))
+        if cursor.rowcount == 0:
+            raise sqlite3.IntegrityError("The game was not found.")
+        _ = conn.execute("DELETE FROM game_launch_targets WHERE game_id = ?", (game_id,))
 
 
 def set_game_local_cover(
@@ -2426,3 +2552,88 @@ def delete_steam_shortcut(account_id: str, game_id: int) -> None:
     with closing(get_connection()) as conn:
         _ = conn.execute('DELETE FROM steam_shortcuts WHERE account_id = ? AND game_id = ?', (account_id, game_id))
         conn.commit()
+
+
+# Download queue (device-local; see core/downloads/queue.py)
+DOWNLOAD_JOB_COLUMNS = (
+    "id", "kind", "game_id", "title", "version", "position", "state", "reason",
+    "error_code", "error_text", "source", "bytes_done", "bytes_total", "retries",
+    "retry_at", "created_at", "updated_at", "finished_at",
+)
+# Columns update_download_job may change; id, kind and created_at stay fixed.
+_DOWNLOAD_JOB_UPDATABLE = frozenset(DOWNLOAD_JOB_COLUMNS) - {"id", "kind", "created_at"}
+
+
+def list_download_jobs() -> list[dict[str, object]]:
+    """Every saved download job, in queue order."""
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = cast(
+            list[sqlite3.Row],
+            conn.execute("SELECT * FROM download_jobs ORDER BY position, created_at, id").fetchall(),
+        )
+    return [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+
+
+def insert_download_job(job: Mapping[str, object]) -> None:
+    """Add a job at the end of the queue unless `job` names a position."""
+    values = {key: job[key] for key in DOWNLOAD_JOB_COLUMNS if key in job}
+    now = time.time()
+    _ = values.setdefault("created_at", now)
+    _ = values.setdefault("updated_at", now)
+    with closing(get_connection()) as conn:
+        if "position" not in values:
+            row = cast(
+                tuple[int | None],
+                conn.execute("SELECT MAX(position) FROM download_jobs").fetchone(),
+            )
+            values["position"] = (row[0] + 1) if row[0] is not None else 0
+        columns = ", ".join(values)
+        marks = ", ".join("?" for _ in values)
+        _ = conn.execute(
+            f"INSERT INTO download_jobs ({columns}) VALUES ({marks})", tuple(values.values())
+        )
+        conn.commit()
+
+
+def update_download_job(job_id: str, fields: Mapping[str, object]) -> bool:
+    """Change allowed columns of one job; False when no such job exists."""
+    values = {key: value for key, value in fields.items() if key in _DOWNLOAD_JOB_UPDATABLE}
+    unknown = set(fields) - _DOWNLOAD_JOB_UPDATABLE
+    if unknown:
+        raise ValueError(f"Unknown download job fields: {', '.join(sorted(unknown))}")
+    _ = values.setdefault("updated_at", time.time())
+    assignments = ", ".join(f"{key} = ?" for key in values)
+    with closing(get_connection()) as conn:
+        cursor = conn.execute(
+            f"UPDATE download_jobs SET {assignments} WHERE id = ?", (*values.values(), job_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def reorder_download_jobs(job_ids: Sequence[str]) -> None:
+    """Put the named jobs first, in the given order; the rest follow in their old order."""
+    with closing(get_connection()) as conn:
+        existing = [
+            str(row[0])
+            for row in cast(
+                list[tuple[object]],
+                conn.execute("SELECT id FROM download_jobs ORDER BY position, created_at, id").fetchall(),
+            )
+        ]
+        known = set(existing)
+        named = list(dict.fromkeys(job_id for job_id in job_ids if job_id in known))
+        rest = [job_id for job_id in existing if job_id not in set(named)]
+        _ = conn.executemany(
+            "UPDATE download_jobs SET position = ? WHERE id = ?",
+            [(index, job_id) for index, job_id in enumerate(named + rest)],
+        )
+        conn.commit()
+
+
+def delete_download_job(job_id: str) -> bool:
+    with closing(get_connection()) as conn:
+        cursor = conn.execute("DELETE FROM download_jobs WHERE id = ?", (job_id,))
+        conn.commit()
+        return cursor.rowcount > 0

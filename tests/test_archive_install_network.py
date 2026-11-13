@@ -129,6 +129,33 @@ def test_copy_tree_parallel_preserves_tree(tmp_path):
     assert os.stat(dst / "f0.dat").st_mtime_ns == os.stat(src / "f0.dat").st_mtime_ns
 
 
+def test_copy_tree_parallel_reports_bytes_and_keeps_tree(tmp_path):
+    import threading
+
+    src = tmp_path / "src"
+    (src / "a").mkdir(parents=True)
+    (src / "a" / "big.bin").write_bytes(os.urandom(3 * 1024 * 1024 + 7))
+    for i in range(10):
+        (src / f"f{i}.dat").write_bytes(os.urandom(1000 + i))
+    os.symlink("a/big.bin", src / "link")
+    plain = tmp_path / "plain"
+    counted = tmp_path / "counted"
+    plain.mkdir()
+    counted.mkdir()
+    lock = threading.Lock()
+    seen: list[int] = []
+
+    def on_bytes(n: int) -> None:
+        with lock:
+            seen.append(n)
+
+    # Without the callback (the archive install call) the copy is unchanged.
+    assert copy_tree_parallel(str(src), str(plain), workers=4) == 12
+    assert copy_tree_parallel(str(src), str(counted), workers=4, on_bytes=on_bytes) == 12
+    assert _snapshot(plain) == _snapshot(src) == _snapshot(counted)
+    assert sum(seen) == ai.tree_bytes(str(src))
+
+
 def test_filesystem_type_picks_deepest_mount(tmp_path):
     mountinfo = tmp_path / "mountinfo"
     games = tmp_path / "mnt" / "nas games"

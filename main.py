@@ -1031,6 +1031,13 @@ def _startup_cleanup() -> None:
         _ = prune_removed_sandboxes()
     except Exception as exc:
         print(f"[wLib] Failed to prune removed sandboxes: {exc}")
+    try:
+        from core.game_files import load_context, sweep_leftovers
+
+        # Trash and move folders left by a crash or a quit during a move.
+        _ = sweep_leftovers(load_context().library_folders)
+    except Exception as exc:
+        print(f"[wLib] Failed to sweep leftover game folders: {exc}")
 
 
 def cleanup_legacy_browser_data_async() -> None:

@@ -10,6 +10,8 @@ import { mockAttachmentList, readMockAttachments, writeMockAttachments } from ".
 import { rewriteMockGameCollections, validateMockCollectionList, writeMockCollections } from "./collections";
 import { readMockCompanions, writeMockCompanions } from "./companions";
 import { MOCK_CATALOG_SOURCES, MOCK_DIAGNOSTICS, MOCK_DIAGNOSTICS_REPORT, MOCK_DIAGNOSTICS_TOOLS, MOCK_SCREENSHOT_SET_B } from "./fixtures";
+import { MockGameFiles } from "./gameFiles";
+import { MockDownloads } from "./downloads";
 import { mockGameSaves } from "./gameSaves";
 import { isRecord, readMockGames } from "./games";
 import { nextMockLaunchTargetId, readMockLaunchTargets, sortMockLaunchTargets, writeMockLaunchTargets } from "./launchTargets";
@@ -49,6 +51,16 @@ export class MockBackend {
   _mockBepinex = new Map<number, BepInExInstalled>();
   _mockBepinexBackup = new Map<number, BepInExInstalled | null>();
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
+  _mockGameFiles = new MockGameFiles((id) => this._mockRunningGames.has(id));
+  _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
+    const settings = readMockSettings();
+    return {
+      download_limit_kib: settings.download_limit_kib,
+      download_max_active: settings.download_max_active,
+      download_pause_while_playing: settings.download_pause_while_playing,
+      download_pause_on_battery: settings.download_pause_on_battery,
+    };
+  });
 
   _mockToolEngine(gameId: number): GameToolEngine {
     const engine = readMockGames().find((game) => game.id === gameId)?.engine ?? "";
@@ -204,6 +216,13 @@ export class MockBackend {
     };
 
     switch (method) {
+      case "plan_game_uninstall":
+      case "uninstall_games":
+      case "plan_game_move":
+      case "start_game_move":
+      case "get_move_status":
+      case "cancel_game_move":
+        return this._mockGameFiles.respond(method, args);
       case "list_companion_tools":
         return { success: true, tools: readMockCompanions().tools };
       case "save_companion_tool": {
@@ -717,6 +736,13 @@ export class MockBackend {
           const error = check(String(payload[field] ?? ""));
           if (error) return { success: false, field, error };
         }
+        for (const key of ["download_limit_kib", "download_max_active"] as const) {
+          if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
+          const value = Number(payload[key]);
+          const valid = Number.isInteger(value) && (key === "download_limit_kib" ? value >= 0 : value >= 1 && value <= 5);
+          if (!valid) return { success: false, field: key, error: "Enter a valid download setting" };
+          payload[key] = value;
+        }
         if (Object.prototype.hasOwnProperty.call(payload, "save_backup_keep") && !isSaveBackupKeep(payload.save_backup_keep)) {
           return { success: false, error: "Save backups to keep must be 'all' or 1–99" };
         }
@@ -1111,12 +1137,24 @@ export class MockBackend {
         return {success:true, version:"v1.2", builds:[{label:"Windows/Linux",section:"",platform:"windows/linux",kind:"full",mirrors:[{link_id:"mock-pixeldrain",host:"pixeldrain",label:"Pixeldrain",part:"",split:false},{link_id:"mock-other",host:"gofile",label:"Gofile",part:"",split:false}]}]};
       case "close_update_download_links":
         return {success:true};
-      case "start_update_download":
-        return {success:false,error:"Downloads are available in the desktop app"};
-      case "get_update_download_status":
-        return {success:true,jobs:[]};
-      case "cancel_update_download":
-        return {success:false,error:"Download is not running"};
+      case "start_update_download": {
+        const gameId = Number(args[0]);
+        if (this._mockRunningGames.has(gameId)) return {success:false,error:"Close the game before downloading an update"};
+        const host = args[1] === "mock-mega" ? "mega" : "pixeldrain";
+        return this._mockDownloads.add("host", gameId, "v1.2", {label:"Windows/Linux",section:"",platform:"windows/linux",host,part:""}, typeof args[2] === "string" ? args[2] : null);
+      }
+      case "get_download_queue":
+        return this._mockDownloads.status(args[0] === true);
+      case "reorder_downloads":
+      case "start_download_now":
+      case "pause_download":
+      case "resume_download":
+      case "pause_all_downloads":
+      case "resume_all_downloads":
+      case "retry_download":
+      case "remove_download":
+      case "resume_downloads_now":
+        return this._mockDownloads.command(method, args);
       case "open_update_download_in_browser":
         return {success:true,mock:true};
       case "inspect_archive": {
@@ -1475,9 +1513,12 @@ export class MockBackend {
         ];
         return { success: true, results, preselected_id: 1, needs_choice: false, signed_in: !!localStorage.getItem("wlib-mock-rpdl"), query: "MockGame" };
       }
-      case "start_rpdl_download":
+      case "start_rpdl_download": {
         if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
-        return { success: false, error: "Downloads are available in the desktop app" };
+        const gameId = Number(args[0]);
+        if (this._mockRunningGames.has(gameId)) return { success: false, error: "Close the game before downloading an update" };
+        return this._mockDownloads.add("torrent", gameId, String(args[2] ?? ""), { rpdl_id: Number(args[1]) }, typeof args[3] === "string" ? args[3] : null);
+      }
       case "save_rpdl_torrent": {
         if (!localStorage.getItem("wlib-mock-rpdl")) return { success: false, error: "Sign in to RPDL in Settings", error_code: "sign_in" };
         const folder = String(args[1] || "");
@@ -1493,11 +1534,9 @@ export class MockBackend {
         if (!folder) return { success: false, error: "Set a watch folder in Settings first" };
         return { success: true, folder, path: `${folder.replace(/\/+$/, "")}/MockGame-1.0-pc.torrent` };
       }
-      case "pause_torrent":
-      case "resume_torrent":
       case "answer_seed_prompt":
       case "stop_seeding":
-        return { success: false, error: "Torrent downloads are available in the desktop app" };
+        return this._mockDownloads.command(method, args);
       case "get_steam_status":
         return { success: true, found: true, flatpak_steam: false, accounts: ["123456"], account_id: "123456", running: false, deck: false, gaming_mode: false, mode: localStorage.getItem("wlib-mock-steam-mode") || "off", sync: { running: false } };
       case "get_game_steam_state":

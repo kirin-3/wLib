@@ -5,7 +5,7 @@ import { IconChevronDown, IconChevronLeft, IconChevronRight } from "@tabler/icon
 import type { GameRecord } from "../services/api";
 import { addTagCsv, launchModeApplicable, removeTagCsv } from "../utils/bulkActions";
 import { ENGINE_OPTIONS, isEngine } from "../utils/engines";
-import { gameTags } from "../utils/libraryGames";
+import { gameTags, isWishlisted } from "../utils/libraryGames";
 import { normalizePlayStatus } from "../utils/playStatus";
 
 type MenuId = "status" | "collections" | "updates" | "runtime" | "metadata" | "maintenance";
@@ -50,6 +50,8 @@ const menus = computed<{ id: MenuId; label: string }[]>(() => [
   { id: "metadata", label: "Metadata" },
   { id: "maintenance", label: "Maintenance" },
 ]);
+
+const installedCount = computed(() => props.games.filter((game) => !isWishlisted(game)).length);
 
 const setTrigger = (id: MenuId, el: unknown) => {
   if (el instanceof HTMLElement) triggers.set(id, el);
@@ -264,6 +266,8 @@ const infoReason = computed(() => {
         <template v-else-if="menu.id === 'maintenance'">
           <button role="menuitem" :disabled="busy || savesBusy" :title="savesDisabledReason || 'Back up the saves of each selected game that has a saves folder'" @click="run('backup-saves')">Back up saves</button>
           <button role="menuitem" :disabled="busy || !!infoReason" :title="infoReason || 'Reads each selected game’s F95 thread, one paced request per game, and refreshes its cover, rating and F95 tags. Your own tag changes stay.'" @click="run('refresh-info')">Refresh F95 info</button>
+          <button role="menuitem" :disabled="busy || !installedCount" :title="installedCount ? 'Delete the files of each selected installed game' : 'No selected game is installed'" @click="closeMenu(false); emit('action', 'uninstall')">Uninstall...</button>
+          <button role="menuitem" :disabled="busy || !installedCount" :title="installedCount ? 'Move the folder of each selected installed game' : 'No selected game is installed'" @click="closeMenu(false); emit('action', 'move')">Move...</button>
         </template>
       </div>
     </div>

@@ -35,6 +35,9 @@ const props = defineProps<{
   layoutMode: LayoutMode;
   selected: boolean;
   running: boolean;
+  /** "moving" or "waiting" while the game is in the move queue. */
+  moveState?: "" | "moving" | "waiting";
+  movePercent?: number;
   menuOpen: boolean;
   updating: boolean;
   updateBusy: boolean;
@@ -90,6 +93,10 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
     ]"
   >
     <span v-if="selected" class="selection-mark" aria-hidden="true">✓</span>
+    <div v-if="moveState" class="card-move" role="status">
+      <span class="card-move-label">{{ moveState === "moving" ? `Moving ${movePercent ?? 0}%` : "Waiting" }}</span>
+      <span class="card-move-track" aria-hidden="true"><span class="card-move-fill" :style="{ width: `${moveState === 'moving' ? (movePercent ?? 0) : 0}%` }"></span></span>
+    </div>
     <div
       class="flex items-center justify-center relative shadow-inner shrink-0 rounded-t-xl"
       :class="
@@ -198,8 +205,9 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
         >
           <button
             @click.stop="emit('toggle-game', game)"
+            :disabled="!!moveState"
             class="compact-play-btn ui-play-btn rounded-md p-2"
-            :title="`${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
+            :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
           >
             <IconPlayerStopFilled
               v-if="!wishlisted && running"
@@ -287,7 +295,8 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
         <div class="relative flex shrink-0">
           <button
             @click.stop="emit('toggle-game', game)"
-            :title="`${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
+            :disabled="!!moveState"
+            :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
             class="play-btn ui-play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
           >
             <IconPlayerStopFilled
@@ -570,4 +579,13 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
 .unplayed-on-art {
   background: var(--bg-surface);
 }
+.card-move {
+  position: absolute; top: 0.5rem; left: 0.5rem; right: 0.5rem; z-index: 5;
+  display: flex; flex-direction: column; gap: 0.25rem; padding: 0.35rem 0.5rem;
+  border-radius: 0.5rem; background: var(--bg-surface); border: 1px solid var(--border-hover);
+  box-shadow: var(--shadow-card); pointer-events: none;
+}
+.card-move-label { font-size: 0.7rem; font-weight: 700; color: var(--text-primary); }
+.card-move-track { display: block; height: 0.25rem; border-radius: 9999px; background: var(--bg-inset); overflow: hidden; }
+.card-move-fill { display: block; height: 100%; background: var(--brand); transition: width 0.4s ease; }
 </style>

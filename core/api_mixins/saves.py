@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Generator
-from contextlib import closing, contextmanager
+from contextlib import closing
 from typing import cast
 
-from core.database import (
-    normalize_launch_mode,
-)
 from core.host_platform import (
     is_windows,
 )
@@ -200,78 +196,6 @@ class SavesMixin(ApiBase):
         except Exception:
             attachments = []
         return {"success": True, "attachments": attachments}
-
-    @contextmanager
-    def _save_operation(self, game_id: int, writes: bool = False) -> Generator[None]:
-        """Allow one backup/import/restore per game at a time.
-
-        Writing operations also refuse while the game runs: it would overwrite
-        the restored saves when it quits. _status_lock serializes this with
-        the launcher's reservation, which refuses launching meanwhile.
-        """
-        from core.game_saves import GameSavesError
-
-        with self._status_lock, self._saves_busy_lock:
-            if game_id in self._saves_busy:
-                raise GameSavesError(
-                    "A save operation is already running for this game"
-                )
-            if writes and game_id in self.get_running_games():
-                raise GameSavesError("Close the game before changing its saves")
-            self._saves_busy.add(game_id)
-            if writes:
-                self._saves_writing.add(game_id)
-        try:
-            yield
-        finally:
-            with self._saves_busy_lock:
-                self._saves_busy.discard(game_id)
-                self._saves_writing.discard(game_id)
-
-    def _saves_game_state(
-        self, game_id: object
-    ) -> tuple[int, dict[str, object], str, list[dict[str, object]]] | None:
-        """(id, row, effective folder, detected) from the stored row, or None."""
-        from core.database import get_game
-        from core.game_saves import detect_save_locations, resolve_effective_folder
-
-        coerced_id = self._coerce_db_id(game_id)
-        if coerced_id is None:
-            return None
-        row = get_game(coerced_id)
-        if row is None:
-            return None
-        override = str(row.get("save_path_override") or "").strip()
-        detected: list[dict[str, object]] = []
-        if not override:
-            native = normalize_launch_mode(row.get("launch_mode")) == "native"
-            from core.database import html_builtin_player_enabled
-            from core.web_launch import resolve_web_player
-
-            uses_player = (
-                resolve_web_player(
-                    row.get("exe_path"),
-                    row.get("launch_mode"),
-                    row.get("html_player"),
-                    html_builtin_player_enabled(),
-                )
-                == "builtin"
-            )
-            locations = detect_save_locations(
-                str(row.get("exe_path") or ""),
-                str(row.get("title") or ""),
-                "" if native else str(row.get("custom_prefix") or ""),
-                "" if native else str(row.get("proton_version") or ""),
-                windows=is_windows(),
-                game_id=coerced_id,
-                sandbox_enabled=bool(row.get("sandbox_enabled")),
-                web_player=uses_player,
-            )
-            detected = [dict(location) for location in locations]
-            effective = resolve_effective_folder("", locations)
-        else:
-            effective = override
-        return coerced_id, row, effective, detected
 
     @staticmethod
     def _game_saves_not_found() -> dict[str, object]:

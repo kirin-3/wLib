@@ -30,6 +30,9 @@ const props = defineProps<{
   game: GameRecord;
   selected: boolean;
   running: boolean;
+  /** "moving" or "waiting" while the game is in the move queue. */
+  moveState?: "" | "moving" | "waiting";
+  movePercent?: number;
   primary: boolean;
 }>();
 const emit = defineEmits<{
@@ -122,6 +125,10 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
           </span>
           <span v-if="unplayed" class="unplayed-label">Unplayed</span>
         </div>
+        <div v-if="moveState" class="row-move mt-1" role="status">
+          <span class="row-move-label">{{ moveState === "moving" ? `Moving ${movePercent ?? 0}%` : "Waiting" }}</span>
+          <span v-if="moveState === 'moving'" class="row-move-track" aria-hidden="true"><span class="row-move-fill" :style="{ width: `${movePercent ?? 0}%` }"></span></span>
+        </div>
       </td>
       <td class="library-table-clip" :title="playStatus.label">
         <span
@@ -152,7 +159,8 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
         <div class="flex items-center gap-1">
           <button
             @click.stop="emit('toggle-game', game)"
-            :title="`${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
+            :disabled="!!moveState"
+            :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
             class="play-btn ui-play-btn rounded-md p-1.5"
           >
             <IconPlayerStopFilled
@@ -278,4 +286,8 @@ button:focus-visible {
   font-weight: 600;
   white-space: nowrap;
 }
+.row-move { display: flex; align-items: center; gap: 0.5rem; }
+.row-move-label { font-size: 0.7rem; font-weight: 600; color: var(--brand); white-space: nowrap; }
+.row-move-track { flex: 1; max-width: 8rem; height: 0.25rem; border-radius: 9999px; background: var(--bg-inset); overflow: hidden; }
+.row-move-fill { display: block; height: 100%; background: var(--brand); transition: width 0.4s ease; }
 </style>

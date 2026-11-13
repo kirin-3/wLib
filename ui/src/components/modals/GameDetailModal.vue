@@ -41,6 +41,7 @@ import DOMPurify from "dompurify";
 import { getSafeNotesLinkUrl, noteLinkUrl, noteLinkLabel, noteLinkHost, hasNoteLink } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
 import {useUpdateDownloads} from "../../composables/useUpdateDownloads";
+import { gameDownloadStatus, isUnfinished } from "../../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
@@ -115,12 +116,16 @@ const props = defineProps<{
   game: GameRecord | null;
   updateCheckState: UpdateCheckState;
   isRunning?: boolean;
+  /** The game is moving or waits in the move queue: its file fields are read-only. */
+  moving?: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   updated: [];
   remove: [game: GameRecord];
+  uninstall: [game: GameRecord];
+  move: [game: GameRecord];
   launch: [payload: GameRecord];
   "check-updates": [gameId: number];
   "targets-changed": [];
@@ -1141,6 +1146,9 @@ const closeAndNavigate = async (hash: string) => {
   if (!(await requestClose())) return;
   void sandboxRouter.push(hash);
 };
+// This game's in-app download, as a status that opens the Downloads page.
+const downloadJob = computed(() => (props.game ? updateDownloads.jobFor(props.game.id) : undefined));
+const downloadStatusText = computed(() => gameDownloadStatus(downloadJob.value));
 
 const modalRef = ref<HTMLElement | null>(null);
 useControllerActions(modalRef, {
@@ -1769,6 +1777,15 @@ const deleteGame = () => {
   close();
 };
 
+const fileAction = (kind: "uninstall" | "move") => {
+  if (!props.game || deleting.value) return;
+  const game = props.game;
+  actionsOpen.value = false;
+  if (kind === "uninstall") emit("uninstall", game);
+  else emit("move", game);
+  close();
+};
+
 const buildLaunchPayload = (targetPath: string): GameRecord | null => {
   if (props.game) {
     const runtimeOverrides = resolveLaunchRuntimeOverrides({
@@ -2196,6 +2213,10 @@ const removeAttachment = async (name: string) => {
             <div ref="actionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'actions')">
               <button ref="actionsButton" type="button" class="modal-toolbar-action" aria-label="More actions" title="More actions" aria-haspopup="menu" :aria-expanded="actionsOpen" @click="togglePopover('actions')"><IconDots class="ui-action-icon" /></button>
               <div v-if="actionsOpen" role="menu" aria-label="Game actions" class="header-popover actions-popover">
+                <template v-if="props.game && !isWishlisted(props.game)">
+                  <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('uninstall')">Uninstall...</button>
+                  <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('move')">Move...</button>
+                </template>
                 <button role="menuitem" class="popover-item" :disabled="deleting" @click="deleteGame">Remove from library</button>
               </div>
             </div>
@@ -2227,8 +2248,13 @@ const removeAttachment = async (name: string) => {
               <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
               {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
             </button>
+            <button v-if="downloadStatusText" type="button" @click="closeAndNavigate('/downloads')"
+              class="modal-toolbar-action ui-action-btn" style="color: var(--brand)"
+              :title="`${downloadStatusText}. Open Downloads`" data-testid="game-download-status">
+              {{ downloadStatusText }}
+            </button>
             <button v-if="hasUpdate && props.game?.f95_url" @click="updateDownloads.open(props.game)"
-              :disabled="props.isRunning || !!updateDownloads.jobFor(props.game.id)"
+              :disabled="props.isRunning || (!!downloadJob && isUnfinished(downloadJob))"
               class="modal-toolbar-action ui-action-btn disabled:opacity-50" style="color:var(--text-primary)">
               Download update
             </button>
@@ -2517,14 +2543,17 @@ const removeAttachment = async (name: string) => {
                   v-model="exePath" id="detail-exe"
                   type="text"
                   class="modal-input flex-1 font-mono"
+                  :readonly="moving"
+                  :aria-describedby="moving ? 'detail-moving-note' : undefined"
                   @change="loadExecutableModifiedTime"
                 />
-                <button @click="browseExe" class="modal-btn ui-action-btn">
+                <button @click="browseExe" class="modal-btn ui-action-btn" :disabled="moving">
                   <IconFolderOpenFilled class="ui-action-icon" />
                   Browse
                 </button>
               </div>
               <PathStatus :path="exePath" kind="file" />
+              <p v-if="moving" id="detail-moving-note" class="text-xs mt-1" style="color: var(--text-muted)">This game is being moved. Its file paths change when the move ends.</p>
             </div>
 
             <div class="col-span-2">
@@ -2919,8 +2948,9 @@ const removeAttachment = async (name: string) => {
                       type="text"
                       placeholder="/home/user/games/my_game_prefix"
                       class="modal-input flex-1 font-mono text-xs"
+                      :readonly="moving"
                     />
-                    <button @click="browseCustomPrefix" class="modal-btn ui-action-btn">
+                    <button @click="browseCustomPrefix" class="modal-btn ui-action-btn" :disabled="moving">
                       <IconFolderOpenFilled class="ui-action-icon" />
                       Browse
                     </button>
@@ -3069,9 +3099,10 @@ const removeAttachment = async (name: string) => {
                 type="text"
                 placeholder="https://..."
                 class="modal-input w-full"
+                :readonly="moving"
               />
               <div class="flex flex-wrap gap-2 mt-2">
-                <button type="button" class="modal-btn" :disabled="coverBusy" @click="changeLocalCover()">Choose image file…</button>
+                <button type="button" class="modal-btn" :disabled="coverBusy || moving" @click="changeLocalCover()">Choose image file…</button>
                 <button v-if="localCoverName" type="button" class="modal-btn" :disabled="coverBusy" @click="changeLocalCover(true)">Remove local cover</button>
               </div>
               <p v-if="coverError" role="alert" class="text-sm mt-2" style="color: var(--danger-text)">{{ coverError }}</p>

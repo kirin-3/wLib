@@ -126,7 +126,7 @@ def _check_cancel(cancel: threading.Event | None) -> None:
         raise InstallCancelled()
 
 
-def _tree_bytes(root: str) -> int:
+def tree_bytes(root: str) -> int:
     """Bytes of the regular files under root (symlinks not followed)."""
     total = 0
     for dirpath, _dirnames, filenames in os.walk(root):
@@ -686,7 +686,11 @@ def _run_parallel[T](func: Callable[[T], None], items: list[T], workers: int) ->
 
 
 def copy_tree_parallel(
-    src_root: str, dst_root: str, workers: int, cancel: threading.Event | None = None
+    src_root: str,
+    dst_root: str,
+    workers: int,
+    cancel: threading.Event | None = None,
+    on_bytes: Callable[[int], None] | None = None,
 ) -> int:
     """Copy an extracted tree into an existing empty folder.
 
@@ -694,6 +698,9 @@ def copy_tree_parallel(
     and modification times are kept, as direct extraction would leave them.
     Symlinks are recreated as links; install_archive() re-checks them in
     staging afterwards. Returns the number of files copied.
+
+    `on_bytes(n)`, when given, is called from the worker threads after each
+    chunk is written, with the size of that chunk.
     """
     dirs: list[str] = []
     files: list[str] = []
@@ -727,6 +734,8 @@ def copy_tree_parallel(
             with open(src, "rb") as f:
                 while chunk := f.read(_COPY_CHUNK):
                     _write_all(fd, chunk)
+                    if on_bytes is not None:
+                        on_bytes(len(chunk))
             # Shares that don't store modes or times (some SMB, rclone) may
             # refuse these; 7-Zip extracting there ignores that too.
             try:
@@ -817,7 +826,7 @@ def sweep_trash(library_folder: str) -> int:
     return started
 
 
-def _trash_root_for(path: str, library_folders: Sequence[str]) -> str:
+def trash_root_for(path: str, library_folders: Sequence[str]) -> str:
     """Deepest library folder holding `path` ("" when none does).
 
     Trash only goes where sweep_trash() looks, so an old version outside every
@@ -1768,14 +1777,14 @@ def copy_override_saves(old_override: str, rel: str, staging: str) -> int:
         ) from exc
 
 
-def _real(path: str) -> str:
+def real_path(path: str) -> str:
     try:
         return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     except OSError:
         return os.path.abspath(os.path.expanduser(path))
 
 
-def _absolute_game_path(value: object) -> str:
+def absolute_game_path(value: object) -> str:
     """Absolute path for a stored game path, expanding `~` like the launcher.
 
     Add Game stores the typed value, so a game added as `~/games/Game.exe`
@@ -1800,7 +1809,7 @@ def _is_root(path_real: str) -> bool:
     return False
 
 
-def _is_within(child_real: str, parent_real: str) -> bool:
+def is_within_real(child_real: str, parent_real: str) -> bool:
     if child_real == parent_real:
         return True
     return child_real.startswith(parent_real.rstrip(os.sep) + os.sep)
@@ -1878,7 +1887,7 @@ def can_remove_old_folder(
     return {"removable": True, "reason": ""}
 
 
-def _relative_inside(path: str, root: str) -> str | None:
+def relative_inside(path: str, root: str) -> str | None:
     """Relative path of `path` inside `root`, or None when outside."""
     path_real = _real(path)
     root_real = _real(root)
@@ -2009,7 +2018,7 @@ def other_game_paths(exclude_id: int | None = None) -> list[str]:
     return paths
 
 
-def _old_install_root(
+def old_install_root(
     old_exe: str,
     old_game: Mapping[str, object],
     library_folders: Sequence[str],
@@ -3114,3 +3123,13 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
                 }
             )
     return offers
+
+
+# Old private names, kept for callers and tests that still use them.
+_tree_bytes = tree_bytes
+_real = real_path
+_is_within = is_within_real
+_relative_inside = relative_inside
+_old_install_root = old_install_root
+_absolute_game_path = absolute_game_path
+_trash_root_for = trash_root_for

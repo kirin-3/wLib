@@ -81,6 +81,12 @@ import BulkActionBar from "../components/BulkActionBar.vue";
 import { isEngine } from "../utils/engines";
 import BulkWineDialog, { type WineChoice } from "../components/BulkWineDialog.vue";
 import { isPendingRemoval, scheduleRemoval } from "../utils/pendingRemovals";
+import { isPendingUninstallRemoval, scheduleUninstall, withPendingUninstall } from "../utils/pendingUninstalls";
+import UninstallDialog from "../components/UninstallDialog.vue";
+import MoveGameDialog from "../components/MoveGameDialog.vue";
+import MoveQueuePanel from "../components/library/MoveQueuePanel.vue";
+import { useGameMoves } from "../composables/useGameMoves";
+import type { UninstallOptions } from "../services/api";
 import { useLibrarySelection } from "../composables/useLibrarySelection";
 import { modalStack } from "../utils/modalKeyboard";
 import { sandboxLaunchError } from "../utils/sandbox";
@@ -547,7 +553,9 @@ watch(searchQuery, (value) => {
 onUnmounted(() => { if (searchTimer) clearTimeout(searchTimer); });
 
 const filteredGames = computed(() => {
-  let result = sortedGames.value.filter((game) => !isPendingRemoval(game.id));
+  let result = sortedGames.value
+    .filter((game) => !isPendingRemoval(game.id) && !isPendingUninstallRemoval(game.id))
+    .map(withPendingUninstall);
   // The selected collection tab limits everything below it.
   if (activeCollection.value) {
     const activeKey = activeCollection.value.toLowerCase();
@@ -642,6 +650,28 @@ const bulkBusy = ref(false);
 const bulkChecking = updateCheckRunning;
 const bulkSavesBusy = ref(false);
 const bulkWineOpen = ref(false);
+const uninstallOpen = ref(false);
+const uninstallTargets = ref<GameRecord[]>([]);
+const moveOpen = ref(false);
+const moveTargets = ref<GameRecord[]>([]);
+const gameMoves = useGameMoves();
+const openUninstall = (targets: GameRecord[]) => {
+  const installed = targets.filter((game) => !isWishlisted(game));
+  if (!installed.length) { notifyError("No selected game is installed."); return; }
+  uninstallTargets.value = installed;
+  uninstallOpen.value = true;
+};
+const openMove = (targets: GameRecord[]) => {
+  const installed = targets.filter((game) => !isWishlisted(game));
+  if (!installed.length) { notifyError("No selected game is installed."); return; }
+  moveTargets.value = installed;
+  moveOpen.value = true;
+};
+const confirmUninstall = (targets: GameRecord[], options: UninstallOptions) => scheduleUninstall(targets, options);
+const moveStarted = (queued: number) => {
+  if (queued) notify(queued === 1 ? "The move runs in the background." : `${queued} games move in the background, one at a time.`, "info");
+  gameMoves.refresh();
+};
 const bulkShowRuntime = ref(false);
 const bulkTagSuggestions = computed(() => [...new Set(games.value.flatMap((game) => gameTags(game)))].sort((a, b) => a.localeCompare(b)));
 const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate(game)));
@@ -694,6 +724,8 @@ const bulkAction = async (action: string, value = "") => {
   if (bulkBusy.value) return;
   const games = [...selectedGames.value];
   if (action === "remove") { scheduleRemoval(games); return; }
+  if (action === "uninstall") { openUninstall(games); return; }
+  if (action === "move") { openMove(games); return; }
   if (action === "backup-saves") { await bulkBackupSaves(games); return; }
   if (action === "launch-mode") {
     const running = runningGameIds.value;
@@ -2457,6 +2489,8 @@ onUnmounted(() => {
               v-for="(game, index) in renderedGames"
               :key="game.id"
               :game="game"
+              :move-state="gameMoves.moveStateFor(game.id).state"
+              :move-percent="gameMoves.moveStateFor(game.id).percent"
               :selected="selectedIds.has(game.id)"
               :running="runningGameIds.has(game.id)"
               :primary="index === 0"
@@ -2485,6 +2519,8 @@ onUnmounted(() => {
           v-for="(game, index) in renderedGames"
           :key="game.id"
           :game="game"
+          :move-state="gameMoves.moveStateFor(game.id).state"
+          :move-percent="gameMoves.moveStateFor(game.id).percent"
           :layout-mode="layoutMode"
           :selected="selectedIds.has(game.id)"
           :running="runningGameIds.has(game.id)"
@@ -2699,6 +2735,8 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
+      <div v-if="selectedIds.size || gameMoves.moveStatus.value?.running" class="library-bottom-stack">
+      <MoveQueuePanel :status="gameMoves.moveStatus.value" @cancel="gameMoves.cancel" />
       <BulkActionBar
         v-if="selectedIds.size"
         ref="bulkBar"
@@ -2718,7 +2756,10 @@ onUnmounted(() => {
         @action="bulkAction"
         @wine="bulkWineOpen = true"
       />
+      </div>
       <BulkWineDialog v-model="bulkWineOpen" :games="selectedGames" :running-ids="runningGameIds" @apply="applyBulkWine" />
+      <UninstallDialog v-model="uninstallOpen" :games="uninstallTargets" @confirm="confirmUninstall" />
+      <MoveGameDialog v-model="moveOpen" :games="moveTargets" @started="moveStarted" />
       <ImportFolderModal v-model="showImportModal" />
       <AddGameModal
         v-model="showAddModal"
@@ -2732,7 +2773,10 @@ onUnmounted(() => {
         :is-running="!!selectedGame && runningGameIds.has(selectedGame.id)"
         :update-check-state="shownModalUpdateState"
         @updated="handleGameUpdated"
+        :moving="!!selectedGame && !!gameMoves.moveStateFor(selectedGame.id).state"
         @remove="scheduleRemoval([$event])"
+        @uninstall="openUninstall([$event])"
+        @move="openMove([$event])"
         @launch="launchGameFast"
         @stop="stopGame"
         @check-updates="handleModalUpdateCheck"
@@ -2744,6 +2788,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* The move panel sits above the bulk bar; both stay after the last row, so neither covers it. */
+.library-bottom-stack { position: sticky; bottom: 0; z-index: 40; display: flex; flex-direction: column; gap: 0.5rem; }
 .library-skeletons--list { grid-template-columns: 1fr; gap: 8px; }
 .library-skeleton { background: var(--bg-surface); border: 1px solid var(--border); animation: skeleton-pulse 1.5s ease-in-out infinite alternate; }
 .library-skeleton--grid { height: 340px; }

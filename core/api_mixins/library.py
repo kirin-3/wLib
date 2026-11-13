@@ -614,9 +614,20 @@ class LibraryMixin(ApiBase):
                 busy = self._game_busy_reason(coerced_id)
             if busy:
                 return {"success": False, "error": busy, "error_code": "game_busy"}
-            self.cover_cache.delete_game(coerced_id)
+            self._remove_game_entry(coerced_id, previous_game)
         except (sqlite3.Error, TypeError, ValueError, OverflowError) as exc:
             return {"success": False, "error": str(exc) or "Could not delete game"}
+        return {"success": True}
+
+    def _remove_game_entry(
+        self, coerced_id: int, previous_game: Mapping[str, object] | None
+    ) -> None:
+        """The "Remove from library" body, after the running and busy checks.
+
+        Raises sqlite3.Error when the row cannot be deleted; the clean-up
+        after that only logs its failures.
+        """
+        self.cover_cache.delete_game(coerced_id)
         try:
             from core.game_attachments import remove_game_attachments
 
@@ -649,8 +660,13 @@ class LibraryMixin(ApiBase):
         except Exception as exc:
             print(f"[wLib] Failed to keep save backups for game {coerced_id}: {exc}")
         try:
+            self._download_queue.forget_game(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to remove downloads of game {coerced_id}: {type(exc).__name__}")
+        try:
             from core.downloads.torrents import supervisor as torrent_supervisor
 
+            # Seeding torrents have no queue row; they go here.
             torrent_supervisor.forget_game(coerced_id)
         except Exception as exc:
             print(f"[wLib] Failed to remove torrents of game {coerced_id}: {type(exc).__name__}")
@@ -669,6 +685,166 @@ class LibraryMixin(ApiBase):
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()
+
+    # ── Uninstall and move ──
+
+    @staticmethod
+    def _coerce_id_list(value: object) -> list[int] | None:
+        if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+            return None
+        ids: list[int] = []
+        for item in value:
+            try:
+                game_id = int(str(item))
+            except (TypeError, ValueError):
+                return None
+            if game_id not in ids:
+                ids.append(game_id)
+        return ids
+
+    def plan_game_uninstall(
+        self, game_ids: object = None, root_overrides: object = None
+    ) -> dict[str, object]:
+        """Each game's root, guard result, saves folder and blocked reason."""
+        from core.game_files import coerce_overrides, plan_uninstall
+
+        ids = self._coerce_id_list(game_ids)
+        if ids is None:
+            return {"success": False, "error": "Choose the games to uninstall."}
+        try:
+            games = plan_uninstall(ids, coerce_overrides(root_overrides), self._game_file_hooks())
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not plan the uninstall."}
+        return {"success": True, "games": games}
+
+    def _reserve_uninstall(self, game_id: int) -> str | None:
+        from core.game_files import UNINSTALL_RUNNING
+
+        with self._status_lock:
+            if game_id in self.get_running_games():
+                return UNINSTALL_RUNNING
+            busy = self._game_busy_reason(game_id)
+            if busy:
+                return busy
+            self._uninstalling.add(game_id)
+        return None
+
+    def _release_uninstall(self, game_id: int) -> None:
+        with self._status_lock:
+            self._uninstalling.discard(game_id)
+
+    def _backup_saves_before_uninstall(self, game_id: int) -> str | None:
+        from core.database import get_save_backup_keep
+        from core.game_saves import GameSavesError, NothingToBackUpError, backup_saves
+
+        effective = self._effective_saves_folder(game_id)
+        if not effective:
+            return None
+        try:
+            with self._save_operation(game_id):
+                _ = backup_saves(
+                    effective, self._save_backups_root(), game_id, get_save_backup_keep()
+                )
+        except NothingToBackUpError:
+            return None
+        except GameSavesError as exc:
+            return str(exc) or "The save backup failed."
+        return None
+
+    def _remove_entry_after_uninstall(self, game_id: int) -> None:
+        from core.database import get_game
+
+        self._remove_game_entry(game_id, get_game(game_id))
+
+    def uninstall_games(
+        self, game_ids: object = None, options: object = None
+    ) -> dict[str, object]:
+        """Uninstall games after the Undo offer ended; one result per game.
+
+        options: {backup_saves, remove_from_library, root_overrides}.
+        """
+        from core.game_files import UninstallHooks, coerce_overrides, run_uninstall
+
+        ids = self._coerce_id_list(game_ids)
+        if ids is None:
+            return {"success": False, "error": "Choose the games to uninstall."}
+        opts: Mapping[str, object] = (
+            cast(Mapping[str, object], options) if isinstance(options, Mapping) else {}
+        )
+        base = self._game_file_hooks()
+        hooks = UninstallHooks(
+            running=base.running,
+            busy=base.busy,
+            saves_folder=base.saves_folder,
+            reserve=self._reserve_uninstall,
+            release=self._release_uninstall,
+            backup_saves=self._backup_saves_before_uninstall,
+            remove_entry=self._remove_entry_after_uninstall,
+        )
+        results = run_uninstall(
+            ids,
+            coerce_overrides(opts.get("root_overrides")),
+            backup=bool(opts.get("backup_saves")),
+            remove_from_library=bool(opts.get("remove_from_library")),
+            hooks=hooks,
+        )
+        failed = [result for result in results if not result["success"]]
+        if len(failed) < len(results):
+            self._schedule_steam_sync()
+        response: dict[str, object] = {
+            "success": not failed,
+            "results": results,
+            "uninstalled": len(results) - len(failed),
+            "failed": len(failed),
+        }
+        if failed:
+            response["error"] = str(failed[0]["error"])
+        return response
+
+    def plan_game_move(
+        self, game_ids: object = None, dest_parent: object = "", root_overrides: object = None
+    ) -> dict[str, object]:
+        """The uninstall checks plus the move checks and each game's size."""
+        from core.game_files import coerce_overrides, plan_move
+
+        ids = self._coerce_id_list(game_ids)
+        if ids is None:
+            return {"success": False, "error": "Choose the games to move."}
+        dest = self._normalize_selected_path(dest_parent) if isinstance(dest_parent, str) else ""
+        try:
+            games = plan_move(
+                ids, dest, coerce_overrides(root_overrides), self._game_file_hooks()
+            )
+        except Exception as exc:
+            return {"success": False, "error": str(exc) or "Could not plan the move."}
+        return {"success": True, "games": games}
+
+    def start_game_move(
+        self, game_ids: object = None, dest_parent: object = "", root_overrides: object = None
+    ) -> dict[str, object]:
+        """Add games to the end of the move queue. Each job checks its plan again."""
+        from core.game_files import MoveJob, coerce_overrides
+
+        ids = self._coerce_id_list(game_ids)
+        if not ids:
+            return {"success": False, "error": "Choose the games to move."}
+        dest = self._normalize_selected_path(dest_parent) if isinstance(dest_parent, str) else ""
+        if not dest or not os.path.isdir(dest):
+            return {"success": False, "error": "The destination folder does not exist."}
+        overrides = coerce_overrides(root_overrides)
+        queued = self._game_moves.enqueue(
+            [
+                MoveJob(game_id=game_id, dest_parent=dest, root_override=overrides.get(game_id, ""))
+                for game_id in ids
+            ]
+        )
+        return {"success": True, "queued": queued}
+
+    def get_move_status(self) -> dict[str, object]:
+        return {"success": True, **self._game_moves.status()}
+
+    def cancel_game_move(self, cancel_all: object = False) -> dict[str, object]:
+        self._game_moves.cancel(bool(cancel_all))
         return {"success": True}
 
     def update_game(

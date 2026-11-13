@@ -8,13 +8,14 @@ import os
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing, suppress
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import closing, contextmanager, suppress
 from typing import TYPE_CHECKING, cast
 
 from core import database
 from core.database import (
     init_db,
+    normalize_launch_mode,
 )
 from core.f95zone import NON_ENGINE_PREFIXES, normalize_prefix_label
 from core.f95zone import normalize_thread_url as _normalize_thread_url
@@ -48,6 +49,10 @@ from core.api_mixins.types import (
 
 if TYPE_CHECKING:
     from webview import Window
+
+    from core.game_files import GameHooks, MoveJob, MoveOutcome
+    from core.downloads.manager import DownloadManager
+    from core.downloads.queue import DownloadQueue
 
 
 normalize_thread_url: Callable[[str], str] = cast(
@@ -110,7 +115,6 @@ class ApiBase:
         from core.update_downloads import UpdateDownloads
 
         self._update_downloads: UpdateDownloads = UpdateDownloads(download_manager)
-        download_manager.cleanup()
         try:
             from core.downloads.torrents import supervisor as torrent_supervisor
 
@@ -126,6 +130,7 @@ class ApiBase:
             print(f"[wLib] Torrent startup failed: {type(exc).__name__}")
         self.scraper: Scraper = hide_from_js(Scraper())
         self.launcher: Launcher = hide_from_js(Launcher())
+        self._download_queue: DownloadQueue = self._build_download_queue(download_manager)
         self._update_running: bool = False
         self._update_cancelled: bool = False
         self._update_outcome: str = "idle"
@@ -211,6 +216,15 @@ class ApiBase:
         # Set by cancel_archive_install(); the install checks it until the new
         # version starts moving into place.
         self._archive_install_cancel: threading.Event = threading.Event()
+        # Games whose uninstall runs now; guarded by _status_lock.
+        self._uninstalling: set[int] = set()
+        from core.game_files import MoveQueue
+
+        # Background game moves, one at a time; polled by get_move_status().
+        self._game_moves: MoveQueue = MoveQueue(self._run_move_job)
+        import atexit
+
+        _ = atexit.register(self._game_moves.shutdown)
         from core.catalog import CatalogClient
         from core.host_platform import get_data_dir
 
@@ -2002,6 +2016,31 @@ class ApiBase:
         if self.steam_sync is not None:
             self.steam_sync.schedule()
 
+    def _build_download_queue(self, download_manager: DownloadManager) -> DownloadQueue:
+        """The one download queue over both workers; restores the saved queue."""
+        from core import power
+        from core.downloads import torrents
+        from core.downloads.queue import DownloadQueue
+        from core.downloads.workers import HostWorker, TorrentWorker
+
+        def fetch_for(rpdl_id: int) -> Callable[[], bytes]:
+            return lambda: self._fetch_checked_rpdl_torrent(rpdl_id)
+
+        queue = DownloadQueue(
+            [
+                HostWorker(download_manager, self._update_downloads.relink),
+                TorrentWorker(lambda: torrents.supervisor, fetch_for),
+            ],
+            running_games=self.get_running_games,
+            on_battery=power.on_battery,
+        )
+        self._update_downloads.queue = queue
+        try:
+            queue.load()
+        except Exception as exc:
+            print(f"[wLib] Download queue startup failed: {type(exc).__name__}")
+        return queue
+
     def get_running_games(self) -> list[int]:
         games = set(self.launcher.get_running_games())
         if is_linux():
@@ -2058,8 +2097,89 @@ class ApiBase:
             return "A Wine runtime install is running on this prefix. Wait for it to finish."
         return None
 
-    def _game_busy_reason(self, game_id: int) -> str | None:
-        """Why the game's files are in use by wLib, or None. Caller holds _status_lock."""
+    @contextmanager
+    def _save_operation(self, game_id: int, writes: bool = False) -> Generator[None]:
+        """Allow one backup/import/restore per game at a time.
+
+        Writing operations also refuse while the game runs: it would overwrite
+        the restored saves when it quits. _status_lock serializes this with
+        the launcher's reservation, which refuses launching meanwhile.
+        """
+        from core.game_saves import GameSavesError
+
+        with self._status_lock, self._saves_busy_lock:
+            if game_id in self._saves_busy:
+                raise GameSavesError(
+                    "A save operation is already running for this game"
+                )
+            if writes and game_id in self.get_running_games():
+                raise GameSavesError("Close the game before changing its saves")
+            self._saves_busy.add(game_id)
+            if writes:
+                self._saves_writing.add(game_id)
+        try:
+            yield
+        finally:
+            with self._saves_busy_lock:
+                self._saves_busy.discard(game_id)
+                self._saves_writing.discard(game_id)
+
+    def _saves_game_state(
+        self, game_id: object
+    ) -> tuple[int, dict[str, object], str, list[dict[str, object]]] | None:
+        """(id, row, effective folder, detected) from the stored row, or None."""
+        from core.database import get_game
+        from core.game_saves import detect_save_locations, resolve_effective_folder
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None:
+            return None
+        row = get_game(coerced_id)
+        if row is None:
+            return None
+        override = str(row.get("save_path_override") or "").strip()
+        detected: list[dict[str, object]] = []
+        if not override:
+            native = normalize_launch_mode(row.get("launch_mode")) == "native"
+            from core.database import html_builtin_player_enabled
+            from core.web_launch import resolve_web_player
+
+            uses_player = (
+                resolve_web_player(
+                    row.get("exe_path"),
+                    row.get("launch_mode"),
+                    row.get("html_player"),
+                    html_builtin_player_enabled(),
+                )
+                == "builtin"
+            )
+            locations = detect_save_locations(
+                str(row.get("exe_path") or ""),
+                str(row.get("title") or ""),
+                "" if native else str(row.get("custom_prefix") or ""),
+                "" if native else str(row.get("proton_version") or ""),
+                windows=is_windows(),
+                game_id=coerced_id,
+                sandbox_enabled=bool(row.get("sandbox_enabled")),
+                web_player=uses_player,
+            )
+            detected = [dict(location) for location in locations]
+            effective = resolve_effective_folder("", locations)
+        else:
+            effective = override
+        return coerced_id, row, effective, detected
+
+    def _game_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
+        """Why the game's files are in use by wLib, or None. Caller holds _status_lock.
+
+        `ignore_move` leaves out the game's own move, for the move job itself.
+        """
+        from core.game_files import MOVING_BUSY, UNINSTALLING_BUSY
+
+        if game_id in self._uninstalling:
+            return UNINSTALLING_BUSY
+        if not ignore_move and self._game_moves.state(game_id):
+            return MOVING_BUSY
         with self._tool_lock:
             if game_id in self._tool_status:
                 return "A mod tool is changing this game's files. Wait for it to finish."
@@ -2069,6 +2189,51 @@ class ApiBase:
         if self._archive_install_status["running"] and self._archive_install_game_id == game_id:
             return "This game is being updated. Wait for the install to finish."
         return None
+
+    def _effective_saves_folder(self, game_id: int) -> str:
+        state = self._saves_game_state(game_id)
+        return state[2] if state is not None else ""
+
+    def _game_file_hooks(self, *, ignore_move: bool = False) -> GameHooks:
+        from core.game_files import GameHooks
+
+        def busy(game_id: int) -> str | None:
+            with self._status_lock:
+                return self._game_busy_reason(game_id, ignore_move=ignore_move)
+
+        return GameHooks(
+            running=lambda game_id: game_id in self.get_running_games(),
+            busy=busy,
+            saves_folder=self._effective_saves_folder,
+        )
+
+    def _game_moved(self, game_id: int) -> None:
+        """After a move changed a game's paths: Steam shortcuts and the library view."""
+        _ = game_id
+        self._schedule_steam_sync()
+        if self.window:
+            with suppress(Exception):
+                self.window.evaluate_js(
+                    "window.dispatchEvent(new Event('wlib-refresh-library'))"
+                )
+
+    def _run_move_job(
+        self,
+        job: MoveJob,
+        cancel: threading.Event,
+        on_bytes: Callable[[int], None],
+        set_total: Callable[[int], None],
+    ) -> MoveOutcome:
+        from core.game_files import MoveHooks, run_move_job
+
+        base = self._game_file_hooks(ignore_move=True)
+        hooks = MoveHooks(
+            running=base.running,
+            busy=base.busy,
+            saves_folder=lambda _game_id: "",
+            moved=self._game_moved,
+        )
+        return run_move_job(job, cancel, on_bytes, set_total, hooks)
 
     def _prefix_tool_running(self) -> bool:
         return self._prefix_tool is not None and self._prefix_tool.poll() is None

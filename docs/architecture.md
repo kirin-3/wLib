@@ -83,6 +83,7 @@ flowchart TD
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |
 | Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
 | Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_server.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
+| In-app downloads | `core/downloads/queue.py` (one ordered queue, slots, holds and retries over both workers), `core/downloads/pacing.py` (the shared speed limit), `core/power.py` (battery state for the battery hold), `core/downloads/manager.py` and `core/downloads/transfer.py` (file hosts), `core/downloads/torrents.py` (torrent helper supervisor), `core/update_downloads.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
 
 `core/versions.py` holds the normalized version comparison shared with the UI. See [Backend Systems](backend.md) for runtime behavior and [Database & Schema](database.md) for persistence.
@@ -120,10 +121,13 @@ flowchart TD
 | Database copies made before a schema update (last three) | `~/.local/share/wLib/db-backups/` | `%LOCALAPPDATA%\wLib\db-backups\` |
 | Sync snapshots (last five) | `~/.local/share/wLib/sync/snapshots/` | `%LOCALAPPDATA%\wLib\sync\snapshots\` |
 | Sandboxes of removed games (30 days) | `~/.local/share/wLib/sandbox/removed/` | `%LOCALAPPDATA%\wLib\sandbox\removed\` |
+| Uninstall and move job records (device-local, never exported or synced) | `~/.local/share/wLib/game-file-jobs.json` | `%LOCALAPPDATA%\wLib\game-file-jobs.json` |
 
 Attachment copies are limited to PDF, TXT and MD. PDF files must start with `%PDF-`; text files must contain no NUL in their first 8 KiB. The bridge exposes `browse_attachment_file` and reports rejected types as `unsupported_attachment`.
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
+
+`game-file-jobs.json` lists each `.wlib-trash-*` folder that an uninstall or a move made outside the library folders, and each `.wlib-move-*` copy folder. At start, wLib deletes the folders that remain and drops the records of the folders that are gone. A record whose parent folder is missing (an offline drive) stays for a later start.
 
 MSI and portable Windows builds share the same user-data location; extracting a portable ZIP does not move the library beside the executable.
 
