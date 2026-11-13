@@ -5,6 +5,7 @@ import {openInstallArchive} from '../utils/installArchive';
 import {confirmChoice} from '../utils/confirm';
 import {isSeeding, isTorrentJob, needsSeedAnswer, seedPromptText, torrentInstallSource, TORRENT_RUNNING_STAGES} from '../utils/torrentDownloads';
 import {notify} from '../utils/toast';
+import {pollDelay, windowActive} from '../utils/polling';
 
 const jobs = ref<UpdateDownloadJob[]>([]);
 const runningGames = ref<number[]>([]);
@@ -22,6 +23,10 @@ const active = (job: UpdateDownloadJob) =>
   ['resolving','needs_user','downloading','verifying'].includes(job.stage) || (isTorrentJob(job) && TORRENT_RUNNING_STAGES.includes(job.stage));
 // Poll quickly only while bytes are moving or a step is pending.
 const fast = (job: UpdateDownloadJob) => ['resolving','needs_user','downloading','verifying','fetching'].includes(job.stage);
+// Poll quickly while bytes move, often while a download is active, and
+// rarely when there is none: an idle poll costs CPU for nothing.
+export const downloadPollMs = (list: UpdateDownloadJob[]) =>
+  list.some(fast) ? 500 : list.some(active) ? 2000 : 10_000;
 // Torrent jobs the Updates view lists: running, failed with a retry, or seeding.
 const visibleTorrent = (job: UpdateDownloadJob) =>
   isTorrentJob(job) && (active(job) || job.stage === 'failed' || isSeeding(job) || needsSeedAnswer(job));
@@ -76,7 +81,7 @@ async function poll() {
   } catch (error) { console.warn('Could not read download status',error); }
   finally {
     polling = false;
-    if (enabled) timer = setTimeout(poll,jobs.value.some(fast) ? 500 : 2000);
+    if (enabled) timer = setTimeout(poll,pollDelay(downloadPollMs(jobs.value),windowActive()));
   }
 }
 function refresh() { if (timer) clearTimeout(timer); timer = undefined; void poll(); }

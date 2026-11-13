@@ -114,6 +114,7 @@ interface ModalUpdateState extends UpdateNotice {
 
 import { extensionGameId, readStoreLinks, gamePageUrl } from "../utils/storeLinks";
 import { launchNoticeMessage } from "../utils/webPlayer";
+import { updateCheckRunning } from "../composables/useUpdateCheckState";
 
 interface AddGamePayload {
   links?: StoreLink[];
@@ -637,20 +638,17 @@ const clearSelection = () => { selection.clear(); selecting.value = false; };
 
 const selectedGames = computed(() => filteredGames.value.filter((game) => selectedIds.value.has(game.id)));
 const bulkBusy = ref(false);
-const bulkChecking = ref(false);
+// Kept current by the app-wide update-status poll.
+const bulkChecking = updateCheckRunning;
 const bulkSavesBusy = ref(false);
 const bulkWineOpen = ref(false);
 const bulkShowRuntime = ref(false);
 const bulkTagSuggestions = computed(() => [...new Set(games.value.flatMap((game) => gameTags(game)))].sort((a, b) => a.localeCompare(b)));
 const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate(game)));
 const eligibleChecks = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
-let bulkStatusTimer: ReturnType<typeof setInterval> | undefined;
-const refreshBulkStatus = async () => { try { bulkChecking.value = (await api.getUpdateStatus()).running; } catch { /* Keep the last known state. */ } };
 onMounted(() => {
-  void refreshBulkStatus(); bulkStatusTimer = setInterval(refreshBulkStatus, 2000);
   void loadPlatformCapabilities().then((capabilities) => { bulkShowRuntime.value = capabilities.platform === "linux"; });
 });
-onUnmounted(() => { if (bulkStatusTimer) clearInterval(bulkStatusTimer); });
 type BulkUpdate = (id: number, fields: Record<string, unknown>) => Promise<{ success?: boolean | undefined; error?: string | undefined }>;
 const bulkUpdate: BulkUpdate = (id, fields) => api.updateGame(id, fields);
 // Shared by the newer field actions: one library refresh, one summary toast, one Undo.
@@ -729,7 +727,6 @@ const bulkAction = async (action: string, value = "") => {
       if (!result.success) throw new Error(result.error || "Could not start the F95 info refresh");
       bulkChecking.value = true;
       notify(`Refreshing F95 info for ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "F95 info refresh", { label: "Open Updates", run: () => { void router.push("/updates"); } });
-      void refreshBulkStatus();
     } catch (error) { notifyError(String(error)); } finally { bulkBusy.value = false; }
     return;
   }
@@ -742,7 +739,6 @@ const bulkAction = async (action: string, value = "") => {
       if (!result.success) throw new Error(result.error || "Could not start update check");
       bulkChecking.value = true;
       notify(`Checking ${ids.length} games; ${games.length - ids.length} skipped.`, "info", "Update check", { label: "Open Updates", run: () => { void router.push("/updates"); } });
-      void refreshBulkStatus();
     } catch (error) { notifyError(String(error)); } finally { bulkBusy.value = false; }
     return;
   }

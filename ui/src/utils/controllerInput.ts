@@ -45,20 +45,50 @@ export function actionForKey(event: KeyboardEvent): ControllerAction | null {
   if (direction) return { type: "move", direction };
   return event.key === "Escape" ? { type: "back" } : null;
 }
+export const CONTROLLER_SETTLE_MS = 500;
 export function startControllerInput(dispatch: (action: ControllerAction) => void): () => void {
   let frame = 0, state: RepeatState = {};
+  let listening = false, settleUntil = 0;
   const poll = () => {
     frame = 0;
     const pads = Array.from(navigator.getGamepads?.() ?? []);
-    const result = readController(pads, document.hasFocus(), performance.now(), state);
+    const now = performance.now();
+    // Right after focus returns, controls count as held while away: the first
+    // samples can lag, and a button still held from a game must not fire.
+    const result = readController(pads, document.hasFocus() && now >= settleUntil, now, state);
     state = result.state;
     result.actions.forEach(dispatch);
-    if (pads.some(Boolean)) frame = requestAnimationFrame(poll);
+    if (listening && (pads.some(Boolean) || now < settleUntil)) frame = requestAnimationFrame(poll);
   };
   const connected = () => { if (!frame) frame = requestAnimationFrame(poll); };
+  // Chromium samples gamepads on a background thread (about 150 wake-ups a
+  // second) while the page listens for them, so listen only while focused.
+  const listen = () => {
+    if (listening) return;
+    listening = true;
+    settleUntil = performance.now() + CONTROLLER_SETTLE_MS;
+    window.addEventListener("gamepadconnected", connected);
+    connected();
+  };
+  const stopListening = () => {
+    if (!listening) return;
+    listening = false;
+    window.removeEventListener("gamepadconnected", connected);
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+  };
+  const syncFocus = () => { if (document.hasFocus()) listen(); else stopListening(); };
   const keydown = (event: KeyboardEvent) => { const action = actionForKey(event); if (action) { event.preventDefault(); dispatch(action); } };
-  window.addEventListener("gamepadconnected", connected);
   window.addEventListener("keydown", keydown);
-  if (Array.from(navigator.getGamepads?.() ?? []).some(Boolean)) connected();
-  return () => { if (frame) cancelAnimationFrame(frame); window.removeEventListener("gamepadconnected", connected); window.removeEventListener("keydown", keydown); };
+  window.addEventListener("focus", syncFocus);
+  window.addEventListener("blur", syncFocus);
+  document.addEventListener("visibilitychange", syncFocus);
+  syncFocus();
+  return () => {
+    stopListening();
+    window.removeEventListener("keydown", keydown);
+    window.removeEventListener("focus", syncFocus);
+    window.removeEventListener("blur", syncFocus);
+    document.removeEventListener("visibilitychange", syncFocus);
+  };
 }

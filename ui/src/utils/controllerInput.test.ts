@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { actionForKey, readController } from "./controllerInput.ts";
+import { actionForKey, CONTROLLER_SETTLE_MS, readController, startControllerInput } from "./controllerInput.ts";
 const pad = (pressed: number[] = [], axes = [0, 0, 0, 0], mapping = "standard") => ({ mapping, axes, buttons: Array.from({ length: 16 }, (_, i) => ({ pressed: pressed.includes(i), value: pressed.includes(i) ? 1 : 0, touched: false })) });
 test("standard buttons map to actions without repeat", () => {
   const first = readController([pad([0, 1, 2, 3, 4, 5, 6, 7, 8])], true, 0, {});
@@ -56,4 +56,41 @@ test("selects move with arrows and open with Enter", () => {
 test("tab strips keep Left and Right but not Up and Down", () => {
   assert.equal(actionForKey(event("ArrowRight", "tablist")), null);
   assert.deepEqual(actionForKey(event("ArrowDown", "tablist")), { type: "move", direction: "down" });
+});
+test("listens for gamepads only while focused and ignores controls held across focus", () => {
+  const g = globalThis as Record<string, unknown>;
+  const saved = ["window", "document", "navigator", "requestAnimationFrame", "cancelAnimationFrame", "performance"].map(k => [k, Object.getOwnPropertyDescriptor(g, k)] as const);
+  const win = new EventTarget(), doc = new EventTarget();
+  let focused = true, now = 0, pads: ReturnType<typeof pad>[] = [];
+  const frames = new Map<number, () => void>(); let nextFrame = 1;
+  const define = (key: string, value: unknown) => Object.defineProperty(g, key, { value, configurable: true, writable: true });
+  define("window", win);
+  define("document", Object.assign(doc, { hasFocus: () => focused }));
+  define("navigator", { getGamepads: () => pads });
+  define("requestAnimationFrame", (fn: () => void) => { const id = nextFrame++; frames.set(id, fn); return id; });
+  define("cancelAnimationFrame", (id: number) => frames.delete(id));
+  define("performance", { now: () => now });
+  const runFrames = () => { const due = [...frames.values()]; frames.clear(); due.forEach(fn => fn()); };
+  const actions: string[] = [];
+  try {
+    const stop = startControllerInput(action => actions.push(action.type));
+    assert.equal(frames.size, 1, "starts a short settle poll on startup");
+    now = CONTROLLER_SETTLE_MS; runFrames();
+    assert.equal(frames.size, 0, "no pads: polling stops after settling");
+    focused = false; win.dispatchEvent(new Event("blur"));
+    win.dispatchEvent(new Event("gamepadconnected"));
+    assert.equal(frames.size, 0, "unfocused: the gamepadconnected listener is gone");
+    pads = [pad([0])];
+    focused = true; now = 1000; win.dispatchEvent(new Event("focus"));
+    runFrames(); now = 1000 + CONTROLLER_SETTLE_MS; runFrames();
+    assert.deepEqual(actions, [], "a button held while focus returns does not fire");
+    pads = [pad()]; now += 16; runFrames();
+    pads = [pad([0])]; now += 16; runFrames();
+    assert.deepEqual(actions, ["activate"]);
+    stop();
+    win.dispatchEvent(new Event("gamepadconnected"));
+    assert.equal(frames.size, 0, "stopped: nothing polls and nothing listens");
+  } finally {
+    for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(g, key, descriptor); else delete g[key]; }
+  }
 });

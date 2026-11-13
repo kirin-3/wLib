@@ -7,6 +7,8 @@ import { gamingMode, tvModeActive } from "./utils/tvMode";
 import ControllerHints from "./components/ControllerHints.vue";
 import ControllerSelect from "./components/ControllerSelect.vue";
 import { startControllerInput } from "./utils/controllerInput";
+import { startPoller, type Poller } from "./utils/polling";
+import { updateCheckRunning } from "./composables/useUpdateCheckState";
 import { dispatchController } from "./utils/controllerActions";
 import { useRouter } from "vue-router";
 import {
@@ -93,7 +95,7 @@ const navCollapsed = computed(() => tvModeActive.value || isNavCollapsed.value);
 const fadeTransitionName = computed(() => (motionEnabled.value ? "fade" : ""));
 const updateCountGames = gamesStore.games;
 const availableUpdateCount = computed(() => updateCountGames.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game)).length);
-let updatePollInterval: ReturnType<typeof setInterval> | null = null;
+let updatePoller: Poller | null = null;
 let lastUpdateProgress = "";
 let pollingUpdates = false;
 let wasUpdateRunning = false;
@@ -111,7 +113,7 @@ const syncNavTitle = computed(() => {
   if (syncState.value === "paused") return "Sync is paused";
   return "";
 });
-let syncPollInterval: ReturnType<typeof setInterval> | null = null;
+let syncPoller: Poller | null = null;
 let lastSyncProblem = "";
 let syncToastId: number | null = null;
 const closeSyncToast = () => {
@@ -224,6 +226,10 @@ const scanDownloadOffers = async () => {
 const handleWindowFocus = () => {
   void reportWindowFocus();
   void scanDownloadOffers();
+  // Polls slow down while the window is inactive; catch up at once.
+  updatePoller?.runNow();
+  syncPoller?.runNow();
+  updateDownloads.refresh();
 };
 
 const reportWindowFocus = async () => {
@@ -285,6 +291,7 @@ const pollLibraryUpdates = async () => {
       void scanDownloadOffers();
     }
     wasUpdateRunning = !!status.running;
+    updateCheckRunning.value = wasUpdateRunning;
     announceInfoRefresh(status);
   } catch (error) {
     console.error("Failed to refresh update progress", error);
@@ -379,9 +386,10 @@ onMounted(() => {
     window.addEventListener("blur", reportWindowFocus);
     document.addEventListener("visibilitychange", reportWindowFocus);
     void reportWindowFocus();
-    updatePollInterval = setInterval(pollLibraryUpdates, 5000);
-    void pollSyncStatus();
-    syncPollInterval = setInterval(pollSyncStatus, 15000);
+    updatePoller = startPoller(pollLibraryUpdates, () => 5000);
+    updatePoller.runNow();
+    syncPoller = startPoller(pollSyncStatus, () => 15000);
+    syncPoller.runNow();
     try {
       const extensionSync = await api.getStartupExtensionSyncStatus();
       if (extensionSync?.success && extensionSync?.updated) {
@@ -431,8 +439,8 @@ onUnmounted(() => {
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("blur", reportWindowFocus);
   document.removeEventListener("visibilitychange", reportWindowFocus);
-  if (updatePollInterval) clearInterval(updatePollInterval);
-  if (syncPollInterval) clearInterval(syncPollInterval);
+  updatePoller?.stop();
+  syncPoller?.stop();
 });
 </script>
 
