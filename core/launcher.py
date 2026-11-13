@@ -26,6 +26,7 @@ from .database import (
     normalize_launch_mode,
     CompanionTool,
     split_companion_arguments,
+    web_player_devtools_enabled,
 )
 from . import game_sandbox
 from .host_platform import (
@@ -2072,6 +2073,8 @@ class Launcher:
                 player.append("--offline")
             # Links cannot leave a sandboxed or offline player.
             player += ["--links", "ignore" if (sandboxed or block) else "open"]
+            if web_player_devtools_enabled():
+                player.append("--devtools")
             player_env = self_env(without_wine_proton_env(env.copy()))
             player_env.update(user_env)
             if sandboxed:

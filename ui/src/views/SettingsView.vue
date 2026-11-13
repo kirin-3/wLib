@@ -133,6 +133,19 @@ const saveHtmlBuiltinPlayer = async (event: Event) => {
     notifyError(`Failed to save the HTML game player: ${String(error)}`);
   }
 };
+const webPlayerDevtools = ref(true);
+const saveWebPlayerDevtools = async (event: Event) => {
+  const value = (event.target as HTMLInputElement).checked;
+  const previous = webPlayerDevtools.value;
+  webPlayerDevtools.value = value;
+  try {
+    const result = await api.saveSettings({ web_player_devtools: value });
+    if (!result.success) throw new Error(result.error || "Unknown error");
+  } catch (error) {
+    webPlayerDevtools.value = previous;
+    notifyError(`Failed to save the web player DevTools setting: ${String(error)}`);
+  }
+};
 const savePerformanceTool = async (tool: "gamemode" | "mangohud", event: Event) => {
   const value = (event.target as HTMLInputElement).checked;
   const state = tool === "gamemode" ? gamemodeEnabled : mangohudEnabled;
@@ -298,6 +311,7 @@ const applySettings = (data: SettingsResponse) => {
   gamemodeEnabled.value = !!data.gamemode_enabled;
   mangohudEnabled.value = !!data.mangohud_enabled;
   htmlBuiltinPlayer.value = data.html_builtin_player !== false;
+  webPlayerDevtools.value = data.web_player_devtools !== false;
   applyKeepSetting(data.save_backup_keep);
   savedValues.value = formValues();
 };
@@ -1279,6 +1293,28 @@ const browseUrm = async () => {
               @change="saveHtmlBuiltinPlayer"
               class="sr-only peer"
               aria-label="Play HTML games in the built-in player"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div data-settings-row="general-static-6" data-settings-bound v-show="settingsRowVisible('general-static-6')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+          <div>
+            <h4 class="text-sm font-medium" style="color: var(--text-primary)">
+              Web player DevTools (F12)
+            </h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">
+              F12 opens DevTools in the built-in player. Turn off if a game uses F12. Applies to the next launch.
+            </p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              role="switch"
+              :checked="webPlayerDevtools"
+              @change="saveWebPlayerDevtools"
+              class="sr-only peer"
+              aria-label="Web player DevTools (F12)"
             />
             <div class="ui-toggle"></div>
           </label>

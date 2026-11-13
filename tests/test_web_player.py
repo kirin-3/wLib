@@ -53,6 +53,11 @@ def test_parse_args_good(game: Path, tmp_path: Path) -> None:
     )
     assert args.entry == "index.html" and args.offline and not args.flash
     assert args.links == "ignore" and args.title == "T"
+    assert not args.devtools
+    args = web_player.parse_args(
+        ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p"), "--devtools"]
+    )
+    assert args.devtools and args.links == "open"
 
 
 @pytest.mark.parametrize(

@@ -1021,6 +1021,7 @@ export interface SettingsPayload {
   gamemode_enabled?: boolean;
   mangohud_enabled?: boolean;
   html_builtin_player?: boolean;
+  web_player_devtools?: boolean;
   sandbox_new_games?: boolean;
   sandboxie_custom_path?: string;
   update_notifications?: boolean;
@@ -1140,6 +1141,8 @@ export interface SettingsResponse {
   gamemode_enabled: boolean;
   mangohud_enabled: boolean;
   html_builtin_player: boolean;
+  /** F12 DevTools in the built-in player; applies to the next launch. In backups and sync. */
+  web_player_devtools: boolean;
   sandbox_new_games: boolean;
   sandboxie_custom_path: string;
   /** After a torrent finishes. In backups and sync. */

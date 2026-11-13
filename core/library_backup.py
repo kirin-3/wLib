@@ -145,7 +145,15 @@ PATH_SETTINGS_KEYS = (
     "sandboxie_custom_path",
 )
 BOOLEAN_SETTINGS_KEYS = frozenset(
-    {"enable_logging", "download_detection_enabled", "sandbox_new_games", "gamemode_enabled", "mangohud_enabled", "html_builtin_player"}
+    {
+        "enable_logging",
+        "download_detection_enabled",
+        "sandbox_new_games",
+        "gamemode_enabled",
+        "mangohud_enabled",
+        "html_builtin_player",
+        "web_player_devtools",
+    }
 )
 # Exported with the path settings but not filesystem paths, so never host-checked.
 NON_PATH_SETTINGS_KEYS = frozenset({"library_folder_pattern", "download_detection_enabled"})

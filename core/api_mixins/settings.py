@@ -88,6 +88,7 @@ class SettingsMixin(ApiBase):
             "gamemode_enabled": get_setting_fn("gamemode_enabled") == "true",
             "mangohud_enabled": get_setting_fn("mangohud_enabled") == "true",
             "html_builtin_player": get_setting_fn("html_builtin_player") != "false",
+            "web_player_devtools": get_setting_fn("web_player_devtools") != "false",
             **self._torrent_settings_payload(),
             "sandboxie_custom_path": str(get_setting_fn("sandboxie_custom_path") or ""),
             "update_notifications": get_setting_fn("update_notifications") != "off",
@@ -388,7 +389,12 @@ class SettingsMixin(ApiBase):
                 "wine_prefix_path", get_payload_or_existing("wine_prefix_path")
             )
             update_setting_fn("enable_logging", enable_logging)
-            for tool_key in ("gamemode_enabled", "mangohud_enabled", "html_builtin_player"):
+            for tool_key in (
+                "gamemode_enabled",
+                "mangohud_enabled",
+                "html_builtin_player",
+                "web_player_devtools",
+            ):
                 if tool_key in settings_map:
                     update_setting_fn(tool_key, "true" if settings_map[tool_key] is True else "false")
             if "sandbox_new_games" in settings_map:

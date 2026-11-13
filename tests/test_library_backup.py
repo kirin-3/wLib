@@ -3517,6 +3517,20 @@ def test_html_player_backup_sync_and_old_import():
     assert next(g for g in get_all_games() if g["title"] == "Old")["html_player"] == ""
 
 
+def test_web_player_devtools_setting_exports_imports_and_syncs():
+    update_setting("web_player_devtools", "false")
+    backup = build_library_backup({"sections": [SECTION_SETTINGS_GENERAL]})
+    assert backup["settings"]["general"]["web_player_devtools"] == "false"
+    sync = build_sync_backup("2026-11-13T00:00:00Z", "device")
+    assert sync["settings"]["general"]["web_player_devtools"] == "false"
+    update_setting("web_player_devtools", "true")
+    apply_library_backup(backup)
+    assert get_setting("web_player_devtools") == "false"
+    update_setting("web_player_devtools", "true")
+    apply_library_backup(sync, {"sections": SYNC_SECTIONS}, mirror=True, sync=True)
+    assert get_setting("web_player_devtools") == "false"
+
+
 def test_sync_payload_without_html_player_keeps_local_choice():
     game_id = add_game("Web2", "/game/index.html", f95_url="https://f95zone.to/threads/web2.777/")
     update_game(game_id, {"html_player": "browser"})

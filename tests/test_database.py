@@ -2144,6 +2144,17 @@ def test_html_builtin_player_setting_defaults_on():
     assert not html_builtin_player_enabled()
 
 
+def test_web_player_devtools_setting_defaults_on():
+    from core.database import web_player_devtools_enabled
+
+    assert get_setting("web_player_devtools") is None
+    assert web_player_devtools_enabled()
+    update_setting("web_player_devtools", "false")
+    assert not web_player_devtools_enabled()
+    update_setting("web_player_devtools", "true")
+    assert web_player_devtools_enabled()
+
+
 def test_default_target_label_column_migrates_and_is_trimmed():
     game_id = add_game("Seasons", "/tmp/seasons.sh")
     assert game_id is not None

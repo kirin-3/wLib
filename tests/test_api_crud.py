@@ -522,6 +522,18 @@ def test_performance_settings_round_trip():
     assert settings["mangohud_enabled"] is True
 
 
+def test_web_player_devtools_setting_round_trip():
+    api = Api()
+    assert api.get_settings()["web_player_devtools"] is True
+    assert api.save_settings({"web_player_devtools": False})["success"]
+    from core.database import get_setting
+
+    assert get_setting("web_player_devtools") == "false"
+    assert api.get_settings()["web_player_devtools"] is False
+    assert api.save_settings({"web_player_devtools": True})["success"]
+    assert api.get_settings()["web_player_devtools"] is True
+
+
 def test_performance_tool_detection_cache(monkeypatch):
     api = Api()
     calls = []

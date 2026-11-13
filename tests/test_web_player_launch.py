@@ -58,6 +58,10 @@ def _launch(game_dir, name="index.html", **kwargs):
     popen.return_value.poll.return_value = None
     with (
         patch("core.launcher.get_setting", side_effect=lambda key: settings.get(key)),
+        patch(
+            "core.launcher.web_player_devtools_enabled",
+            side_effect=lambda: settings.get("web_player_devtools") != "false",
+        ),
         patch("core.launcher.game_sandbox.get_sandbox_status") as status,
         patch("subprocess.Popen", popen),
         patch("threading.Thread"),
@@ -124,6 +128,25 @@ def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
     assert popen.call_args.kwargs["env"]["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
     profile = game_sandbox.web_player_folder(7)
     assert ["--bind", profile, profile] in [argv[i : i + 3] for i in range(len(argv) - 2)]
+
+
+def test_devtools_flag_follows_setting(game_dir):
+    _, popen, *_ = _launch(game_dir)
+    assert "--devtools" in popen.call_args.args[0]
+    _, popen, *_ = _launch(game_dir, settings={"web_player_devtools": "false"})
+    argv = popen.call_args.args[0]
+    assert "--play-web" in argv and "--devtools" not in argv
+    _, popen, *_ = _launch(game_dir, settings={"web_player_devtools": "true"})
+    assert "--devtools" in popen.call_args.args[0]
+
+
+def test_devtools_flag_inside_sandboxed_argv(game_dir, monkeypatch):
+    monkeypatch.setattr("core.launcher.web_player_runtime_paths", lambda: ())
+    result, popen, *_ = _launch(game_dir, sandbox_enabled=True)
+    assert result["success"]
+    argv = popen.call_args.args[0]
+    assert argv[0] == "/usr/bin/bwrap"
+    assert "--devtools" in argv[argv.index("--play-web") :]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
@@ -208,12 +231,14 @@ def test_flatpak_sandboxed_uses_sub_sandbox_and_reports_early_exit(game_dir, mon
     popen.return_value.wait.return_value = 1
     with (
         patch("core.launcher.get_setting", return_value=None),
+        patch("core.launcher.web_player_devtools_enabled", return_value=True),
         patch("subprocess.Popen", popen),
         patch("threading.Thread"),
     ):
         result = Launcher().launch(str(game_dir / "index.html"), game_id=5, sandbox_enabled=True, block_network=True)
     argv = popen.call_args.args[0]
     assert argv[:2] == ["flatpak-spawn", "--sandbox"] and "--no-network" in argv
+    assert "--devtools" in argv
     assert not result["success"] and "exited before its window opened" in result["error"]
     assert 5 not in Launcher()._running
 

@@ -11,6 +11,7 @@ import html
 import mimetypes
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, override
 from urllib.parse import quote, unquote, urlsplit
@@ -22,7 +23,7 @@ FLASH_PAGE = "__wlib_flash__.html"
 USAGE = (
     "Usage: wlib --play-web --root <game dir> --entry <relative path> "
     "--profile <storage dir> --title <title> [--flash] [--offline] "
-    "[--links open|ignore]"
+    "[--links open|ignore] [--devtools]"
 )
 
 EXTRA_CONTENT_TYPES = {
@@ -64,6 +65,7 @@ class PlayerArgs:
     flash: bool = False
     offline: bool = False
     links: LinkMode = "open"
+    devtools: bool = False
 
 
 def parse_args(argv: list[str]) -> PlayerArgs:
@@ -73,7 +75,7 @@ def parse_args(argv: list[str]) -> PlayerArgs:
     index = 0
     while index < len(argv):
         arg = argv[index]
-        if arg in ("--flash", "--offline"):
+        if arg in ("--flash", "--offline", "--devtools"):
             flags.add(arg)
             index += 1
         elif arg in ("--root", "--entry", "--profile", "--title", "--links"):
@@ -101,6 +103,7 @@ def parse_args(argv: list[str]) -> PlayerArgs:
         flash="--flash" in flags,
         offline="--offline" in flags,
         links=links,  # type: ignore[arg-type]
+        devtools="--devtools" in flags,
     )
 
 
@@ -265,7 +268,7 @@ def run(args: PlayerArgs) -> int:
     """Open the player window and block until it closes."""
     # Qt types are imported here so the helpers above need no display or Qt.
     from PyQt6.QtCore import QByteArray, QBuffer, QCoreApplication, QEvent, QFile, QIODevice, QObject, Qt, QUrl
-    from PyQt6.QtGui import QKeySequence, QShortcut
+    from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QShortcut
     from PyQt6.QtWebEngineCore import (
         QWebEngineProfile,
         QWebEngineScript,
@@ -279,7 +282,7 @@ def run(args: PlayerArgs) -> int:
         QWebEnginePage,
     )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QSplitter
 
     scheme = QWebEngineUrlScheme(QByteArray(SCHEME.encode()))
     scheme.setSyntax(QWebEngineUrlScheme.Syntax.Host)
@@ -375,6 +378,52 @@ def run(args: PlayerArgs) -> int:
             probe = _LinkProbe(self.profile(), self)
             return probe
 
+    class DevToolsPage(QWebEnginePage):
+        """The DevTools front end: only devtools:// loads here, other links leave the player."""
+
+        @override
+        def acceptNavigationRequest(  # noqa: N802
+            self, url: QUrl, type: QWebEnginePage.NavigationType, isMainFrame: bool  # noqa: A002, N803
+        ) -> bool:
+            if url.scheme().lower() == "devtools":
+                return True
+            if classify_navigation(url.toString(), args.links, args.offline) == "open" and (
+                isMainFrame
+                or type == QWebEnginePage.NavigationType.NavigationTypeLinkClicked
+            ):
+                open_externally(url.toString())
+            return False
+
+        @override
+        def createWindow(self, type: QWebEnginePage.WebWindowType) -> QWebEnginePage | None:  # noqa: A002, N802
+            return _LinkProbe(self.profile(), self)
+
+    class GameView(QWebEngineView):
+        @override
+        def contextMenuEvent(self, a0: QContextMenuEvent | None) -> None:  # noqa: N802
+            if a0 is None:
+                return
+            menu = self.createStandardContextMenu()
+            if menu is None:
+                return
+            menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            inspect = page.action(QWebEnginePage.WebAction.InspectElement)
+            listed = inspect is not None and inspect in menu.actions()
+            if args.devtools:
+                # Qt lists its own Inspect only after a DevTools page is
+                # attached, and it cannot make the pane, so use ours: it shows
+                # the pane first and then inspects.
+                replacement = QAction(inspect.text() if inspect is not None else "Inspect", menu)
+                _ = replacement.triggered.connect(inspect_element)  # pyright: ignore[reportUnknownMemberType]
+                if listed:
+                    menu.insertAction(inspect, replacement)
+                else:
+                    _ = menu.addSeparator()
+                    menu.addAction(replacement)  # pyright: ignore[reportUnknownMemberType]
+            if listed:
+                menu.removeAction(inspect)
+            menu.popup(a0.globalPos())
+
     class _LinkProbe(QWebEnginePage):
         @override
         def acceptNavigationRequest(  # noqa: N802
@@ -414,22 +463,55 @@ def run(args: PlayerArgs) -> int:
     ):
         settings.setAttribute(attr, enabled)
 
+    view = GameView()
+    page = GamePage(profile, view)
+    view.setPage(page)
+    # The splitter is the window, so fullscreen keeps the DevTools pane as it is.
+    window = QSplitter(Qt.Orientation.Horizontal)
+    window.setChildrenCollapsible(False)
+    window.addWidget(view)
+    window.setWindowTitle(args.title)
+    window.resize(1280, 800)
+
     if not args.flash:
+        # On the game page only, so the bootstrap never runs in DevTools.
         script = QWebEngineScript()
         script.setName("wlib-ruffle")
         script.setSourceCode(ruffle_bootstrap_source())
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
         script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
         script.setRunsOnSubFrames(True)
-        scripts = profile.scripts()
+        scripts = page.scripts()
         assert scripts is not None
         scripts.insert(script)  # pyright: ignore[reportUnknownMemberType]
 
-    view = QWebEngineView()
-    page = GamePage(profile, view)
-    view.setPage(page)
-    view.setWindowTitle(args.title)
-    view.resize(1280, 800)
+    # Made on the first F12 only, so a game nobody inspects starts no second renderer.
+    devtools: list[tuple[QWebEngineView, DevToolsPage]] = []
+
+    def show_devtools() -> None:
+        if not devtools:
+            dev_view = QWebEngineView()
+            dev_page = DevToolsPage(profile, dev_view)
+            dev_view.setPage(dev_page)
+            page.setDevToolsPage(dev_page)
+            # The DevTools close button hides the pane; the player stays open.
+            _ = dev_page.windowCloseRequested.connect(dev_view.hide)  # pyright: ignore[reportUnknownMemberType]
+            window.addWidget(dev_view)
+            width = max(window.width(), 2)
+            game_width = int(width * 0.6)
+            window.setSizes([game_width, width - game_width])  # pyright: ignore[reportUnknownMemberType]
+            devtools.append((dev_view, dev_page))
+        devtools[0][0].show()
+
+    def toggle_devtools() -> None:
+        if devtools and devtools[0][0].isVisible():
+            devtools[0][0].hide()
+        else:
+            show_devtools()
+
+    def inspect_element() -> None:
+        show_devtools()
+        page.triggerAction(QWebEnginePage.WebAction.InspectElement)
 
     def on_permission(origin: QUrl, feature: QWebEnginePage.Feature) -> None:
         page.setFeaturePermission(
@@ -441,44 +523,44 @@ def run(args: PlayerArgs) -> int:
     def on_fullscreen(request: QWebEngineFullScreenRequest) -> None:
         request.accept()
         if request.toggleOn():
-            view.showFullScreen()
+            window.showFullScreen()
         else:
-            view.showNormal()
+            window.showNormal()
 
     _ = page.fullScreenRequested.connect(on_fullscreen)  # pyright: ignore[reportUnknownMemberType]
 
     def toggle_fullscreen() -> None:
-        if view.isFullScreen():
-            view.showNormal()
+        if window.isFullScreen():
+            window.showNormal()
         else:
-            view.showFullScreen()
+            window.showFullScreen()
 
-    for sequence, action in (
+    bindings: list[tuple[str, Callable[[], object]]] = [
         ("F11", toggle_fullscreen),
         ("Ctrl++", lambda: view.setZoomFactor(min(view.zoomFactor() + 0.1, 5.0))),
         ("Ctrl+=", lambda: view.setZoomFactor(min(view.zoomFactor() + 0.1, 5.0))),
         ("Ctrl+-", lambda: view.setZoomFactor(max(view.zoomFactor() - 0.1, 0.25))),
         ("Ctrl+0", lambda: view.setZoomFactor(1.0)),
-    ):
-        shortcut = QShortcut(QKeySequence(sequence), view)
+    ]
+    if args.devtools:
+        # Without --devtools F12 is not bound, so the game receives it.
+        bindings.append(("F12", toggle_devtools))
+    for sequence, action in bindings:
+        shortcut = QShortcut(QKeySequence(sequence), window)
         shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         _ = shortcut.activated.connect(action)  # pyright: ignore[reportUnknownMemberType]
 
-    if os.environ.get("DEV_MODE") == "1":
-        dev = QShortcut(QKeySequence("F12"), view)
-        _ = dev.activated.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda: page.triggerAction(QWebEnginePage.WebAction.InspectElement)
-        )
-
     entry = FLASH_PAGE if args.flash else quote(args.entry, safe="/")
     view.setUrl(QUrl(f"{SCHEME}://{GAME_HOST}/{entry}"))
-    view.show()
+    window.show()
     app.setQuitOnLastWindowClosed(True)
     code = app.exec()
-    # Delete the page before its profile, so storage is flushed and released
+    # Delete the pages before their profile, so storage is flushed and released
     # in order instead of at interpreter shutdown.
+    for _dev_view, dev_page in devtools:
+        dev_page.deleteLater()
     page.deleteLater()
-    view.deleteLater()
+    window.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
     profile.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)

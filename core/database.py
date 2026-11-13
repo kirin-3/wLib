@@ -55,6 +55,7 @@ GENERAL_SETTINGS_KEYS = (
     "gamemode_enabled",
     "mangohud_enabled",
     "html_builtin_player",
+    "web_player_devtools",
     "torrent_seed_mode",
     "torrent_seed_ratio",
     "torrent_seed_hours",
@@ -218,6 +219,11 @@ def normalize_html_player(value: object) -> str:
 def html_builtin_player_enabled() -> bool:
     """The "Play HTML games in the built-in player" setting; absent reads as on."""
     return get_setting("html_builtin_player") != "false"
+
+
+def web_player_devtools_enabled() -> bool:
+    """The "Web player DevTools (F12)" setting; absent reads as on."""
+    return get_setting("web_player_devtools") != "false"
 
 
 def normalize_tool_override(value: object) -> str:
