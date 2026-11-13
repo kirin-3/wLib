@@ -14,10 +14,7 @@
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg" alt="Platform: Linux and Windows" />
   <img src="https://img.shields.io/badge/python-3.12+-yellow.svg" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/vue-3-brightgreen.svg" alt="Vue 3" />
-</p>
-
-<p align="center">
-  <a href="https://thekirin.net/discord"><img src="https://img.shields.io/badge/Join%20our%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord" /></a>
+  <a href="https://thekirin.net/discord"><img src="https://img.shields.io/badge/discord-join-5865F2.svg?logo=discord&logoColor=white" alt="Join our Discord" /></a>
 </p>
 
 <p align="center">
