@@ -17,7 +17,6 @@ jobs:
       - name: Send commits to Discord
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_COMMITS_WEBHOOK }}
-          EVENT_PATH: ${{ github.event_path }}
         run: |
           if [ -z "$WEBHOOK_URL" ]; then
             echo "DISCORD_COMMITS_WEBHOOK is not set. Skipping."
@@ -43,6 +42,6 @@ jobs:
                   color: 7506394
                 }]
               }
-          ' "$EVENT_PATH")
+          ' "$GITHUB_EVENT_PATH")
 
           curl -sS --fail-with-body -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
