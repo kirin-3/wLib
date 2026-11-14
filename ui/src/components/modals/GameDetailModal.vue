@@ -29,6 +29,7 @@ import {
   IconDownload,
   IconRefresh,
   IconStarFilled,
+  IconHeartFilled,
   IconDots,
   IconX,
   IconDeviceGamepad2Filled,
@@ -40,6 +41,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { getSafeNotesLinkUrl, noteLinkUrl, noteLinkLabel, noteLinkHost, hasNoteLink } from "../../utils/notesLinks";
 import { openInstallArchive } from "../../utils/installArchive";
+import MenuButton, { type MenuButtonItem } from "../MenuButton.vue";
 import {useUpdateDownloads} from "../../composables/useUpdateDownloads";
 import { gameDownloadStatus, isUnfinished } from "../../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
@@ -455,7 +457,14 @@ const toggleSkippedVersion = async () => {
   } finally {
     savingSkip.value = false;
   }
+  // Skipping swaps the update split button for "Stop skipping", and stopping swaps it back.
+  // Move focus to the control that replaced the one the user used, so it does not fall to the page.
+  if (props.game?.id !== gameId) return;
+  if (next && updateSkipped.value) void nextTick(() => stopSkippingButton.value?.focus());
+  else if (!next && !updateSkipped.value) void nextTick(() => updateMenu.value?.focus());
 };
+const stopSkippingButton = ref<HTMLButtonElement | null>(null);
+const updateMenu = ref<InstanceType<typeof MenuButton> | null>(null);
 
 const sessions = ref<PlaySession[]>([]);
 const loadingJournal = ref(false);
@@ -572,14 +581,6 @@ const getEngineBadgeStyle = (value: EngineOption): string => {
 };
 
 const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
-
-const statusButtonClasses = (value: PlayStatus) => {
-  const meta = getPlayStatusMeta(value);
-  return [
-    "status-chip px-3 py-1.5 text-xs font-medium transition-colors",
-    playStatus.value === value ? ["ui-status-chip", meta.toneClass, "status-chip-active"] : ["ui-status-chip", "ui-status-chip--idle", "status-chip-idle"],
-  ];
-};
 
 const summaryItems = computed(() => [
   {
@@ -1256,6 +1257,34 @@ const setPlayStatus = (value: PlayStatus) => {
       applyAutoFilledFinishedVersion(res.finished_version);
     }
   });
+};
+
+// Header play status menu: canonical statuses, then custom ones, each with its icon.
+const currentStatusOption = computed(() => getPlayStatusMeta(playStatus.value));
+const statusMenuItems = computed<MenuButtonItem[]>(() => statuses.value.map(s => ({
+  id: s.value,
+  label: s.label,
+  icon: s.icon,
+  iconClass: `ui-status-inline ${s.toneClass}`,
+  checked: playStatus.value === s.value,
+})));
+
+// Header update split button: Download update when the game has an F95 thread, otherwise Install update.
+const canDownloadUpdate = computed(() => !!props.game?.f95_url);
+const downloadUpdateDisabled = computed(() => !!props.isRunning || (!!downloadJob.value && isUnfinished(downloadJob.value)));
+const updateMenuItems = computed<MenuButtonItem[]>(() => [
+  ...(canDownloadUpdate.value ? [{ id: "install", label: "Install update", icon: IconDownload }] : []),
+  { id: "skip", label: `Skip version ${latestVersion.value}`, disabled: savingSkip.value },
+]);
+const runUpdateMain = () => {
+  if (!props.game) return;
+  if (canDownloadUpdate.value) updateDownloads.open(props.game);
+  else openInstallArchive({ gameId: props.game.id });
+};
+const chooseUpdateMenuItem = (id: string) => {
+  if (!props.game) return;
+  if (id === "install") openInstallArchive({ gameId: props.game.id });
+  else if (id === "skip") void toggleSkippedVersion();
 };
 
 const toggleFavorite = () => {
@@ -2173,62 +2202,96 @@ const removeAttachment = async (name: string) => {
             <IconDeviceGamepad2Filled v-else class="h-10 w-10" role="img" aria-label="No cover image" />
           </div>
           <div class="min-w-0">
-            <h2 id="game-detail-title" class="game-title" :title="title || game.title">{{ title || game.title || 'Untitled game' }}</h2>
+            <div class="flex items-start gap-3">
+              <h2 id="game-detail-title" class="game-title flex-1 min-w-0" :title="title || game.title">{{ title || game.title || 'Untitled game' }}</h2>
+              <div class="modal-toolbar-group shrink-0">
+                <button
+                  type="button"
+                  class="modal-toolbar-action favorite-toggle"
+                  :class="{ 'favorite-toggle--on': isFavorite }"
+                  aria-label="Favorite"
+                  :title="isFavorite ? 'Remove from favorites' : 'Mark as favorite'"
+                  :aria-pressed="isFavorite"
+                  @click="toggleFavorite"
+                >
+                  <IconHeartFilled class="ui-action-icon" aria-hidden="true" />
+                </button>
+                <div ref="actionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'actions')">
+                  <button ref="actionsButton" type="button" class="modal-toolbar-action" aria-label="More actions" title="More actions" aria-haspopup="menu" :aria-expanded="actionsOpen" @click="togglePopover('actions')"><IconDots class="ui-action-icon" /></button>
+                  <div v-if="actionsOpen" role="menu" aria-label="Game actions" class="header-popover actions-popover">
+                    <template v-if="props.game && !isWishlisted(props.game)">
+                      <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('uninstall')">Uninstall...</button>
+                      <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('move')">Move...</button>
+                    </template>
+                    <button role="menuitem" class="popover-item" :disabled="deleting" @click="deleteGame">Remove from library</button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <p v-if="game.developer" class="text-sm mt-1 break-words" style="color: var(--text-secondary)">by {{ game.developer }}</p>
             <div class="flex flex-wrap items-center gap-2 mt-3">
               <span class="identity-badge" :style="selectedEngineStyle">{{ engine }}</span>
               <span v-if="version" class="identity-badge version-badge">{{ version }}</span>
               <span v-if="hasUpdate" class="identity-badge update-badge">Update: {{ latestVersion }}</span>
-              <span v-else-if="updateSkipped" class="text-sm" style="color: var(--text-secondary)">Version {{ skippedVersion }} skipped</span>
-            </div>
-          </div>
-        </div>
-        <div class="collection-row">
-          <div class="collection-labels"><span v-for="name in collectionMembership" :key="name" class="collection-chip collection-chip-active">{{ name }}</span></div>
-          <div ref="collectionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'collections')">
-            <button ref="collectionsButton" type="button" class="collection-chip" aria-haspopup="menu" :aria-expanded="collectionsOpen" @click="togglePopover('collections')">+ Collection</button>
-            <div v-if="collectionsOpen" role="menu" aria-label="Collections" class="header-popover collection-popover">
-              <p v-if="!collectionOptions.length" class="text-xs" style="color: var(--text-muted)">No collections yet.</p>
-              <button v-for="name in collectionOptions" :key="name" type="button" role="menuitemcheckbox" :aria-checked="gameInCollection(name)" class="popover-item" @click="toggleModalCollection(name)">{{ gameInCollection(name) ? '✓ ' : '' }}{{ name }}</button>
-              <div class="flex gap-2 mt-2">
-                <input v-model="newCollectionName" aria-label="New collection name" type="text" placeholder="New collection" class="modal-input flex-1 min-w-0 !py-1.5 !text-xs" @keydown.enter.prevent="createModalCollection" />
-                <button class="modal-btn" :disabled="collectionBusy" @click="createModalCollection">Add</button>
+              <span v-for="name in collectionMembership" :key="name" class="collection-chip collection-chip-active">{{ name }}</span>
+              <div ref="collectionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'collections')">
+                <button ref="collectionsButton" type="button" class="collection-chip" aria-haspopup="menu" :aria-expanded="collectionsOpen" @click="togglePopover('collections')">+ Collection</button>
+                <div v-if="collectionsOpen" role="menu" aria-label="Collections" class="header-popover collection-popover">
+                  <p v-if="!collectionOptions.length" class="text-xs" style="color: var(--text-muted)">No collections yet.</p>
+                  <button v-for="name in collectionOptions" :key="name" type="button" role="menuitemcheckbox" :aria-checked="gameInCollection(name)" class="popover-item" @click="toggleModalCollection(name)">{{ gameInCollection(name) ? '✓ ' : '' }}{{ name }}</button>
+                  <div class="flex gap-2 mt-2">
+                    <input v-model="newCollectionName" aria-label="New collection name" type="text" placeholder="New collection" class="modal-input flex-1 min-w-0 !py-1.5 !text-xs" @keydown.enter.prevent="createModalCollection" />
+                    <button class="modal-btn" :disabled="collectionBusy" @click="createModalCollection">Add</button>
+                  </div>
+                  <p v-if="collectionError" role="alert" class="text-xs mt-2" style="color: var(--danger-text)">{{ collectionError }}</p>
+                </div>
               </div>
-              <p v-if="collectionError" role="alert" class="text-xs mt-2" style="color: var(--danger-text)">{{ collectionError }}</p>
             </div>
-          </div>
-          <div class="modal-toolbar-group modal-toolbar-group--end">
-            <button
-              @click="toggleFavorite"
-              class="modal-toolbar-action ui-action-btn"
-              :style="
-                isFavorite
-                  ? 'background: rgba(234, 179, 8, 0.14); border: 1px solid rgba(234, 179, 8, 0.42); color: var(--rating-accent)'
-                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-muted)'
-              "
-            >
-              <IconStarFilled class="ui-action-icon" :style="isFavorite ? '' : 'opacity: 0.7'" />
-              {{ isFavorite ? 'Favorited' : 'Mark Favorite' }}
-            </button>
-            <div ref="actionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'actions')">
-              <button ref="actionsButton" type="button" class="modal-toolbar-action" aria-label="More actions" title="More actions" aria-haspopup="menu" :aria-expanded="actionsOpen" @click="togglePopover('actions')"><IconDots class="ui-action-icon" /></button>
-              <div v-if="actionsOpen" role="menu" aria-label="Game actions" class="header-popover actions-popover">
-                <template v-if="props.game && !isWishlisted(props.game)">
-                  <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('uninstall')">Uninstall...</button>
-                  <button role="menuitem" class="popover-item" :disabled="deleting || moving" :title="moving ? 'This game is being moved. Wait for the move to finish.' : ''" @click="fileAction('move')">Move...</button>
+            <div class="flex flex-wrap items-center gap-2 mt-3">
+              <MenuButton
+                radio
+                class="play-status-menu"
+                :class="currentStatusOption.toneClass"
+                :items="statusMenuItems"
+                menu-label="Play status"
+                :button-label="`Play status: ${currentStatusOption.label}`"
+                button-title="Play status"
+                @select="setPlayStatus"
+              >
+                <component :is="currentStatusOption.icon" class="ui-status-icon" aria-hidden="true" />
+                <span>{{ currentStatusOption.label }}</span>
+              </MenuButton>
+              <MenuButton
+                v-if="hasUpdate && props.game"
+                ref="updateMenu"
+                split
+                class="update-menu"
+                :items="updateMenuItems"
+                menu-label="More update actions"
+                button-label="More update actions"
+                :main-disabled="canDownloadUpdate && downloadUpdateDisabled"
+                :main-title="canDownloadUpdate ? undefined : 'Install the new version from a downloaded archive'"
+                @main="runUpdateMain"
+                @select="chooseUpdateMenuItem"
+              >
+                <template #main>
+                  <IconDownload class="ui-action-icon" aria-hidden="true" />
+                  {{ canDownloadUpdate ? "Download update" : "Install update" }}
                 </template>
-                <button role="menuitem" class="popover-item" :disabled="deleting" @click="deleteGame">Remove from library</button>
-              </div>
+              </MenuButton>
+              <template v-else-if="updateSkipped">
+                <span class="text-sm" style="color: var(--text-secondary)">Version {{ skippedVersion }} skipped</span>
+                <button ref="stopSkippingButton" type="button" @click="toggleSkippedVersion"
+                  :disabled="savingSkip" class="modal-toolbar-action ui-action-btn"
+                  style="color: var(--text-primary)">
+                  Stop skipping {{ skippedVersion }}
+                </button>
+              </template>
             </div>
           </div>
         </div>
         <div class="modal-toolbar">
           <div class="modal-toolbar-group">
-            <button v-if="hasUpdate || updateSkipped" @click="toggleSkippedVersion"
-              :disabled="savingSkip" class="modal-toolbar-action ui-action-btn min-h-11"
-              style="color: var(--text-primary)">
-              {{ updateSkipped ? `Stop skipping ${skippedVersion}` : `Skip version ${latestVersion}` }}
-            </button>
             <button
               v-if="f95Url.trim() || game.links?.length"
               @click="openInBrowser"
@@ -2252,21 +2315,6 @@ const removeAttachment = async (name: string) => {
               class="modal-toolbar-action ui-action-btn" style="color: var(--brand)"
               :title="`${downloadStatusText}. Open Downloads`" data-testid="game-download-status">
               {{ downloadStatusText }}
-            </button>
-            <button v-if="hasUpdate && props.game?.f95_url" @click="updateDownloads.open(props.game)"
-              :disabled="props.isRunning || (!!downloadJob && isUnfinished(downloadJob))"
-              class="modal-toolbar-action ui-action-btn disabled:opacity-50" style="color:var(--text-primary)">
-              Download update
-            </button>
-            <button
-              v-if="hasUpdate && props.game"
-              @click="openInstallArchive({ gameId: props.game.id })"
-              class="modal-toolbar-action ui-action-btn"
-              style="color: var(--text-primary)"
-              title="Install the new version from a downloaded archive"
-            >
-              <IconDownload class="ui-action-icon" />
-              Install update
             </button>
             <button
               v-if="!hasUpdate && props.game && isWishlisted(props.game)"
@@ -2355,22 +2403,6 @@ const removeAttachment = async (name: string) => {
                 @click="requestUpdateCheck"
               >
                 {{ updateCheckState.running ? "Checking..." : "Check thread now" }}
-              </button>
-            </div>
-          </div>
-
-          <div class="status-strip">
-            <h3 class="modal-label mb-3">Play Status</h3>
-            <div class="status-grid">
-              <button
-                v-for="s in statuses"
-                :key="s.value"
-                @click="setPlayStatus(s.value)"
-                :aria-pressed="playStatus === s.value"
-                :class="[statusButtonClasses(s.value), 'w-full']"
-              >
-                <component :is="s.icon" class="ui-status-icon" />
-                <span>{{ s.label }}</span>
               </button>
             </div>
           </div>
@@ -3303,14 +3335,12 @@ const removeAttachment = async (name: string) => {
 </template>
 
 <style scoped>
-.collection-row { display: flex; align-items: center; gap: .375rem; margin-top: .75rem; }
-.collection-labels { display: flex; gap: .375rem; min-width: 0; overflow-x: auto; }
-.collection-labels:empty { display: none; }
-.collection-labels .collection-chip { flex-shrink: 0; }
-.collection-row > .header-popover-anchor,
-.collection-row > .modal-toolbar-group--end { flex-shrink: 0; }
-/* Favorite and More actions live in the collection row; hide the toolbar when no other action applies. */
+/* Hide the toolbar row when no action applies. */
 .detail-header .modal-toolbar:not(:has(button)) { display: none; }
+.favorite-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 2.375rem; padding-inline: .5rem; color: var(--text-muted); }
+.favorite-toggle--on { color: var(--rating-accent); border-color: color-mix(in srgb, var(--rating-accent) 45%, transparent); background: color-mix(in srgb, var(--rating-accent) 14%, transparent); }
+.play-status-menu :deep(.menu-button-toggle) { border-color: var(--ui-status-border, var(--border)); background: var(--ui-status-bg, var(--bg-raised)); color: var(--ui-status-text, var(--text-secondary)); font-weight: 600; }
+.play-status-menu :deep(.menu-button-toggle:hover:not(:disabled)) { border-color: var(--ui-status-text, var(--border-hover)); background: var(--ui-status-bg, var(--bg-overlay)); }
 .header-popover-anchor { position: relative; }
 .header-popover { position: absolute; z-index: 30; top: calc(100% + .3rem); padding: .5rem; min-width: 14rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-surface); box-shadow: 0 6px 20px #0003; }
 .actions-popover { right: 0; }
@@ -3840,19 +3870,6 @@ const removeAttachment = async (name: string) => {
   background: var(--bg-raised);
 }
 
-.status-strip {
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-surface) 100%);
-  padding: 0.75rem;
-}
-
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.75rem, 1fr));
-  gap: 0.5rem;
-}
-
 .modal-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -3904,9 +3921,6 @@ const removeAttachment = async (name: string) => {
   border-radius: 0.5rem;
 }
 
-.status-chip {
-  border-radius: 0.55rem;
-}
 .collection-chip {
   padding: 0.3rem 0.7rem;
   border: 1px solid var(--border);
@@ -3934,16 +3948,6 @@ const removeAttachment = async (name: string) => {
 .collection-chip-active:hover {
   background: var(--brand);
   color: var(--on-brand);
-}
-
-.status-chip-active {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent);
-}
-
-.status-chip-idle:hover {
-  background: var(--bg-overlay);
-  border-color: var(--border-hover);
-  color: var(--text-primary);
 }
 
 .launch-btn,

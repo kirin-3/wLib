@@ -7,17 +7,18 @@ import { computed } from "vue";
 import {
   IconArrowUp,
   IconChevronDown,
+  IconDeviceGamepad2,
+  IconHeartFilled,
   IconLoader2,
-  IconPhotoFilled,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
   IconRefresh,
-  IconStarFilled,
 } from "@tabler/icons-vue";
 import CoverImage from "../CoverImage.vue";
 import type { GameRecord } from "../../services/api";
 import type { LayoutMode } from "../../utils/libraryViewState";
 import { gameCoverSrc } from "../../utils/gameCover";
+import { titleInitials, titleSwatch } from "../../utils/coverPlaceholder";
 import {
   formatPlaytime,
   getEffectiveLaunchTargets,
@@ -55,6 +56,8 @@ const emit = defineEmits<{
 
 // Compact and banner both draw image-only tiles (cover, overlay, bottom row).
 const isImageTileLayout = computed(() => props.layoutMode === "compact" || props.layoutMode === "banner");
+const placeholderInitials = computed(() => titleInitials(props.game.title));
+const placeholderSwatch = computed(() => titleSwatch(props.game.title));
 const wishlisted = computed(() => isWishlisted(props.game));
 const updateAvailable = computed(() => hasAvailableUpdate(props.game));
 const unplayed = computed(() => hasUnplayedUpdate(props.game));
@@ -122,11 +125,16 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
           isImageTileLayout ? 'rounded-b-xl' : '',
         ]"
       />
-      <IconPhotoFilled
+      <div
         v-else
-        class="w-12 h-12"
-        style="color: var(--border)"
-      />
+        class="cover-placeholder absolute inset-0"
+        :class="isImageTileLayout ? 'rounded-xl' : 'rounded-t-xl'"
+        :data-tag-color="placeholderSwatch"
+        aria-hidden="true"
+      >
+        <span v-if="placeholderInitials" class="cover-placeholder-initials">{{ placeholderInitials }}</span>
+        <IconDeviceGamepad2 v-else class="cover-placeholder-icon" />
+      </div>
       <div
         v-if="game.metadata_pending"
         class="metadata-pending absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-xs font-medium"
@@ -147,8 +155,9 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
           v-if="game.is_favorite"
           class="card-indicator"
           title="Favorite"
+          role="img"
           aria-label="Favorite"
-          ><IconStarFilled class="w-3 h-3 text-yellow-400"
+          ><IconHeartFilled class="favorite-marker w-3 h-3" aria-hidden="true"
         /></span>
         <span
           v-if="isImageTileLayout && updateAvailable"
@@ -177,7 +186,10 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
       <span
         v-if="!isImageTileLayout && game.rating"
         class="rating-badge absolute bottom-2 left-2 text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1"
-        ><IconStarFilled class="w-3 h-3" />{{ game.rating }}</span
+        role="img"
+        :aria-label="`F95 rating ${game.rating}`"
+        :title="`F95 rating ${game.rating}`"
+        ><span class="rating-badge-source" aria-hidden="true">F95</span><span aria-hidden="true">{{ game.rating }}</span></span
       >
       <div
         v-if="isImageTileLayout"
@@ -412,6 +424,11 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
   border-radius: 0.3rem;
   padding: 0.25rem;
 }
+/* The marker sits on the dark scrim in both themes, so it keeps the bright yellow
+   (the light theme darkens the yellow-400 utility for white surfaces). */
+.favorite-marker {
+  color: #facc15;
+}
 .game-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -512,8 +529,32 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
   color: #facc15;
 }
 
-.rating-badge svg {
-  fill: currentColor;
+.rating-badge-source {
+  color: var(--overlay-control-text);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Initials on a tag swatch for games without a cover; the swatch tokens pass 4.5:1 in both themes. */
+.cover-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+}
+
+.cover-placeholder-initials {
+  font-size: clamp(1rem, 32cqmin, 4.5rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.cover-placeholder-icon {
+  width: clamp(1.5rem, 34cqmin, 4rem);
+  height: clamp(1.5rem, 34cqmin, 4rem);
 }
 
 .update-overlay-btn {

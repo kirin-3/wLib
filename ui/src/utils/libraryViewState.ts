@@ -139,6 +139,25 @@ export const VALID_SORT_FIELDS = new Set<SortField>([
   "own_rating",
 ]);
 const VALID_SORT_DIRECTIONS = new Set<SortDir>(["asc", "desc"]);
+const ASCENDING_BY_DEFAULT = new Set<SortField>(["title", "version", "play_status", "engine"]);
+
+/** The direction a sort field starts with: ascending for text-like fields, descending for dates, times and ratings. */
+export const defaultSortDir = (field: SortField): SortDir => (ASCENDING_BY_DEFAULT.has(field) ? "asc" : "desc");
+
+export interface SortState {
+  sortBy: SortField;
+  sortDir: SortDir;
+}
+
+/** List view column headers: the active field flips direction, another field starts with its default direction. */
+export const toggleSortState = (current: SortState, field: SortField): SortState =>
+  current.sortBy === field
+    ? { sortBy: field, sortDir: current.sortDir === "asc" ? "desc" : "asc" }
+    : { sortBy: field, sortDir: defaultSortDir(field) };
+
+/** The sort menu: another field starts with its default direction; the active field keeps its direction. */
+export const chooseSortField = (current: SortState, field: SortField): SortState =>
+  current.sortBy === field ? { ...current } : { sortBy: field, sortDir: defaultSortDir(field) };
 const VALID_FILTER_COLLECTIONS = new Set<FilterCollection>([
   "All",
   "Favorites",

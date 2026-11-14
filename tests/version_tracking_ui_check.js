@@ -64,7 +64,16 @@ async (page) => {
       check(await badges().count() === 1, "Unplayed collection must restore on reload");
       await page.getByRole("button", { name: "All Games", exact: true }).click();
       await open();
-      await dialog.getByRole("button", { name: "Skip version 0.9", exact: true }).click();
+      await dialog.getByRole("button", { name: "More update actions", exact: true }).click();
+      await dialog.getByRole("menuitem", { name: "Skip version 0.9", exact: true }).click();
+      await dialog.getByText("Version 0.9 skipped", { exact: true }).waitFor();
+      await page.waitForFunction(() => document.activeElement?.textContent?.trim() === "Stop skipping 0.9", undefined, { timeout: 3000 })
+        .catch(() => { throw new Error("Skipping from the update menu must move focus to Stop skipping"); });
+      await dialog.getByRole("button", { name: "Stop skipping 0.9", exact: true }).click();
+      await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "More update actions", undefined, { timeout: 3000 })
+        .catch(() => { throw new Error("Stopping the skip must move focus to the update menu button"); });
+      await dialog.getByRole("button", { name: "More update actions", exact: true }).click();
+      await dialog.getByRole("menuitem", { name: "Skip version 0.9", exact: true }).click();
       await dialog.getByText("Version 0.9 skipped", { exact: true }).waitFor();
       check(await dialog.getByText("Update: 0.9", { exact: true }).count() === 0, "Skipped state replaces the modal update badge");
       await close();

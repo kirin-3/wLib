@@ -92,7 +92,10 @@ async (page) => {
     await page.evaluate(() => {
       delete window.pywebview;
     });
-    await dialog.getByRole("button", { name: "Mark Favorite", exact: true }).click();
+    const favorite = dialog.getByRole("button", { name: "Favorite", exact: true });
+    const favoriteBefore = await favorite.getAttribute("aria-pressed");
+    await favorite.click();
+    check(await favorite.getAttribute("aria-pressed") !== favoriteBefore, "The Favorite toggle must show its new pressed state");
     check(await save.count() === 1, "Saving another quick field must not clear a failed edit");
     await save.click();
     await dialog.waitFor({ state: "hidden" });

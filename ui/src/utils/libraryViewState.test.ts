@@ -3,6 +3,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  chooseSortField,
+  defaultSortDir,
+  toggleSortState,
   DEFAULT_FILTER_SECTIONS,
   LEGACY_FILTERS_PANE_STORAGE_KEY,
   LEGACY_FILTER_SECTIONS_STORAGE_KEY,
@@ -522,4 +525,20 @@ test("source filters validate fixed keys and default for older state and presets
   assert.deepEqual(normalizeFilterPreset({ name: "New", filterSources: ["dlsite", "unknown"] })?.filterSources, ["dlsite"]);
   assert.deepEqual(normalizeLibraryViewState({ filterSections: { presets: false, collections: false, status: true, engines: false, tags: true } }).filterSections,
     { presets: false, collections: false, status: true, sources: true, engines: false, tags: true });
+});
+
+test("sort menu choice uses the field's default direction and keeps the active field", () => {
+  assert.equal(defaultSortDir("title"), "asc");
+  assert.equal(defaultSortDir("engine"), "asc");
+  assert.equal(defaultSortDir("playtime_seconds"), "desc");
+  assert.equal(defaultSortDir("own_rating"), "desc");
+  assert.deepEqual(chooseSortField({ sortBy: "title", sortDir: "asc" }, "playtime_seconds"), { sortBy: "playtime_seconds", sortDir: "desc" });
+  assert.deepEqual(chooseSortField({ sortBy: "rating", sortDir: "desc" }, "title"), { sortBy: "title", sortDir: "asc" });
+  assert.deepEqual(chooseSortField({ sortBy: "title", sortDir: "desc" }, "title"), { sortBy: "title", sortDir: "desc" });
+});
+
+test("list header toggle flips the active field and starts others with their default", () => {
+  assert.deepEqual(toggleSortState({ sortBy: "title", sortDir: "asc" }, "title"), { sortBy: "title", sortDir: "desc" });
+  assert.deepEqual(toggleSortState({ sortBy: "title", sortDir: "asc" }, "last_played"), { sortBy: "last_played", sortDir: "desc" });
+  assert.deepEqual(toggleSortState({ sortBy: "rating", sortDir: "desc" }, "version"), { sortBy: "version", sortDir: "asc" });
 });

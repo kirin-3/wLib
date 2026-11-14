@@ -37,7 +37,10 @@ import {
   IconPlus,
   IconSparkles,
   IconZoom,
-  IconStarFilled,
+  IconHeartFilled,
+  IconListCheck,
+  IconSortAscending,
+  IconSortDescending,
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
@@ -45,6 +48,7 @@ import type { CompanionTool, GameRecord, LaunchMode, StoreLink } from "../servic
 import AddGameModal from "../components/modals/AddGameModal.vue";
 import ImportFolderModal from "../components/modals/ImportFolderModal.vue";
 import GameDetailModal from "../components/modals/GameDetailModal.vue";
+import MenuButton, { type MenuButtonItem } from "../components/MenuButton.vue";
 import {
   getPlayStatusOptions,
   normalizePlayStatus,
@@ -61,6 +65,10 @@ import {
   restoreSavedLibraryViewState,
   saveLibraryViewState,
   toggleStatusFilter,
+  toggleSortState,
+  chooseSortField,
+  VALID_SORT_FIELDS,
+  type SortState,
   type FilterCollection,
   type FilterInstallState,
   type FilterSections,
@@ -253,7 +261,7 @@ const collections: Array<{
   icon: typeof IconClock;
 }> = [
   { value: "All", label: "All Games", icon: IconLayoutGridFilled },
-  { value: "Favorites", label: "Favorites", icon: IconStarFilled },
+  { value: "Favorites", label: "Favorites", icon: IconHeartFilled },
   { value: "Updates available", label: "Updates available", icon: IconArrowUp },
   { value: "New since finished", label: "New since finished", icon: IconSparkles },
   { value: "Unplayed update", label: "Unplayed update", icon: IconClock },
@@ -358,18 +366,17 @@ const urlsMatchByThreadIdentity = (left: unknown, right: unknown): boolean => {
   return normalizeF95Url(left) === normalizeF95Url(right);
 };
 
-const toggleSort = (field: SortField) => {
-  if (sortBy.value === field) {
-    sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
-  } else {
-    sortBy.value = field;
-    sortDir.value = ["title", "version", "play_status", "engine"].includes(
-      field,
-    )
-      ? "asc"
-      : "desc";
-  }
+const applySortState = (state: SortState) => {
+  sortBy.value = state.sortBy;
+  sortDir.value = state.sortDir;
 };
+// List view column headers.
+const toggleSort = (field: SortField) => applySortState(toggleSortState({ sortBy: sortBy.value, sortDir: sortDir.value }, field));
+// The sort menu in the other layouts; the direction button reverses the order.
+const setSortField = (field: string) => {
+  if (VALID_SORT_FIELDS.has(field as SortField)) applySortState(chooseSortField({ sortBy: sortBy.value, sortDir: sortDir.value }, field as SortField));
+};
+const reverseSortDir = () => { sortDir.value = sortDir.value === "asc" ? "desc" : "asc"; };
 
 const selectCollection = (collection: FilterCollection) => {
   filterCollection.value = collection;
@@ -404,6 +411,18 @@ const sortOptions: Array<{ key: SortField; label: string }> = [
   { key: "rating", label: "F95 rating" },
   { key: "own_rating", label: "My rating" },
 ];
+// List view can also sort by these columns; the sort button names them when they are active.
+const listOnlySortLabels: Partial<Record<SortField, string>> = { version: "Version", play_status: "Status", engine: "Engine" };
+const sortFieldLabel = computed(() => sortOptions.find(option => option.key === sortBy.value)?.label ?? listOnlySortLabels[sortBy.value] ?? "Sort");
+const sortMenuItems = computed<MenuButtonItem[]>(() => sortOptions.map(option => ({ id: option.key, label: option.label, checked: sortBy.value === option.key })));
+const addMenuItems: MenuButtonItem[] = [
+  { id: "import", label: "Import folder", icon: IconFolderPlus },
+  { id: "archive", label: "Install from archive", icon: IconArchive },
+];
+const chooseAddMenuItem = (id: string) => {
+  if (id === "import") showImportModal.value = true;
+  else if (id === "archive") openInstallArchive();
+};
 
 const toggleFilter = (arr: string[], val: string) => {
   const idx = arr.indexOf(val);
@@ -2158,67 +2177,34 @@ onUnmounted(() => {
 
     <!-- Main Content Area -->
     <div class="flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
-      <header
-        class="flex flex-wrap gap-3 justify-between items-center mb-5 shrink-0"
-      >
-        <div>
+      <header class="library-header mb-4 shrink-0">
+        <div class="library-header-row">
           <h2
-            class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
+            class="ui-page-heading text-3xl font-bold tracking-tight shrink-0"
             style="color: var(--text-primary)"
           >
             <IconDeviceGamepad2 class="ui-page-heading-icon" />
             <span>Your Library</span>
           </h2>
-          <p
-            class="text-sm pl-3"
-            style="
-              color: var(--text-secondary);
-              border-left: 2px solid var(--brand);
-            "
-          >
+          <p class="library-subtitle text-sm pl-3" aria-hidden="true">
             Manage and play your imported games.
           </p>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <button
-            @click="showAddModal = true"
-            class="ui-action-btn library-primary-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
-            style="
-              background: var(--brand);
-              color: var(--on-brand);
-              box-shadow: var(--shadow-brand);
-            "
+          <p class="sr-only">Manage and play your imported games.</p>
+          <MenuButton
+            split
+            class="library-add-menu"
+            :items="addMenuItems"
+            menu-label="More ways to add"
+            button-label="More ways to add"
+            align="end"
+            @main="showAddModal = true"
+            @select="chooseAddMenuItem"
           >
-            <IconLibraryPlus class="ui-action-icon" />
-            Add Game
-          </button>
-          <button
-            @click="showImportModal = true"
-            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
-            style="
-              background: var(--bg-raised);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-            "
-            title="Add every game in a folder"
-          >
-            <IconFolderPlus class="ui-action-icon" />
-            Import Folder
-          </button>
-          <button
-            @click="openInstallArchive()"
-            class="ui-action-btn px-3 py-1.5 rounded-lg text-sm font-semibold active:scale-95"
-            style="
-              background: var(--bg-raised);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-            "
-            title="Install a game from a downloaded archive (.zip, .7z, .rar)"
-          >
-            <IconArchive class="ui-action-icon" />
-            Install from archive
-          </button>
+            <template #main>
+              <IconLibraryPlus class="ui-action-icon" />
+              Add game
+            </template>
+          </MenuButton>
         </div>
       </header>
 
@@ -2331,39 +2317,62 @@ onUnmounted(() => {
         </p>
       </div>
 
-      <!-- Search & Filter Bar -->
-      <div class="mb-4 space-y-3 shrink-0">
-        <div class="flex items-center gap-3">
-          <div class="relative flex-1 min-w-0">
-            <IconZoom
-              class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
-              style="color: var(--text-muted)"
-            />
-            <input
-              ref="searchInput"
-              v-model="searchQuery"
-              type="text"
-              aria-label="Search games"
-              placeholder="Search title, developer, tags or engine..."
-              class="library-search-input w-full rounded-lg pl-10 pr-10 py-2.5 text-sm focus:outline-none"
-            />
-            <button
-              v-if="searchQuery"
-              @click="
-                searchQuery = '';
-                searchInput?.focus();
-              "
-              aria-label="Clear search"
-              class="ui-icon-btn absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded"
+      <!-- Search, sort and view controls share one wrapping row -->
+      <div class="library-toolbar mb-4 shrink-0">
+        <div class="library-toolbar-search relative">
+          <IconZoom
+            class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+            style="color: var(--text-muted)"
+          />
+          <input
+            ref="searchInput"
+            v-model="searchQuery"
+            type="text"
+            aria-label="Search games"
+            placeholder="Search title, developer, tags or engine..."
+            class="library-search-input w-full rounded-lg pl-10 pr-10 py-2 text-sm focus:outline-none"
+          />
+          <button
+            v-if="searchQuery"
+            @click="
+              searchQuery = '';
+              searchInput?.focus();
+            "
+            aria-label="Clear search"
+            class="ui-icon-btn absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded"
+          >
+            <IconX class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div class="library-toolbar-controls">
+          <div v-if="layoutMode !== 'list'" class="flex items-center">
+            <MenuButton
+              radio
+              class="library-sort-menu"
+              :items="sortMenuItems"
+              menu-label="Sort by"
+              :button-label="`Sort by: ${sortFieldLabel}`"
+              button-title="Sort by"
+              @select="setSortField"
             >
-              <IconX class="w-4 h-4" />
+              {{ sortFieldLabel }}
+            </MenuButton>
+            <button
+              type="button"
+              class="library-toolbar-btn library-sort-dir ui-action-btn ui-hover-surface"
+              :aria-label="sortDir === 'asc' ? 'Sort direction: ascending' : 'Sort direction: descending'"
+              :title="sortDir === 'asc' ? 'Ascending. Click to reverse.' : 'Descending. Click to reverse.'"
+              @click="reverseSortDir"
+            >
+              <IconSortAscending v-if="sortDir === 'asc'" class="ui-action-icon" />
+              <IconSortDescending v-else class="ui-action-icon" />
             </button>
           </div>
-          <button class="ui-action-btn px-3 py-2 rounded-lg" :aria-pressed="selecting || selectedIds.size > 0" @click="selecting = !selecting; if (!selecting) selection.clear()">Select</button>
+
           <button
             @click="toggleFiltersPane"
-            class="ui-action-btn relative px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface active:scale-95 active:bg-[var(--bg-overlay)]"
-            style="color: var(--text-primary); border: 1px solid var(--border)"
+            class="library-toolbar-btn ui-action-btn relative ui-hover-surface active:scale-95"
             :aria-expanded="!isFiltersCollapsed"
             :title="
               isFiltersCollapsed ? 'Show Filters Pane' : 'Hide Filters Pane'
@@ -2379,113 +2388,85 @@ onUnmounted(() => {
               {{ activeFilterCount }}
             </span>
           </button>
-        </div>
-
-        <!-- Filter Toggle, Sort & Counter -->
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- Sort Buttons -->
-          <div
-            v-if="layoutMode !== 'list'"
-            class="flex flex-wrap items-center rounded-lg overflow-hidden"
-            style="border: 1px solid var(--border)"
+          <button
+            type="button"
+            class="library-toolbar-btn ui-action-btn ui-hover-surface active:scale-95"
+            :aria-pressed="selecting || selectedIds.size > 0"
+            @click="selecting = !selecting; if (!selecting) selection.clear()"
           >
-            <button
-              v-for="s in sortOptions"
-              :key="s.key"
-              @click="toggleSort(s.key)"
-              class="library-sort-btn px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 active:scale-95 active:bg-[var(--bg-overlay)]"
-              :style="
-                sortBy === s.key
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'background: var(--bg-surface); color: var(--text-muted)'
-              "
-            >
-              {{ s.label }}
-              <svg
-                v-if="sortBy === s.key"
-                class="w-3 h-3"
-                :class="sortDir === 'desc' ? 'rotate-180' : ''"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.5"
-              >
-                <path d="M12 19V5M5 12l7-7 7 7" />
-              </svg>
-            </button>
+            <IconListCheck class="ui-action-icon" />
+            <span>Select</span>
+          </button>
+
+          <span class="text-xs whitespace-nowrap" style="color: var(--text-muted)"
+            >{{ filteredGames.length }} game{{
+              filteredGames.length !== 1 ? "s" : ""
+            }}</span
+          >
+
+          <div v-if="layoutMode !== 'list'" class="flex items-center gap-2" style="color: var(--text-muted)">
+            <IconPhotoFilled class="size-3" aria-hidden="true" />
+            <input v-model.number="cardSize" type="range" min="0" max="4" step="1" aria-label="Card size"
+              class="card-size-control w-20 cursor-pointer" />
+            <IconPhotoFilled class="size-5" aria-hidden="true" />
           </div>
 
-          <div class="ml-auto flex items-center gap-4">
-            <span class="text-xs" style="color: var(--text-muted)"
-              >{{ filteredGames.length }} game{{
-                filteredGames.length !== 1 ? "s" : ""
-              }}</span
-            >
-
-            <div v-if="layoutMode !== 'list'" class="flex items-center gap-2" style="color: var(--text-muted)">
-              <IconPhotoFilled class="size-3" aria-hidden="true" />
-              <input v-model.number="cardSize" type="range" min="0" max="4" step="1" aria-label="Card size"
-                class="card-size-control w-20 cursor-pointer" />
-              <IconPhotoFilled class="size-5" aria-hidden="true" />
-            </div>
-
-            <!-- Layout Toggle -->
-            <div
-              class="flex items-center rounded-lg p-1"
-              style="
-                background: var(--bg-surface);
-                border: 1px solid var(--border);
+          <!-- Layout Toggle -->
+          <div
+            class="flex items-center rounded-lg p-1"
+            style="
+              background: var(--bg-surface);
+              border: 1px solid var(--border);
+            "
+          >
+            <button
+              @click="layoutMode = 'grid'"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+              :style="
+                layoutMode === 'grid'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                  : 'color: var(--text-muted)'
               "
+              title="Grid view" aria-label="Grid view" :aria-pressed="layoutMode === 'grid'"
             >
-              <button
-                @click="layoutMode = 'grid'"
-                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-                :style="
-                  layoutMode === 'grid'
-                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                    : 'color: var(--text-muted)'
-                "
-                title="Grid view" aria-label="Grid view" :aria-pressed="layoutMode === 'grid'"
-              >
-                <IconColumns2Filled class="ui-action-icon" />
-              </button>
-              <button
-                @click="layoutMode = 'list'"
-                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-                :style="
-                  layoutMode === 'list'
-                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                    : 'color: var(--text-muted)'
-                "
-                title="List view" aria-label="List view" :aria-pressed="layoutMode === 'list'"
-              >
-                <IconLayoutListFilled class="ui-action-icon" />
-              </button>
-              <button
-                @click="layoutMode = 'compact'"
-                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-                :style="
-                  layoutMode === 'compact'
-                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                    : 'color: var(--text-muted)'
-                "
-                title="Compact view" aria-label="Compact view" :aria-pressed="layoutMode === 'compact'"
-              >
-                <IconLayoutGridFilled class="ui-action-icon opacity-90" />
-              </button>
-              <button
-                @click="layoutMode = 'banner'"
-                class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
-                :style="
-                  layoutMode === 'banner'
-                    ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                    : 'color: var(--text-muted)'
-                "
-                title="Banner view" aria-label="Banner view" :aria-pressed="layoutMode === 'banner'"
-              >
-                <IconPanoramaHorizontalFilled class="ui-action-icon" />
-              </button>
-            </div>
+              <IconColumns2Filled class="ui-action-icon" />
+            </button>
+            <button
+              @click="layoutMode = 'list'"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+              :style="
+                layoutMode === 'list'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                  : 'color: var(--text-muted)'
+              "
+              title="List view" aria-label="List view" :aria-pressed="layoutMode === 'list'"
+            >
+              <IconLayoutListFilled class="ui-action-icon" />
+            </button>
+            <button
+              @click="layoutMode = 'compact'"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+              :style="
+                layoutMode === 'compact'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                  : 'color: var(--text-muted)'
+              "
+              title="Compact view" aria-label="Compact view" :aria-pressed="layoutMode === 'compact'"
+            >
+              <IconLayoutGridFilled class="ui-action-icon opacity-90" />
+            </button>
+            <button
+              @click="layoutMode = 'banner'"
+              class="ui-icon-btn px-3 py-1.5 rounded-lg text-sm active:scale-95 active:bg-[var(--bg-overlay)]"
+              :style="
+                layoutMode === 'banner'
+                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
+                  : 'color: var(--text-muted)'
+              "
+              title="Banner view" aria-label="Banner view" :aria-pressed="layoutMode === 'banner'"
+            >
+              <IconPanoramaHorizontalFilled class="ui-action-icon" />
+            </button>
           </div>
         </div>
       </div>
@@ -2510,7 +2491,7 @@ onUnmounted(() => {
         <h3 class="empty-state-title">Your library is empty</h3>
         <p class="empty-state-subtext">Add your first game to get started</p>
         <p class="empty-state-hint">
-          Use the Add Game button above to import your first title.
+          Use the Add game button above to import your first title.
         </p>
       </div>
 
@@ -3015,9 +2996,6 @@ onUnmounted(() => {
   opacity: 0.5;
   cursor: wait;
 }
-.library-primary-btn {
-  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
-}
 
 .filters-pane {
   background: var(--bg-surface);
@@ -3049,8 +3027,97 @@ onUnmounted(() => {
   outline-offset: 1px;
 }
 
-.library-sort-btn {
-  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+/* Heading row: the subtitle is hidden before the heading or "Add game" would wrap; an sr-only copy stays. */
+.library-header {
+  container-type: inline-size;
+}
+.library-header-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.library-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--brand);
+}
+.library-add-menu {
+  margin-left: auto;
+}
+@container (max-width: 44rem) {
+  .library-subtitle {
+    display: none;
+  }
+}
+.library-add-menu :deep(.menu-button-trigger) {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.library-add-menu :deep(.menu-button-main) {
+  box-shadow: var(--shadow-brand);
+}
+.library-add-menu :deep(.menu-button-toggle) {
+  border-left-color: color-mix(in srgb, var(--on-brand) 35%, var(--brand));
+}
+.library-add-menu :deep(.menu-button-trigger:hover:not(:disabled)) {
+  border-color: var(--brand);
+  background: var(--brand);
+  filter: brightness(1.08);
+}
+
+/* One toolbar row; the view controls wrap as a group before the search field gets too small. */
+.library-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.library-toolbar-search {
+  flex: 1 1 12rem;
+  min-width: 12rem;
+}
+.library-toolbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-left: auto;
+}
+.library-toolbar-btn {
+  min-height: 2.375rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.library-toolbar-btn[aria-pressed="true"] {
+  background: var(--brand-glow);
+  border-color: var(--brand-deep);
+  color: var(--brand);
+}
+.library-sort-menu :deep(.menu-button-toggle) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  background: transparent;
+  font-size: 0.875rem;
+}
+.library-sort-menu :deep(.menu-button-trigger:hover:not(:disabled)) {
+  background: var(--bg-overlay);
+}
+.library-sort-dir {
+  margin-left: -1px;
+  padding-inline: 0.5rem;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .filter-tag-btn {

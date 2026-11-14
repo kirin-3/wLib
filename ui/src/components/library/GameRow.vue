@@ -6,15 +6,16 @@
 import { computed } from "vue";
 import {
   IconArrowUp,
+  IconDeviceGamepad2,
+  IconHeartFilled,
   IconLoader2,
-  IconPhotoFilled,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
-  IconStarFilled,
 } from "@tabler/icons-vue";
 import CoverImage from "../CoverImage.vue";
 import type { GameRecord } from "../../services/api";
 import { gameCoverSrc } from "../../utils/gameCover";
+import { titleInitials, titleSwatch } from "../../utils/coverPlaceholder";
 import {
   formatLastPlayed,
   formatPlaytime,
@@ -75,12 +76,11 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
           </span>
           <span
             v-else
-            class="w-8 h-8 rounded shrink-0 flex items-center justify-center"
-            style="background: var(--bg-raised)"
+            class="cover-placeholder w-8 h-8 rounded shrink-0 flex items-center justify-center"
+            :data-tag-color="titleSwatch(game.title)"
             aria-hidden="true"
-            ><IconPhotoFilled
-              class="w-4 h-4"
-              style="color: var(--text-muted)"
+            ><template v-if="titleInitials(game.title)">{{ titleInitials(game.title) }}</template
+            ><IconDeviceGamepad2 v-else class="w-4 h-4"
           /></span>
           <button
             @click.stop="emit('activate', game, $event)"
@@ -91,9 +91,11 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
           </button>
           <span v-if="wishlisted" class="wishlist-pill shrink-0">Wishlist</span>
           <span v-if="wishlisted && game.thread_completed" class="finished-pill shrink-0">Finished</span>
-          <IconStarFilled
+          <IconHeartFilled
             v-if="game.is_favorite"
-            class="w-3.5 h-3.5 shrink-0 text-yellow-500"
+            class="w-3.5 h-3.5 shrink-0"
+            style="color: var(--rating-accent)"
+            role="img"
             aria-label="Favorite"
           />
           <span
@@ -190,6 +192,13 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
 </template>
 
 <style scoped>
+.cover-placeholder {
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
 .is-selected { box-shadow: inset 0 0 0 3px var(--brand); }
 .running-label {
   background: var(--brand);
