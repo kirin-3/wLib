@@ -68,16 +68,22 @@ GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GDRIVE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GDRIVE_API = "https://www.googleapis.com/drive/v3/"
 GDRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/"
+# Seconds to wait for a provider. A file upload or download gets longer: a
+# large library can take more than the short timeout, and a timeout after an
+# upload that worked leaves this device unsure what the remote file is.
+REQUEST_TIMEOUT = 8
+FILE_TRANSFER_TIMEOUT = 60
 CALLBACK_UNAVAILABLE = "The local callback server on port 8183 is unavailable."
 # How often the watcher checks the sync file for changes from other devices.
 FULL_SYNC_INTERVAL = 300.0
 FULL_SYNC_RETRY_MAX = 1800.0
-# Errors a timed retry cannot fix.
+# Errors a timed retry cannot fix. A broken sync file is not one: a cloud
+# client can deliver it half-written, then finish it, so it retries with the
+# normal backoff.
 NO_RETRY_ERRORS = frozenset(
     {
         "dropbox_auth_failed",
         "gdrive_auth_failed",
-        "invalid_sync_file",
         "sync_off",
         "invalid_sync_choice",
         "dropbox_full",
@@ -493,7 +499,9 @@ class DropboxLocation(_OAuthLocation):
                 with cast(
                     HTTPResponse,
                     urllib.request.urlopen(
-                        request, context=ssl.create_default_context(), timeout=8
+                        request,
+                        context=ssl.create_default_context(),
+                        timeout=FILE_TRANSFER_TIMEOUT if content else REQUEST_TIMEOUT,
                     ),
                 ) as response:
                     return response.read(), str(
@@ -663,7 +671,13 @@ class GoogleDriveLocation(_OAuthLocation):
                 with cast(
                     HTTPResponse,
                     urllib.request.urlopen(
-                        request, context=ssl.create_default_context(), timeout=8
+                        request,
+                        context=ssl.create_default_context(),
+                        timeout=(
+                            FILE_TRANSFER_TIMEOUT
+                            if file_request or url.startswith(GDRIVE_UPLOAD)
+                            else REQUEST_TIMEOUT
+                        ),
                     ),
                 ) as response:
                     return response.read()
@@ -969,6 +983,7 @@ class SyncManager:
                 "sync_last_synced_at": "",
                 "sync_last_error": "",
                 "sync_last_device": "",
+                "sync_pending_push": "",
                 "sync_paused": "",
                 **values,
             }
@@ -1061,6 +1076,7 @@ class SyncManager:
             "sync_last_device": device,
             "sync_last_error": "",
             "sync_encryption_change": "",
+            "sync_pending_push": "",
         }
 
     def _pull(
@@ -1106,6 +1122,13 @@ class SyncManager:
                 key=base64.b64decode(self._setting("encryption_key"), validate=True),
                 salt=base64.b64decode(self._setting("encryption_salt"), validate=True),
             )
+        # If the upload works but its reply is lost (a timeout), the next run
+        # finds this file under a new revision. This marker lets it see that
+        # the file is its own upload, not a change from another device.
+        database.update_setting(
+            "sync_pending_push",
+            json.dumps({"modified_at": modified, "device": device}),
+        )
         new_revision = location.write(
             json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8"), revision
         )
@@ -1242,6 +1265,10 @@ class SyncManager:
             backup, revision = self._remote(location)
         if first:
             assert backup is not None
+            if choice is None and self._adopt_unconfirmed_push(
+                location, cast(dict[str, object], backup["sync"]), revision
+            ):
+                return
             local_games, remote_games = database.get_all_games(), cast(
                 list[object], backup["games"]
             )
@@ -1273,7 +1300,8 @@ class SyncManager:
             return
         if remote_changed:
             assert backup is not None
-            remote_time = str(cast(dict[str, object], backup["sync"])["modified_at"])
+            remote_sync = cast(dict[str, object], backup["sync"])
+            remote_time = str(remote_sync["modified_at"])
             # The file can get a new revision without new content (a sync tool
             # rewrote it). Its change time is then still the one this device
             # last synced, so only the local side changed.
@@ -1282,6 +1310,8 @@ class SyncManager:
             )
             if choice is not None:
                 self._resolve_choice(choice, location, backup, revision, local_modified)
+                return
+            if self._adopt_unconfirmed_push(location, remote_sync, revision):
                 return
             if remote_content_changed and local_changed:
                 # Both sides changed since the last sync. Newest-wins would
@@ -1306,6 +1336,50 @@ class SyncManager:
         self._choice_revision, self._choice_reason = None, ""
         if local_changed:
             self._push(location, revision)
+
+    def _adopt_unconfirmed_push(
+        self,
+        location: SyncLocation,
+        remote_sync: Mapping[str, object],
+        revision: str,
+    ) -> bool:
+        """Record the remote file as synced when it is our upload with no reply.
+
+        Then push any edit made after that upload. False when the file is not
+        this device's unconfirmed upload.
+        """
+        if not self._is_unconfirmed_push(remote_sync):
+            return False
+        database.update_settings(
+            self._winning_settings(
+                str(remote_sync.get("modified_at") or ""),
+                str(remote_sync.get("device") or ""),
+                revision,
+            )
+        )
+        self._choice_revision, self._choice_reason = None, ""
+        if self.local_changed():
+            self._push(location, revision)
+        return True
+
+    def _is_unconfirmed_push(self, remote_sync: Mapping[str, object]) -> bool:
+        """True when the remote file is this device's upload with no reply."""
+        raw = self._setting("pending_push")
+        if not raw:
+            return False
+        try:
+            pending = cast(object, json.loads(raw))
+        except ValueError:
+            return False
+        if not isinstance(pending, dict):
+            return False
+        marker = cast(dict[str, object], pending)
+        return (
+            str(marker.get("modified_at") or "")
+            == str(remote_sync.get("modified_at") or "")
+            and str(marker.get("device") or "")
+            == str(remote_sync.get("device") or "")
+        )
 
     def _ask_choice(self, revision: str, reason: str) -> None:
         self._state = "needs_choice"
@@ -1743,7 +1817,7 @@ class SyncManager:
         # repeat the question; leave it to the user.
         if self._state in ("needs_choice", "needs_passphrase"):
             return
-        # A rejected sign-in or a broken file needs the user; retrying on a
+        # A rejected sign-in or a full account needs the user; retrying on a
         # timer would only repeat the error.
         if self._state == "error" and self._error_code in NO_RETRY_ERRORS:
             return

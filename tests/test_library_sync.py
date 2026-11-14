@@ -1938,3 +1938,120 @@ def test_download_queue_is_not_synced():
     assert "QUEUED" not in pushed
     for key in queue_settings.KEYS:
         assert key not in pushed
+
+
+def test_upload_with_a_lost_reply_is_not_a_conflict():
+    location = MemoryLocation()
+    sync = manager(location)
+    game_id = database.add_game("Local", "/local.exe")
+    assert sync.run()["state"] == "idle"
+    write = location.write
+
+    def write_then_time_out(data, expected_revision):
+        _ = write(data, expected_revision)
+        raise SyncError("Dropbox could not be reached. wLib will try again later.")
+
+    location.write = write_then_time_out
+    database.update_game(game_id, {"rating": "9"})
+    assert sync.run()["state"] in ("error", "offline")
+    assert location.writes == 2
+    location.write = write
+
+    # The remote file is this device's own upload: no "both sides changed".
+    status = sync.run()
+    assert status["state"] == "idle", status
+    assert location.writes == 2
+    assert database.get_setting("sync_last_revision") == location.rev
+    assert not sync.local_changed()
+
+    # An edit after the lost reply is still pushed.
+    database.update_game(game_id, {"rating": "3"})
+    location.write = write_then_time_out
+    assert sync.run()["state"] in ("error", "offline")
+    location.write = write
+    database.update_game(game_id, {"rating": "4"})
+    database.update_setting("sync_local_modified_at", "2099-01-01T00:00:00Z")
+    assert sync.run()["state"] == "idle"
+    assert location.writes == 4
+    assert json.loads(location.data)["games"][0]["user_state"]["rating"] == "4"
+
+
+def test_half_written_sync_file_is_retried():
+    location = MemoryLocation(remote_backup())
+    complete = location.data
+    location.data = complete[: len(complete) // 2]
+    sync = manager(location)
+    status = sync.run()
+    assert status["error_code"] == "invalid_sync_file"
+
+    # The cloud client finished the file; the watcher tries again.
+    location.data = complete
+    sync._next_full_run = 0.0
+    sync._watch_tick()
+    worker = sync._worker
+    assert worker is not None
+    worker.join(5)
+    assert sync.status()["state"] == "idle"
+    assert database.get_all_games()[0]["title"] == "Remote"
+
+
+def test_failed_pull_keeps_the_saved_snapshots(monkeypatch):
+    from core import library_backup
+
+    _ = database.add_game("Local", "/local.exe")
+    for _ in range(library_backup.SYNC_SNAPSHOT_KEEP):
+        assert library_backup.write_sync_snapshot()
+    folder = library_backup.sync_snapshot_dir()
+    before = sorted(os.listdir(folder))
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(library_backup, "_import_setting_groups", fail)
+    for _ in range(3):
+        with pytest.raises(OSError):
+            _ = library_backup.apply_library_backup(
+                remote_backup(),
+                {"sections": library_backup.SYNC_SECTIONS},
+                mirror=True,
+                sync=True,
+            )
+    assert sorted(os.listdir(folder)) == before
+
+
+def test_first_upload_with_a_lost_reply_does_not_ask_for_a_library():
+    location = MemoryLocation()
+    sync = manager(location)
+    _ = database.add_game("Local", "/local.exe")
+    write = location.write
+
+    def write_then_time_out(data, expected_revision):
+        _ = write(data, expected_revision)
+        raise SyncError("Dropbox could not be reached. wLib will try again later.")
+
+    location.write = write_then_time_out
+    assert sync.run()["state"] in ("error", "offline")
+    location.write = write
+
+    status = sync.run()
+    assert status["state"] == "idle", status
+    assert location.writes == 1
+    assert database.get_setting("sync_last_revision") == location.rev
+
+
+def test_pending_push_marker_from_another_device_still_asks():
+    location = MemoryLocation(remote_backup())
+    sync = manager(location)
+    sync.run()
+    game = database.get_all_games()[0]
+    database.update_game(game["id"], {"rating": "9"})
+    database.update_setting("sync_local_modified_at", "2026-10-09T12:00:00Z")
+    # A failed push left a marker; another device then wrote the file.
+    database.update_setting(
+        "sync_pending_push",
+        json.dumps({"modified_at": "2026-10-09T12:00:00Z", "device": "this-device"}),
+    )
+    location.change(remote_backup(modified="2026-10-09T13:00:00Z"))
+    status = sync.run()
+    assert status["state"] == "needs_choice"
+    assert status["choice_reason"] == "conflict"

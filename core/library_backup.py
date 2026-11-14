@@ -603,11 +603,12 @@ def _snapshot_name(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%S-%fZ") + ".json"
 
 
-def write_sync_snapshot() -> str | None:
+def write_sync_snapshot(*, prune: bool = True) -> str | None:
     """Save the whole local library before sync changes it; keep the last five.
 
     Returns the snapshot's name, or None when the library has no games (there
-    is nothing to undo). The copy older wLib versions kept in
+    is nothing to undo). With prune=False the caller prunes after its change
+    commits, so a change that fails cannot push older snapshots out. The copy older wLib versions kept in
     `sync/last-local.json` moves into the list the first time.
     """
     folder = sync_snapshot_dir()
@@ -623,13 +624,35 @@ def write_sync_snapshot() -> str | None:
         return None
     name = _snapshot_name(datetime.now(UTC))
     _ = write_library_backup(os.path.join(folder, name), {"sections": SUPPORTED_SECTIONS})
-    names = sorted(entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry))
+    if prune:
+        prune_sync_snapshots()
+    return name
+
+
+def prune_sync_snapshots() -> None:
+    """Delete all but the newest five snapshots."""
+    folder = sync_snapshot_dir()
+    try:
+        names = sorted(
+            entry for entry in os.listdir(folder) if _SYNC_SNAPSHOT_RE.match(entry)
+        )
+    except OSError:
+        return
     for old in names[:-SYNC_SNAPSHOT_KEEP]:
         try:
             os.remove(os.path.join(folder, old))
         except OSError:
             pass
-    return name
+
+
+def discard_sync_snapshot(name: str | None) -> None:
+    """Delete a snapshot made for a sync change that did not happen."""
+    if not name:
+        return
+    try:
+        os.remove(os.path.join(sync_snapshot_dir(), name))
+    except OSError:
+        pass
 
 
 def list_sync_snapshots() -> list[dict[str, object]]:
@@ -1733,9 +1756,6 @@ def _coerce_setting_value(key: str, raw: object) -> str:
     """
     if isinstance(raw, (list, dict)):
         return json.dumps(raw, ensure_ascii=False)
-    if key == "download_detection_enabled" and not _coerce_text(raw).strip():
-        # The app reads a blank value as the default (on), not as off.
-        return "true"
     if key in BOOLEAN_SETTINGS_KEYS:
         return "true" if _coerce_bool(raw) else "false"
     if key in gamescope.SETTINGS_DEFAULTS:
@@ -1842,7 +1862,10 @@ def _folder_entries(raw: object) -> list[object]:
 
 
 def _import_library_folders(
-    cursor: sqlite3.Cursor, group: Mapping[str, object], merge_mode: str
+    cursor: sqlite3.Cursor,
+    group: Mapping[str, object],
+    merge_mode: str,
+    mirror: bool = False,
 ) -> int:
     if "library_folders" not in group and "library_folder" not in group:
         return 0
@@ -1871,6 +1894,10 @@ def _import_library_folders(
     )
     # Every entry was foreign: keep the local folders, as for other path settings.
     if not folders and any(isinstance(p, str) and p.strip() for p in raw_folders):
+        return 0
+    # No folders in the backup means none were set there; only a mirror
+    # removes this device's folders.
+    if not folders and not mirror:
         return 0
     identity = os.path.realpath(os.path.expanduser(raw_default)) if raw_default else ""
     default = next(
@@ -1916,13 +1943,29 @@ def _import_setting_groups(
     for group_name, allowed_keys in groups:
         group = _coerce_mapping(settings.get(group_name))
         if group_name == "paths":
-            updated += _import_library_folders(cursor, group, merge_mode)
+            updated += _import_library_folders(cursor, group, merge_mode, mirror)
         for key in allowed_keys:
             if key in ("library_folder", "library_folders"):
                 continue
             if key not in group:
                 continue
-            value = _coerce_setting_value(key, group.get(key))
+            raw_value = group.get(key)
+            # Exports write "" for a setting that was never set there, so a
+            # blank value means "default", not "off" or "no path". Only a
+            # mirror makes this device match; otherwise keep the local value.
+            blank = (
+                not isinstance(raw_value, (list, dict, bool, int, float))
+                and not _coerce_text(raw_value).strip()
+            )
+            if blank and not mirror:
+                continue
+            # The app reads a blank yes/no setting as its default; coercing it
+            # would store "false" and turn a default-on setting off.
+            value = (
+                ""
+                if blank and key in BOOLEAN_SETTINGS_KEYS
+                else _coerce_setting_value(key, group.get(key))
+            )
             if (
                 group_name == "paths"
                 and key not in NON_PATH_SETTINGS_KEYS
@@ -2126,6 +2169,7 @@ def apply_library_backup(
     updated_ids: list[int] = []
     copied_covers: list[str] = []
     replaced_covers: list[str] = []
+    snapshot: str | None = None
 
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
@@ -2158,7 +2202,7 @@ def apply_library_backup(
             if mirror or sync:
                 # A mirror can delete games and a sync merge overwrites values;
                 # either can be undone from these copies.
-                _ = write_sync_snapshot()
+                snapshot = write_sync_snapshot(prune=False)
 
             if SECTION_SETTINGS_PATHS in sections:
                 tools_updated, tools_skipped = _import_companion_tools(
@@ -2395,7 +2439,11 @@ def apply_library_backup(
         except Exception:
             conn.rollback()
             _discard_cover_files(copied_covers)
+            discard_sync_snapshot(snapshot)
             raise
+
+    if snapshot:
+        prune_sync_snapshots()
 
     _discard_cover_files(replaced_covers)
     if deleted > 0:

@@ -2239,8 +2239,8 @@ def test_import_settings_reads_native_booleans(tmp_path):
     assert settings["update_notifications"] is False
 
 
-def test_import_settings_keeps_blank_download_detection_on(tmp_path):
-    """A blank or null detection toggle means the default (on), not off."""
+def test_import_settings_keeps_local_download_detection_for_blank(tmp_path):
+    """A blank or null detection toggle was never set there: keep this one."""
     api = Api()
     for value in (None, ""):
         api.save_settings({"download_detection_enabled": False})
@@ -2257,7 +2257,7 @@ def test_import_settings_keeps_blank_download_detection_on(tmp_path):
         )
 
         assert result["success"] is True
-        assert api.get_settings()["download_detection_enabled"] is True
+        assert api.get_settings()["download_detection_enabled"] is False
 
 
 def test_import_merges_new_rows_for_one_thread_under_different_slugs(tmp_path):
@@ -3731,3 +3731,49 @@ def test_download_queue_and_its_settings_stay_out_of_backups_and_sync():
         assert "download_jobs" not in text
         for key in queue_settings.KEYS:
             assert key not in text
+
+
+def test_blank_settings_in_a_backup_keep_local_values():
+    from core.database import html_builtin_player_enabled
+
+    add_game("Game", "/games/game.exe")
+    # Nothing is set on the exporting device, so every setting is blank.
+    backup = build_library_backup(
+        {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]}
+    )
+    assert backup["settings"]["general"]["html_builtin_player"] == ""
+    paths = backup["settings"]["paths"]
+    for key in ("downloads_folder", "proton_path", "library_folder"):
+        paths[key] = ""
+    paths["library_folders"] = []
+    update_setting("downloads_folder", "/home/me/Downloads")
+    update_setting("proton_path", "/opt/proton")
+    update_setting("library_folders", json.dumps(["/games"]))
+    update_setting("library_folder", "/games")
+
+    _ = apply_library_backup(
+        backup, {"sections": [SECTION_SETTINGS_GENERAL, SECTION_SETTINGS_PATHS]}
+    )
+
+    # A blank yes/no setting is the default (on), not "false".
+    assert get_setting("html_builtin_player") is None
+    assert html_builtin_player_enabled()
+    assert get_setting("downloads_folder") == "/home/me/Downloads"
+    assert get_setting("proton_path") == "/opt/proton"
+    assert json.loads(get_setting("library_folders") or "[]") == ["/games"]
+    assert get_setting("library_folder") == "/games"
+
+
+def test_blank_setting_in_a_sync_mirror_restores_the_default():
+    from core.database import html_builtin_player_enabled
+
+    add_game("Game", "/games/game.exe")
+    payload = build_sync_backup("2026-10-09T10:00:00Z", "remote-device")
+    update_setting("html_builtin_player", "false")
+
+    _ = apply_library_backup(
+        payload, {"sections": SYNC_SECTIONS}, mirror=True, sync=True
+    )
+
+    assert get_setting("html_builtin_player") == ""
+    assert html_builtin_player_enabled()
