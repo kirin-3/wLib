@@ -1,0 +1,48 @@
+name: Discord commits
+
+# Posts each push to the Discord #wlib-commits channel with the full commit titles.
+# The Discord GitHub webhook cuts titles at about 50 characters, so this replaces it for pushes.
+on:
+  push:
+    branches:
+      - '**'
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.deleted && github.event.commits[0] != null }}
+    steps:
+      - name: Send commits to Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_COMMITS_WEBHOOK }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "DISCORD_COMMITS_WEBHOOK is not set. Skipping."
+            exit 0
+          fi
+
+          payload=$(jq '
+            def short: .[0:7];
+            (.ref | sub("^refs/heads/"; "")) as $branch
+            | (.commits | length) as $n
+            | ([.commits[]
+                | "[`\(.id | short)`](\(.url)) \(.message | split("\n")[0]) - \(.author.username // .author.name)"]
+                | join("\n")) as $lines
+            | {
+                username: "GitHub",
+                avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                allowed_mentions: { parse: [] },
+                embeds: [{
+                  author: { name: .sender.login, icon_url: .sender.avatar_url, url: .sender.html_url },
+                  title: "[\(.repository.name):\($branch)] \($n) new commit\(if $n == 1 then "" else "s" end)",
+                  url: (if $n == 1 then .head_commit.url else .compare end),
+                  description: (if ($lines | length) > 4000 then $lines[0:4000] + "\n..." else $lines end),
+                  color: 7506394
+                }]
+              }
+          ' "$EVENT_PATH")
+
+          curl -sS --fail-with-body -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
