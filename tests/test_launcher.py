@@ -3740,6 +3740,7 @@ def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
     assert ["--ro-bind", folder, folder] in triples
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="RPGMaker Linux runner runs only on Linux hosts")
 def test_performance_rpgmaker_runner_keeps_user_mangohud(tmp_path, monkeypatch):
     exe = tmp_path / "game.exe"
     exe.touch()
@@ -3758,6 +3759,7 @@ def test_performance_rpgmaker_runner_keeps_user_mangohud(tmp_path, monkeypatch):
     assert [os.path.basename(arg) for arg in cmd].count("mangohud") == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX exec bits")
 def test_performance_native_launch_keeps_mangohud(tmp_path, monkeypatch):
     game = tmp_path / "game.sh"
     game.write_text("#!/bin/sh\n")
