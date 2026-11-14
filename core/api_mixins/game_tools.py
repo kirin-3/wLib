@@ -102,6 +102,9 @@ class GameToolsMixin(ApiBase):
                 raise GameToolError("Close the game before using its tools")
             if self._archive_install_status["running"] and self._archive_install_game_id == game_id:
                 raise GameToolError("This game is being updated. Wait for the install to finish.")
+            files_busy = self._game_files_busy_reason(game_id)
+            if files_busy:
+                raise GameToolError(files_busy)
             self._tool_status[game_id] = {
                 "running": True,
                 "action": action,

@@ -226,3 +226,52 @@ def test_start_move_needs_existing_destination(env, tmp_path):
     game_id = _install(library / "Game")
     result = api.start_game_move([game_id], str(tmp_path / "missing"))
     assert result["success"] is False
+
+
+def test_moving_or_uninstalling_game_refuses_mod_tools_and_save_restore(env, tmp_path, monkeypatch):
+    import threading
+
+    from core.game_saves import GameSavesError
+    from core.game_tools import GameToolError
+
+    api, library, _backups = env
+    game_id = _install(library / "Game")
+
+    api._uninstalling.add(game_id)
+    with pytest.raises(GameToolError, match="being uninstalled"):
+        with api._tool_run(game_id, "extract"):
+            pass
+    with pytest.raises(GameSavesError, match="being uninstalled"):
+        with api._save_operation(game_id, writes=True):
+            pass
+    # The uninstall's own backup reads the saves; it is not a restore.
+    with api._save_operation(game_id):
+        pass
+    api._uninstalling.clear()
+
+    gate = threading.Event()
+    started = threading.Event()
+
+    def held(job, cancel, on_bytes, set_total):
+        started.set()
+        assert gate.wait(5)
+        return gf.MoveOutcome("cancelled")
+
+    monkeypatch.setattr(api._game_moves, "_runner", held)
+    _ = api.start_game_move([game_id], str(tmp_path))
+    assert started.wait(5)
+    try:
+        with pytest.raises(GameToolError, match="being moved"):
+            with api._tool_run(game_id, "extract"):
+                pass
+        with pytest.raises(GameSavesError, match="being moved"):
+            with api._save_operation(game_id, writes=True):
+                pass
+    finally:
+        _ = api.cancel_game_move(True)
+        gate.set()
+    deadline = time.monotonic() + 5
+    while api.get_move_status()["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    with api._tool_run(game_id, "extract"):
+        pass

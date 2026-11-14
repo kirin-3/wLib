@@ -283,6 +283,27 @@ def test_sweep_after_crash(lib, tmp_path):
     assert gf.list_jobs("move") == []
 
 
+def test_sweep_keeps_trash_record_before_its_rename(lib, tmp_path, monkeypatch):
+    library, _ctx = lib
+    root = tmp_path / "Elsewhere" / "Game"
+    root.mkdir(parents=True)
+    (root / "file").write_text("x")
+    real_rename = gf.os.rename
+    swept: list[list[str]] = []
+
+    def rename_after_sweep(src, dst):
+        # A startup sweep runs between the record and the rename.
+        _ = gf.sweep_leftovers([str(library)])
+        swept.append(gf.list_jobs("trash"))
+        real_rename(src, dst)
+
+    monkeypatch.setattr(gf, "remove_tree_collect", lambda path: ["held"])
+    monkeypatch.setattr(gf.os, "rename", rename_after_sweep)
+    assert gf.trash_root(str(root), [str(library)]) == "recorded"
+    assert len(swept) == 1 and len(swept[0]) == 1
+    assert gf.list_jobs("trash") == swept[0]
+
+
 def test_jobs_file_is_json(lib):
     gf.add_job("trash", "/x/.wlib-trash-1")
     gf.add_job("trash", "/x/.wlib-trash-1")

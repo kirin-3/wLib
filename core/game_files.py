@@ -374,6 +374,9 @@ def plan_move(
 
 _record_lock = threading.Lock()
 _record_in_flight: set[str] = set()
+# Recorded folders that wLib is making now (a trash rename or a move copy);
+# the sweep leaves them and their records alone.
+_active_records: set[str] = set()
 
 
 def _start_recorded_delete(kind: str, path: str) -> None:
@@ -418,18 +421,22 @@ def trash_root(root: str, library_folders: Sequence[str]) -> str:
         return "library"
     parent = os.path.dirname(os.path.abspath(root).rstrip(os.sep))
     trash = os.path.join(parent, f"{TRASH_PREFIX}{time.time_ns()}")
-    add_job("trash", trash)
+    # The sweep must not drop the record while the folder is not there yet.
+    with _record_lock:
+        _active_records.add(trash)
     try:
-        os.rename(root, trash)
-    except OSError:
-        remove_job("trash", trash)
-        _delete_in_place(root)
-        return "in_place"
+        add_job("trash", trash)
+        try:
+            os.rename(root, trash)
+        except OSError:
+            remove_job("trash", trash)
+            _delete_in_place(root)
+            return "in_place"
+    finally:
+        with _record_lock:
+            _active_records.discard(trash)
     _start_recorded_delete("trash", trash)
     return "recorded"
-
-
-_active_move_temps: set[str] = set()
 
 
 def sweep_leftovers(library_folders: Sequence[str]) -> int:
@@ -445,7 +452,7 @@ def sweep_leftovers(library_folders: Sequence[str]) -> int:
     for kind in ("trash", "move"):
         for path in list_jobs(kind):
             with _record_lock:
-                if path in _active_move_temps:
+                if path in _active_records:
                     continue
             if os.path.isdir(path) and not os.path.islink(path):
                 _start_recorded_delete(kind, path)
@@ -453,8 +460,6 @@ def sweep_leftovers(library_folders: Sequence[str]) -> int:
             elif os.path.isdir(os.path.dirname(path)):
                 remove_job(kind, path)
     return started
-
-
 
 
 # ── Uninstall ──
@@ -610,7 +615,7 @@ def run_move_job(
         return MoveOutcome("skipped", str(exc))
     temp = os.path.join(dest, f"{MOVE_PREFIX}{time.time_ns()}")
     with _record_lock:
-        _active_move_temps.add(temp)
+        _active_records.add(temp)
     add_job("move", temp)
     renamed = False
     try:
@@ -641,7 +646,7 @@ def run_move_job(
         if renamed or not os.path.lexists(temp):
             remove_job("move", temp)
         with _record_lock:
-            _active_move_temps.discard(temp)
+            _active_records.discard(temp)
     hooks.moved(job.game_id)
     how = trash_root(root, context.library_folders)
     warning = ""

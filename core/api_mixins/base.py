@@ -2114,6 +2114,10 @@ class ApiBase:
                 )
             if writes and game_id in self.get_running_games():
                 raise GameSavesError("Close the game before changing its saves")
+            if writes:
+                files_busy = self._game_files_busy_reason(game_id)
+                if files_busy:
+                    raise GameSavesError(files_busy)
             self._saves_busy.add(game_id)
             if writes:
                 self._saves_writing.add(game_id)
@@ -2169,10 +2173,11 @@ class ApiBase:
             effective = override
         return coerced_id, row, effective, detected
 
-    def _game_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
-        """Why the game's files are in use by wLib, or None. Caller holds _status_lock.
+    def _game_files_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
+        """The uninstall or move that changes the game's folder, or None.
 
-        `ignore_move` leaves out the game's own move, for the move job itself.
+        Caller holds _status_lock. Takes no other Api lock, so the mod tool and
+        save checks can call it while they hold their own locks.
         """
         from core.game_files import MOVING_BUSY, UNINSTALLING_BUSY
 
@@ -2180,6 +2185,16 @@ class ApiBase:
             return UNINSTALLING_BUSY
         if not ignore_move and self._game_moves.state(game_id):
             return MOVING_BUSY
+        return None
+
+    def _game_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
+        """Why the game's files are in use by wLib, or None. Caller holds _status_lock.
+
+        `ignore_move` leaves out the game's own move, for the move job itself.
+        """
+        files_busy = self._game_files_busy_reason(game_id, ignore_move=ignore_move)
+        if files_busy:
+            return files_busy
         with self._tool_lock:
             if game_id in self._tool_status:
                 return "A mod tool is changing this game's files. Wait for it to finish."
