@@ -34,7 +34,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 **Highlights**
 
 - **Updates in one click.** Check the whole library against F95Zone, download the new build through the browser extension or as an RPDL torrent, and install it over the old one with your saves moved across.
-- **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, Winetricks and per-game sandboxing are built in.
+- **Made for Linux.** Wine, Proton through umu-launcher, an RPG Maker runner, GameMode, MangoHud, gamescope, Winetricks and per-game sandboxing are built in.
 - **Steam Deck ready.** Controller navigation, a TV mode that turns on in Gaming Mode, and games added to Steam as shortcuts.
 - **Light.** About 125 MB of RAM when idle, a third to a half of what the Electron-based managers use ([details](docs/feature-comparison.md)).
 - **Your data stays yours.** Back up to a single JSON file, sync through a folder, Dropbox or Google Drive with optional encryption, and import from F95Checker, Atlas, XLibrary, f69 or Playnite.
@@ -46,18 +46,19 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - Grid, list, compact and banner views, with a card-size slider.
 - Cover art (animated covers play always, on hover or never, and pause while a game runs), tags with colors, ratings, play status (including your own statuses), Markdown notes and PDF, TXT or MD attachments.
 - Collections as tabs, saved filters, and active filters shown as removable chips.
-- Select several games at once to change status, collections, favorites, tags, engine, launch mode, sandbox or Wine/Proton prefix, back up saves, refresh covers, check for updates, or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
+- Select several games at once to change status, collections, favorites, tags, engine, launch mode, sandbox or Wine/Proton prefix, back up saves, refresh F95 covers, ratings and tags, check for updates, uninstall, move or remove them. Most actions can be undone for a few seconds, also with Ctrl+Z.
 - A wishlist that tells you when a game is marked Completed.
 - Playtime tracking and a per-version **Journal**. **Unplayed update** and **New since finished** collections show what's new.
 - Thread screenshots in the detail window, served from the shared game catalog.
 - Import a whole folder of installed games at once. wLib guesses the title, version and engine, and you can fix them afterwards.
 - More than one executable per game, with one as the default for Play.
+- Uninstall a game (it can stay in the library as Wishlist, with an optional save backup first) or move its folder to another drive. Moves run in the background and update every path for you.
 
 ### Updates and downloads
 
 - Check every game against F95Zone at once, or on a schedule. Games from Ryuugames without an F95 thread are checked against the catalog.
 - **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
-- **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit.
+- **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit. You can also save the `.torrent`, copy the magnet link, or send it to your own torrent client's watch folder.
 - **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
 - Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
@@ -77,13 +78,13 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
   - automatic fixes for common black screens in RPG Maker and NW.js games
   - a Japanese locale option and a Wayland toggle
   - Winecfg, Winetricks and one-click runtime installs (DirectX, VC++, fonts, RPG Maker RTPs)
-  - GameMode and MangoHud, globally or per game
+  - GameMode, MangoHud and gamescope, globally or per game
   - Cheat Engine (Lunar Engine) for Wine and Proton games
   - your own tools in **Settings > Custom tools**, opened from a running game's menu
 - Add wLib and your installed games to Steam as non-Steam shortcuts (Linux). Games started from Steam still go through wLib's launcher and record playtime.
 - **Run in sandbox** uses bubblewrap on Linux and Sandboxie-Plus on Windows. If the tool is missing, the game doesn't launch, so it never runs unsandboxed by accident.
 - **No internet** cuts a single game off from the network on both Linux and Windows.
-- HTML and Flash games play in a built-in player with playtime, Stop, sandbox and No internet. Each game keeps its own saves. Flash runs through Ruffle. You can still open a game in your browser instead.
+- HTML and Flash games play in a built-in player with playtime, Stop, sandbox and No internet. Each game keeps its own saves. Flash runs through Ruffle. wLib warns you about videos the player can't play (H.264, H.265, AAC) and can convert them with ffmpeg. F12 opens DevTools. You can still open a game in your browser instead.
 - On Windows, `.exe`, `.bat` and `.cmd` files run directly and `.jar` games run through Java.
 
 ### Controller and Steam Deck
@@ -292,13 +293,14 @@ To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-li
 | Play `.jar` games | Java |
 | Install from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux (included in Flatpak and Nix) |
 | Run games in a sandbox | bubblewrap on Linux, Sandboxie-Plus on Windows (wLib can install either from **Settings > Sandbox**) |
-| Use GameMode or MangoHud | `gamemode`, `mangohud` |
+| Use GameMode, MangoHud or gamescope | `gamemode`, `mangohud`, `gamescope` |
+| Convert HTML game videos for the built-in player | `ffmpeg` |
 
 ## Browser extension
 
 The Chrome and Firefox extension adds **Add to wLib**, **Wishlist** and **Open in wLib** buttons to F95Zone threads, and to DLsite, VNDB and Ryuugames pages once you turn those sites on in its options. It also handles in-app downloads, and it retries requests with your browser's sign-in when F95Zone challenges wLib.
 
-It only talks to wLib on your own computer (port `8183`), so wLib has to be running. It updates itself, so you only install it once. Click **Open Extension Folder** in wLib to find the files.
+It only talks to wLib on your own computer (port `8183`), so wLib has to be running. The first time it connects, wLib asks you to allow it, and you can remove it later on the Extension page. It updates itself, so you only install it once. Click **Open Extension Folder** in wLib to find the files.
 
 **Chrome, Brave, Edge and other Chromium browsers:** open `chrome://extensions/`, turn on **Developer mode**, click **Load unpacked** and pick the `chrome` folder.
 

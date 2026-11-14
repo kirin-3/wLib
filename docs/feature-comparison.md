@@ -58,7 +58,7 @@ Snapshot from 2026-11-03
 | Skip / pin a version | ✅ skip | ❌ | ❌ | ✅ pin |
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
 | In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier | ✅ aria2: donor DDL, masked links, MEGAcmd |
-| Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue | ✅ | ❌ | ✅ |
+| Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue; export .torrent/magnet or send to a client's watch folder | ✅ | ❌ | ✅ |
 | Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
 
@@ -85,7 +85,7 @@ Snapshot from 2026-11-03
 | Other runtimes | Java, built-in HTML player, Flash/Ruffle | Java, HTML player, Flash/Ruffle, DOSBox, ScummVM | Per-extension emulator mapping | ❌ |
 | Japanese locale | ✅ | ✅ Locale Emulator | ❌ | ❌ |
 | Winecfg / Winetricks / runtime installs | ✅ | ❌ | ❌ | ❌ |
-| GameMode / MangoHud | ✅ | ❌ | ❌ | ❌ |
+| GameMode / MangoHud | ✅ (+ gamescope) | ❌ | ❌ | ❌ |
 | Sandbox | ✅ bubblewrap, Sandboxie-Plus | ⚠️ Sandboxie (Windows) | ❌ | ✅ bubblewrap, Sandboxie |
 | Per-game internet block | ✅ Linux + Windows | ⚠️ Windows firewall | ❌ | ⚠️ Linux only |
 | Add to Steam as shortcut | ✅ Linux; changes apply after Steam exits | ✅ | ❌ | ❌ |
