@@ -48,11 +48,11 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
       <IconBrandSteam class="ui-section-icon" />
       Steam
     </h3>
-    <div data-settings-row="steam-static-0" data-settings-bound v-show="settingsRowVisible('steam-static-0')" v-if="!status" class="ui-card-row flex items-center gap-3 p-4 rounded-lg text-sm" style="color:var(--text-secondary)">
+    <div data-settings-row="steam-static-0" data-settings-bound v-show="settingsRowVisible('steam-static-0')" v-if="!status" class="ui-card-row flex items-center gap-3 text-sm" style="color:var(--text-secondary)">
       <IconLoader2 class="w-4 h-4 animate-spin" />Checking Steam…
     </div>
     <template v-else>
-      <div class="ui-card-row flex items-start gap-3 p-4 rounded-lg" role="status">
+      <div class="ui-card-row flex items-start gap-3" role="status">
         <span class="ui-status-badge" :class="status.found ? 'ui-status-badge--ok' : 'ui-status-badge--warn'" aria-hidden="true">
           <IconCircleCheck v-if="status.found" class="w-4 h-4" /><IconAlertTriangle v-else class="w-4 h-4" />
         </span>
@@ -66,7 +66,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
         </div>
       </div>
       <template v-if="status.found">
-        <div v-if="status.accounts.length" class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+        <div v-if="status.accounts.length" class="ui-card-row flex flex-wrap items-center justify-between gap-4">
           <div>
             <label for="steam-account" class="text-sm font-medium" style="color:var(--text-primary)">Account</label>
             <p class="text-xs mt-1" style="color:var(--text-muted)">The Steam user whose library gets the shortcuts.</p>
@@ -75,7 +75,7 @@ onUnmounted(() => { if (timer) clearInterval(timer); });
             <option v-for="account in status.accounts" :key="account" :value="account">{{ account }}</option>
           </select>
         </div>
-        <div class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+        <div class="ui-card-row flex flex-wrap items-center justify-between gap-4">
           <div>
             <label for="steam-mode" class="text-sm font-medium" style="color:var(--text-primary)">Games in Steam</label>
             <p class="text-xs mt-1" style="color:var(--text-muted)">Which wLib games appear as Steam shortcuts.</p>

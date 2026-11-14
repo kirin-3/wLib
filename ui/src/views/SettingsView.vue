@@ -1282,7 +1282,7 @@ const browseUrm = async () => {
           General
         </h3>
 
-        <div data-settings-row="general-static-0" data-settings-bound v-show="settingsRowVisible('general-static-0')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-0" data-settings-bound v-show="settingsRowVisible('general-static-0')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Enable Debug Logging
@@ -1308,7 +1308,7 @@ const browseUrm = async () => {
           </label>
         </div>
 
-        <div data-settings-row="general-static-5" data-settings-bound v-show="settingsRowVisible('general-static-5')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-5" data-settings-bound v-show="settingsRowVisible('general-static-5')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Play HTML games in the built-in player
@@ -1330,7 +1330,7 @@ const browseUrm = async () => {
           </label>
         </div>
 
-        <div data-settings-row="general-static-6" data-settings-bound v-show="settingsRowVisible('general-static-6')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-6" data-settings-bound v-show="settingsRowVisible('general-static-6')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Web player DevTools (F12)
@@ -1352,7 +1352,7 @@ const browseUrm = async () => {
           </label>
         </div>
 
-        <div data-settings-row="general-static-1" data-settings-bound v-show="settingsRowVisible('general-static-1')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="general-static-1" data-settings-bound v-show="settingsRowVisible('general-static-1')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <label for="save-backup-keep" class="text-sm font-medium" style="color: var(--text-primary)">
               Save backups to keep per game
@@ -1390,7 +1390,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="general-static-2" data-settings-bound v-show="settingsRowVisible('general-static-2')" class="space-y-3">
+        <div data-settings-row="general-static-2" data-settings-bound v-show="settingsRowVisible('general-static-2')" class="ui-card-row space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Play Statuses</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1415,7 +1415,7 @@ const browseUrm = async () => {
           <div
             v-for="name in customStatuses"
             :key="name"
-            class="setting-row flex items-center justify-between gap-3 px-4 py-2 rounded-lg"
+            class="ui-card-row flex items-center justify-between gap-3"
           >
             <span class="text-sm" style="color: var(--text-primary)">{{ name }}</span>
             <button @click="removeStatus(name)" :disabled="!!settingsLoadError || settingsLoading" class="settings-btn" :aria-label="`Remove ${name}`">
@@ -1424,7 +1424,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="general-static-3" data-settings-bound v-show="settingsRowVisible('general-static-3')" class="space-y-3">
+        <div data-settings-row="general-static-3" data-settings-bound v-show="settingsRowVisible('general-static-3')" class="ui-card-row space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Collections</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1453,7 +1453,7 @@ const browseUrm = async () => {
           <div
             v-for="(name, index) in collectionList"
             :key="name"
-            class="setting-row flex items-center justify-between gap-3 px-4 py-2 rounded-lg"
+            class="ui-card-row flex items-center justify-between gap-3"
           >
             <form
               v-if="renamingCollection === name"
@@ -1507,7 +1507,7 @@ const browseUrm = async () => {
           <IconDownloadFilled class="ui-section-icon" />
           Library &amp; Downloads
         </h3>
-        <div data-settings-row="library-downloads-static-0" data-settings-bound v-show="settingsRowVisible('library-downloads-static-0')" class="flex items-center justify-between gap-3 mb-4">
+        <div data-settings-row="library-downloads-static-0" data-settings-bound v-show="settingsRowVisible('library-downloads-static-0')" class="ui-card-row flex items-center justify-between gap-3">
           <div>
             <p class="text-sm">Cover cache: {{ coverCache.count ? `${coverCache.count} covers, ${formatCoverCacheSize(coverCache.bytes)}` : 'Empty' }}</p>
             <p class="text-xs mt-1" style="color: var(--text-muted)">Cached covers stay on this device. After purging, downloads resume next launch.</p>
@@ -1516,7 +1516,7 @@ const browseUrm = async () => {
           <button class="settings-btn disabled:opacity-50" :disabled="coverCacheBusy || !coverCache.count" @click="purgeCoverCache">Purge</button>
         </div>
 
-        <div data-settings-row="library-downloads-static-1" data-settings-bound v-show="settingsRowVisible('library-downloads-static-1')" class="space-y-3">
+        <div data-settings-row="library-downloads-static-1" data-settings-bound v-show="settingsRowVisible('library-downloads-static-1')" class="ui-card-row space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Library folders</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1540,7 +1540,7 @@ const browseUrm = async () => {
           <FieldSaveFeedback :state="foldersSave.state.value" :error="foldersSave.error.value" />
         </div>
 
-        <div data-settings-row="library-downloads-static-2" data-settings-bound v-show="settingsRowVisible('library-downloads-static-2')" class="space-y-3">
+        <div data-settings-row="library-downloads-static-2" data-settings-bound v-show="settingsRowVisible('library-downloads-static-2')" class="ui-card-row space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Folder pattern</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1565,7 +1565,7 @@ const browseUrm = async () => {
           </p>
         </div>
 
-        <div data-settings-row="library-downloads-static-3" data-settings-bound v-show="settingsRowVisible('library-downloads-static-3')" class="space-y-3">
+        <div data-settings-row="library-downloads-static-3" data-settings-bound v-show="settingsRowVisible('library-downloads-static-3')" class="ui-card-row space-y-3">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Downloads folder</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1590,7 +1590,7 @@ const browseUrm = async () => {
           <PathStatus :path="downloadsFolder" kind="dir" />
         </div>
 
-        <div data-settings-row="library-downloads-static-4" data-settings-bound v-show="settingsRowVisible('library-downloads-static-4')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="library-downloads-static-4" data-settings-bound v-show="settingsRowVisible('library-downloads-static-4')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">
               Detect downloaded updates
@@ -1613,7 +1613,7 @@ const browseUrm = async () => {
           </label>
         </div>
 
-        <div data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" class="setting-row p-4 rounded-lg space-y-3" data-testid="settings-download-queue">
+        <div data-settings-row="library-downloads-queue" data-keywords="download queue speed limit bandwidth slots same time pause playing game battery" data-settings-bound v-show="settingsRowVisible('library-downloads-queue')" class="ui-card-row space-y-3" data-testid="settings-download-queue">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">In-app downloads</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">For file hosts and torrents together. The Downloads page shows the same settings. This device only.</p>
@@ -1666,7 +1666,7 @@ const browseUrm = async () => {
           Appearance
         </h3>
 
-        <div data-settings-row="appearance-static-0" data-keywords="dark light system" data-settings-bound v-show="settingsRowVisible('appearance-static-0')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-0" data-keywords="dark light system" data-settings-bound v-show="settingsRowVisible('appearance-static-0')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Theme</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1688,7 +1688,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="appearance-static-1" data-settings-bound v-show="settingsRowVisible('appearance-static-1')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-1" data-settings-bound v-show="settingsRowVisible('appearance-static-1')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 id="accent-label" class="text-sm font-medium" style="color: var(--text-primary)">Accent</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1727,7 +1727,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="appearance-static-2" data-settings-bound v-show="settingsRowVisible('appearance-static-2')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-2" data-settings-bound v-show="settingsRowVisible('appearance-static-2')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Text size</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1749,7 +1749,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="appearance-static-3" data-settings-bound v-show="settingsRowVisible('appearance-static-3')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-3" data-settings-bound v-show="settingsRowVisible('appearance-static-3')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">TV mode</h4>
             <label class="sr-only" for="tv-mode">TV mode</label>
@@ -1760,7 +1760,7 @@ const browseUrm = async () => {
             </select>
         </div>
 
-        <div data-settings-row="appearance-static-4" data-settings-bound v-show="settingsRowVisible('appearance-static-4')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-4" data-settings-bound v-show="settingsRowVisible('appearance-static-4')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <label for="interface-scale" class="text-sm font-medium" style="color: var(--text-primary)">Interface scale</label>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1778,7 +1778,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="appearance-static-5" data-settings-bound v-show="settingsRowVisible('appearance-static-5')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-5" data-settings-bound v-show="settingsRowVisible('appearance-static-5')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animations</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1807,7 +1807,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="appearance-static-6" data-keywords="gif cover covers animate animated hover" data-settings-bound v-show="settingsRowVisible('appearance-static-6')" class="setting-row flex items-center justify-between gap-4 p-4 rounded-lg">
+        <div data-settings-row="appearance-static-6" data-keywords="gif cover covers animate animated hover" data-settings-bound v-show="settingsRowVisible('appearance-static-6')" class="ui-card-row flex items-center justify-between gap-4">
           <div>
             <h4 class="text-sm font-medium" style="color: var(--text-primary)">Animate covers</h4>
             <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -1842,7 +1842,7 @@ const browseUrm = async () => {
 
         <div data-settings-row="wine-proton-static-0" data-settings-bound v-show="settingsRowVisible('wine-proton-static-0')"
           v-if="platformCapabilities.platform === 'windows'"
-          class="setting-row p-4 rounded-lg text-sm"
+          class="ui-card-row text-sm"
           style="color: var(--text-secondary)"
         >
           Windows games launch directly. Proton, Wine, Winetricks, Wine
@@ -1850,7 +1850,7 @@ const browseUrm = async () => {
         </div>
         <div data-settings-row="wine-proton-static-1" data-settings-bound v-show="settingsRowVisible('wine-proton-static-1')"
           v-else-if="!supportsLinuxRuntimes"
-          class="setting-row p-4 rounded-lg text-sm"
+          class="ui-card-row text-sm"
           style="color: var(--text-secondary)"
         >
           Wine, Proton, and Linux runtime installers are not supported on this platform.
@@ -1964,7 +1964,7 @@ const browseUrm = async () => {
           </p>
         </div>
 
-        <div data-settings-row="wine-proton-static-4" data-settings-bound v-show="settingsRowVisible('wine-proton-static-4')" v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
+        <div data-settings-row="wine-proton-static-4" data-settings-bound v-show="settingsRowVisible('wine-proton-static-4')" v-if="supportsLinuxRuntimes" class="ui-card-row space-y-3">
           <div class="flex flex-wrap gap-2">
             <button class="settings-btn" @click="openPrefixTool('winecfg')">Winecfg</button>
             <button class="settings-btn" @click="openPrefixTool('winetricks')">Winetricks</button>
@@ -1985,7 +1985,7 @@ const browseUrm = async () => {
           </div>
         </div>
 
-        <div data-settings-row="wine-proton-static-6" data-settings-bound data-keywords="gamescope scaler scaling upscale resolution fsr nis integer pixel art fullscreen" v-show="settingsRowVisible('wine-proton-static-6')" v-if="supportsLinuxRuntimes" class="setting-row p-4 rounded-lg space-y-3">
+        <div data-settings-row="wine-proton-static-6" data-settings-bound data-keywords="gamescope scaler scaling upscale resolution fsr nis integer pixel art fullscreen" v-show="settingsRowVisible('wine-proton-static-6')" v-if="supportsLinuxRuntimes" class="ui-card-row space-y-3">
           <div class="flex items-start justify-between gap-3">
             <div>
               <h4 id="settings-gamescope-label" class="text-sm font-medium" style="color: var(--text-primary)">
@@ -2070,7 +2070,7 @@ const browseUrm = async () => {
           </fieldset>
         </div>
 
-        <div data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux" class="setting-row p-4 rounded-lg">
+        <div data-settings-row="wine-proton-static-5" data-settings-bound v-show="settingsRowVisible('wine-proton-static-5')" v-if="platformCapabilities.rpgmaker_linux" class="ui-card-row">
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -2407,7 +2407,6 @@ const browseUrm = async () => {
   cursor: pointer;
 }
 
-.setting-row,
 .motion-toggle {
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -2481,7 +2480,8 @@ kbd {
   position: sticky;
   top: 0;
   z-index: 5;
-  margin: -1.5rem -1.5rem 1.25rem;
+  /* -1px: the first block's top line lies under this line, so there is never a double line. */
+  margin: -1.5rem -1.5rem -1px;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
   border-radius: calc(0.75rem - 1px) calc(0.75rem - 1px) 0 0;
@@ -2491,5 +2491,12 @@ kbd {
   font-size: 1.25rem;
   line-height: 1.75rem;
   font-weight: 700;
+}
+/* Every block in a section draws its own top line (the same as .ui-card-row), so a block that settings search
+   hides with v-show also hides its line. No sibling selectors: hidden blocks stay in the DOM. A table continues
+   the block above it and gets no line. */
+.settings-sections > section[id] > :not(:first-child):not(table) {
+  border-top: 1px solid var(--border);
+  padding-top: var(--row-gap, 1.25rem);
 }
 </style>

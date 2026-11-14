@@ -102,7 +102,7 @@ onMounted(() => onWebviewReady(() => { void load(); }));
       Torrents
     </h3>
 
-    <div data-settings-row="torrents-seed-mode" data-keywords="torrent seed seeding ask always never" data-settings-bound v-show="settingsRowVisible('torrents-seed-mode')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="torrents-seed-mode" data-keywords="torrent seed seeding ask always never" data-settings-bound v-show="settingsRowVisible('torrents-seed-mode')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <label for="torrent-seed-mode" class="text-sm font-medium" style="color:var(--text-primary)">After a torrent finishes</label>
@@ -114,7 +114,7 @@ onMounted(() => onWebviewReady(() => { void load(); }));
       </div>
     </div>
 
-    <div data-settings-row="torrents-seed-limits" data-keywords="torrent seed ratio hours time limit" data-settings-bound v-show="settingsRowVisible('torrents-seed-limits')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="torrents-seed-limits" data-keywords="torrent seed ratio hours time limit" data-settings-bound v-show="settingsRowVisible('torrents-seed-limits')" class="ui-card-row space-y-3">
       <p class="text-xs" style="color:var(--text-muted)">Seeding stops at the first limit reached. Leave a field blank for no limit.</p>
       <div class="grid gap-3 sm:grid-cols-2">
         <div>
@@ -130,7 +130,7 @@ onMounted(() => onWebviewReady(() => { void load(); }));
       </div>
     </div>
 
-    <div data-settings-row="torrents-watch-folder" data-keywords="torrent watch folder external client qbittorrent transmission deluge send magnet" data-settings-bound v-show="settingsRowVisible('torrents-watch-folder')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="torrents-watch-folder" data-keywords="torrent watch folder external client qbittorrent transmission deluge send magnet" data-settings-bound v-show="settingsRowVisible('torrents-watch-folder')" class="ui-card-row space-y-3">
       <div>
         <label for="torrent-watch-folder" class="text-sm font-medium" style="color:var(--text-primary)">Watch folder</label>
         <p class="text-xs mt-1" style="color:var(--text-muted)">When set, Download in the update dialog becomes Send to client. wLib puts the .torrent file in this folder, and your torrent client downloads it. This device only. Leave blank to download in wLib.</p>
@@ -144,7 +144,7 @@ onMounted(() => onWebviewReady(() => { void load(); }));
       <p id="torrent-watch-folder-warning" class="text-xs" style="color:var(--warning-text)">.torrent files and magnet links contain your private RPDL passkey. Do not share them.</p>
     </div>
 
-    <div data-settings-row="torrents-network" data-keywords="torrent speed limit upload port upnp nat-pmp router" data-settings-bound v-show="settingsRowVisible('torrents-network')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="torrents-network" data-keywords="torrent speed limit upload port upnp nat-pmp router" data-settings-bound v-show="settingsRowVisible('torrents-network')" class="ui-card-row space-y-3">
       <p class="text-xs" style="color:var(--text-muted)">The upload limit and port mapping apply to this device only. 0 or blank means unlimited. The download limit is in Library &amp; Downloads, for file hosts and torrents together.</p>
       <div class="grid gap-3 sm:grid-cols-2">
         <div>

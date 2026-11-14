@@ -57,7 +57,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
     </h3>
 
     <div data-settings-row="umu-static-0" data-settings-bound v-show="settingsRowVisible('umu-static-0')" class="grid gap-3 sm:grid-cols-2">
-      <div class="ui-card-row flex items-start gap-3 p-4 rounded-lg min-w-0">
+      <div class="ui-card-row flex items-start gap-3 min-w-0">
         <span class="ui-status-badge" :class="umu.path ? 'ui-status-badge--ok' : 'ui-status-badge--warn'" aria-hidden="true">
           <IconCircleCheck v-if="umu.path" class="w-4 h-4" /><IconAlertTriangle v-else class="w-4 h-4" />
         </span>
@@ -68,7 +68,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
           </p>
         </div>
       </div>
-      <div class="ui-card-row flex items-start gap-3 p-4 rounded-lg min-w-0" role="status">
+      <div class="ui-card-row flex items-start gap-3 min-w-0" role="status">
         <span class="ui-status-badge" :class="runtime.ready ? 'ui-status-badge--ok' : ''" aria-hidden="true">
           <IconLoader2 v-if="runtime.running" class="w-4 h-4 animate-spin" />
           <IconCircleCheck v-else-if="runtime.ready" class="w-4 h-4" />
@@ -86,11 +86,11 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
     </p>
     <p data-settings-row="umu-static-3" data-settings-bound v-show="settingsRowVisible('umu-static-3')" class="text-xs" style="color:var(--text-muted)">Prepare downloads the shared Steam Linux Runtime and any selected Proton build. Choose the runner above first.</p>
 
-    <div data-settings-row="umu-static-4" data-settings-bound v-show="settingsRowVisible('umu-static-4')" v-if="download.running" class="ui-card-row p-4 rounded-lg" role="status">
+    <div data-settings-row="umu-static-4" data-settings-bound v-show="settingsRowVisible('umu-static-4')" v-if="download.running" class="ui-card-row" role="status">
       <p class="text-sm">{{ download.stage }} — {{ bytes(download.done) }}<span v-if="download.total"> / {{ bytes(download.total) }}</span></p>
       <div class="umu-bar mt-2"><div class="umu-bar-fill" :class="{ indeterminate: percent(download) === null }" :style="percent(download) !== null ? { width: percent(download) + '%' } : undefined"></div></div>
     </div>
-    <div data-settings-row="umu-static-5" data-settings-bound v-show="settingsRowVisible('umu-static-5')" v-if="runtime.running" class="ui-card-row p-4 rounded-lg" role="status">
+    <div data-settings-row="umu-static-5" data-settings-bound v-show="settingsRowVisible('umu-static-5')" v-if="runtime.running" class="ui-card-row" role="status">
       <p class="text-sm">{{ runtime.stage }} — {{ bytes(runtime.done) }} downloaded or installed</p>
       <div class="umu-bar mt-2"><div class="umu-bar-fill indeterminate"></div></div>
     </div>

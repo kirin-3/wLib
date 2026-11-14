@@ -6,16 +6,15 @@
 import { computed } from "vue";
 import {
   IconArrowUp,
-  IconDeviceGamepad2,
   IconHeartFilled,
   IconLoader2,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
 } from "@tabler/icons-vue";
 import CoverImage from "../CoverImage.vue";
+import CoverPlaceholder from "../CoverPlaceholder.vue";
 import type { GameRecord } from "../../services/api";
 import { gameCoverSrc } from "../../utils/gameCover";
-import { titleInitials, titleSwatch } from "../../utils/coverPlaceholder";
 import {
   formatLastPlayed,
   formatPlaytime,
@@ -74,14 +73,7 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
           <span v-if="gameCoverSrc(game)" class="cover-thumb w-8 h-8 shrink-0">
             <CoverImage :game="game" img-class="w-8 h-8 rounded object-cover" />
           </span>
-          <span
-            v-else
-            class="cover-placeholder w-8 h-8 rounded shrink-0 flex items-center justify-center"
-            :data-tag-color="titleSwatch(game.title)"
-            aria-hidden="true"
-            ><template v-if="titleInitials(game.title)">{{ titleInitials(game.title) }}</template
-            ><IconDeviceGamepad2 v-else class="w-4 h-4"
-          /></span>
+          <CoverPlaceholder v-else :title="game.title" class="w-8 h-8 rounded shrink-0" />
           <button
             @click.stop="emit('activate', game, $event)"
             class="truncate text-left font-semibold"
@@ -192,13 +184,6 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
 </template>
 
 <style scoped>
-.cover-placeholder {
-  background: var(--tag-bg);
-  color: var(--tag-text);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  line-height: 1;
-}
 .is-selected { box-shadow: inset 0 0 0 3px var(--brand); }
 .running-label {
   background: var(--brand);

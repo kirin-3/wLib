@@ -87,7 +87,7 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
       In-app update downloads use these accounts, so your premium speed and transfer quota apply. They stay on this device and are never included in backups or sync.
     </p>
 
-    <div data-settings-row="file-hosts-pixeldrain" data-keywords="pixeldrain api key premium" data-settings-bound v-show="settingsRowVisible('file-hosts-pixeldrain')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="file-hosts-pixeldrain" data-keywords="pixeldrain api key premium" data-settings-bound v-show="settingsRowVisible('file-hosts-pixeldrain')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 class="text-sm font-medium" style="color:var(--text-primary)">Pixeldrain</h4>
@@ -109,7 +109,7 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
       </form>
     </div>
 
-    <div data-settings-row="file-hosts-mega" data-keywords="mega account sign in login premium pro" data-settings-bound v-show="settingsRowVisible('file-hosts-mega')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="file-hosts-mega" data-keywords="mega account sign in login premium pro" data-settings-bound v-show="settingsRowVisible('file-hosts-mega')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 class="text-sm font-medium" style="color:var(--text-primary)">MEGA</h4>
@@ -134,7 +134,7 @@ onMounted(() => onWebviewReady(() => { void refresh(); }));
       </form>
     </div>
 
-    <div data-settings-row="file-hosts-rpdl" data-keywords="rpdl torrent account sign in login seed" data-settings-bound v-show="settingsRowVisible('file-hosts-rpdl')" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="file-hosts-rpdl" data-keywords="rpdl torrent account sign in login seed" data-settings-bound v-show="settingsRowVisible('file-hosts-rpdl')" class="ui-card-row space-y-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 class="text-sm font-medium" style="color:var(--text-primary)">RPDL (torrents)</h4>

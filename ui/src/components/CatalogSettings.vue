@@ -74,7 +74,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       Game catalog
     </h3>
 
-    <div data-settings-row="catalog-static-0" data-settings-bound v-show="settingsRowVisible('catalog-static-0')" class="catalog-row flex items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="catalog-static-0" data-settings-bound v-show="settingsRowVisible('catalog-static-0')" class="ui-card-row flex items-center justify-between gap-4">
       <div>
         <h4 class="text-sm font-medium" style="color: var(--text-primary)">Download the game catalog</h4>
         <p class="text-xs mt-1" style="color: var(--text-muted)">
@@ -95,7 +95,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </label>
     </div>
 
-    <div data-settings-row="catalog-static-1" data-settings-bound v-show="settingsRowVisible('catalog-static-1')" class="flex flex-wrap items-start justify-between gap-3">
+    <div data-settings-row="catalog-static-1" data-settings-bound v-show="settingsRowVisible('catalog-static-1')" class="ui-card-row flex flex-wrap items-start justify-between gap-3">
       <div class="space-y-1 text-sm" role="status">
         <p style="color: var(--text-primary)">{{ summary }}</p>
         <p v-if="enabled && status?.success !== false" class="text-xs" style="color: var(--text-muted)">
@@ -142,7 +142,6 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
 
 <style scoped>
 .catalog-card { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border); scroll-margin-top: 1.5rem; }
-.catalog-row { background: var(--bg-raised); border: 1px solid var(--border); }
 .catalog-btn {
   background: var(--bg-overlay);
   border: 1px solid var(--border-hover);

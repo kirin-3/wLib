@@ -5,6 +5,7 @@ import { confirmAction } from "../../utils/confirm";
 import { addLeaveGuard } from "../../utils/leaveGuard";
 import { useControllerActions } from "../../utils/controllerActions";
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
+import CoverPlaceholder from "../CoverPlaceholder.vue";
 import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
@@ -2199,7 +2200,7 @@ const removeAttachment = async (name: string) => {
           </button>
           <div v-else class="game-cover">
             <img v-if="hasCoverImage" :src="displayedCover" :alt="`${title || game.title} cover`" @error="onCoverError" />
-            <IconDeviceGamepad2Filled v-else class="h-10 w-10" role="img" aria-label="No cover image" />
+            <CoverPlaceholder v-else :title="game.title" class="h-full w-full" />
           </div>
           <div class="min-w-0">
             <div class="flex items-start gap-3">

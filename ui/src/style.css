@@ -483,10 +483,23 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
 }
 
 /* Settings card building blocks shared by component-based settings sections. */
+/* A flat Settings row: no box of its own, only a divider above it. Each row draws its own top border (no sibling
+   selectors), so a row that settings search hides with v-show also hides its divider. The top padding equals the
+   parent's gap, so the divider sits midway between the content above and the row. */
 .ui-card-row {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: var(--row-gap, 1.25rem) 0 0;
 }
+
+/* The row gap of the stacking parent, read by .ui-card-row and the Settings section blocks. Set on the children,
+   so a row that is itself a space-y-* stack still reads its parent's gap, not its own. */
+.space-y-2 > * { --row-gap: 0.5rem; }
+.space-y-3 > * { --row-gap: 0.75rem; }
+.space-y-4 > * { --row-gap: 1rem; }
+.space-y-5 > * { --row-gap: 1.25rem; }
 
 .ui-card-btn {
   display: inline-flex;

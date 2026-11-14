@@ -7,7 +7,6 @@ import { computed } from "vue";
 import {
   IconArrowUp,
   IconChevronDown,
-  IconDeviceGamepad2,
   IconHeartFilled,
   IconLoader2,
   IconPlayerPlayFilled,
@@ -15,10 +14,10 @@ import {
   IconRefresh,
 } from "@tabler/icons-vue";
 import CoverImage from "../CoverImage.vue";
+import CoverPlaceholder from "../CoverPlaceholder.vue";
 import type { GameRecord } from "../../services/api";
 import type { LayoutMode } from "../../utils/libraryViewState";
 import { gameCoverSrc } from "../../utils/gameCover";
-import { titleInitials, titleSwatch } from "../../utils/coverPlaceholder";
 import {
   formatPlaytime,
   getEffectiveLaunchTargets,
@@ -56,8 +55,6 @@ const emit = defineEmits<{
 
 // Compact and banner both draw image-only tiles (cover, overlay, bottom row).
 const isImageTileLayout = computed(() => props.layoutMode === "compact" || props.layoutMode === "banner");
-const placeholderInitials = computed(() => titleInitials(props.game.title));
-const placeholderSwatch = computed(() => titleSwatch(props.game.title));
 const wishlisted = computed(() => isWishlisted(props.game));
 const updateAvailable = computed(() => hasAvailableUpdate(props.game));
 const unplayed = computed(() => hasUnplayedUpdate(props.game));
@@ -125,16 +122,12 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
           isImageTileLayout ? 'rounded-b-xl' : '',
         ]"
       />
-      <div
+      <CoverPlaceholder
         v-else
-        class="cover-placeholder absolute inset-0"
+        :title="game.title"
+        class="absolute inset-0"
         :class="isImageTileLayout ? 'rounded-xl' : 'rounded-t-xl'"
-        :data-tag-color="placeholderSwatch"
-        aria-hidden="true"
-      >
-        <span v-if="placeholderInitials" class="cover-placeholder-initials">{{ placeholderInitials }}</span>
-        <IconDeviceGamepad2 v-else class="cover-placeholder-icon" />
-      </div>
+      />
       <div
         v-if="game.metadata_pending"
         class="metadata-pending absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-xs font-medium"
@@ -271,7 +264,7 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
         by {{ game.developer }}
       </p>
       <div class="flex flex-wrap items-center gap-1.5 text-xs mb-3">
-        <span class="font-mono" style="color: var(--brand)">{{
+        <span class="font-mono" style="color: var(--text-secondary)">{{
           game.version || "Unknown"
         }}</span>
         <span v-if="wishlisted" class="wishlist-pill">Wishlist</span>
@@ -533,28 +526,6 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
   color: var(--overlay-control-text);
   font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-/* Initials on a tag swatch for games without a cover; the swatch tokens pass 4.5:1 in both themes. */
-.cover-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  container-type: size;
-  background: var(--tag-bg);
-  color: var(--tag-text);
-}
-
-.cover-placeholder-initials {
-  font-size: clamp(1rem, 32cqmin, 4.5rem);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1;
-}
-
-.cover-placeholder-icon {
-  width: clamp(1.5rem, 34cqmin, 4rem);
-  height: clamp(1.5rem, 34cqmin, 4rem);
 }
 
 .update-overlay-btn {

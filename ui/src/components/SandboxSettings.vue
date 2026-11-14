@@ -100,7 +100,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       Sandbox
     </h3>
 
-    <div data-settings-row="sandbox-static-0" data-settings-bound v-show="settingsRowVisible('sandbox-static-0')" class="ui-card-row flex items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="sandbox-static-0" data-settings-bound v-show="settingsRowVisible('sandbox-static-0')" class="ui-card-row flex items-center justify-between gap-4">
       <div class="flex items-start gap-3 min-w-0" role="status">
         <span class="ui-status-badge" :class="statusTone === 'ok' ? 'ui-status-badge--ok' : statusTone === 'warn' ? 'ui-status-badge--warn' : ''" aria-hidden="true">
           <IconLoader2 v-if="statusTone === 'pending'" class="w-4 h-4 animate-spin" />
@@ -118,7 +118,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
     <p data-settings-row="sandbox-static-1" data-settings-bound v-show="settingsRowVisible('sandbox-static-1')" class="text-xs" style="color: var(--text-muted)">Sandboxing gives each game separate profile storage. Saves inside the game folder still write to that folder.</p>
     <p data-settings-row="sandbox-static-2" data-settings-bound v-show="settingsRowVisible('sandbox-static-2')" v-if="platform === 'linux'" class="text-xs !mt-2" style="color: var(--text-muted)">Sandboxed Proton games make a temporary runtime copy for each launch, using extra disk space and startup time. Cheat Engine auto-injection is unavailable for these games.</p>
 
-    <div data-settings-row="sandbox-static-3" data-settings-bound v-show="settingsRowVisible('sandbox-static-3')" v-if="status?.status === 'missing' && info" class="ui-card-row p-4 rounded-lg space-y-3">
+    <div data-settings-row="sandbox-static-3" data-settings-bound v-show="settingsRowVisible('sandbox-static-3')" v-if="status?.status === 'missing' && info" class="ui-card-row space-y-3">
       <h4 class="text-sm font-medium" style="color: var(--text-primary)">Install the sandbox tool</h4>
       <div v-if="info.command" class="command flex items-center gap-2 rounded-lg pl-3 pr-1 py-1">
         <code class="text-xs font-mono break-all flex-1 min-w-0">{{ info.command }}</code>
@@ -142,7 +142,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       <span class="break-words min-w-0">{{ error }}</span>
     </p>
 
-    <div data-settings-row="sandbox-static-6" data-settings-bound v-show="settingsRowVisible('sandbox-static-6')" v-if="platform === 'windows'" class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="sandbox-static-6" data-settings-bound v-show="settingsRowVisible('sandbox-static-6')" v-if="platform === 'windows'" class="ui-card-row flex flex-wrap items-center justify-between gap-4">
       <div class="min-w-0">
         <h4 class="text-sm font-medium" style="color: var(--text-primary)">Custom Sandboxie Start.exe</h4>
         <p class="text-xs mt-1 font-mono break-all" style="color: var(--text-muted)">{{ customPath || 'Use the detected installation' }}</p>
@@ -153,7 +153,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </div>
     </div>
 
-    <div data-settings-row="sandbox-static-7" data-settings-bound v-show="settingsRowVisible('sandbox-static-7')" class="ui-card-row flex items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="sandbox-static-7" data-settings-bound v-show="settingsRowVisible('sandbox-static-7')" class="ui-card-row flex items-center justify-between gap-4">
       <div>
         <h4 class="text-sm font-medium" style="color: var(--text-primary)">Sandbox new games</h4>
         <p class="text-xs mt-1" style="color: var(--text-muted)">Games you add from now on start with sandboxing turned on.</p>
@@ -164,7 +164,7 @@ onUnmounted(() => { disposed = true; if (timer) clearTimeout(timer); });
       </label>
     </div>
 
-    <div data-settings-row="sandbox-static-8" data-settings-bound v-show="settingsRowVisible('sandbox-static-8')" class="ui-card-row flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg">
+    <div data-settings-row="sandbox-static-8" data-settings-bound v-show="settingsRowVisible('sandbox-static-8')" class="ui-card-row flex flex-wrap items-center justify-between gap-4">
       <div>
         <h4 class="text-sm font-medium" style="color: var(--text-primary)">Existing games</h4>
         <p class="text-xs mt-1" style="color: var(--text-muted)">Change sandboxing for every game in your library at once.</p>

@@ -71,7 +71,7 @@ onMounted(async () => {
     </div>
     <p data-settings-row="custom-tools-static-0" data-settings-bound v-show="settingsRowVisible('custom-tools-static-0')" v-if="!tools.length" class="help text-sm">No custom tools yet.</p>
     <ul data-settings-row="custom-tools-static-1" data-settings-bound v-show="settingsRowVisible('custom-tools-static-1')" class="space-y-2">
-      <li v-for="tool in tools" :key="tool.id" class="tool-row flex items-center justify-between gap-3 rounded-lg p-3">
+      <li v-for="tool in tools" :key="tool.id" class="ui-card-row flex items-center justify-between gap-3">
         <div class="min-w-0">
           <p class="font-medium break-words">{{ tool.name }} <span class="help text-xs capitalize">{{ tool.kind }}</span></p>
           <p class="help text-xs truncate">{{ tool.kind === 'command' ? tool.arguments : tool.path }}</p>
@@ -83,7 +83,7 @@ onMounted(async () => {
         </div>
       </li>
     </ul>
-    <form data-settings-row="custom-tools-static-2" data-settings-bound v-show="settingsRowVisible('custom-tools-static-2')" v-if="draft" class="tool-row rounded-lg p-4 space-y-3" @submit.prevent="save">
+    <form data-settings-row="custom-tools-static-2" data-settings-bound v-show="settingsRowVisible('custom-tools-static-2')" v-if="draft" class="ui-card-row space-y-3" @submit.prevent="save">
       <h4 class="font-medium">{{ draft.id ? 'Edit tool' : 'Add tool' }}</h4>
       <fieldset :disabled="busy" class="space-y-3">
         <label class="block text-sm">Name<input v-model="draft.name" class="tool-input mt-1 w-full" required /></label>
@@ -109,7 +109,6 @@ onMounted(async () => {
 <style scoped>
 .companion-settings { color: var(--text-primary); scroll-margin-top: 1rem; }
 .help { color: var(--text-muted); }
-.tool-row { background: var(--bg-raised); border: 1px solid var(--border); }
 .tool-btn, .tool-input { border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-surface); color: var(--text-primary); padding: .45rem .65rem; font-size: .875rem; }
 .tool-btn:hover { border-color: var(--brand); }
 .tool-btn:disabled { opacity: .5; }

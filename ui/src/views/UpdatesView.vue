@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { gameCoverSrc } from "../utils/gameCover";
 import CoverImage from "../components/CoverImage.vue";
+import CoverPlaceholder from "../components/CoverPlaceholder.vue";
 import { refreshRunningGames } from "../composables/useRunningGames";
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
 import MenuButton, { type MenuButtonItem } from "../components/MenuButton.vue";
@@ -845,12 +846,8 @@ onUnmounted(() => {
       <section
         v-if="persistedUpdates.length > 0"
         class="section-card rounded-xl p-6"
-        style="border-color: var(--success-border)"
       >
-        <h3
-          class="ui-section-heading text-lg font-semibold mb-4"
-          style="color: var(--success-text)"
-        >
+        <h3 class="ui-section-heading text-lg font-semibold mb-4">
           <IconArrowUp class="ui-section-icon" />
           Updates Available ({{ persistedUpdates.length }})
         </h3>
@@ -874,23 +871,7 @@ onUnmounted(() => {
             <span v-if="gameCoverSrc(game)" class="cover-thumb w-10 h-10 shrink-0">
               <CoverImage :game="game" img-class="w-10 h-10 rounded-lg object-cover" />
             </span>
-            <div
-              v-else
-              class="w-10 h-10 rounded-lg shrink-0 flex items-center justify-center"
-              style="background: var(--bg-overlay)"
-              aria-hidden="true"
-            >
-              <svg
-                class="w-4 h-4"
-                style="color: var(--text-muted)"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-              </svg>
-            </div>
+            <CoverPlaceholder v-else :title="game.title" class="w-10 h-10 rounded-lg shrink-0" />
             <div class="min-w-[10rem] flex-1">
               <p class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-base">
                 <button
