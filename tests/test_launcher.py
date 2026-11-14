@@ -3686,7 +3686,7 @@ def test_performance_tools_wrap_wine_and_proton(tmp_path, monkeypatch, runner):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="GameMode, MangoHud and Wine launches run only on Linux hosts")
-def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch):
+def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch, capsys):
     exe = tmp_path / "game.exe"
     exe.touch()
     runner = tmp_path / "rpgmaker-linux"
@@ -3697,7 +3697,138 @@ def test_performance_tools_wrap_rpgmaker_runner(tmp_path, monkeypatch):
     with patch("subprocess.Popen") as popen, patch("threading.Thread"):
         result = Launcher().launch(str(exe), launch_mode="rpgmaker_linux", gamemode=True, mangohud=True)
     assert result["success"]
-    assert popen.call_args.args[0][:3] == ["/usr/bin/gamemoderun", "/usr/bin/mangohud", str(runner)]
+    assert popen.call_args.args[0][:2] == ["/usr/bin/gamemoderun", str(runner)]
+    assert "/usr/bin/mangohud" not in popen.call_args.args[0]
+    assert "MangoHud skipped: NW.js hangs with it" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+def test_sandboxed_runner_symlink_runs_real_path(monkeypatch, tmp_path):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+    runner_dir = tmp_path / "nwjs" / "packagefiles"
+    runner_dir.mkdir(parents=True)
+    runner = runner_dir / "start.sh"
+    runner.write_text("#!/bin/sh\n")
+    runner.chmod(0o755)
+    link = home / ".local" / "bin" / "rpgmaker-linux"
+    link.symlink_to(runner)
+    game = tmp_path / "games" / "Game.exe"
+    game.parent.mkdir()
+    game.touch()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(link) if key == "rpgmaker_linux_runner_path" else "")
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game), game_id=33, sandbox_enabled=True, launch_mode="rpgmaker_linux"
+        )
+    assert result["success"], result
+    argv = popen.call_args.args[0]
+    assert argv[-3:] == [str(runner), "--gamepath", str(game.parent)]
+    assert str(link) not in argv
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    folder = str(tmp_path / "nwjs")
+    assert ["--ro-bind", folder, folder] in triples
+
+
+def test_performance_rpgmaker_runner_keeps_user_mangohud(tmp_path, monkeypatch):
+    exe = tmp_path / "game.exe"
+    exe.touch()
+    runner = tmp_path / "rpgmaker-linux"
+    runner.touch()
+    runner.chmod(0o755)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: str(runner) if key == "rpgmaker_linux_runner_path" else "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(exe), "mangohud %command%", launch_mode="rpgmaker_linux", mangohud=True
+        )
+    assert result["success"]
+    cmd = popen.call_args.args[0]
+    assert cmd[:2] == ["mangohud", str(runner)]
+    assert [os.path.basename(arg) for arg in cmd].count("mangohud") == 1
+
+
+def test_performance_native_launch_keeps_mangohud(tmp_path, monkeypatch):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(str(game), launch_mode="native", mangohud=True)
+    assert result["success"], result
+    assert popen.call_args.args[0][0] == "/usr/bin/mangohud"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bwrap runs only on Linux hosts")
+@pytest.mark.parametrize(
+    "args, setting, expected",
+    [
+        ("", True, True),
+        ("mangohud %command%", False, True),
+        ("MANGOHUD=1 %command%", False, True),
+        ("", False, False),
+    ],
+)
+def test_sandboxed_mangohud_binds(monkeypatch, tmp_path, args, setting, expected):
+    from core import game_sandbox
+
+    home = tmp_path / "home"
+    home.mkdir()
+    game = tmp_path / "games" / "game.sh"
+    game.parent.mkdir()
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("MANGOHUD", raising=False)
+    monkeypatch.setattr("core.launcher.is_windows", lambda: False)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "")
+    monkeypatch.setattr(
+        game_sandbox,
+        "get_sandbox_status",
+        lambda: {"status": "ready", "path": "/usr/bin/bwrap"},
+    )
+    seen: list[object] = []
+    real = game_sandbox.build_bwrap_argv
+
+    def capture(*a, **kw):
+        seen.append(kw.get("mangohud"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(game_sandbox, "build_bwrap_argv", capture)
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        result = Launcher().launch(
+            str(game), args, game_id=31, sandbox_enabled=True,
+            launch_mode="native", mangohud=setting,
+        )
+    assert result["success"], result
+    argv = popen.call_args.args[0]
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    bind = ["--ro-bind-try", "/sys/class/drm", "/sys/class/drm"]
+    if expected:
+        assert seen and seen[0]
+        assert bind in triples
+        assert [
+            "--ro-bind-try",
+            os.path.realpath(home / ".config" / "MangoHud"),
+            str(home / ".config" / "MangoHud"),
+        ] in triples
+    else:
+        assert seen == [None]
+        assert not any(arg.startswith("/sys/class") for arg in argv)
 
 
 def test_companion_tool_does_not_inherit_performance_wrappers(tmp_path, monkeypatch):

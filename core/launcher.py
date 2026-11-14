@@ -1505,6 +1505,8 @@ class Launcher:
                 # The Flatpak player runs inside the app, where host tools are absent.
                 else "Flatpak web player" if flatpak_player
                 else "sandboxed" if binary == "gamemoderun" and sandboxed
+                # MangoHud's preload shim makes NW.js spin at startup with no window.
+                else "NW.js hangs with it" if binary == "mangohud" and launch_mode == "rpgmaker_linux"
                 else ""
             )
             if not reason:
@@ -1517,6 +1519,14 @@ class Launcher:
                 note = f"{name} skipped: {reason}"
                 performance_notes.append(note)
                 print(note)
+        # MangoHud is in effect when wLib wraps the launch, when the user's own
+        # wrappers start it, or when the environment turns it on directly.
+        user_wrappers = args[: args.index("%command%")] if "%command%" in args else args
+        mangohud_active = (
+            any(os.path.basename(tool) == "mangohud" for tool in performance_tools)
+            or any(os.path.basename(arg) == "mangohud" for arg in user_wrappers)
+            or env.get("MANGOHUD") == "1"
+        )
         gamescope_cmd: list[str] = []
         if gamescope is not None:
             reason = gamescope_skip_reason(
@@ -1756,6 +1766,11 @@ class Launcher:
                         (sandbox_game_dir, mount_prefix), user_home
                     )
                     host_nixos, host_links = host_system_layout()
+                    mangohud_binds = (
+                        game_sandbox.mangohud_mounts(env_vars, user_home)
+                        if mangohud_active
+                        else None
+                    )
                     cmd = game_sandbox.build_bwrap_argv(
                         cmd,
                         game_dir=sandbox_game_dir,
@@ -1775,6 +1790,7 @@ class Launcher:
                         writable_paths=writable_paths,
                         x11_sockets=() if gamescope_cmd else host_x11_sockets(),
                         gamescope=bool(gamescope_cmd),
+                        mangohud=mangohud_binds,
                     )
                     entry.kill_info = None
                 elif block and not is_windows() and not flatpak_player:
@@ -2098,7 +2114,13 @@ class Launcher:
                 parent_dir = path_module.dirname(runner_game_dir)
                 if os.path.isfile(path_module.join(parent_dir, "package.json")):
                     runner_game_dir = parent_dir
-            base_cmd = [runner_status["path"], "--gamepath", runner_game_dir]
+            runner_path = runner_status["path"]
+            if sandboxed:
+                # The sandbox binds only the runner's real folder (runtime_folder
+                # resolves symlinks), so a symlink such as ~/.local/bin/<runner>
+                # does not exist there. Run the target instead.
+                runner_path = os.path.realpath(runner_path)
+            base_cmd = [runner_path, "--gamepath", runner_game_dir]
 
             command = build_command(base_cmd, args)
             print(f"Executing via RPGMaker Linux runner: {' '.join(command)}")
@@ -2106,7 +2128,7 @@ class Launcher:
                 command,
                 build_host_tool_env(env),
                 cwd_override=runner_game_dir,
-                runtime_paths=(game_sandbox.runtime_folder(runner_status["path"]),),
+                runtime_paths=(game_sandbox.runtime_folder(runner_path),),
             )
 
         def execute_web_player() -> dict[str, object]:

@@ -19,6 +19,7 @@ from core.host_platform import (
     get_host_name,
     host_command,
     host_which,
+    is_flatpak,
     no_console_window,
 )
 
@@ -361,6 +362,44 @@ def _x11_socket_binds(x11_sockets: tuple[str, ...]) -> list[str]:
     return argv
 
 
+# (source, destination) pairs bound read-only when MangoHud is in effect.
+MangoHudMounts = tuple[tuple[str, str], ...]
+
+# MangoHud aborts without /sys/class/drm and reads hwmon and power_supply for
+# temperature and battery data. Their entries link into /sys/devices.
+MANGOHUD_SYS_CLASSES = ("/sys/class/drm", "/sys/class/hwmon", "/sys/class/power_supply")
+
+
+def mangohud_mounts(environment: Mapping[str, str], home: str) -> MangoHudMounts:
+    """Host paths MangoHud needs in the sandbox, as read-only bind pairs.
+
+    The user's configuration folder goes to the sandbox's `~/.config/MangoHud`,
+    where MangoHud looks under the sandbox's XDG_CONFIG_HOME. Files named by
+    MANGOHUD_CONFIGFILE and MANGOHUD_PRESETSFILE keep their own paths. Real
+    paths are the bind sources and must not expose HOME or wLib's data.
+    """
+    if is_flatpak():
+        # Inside Flatpak XDG_CONFIG_HOME is the app's own folder.
+        config_home = environment.get("HOST_XDG_CONFIG_HOME", "")
+    else:
+        config_home = environment.get("XDG_CONFIG_HOME", "")
+    if not os.path.isabs(config_home):
+        config_home = os.path.join(home, ".config")
+    pairs: list[tuple[str, str]] = [(path, path) for path in MANGOHUD_SYS_CLASSES]
+    pairs.append(
+        (
+            os.path.realpath(os.path.join(config_home, "MangoHud")),
+            os.path.join(home, ".config", "MangoHud"),
+        )
+    )
+    for name in ("MANGOHUD_CONFIGFILE", "MANGOHUD_PRESETSFILE"):
+        value = environment.get(name, "")
+        if os.path.isabs(value):
+            pairs.append((os.path.realpath(value), value))
+    check_readonly_mounts(tuple(source for source, _ in pairs), home)
+    return tuple(pairs)
+
+
 def build_bwrap_argv(
     command: list[str],
     *,
@@ -381,8 +420,12 @@ def build_bwrap_argv(
     writable_paths: tuple[str, ...] = (),
     x11_sockets: tuple[str, ...] = (),
     gamescope: bool = False,
+    mangohud: MangoHudMounts | None = None,
 ) -> list[str]:
     """Pure argv builder; optional host paths are handled by bubblewrap's try flags.
+
+    `mangohud` holds the read-only (source, destination) pairs from
+    `mangohud_mounts()`; pass it only when MangoHud is in effect for the launch.
 
     With `gamescope=True` the result runs inside gamescope: the host X sockets,
     host Wayland socket and host Xauthority are left out, and the
@@ -470,6 +513,10 @@ def build_bwrap_argv(
         argv += ["--setenv", key, home + suffix]
     for path in readonly_paths:
         argv += ["--ro-bind", path, path]
+    # After the sandbox-home bind, so the configuration folder lands in the
+    # game's own ~/.config. Every pair is optional on the host.
+    for source, destination in mangohud or ():
+        argv += ["--ro-bind-try", source, destination]
     if umu_data and umu_runtime and umu_var:
         check_readonly_mounts((umu_data,), home)
         runtime_root = os.path.realpath(umu_data)
@@ -1070,9 +1117,10 @@ def check_readonly_mounts(paths: tuple[str, ...], home: str) -> None:
     for path in paths:
         if path and _exposes_protected_root(path, home):
             raise ValueError(
-                f"Cannot sandbox a launch whose runtime folder is {path}: "
+                f"Cannot sandbox a launch whose runtime folder or MangoHud configuration is {path}: "
                 + "mounting it would expose your whole home folder or wLib's data folder. "
-                + "Move the runtime into its own folder, or turn sandboxing off for this game."
+                + "Move the runtime or MangoHud configuration into its own folder, "
+                + "or turn sandboxing off for this game."
             )
 
 

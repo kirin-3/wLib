@@ -2502,10 +2502,10 @@ const removeAttachment = async (name: string) => {
           <div v-if="platformCapabilities.platform === 'linux'" class="grid grid-cols-2 gap-4">
             <div v-for="tool in (['gamemode', 'mangohud', 'gamescope'] as const)" :key="tool">
               <label :for="`detail-${tool}`" class="modal-label">{{ performanceToolName(tool) }}</label>
-              <select :id="`detail-${tool}`" :value="toolOverrides[tool].value" @change="toolOverrides[tool].value = ($event.target as HTMLSelectElement).value as 'default' | 'on' | 'off'" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled).disabled">
+              <select :id="`detail-${tool}`" :value="toolOverrides[tool].value" @change="toolOverrides[tool].value = ($event.target as HTMLSelectElement).value as 'default' | 'on' | 'off'" class="modal-input w-full" :disabled="performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).disabled">
                 <option value="default">Default ({{ performanceDefaults[tool] ? 'On' : 'Off' }})</option><option value="on">On</option><option value="off">Off</option>
               </select>
-              <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled).note }}</p>
+              <p class="text-xs" style="color:var(--text-secondary)">{{ performanceToolState(tool, performanceTools[tool], sandboxEnabled, launchMode).note }}</p>
             </div>
           </div>
           <div v-if="platformCapabilities.platform === 'linux' && gamescopeOn" class="grid grid-cols-2 gap-4" data-testid="gamescope-overrides">

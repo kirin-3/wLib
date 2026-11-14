@@ -848,3 +848,100 @@ def test_gamescope_shim_without_display_adds_nothing(tmp_path):
     argv = sandbox.build_network_bwrap_argv(["game"], cwd="/games", gamescope=True)
     out = _run_gamescope_shim(argv, tmp_path, {})
     assert out == ["--unshare-user", "--unshare-net", "--dev-bind", "/", "/", "--tmpfs", "/tmp/.X11-unix", "--chdir", "/games", "--", "game"]
+
+
+def _mangohud_config(pairs, home):
+    return next(src for src, dst in pairs if dst == os.path.join(home, ".config", "MangoHud"))
+
+
+def test_mangohud_mounts_default_and_custom_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "is_flatpak", lambda: False)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = str(tmp_path / "home")
+    pairs = sandbox.mangohud_mounts({}, home)
+    for path in sandbox.MANGOHUD_SYS_CLASSES:
+        assert (path, path) in pairs
+    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+    custom = str(tmp_path / "xdg")
+    pairs = sandbox.mangohud_mounts({"XDG_CONFIG_HOME": custom}, home)
+    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(custom, "MangoHud"))
+    # HOST_XDG_CONFIG_HOME is only for Flatpak.
+    pairs = sandbox.mangohud_mounts({"HOST_XDG_CONFIG_HOME": custom}, home)
+    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+
+
+def test_mangohud_mounts_flatpak_host_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "is_flatpak", lambda: True)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = str(tmp_path / "home")
+    host = str(tmp_path / "host-config")
+    pairs = sandbox.mangohud_mounts(
+        {"HOST_XDG_CONFIG_HOME": host, "XDG_CONFIG_HOME": str(tmp_path / "app")}, home
+    )
+    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(host, "MangoHud"))
+
+
+@pytest.mark.parametrize("value", ["", "relative/config"])
+def test_mangohud_mounts_ignore_relative_or_empty(monkeypatch, tmp_path, value):
+    monkeypatch.setattr(sandbox, "is_flatpak", lambda: False)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = str(tmp_path / "home")
+    pairs = sandbox.mangohud_mounts(
+        {"XDG_CONFIG_HOME": value, "MANGOHUD_CONFIGFILE": value, "MANGOHUD_PRESETSFILE": value},
+        home,
+    )
+    assert _mangohud_config(pairs, home) == os.path.realpath(os.path.join(home, ".config", "MangoHud"))
+    assert len(pairs) == len(sandbox.MANGOHUD_SYS_CLASSES) + 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux")
+def test_mangohud_mounts_follow_symlinks(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "is_flatpak", lambda: False)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    dotfiles = tmp_path / "dotfiles" / "MangoHud"
+    dotfiles.mkdir(parents=True)
+    (home / ".config" / "MangoHud").symlink_to(dotfiles)
+    conf = tmp_path / "dotfiles" / "my.conf"
+    conf.write_text("fps")
+    link = tmp_path / "conf-link"
+    link.symlink_to(conf)
+    pairs = sandbox.mangohud_mounts({"MANGOHUD_CONFIGFILE": str(link)}, str(home))
+    assert (str(dotfiles), str(home / ".config" / "MangoHud")) in pairs
+    assert (str(conf), str(link)) in pairs
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need Linux")
+def test_mangohud_mounts_refuse_symlink_to_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(sandbox, "is_flatpak", lambda: False)
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    home = tmp_path / "home"
+    (home / ".config").mkdir(parents=True)
+    (home / ".config" / "MangoHud").symlink_to(home)
+    with pytest.raises(ValueError, match="MangoHud configuration") as error:
+        _ = sandbox.mangohud_mounts({}, str(home))
+    assert "whole home folder" in str(error.value)
+
+
+def test_bwrap_mangohud_binds_follow_home_and_readonly():
+    pairs = (("/sys/class/drm", "/sys/class/drm"), ("/cfg/MangoHud", "/home/u/.config/MangoHud"))
+    argv = sandbox.build_bwrap_argv(
+        ["true"],
+        game_dir="/games",
+        home="/home/u",
+        sandbox_home="/s",
+        cwd="/games",
+        readonly_paths=("/runner",),
+        mangohud=pairs,
+    )
+    triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
+    home_bind = triples.index(["--bind", "/s", "/home/u"])
+    runner = triples.index(["--ro-bind", "/runner", "/runner"])
+    drm = triples.index(["--ro-bind-try", "/sys/class/drm", "/sys/class/drm"])
+    config = triples.index(["--ro-bind-try", "/cfg/MangoHud", "/home/u/.config/MangoHud"])
+    assert home_bind < runner < drm < config
+    plain = sandbox.build_bwrap_argv(
+        ["true"], game_dir="/games", home="/home/u", sandbox_home="/s", cwd="/games"
+    )
+    assert not any(arg.startswith("/sys/class") for arg in plain)

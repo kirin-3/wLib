@@ -392,7 +392,24 @@ descendants exit. It ignores D-Bus and accessibility bus helpers
 the sandbox's PID namespace before it exits, because bwrap's init otherwise
 waits for those helpers. Stop terminates the outer bwrap process group and skips the
 host wineserver. Automatic Cheat Engine injection, when enabled, runs inside
-that same sandbox after its usual delay.
+that same sandbox after its usual delay. A sandboxed RPGMaker Linux runner
+launch starts the runner by its real path (`os.path.realpath`), because the
+sandbox binds only the runner's real folder (`game_sandbox.runtime_folder()`)
+and a symlink such as `~/.local/bin/rpgmaker-linux` does not exist there.
+
+When MangoHud is in effect for a sandboxed launch (wLib adds the `mangohud`
+wrapper, the user's arguments before `%command%` start `mangohud`, or the launch
+environment sets `MANGOHUD=1`), `game_sandbox.mangohud_mounts()` adds
+`--ro-bind-try` pairs after the sandbox-home bind and the runtime mounts:
+`/sys/class/drm` (MangoHud aborts without it), `/sys/class/hwmon` and
+`/sys/class/power_supply`; the host's MangoHud configuration folder
+(`$HOST_XDG_CONFIG_HOME/MangoHud` in Flatpak, else `$XDG_CONFIG_HOME/MangoHud`,
+else `~/.config/MangoHud`, bound by real path) at the sandbox's
+`~/.config/MangoHud`; and the files named by `MANGOHUD_CONFIGFILE` and
+`MANGOHUD_PRESETSFILE` (absolute values only) at the path the variable names.
+Every source goes through `check_readonly_mounts`, so a configuration path whose
+real path would show HOME or wLib's data folder refuses the launch. Launches
+without MangoHud get none of these paths.
 
 No internet adds `--unshare-net` to the sandbox. With sandboxing off it uses a
 thin `bwrap --unshare-user --unshare-net --dev-bind / /` wrapper with the
@@ -582,7 +599,7 @@ The device-only `games.cover_cache` filename and `games.cover_cache_url` source 
 
 ### Performance and prefix tools
 
-On Linux, launch options resolve GameMode and MangoHud per game against their global defaults. Enabled, available wrappers surround the complete game command before Cheat Engine, sandbox, network isolation, and Flatpak host wrapping. GameMode is skipped in the sandbox; MangoHud remains available. Browser and Windows launches skip both. Skip reasons are printed and written to the per-game debug log when enabled. Companion tools and Wine cleanup commands are not wrapped.
+On Linux, launch options resolve GameMode and MangoHud per game against their global defaults. Enabled, available wrappers surround the complete game command before Cheat Engine, sandbox, network isolation, and Flatpak host wrapping. GameMode is skipped in the sandbox; MangoHud remains available. The RPGMaker Linux runner is never wrapped with `mangohud` (skip reason `NW.js hangs with it`): with MangoHud's `libMangoHud_shim.so` preload, NW.js spins one CPU core at startup and never opens a window. GameMode still applies, and arguments the user wrote that start `mangohud` (for example `mangohud %command%`) run unchanged. Browser and Windows launches skip both. Skip reasons are printed and written to the per-game debug log when enabled. Companion tools and Wine cleanup commands are not wrapped.
 
 **Gamescope.** `core/game_launch.py` resolves the per-game `gamescope` override (`default|on|off`) with `tool_enabled("gamescope")`. When it is on, `core/gamescope.py` `resolve_options()` merges the global `gamescope_*` settings with the game's overrides (a non-empty game resolution, scaler or filter replaces the global value; game extra arguments come after the global ones) and passes them as `launcher.launch(gamescope=...)`. The launcher skips gamescope, with the reason in the print output and the per-game debug log (`Gamescope skipped: <reason>`), for Windows, a system-browser launch, the Flatpak built-in player, a wLib that runs inside a gamescope session (`steam_env.gaming_mode()`), arguments that already run `gamescope`, or a host with no `gamescope` (`host_which`). Otherwise `gamescope_argv()` builds `gamescope [-f|-b] [-W w -H h] [-w w -h h] -S <scaler> -F <filter> [-r fps] <extra args>`. Fullscreen gives `-f`, Borderless `-b`, Window neither. With only an output resolution, the game size is the output size. With both resolutions Auto, the size is the screen that holds the wLib window in physical pixels (`core/display_info.py`, set by `main.py` on the GUI thread at startup and when the window changes screen), because nested gamescope 3.17 otherwise renders at 1280x720; an unknown size gives no size flags. The debug log has the full `Gamescope: ... --` line.
 
