@@ -24,7 +24,7 @@ def test_discharging_battery(tmp_path):
 
 
 def test_usb_c_power_counts_as_mains(tmp_path):
-    supply(tmp_path, "ucsi-source-psy-USBC000:001", type="USB", online="1")
+    supply(tmp_path, "ucsi-source-psy-USBC000-001", type="USB", online="1")
     supply(tmp_path, "BAT0", type="Battery", status="Discharging")
     assert power.linux_on_battery(str(tmp_path)) is False
 

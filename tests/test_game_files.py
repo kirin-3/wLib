@@ -42,6 +42,7 @@ def lib(tmp_path, monkeypatch):
     library = tmp_path / "Library"
     library.mkdir()
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     ctx = gf.FilesContext(
         library_folders=[str(library)],
         downloads_folder=str(tmp_path / "Downloads"),
