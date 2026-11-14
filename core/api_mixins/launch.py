@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from core.steam_sync import SteamSync
 
 
+
+def _busy_code(reason: str) -> str:
+    """`web_media_converting` opens the progress dialog; other busy reasons are a toast."""
+    from core.web_video import WEB_MEDIA_BUSY
+
+    return "web_media_converting" if reason == WEB_MEDIA_BUSY else "game_busy"
+
 class LaunchMixin(ApiBase):
     def open_steam_keyboard(self) -> dict[str, object]:
         from core import steam_env
@@ -457,7 +464,7 @@ class LaunchMixin(ApiBase):
             with self._status_lock:
                 busy = self._game_busy_reason(game_id)
             if busy:
-                return {"success": False, "code": "game_busy", "error": busy}
+                return {"success": False, "code": _busy_code(busy), "error": busy}
 
         def on_tick(detail: dict[str, object]) -> None:
             # evaluate_js can block forever once the window is gone at exit.
@@ -466,7 +473,8 @@ class LaunchMixin(ApiBase):
                     f"window.dispatchEvent(new CustomEvent('wlib-playtime-tick', {{ detail: {json.dumps(detail)} }}))"
                 )
 
-        return launch_tracked(self.launcher, game_id, {
+        result = launch_tracked(self.launcher, game_id, {
+            "check_web_media": True,
             "exe_path": exe_path,
             "command_line_args": command_line_args,
             "run_japanese_locale": run_japanese_locale,
@@ -476,6 +484,11 @@ class LaunchMixin(ApiBase):
             "proton_version": proton_version,
             "launch_mode": launch_mode,
         }, on_tick)
+        # A conversion that started after the check above is caught by the
+        # launcher's reservation.
+        if result.get("code") == "game_busy":
+            return {**result, "code": _busy_code(str(result.get("error") or ""))}
+        return result
 
     def _start_steam_sync(self, icon: str) -> None:
         if not is_linux():

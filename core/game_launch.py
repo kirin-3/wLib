@@ -16,6 +16,7 @@ from core.web_launch import resolve_web_player as resolve_web_player
 class _OptionalLaunchOptions(TypedDict, total=False):
     html_player: str
     gamescope: GamescopeOptions
+    check_web_media: bool
 
 
 def _normalize_compare_path(value: object) -> str:
@@ -217,6 +218,11 @@ def launch_tracked(
         optional_options["html_player"] = str(stored_game["html_player"])
     if gamescope_options is not None:
         optional_options["gamescope"] = gamescope_options
+    if request.get("check_web_media") and target_path.lower().endswith((".html", ".htm")) and resolve_web_player(
+        target_path, launch_mode, stored_game.get("html_player"), html_builtin_player_enabled()
+    ) == "builtin":
+        # Only HTML in the built-in player is checked; other launchers never see the option.
+        optional_options["check_web_media"] = True
 
     try:
         result = launcher.launch(

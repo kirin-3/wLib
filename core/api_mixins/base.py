@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from webview import Window
 
     from core.game_files import GameHooks, MoveJob, MoveOutcome
+    from core.web_video import Converter
     from core.downloads.manager import DownloadManager
     from core.downloads.queue import DownloadQueue
 
@@ -225,6 +226,14 @@ class ApiBase:
         import atexit
 
         _ = atexit.register(self._game_moves.shutdown)
+        # Video conversion for the built-in player, one game at a time.
+        # _web_media_jobs holds the running job; guarded by _status_lock.
+        self._web_media_jobs: dict[int, dict[str, object]] = {}
+        # Last finished job per game, for the status poll after the job ends.
+        self._web_media_results: dict[int, dict[str, object]] = {}
+        self._web_media_cancel: threading.Event = threading.Event()
+        self._web_media_converter: Converter | None = None
+        _ = atexit.register(self._web_media_shutdown)
         from core.catalog import CatalogClient
         from core.host_platform import get_data_dir
 
@@ -2185,7 +2194,21 @@ class ApiBase:
             return UNINSTALLING_BUSY
         if not ignore_move and self._game_moves.state(game_id):
             return MOVING_BUSY
+        if game_id in self._web_media_jobs:
+            from core.web_video import WEB_MEDIA_BUSY
+
+            return WEB_MEDIA_BUSY
         return None
+
+    def _set_web_media_converter(self, converter: Converter | None) -> None:
+        self._web_media_converter = converter
+
+    def _web_media_shutdown(self) -> None:
+        """Stop a running conversion when wLib quits; the partial file is deleted."""
+        self._web_media_cancel.set()
+        converter = self._web_media_converter
+        if converter is not None:
+            converter.kill()
 
     def _game_busy_reason(self, game_id: int, *, ignore_move: bool = False) -> str | None:
         """Why the game's files are in use by wLib, or None. Caller holds _status_lock.

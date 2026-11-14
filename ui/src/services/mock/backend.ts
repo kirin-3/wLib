@@ -16,6 +16,7 @@ import { mockGameSaves } from "./gameSaves";
 import { isRecord, readMockGames } from "./games";
 import { nextMockLaunchTargetId, readMockLaunchTargets, sortMockLaunchTargets, writeMockLaunchTargets } from "./launchTargets";
 import { mockRpgmSaves } from "./rpgm";
+import { MockWebMedia } from "./webMedia";
 import { DEFAULT_MOCK_SETTINGS, isActionableVersion, isSaveBackupKeep, normalizeMockFilterPresets, normalizeMockSettings, readMockSettings, writeMockSettings } from "./settings";
 
 // Browser preview: gamescope reads as missing unless this key is "installed".
@@ -52,6 +53,7 @@ export class MockBackend {
   _mockBepinexBackup = new Map<number, BepInExInstalled | null>();
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
   _mockGameFiles = new MockGameFiles((id) => this._mockRunningGames.has(id));
+  _mockWebMedia = new MockWebMedia();
   _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
     const settings = readMockSettings();
     return {
@@ -223,6 +225,11 @@ export class MockBackend {
       case "get_move_status":
       case "cancel_game_move":
         return this._mockGameFiles.respond(method, args);
+      case "start_web_media_conversion":
+      case "cancel_web_media_conversion":
+      case "get_web_media_conversion_status":
+      case "set_web_media_play_anyway":
+        return this._mockWebMedia.respond(method, args, (id) => this._mockRunningGames.has(id));
       case "list_companion_tools":
         return { success: true, tools: readMockCompanions().tools };
       case "save_companion_tool": {
@@ -420,6 +427,10 @@ export class MockBackend {
         else this._mockCompanionWine.delete(gameId);
         // Only system-browser launches have no process to track.
         const player = resolveWebPlayer(String(args[1]), mode, game?.html_player, readMockSettings().html_builtin_player, "linux");
+        if (player === "builtin" && /\.html?$/i.test(String(args[1]))) {
+          const blocked = this._mockWebMedia.launchCheck(game, String(args[1]));
+          if (blocked) return blocked;
+        }
         if (player !== "browser") this._mockRunningGames.add(gameId);
         if (player === "builtin" && /\.html?$/i.test(String(args[1])) && !game?.html_player && localStorage.getItem("wlib-mock-html-player-note") !== "shown") {
           localStorage.setItem("wlib-mock-html-player-note", "shown");

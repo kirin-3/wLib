@@ -867,3 +867,26 @@ def test_builtin_player_saves_are_detected_and_refuse_changes_while_running(save
     _write_save(source / "a.save", "a")
     refused = api.import_game_saves(game_id, str(source))
     assert refused["success"] is False and "Close the game" in str(refused["error"])
+
+
+def test_delete_game_deletes_the_video_check_and_export_leaves_it_out(tmp_path, monkeypatch):
+    import json
+    import os
+
+    from core import web_video
+    from core.library_backup import build_library_backup
+
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
+    api = Api()
+    folder = tmp_path / "web"
+    folder.mkdir()
+    (folder / "clip.mp4").write_bytes(b"x")
+    game_id = add_game(title="Game", exe_path=str(folder / "index.html"))
+    assert game_id is not None
+    _ = web_video.scan_game(game_id, str(folder))
+    _ = web_video.set_play_anyway(game_id, str(folder))
+    cache = web_video.scan_cache_path(game_id)
+    exported = json.dumps(build_library_backup(), default=str)
+    assert "clip.mp4" not in exported and "play_anyway" not in exported
+    assert api.delete_game(game_id)["success"] is True
+    assert not os.path.exists(cache)

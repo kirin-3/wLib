@@ -1390,6 +1390,7 @@ class Launcher:
         mangohud: bool = False,
         html_player: str = "",
         gamescope: GamescopeOptions | None = None,
+        check_web_media: bool = False,
     ) -> dict[str, object]:
         """
         Launches the given executable natively if it's a Linux binary, .sh, or .jar.
@@ -2133,6 +2134,17 @@ class Launcher:
 
         def execute_web_player() -> dict[str, object]:
             """Run the built-in player as a tracked process (sandbox, No internet, Stop)."""
+            if check_web_media and ext in (".html", ".htm") and game_id is not None and game_id > 0:
+                # Only window launches set the flag: they can show the dialog.
+                from core.web_video import launch_check
+
+                try:
+                    blocked = launch_check(game_id, game_dir)
+                except Exception as exc:
+                    print(f"Video check of game {game_id} failed: {exc}")
+                    blocked = None
+                if blocked is not None:
+                    return blocked
             if game_id is not None and game_id > 0:
                 profile = game_sandbox.web_player_folder(game_id)
             else:

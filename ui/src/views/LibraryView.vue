@@ -84,6 +84,10 @@ import { isPendingRemoval, scheduleRemoval } from "../utils/pendingRemovals";
 import { isPendingUninstallRemoval, scheduleUninstall, withPendingUninstall } from "../utils/pendingUninstalls";
 import UninstallDialog from "../components/UninstallDialog.vue";
 import MoveGameDialog from "../components/MoveGameDialog.vue";
+import WebMediaDialog from "../components/WebMediaDialog.vue";
+import { useWebMediaConversion } from "../composables/useWebMediaConversion";
+import { WEB_MEDIA_CONVERTING, WEB_MEDIA_UNSUPPORTED } from "../utils/webMedia";
+import type { LaunchGameResponse, WebMediaInfo } from "../services/api";
 import MoveQueuePanel from "../components/library/MoveQueuePanel.vue";
 import { useGameMoves } from "../composables/useGameMoves";
 import type { UninstallOptions } from "../services/api";
@@ -655,6 +659,14 @@ const uninstallTargets = ref<GameRecord[]>([]);
 const moveOpen = ref(false);
 const moveTargets = ref<GameRecord[]>([]);
 const gameMoves = useGameMoves();
+// The built-in player's video dialog, opened from a launch result.
+const webMediaOpen = ref(false);
+const webMediaGame = ref<GameRecord | null>(null);
+const webMediaTarget = ref("");
+const webMediaInfo = ref<WebMediaInfo | null>(null);
+const webMediaCode = ref("");
+const webMediaDialog = ref<InstanceType<typeof WebMediaDialog> | null>(null);
+const webMediaJobs = useWebMediaConversion();
 const openUninstall = (targets: GameRecord[]) => {
   const installed = targets.filter((game) => !isWishlisted(game));
   if (!installed.length) { notifyError("No selected game is installed."); return; }
@@ -1283,6 +1295,10 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
       game.launch_mode || "auto",
     );
     if (result && !result.success) {
+      if (result.code === WEB_MEDIA_UNSUPPORTED || result.code === WEB_MEDIA_CONVERTING) {
+        openWebMediaDialog(game, exePath, result);
+        return;
+      }
       if (result.code === 'umu_missing' || result.code === 'umu_runtime_missing') {
         notify(result.error || 'Proton needs umu setup.', 'error', 'Could not launch game', { label: 'Open Proton settings', run: () => { void router.push('/settings#umu'); } });
         return;
@@ -1297,6 +1313,66 @@ const launchGameFast = async (game: GameRecord, exePath = game.exe_path) => {
     }
   } catch (e) {
     console.error("Launch failed", e);
+  }
+};
+
+const openWebMediaDialog = (game: GameRecord, exePath: string, result: LaunchGameResponse) => {
+  webMediaGame.value = game;
+  webMediaTarget.value = exePath;
+  webMediaInfo.value = result.media ?? null;
+  webMediaCode.value = result.code || "";
+  if (result.code === WEB_MEDIA_CONVERTING) webMediaJobs.follow(game.id, game.title, () => void launchGameFast(game, exePath));
+  webMediaOpen.value = true;
+};
+
+const relaunchWebMediaGame = async () => {
+  const game = webMediaGame.value;
+  webMediaOpen.value = false;
+  if (game) await launchGameFast(game, webMediaTarget.value);
+};
+
+const webMediaConvert = async () => {
+  const game = webMediaGame.value;
+  if (!game) return;
+  const exePath = webMediaTarget.value;
+  try {
+    const result = await webMediaJobs.start(game.id, game.title, () => void launchGameFast(game, exePath));
+    if (!result.success) {
+      notifyError(result.error || "Could not start the conversion.");
+      webMediaOpen.value = false;
+      return;
+    }
+    webMediaDialog.value?.showProgress();
+  } catch (error) {
+    notifyError(String(error));
+    webMediaOpen.value = false;
+  }
+};
+
+const webMediaUseBrowser = async () => {
+  const game = webMediaGame.value;
+  if (!game) return;
+  try {
+    const result = await api.updateGame(game.id, { html_player: "browser" });
+    if (result.success === false) { notifyError(result.error || "Could not change where the game opens."); webMediaOpen.value = false; return; }
+    await loadGames();
+    await relaunchWebMediaGame();
+  } catch (error) {
+    notifyError(String(error));
+    webMediaOpen.value = false;
+  }
+};
+
+const webMediaPlayAnyway = async () => {
+  const game = webMediaGame.value;
+  if (!game) return;
+  try {
+    const result = await api.setWebMediaPlayAnyway(game.id);
+    if (result.success === false) { notifyError(result.error || "Could not start the game."); webMediaOpen.value = false; return; }
+    await relaunchWebMediaGame();
+  } catch (error) {
+    notifyError(String(error));
+    webMediaOpen.value = false;
   }
 };
 
@@ -2760,6 +2836,16 @@ onUnmounted(() => {
       <BulkWineDialog v-model="bulkWineOpen" :games="selectedGames" :running-ids="runningGameIds" @apply="applyBulkWine" />
       <UninstallDialog v-model="uninstallOpen" :games="uninstallTargets" @confirm="confirmUninstall" />
       <MoveGameDialog v-model="moveOpen" :games="moveTargets" @started="moveStarted" />
+      <WebMediaDialog
+        ref="webMediaDialog"
+        v-model="webMediaOpen"
+        :game="webMediaGame"
+        :media="webMediaInfo"
+        :code="webMediaCode"
+        @convert="webMediaConvert"
+        @use-browser="webMediaUseBrowser"
+        @play-anyway="webMediaPlayAnyway"
+      />
       <ImportFolderModal v-model="showImportModal" />
       <AddGameModal
         v-model="showAddModal"

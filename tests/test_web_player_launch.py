@@ -290,3 +290,71 @@ def test_flatpak_player_skips_host_performance_tools(game_dir, monkeypatch):
     result, popen, *_ = _launch(game_dir, gamemode=True, mangohud=True)
     argv = popen.call_args.args[0]
     assert result["success"] and "/usr/bin/mangohud" not in argv and "/usr/bin/gamemoderun" not in argv
+
+
+# ── Video check before the built-in player starts ──
+
+
+@pytest.fixture
+def h264_game(game_dir, monkeypatch):
+    from test_web_video import mp4, sample_entry
+
+    from core import web_video
+
+    (game_dir / "videos").mkdir()
+    (game_dir / "videos" / "intro.mp4").write_bytes(mp4(sample_entry(b"avc1"), sample_entry(b"mp4a", 0x40)))
+    monkeypatch.setattr(web_video, "ffmpeg_info", lambda refresh=False: {"available": False, "reason": "missing"})
+    return game_dir
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+def test_h264_videos_stop_the_player(h264_game):
+    result, popen, _, launcher = _launch(h264_game, check_web_media=True)
+    assert result["success"] is False and result["code"] == "web_media_unsupported"
+    assert result["media"] == {"count": 1, "ffmpeg": {"available": False, "reason": "missing"}}
+    popen.assert_not_called()
+    assert launcher.get_running_games() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+def test_vp9_and_av1_videos_start_the_player(game_dir):
+    from test_web_video import mp4, sample_entry
+
+    (game_dir / "a.mp4").write_bytes(mp4(sample_entry(b"vp09"), sample_entry(b"Opus")))
+    (game_dir / "b.mp4").write_bytes(mp4(sample_entry(b"av01")))
+    result, popen, *_ = _launch(game_dir, check_web_media=True)
+    assert result["success"] and "--play-web" in popen.call_args.args[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+def test_browser_and_swf_launches_are_not_checked(h264_game):
+    result, popen, *_ = _launch(h264_game, html_player="browser", check_web_media=True)
+    assert result["success"] and popen.call_args.args[0][0] == "xdg-open"
+    result, popen, *_ = _launch(h264_game, name="game.swf", check_web_media=True)
+    assert result["success"] and "--flash" in popen.call_args.args[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates a Linux host; POSIX paths only")
+def test_play_anyway_and_launches_without_the_flag_start_the_player(h264_game):
+    from core import web_video
+
+    result, popen, *_ = _launch(h264_game)
+    assert result["success"] and "--play-web" in popen.call_args.args[0]
+    _ = web_video.set_play_anyway(7, str(h264_game))
+    result, popen, *_ = _launch(h264_game, check_web_media=True)
+    assert result["success"] and "--play-web" in popen.call_args.args[0]
+
+
+def test_launch_tracked_passes_the_flag_only_when_asked(tmp_path):
+    from core.database import init_db
+    from core.game_launch import launch_tracked
+
+    init_db()
+    target = tmp_path / "index.html"
+    target.write_text("<html></html>")
+    launcher = MagicMock()
+    launcher.launch.return_value = {"success": False, "error": "x"}
+    _ = launch_tracked(launcher, None, {"exe_path": str(target)})
+    assert "check_web_media" not in launcher.launch.call_args.kwargs
+    _ = launch_tracked(launcher, None, {"exe_path": str(target), "check_web_media": True})
+    assert launcher.launch.call_args.kwargs["check_web_media"] is True

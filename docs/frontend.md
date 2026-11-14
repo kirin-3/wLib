@@ -132,6 +132,12 @@ The Game Detail "More actions" menu and the bulk Maintenance menu offer "Uninsta
 - `components/library/MoveQueuePanel.vue` sits in a sticky stack above the bulk bar, after the last row, with "Moving X of Y", the title, the bytes, the speed, "Cancel" and "Cancel all".
 - While a game is moving, the Game Detail modal shows its executable, prefix and cover fields as read-only.
 
+## Built-in player video dialog
+- `launchGameFast` in `LibraryView.vue` opens `components/WebMediaDialog.vue` when a launch returns `code: "web_media_unsupported"` (with `media: {count, ffmpeg}`) or `"web_media_converting"`. The dialog has three steps (`utils/webMedia.ts`: `initialStep`): **choices** (the count, "Convert videos", "Use system browser", "Play anyway"; when `ffmpeg.available` is false there is no Convert button and an ffmpeg note shows `ffmpegProblem()` and `ffmpegInstallHint()`), **confirm** (the "replaced, cannot be undone" warning) and **progress** (done/total, current file, Cancel conversion, Close). It uses `useModalKeyboard`, so Escape, the backdrop and controller Back close it without a launch.
+- The parent handles the choices: "Use system browser" saves `html_player: "browser"` through `updateGame`, reloads the games and launches again; "Play anyway" calls `setWebMediaPlayAnyway` and launches again; "Replace and convert" calls `startWebMediaConversion` through the composable and switches the dialog to progress (`showProgress()`).
+- `composables/useWebMediaConversion.ts` keeps `webMediaStatus` per game and polls `getWebMediaConversionStatus` every 500 ms while a job runs, also after the dialog closes (`createWebMediaWatcher` in `utils/webMedia.ts`). When the job ends it shows one notification with the converted and failed counts (`summaryText`) and a Play action (not after an error). A `web_media_converting` launch result follows the running job and opens the dialog in progress.
+- Browser preview: `services/mock/webMedia.ts`. An HTML game whose title or path contains `h264` reports 12 videos; localStorage `wlib-mock-ffmpeg = "missing"` shows the install hint.
+
 ## Game screenshot gallery
 
 The modal reads screenshots live from the catalog, falling back to `GameRecord.screenshots` from the thread starter post. F95 thumbnails use the preview host, fall back to full images on error, and the lightbox uses full images. Browser mocks start with no seeded library; a simulated update check fills a game's missing screenshots with data-URI SVG placeholders so the strip and lightbox can be exercised. Games without a thread URL show neither.

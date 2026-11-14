@@ -222,6 +222,46 @@ export interface GetAvailableRunnersResponse extends ApiBasicResponse {
 export interface LaunchGameResponse extends ApiBasicResponse {
   success: boolean;
   notice?: string;
+  /** Set with code "web_media_unsupported". */
+  media?: WebMediaInfo;
+}
+
+export interface FfmpegInstallHint {
+  command: string;
+  package_manager: string;
+  platform: "linux" | "windows";
+  /** True in the Flatpak: install ffmpeg on the host system. */
+  host: boolean;
+}
+
+export interface FfmpegInfo {
+  available: boolean;
+  ffmpeg: string;
+  ffprobe: string;
+  video_encoder: string;
+  audio_encoder: string;
+  /** "", "missing", "no_video_encoder" or "no_audio_encoder". */
+  reason: string;
+  install: FfmpegInstallHint;
+}
+
+/** Videos the built-in player cannot decode (H.264, H.265, AAC). */
+export interface WebMediaInfo {
+  count: number;
+  ffmpeg: FfmpegInfo;
+}
+
+export interface WebMediaStatus extends ApiBasicResponse {
+  running: boolean;
+  finished: boolean;
+  done: number;
+  total: number;
+  current: string;
+  converted: number;
+  failed: number;
+  failed_files: string[];
+  cancelled: boolean;
+  error: string;
 }
 
 export interface UpdateCheckResponse extends ApiBasicResponse {
@@ -1840,6 +1880,24 @@ class ApiService {
 
   async cancelGameTool(gameId: number): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("cancel_game_tool", gameId);
+  }
+
+  /** Converts the game's videos in place in the background; poll getWebMediaConversionStatus. */
+  async startWebMediaConversion(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("start_web_media_conversion", gameId);
+  }
+
+  async cancelWebMediaConversion(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("cancel_web_media_conversion", gameId);
+  }
+
+  async getWebMediaConversionStatus(gameId: number): Promise<WebMediaStatus> {
+    return this.invoke<WebMediaStatus>("get_web_media_conversion_status", gameId);
+  }
+
+  /** Starts the built-in player without the video dialog until the game's videos change. */
+  async setWebMediaPlayAnyway(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke<ApiBasicResponse>("set_web_media_play_anyway", gameId);
   }
 
   async getExecutableModifiedTime(exe_path: string): Promise<ExecutableModifiedTimeResponse> {

@@ -17,6 +17,7 @@ from core.api_mixins.saves import SavesMixin
 from core.api_mixins.settings import SettingsMixin
 from core.api_mixins.sync import SyncMixin
 from core.api_mixins.updates import UpdatesMixin
+from core.api_mixins.web_media import WebMediaMixin
 from core.api_mixins.base import ApiBase
 from core.app_version import APP_VERSION as APP_VERSION
 from core.versions import normalize_version as normalize_version
@@ -34,6 +35,7 @@ class Api(
     DownloadsMixin,
     SavesMixin,
     SettingsMixin,
+    WebMediaMixin,
     ApiBase,
 ):
     """The object that PyWebView lists on ``window.pywebview.api``."""

@@ -682,6 +682,12 @@ class LibraryMixin(ApiBase):
             _ = retire_web_player_folder(coerced_id)
         except Exception as exc:
             print(f"[wLib] Failed to move the web player storage of game {coerced_id}: {exc}")
+        try:
+            from core.web_video import delete_scan_cache
+
+            _ = delete_scan_cache(coerced_id)
+        except Exception as exc:
+            print(f"[wLib] Failed to delete the video check of game {coerced_id}: {exc}")
         with self._metadata_lock:
             self._metadata_pending.discard(coerced_id)
         self._schedule_steam_sync()

@@ -65,6 +65,9 @@
   ],
   "cancel_umu_runtime_prepare": [],
   "cancel_update_check": [],
+  "cancel_web_media_conversion": [
+    "game_id"
+  ],
   "check_all_updates": [
     "game_ids",
     "refresh_info"
@@ -243,6 +246,9 @@
   ],
   "get_update_status": [],
   "get_urm_status": [
+    "game_id"
+  ],
+  "get_web_media_conversion_status": [
     "game_id"
   ],
   "import_external_library": [
@@ -517,6 +523,9 @@
     "game_id",
     "installed"
   ],
+  "set_web_media_play_anyway": [
+    "game_id"
+  ],
   "set_window_focused": [
     "focused"
   ],
@@ -538,6 +547,9 @@
     "game_id",
     "link_id",
     "replaces"
+  ],
+  "start_web_media_conversion": [
+    "game_id"
   ],
   "stop_game": [
     "game_id"
