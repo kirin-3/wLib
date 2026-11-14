@@ -51,7 +51,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "exists": true,
     "playStatus": "Playing",
     "wishlisted": false,
-    "app_version": "0.4.6",
+    "app_version": "0.4.7",
     "extension_version": "1.2.6"
   }
   ```
