@@ -4,7 +4,7 @@
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue';
 import {useRouter} from 'vue-router';
 import {
-  IconAlertTriangle, IconDownload, IconInfoCircle, IconPackage, IconPlayerPause, IconPlayerPlay, IconReload, IconTrash, IconX,
+  IconAlertTriangle, IconDownload, IconInfoCircle, IconPackage, IconPlayerPause, IconPlayerPlay, IconReload, IconSettings, IconTrash, IconX,
 } from '@tabler/icons-vue';
 import {api, type DownloadOffer, type DownloadQueueJob, type UpdateDownloadJob} from '../services/api';
 import {useUpdateDownloads} from '../composables/useUpdateDownloads';
@@ -26,6 +26,7 @@ const downloads = useUpdateDownloads();
 const {jobs, queue, seeding, runningGames, loaded} = downloads;
 
 const offers = ref<DownloadOffer[]>([]);
+const settingsOpen = ref(false);
 const announcement = ref('');
 // After a move, focus goes back to the moved row once the new order arrives.
 let pendingFocus: {id: string; action: RowAction} | null = null;
@@ -195,11 +196,16 @@ onBeforeUnmount(() => {
           Game updates that wLib downloads, in the order they run.
         </p>
       </div>
-      <div v-if="jobs.length" class="flex gap-2">
-        <button type="button" class="tool-btn" :disabled="!anyPausable" data-testid="pause-all" @click="pauseAll"><IconPlayerPause class="w-4 h-4" />Pause all</button>
-        <button type="button" class="tool-btn" :disabled="!anyPaused" data-testid="resume-all" @click="downloads.resumeAll()"><IconPlayerPlay class="w-4 h-4" />Resume all</button>
+      <div class="flex flex-wrap gap-2">
+        <template v-if="jobs.length">
+          <button type="button" class="tool-btn" :disabled="!anyPausable" data-testid="pause-all" @click="pauseAll"><IconPlayerPause class="w-4 h-4" />Pause all</button>
+          <button type="button" class="tool-btn" :disabled="!anyPaused" data-testid="resume-all" @click="downloads.resumeAll()"><IconPlayerPlay class="w-4 h-4" />Resume all</button>
+        </template>
+        <button type="button" class="tool-btn" :disabled="!queue" :title="queue ? undefined : 'Loading the download settings'" data-testid="download-settings-button" @click="settingsOpen = true"><IconSettings class="w-4 h-4" />Settings</button>
       </div>
     </header>
+
+    <DownloadQuickSettings v-if="queue" v-model="settingsOpen" :settings="queue.settings" @saved="downloads.refresh()" />
 
     <p class="sr-only" role="status" aria-live="polite" data-testid="downloads-live">{{ announcement }}</p>
 
@@ -219,7 +225,6 @@ onBeforeUnmount(() => {
           <IconAlertTriangle v-if="forecast.warning" class="w-4 h-4 shrink-0 mt-0.5" />{{ forecast.text }}
         </p>
       </template>
-      <DownloadQuickSettings v-if="queue" :settings="queue.settings" @saved="downloads.refresh()" />
 
       <div v-if="empty" class="empty" data-testid="downloads-empty">
         <IconDownload class="w-10 h-10 mx-auto mb-3" style="color: var(--text-muted)" />

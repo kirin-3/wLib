@@ -85,9 +85,10 @@ async (page) => {
     check(await page.getByRole("link", { name: "Updates, 1 available", exact: true }).count() === 1, "An old response must not restore the navigation count");
 
     await page.getByRole("link", { name: "Updates, 1 available", exact: true }).click();
-    await page.getByRole("button", { name: "Mark updated", exact: true }).waitFor();
+    await page.getByRole("button", { name: "More update actions", exact: true }).waitFor();
     await deferRefresh();
-    await page.getByRole("button", { name: "Mark updated", exact: true }).click();
+    await page.getByRole("button", { name: "More update actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Mark updated", exact: true }).click();
     await page.getByRole("link", { name: "Updates, 0 available", exact: true }).waitFor();
     await releaseRefresh();
     check(await page.getByRole("heading", { name: /^Updates Available/ }).count() === 0, "An old response must not restore the Updates list");
@@ -124,7 +125,8 @@ async (page) => {
     await page.getByLabel('Search games').fill('');
     await bar.getByRole('button', {name: 'Select all'}).click();
     await bar.getByText('3 selected').waitFor();
-    await bar.getByLabel('Set status').selectOption('Completed');
+    await bar.getByRole('button', {name: 'Status', exact: true}).click();
+    await bar.getByRole('menuitem', {name: 'Set status: Completed', exact: true}).click();
     await page.getByText('2 changed, 1 skipped.').waitFor();
     await page.getByRole('button', {name: 'Undo', exact: true}).last().click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).every(game => game.play_status === (game.id === 1 ? 'Completed' : 'Playing')));

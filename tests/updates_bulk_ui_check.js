@@ -17,7 +17,8 @@ async page => {
     await page.getByRole('button', {name:'Undo', exact:true}).click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).every(game => game.version === '1'));
     const row = page.locator('.section-card').filter({has: page.getByRole('heading', {name: /^Updates Available/})});
-    await row.getByRole('button', {name:'Skip version', exact:true}).last().click();
+    await row.getByRole('button', {name:'More update actions', exact:true}).last().click();
+    await page.getByRole('menuitem', {name:'Skip version 2', exact:true}).click();
     await page.getByRole('button', {name:'Undo', exact:true}).last().click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('wlib-mock-games')).every(game => !game.skipped_version));
     await all.check();

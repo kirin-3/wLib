@@ -3,18 +3,21 @@
 import { gameCoverSrc } from "../utils/gameCover";
 import CoverImage from "../components/CoverImage.vue";
 import { refreshRunningGames } from "../composables/useRunningGames";
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
+import MenuButton, { type MenuButtonItem } from "../components/MenuButton.vue";
+import UpdateSettingsDialog from "../components/UpdateSettingsDialog.vue";
 import { useRouter } from "vue-router";
 import {
   IconArrowUp,
-  IconClockUp,
   IconCheck,
   IconDownload,
   IconExternalLink,
   IconFileZip,
   IconInfoCircle,
   IconLoader2,
+  IconPlayerSkipForward,
   IconReload,
+  IconSettings,
   IconX,
 } from "@tabler/icons-vue";
 import { api, onWebviewReady } from "../services/api";
@@ -72,11 +75,13 @@ const hasUnfinishedDownload = (gameId: number): boolean => {
 };
 const openDownloads = () => { void router.push("/downloads"); };
 
-const installUpdate = (game: GameRecord) => {
+// "Install found archive" preselects the archive wLib found; "Install from file"
+// opens the dialog without it, so the user can choose another file.
+const installUpdate = (game: GameRecord, useOffer = true) => {
   if (status.value.running) return;
   openInstallArchive({
     gameId: game.id,
-    archivePath: downloadOffers.value.get(game.id)?.archive_path,
+    archivePath: useOffer ? downloadOffers.value.get(game.id)?.archive_path : undefined,
   });
 };
 
@@ -407,6 +412,119 @@ const bulkUpdate = async (action: "updated" | "skip" | "check") => {
   else notifyError(`No games changed; ${result.failed} failed.`);
 };
 
+// Each row has one split button. The main part is the most direct way to get
+// the new version; the menu lists every other action that applies.
+type UpdateMainAction = "install-offer" | "download" | "install-file";
+const CHECK_RUNNING_REASON = "Wait for the update check to finish";
+
+const updateMainAction = (game: GameRecord): UpdateMainAction => {
+  if (downloadOffers.value.get(game.id)) return "install-offer";
+  if (game.f95_url) return "download";
+  return "install-file";
+};
+
+const downloadDisabledReason = (game: GameRecord): string => {
+  if (updateDownloads.runningGames.value.includes(game.id)) return "Close the game before you download an update";
+  if (hasUnfinishedDownload(game.id)) return "A download for this game is in progress";
+  return "";
+};
+
+const updateMainDisabled = (game: GameRecord): boolean =>
+  updateMainAction(game) === "download" ? !!downloadDisabledReason(game) : status.value.running;
+
+const updateMainTitle = (game: GameRecord): string => {
+  const action = updateMainAction(game);
+  if (action === "download") return downloadDisabledReason(game) || "Choose a build from the F95Zone thread and download it";
+  if (status.value.running) return CHECK_RUNNING_REASON;
+  if (action === "install-offer") return `Install from ${downloadOffers.value.get(game.id)?.archive_path ?? ""}`;
+  return "Install the new version from a downloaded archive";
+};
+
+const updateMenuItems = (game: GameRecord): MenuButtonItem[] => {
+  const main = updateMainAction(game);
+  const running = status.value.running;
+  const items: MenuButtonItem[] = [];
+  if (game.f95_url && main !== "download") {
+    const reason = downloadDisabledReason(game);
+    items.push({ id: "download", label: "Download update", icon: IconDownload, disabled: !!reason, disabledReason: reason });
+  }
+  if (main !== "install-file") {
+    items.push({ id: "install-file", label: "Install from file", icon: IconFileZip, disabled: running, disabledReason: CHECK_RUNNING_REASON });
+  }
+  const marking = markingUpdatedIds.value.has(game.id);
+  items.push({
+    id: "mark", label: "Mark updated", icon: IconCheck, disabled: marking || running,
+    disabledReason: running ? CHECK_RUNNING_REASON : "Marking this game updated",
+  });
+  items.push({ id: "skip", label: `Skip version ${game.latest_version ?? ""}`.trim(), icon: IconPlayerSkipForward, disabled: running, disabledReason: CHECK_RUNNING_REASON });
+  let recheckReason = "";
+  if (!game.f95_url) recheckReason = "Only games with an F95Zone thread can be re-checked";
+  else if (running) recheckReason = CHECK_RUNNING_REASON;
+  else if (recheckingIds.value.has(game.id)) recheckReason = "Checking this game now";
+  items.push({ id: "recheck", label: "Re-check", icon: IconReload, disabled: !!recheckReason, disabledReason: recheckReason });
+  if (game.f95_url) items.push({ id: "thread", label: "Open F95Zone thread", icon: IconExternalLink });
+  return items;
+};
+
+const runUpdateMain = (game: GameRecord) => {
+  const action = updateMainAction(game);
+  if (action === "download") updateDownloads.open(game);
+  else installUpdate(game, action === "install-offer");
+};
+
+const chooseUpdateMenuItem = (game: GameRecord, id: string) => {
+  if (id === "download") updateDownloads.open(game);
+  else if (id === "install-file") installUpdate(game, false);
+  else if (id === "mark") void markAsUpdated(game);
+  else if (id === "skip") void skipVersion(game);
+  else if (id === "recheck") void recheck(game);
+  else if (id === "thread") void openInBrowser(game.f95_url);
+};
+
+// When a row leaves while focus is in it (or focus was lost), move focus to
+// the main part of the row now at the same place, else the previous row, else
+// "Check All Games". Rows that animate out still hold the leave class.
+const checkActions = ref<HTMLElement | null>(null);
+const focusUpdateRow = (index: number) => {
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-update-row]")]
+    .filter((row) => !row.classList.contains("list-leave-active") && !row.classList.contains("list-leave-from"));
+  const target = rows[index] ?? rows[rows.length - 1];
+  const main = target?.querySelector<HTMLElement>("[data-update-row-action] .menu-button-main");
+  if (main && !main.matches(":disabled")) { main.focus(); return; }
+  if (target) { target.querySelector<HTMLElement>("[data-update-row-action] .menu-button-toggle")?.focus(); return; }
+  checkActions.value?.querySelector<HTMLElement>("[data-check-action]")?.focus();
+};
+watch(() => persistedUpdates.value.map((game) => game.id), async (ids, previous) => {
+  if (!previous) return;
+  const remaining = new Set(ids);
+  const removed = previous.filter((id) => !remaining.has(id));
+  if (!removed.length) return;
+  const active = document.activeElement;
+  const removedIndex = removed
+    .filter((id) => {
+      const row = document.querySelector(`[data-update-row="${id}"]`);
+      return !active || active === document.body || !!row?.contains(active);
+    })
+    .map((id) => previous.indexOf(id))[0];
+  if (removedIndex === undefined) return;
+  await nextTick();
+  focusUpdateRow(Math.max(0, removedIndex - previous.slice(0, removedIndex).filter((id) => !remaining.has(id)).length));
+});
+
+const settingsOpen = ref(false);
+const frequencyLabel = computed(() => {
+  if (autoCheckFreq.value === "monthly") return "Monthly";
+  if (autoCheckFreq.value === "off") return "Automatic checks off";
+  return "Weekly";
+});
+const hasStatusContent = computed(() =>
+  !!statusError.value
+  || status.value.running
+  || status.value.checked > 0
+  || (!!status.value.outcome && status.value.outcome !== "idle")
+  || status.value.total === 0,
+);
+
 const formatLastCheck = computed(() => {
   if (!lastAutoCheck.value) return "Never";
   try {
@@ -521,24 +639,136 @@ onUnmounted(() => {
 
 <template>
   <div class="mx-auto w-full p-8 max-w-4xl pb-12">
-    <header class="mb-8">
-      <h2
-        class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
-        style="color: var(--text-primary)"
-      >
-        <IconReload class="ui-page-heading-icon" />
-        <span>Updates</span>
-      </h2>
-      <p
-        class="text-sm pl-3"
-        style="
-          color: var(--text-secondary);
-          border-left: 2px solid var(--brand);
-        "
-      >
-        Check F95Zone for new game versions.
-      </p>
+    <header class="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+      <div class="min-w-0">
+        <h2
+          class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"
+          style="color: var(--text-primary)"
+        >
+          <IconReload class="ui-page-heading-icon" />
+          <span>Updates</span>
+        </h2>
+        <p
+          class="text-sm pl-3"
+          style="
+            color: var(--text-secondary);
+            border-left: 2px solid var(--brand);
+          "
+        >
+          Check F95Zone for new game versions.
+        </p>
+        <p class="mt-2 text-xs" style="color: var(--text-secondary)" data-testid="updates-last-checked">
+          Last checked: {{ formatLastCheck }} · {{ frequencyLabel }}
+        </p>
+      </div>
+      <div ref="checkActions" class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="ui-action-btn update-btn"
+          @click="settingsOpen = true"
+        >
+          <IconSettings class="ui-action-icon" />
+          Settings
+        </button>
+        <button
+          v-if="!status.running"
+          type="button"
+          data-check-action
+          @click="startCheck()"
+          :disabled="startingCheck"
+          class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
+          style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
+        >
+          <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" />
+          <IconReload v-else class="ui-action-icon" />
+          Check All Games
+        </button>
+        <button
+          v-else
+          type="button"
+          data-check-action
+          @click="cancelCheck"
+          :disabled="status.cancelling"
+          class="ui-action-btn bg-red-600/20 hover:bg-red-600/30 text-red-400 px-5 py-2 rounded-lg text-sm font-bold transition-all border border-red-500/30 disabled:opacity-60 disabled:cursor-wait"
+        >
+          <IconX class="ui-action-icon" />
+          {{ status.cancelling ? "Cancelling…" : "Cancel" }}
+        </button>
+      </div>
     </header>
+
+    <UpdateSettingsDialog
+      v-model="settingsOpen"
+      :frequency="autoCheckFreq"
+      :notifications-available="notificationsAvailable"
+      :desktop-notifications="desktopNotifications"
+      :notifications-saving="savingNotifications"
+      :notifications-loaded="notificationSettingLoaded"
+      :notifications-error="notificationSettingError"
+      @set-frequency="setFrequency"
+      @set-notifications="setDesktopNotifications"
+      @retry-notifications="loadNotificationSetting"
+    />
+
+    <!-- Check status: progress, outcome, errors and the first-run hint -->
+    <div
+      role="status"
+      class="mb-6 empty:hidden"
+      data-testid="update-check-status"
+    >
+      <div v-if="hasStatusContent" class="section-card rounded-xl px-5 py-4 space-y-2">
+        <div v-if="status.running || status.checked > 0" class="space-y-2">
+          <div
+            class="flex items-center justify-between text-xs"
+            style="color: var(--text-secondary)"
+          >
+            <span v-if="status.running" class="flex items-center gap-2">
+              <IconLoader2 class="ui-action-icon animate-spin text-green-400" />
+              Checking: {{ status.current }}
+            </span>
+            <span v-else :class="progressToneClass">{{ progressLabel }}</span>
+            <span>{{ status.checked }}/{{ status.total }}</span>
+          </div>
+          <div
+            class="h-2 rounded-full overflow-hidden"
+            style="background: var(--bg-raised)"
+          >
+            <div
+              class="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all duration-500"
+              :style="{ width: progress + '%' }"
+            ></div>
+          </div>
+        </div>
+
+        <p v-if="statusError" class="text-sm text-red-400">
+          {{ statusError }}
+          <button
+            type="button"
+            class="ml-2 underline font-semibold"
+            @click="retryStatus"
+          >
+            Try again
+          </button>
+        </p>
+        <p
+          v-else-if="!status.running && status.outcome && status.outcome !== 'idle'"
+          class="text-sm"
+          style="color: var(--text-secondary)"
+        >
+          Check {{ status.outcome }}: {{ status.checked }} / {{ status.total }} games checked.
+          {{ status.error }}
+        </p>
+        <p
+          v-else-if="!status.running && status.total === 0"
+          class="text-sm"
+          style="color: var(--text-secondary)"
+        >
+          Choose "Check All Games" to scan F95Zone for new versions. Games are
+          checked one-by-one with a {{ statusDelaySeconds }}-second delay to
+          avoid rate limiting.
+        </p>
+      </div>
+    </div>
 
     <div class="space-y-6">
       <!-- App Update Available (GitHub) -->
@@ -559,7 +789,7 @@ onUnmounted(() => {
           style="background: var(--brand-glow)"
         ></div>
 
-        <div class="flex items-start justify-between mb-4 relative z-10">
+        <div class="flex flex-wrap items-start justify-between gap-3 mb-4 relative z-10">
           <div>
             <h3
               class="ui-section-heading text-xl font-bold mb-1"
@@ -611,167 +841,15 @@ onUnmounted(() => {
         ></div>
       </section>
 
-      <!-- F95Zone Game Auto-Check Setting -->
-      <section class="section-card rounded-xl p-6">
-        <div class="flex items-center justify-between mb-3">
-          <h3
-            class="ui-section-heading text-lg font-semibold"
-            style="color: var(--text-primary)"
-          >
-            <IconClockUp class="ui-section-icon" />
-            Automatic Checking
-          </h3>
-        </div>
-
-        <div class="flex items-center gap-3 mb-3">
-          <span class="text-sm" style="color: var(--text-secondary)"
-            >Frequency:</span
-          >
-          <div
-            class="flex items-center rounded-lg overflow-hidden"
-            style="border: 1px solid var(--border)"
-          >
-            <button
-              v-for="opt in [
-                { key: 'weekly', label: 'Weekly' },
-                { key: 'monthly', label: 'Monthly' },
-                { key: 'off', label: 'Off' },
-              ]"
-              :key="opt.key"
-              @click="setFrequency(opt.key)"
-              class="px-3 py-1.5 text-xs font-medium transition-all"
-              :style="
-                autoCheckFreq === opt.key
-                  ? 'background: var(--bg-overlay); color: var(--text-primary)'
-                  : 'background: var(--bg-surface); color: var(--text-muted)'
-              "
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-        </div>
-        <p class="text-xs" style="color: var(--text-muted)">
-          Last checked: {{ formatLastCheck }}
-        </p>
-        <div v-if="notificationsAvailable" class="mt-4 text-sm" style="color: var(--text-primary)">
-          <label class="flex min-h-11 items-center gap-3 w-fit cursor-pointer">
-            <input type="checkbox" :checked="desktopNotifications"
-              :disabled="savingNotifications || !notificationSettingLoaded"
-              @change="setDesktopNotifications" />
-            Desktop notifications
-          </label>
-          <p v-if="notificationSettingError" role="alert">
-            {{ notificationSettingError }}
-            <button class="underline min-h-11" @click="loadNotificationSetting">Retry</button>
-          </p>
-          <p v-else-if="!notificationSettingLoaded" role="status">Loading notification setting...</p>
-          <p v-else class="text-xs" style="color: var(--text-secondary)">
-            Notify after automatic checks, or manual checks that finish while you are away from wLib.
-          </p>
-        </div>
-      </section>
-
-      <!-- Check All Button / Progress -->
-      <section class="section-card rounded-xl p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3
-            class="ui-section-heading text-lg font-semibold"
-            style="color: var(--text-primary)"
-          >
-            <IconReload class="ui-section-icon text-green-400" />
-            Manual Check
-          </h3>
-
-          <div class="flex items-center gap-3">
-            <button
-              v-if="!status.running"
-              @click="startCheck()"
-              :disabled="startingCheck"
-              class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
-              style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
-            >
-              <IconLoader2 v-if="startingCheck" class="ui-action-icon animate-spin" />
-              <IconReload v-else class="ui-action-icon" />
-              Check All Games
-            </button>
-            <button
-              v-else
-              @click="cancelCheck"
-              :disabled="status.cancelling"
-              class="ui-action-btn bg-red-600/20 hover:bg-red-600/30 text-red-400 px-5 py-2 rounded-lg text-sm font-bold transition-all border border-red-500/30 disabled:opacity-60 disabled:cursor-wait"
-            >
-              <IconX class="ui-action-icon" />
-              {{ status.cancelling ? "Cancelling…" : "Cancel" }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Progress Bar -->
-        <div v-if="status.running || status.checked > 0" class="space-y-2">
-          <div
-            class="flex items-center justify-between text-xs"
-            style="color: var(--text-secondary)"
-          >
-            <span v-if="status.running" class="flex items-center gap-2">
-              <IconLoader2 class="ui-action-icon animate-spin text-green-400" />
-              Checking: {{ status.current }}
-            </span>
-            <span v-else :class="progressToneClass">{{ progressLabel }}</span>
-            <span>{{ status.checked }}/{{ status.total }}</span>
-          </div>
-          <div
-            class="h-2 rounded-full overflow-hidden"
-            style="background: var(--bg-raised)"
-          >
-            <div
-              class="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all duration-500"
-              :style="{ width: progress + '%' }"
-            ></div>
-          </div>
-        </div>
-
-        <p
-          v-if="statusError"
-          class="text-sm text-red-400"
-          role="alert"
-        >
-          {{ statusError }}
-          <button
-            type="button"
-            class="ml-2 underline font-semibold"
-            @click="retryStatus"
-          >
-            Try again
-          </button>
-        </p>
-        <p
-          v-else-if="!status.running && status.outcome && status.outcome !== 'idle'"
-          class="text-sm"
-          style="color: var(--text-secondary)"
-          role="status"
-        >
-          Check {{ status.outcome }}: {{ status.checked }} / {{ status.total }} games checked.
-          {{ status.error }}
-        </p>
-        <p
-          v-else-if="!status.running && status.total === 0"
-          class="text-sm"
-          style="color: var(--text-muted)"
-        >
-          Click "Check All Games" to scan F95Zone for new versions. Games are
-          checked one-by-one with a {{ statusDelaySeconds }}-second delay to
-          avoid rate limiting.
-        </p>
-      </section>
-
       <!-- Updates Available -->
       <section
         v-if="persistedUpdates.length > 0"
         class="section-card rounded-xl p-6"
-        style="border-color: rgba(34, 197, 94, 0.2)"
+        style="border-color: var(--success-border)"
       >
         <h3
-          class="ui-section-heading text-lg font-semibold text-green-400 mb-4"
+          class="ui-section-heading text-lg font-semibold mb-4"
+          style="color: var(--success-text)"
         >
           <IconArrowUp class="ui-section-icon" />
           Updates Available ({{ persistedUpdates.length }})
@@ -789,141 +867,89 @@ onUnmounted(() => {
           <div
             v-for="game in persistedUpdates"
             :key="game.id"
-            class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg px-4 py-3"
-            style="
-              background: var(--bg-raised);
-              border: 1px solid var(--border);
-            "
+            :data-update-row="game.id"
+            class="update-row flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg px-4 py-3"
           >
-            <label><input type="checkbox" :aria-label="`Select ${game.title}`" :checked="selectedUpdateIds.has(game.id)" @change="($event.target as HTMLInputElement).checked ? selectedUpdateIds.add(game.id) : selectedUpdateIds.delete(game.id)" /></label>
-            <button
-              @click="openGame(game)"
-              class="update-entry flex items-center gap-3 min-w-[12rem] flex-1 text-left rounded-md"
-              :title="`Open ${game.title}`"
+            <label class="flex items-center"><input type="checkbox" :aria-label="`Select ${game.title}`" :checked="selectedUpdateIds.has(game.id)" @change="($event.target as HTMLInputElement).checked ? selectedUpdateIds.add(game.id) : selectedUpdateIds.delete(game.id)" /></label>
+            <span v-if="gameCoverSrc(game)" class="cover-thumb w-10 h-10 shrink-0">
+              <CoverImage :game="game" img-class="w-10 h-10 rounded-lg object-cover" />
+            </span>
+            <div
+              v-else
+              class="w-10 h-10 rounded-lg shrink-0 flex items-center justify-center"
+              style="background: var(--bg-overlay)"
+              aria-hidden="true"
             >
-              <span v-if="gameCoverSrc(game)" class="cover-thumb w-10 h-10 shrink-0">
-                <CoverImage :game="game" img-class="w-10 h-10 rounded-lg object-cover" />
-              </span>
-              <div
-                class="w-6 h-6 rounded shrink-0 flex items-center justify-center"
-                style="background: var(--bg-overlay)"
-                v-else
+              <svg
+                class="w-4 h-4"
+                style="color: var(--text-muted)"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
               >
-                <svg
-                  class="w-3 h-3"
-                  style="color: var(--text-muted)"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                >
-                  <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-                </svg>
-              </div>
-              <div class="min-w-0">
-                <p
-                  class="text-sm font-semibold truncate"
-                  style="color: var(--text-primary)"
+                <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+              </svg>
+            </div>
+            <div class="min-w-[10rem] flex-1">
+              <p class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-base">
+                <button
+                  type="button"
+                  @click="openGame(game)"
+                  class="update-entry min-w-0 max-w-full truncate text-left font-semibold rounded-md"
+                  :title="`Open ${game.title}`"
                 >
                   {{ game.title }}
-                </p>
-                <p class="text-xs truncate" style="color: var(--text-muted)">
-                  {{ game.developer }}
-                </p>
-              </div>
-            </button>
-            <div class="flex flex-wrap items-center justify-end gap-2">
-              <button
-                v-if="downloadStatus(game.id)"
-                type="button"
-                class="download-status text-xs font-medium tabular-nums rounded-md px-1.5 py-1"
-                :title="`${downloadStatus(game.id)}. Open Downloads`"
-                data-testid="game-download-status"
-                @click="openDownloads"
-              >
-                {{ downloadStatus(game.id) }}
-              </button>
-              <button
-                v-if="game.f95_url"
-                @click="updateDownloads.open(game)"
-                :disabled="updateDownloads.runningGames.value.includes(game.id) || hasUnfinishedDownload(game.id)"
-                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
-                style="
-                  background: var(--brand-glow);
-                  color: var(--brand);
-                  border: 1px solid var(--brand-deep);
-                "
-                title="Choose a build from the F95Zone thread and download it"
-              >
-                <IconDownload class="ui-action-icon" />
-                Download update
-              </button>
-              <button
-                @click="installUpdate(game)"
-                :disabled="status.running"
-                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
-                :class="downloadOffers.get(game.id) ? '' : 'update-btn'"
-                :style="downloadOffers.get(game.id) ? 'background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);' : ''"
-                :title="downloadOffers.get(game.id) ? `Install from ${downloadOffers.get(game.id)?.archive_path}` : 'Install the new version from a downloaded archive'"
-              >
-                <IconFileZip class="ui-action-icon" />
-                {{ downloadOffers.get(game.id) ? "Install found archive" : "Install from file" }}
-              </button>
-              <button
-                @click="markAsUpdated(game)"
-                :disabled="markingUpdatedIds.has(game.id) || status.running"
-                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50"
-                style="
-                  background: var(--success-bg);
-                  color: var(--success-text);
-                  border: 1px solid var(--success-border);
-                "
-                :title="`Set installed version to ${game.latest_version}`"
-              >
-                <IconCheck class="ui-action-icon" />
-                Mark updated
-              </button>
-              <button @click="skipVersion(game)" :disabled="status.running" class="ui-action-btn px-2 py-1.5 rounded-lg text-xs disabled:opacity-50">Skip version</button>
-              <button
-                @click="recheck(game)"
-                :disabled="!game.f95_url || recheckingIds.has(game.id) || status.running"
-                class="ui-action-btn update-btn !px-2 !py-1.5 disabled:opacity-50"
-                :title="game.f95_url ? `Check F95Zone again for ${game.title}` : 'Only games with an F95Zone thread can be re-checked'"
-              >
-                <IconLoader2
-                  v-if="recheckingIds.has(game.id)"
-                  class="ui-action-icon animate-spin"
-                />
-                <IconReload v-else class="ui-action-icon" />
-                Re-check
-              </button>
-              <div class="text-right">
-                <span
-                  class="text-xs font-mono"
-                  style="color: var(--text-muted)"
-                  >{{ game.version }}</span
+                </button>
+                <span class="update-version font-mono whitespace-nowrap" data-testid="update-version-change">
+                  <span>{{ game.version }}</span>
+                  <span class="mx-1" aria-hidden="true">→</span>
+                  <span class="sr-only">to</span>
+                  <span class="font-bold" style="color: var(--success-text)">{{ game.latest_version }}</span>
+                </span>
+              </p>
+              <p class="flex flex-wrap items-center gap-x-2 text-xs" style="color: var(--text-secondary)">
+                <span v-if="game.developer" class="truncate">{{ game.developer }}</span>
+                <button
+                  v-if="downloadStatus(game.id)"
+                  type="button"
+                  class="download-status text-xs font-medium tabular-nums rounded-md px-1.5 py-0.5"
+                  :title="`${downloadStatus(game.id)}. Open Downloads`"
+                  data-testid="game-download-status"
+                  @click="openDownloads"
                 >
-                <span class="text-xs mx-1" style="color: var(--text-muted)"
-                  >→</span
-                >
-                <span class="text-xs text-green-400 font-mono font-bold">{{
-                  game.latest_version
-                }}</span>
-              </div>
-              <button
-                v-if="game.f95_url"
-                @click="openInBrowser(game.f95_url)"
-                class="ui-icon-btn p-1.5 rounded-lg transition-all"
-                style="color: var(--brand)"
-                title="Open F95Zone thread"
-              >
-                <IconExternalLink class="ui-action-icon" />
-              </button>
+                  {{ downloadStatus(game.id) }}
+                </button>
+              </p>
             </div>
+            <MenuButton
+              split
+              align="end"
+              class="ml-auto"
+              :data-update-row-action="game.id"
+              :items="updateMenuItems(game)"
+              menu-label="More update actions"
+              button-label="More update actions"
+              :main-disabled="updateMainDisabled(game)"
+              :main-title="updateMainTitle(game)"
+              @main="runUpdateMain(game)"
+              @select="(id: string) => chooseUpdateMenuItem(game, id)"
+            >
+              <template #main>
+                <IconDownload v-if="updateMainAction(game) === 'download'" class="ui-action-icon" aria-hidden="true" />
+                <IconFileZip v-else class="ui-action-icon" aria-hidden="true" />
+                {{ updateMainAction(game) === "install-offer" ? "Install found archive" : updateMainAction(game) === "download" ? "Download update" : "Install from file" }}
+              </template>
+            </MenuButton>
           </div>
         </TransitionGroup>
       </section>
-
+      <section v-else class="section-card rounded-xl p-6">
+        <p class="flex items-center gap-2 text-sm" style="color: var(--text-secondary)">
+          <IconCheck class="ui-action-icon" style="color: var(--success-text)" aria-hidden="true" />
+          No updates available.
+        </p>
+      </section>
       <!-- Check Results -->
       <section
         v-if="!status.running && status.results.length > 0"
@@ -1020,9 +1046,14 @@ onUnmounted(() => {
   background: var(--border-hover);
 }
 
-.update-entry:hover p:first-child {
-  color: var(--brand) !important;
+.update-row {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
 }
+.update-entry { color: var(--text-primary); }
+.update-entry:hover { color: var(--brand); }
+.update-entry:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.update-version { color: var(--text-secondary); }
 
 .changelog-wrapper {
   background: var(--bg-inset);

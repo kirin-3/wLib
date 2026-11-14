@@ -117,7 +117,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="allow-text-selection mx-auto w-full p-8 max-w-4xl h-full flex flex-col overflow-y-auto">
+  <div class="allow-text-selection mx-auto w-full p-8 max-w-4xl pb-12">
     <header class="mb-8">
       <h2
         class="ui-page-heading text-3xl font-bold mb-2 tracking-tight"

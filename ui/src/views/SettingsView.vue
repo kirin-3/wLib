@@ -1069,6 +1069,7 @@ const sectionRegistry = computed(() => [
   { id: "catalog", title: "Catalog", keywords: "game catalog" },
   ...(supportsLinuxRuntimes.value ? [{ id: "tools", title: "Tools", keywords: "winetricks" }] : []),
   { id: "renpy", title: "Ren'Py", keywords: "urm mod" },
+  { id: "keyboard-shortcuts", title: "Keyboard Shortcuts", keywords: "keys hotkeys shortcut" },
 ]);
 const shownSections = computed(() => sectionRegistry.value.filter(section => shownSectionIds.value.includes(section.id)));
 const sectionVisible = (id: string) => !searchQuery.value.trim() || shownSectionIds.value.includes(id);
@@ -1273,7 +1274,7 @@ const browseUrm = async () => {
           </select>
         </div>
         <div v-if="!shownSections.length && searchQuery.trim()" class="settings-card rounded-xl p-6 mb-6" role="status">No settings match. <button class="underline" @click="searchQuery = ''">Clear search</button></div>
-        <fieldset :disabled="!!settingsLoadError || settingsLoading" class="space-y-6 w-full min-w-0 border-0 p-0">
+        <fieldset :disabled="!!settingsLoadError || settingsLoading" class="settings-sections space-y-6 w-full min-w-0 border-0 p-0">
       <!-- General -->
       <section v-show="sectionVisible('general')" id="general" class="settings-card rounded-xl p-6 space-y-5">
         <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
@@ -1497,25 +1498,6 @@ const browseUrm = async () => {
               </div>
             </template>
           </div>
-        </div>
-
-        <div data-settings-row="general-static-4" data-settings-bound v-show="settingsRowVisible('general-static-4')" class="space-y-3">
-          <h4 class="ui-section-heading text-sm font-medium" style="color: var(--text-primary)">
-            <IconKeyboard class="w-4 h-4" style="color: var(--text-muted)" />
-            Keyboard Shortcuts
-          </h4>
-          <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-            <div
-              v-for="shortcut in shortcuts"
-              :key="shortcut.action"
-              class="flex items-center justify-between gap-3"
-            >
-              <dt style="color: var(--text-secondary)">{{ shortcut.action }}</dt>
-              <dd class="flex gap-1 shrink-0">
-                <kbd v-for="key in shortcut.keys" :key="key">{{ key }}</kbd>
-              </dd>
-            </div>
-          </dl>
         </div>
       </section>
 
@@ -2347,6 +2329,28 @@ const browseUrm = async () => {
         </p>
         </div>
       </section>
+
+      <!-- Keyboard Shortcuts -->
+      <section v-show="sectionVisible('keyboard-shortcuts')" id="keyboard-shortcuts" class="settings-card rounded-xl p-6 space-y-3">
+        <h3 class="ui-section-heading text-lg font-semibold" style="color: var(--text-primary)">
+          <IconKeyboard class="ui-section-icon" />
+          Keyboard Shortcuts
+        </h3>
+        <div data-settings-row="keyboard-shortcuts-static-0" data-settings-bound v-show="settingsRowVisible('keyboard-shortcuts-static-0')">
+          <dl class="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+            <div
+              v-for="shortcut in shortcuts"
+              :key="shortcut.action"
+              class="flex items-center justify-between gap-3"
+            >
+              <dt style="color: var(--text-secondary)">{{ shortcut.action }}</dt>
+              <dd class="flex gap-1 shrink-0">
+                <kbd v-for="key in shortcut.keys" :key="key">{{ key }}</kbd>
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
         </fieldset>
       </div>
     </div>
@@ -2466,5 +2470,26 @@ kbd {
 .tool-card {
   background: var(--bg-raised);
   border: 1px solid var(--border);
+}
+</style>
+
+<style>
+/* Each section's heading block stays at the top of the content area while
+   its section scrolls; the next card pushes it away. Not scoped, so it also
+   reaches the sections that live in child components. */
+.settings-sections > section[id] > :first-child {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: -1.5rem -1.5rem 1.25rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: calc(0.75rem - 1px) calc(0.75rem - 1px) 0 0;
+  background: var(--bg-surface);
+}
+.settings-sections > section[id] h3.ui-section-heading {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 700;
 }
 </style>

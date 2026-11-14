@@ -23,7 +23,7 @@ async (page) => {
   };
   page.on("pageerror", error => errors.push(error.message));
   await page.keyboard.press("Escape");
-  const url = "http://127.0.0.1:5173/#/sync";
+  const url = new URL("/#/sync", page.url().startsWith("http") ? page.url() : "http://localhost:5173/").toString();
   const setState = async (state, extra = {}) => {
     await page.evaluate(({ state, extra }) => localStorage.setItem("wlib-mock-sync", JSON.stringify({ state, location: state === "off" ? "" : "folder", folder_path: "/browser/mock/sync", last_synced_at: state === "off" ? "" : "2026-10-09T12:00:00Z", last_device: "Browser mock device", ...extra })), { state, extra });
     await page.goto(url);

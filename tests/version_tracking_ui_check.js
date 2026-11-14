@@ -147,15 +147,25 @@ async (page) => {
       await page.evaluate(() => { document.documentElement.style.zoom = ""; });
       await close();
       await page.getByRole("link", { name: /^Updates,/ }).click();
+      const updateSettings = page.getByRole("button", { name: "Settings", exact: true });
+      const openUpdateSettings = async () => {
+        await updateSettings.click();
+        await page.getByRole("dialog", { name: "Update settings", exact: true }).waitFor();
+      };
       const toggle = page.getByRole("checkbox", { name: "Desktop notifications", exact: true });
+      await openUpdateSettings();
       await toggle.waitFor();
       await toggle.uncheck();
       await page.reload();
+      await openUpdateSettings();
+      await toggle.waitFor();
       check(!await toggle.isChecked(), "Notification choice persists");
       await toggle.check();
       await page.evaluate(() => localStorage.setItem("wlib-mock-platform", "windows"));
       await page.reload();
+      await openUpdateSettings();
       check(await toggle.count() === 0, "Windows hides desktop notifications");
+      await page.keyboard.press("Escape");
       evidence.push(`${theme}: three layouts, AA text contrast, collection persistence, menu/modal skip and unskip, counts, live Journal and badge, 375/1280px, empty/error/retry, Linux toggle persistence, Windows hiding`);
     }
     check(errors.length === 0, `Unexpected browser errors: ${errors.join("; ")}`);
