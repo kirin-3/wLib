@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 STATUS_INTERVAL = 1.0
 AUTOSAVE_INTERVAL = 300.0
 SHUTDOWN_WAIT = 8.0
+FLUSH_WAIT = 10.0
 EXIT_ENGINE_MISSING = 3
 
 MSG_UNAVAILABLE = "Torrent downloads are unavailable in this build"
@@ -132,6 +133,11 @@ class _Entry:
     folder: str
     handle: lt_types.torrent_handle
     finished_sent: bool = False
+    # libtorrent marks a torrent finished when the last piece passes its hash
+    # check, which can be before that piece is on disk. "finished" waits for
+    # the disk cache flush (or FLUSH_WAIT) so an install never reads a short file.
+    flush_requested_at: float | None = None
+    flushed: bool = False
 
 
 @final
@@ -158,7 +164,9 @@ class Engine:
             "listen_interfaces": f"0.0.0.0:{port},[::]:{port}",
             "download_rate_limit": _limit(options.get("download_kib")),
             "upload_rate_limit": _limit(options.get("upload_kib")),
-            "alert_mask": int(lt.alert.category_t.status_notification) | int(lt.alert.category_t.error_notification),
+            "alert_mask": int(lt.alert.category_t.status_notification)
+            | int(lt.alert.category_t.error_notification)
+            | int(lt.alert.category_t.storage_notification),
         }
         # flags=0 leaves out the default plugins, so peer exchange stays off.
         self._session = lt.session(settings, 0)  # pyright: ignore[reportCallIssue, reportArgumentType]
@@ -269,11 +277,20 @@ class Engine:
         for entry in list(self._entries.values()):
             status = self._status(entry)
             torrents.append(status)
-            if status["finished"] and not entry.finished_sent:
+            if status["finished"] and not entry.finished_sent and self._flushed(entry, now):
                 entry.finished_sent = True
                 self._emit({"event": "finished", "id": entry.job_id})
                 self._request_save(entry)
         self._emit({"event": "status", "torrents": torrents})
+
+    def _flushed(self, entry: _Entry, now: float) -> bool:
+        if entry.flushed:
+            return True
+        if entry.flush_requested_at is None:
+            entry.flush_requested_at = now
+            entry.handle.flush_cache()
+            return False
+        return now - entry.flush_requested_at >= FLUSH_WAIT
 
     def _status(self, entry: _Entry) -> dict[str, object]:
         lt = self._lt
@@ -316,6 +333,10 @@ class Engine:
                     self._emit({"event": "saved", "id": entry.job_id})
             elif isinstance(alert, lt.save_resume_data_failed_alert):
                 self._pending_saves = max(0, self._pending_saves - 1)
+            elif isinstance(alert, lt.cache_flushed_alert):
+                entry = self._entry_for(alert.handle)
+                if entry is not None and entry.flush_requested_at is not None:
+                    entry.flushed = True
 
     def _entry_for(self, handle: lt_types.torrent_handle) -> _Entry | None:
         for entry in self._entries.values():

@@ -122,7 +122,10 @@ def test_scan_reuses_unchanged_files(game):
     second = web_video.scan_game(5, str(game), reader)
     assert reader.call_count == 0 and second == first
     target = game / "media" / "sub" / "B.M4V"
+    before = target.stat().st_mtime_ns
     target.write_bytes(mp4(sample_entry(b"hev1")))
+    # Same size, and Windows can keep the same mtime for a quick rewrite.
+    os.utime(target, ns=(before + 2_000_000_000, before + 2_000_000_000))
     third = web_video.scan_game(5, str(game), reader)
     assert reader.call_count == 1 and "media/sub/B.M4V" in third["needs"]
     assert third["fingerprint"] != first["fingerprint"]
