@@ -143,16 +143,44 @@ def _renpy_children(base: str, title_clean: str, game_name: str) -> list[str]:
     title_key = (
         title_clean.lower().replace(" ", "").replace("'", "") if title_clean else ""
     )
+    # The executable's name must match a whole word of the folder name, not a
+    # part of a word: "game" for game.exe must not select "MyGame-123". A
+    # generic name (game, start, …) can't identify a Ren'Py game at all.
+    game_key = "".join(_name_tokens(game_name))
+    if game_key in _GENERIC_EXE_STEMS:
+        game_key = ""
     matched: list[str] = []
     for entry in entries:
         entry_lower = entry.lower()
+        # Ren'Py names the folder "<save_directory>-<number>".
+        base_tokens = _name_tokens(re.sub(r"-\d+$", "", entry))
+        base_key = "".join(base_tokens)
         if (
             title_key and title_key in entry_lower.replace("-", "").replace("_", "")
-        ) or (game_name and game_name.lower() in entry_lower):
+        ) or (
+            game_key
+            and (
+                _joins_whole_words(game_key, base_tokens)
+                or (len(game_key) >= 8 and game_key in base_key)
+            )
+        ):
             candidate = os.path.join(base, entry)
             if os.path.isdir(candidate):
                 matched.append(candidate)
     return matched
+
+
+def _joins_whole_words(key: str, tokens: list[str]) -> bool:
+    """True when whole words in a row spell `key` ("mygame" in my, game, 0, 5)."""
+    for start in range(len(tokens)):
+        joined = ""
+        for token in tokens[start:]:
+            joined += token
+            if joined == key:
+                return True
+            if len(joined) >= len(key):
+                break
+    return False
 
 
 def _name_tokens(value: str) -> list[str]:
@@ -166,7 +194,8 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
 
     These roots hold many unrelated folders, so a match needs the whole title,
     the executable's name, or every longer title word as a whole word: one
-    shared word must not turn ~/.config/libreoffice or autostart into saves.
+    shared word must not turn ~/.config/libreoffice, autostart or "Mansion Of
+    Souls" (for "The Mansion") into saves.
     """
     entry_tokens = _name_tokens(entry)
     entry_key = "".join(entry_tokens)
@@ -192,7 +221,18 @@ def _name_matches_game(entry: str, title_clean: str, game_name: str) -> bool:
     if title_key and entry_key == title_key:
         return True
     words = [word for word in title_tokens if len(word) >= 4]
-    return bool(words) and all(word in entry_tokens for word in words)
+    if not words or not all(word in entry_tokens for word in words):
+        return False
+    if len(words) > 1:
+        return True
+    # One title word can't tell "The Mansion" from "Mansion Of Souls". A
+    # developer name may come before it ("CaribdisEternum"), but only save
+    # words or a version may come after it ("Mansion-Saves", "Mansion v2").
+    last = len(entry_tokens) - 1 - entry_tokens[::-1].index(words[0])
+    return all(
+        token in _SAVE_WORDS or re.fullmatch(r"v?\d+", token) is not None
+        for token in entry_tokens[last + 1 :]
+    )
 
 
 # Executable stems shared by many unrelated games (RPG Maker's Game.exe and

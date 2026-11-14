@@ -376,3 +376,34 @@ def test_list_versions_survives_cut_off_response():
 
     builds, warnings = list_versions("x64", "mono", fetcher)
     assert builds == [] and len(warnings) == 2
+
+
+def test_remove_user_data_after_install_over_own_bepinex(tmp_path):
+    import zipfile
+
+    from core.unity_tools import install_build, restore, uninstall
+
+    core = tmp_path / "BepInEx/core"
+    core.mkdir(parents=True)
+    (core / "BepInEx.Core.dll").write_text("user")
+    (core / "BepInEx.Unity.IL2CPP.dll").write_text("user")
+    plugin = tmp_path / "BepInEx/plugins/mod.dll"
+    plugin.parent.mkdir()
+    plugin.write_text("mine")
+    archive = tmp_path / "package.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("BepInEx/core/BepInEx.Core.dll", "wlib")
+        z.writestr("BepInEx/core/BepInEx.Unity.IL2CPP.dll", "wlib")
+        z.writestr("winhttp.dll", "wlib")
+    install_build(str(tmp_path), str(archive), None, lambda *a: None, lambda: False)
+    assert (core / "BepInEx.Core.dll").read_text() == "wlib"
+
+    uninstall(str(tmp_path), True)
+    assert not (tmp_path / "winhttp.dll").exists()
+    assert not (tmp_path / "BepInEx/core").exists()
+    assert not plugin.exists()
+
+    restore(str(tmp_path))
+    assert (core / "BepInEx.Core.dll").read_text() == "user"
+    assert plugin.read_text() == "mine"
+    assert not (tmp_path / "winhttp.dll").exists()

@@ -808,3 +808,48 @@ def test_web_player_storage_missing_is_not_listed(tmp_path, monkeypatch):
     assert not detect_save_locations(
         "/games/web/index.html", "Web", windows=False, game_id=5, web_player=True
     )
+
+
+def test_short_exe_name_does_not_match_other_renpy_folders(tmp_path):
+    home = tmp_path / "home"
+    own = home / ".renpy" / "Zelda-1234567890"
+    for path in (own, home / ".renpy" / "MyGame-111", home / ".renpy" / "Endgame-222"):
+        _write(path / "1-1-LT1.save")
+    results = detect_save_locations(
+        "/games/z/game.exe", "Zelda", windows=False, _profile_home=str(home)
+    )
+    assert [r["path"] for r in results] == [str(own)]
+    # A specific executable name still matches as a whole word.
+    other = home / "other" / ".renpy"
+    _write(other / "MyStory-1" / "a.save")
+    _write(other / "Storyteller-2" / "a.save")
+    results = detect_save_locations(
+        "/games/z/Story.sh", "Zq", windows=False, _profile_home=str(home / "other")
+    )
+    assert [os.path.basename(r["path"]) for r in results] == ["MyStory-1"]
+
+
+def test_one_title_word_does_not_match_a_longer_name(tmp_path):
+    home = tmp_path / "home"
+    for name in ("Mansion Of Souls", "TheMansion-Saves", "Mansion"):
+        (home / ".config" / name).mkdir(parents=True)
+    results = detect_save_locations(
+        "/games/m/tm.exe", "The Mansion", windows=False, _profile_home=str(home)
+    )
+    assert sorted(os.path.basename(r["path"]) for r in results) == ["Mansion", "TheMansion-Saves"]
+
+
+def test_renpy_exe_name_matches_versioned_and_split_folder_names(tmp_path):
+    base = tmp_path / ".renpy"
+    for name in ("MyGame-0.5-1234", "My_Game-12", "Mygamer-1", "Other-1"):
+        (base / name).mkdir(parents=True)
+    found = sorted(os.path.basename(p) for p in game_saves._renpy_children(str(base), "", "mygame"))
+    assert found == ["MyGame-0.5-1234", "My_Game-12"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [("CaribdisEternum", True), ("Eternum Saves", True), ("Eternum v2", True), ("Eternum Of Souls", False)],
+)
+def test_one_title_word_allows_a_developer_prefix_only(entry, expected):
+    assert game_saves._name_matches_game(entry, "Eternum", "game") is expected

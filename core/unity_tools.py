@@ -486,21 +486,39 @@ def _move_to_backup(root: Path, paths: list[str], installed: list[str], owned: l
         moved_list = [p for p in cast(list[object], moved_value) if isinstance(p, str)] if isinstance(moved_value, list) else []
         change.manifest_path = backup / "manifest.json"
         change.manifest_before = change.manifest_path.read_text(encoding="utf-8")
+        def discard(name: str) -> None:
+            # wLib's own files: set aside, deleted once the operation succeeds.
+            if change.discard is None:
+                change.discard = root / _DISCARD
+                if change.discard.is_symlink():
+                    raise GameToolError("Staging path is a symbolic link")
+                if change.discard.exists():
+                    shutil.rmtree(change.discard)
+            destination = change.discard / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _ = shutil.move(str(root / name), str(destination))
+            change.moves.append((destination, root / name))
+
         try:
             for name in unique:
                 if _is_wlib_owned(name, owned, installed):
-                    # wLib's own files: set aside, deleted once the operation succeeds.
-                    if change.discard is None:
-                        change.discard = root / _DISCARD
-                        if change.discard.is_symlink():
-                            raise GameToolError("Staging path is a symbolic link")
-                        if change.discard.exists():
-                            shutil.rmtree(change.discard)
-                    destination = change.discard / name
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    _ = shutil.move(str(root / name), str(destination))
-                    change.moves.append((destination, root / name))
+                    discard(name)
                 else:
+                    # A folder that also holds wLib's files ("BepInEx" with
+                    # "Remove user data"): set wLib's files aside first, so
+                    # they never collide with the user's copies in the backup.
+                    inner = sorted(
+                        {p for p in owned or [] if Path(p) != Path(name) and Path(p).is_relative_to(name)},
+                        key=lambda p: (len(Path(p).parts), p),
+                    )
+                    done: list[Path] = []
+                    for path_name in inner:
+                        if any(Path(path_name).is_relative_to(p) for p in done):
+                            continue
+                        if (root / path_name).exists() or (root / path_name).is_symlink():
+                            _ = _safe_target(root, path_name)
+                            discard(path_name)
+                            done.append(Path(path_name))
                     for path in _merge_move(root / name, backup / name, change):
                         relative = path.relative_to(backup).as_posix()
                         if relative not in moved_list:

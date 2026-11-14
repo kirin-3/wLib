@@ -493,18 +493,20 @@ def run_uninstall(
     for game_id in ids:
         result: dict[str, object] = {"game_id": game_id, "success": False, "error": ""}
         results.append(result)
-        entry = _plan_entry(
-            game_id, context, hooks, root_overrides.get(game_id, ""), UNINSTALL_RUNNING
-        )
-        problem = entry_problem(entry)
-        if problem:
-            result["error"] = problem
-            continue
-        busy = hooks.reserve(game_id)
-        if busy:
-            result["error"] = busy
-            continue
+        reserved = False
         try:
+            entry = _plan_entry(
+                game_id, context, hooks, root_overrides.get(game_id, ""), UNINSTALL_RUNNING
+            )
+            problem = entry_problem(entry)
+            if problem:
+                result["error"] = problem
+                continue
+            busy = hooks.reserve(game_id)
+            if busy:
+                result["error"] = busy
+                continue
+            reserved = True
             if backup and entry["saves_folder"]:
                 error = hooks.backup_saves(game_id)
                 if error:
@@ -518,9 +520,14 @@ def run_uninstall(
                 clear_game_install(game_id)
             result["success"] = True
         except Exception as exc:
+            _log.exception("Uninstall of game %s failed", game_id)
             result["error"] = str(exc) or type(exc).__name__
         finally:
-            hooks.release(game_id)
+            if reserved:
+                try:
+                    hooks.release(game_id)
+                except Exception:
+                    _log.exception("Could not release game %s after uninstall", game_id)
     return results
 
 
@@ -795,6 +802,9 @@ class MoveQueue:
             with self._lock:
                 if not self._queue or self._closed:
                     self._current = None
+                    # This thread still looks alive until it returns; clear it
+                    # so a job enqueued from now on starts a new worker.
+                    self._thread = None
                     if not self._closed:
                         self._finish_locked()
                     return

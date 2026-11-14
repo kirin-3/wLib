@@ -563,3 +563,55 @@ def test_queue_speed_uses_recent_bytes():
     assert current["speed_bps"] == 200
     gate.set()
     _ = _wait_idle(queue)
+
+
+def test_uninstall_error_in_one_game_keeps_other_results(lib):
+    library, ctx = lib
+    first, _ = _install(library / "First", title="First")
+    second, _ = _install(library / "Second", title="Second")
+    released = []
+
+    def running(game_id):
+        if game_id == second:
+            raise RuntimeError("database is locked")
+        return False
+
+    hooks = gf.UninstallHooks(
+        running=running,
+        busy=lambda _gid: None,
+        saves_folder=lambda _gid: "",
+        release=released.append,
+    )
+    results = gf.run_uninstall([first, second], {}, backup=False, remove_from_library=False, hooks=hooks, ctx=ctx)
+    assert [r["success"] for r in results] == [True, False]
+    assert results[1]["error"] == "database is locked"
+    assert released == [first]
+    assert not (library / "First").exists()
+
+
+def test_queue_restarts_when_job_added_as_worker_exits():
+    exited = threading.Event()
+    hold = threading.Event()
+    done = []
+
+    class HeldQueue(gf.MoveQueue):
+        def _work(self):
+            super()._work()
+            exited.set()
+            assert hold.wait(5)
+
+    def runner(job, cancel, on_bytes, set_total):
+        done.append(job.game_id)
+        return gf.MoveOutcome("moved")
+
+    queue = HeldQueue(runner)
+    try:
+        assert queue.enqueue([gf.MoveJob(1, "/d")]) == [1]
+        assert exited.wait(5)
+        exited.clear()
+        assert queue.enqueue([gf.MoveJob(2, "/d")]) == [2]
+        assert exited.wait(5)
+        assert done == [1, 2]
+        assert queue.state(2) == ""
+    finally:
+        hold.set()

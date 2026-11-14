@@ -48,7 +48,9 @@ class GameToolsMixin(ApiBase):
         import shutil
         import sqlite3
         import tempfile
+
         from core.database import get_setting
+        from core.game_tools import GameToolError
 
         if not isinstance(installed, bool):
             return {"success": False, "error": "Installed must be a boolean"}
@@ -64,23 +66,26 @@ class GameToolsMixin(ApiBase):
             }
         temporary = ""
         try:
-            target = os.path.join(
-                self._get_urm_game_dir(game_id), "game", "0x52_URM.rpa"
-            )
-            if installed:
-                with tempfile.NamedTemporaryFile(
-                    dir=os.path.dirname(target), delete=False
-                ) as file:
-                    temporary = file.name
-                source = os.path.expanduser(
-                    str(get_setting("urm_rpa_path") or "").strip()
+            # The same checks as the other tools: not while the game runs, is
+            # updated, moved or uninstalled, or another tool is busy with it.
+            with self._tool_run(game_id, "urm"):
+                target = os.path.join(
+                    self._get_urm_game_dir(game_id), "game", "0x52_URM.rpa"
                 )
-                _ = shutil.copyfile(source, temporary)
-                os.replace(temporary, target)
-            elif os.path.lexists(target):
-                os.remove(target)
+                if installed:
+                    with tempfile.NamedTemporaryFile(
+                        dir=os.path.dirname(target), delete=False
+                    ) as file:
+                        temporary = file.name
+                    source = os.path.expanduser(
+                        str(get_setting("urm_rpa_path") or "").strip()
+                    )
+                    _ = shutil.copyfile(source, temporary)
+                    os.replace(temporary, target)
+                elif os.path.lexists(target):
+                    os.remove(target)
             return self.get_urm_status(game_id)
-        except (ValueError, OSError, sqlite3.Error) as exc:
+        except (GameToolError, ValueError, OSError, sqlite3.Error) as exc:
             return {"success": False, "error": str(exc)}
         finally:
             if temporary and os.path.exists(temporary):

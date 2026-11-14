@@ -4931,3 +4931,27 @@ def test_inspect_archive_game_inside_library_has_no_suggestion(tmp_path, monkeyp
     info = Api().inspect_archive(str(archive), gid)
     assert info["outside_library_folders"] is False
     assert info["suggested_library_folder"] == ""
+
+
+def test_urm_refuses_running_moving_or_uninstalling_game(monkeypatch, tmp_path):
+    folder = tmp_path / "RenPy"
+    (folder / "renpy").mkdir(parents=True)
+    (folder / "game").mkdir()
+    source = tmp_path / "mod.rpa"
+    source.write_bytes(b"mod")
+    update_setting("urm_rpa_path", str(source))
+    game_id = add_game("RenPy", str(folder / "game.exe"))
+    assert game_id is not None
+    api = Api()
+    installed = folder / "game" / "0x52_URM.rpa"
+
+    monkeypatch.setattr(api, "get_running_games", lambda: [game_id])
+    result = api.set_urm_installed(game_id, True)
+    assert result["success"] is False and "Close the game" in str(result["error"])
+    monkeypatch.setattr(api, "get_running_games", lambda: [])
+    for reason in ("This game is being moved.", "This game is being uninstalled."):
+        monkeypatch.setattr(api, "_game_files_busy_reason", lambda _gid, r=reason: r)
+        assert api.set_urm_installed(game_id, True) == {"success": False, "error": reason}
+    assert not installed.exists()
+    monkeypatch.setattr(api, "_game_files_busy_reason", lambda _gid: "")
+    assert api.set_urm_installed(game_id, True)["installed"] is True
