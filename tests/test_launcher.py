@@ -3795,6 +3795,8 @@ def test_sandboxed_mangohud_binds(monkeypatch, tmp_path, args, setting, expected
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("MANGOHUD", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("HOST_XDG_CONFIG_HOME", raising=False)
     monkeypatch.setattr("core.launcher.is_windows", lambda: False)
     monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr("core.launcher.get_setting", lambda key: "")
