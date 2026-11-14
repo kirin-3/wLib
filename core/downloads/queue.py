@@ -754,6 +754,8 @@ class DownloadQueue:
                 self._fill_slots(self._clock())
         for job in jobs:
             self._remove_data(job)
+        if jobs:
+            self.poke()
 
     def _remove_data(self, job: QueueJob) -> None:
         try:
@@ -918,6 +920,7 @@ class DownloadQueue:
                 if not alive:
                     self._store.delete(job.id)
                     continue
+                before = (job.state, job.reason)
                 if job.state in (RUNNING, HELD):
                     job.state, job.reason = QUEUED, ""
                     restarted.append(job)
@@ -926,7 +929,10 @@ class DownloadQueue:
                 elif job.state == PAUSED and job.reason == REASON_PREPARING:
                     job.reason = ""
                 self._jobs[job.id] = job
-                self._save(job, "state", "reason")
+                # Save only a change: a save sets `updated_at`, and an untouched
+                # failed host job must still age out after 30 days.
+                if (job.state, job.reason) != before:
+                    self._save(job, "state", "reason")
             claimed = set(self._jobs)
             adopted: list[QueueJob] = []
             for worker in self._workers.values():

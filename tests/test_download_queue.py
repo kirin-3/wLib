@@ -418,6 +418,20 @@ def test_stale_host_job_is_removed_after_30_days(worker, clock):
     assert restored.jobs() == [] and worker2.removed == [a]
 
 
+def test_restart_does_not_touch_a_failed_host_job(worker, clock):
+    queue = make_queue(worker, clock)
+    a = add(queue, 1)
+    worker.fail(a, "link expired or removed")
+    queue.tick()
+    clock.now += 20 * 86400
+    make_queue(FakeWorker(), clock).load()
+    clock.now += 11 * 86400
+    worker3 = FakeWorker()
+    restored = make_queue(worker3, clock)
+    restored.load()
+    assert restored.jobs() == [] and worker3.removed == [a]
+
+
 def test_cleanup_gets_the_restored_jobs(worker, clock):
     queue = make_queue(worker, clock)
     a = add(queue, 1)
