@@ -3124,6 +3124,7 @@ def test_parent_of_protected_folder_cannot_be_removed(tmp_path, monkeypatch, hol
     for folder in (library, downloads, home):
         folder.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # expanduser("~") reads this on Windows
     guard = can_remove_old_folder(
         str(games), "", [str(library)], str(downloads), [], str(exe)
     )
