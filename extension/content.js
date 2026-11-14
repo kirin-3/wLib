@@ -333,6 +333,12 @@ function processLatestAlphaTile(tileLink) {
                 scheduleLatestAlphaTileRetry();
                 return;
             }
+            if (checkResult.pairingNote) {
+                // Not paired yet: wLib tells nothing about the library, so
+                // "not in wLib" must not be cached. Ask again later.
+                scheduleLatestAlphaTileRetry();
+                return;
+            }
             wlibTileRetryDelay = 0;
             const existsInWLib = checkResult.exists;
             wlibTileCheckCache.set(threadIdentity.canonicalUrl, existsInWLib);

@@ -666,6 +666,9 @@ async function bridgeHandleFetchMessage(message) {
 
 let bridgeToken = null;
 let bridgeTokenLoading = false;
+// Set by a failed token read for one connect only, so the next connect
+// reads again instead of staying unpaired until the worker restarts.
+let bridgeTokenReadFailed = false;
 
 function ensureBridge() {
     try {
@@ -675,22 +678,29 @@ function ensureBridge() {
         if (bridgeSocket && (bridgeSocket.readyState === 0 || bridgeSocket.readyState === 1)) {
             return;
         }
-        if (bridgeToken === null) {
+        if (bridgeToken === null && !bridgeTokenReadFailed) {
             // Read the token once, then come back; a failed read connects
-            // without it and wLib answers "not allowed".
+            // without it (wLib answers "not allowed") and the next connect
+            // tries the read again.
             if (!bridgeTokenLoading) {
                 bridgeTokenLoading = true;
-                pairingToken().catch(() => "").then((token) => {
-                    bridgeToken = token;
+                pairingToken().then((token) => {
+                    bridgeToken = token || null;
+                    bridgeTokenReadFailed = !token;
+                }, () => {
+                    bridgeTokenReadFailed = true;
+                }).then(() => {
                     bridgeTokenLoading = false;
                     ensureBridge();
                 });
             }
             return;
         }
+        const token = bridgeToken || "";
+        bridgeTokenReadFailed = false;
         let socket;
         try {
-            socket = new WebSocket(bridgeToken ? `${BRIDGE_URL}?token=${bridgeToken}` : BRIDGE_URL);
+            socket = new WebSocket(token ? `${BRIDGE_URL}?token=${token}` : BRIDGE_URL);
         } catch (error) {
             console.warn("wLib extension: bridge connect failed.", error);
             bridgeScheduleReconnect();

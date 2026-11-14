@@ -231,6 +231,16 @@ def build_umu_invocation(
         else runner
     )
     env = dict(os.environ if environment is None else environment)
+    # wLib picks the runner and needs umu to wait for the game, so these
+    # values from the launch arguments cannot apply. Say so in the log.
+    proton_path = proton_path_value(selected)
+    for key, kept, reason in (
+        ("PROTONPATH", proton_path, "select the Proton version in the game's settings instead"),
+        ("PROTON_VERB", "waitforexitandrun", "wLib needs it to track playtime"),
+    ):
+        value = env.get(key)
+        if value and value != kept:
+            print(f"[wLib] Ignoring {key}={value} for umu launch: {reason}.")
     env.update(
         WINEPREFIX=compat,
         GAMEID=f"umu-wlib{game_id}" if game_id is not None else "umu-default",
@@ -249,7 +259,6 @@ def build_umu_invocation(
         env["STEAM_COMPAT_INSTALL_PATH"] = game_dir
     else:
         _ = env.pop("STEAM_COMPAT_INSTALL_PATH", None)
-    proton_path = proton_path_value(selected)
     if proton_path:
         env["PROTONPATH"] = proton_path
     else:

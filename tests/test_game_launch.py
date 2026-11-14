@@ -102,3 +102,26 @@ def test_gamescope_on_with_overrides(monkeypatch):
         "fps_limit": "",
         "args": ["--hdr-enabled", "--force-grab-cursor"],
     }
+
+
+def test_final_tick_still_arrives_when_saving_fails(monkeypatch):
+    # The Steam runner exits on the final tick; a failed save must not hang it.
+    game = {"id": 7, "exe_path": "/game", "version": "1"}
+    monkeypatch.setattr("core.database.get_all_games", lambda: [game])
+    monkeypatch.setattr("core.database.list_game_launch_targets", lambda _: [])
+    monkeypatch.setattr("core.database.start_play_session", lambda *_: 42)
+    monkeypatch.setattr(
+        "core.database.record_play_tick", MagicMock(side_effect=OSError("disk full"))
+    )
+    events = []
+    launcher = MagicMock()
+    launcher.launch.return_value = {"success": True}
+    assert launch_tracked(launcher, 7, request_from_game(game), events.append)["success"]
+    on_exit = launcher.launch.call_args.kwargs["on_exit_callback"]
+    on_exit(30, False)
+    assert events == []
+    on_exit(12, True)
+    assert events == [{
+        "gameId": 7, "delta": 0, "isFinal": True,
+        "lastPlayedVersion": None, "sessionId": 42,
+    }]

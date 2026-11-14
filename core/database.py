@@ -32,7 +32,12 @@ from core import gamescope
 from core.versions import normalize_version
 
 DATA_DIR = get_data_dir()
-os.makedirs(DATA_DIR, exist_ok=True)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except OSError:
+    # main.py checks the folder next and shows the user why it cannot be
+    # used; failing here at import would crash before that dialog.
+    pass
 DB_PATH = os.path.join(DATA_DIR, "wlib.db")
 # Copies of wlib.db made before a migration changes it; device-local.
 DB_BACKUP_DIR_NAME = "db-backups"

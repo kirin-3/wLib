@@ -120,3 +120,15 @@ def test_host_open_env_drops_bundled_libs() -> None:
 
 def test_open_url_on_host_rejects_other_schemes() -> None:
     assert web_player.open_url_on_host("file:///etc/passwd") is False
+
+
+def test_literal_percent_names_decode_once(game: Path, tmp_path: Path) -> None:
+    from urllib.parse import quote
+
+    (game / "a%20b.html").write_text("x")
+    # A URL path is decoded once: %2520 is the file "a%20b.html".
+    assert web_player.resolve_game_file(str(game), "/" + quote("a%20b.html")) is not None
+    args = web_player.parse_args(
+        ["--root", str(game), "--entry", "a%20b.html", "--profile", str(tmp_path / "p")]
+    )
+    assert args.entry == "a%20b.html"

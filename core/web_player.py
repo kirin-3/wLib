@@ -93,7 +93,8 @@ def parse_args(argv: list[str]) -> PlayerArgs:
         raise UsageError("--links must be open or ignore")
     root = os.path.abspath(values["--root"])
     entry = values["--entry"].replace("\\", "/").lstrip("/")
-    if resolve_game_file(root, entry) is None:
+    # entry is a file path, not a URL path: quote it so a literal "%20" survives.
+    if resolve_game_file(root, quote(entry, safe="/")) is None:
         raise UsageError(f"Entry file not found inside the game folder: {entry}")
     return PlayerArgs(
         root=root,
@@ -310,7 +311,9 @@ def run(args: PlayerArgs) -> int:
             job = a0
             url = job.requestUrl()
             host = url.host().lower()
-            path = url.path()
+            # Fully encoded, so resolve_game_file() decodes it exactly once
+            # (the default form already turns %2520 into %20).
+            path = url.path(QUrl.ComponentFormattingOption.FullyEncoded)
             if host == GAME_HOST and path.lstrip("/") == FLASH_PAGE and args.flash:
                 self._reply_bytes(job, "text/html", flash_page(args.entry))
                 return

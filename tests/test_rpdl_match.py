@@ -57,6 +57,11 @@ def test_versions_compare_with_suffixes():
     assert m.listing_has_version("Game-0.8-fix2-pc", "0.8")
     assert m.listing_has_version("Game-v0.8-pc", "0.8.0")
     assert m.listing_has_version("Game-1.0-Final", "v1")
+    # normalize_version() drops the space, so the word follows the digit.
+    assert m.listing_has_version("Game-1.0-pc", "1.0 Final")
+    assert m.listing_has_version("Game-v1.0-Final-pc", "v1.0 Final")
+    assert m.listing_has_version("Game-0.5-pc", "0.5 Beta")
+    assert m.canonical_version("0.8b") == "0.8b"
     assert m.listing_has_version("Game-0.10-pc", "0.10")
     assert not m.listing_has_version("Game-0.7-pc", "0.8")
     assert not m.listing_has_version("Game-10.8-pc", "0.8")

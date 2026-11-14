@@ -182,13 +182,27 @@ def launch_tracked(
         if game_id is None:
             return
         last_played_version: str | None = None
-        if session_id is None:
-            # No journal row could be created; still count the playtime.
-            update_playtime(game_id, delta)
-        else:
-            last_played_version = record_play_tick(
-                game_id, session_id, delta, is_final
-            )
+        try:
+            if session_id is None:
+                # No journal row could be created; still count the playtime.
+                update_playtime(game_id, delta)
+            else:
+                last_played_version = record_play_tick(
+                    game_id, session_id, delta, is_final
+                )
+        except Exception:
+            # The final tick still has to arrive: the Steam runner waits for
+            # it to exit and the UI to mark the game stopped. Nothing was
+            # saved, so it carries no playtime.
+            if is_final and on_tick is not None:
+                on_tick({
+                    "gameId": game_id,
+                    "delta": 0,
+                    "isFinal": True,
+                    "lastPlayedVersion": None,
+                    "sessionId": session_id,
+                })
+            raise
         if on_tick is not None:
             on_tick({
                 "gameId": game_id,

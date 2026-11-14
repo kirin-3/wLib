@@ -1309,3 +1309,19 @@ def test_main_reports_a_damaged_database_and_exits(monkeypatch):
     assert exit_info.value.code == 1
     assert shown == ["The library database is damaged."]
     server.server_close.assert_called_once()
+
+
+def test_unusable_data_folder_reaches_the_startup_check(tmp_path):
+    # Importing the app must not fail before main() can show the dialog.
+    import subprocess
+
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    env = {**os.environ, "WLIB_DATA_DIR": str(blocker / "wlib")}
+    code = "import main; print(main.data_dir_problem(main.APP_DATA_DIR))"
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "cannot write to its data folder" in result.stdout

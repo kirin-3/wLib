@@ -534,3 +534,26 @@ def test_wrapper_uses_runtime_check_when_available(tmp_path):
     env["UMU_RUNTIME_UPDATE"] = "0"
     (package / "umu_util.py").write_text("")
     assert "patch unavailable" in run() and "original setup" in run()
+
+
+def test_umu_invocation_reports_overridden_launch_values(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(umu, "get_data_dir", lambda: str(tmp_path / "data"))
+    monkeypatch.setattr(umu, "locate_umu", lambda: ("/usr/bin/umu-run", "system"))
+    prefix = tmp_path / "wine"
+    (prefix / "drive_c").mkdir(parents=True)
+    _, env = umu.build_umu_invocation(
+        "/games/demo.exe",
+        prefix=str(prefix),
+        runner="/runner/proton",
+        game_id=7,
+        environment={"PROTONPATH": "/other", "PROTON_VERB": "run"},
+    )
+    assert env["PROTONPATH"] == "/runner" and env["PROTON_VERB"] == "waitforexitandrun"
+    out = capsys.readouterr().out
+    assert "Ignoring PROTONPATH=/other" in out and "Ignoring PROTON_VERB=run" in out
+    # Values wLib sets itself are not reported.
+    _ = umu.build_umu_invocation(
+        "/games/demo.exe", prefix=str(prefix), runner="/runner/proton", game_id=7,
+        environment={"PROTONPATH": "/runner", "PROTON_VERB": "waitforexitandrun"},
+    )
+    assert "Ignoring" not in capsys.readouterr().out

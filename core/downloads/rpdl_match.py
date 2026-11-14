@@ -131,7 +131,9 @@ def title_score(game_title: str, result_title: str) -> int:
 
 # --- versions --------------------------------------------------------------
 
-_VERSION_WORDS = re.compile(r"(?:^|[^a-z0-9])(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*(?![a-z])")
+# normalize_version() drops spaces ("1.0 Final" -> "1.0final"), so a suffix
+# word can follow a digit directly; only another letter rules it out.
+_VERSION_WORDS = re.compile(r"(?<![a-z])(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*(?![a-z])")
 _VERSION_IN_TITLE = re.compile(
     r"(?<![\w.])v?(\d+(?:[._]\d+)*[a-z]?)(?:[-_ ]?(?:hotfix|fixed|fix|final|beta|alpha|public|patreon)\d*)*(?![\w.]*\d)",
     re.IGNORECASE,
