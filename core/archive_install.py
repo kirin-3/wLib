@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import ntpath
 import os
@@ -704,7 +705,13 @@ def copy_tree_parallel(
     """
     dirs: list[str] = []
     files: list[str] = []
-    for root, dirnames, filenames in os.walk(src_root):
+
+    def _walk_failed(exc: OSError) -> None:
+        # A folder that cannot be listed would arrive empty; a move then
+        # deletes the original, so stop instead.
+        raise exc
+
+    for root, dirnames, filenames in os.walk(src_root, onerror=_walk_failed):
         rel_root = os.path.relpath(root, src_root)
         rel_root = "" if rel_root == "." else rel_root
         for d in dirnames:
@@ -903,7 +910,7 @@ def _extract_tool_via_local_scratch(
         except OSError:
             pass
         _check_cancel(cancel)
-        _ = copy_tree_parallel(scratch, staging, workers)
+        _ = copy_tree_parallel(scratch, staging, workers, cancel)
     finally:
         cleanup_staging_dir(scratch)
     return True
@@ -1637,26 +1644,167 @@ def cleanup_staging_dir(path: str) -> None:
         pass
 
 
+# Beside a staging folder that holds a moved torrent download: where the
+# download came from, so a crashed install puts it back instead of deleting
+# the only copy.
+MOVED_RECORD_SUFFIX = ".moved.json"
+
+
+def _moved_record_path(staging: str) -> str:
+    return staging.rstrip(os.sep) + MOVED_RECORD_SUFFIX
+
+
+def write_moved_record(
+    staging: str, source: str, wrapper: str = "", flattened: bool = False
+) -> None:
+    """Record (atomically) that `staging` holds the download moved from `source`."""
+    path = _moved_record_path(staging)
+    temp = f"{path}.tmp"
+    data = {"source": source, "wrapper": wrapper, "flattened": flattened}
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, path)
+
+
+def remove_moved_record(staging: str) -> None:
+    for path in (_moved_record_path(staging), f"{_moved_record_path(staging)}.tmp"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            _log.warning("Could not remove %s: %s", path, exc)
+
+
+def _read_moved_record(staging: str) -> dict[str, object] | None:
+    try:
+        with open(_moved_record_path(staging), encoding="utf-8") as handle:
+            data = cast(object, json.load(handle))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        # A record that cannot be read still marks the folder as someone's data.
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return cast(dict[str, object], data)
+
+
+def restore_moved_staging(staging: str, record: Mapping[str, object]) -> bool:
+    """Put a moved download back at its source, in its own layout.
+
+    Returns False (and changes nothing) when the source cannot take it back.
+    """
+    source = str(record.get("source") or "")
+    wrapper = str(record.get("wrapper") or "") if record.get("flattened") else ""
+    if not source or not os.path.isabs(source):
+        return False
+    if os.path.lexists(source):
+        try:
+            if not os.listdir(staging):
+                # Stopped before the rename: the download never left.
+                os.rmdir(staging)
+                return True
+        except OSError:
+            return False
+        # The torrent may have made an empty folder again; anything more is
+        # data to keep, so the staging folder waits for the user.
+        try:
+            os.rmdir(source)
+        except OSError:
+            return False
+    # The parent is not made again: a torrent folder that is gone was removed,
+    # and its cleanup would delete a recreated one without a state file.
+    try:
+        if wrapper:
+            os.mkdir(source)
+            try:
+                os.replace(staging, os.path.join(source, wrapper))
+            except OSError:
+                try:
+                    os.rmdir(source)
+                except OSError:
+                    pass
+                raise
+        else:
+            os.replace(staging, source)
+    except OSError as exc:
+        _log.warning("Could not put %s back at %s: %s", staging, source, exc)
+        return False
+    return True
+
+
 def cleanup_stale_staging(library_folder: str) -> int:
-    """Remove leftover `.wlib-staging-*` folders from crashed installs."""
+    """Remove leftover `.wlib-staging-*` folders from crashed installs.
+
+    A folder that holds a moved torrent download goes back to the download's
+    folder instead; when that fails it is kept, never deleted.
+    """
     removed = 0
     try:
         base = os.path.abspath(os.path.expanduser(library_folder))
         if not os.path.isdir(base):
             return 0
-        for name in os.listdir(base):
+        names = os.listdir(base)
+        for name in names:
             if not name.startswith(STAGING_PREFIX):
                 continue
             candidate = os.path.join(base, name)
             try:
-                if os.path.isdir(candidate) and not os.path.islink(candidate):
-                    shutil.rmtree(_long_path_safe(candidate), ignore_errors=True)
-                    removed += 1
+                if os.path.islink(candidate) or not os.path.isdir(candidate):
+                    continue
+                record = _read_moved_record(candidate)
+                if record is not None:
+                    if restore_moved_staging(candidate, record):
+                        remove_moved_record(candidate)
+                        _log.info("Put the moved download %s back", record.get("source"))
+                    else:
+                        _log.warning(
+                            "Kept %s: it holds a moved download that could not be put back",
+                            candidate,
+                        )
+                    continue
+                shutil.rmtree(_long_path_safe(candidate), ignore_errors=True)
+                removed += 1
             except OSError:
                 continue
+        # Records whose staging folder is gone (the install finished or the
+        # folder was put back) are only clutter.
+        for name in names:
+            if not name.startswith(STAGING_PREFIX):
+                continue
+            for suffix in (MOVED_RECORD_SUFFIX, MOVED_RECORD_SUFFIX + ".tmp"):
+                if name.endswith(suffix):
+                    staging = os.path.join(base, name[: -len(suffix)])
+                    if not os.path.lexists(staging):
+                        try:
+                            os.remove(os.path.join(base, name))
+                        except OSError:
+                            pass
+                    break
     except OSError:
         return removed
     return removed
+
+
+def _existing_ancestor(path: str) -> str:
+    current = os.path.abspath(os.path.expanduser(path))
+    while not os.path.exists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return current
+
+
+def _same_drive(a: str, b: str) -> bool:
+    """Whether `a` and `b` (or `b`'s nearest existing folder) share a filesystem."""
+    try:
+        return os.stat(a).st_dev == os.stat(_existing_ancestor(b)).st_dev
+    except OSError:
+        return False
 
 
 def ensure_free_space(library_folder: str, required_bytes: int | None) -> None:
@@ -1843,13 +1991,33 @@ def can_remove_old_folder(
     home_real = _real("~")
     if cand_real == home_real:
         return {"removable": False, "reason": "Refusing to remove your home folder."}
-    if any(cand_real == _real(folder) for folder in library_folders or []):
-        return {"removable": False, "reason": "Refusing to remove the library folder."}
-    if downloads_folder and cand_real == _real(downloads_folder):
+    if _is_within(home_real, cand_real):
         return {
             "removable": False,
-            "reason": "Refusing to remove the Downloads folder.",
+            "reason": "Refusing to remove a folder that contains your home folder.",
         }
+    library_reals = [_real(folder) for folder in library_folders or [] if folder]
+    if any(cand_real == folder for folder in library_reals):
+        return {"removable": False, "reason": "Refusing to remove the library folder."}
+    # A game added by hand straight into a parent folder (~/Games/Foo.sh) has
+    # that parent as its folder; removing it would take the library with it.
+    if any(_is_within(folder, cand_real) for folder in library_reals):
+        return {
+            "removable": False,
+            "reason": "Refusing to remove a folder that contains a library folder.",
+        }
+    if downloads_folder:
+        downloads_real = _real(downloads_folder)
+        if cand_real == downloads_real:
+            return {
+                "removable": False,
+                "reason": "Refusing to remove the Downloads folder.",
+            }
+        if _is_within(downloads_real, cand_real):
+            return {
+                "removable": False,
+                "reason": "Refusing to remove a folder that contains the Downloads folder.",
+            }
     if new_destination:
         new_real = _real(new_destination)
         # Equal folders = in-place replace: what gets removed is the renamed
@@ -2182,6 +2350,7 @@ def _place_folder(
     workers: int,
     cancel: threading.Event | None,
     progress: Callable[[str], None],
+    required_bytes: int | None = None,
 ) -> str:
     """Fill `staging` from a downloaded folder; returns the source path when it was moved.
 
@@ -2190,11 +2359,17 @@ def _place_folder(
     """
     if not seeding:
         try:
+            # Recorded first: after a crash the staging folder holds the only
+            # copy, and the next install's cleanup must put it back.
+            write_moved_record(staging, source)
             os.rmdir(staging)
             os.replace(source, staging)
             return source
         except OSError:
+            remove_moved_record(staging)
             os.makedirs(staging, exist_ok=True)
+        # A rename that failed means a copy after all, so it needs the room.
+        ensure_free_space(staging, required_bytes)
     progress("copying")
     _ = copy_tree_parallel(source, staging, workers, cancel)
     return ""
@@ -2282,6 +2457,8 @@ def install_archive(
 
     default_exe = ""
     old_exe = ""
+    # The chosen target's stored path, as stored, for a rollback.
+    old_target_exe = ""
     old_root = ""
     # The folder the previous version was installed into. It differs from
     # old_root (the executable's folder) when the archive wrapped the game in
@@ -2319,6 +2496,7 @@ def install_archive(
                     "The launch target does not belong to this game."
                 )
             old_exe = _absolute_game_path(chosen["exe_path"])
+            old_target_exe = str(chosen["exe_path"] or "")
     elif target_id is not None:
         raise ArchiveInstallError("A game is required when choosing a launch target.")
 
@@ -2413,18 +2591,25 @@ def install_archive(
         if old_trash_root and old_trash_root != _real(library_folder):
             _ = sweep_trash(old_trash_root)
     tool: str | None = None
+    seeding = False
     if folder_source:
         required_bytes: int | None = _tree_bytes(archive_path)
+        seeding = _torrent_seeding(archive_path)
     else:
         tool, tool_error = detect_archive_tool(archive_path, library_folder=library_folder)
         if tool_error:
             raise ArchiveInstallError(tool_error)
         required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
-    ensure_free_space(library_folder, required_bytes)
+    # A download that is not seeding and sits on the library's drive is only
+    # renamed into place, which takes no room; _place_folder checks the room
+    # itself if that rename fails and it copies after all.
+    if not (folder_source and not seeding and _same_drive(archive_path, library_folder)):
+        ensure_free_space(library_folder, required_bytes)
     network = is_network_filesystem(library_folder)
     workers = NETWORK_IO_WORKERS if network else 1
     _check_cancel(cancel)
     staging = create_staging_dir(library_folder)
+    staging_path = staging
     moved_from = ""
     # The wrapper folder that flattening removed, put back if a moved
     # download is restored.
@@ -2437,10 +2622,11 @@ def install_archive(
                 moved_from = _place_folder(
                     archive_path,
                     staging,
-                    seeding=_torrent_seeding(archive_path),
+                    seeding=seeding,
                     workers=workers,
                     cancel=cancel,
                     progress=_progress,
+                    required_bytes=required_bytes,
                 )
                 _progress("fixing permissions")
                 try:
@@ -2488,9 +2674,13 @@ def install_archive(
                 except OSError:
                     pass
         _check_cancel(cancel)
-        wrapper_name = _single_wrapper_name(staging)
-        if not flatten_single_wrapper(staging):
-            wrapper_name = ""
+        single_wrapper = _single_wrapper_name(staging)
+        if moved_from and single_wrapper:
+            write_moved_record(staging, moved_from, single_wrapper, flattened=False)
+        if flatten_single_wrapper(staging):
+            wrapper_name = single_wrapper
+            if moved_from and wrapper_name:
+                write_moved_record(staging, moved_from, wrapper_name, flattened=True)
         # Flattening moves a wrapper's entries up one level, which changes
         # what relative symlinks resolve to (staging/Game/link -> ../x means
         # something different at staging/link). Re-check after the move.
@@ -2645,24 +2835,24 @@ def install_archive(
             staging = ""
             old_root_for_targets = old_root
             old_backup = ""
+        if moved_from:
+            # The download now is the installed game folder.
+            remove_moved_record(staging_path)
     except Exception as exc:
         if staging:
-            restored = False
             if moved_from and os.path.isdir(staging):
                 # A moved download must survive a failed install, in its own
                 # layout: a retry's chosen launch file and the torrent's file
-                # list are both relative to it.
-                try:
-                    if wrapper_name:
-                        os.makedirs(moved_from)
-                        os.replace(staging, os.path.join(moved_from, wrapper_name))
-                    else:
-                        os.replace(staging, moved_from)
-                    restored = True
-                except OSError:
-                    pass
-            if not restored:
+                # list are both relative to it. When it cannot go back now,
+                # the record keeps it for the next install's cleanup.
+                if restore_moved_staging(
+                    staging,
+                    {"source": moved_from, "wrapper": wrapper_name, "flattened": True},
+                ):
+                    remove_moved_record(staging)
+            else:
                 cleanup_staging_dir(staging)
+                remove_moved_record(staging)
         long_path = _windows_long_path_error(exc)
         if long_path:
             raise ArchiveInstallError(long_path) from exc
@@ -2672,6 +2862,7 @@ def install_archive(
     kept_reason = ""
     unmoved: list[dict[str, object]] = []
     library_updated = False
+    target_rewritten = False
     try:
         _progress("updating library")
         from core.game_scan import detect_engine as _detect_engine
@@ -2730,6 +2921,8 @@ def install_archive(
                 fields["exe_path"] = exe_path
             else:
                 _ = update_game_launch_target(target_id, {"exe_path": exe_path})
+                # Written before the game row; a failed row update puts it back.
+                target_rewritten = True
             if engine.strip():
                 fields["engine"] = engine.strip()
             elif detected_engine:
@@ -2888,6 +3081,21 @@ def install_archive(
         # for an in-place update and the library still points into it. Restore
         # it so the game stays usable, and keep the extracted tree beside it
         # for the manual-executable flow the message offers.
+        def _restore_target() -> None:
+            # The target was pointed at the new version before the game row
+            # failed; the previous version is what stays installed.
+            if not (target_rewritten and target_id is not None and old_target_exe):
+                return
+            try:
+                _ = update_game_launch_target(target_id, {"exe_path": old_target_exe})
+            except Exception as target_exc:
+                _log.error(
+                    "Could not restore launch target %s to %s: %s",
+                    target_id,
+                    old_target_exe,
+                    target_exc,
+                )
+
         if old_backup and not library_updated:
             kept_new = f"{destination}.wlib-new-{time.time_ns()}"
             try:
@@ -2901,9 +3109,13 @@ def install_archive(
                 except OSError:
                     pass
                 raise
+            _restore_target()
             raise ArchiveInstallError(
                 f"{str(exc) or 'The update could not be completed.'} The extracted folder was kept at {kept_new} and the previous version was restored."
             ) from exc
+        if not library_updated:
+            # The previous folder was left as it was, so the target goes back to it.
+            _restore_target()
         # Step 6 failures are reported in the result, not raised; nothing else
         # after the library update is allowed to abandon the new version.
         raise

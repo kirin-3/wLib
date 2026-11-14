@@ -79,8 +79,10 @@ def test_torrent_area_root_itself_is_refused(tmp_path):
         run(root, lib)
 
 
-def test_not_enough_space_copies_nothing(tmp_path, monkeypatch):
+def test_not_enough_space_copies_nothing(tmp_path, env, monkeypatch):
+    # A seeding torrent is copied, so it needs the room.
     folder, _game = make_download(tmp_path, files={"Game.exe": b"x" * 1000})
+    env.load()
     lib = tmp_path / "lib"
     lib.mkdir()
     monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
@@ -225,3 +227,134 @@ def test_api_install_holds_then_releases_the_download(tmp_path, env):
     assert (lib / "Game" / "0.8" / "Game.exe").is_file() and (game / "Game.exe").is_file()
     assert not env._open  # pyright: ignore[reportPrivateUsage]
 
+
+
+class _Crash(BaseException):
+    """Stands in for the app stopping: no except Exception handler runs."""
+
+
+@pytest.mark.parametrize("crash_at", ["before_flatten", "after_flatten"])
+def test_crashed_install_leaves_a_record_and_cleanup_puts_the_download_back(
+    tmp_path, env, monkeypatch, crash_at
+):
+    import core.archive_install as ai
+
+    folder, game = make_download(tmp_path, phase="ended")
+    env.load()
+    lib = tmp_path / "lib"
+    lib.mkdir()
+
+    def crash(*_args, **_kwargs):
+        raise _Crash()
+
+    if crash_at == "before_flatten":
+        monkeypatch.setattr(ai, "flatten_single_wrapper", crash)
+    else:
+        monkeypatch.setattr(ai, "check_symlinks_inside_staging", crash)
+    with pytest.raises(_Crash):
+        run(folder / "data", lib)
+    assert not (folder / "data").exists()
+    stagings = [p for p in lib.iterdir() if p.is_dir()]
+    assert len(stagings) == 1 and stagings[0].name.startswith(ai.STAGING_PREFIX)
+    assert Path(str(stagings[0]) + ai.MOVED_RECORD_SUFFIX).is_file()
+
+    monkeypatch.undo()
+    assert ai.cleanup_stale_staging(str(lib)) == 0
+    assert (game / "Game.exe").read_bytes() == b"exe"
+    assert (game / "sub" / "readme.txt").read_text() == "hi"
+    assert list(lib.iterdir()) == []
+
+
+def test_cleanup_keeps_a_moved_download_whose_folder_is_taken(tmp_path):
+    import core.archive_install as ai
+
+    lib = tmp_path / "lib"
+    staging = Path(ai.create_staging_dir(str(lib)))
+    (staging / "Game.exe").write_bytes(b"only copy")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "other.txt").write_text("new data")
+    ai.write_moved_record(str(staging), str(source))
+    assert ai.cleanup_stale_staging(str(lib)) == 0
+    assert (staging / "Game.exe").read_bytes() == b"only copy"
+    assert (source / "other.txt").read_text() == "new data"
+
+
+def test_cleanup_drops_records_without_a_staging_folder(tmp_path):
+    import core.archive_install as ai
+
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    record = lib / (ai.STAGING_PREFIX + "gone" + ai.MOVED_RECORD_SUFFIX)
+    record.write_text("{}")
+    _ = ai.cleanup_stale_staging(str(lib))
+    assert not record.exists()
+
+
+def test_successful_move_install_leaves_no_record(tmp_path, env):
+    folder, _game = make_download(tmp_path, phase="ended")
+    env.load()
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    run(folder / "data", lib)
+    assert [p.name for p in lib.iterdir()] == ["Game"]
+
+
+def test_same_drive_move_needs_no_free_space(tmp_path, env, monkeypatch):
+    folder, game = make_download(tmp_path, phase="ended", files={"Game.exe": b"x" * 1000})
+    env.load()
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
+    result = run(folder / "data", lib)
+    assert result["success"] is True
+    assert (lib / "Game" / "0.8" / "Game.exe").is_file() and not game.exists()
+
+
+def test_move_that_falls_back_to_copy_checks_free_space(tmp_path, env, monkeypatch):
+    import core.archive_install as ai
+
+    folder, game = make_download(tmp_path, phase="ended", files={"Game.exe": b"x" * 1000})
+    env.load()
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    real_replace = ai.os.replace
+
+    def no_cross_rename(src, dst):
+        if str(src).startswith(str(folder)):
+            raise OSError(18, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ai.os, "replace", no_cross_rename)
+    monkeypatch.setattr("core.archive_install.shutil.disk_usage", lambda p: type("U", (), {"free": 10})())
+    with pytest.raises(ArchiveInstallError, match="Not enough free space"):
+        run(folder / "data", lib)
+    assert (game / "Game.exe").is_file()
+    assert [p.name for p in lib.iterdir()] == []
+
+
+def test_cleanup_keeps_a_download_whose_torrent_folder_is_gone(tmp_path):
+    import core.archive_install as ai
+
+    lib = tmp_path / "lib"
+    staging = Path(ai.create_staging_dir(str(lib)))
+    (staging / "Game.exe").write_bytes(b"only copy")
+    source = tmp_path / "torrents" / "gone" / "data"
+    ai.write_moved_record(str(staging), str(source))
+    assert ai.cleanup_stale_staging(str(lib)) == 0
+    assert (staging / "Game.exe").read_bytes() == b"only copy"
+    assert not source.parent.exists()
+
+
+def test_cleanup_drops_an_empty_staging_whose_download_never_moved(tmp_path):
+    import core.archive_install as ai
+
+    lib = tmp_path / "lib"
+    staging = Path(ai.create_staging_dir(str(lib)))
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Game.exe").write_bytes(b"x")
+    ai.write_moved_record(str(staging), str(source))
+    _ = ai.cleanup_stale_staging(str(lib))
+    assert list(lib.iterdir()) == []
+    assert (source / "Game.exe").read_bytes() == b"x"

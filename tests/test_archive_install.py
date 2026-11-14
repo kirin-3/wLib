@@ -5,7 +5,9 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import zipfile
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -3093,3 +3095,124 @@ def test_update_keeps_default_target_label_and_names_it_in_results(tmp_path, mon
     assert game["default_target_label"] == "Season 1"
     # The renamed default (outside the replaced folder) is never labelled "Default".
     assert "Default" not in [t.get("label") for t in cast(list[dict[str, object]], result["unmoved_targets"])]
+
+
+@pytest.mark.parametrize(
+    ("holds", "reason"),
+    [
+        ("library", "contains a library folder"),
+        ("downloads", "contains the Downloads folder"),
+        ("home", "contains your home folder"),
+    ],
+)
+def test_parent_of_protected_folder_cannot_be_removed(tmp_path, monkeypatch, holds, reason):
+    from core.archive_install import can_remove_old_folder
+
+    games = tmp_path / "Games"
+    exe = games / "Foo.sh"
+    games.mkdir()
+    exe.write_text("#!/bin/sh\n")
+    library = tmp_path / "Lib"
+    downloads = tmp_path / "Downloads"
+    home = tmp_path / "home"
+    if holds == "library":
+        library = games / "Library"
+    elif holds == "downloads":
+        downloads = games / "Downloads"
+    else:
+        home = games / "me"
+    for folder in (library, downloads, home):
+        folder.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    guard = can_remove_old_folder(
+        str(games), "", [str(library)], str(downloads), [], str(exe)
+    )
+    assert guard["removable"] is False
+    assert reason in str(guard["reason"])
+
+
+def test_copy_tree_stops_at_a_folder_it_cannot_read(tmp_path):
+    from core.archive_install import copy_tree_parallel
+
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("needs a non-root POSIX user")
+    src = tmp_path / "src"
+    locked = src / "locked"
+    locked.mkdir(parents=True)
+    (locked / "save.dat").write_bytes(b"x")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    locked.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            _ = copy_tree_parallel(str(src), str(dst), 1)
+    finally:
+        locked.chmod(0o755)
+
+
+def test_scratch_copy_honours_cancel(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    monkeypatch.setattr(ai, "_scratch_parent", lambda: str(tmp_path / "scratch"))
+    archive = tmp_path / "a.7z"
+    archive.write_bytes(b"x")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    cancel = threading.Event()
+
+    def fake_extract(_tool, _archive, dest, _cancel):
+        for i in range(3):
+            (Path(dest) / f"f{i}").write_bytes(b"x")
+        return 0
+
+    real_copy = ai.copy_tree_parallel
+
+    def copy_then_cancel(src, dst, workers, cancel_arg=None, on_bytes=None):
+        assert cancel_arg is cancel
+        cancel.set()
+        return real_copy(src, dst, workers, cancel_arg, on_bytes)
+
+    monkeypatch.setattr(ai, "extract_with_tool", fake_extract)
+    monkeypatch.setattr(ai, "copy_tree_parallel", copy_then_cancel)
+    with pytest.raises(ai.InstallCancelled):
+        ai._extract_tool_via_local_scratch(
+            "7z", str(archive), str(staging), 1, 10, cancel
+        )
+    assert list(staging.iterdir()) == []
+
+
+@pytest.mark.parametrize("in_place", [True, False])
+def test_failed_game_row_update_restores_the_launch_target(tmp_path, monkeypatch, in_place):
+    import sqlite3
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+    old = lib / "Title" if in_place else tmp_path / "old"
+    old.mkdir(parents=True)
+    (old / "Game.exe").write_bytes(b"old")
+    (old / "Old.exe").write_bytes(b"old alt")
+    gid = db.add_game("Title", str(old / "Game.exe"))
+    target = db.add_game_launch_target(gid, "Alt", str(old / "Old.exe"))
+    archive = tmp_path / "update.zip"
+    _write_game_zip(archive, {"New.exe": b"new"})
+
+    def locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "update_game", locked)
+    with pytest.raises((ArchiveInstallError, sqlite3.OperationalError)):
+        install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}",
+            title="Title",
+            version="2.0",
+            game_id=gid,
+            target_id=target["id"],
+            exe_relpath="New.exe",
+        )
+    targets = db.list_game_launch_targets(gid)
+    assert [t["exe_path"] for t in targets] == [str(old / "Old.exe")]
+    assert (old / "Old.exe").read_bytes() == b"old alt"
