@@ -80,6 +80,7 @@ import {
   type SortField,
 } from "../utils/libraryViewState";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import { libraryFiltersPaneOpen } from "../utils/navLayout";
 import { notify, notifyError, notifyUndo } from "../utils/toast";
 import {
   addTagCsv, engineSnapshot, launchModeApplicable, launchModeSnapshot, removeTagCsv, runBulk, runBulkSaveBackup,
@@ -187,12 +188,17 @@ const newCollectionInput = ref<HTMLInputElement | null>(null);
 const collectionTabsElement = ref<HTMLElement | null>(null);
 const collectionTabMenu = ref<{ name: string; x: number; y: number } | null>(null);
 const collectionTabMenuElement = ref<HTMLElement | null>(null);
-// Saved filter presets listed at the top of the filters pane.
+// Saved filter presets listed after Quick filters in the filters pane.
 const savedPresets = ref<LibraryFilterPreset[]>([]);
 // True once Settings has answered, so a save can't treat "not loaded" as empty.
 const presetsLoaded = ref(false);
 const newPresetName = ref("");
 const presetError = ref("");
+// "Save as preset" in the active-filter chip row opens an inline name field.
+const savePresetOpen = ref(false);
+const savePresetButton = ref<HTMLButtonElement | null>(null);
+const savePresetInput = ref<HTMLInputElement | null>(null);
+const quickFiltersList = ref<HTMLElement | null>(null);
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const showDetailModal = ref(false);
@@ -281,7 +287,7 @@ useControllerActions(libraryControllerScope, {
     const game = games.value.find(item => String(item.id) === card?.dataset.gameId);
     if (game) void toggleGame(game);
   },
-  back: () => { if (bulkBar.value?.closeMenu()) return true; if (!selectedIds.value.size && !selecting.value) return false; clearSelection(); return true; },
+  back: () => { if (bulkBar.value?.closeMenu()) return true; if (savePresetOpen.value) { closeSavePreset(); return true; } if (!selectedIds.value.size && !selecting.value) return false; clearSelection(); return true; },
   menu: () => {
     if (selectedIds.value.size) bulkBar.value?.focusFirst();
     else (document.activeElement as HTMLElement | null)?.dispatchEvent(new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }));
@@ -389,6 +395,8 @@ const selectCollection = (collection: FilterCollection) => {
 const toggleFiltersPane = () => {
   isFiltersCollapsed.value = !isFiltersCollapsed.value;
 };
+// The app sidebar collapses while the pane is open (see utils/navLayout.ts).
+watch(isFiltersCollapsed, (collapsed) => { libraryFiltersPaneOpen.value = !collapsed; });
 
 const toggleFilterSection = (section: keyof FilterSections) => {
   filterSections.value[section] = !filterSections.value[section];
@@ -1131,6 +1139,27 @@ const saveFilterPreset = async () => {
   savedPresets.value = next;
   newPresetName.value = "";
   presetError.value = "";
+  savePresetOpen.value = false;
+  void nextTick(() => savePresetButton.value?.focus());
+};
+
+const openSavePreset = async () => {
+  presetError.value = "";
+  savePresetOpen.value = true;
+  await nextTick();
+  if (savePresetInput.value) controllerFocusText(savePresetInput.value);
+};
+
+// The chip row (and its save field) disappears when the last filter is removed.
+watch(() => activeFilterChips.value.length, (count) => {
+  if (!count && savePresetOpen.value) { savePresetOpen.value = false; newPresetName.value = ""; presetError.value = ""; }
+});
+
+const closeSavePreset = () => {
+  savePresetOpen.value = false;
+  newPresetName.value = "";
+  presetError.value = "";
+  void nextTick(() => savePresetButton.value?.focus());
 };
 
 const deleteFilterPreset = async (name: string) => {
@@ -1143,6 +1172,11 @@ const deleteFilterPreset = async (name: string) => {
   }
   savedPresets.value = next;
   presetError.value = "";
+  // The section hides with its last preset, so focus moves to Quick filters.
+  if (!next.length) {
+    await nextTick();
+    quickFiltersList.value?.querySelector<HTMLElement>("button")?.focus();
+  }
 };
 
 const updatingId = ref<number | null>(null);
@@ -1849,6 +1883,7 @@ watch(showImportModal, (open) => {
 
 onMounted(() => {
   restoreLibraryViewState();
+  libraryFiltersPaneOpen.value = !isFiltersCollapsed.value;
 
   window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
@@ -1866,6 +1901,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  libraryFiltersPaneOpen.value = false;
   settingsRequest++;
   window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
@@ -1894,6 +1930,41 @@ onUnmounted(() => {
       <div class="w-64 h-full flex flex-col overflow-y-auto">
         <div class="p-6 pb-2 pt-4">
           <button
+            @click="toggleFilterSection('collections')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+          >
+            <span>Quick filters</span>
+            <span class="text-sm">{{
+              filterSections.collections ? "▾" : "▸"
+            }}</span>
+          </button>
+          <div v-show="filterSections.collections" ref="quickFiltersList" class="space-y-1 mt-3">
+            <button
+              v-for="collection in collections"
+              :key="collection.value"
+              @click="selectCollection(collection.value)"
+              :aria-pressed="filterCollection === collection.value"
+              class="w-full min-h-11 flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
+              :style="
+                filterCollection === collection.value
+                  ? 'background: var(--bg-raised); color: var(--text-primary)'
+                  : 'color: var(--text-secondary)'
+              "
+            >
+              <component :is="collection.icon" class="w-4 h-4 shrink-0" />
+              <span>{{ collection.label }}</span>
+              <span
+                v-if="collection.value === 'Updates available'"
+                class="collection-count ml-auto"
+                >{{ updateCount }}</span
+              >
+            </button>
+          </div>
+        </div>
+
+        <div v-if="savedPresets.length" class="p-6 pb-2 pt-4">
+          <button
             @click="toggleFilterSection('presets')"
             class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
             style="color: var(--text-muted)"
@@ -1904,13 +1975,6 @@ onUnmounted(() => {
             }}</span>
           </button>
           <div v-show="filterSections.presets" class="space-y-1 mt-3">
-            <p
-              v-if="!savedPresets.length"
-              class="px-3 text-xs"
-              style="color: var(--text-muted)"
-            >
-              Save the current filters and sort under a name to reuse them.
-            </p>
             <div
               v-for="preset in savedPresets"
               :key="preset.name"
@@ -1935,66 +1999,14 @@ onUnmounted(() => {
                 <IconX class="w-4 h-4" />
               </button>
             </div>
-            <form class="flex gap-1 pt-1" @submit.prevent="saveFilterPreset">
-              <input
-                v-model="newPresetName"
-                type="text"
-                aria-label="Saved filter name"
-                placeholder="Name for current filters"
-                class="library-search-input flex-1 min-w-0 rounded-lg px-2 py-1.5 text-xs"
-              />
-              <button
-                type="submit"
-                class="ui-action-btn px-2 py-1.5 rounded-lg text-xs font-semibold border active:scale-95 active:bg-[var(--bg-overlay)]"
-                style="color: var(--text-secondary); border-color: var(--border)"
-                title="Save the current filters and sort under this name"
-              >
-                Save
-              </button>
-            </form>
             <p
-              v-if="presetError"
+              v-if="presetError && !savePresetOpen"
               role="alert"
               class="px-3 text-xs"
               style="color: var(--danger-text)"
             >
               {{ presetError }}
             </p>
-          </div>
-        </div>
-
-        <div class="p-6 pb-2 pt-4">
-          <button
-            @click="toggleFilterSection('collections')"
-            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
-            style="color: var(--text-muted)"
-          >
-            <span>Quick filters</span>
-            <span class="text-sm">{{
-              filterSections.collections ? "▾" : "▸"
-            }}</span>
-          </button>
-          <div v-show="filterSections.collections" class="space-y-1 mt-3">
-            <button
-              v-for="collection in collections"
-              :key="collection.value"
-              @click="selectCollection(collection.value)"
-              :aria-pressed="filterCollection === collection.value"
-              class="w-full min-h-11 flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ui-hover-surface"
-              :style="
-                filterCollection === collection.value
-                  ? 'background: var(--bg-raised); color: var(--text-primary)'
-                  : 'color: var(--text-secondary)'
-              "
-            >
-              <component :is="collection.icon" class="w-4 h-4 shrink-0" />
-              <span>{{ collection.label }}</span>
-              <span
-                v-if="collection.value === 'Updates available'"
-                class="collection-count ml-auto"
-                >{{ updateCount }}</span
-              >
-            </button>
           </div>
         </div>
 
@@ -2473,6 +2485,39 @@ onUnmounted(() => {
 
       <div v-if="activeFilterChips.length" class="flex flex-wrap items-center gap-2 px-6 pb-3" role="group" aria-label="Active filters">
         <button v-for="chip in activeFilterChips" :key="chip.key" class="ui-action-btn ui-hover-surface px-3 py-1 rounded-full text-xs" style="color: var(--text-primary); border: 1px solid var(--border); background: var(--bg-raised)" :aria-label="`Remove filter ${chip.label}`" @click="removeFilterChip(chip)">{{ chip.label }} <span aria-hidden="true">×</span></button>
+        <button
+          v-if="!savePresetOpen"
+          ref="savePresetButton"
+          class="ui-action-btn px-3 py-1 text-xs"
+          style="color: var(--text-secondary)"
+          title="Save the current filters and sort under a name"
+          @click="openSavePreset"
+        >Save as preset</button>
+        <form
+          v-else
+          class="flex items-center gap-1"
+          @submit.prevent="saveFilterPreset"
+          @keydown.esc.stop.prevent="closeSavePreset"
+        >
+          <input
+            ref="savePresetInput"
+            v-model="newPresetName"
+            type="text"
+            aria-label="Saved filter name"
+            placeholder="Preset name"
+            maxlength="40"
+            class="library-search-input w-40 rounded-lg px-2 py-1 text-xs"
+            :aria-invalid="!!presetError"
+            :aria-describedby="presetError ? 'save-preset-error' : undefined"
+          />
+          <button
+            type="submit"
+            class="ui-action-btn px-2 py-1 rounded-lg text-xs font-semibold border active:scale-95 active:bg-[var(--bg-overlay)]"
+            style="color: var(--text-secondary); border-color: var(--border)"
+            title="Save the current filters and sort under this name"
+          >Save</button>
+          <span v-if="presetError" id="save-preset-error" role="alert" class="text-xs" style="color: var(--danger-text)">{{ presetError }}</span>
+        </form>
         <button class="ui-action-btn px-3 py-1 text-xs hover:text-red-400" style="color: var(--text-muted)" @click="clearFilters">Clear all</button>
       </div>
 

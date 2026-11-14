@@ -24,6 +24,7 @@ async (page) => {
   await source('DLsite').click();
   await source('VNDB').click();
   check((await page.getByRole('button', {name:/Filters/}).innerText()).includes('1'), 'sources should count as one filter group');
+  await page.getByRole('button', {name:'Save as preset', exact:true}).click();
   await page.getByLabel('Saved filter name').fill('Sources test');
   await page.getByRole('button', {name:'Save', exact:true}).click();
   await page.reload();
@@ -32,9 +33,12 @@ async (page) => {
   check(await source('DLsite').getAttribute('aria-pressed') === 'true' && await source('VNDB').getAttribute('aria-pressed') === 'true' && await source('F95Zone').getAttribute('aria-pressed') === 'false', 'new preset restores sources');
   await page.getByTitle("Apply the saved filter 'Old'").click();
   check(await source('DLsite').getAttribute('aria-pressed') === 'false' && await source('VNDB').getAttribute('aria-pressed') === 'false', 'old preset clears sources');
+  // The footer theme control cycles System, Light, Dark; its name states the current mode.
+  const themeToggle = page.getByRole('button', {name: /^Theme: /});
   for (const theme of ['light', 'dark']) {
-    const toggle = page.getByRole('button', {name: theme === 'dark' ? 'Switch to Dark Mode' : 'Switch to Light Mode'});
-    if (await toggle.count()) await toggle.click();
+    const wanted = `Theme: ${theme === 'dark' ? 'Dark' : 'Light'}.`;
+    for (let step = 0; step < 3 && !(await themeToggle.getAttribute('aria-label')).startsWith(wanted); step++) await themeToggle.click();
+    check((await themeToggle.getAttribute('aria-label')).startsWith(wanted), `${theme} theme selected`);
     check(await source('DLsite').isVisible(), `${theme} source visible`);
     await page.screenshot({path:`/tmp/wlib-source-${theme}.png`});
   }

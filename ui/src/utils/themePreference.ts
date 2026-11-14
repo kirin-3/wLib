@@ -17,6 +17,29 @@ export const isDarkTheme = computed(() =>
 export const normalizeThemePreference = (value: string | null): ThemePreference =>
   value === "light" || value === "dark" ? value : "system";
 
+const THEME_CYCLE: Record<ThemePreference, ThemePreference> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+};
+
+// The footer theme control steps system → light → dark → system.
+export const nextThemePreference = (preference: ThemePreference): ThemePreference =>
+  THEME_CYCLE[preference];
+
+const THEME_LABELS: Record<ThemePreference, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+};
+
+export const themePreferenceLabel = (preference: ThemePreference): string =>
+  THEME_LABELS[preference];
+
+// Accessible name for the footer theme control: the current mode and the next one.
+export const themeCycleLabel = (preference: ThemePreference): string =>
+  `Theme: ${THEME_LABELS[preference]}. Switch to ${THEME_LABELS[nextThemePreference(preference)]}`;
+
 const systemQuery = (): MediaQueryList | undefined =>
   typeof window === "undefined" ? undefined : window.matchMedia?.("(prefers-color-scheme: light)");
 

@@ -35,6 +35,7 @@ import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
 import { libraryOpenQuery } from "../utils/storeLinks";
 import { isNewerVersion } from "../utils/appVersion";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
+import { bulkDownloadDecision, type HostPlatform } from "../utils/updateDownloads";
 import {
   shouldAdoptBackgroundCheck,
   updateCheckProgressLabel,
@@ -398,8 +399,68 @@ watch(() => persistedUpdates.value.map((game) => game.id), (ids) => {
 const toggleAllUpdates = (event: Event) => {
   selectedUpdateIds.value = (event.target as HTMLInputElement).checked ? new Set(persistedUpdates.value.map((game) => game.id)) : new Set();
 };
+// Download selected: one game at a time, with the build picker's own preselection.
+// File hosts only (never RPDL). Games without a clear build get a row note.
+const bulkDownloading = ref(false);
+const bulkDownloadCancelled = ref(false);
+const bulkDownloadProgress = ref({ index: 0, total: 0, title: "" });
+const needsChoice = ref(new Map<number, string>());
+const BULK_DOWNLOAD_REASON = "Wait for Download selected to finish";
+const bulkDownload = async () => {
+  if (status.value.running || startingCheck.value || bulkBusy.value || bulkDownloading.value) return;
+  const selected = persistedUpdates.value.filter((game) => selectedUpdateIds.value.has(game.id));
+  if (!selected.length) return;
+  bulkDownloading.value = true;
+  bulkDownloadCancelled.value = false;
+  let queued = 0, choose = 0, skipped = 0;
+  try {
+    const capabilities = await loadPlatformCapabilities();
+    const host: HostPlatform = capabilities.platform === "windows" ? "windows" : "linux";
+    for (const [index, game] of selected.entries()) {
+      if (bulkDownloadCancelled.value) break;
+      bulkDownloadProgress.value = { index: index + 1, total: selected.length, title: game.title };
+      if (downloadDisabledReason(game) || !game.f95_url) { skipped++; continue; }
+      let reason = "";
+      try {
+        const decision = bulkDownloadDecision(await api.getUpdateDownloadLinks(game.id), host);
+        if (decision.kind === "start") {
+          const started = await api.startUpdateDownload(game.id, decision.mirror.link_id, null);
+          if (!started.success) reason = `Download did not start: ${started.error || "unknown error"}`;
+        } else reason = decision.reason;
+      } catch (error) {
+        reason = `Links did not load: ${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        try { await api.closeUpdateDownloadLinks(game.id); } catch (error) { console.warn("Could not close the download links", error); }
+      }
+      const next = new Map(needsChoice.value);
+      if (reason) { next.set(game.id, reason.replace(/\.+$/, "")); choose++; }
+      else { next.delete(game.id); queued++; }
+      needsChoice.value = next;
+    }
+  } catch (error) {
+    notifyError(`Download selected stopped: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    const stopped = bulkDownloadCancelled.value;
+    bulkDownloading.value = false;
+    bulkDownloadCancelled.value = false;
+    selectedUpdateIds.value = new Set();
+    updateDownloads.refresh();
+    const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+    const message = `${stopped ? "Stopped. " : ""}${plural(queued, "download was", "downloads were")} queued, ${plural(choose, "game needs", "games need")} a build choice and ${skipped} ${skipped === 1 ? "was" : "were"} skipped.`;
+    notify(message, queued ? "success" : "info", "", { label: "Open Downloads", run: openDownloads });
+  }
+};
+const cancelBulkDownload = () => { bulkDownloadCancelled.value = true; };
+// The note goes away when a download starts for the game or its row leaves.
+watch([() => persistedUpdates.value.map((game) => game.id), () => updateDownloads.jobs.value], ([ids]) => {
+  if (!needsChoice.value.size) return;
+  const visible = new Set(ids);
+  const next = new Map([...needsChoice.value].filter(([id]) => visible.has(id) && !hasUnfinishedDownload(id)));
+  if (next.size !== needsChoice.value.size) needsChoice.value = next;
+});
+
 const bulkUpdate = async (action: "updated" | "skip" | "check") => {
-  if (status.value.running || startingCheck.value || bulkBusy.value) return;
+  if (status.value.running || startingCheck.value || bulkBusy.value || bulkDownloading.value) return;
   const selected = persistedUpdates.value.filter((game) => selectedUpdateIds.value.has(game.id));
   if (action === "check") { await startCheck(selected.filter((game) => game.f95_url).map((game) => game.id)); return; }
   bulkBusy.value = true;
@@ -431,9 +492,10 @@ const downloadDisabledReason = (game: GameRecord): string => {
 };
 
 const updateMainDisabled = (game: GameRecord): boolean =>
-  updateMainAction(game) === "download" ? !!downloadDisabledReason(game) : status.value.running;
+  bulkDownloading.value || (updateMainAction(game) === "download" ? !!downloadDisabledReason(game) : status.value.running);
 
 const updateMainTitle = (game: GameRecord): string => {
+  if (bulkDownloading.value) return BULK_DOWNLOAD_REASON;
   const action = updateMainAction(game);
   if (action === "download") return downloadDisabledReason(game) || "Choose a build from the F95Zone thread and download it";
   if (status.value.running) return CHECK_RUNNING_REASON;
@@ -519,7 +581,8 @@ const frequencyLabel = computed(() => {
   return "Weekly";
 });
 const hasStatusContent = computed(() =>
-  !!statusError.value
+  bulkDownloading.value
+  || !!statusError.value
   || status.value.running
   || status.value.checked > 0
   || (!!status.value.outcome && status.value.outcome !== "idle")
@@ -676,7 +739,8 @@ onUnmounted(() => {
           type="button"
           data-check-action
           @click="startCheck()"
-          :disabled="startingCheck"
+          :disabled="startingCheck || bulkDownloading"
+          :title="bulkDownloading ? BULK_DOWNLOAD_REASON : undefined"
           class="ui-action-btn px-5 py-2 rounded-lg text-sm font-bold transition-all hover:brightness-110 disabled:opacity-50"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
@@ -718,6 +782,18 @@ onUnmounted(() => {
       data-testid="update-check-status"
     >
       <div v-if="hasStatusContent" class="section-card rounded-xl px-5 py-4 space-y-2">
+        <div v-if="bulkDownloading" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" style="color: var(--text-secondary)" data-testid="bulk-download-progress">
+          <IconLoader2 class="ui-action-icon animate-spin" aria-hidden="true" />
+          <span class="font-semibold tabular-nums">Preparing downloads {{ bulkDownloadProgress.index }} / {{ bulkDownloadProgress.total }}</span>
+          <span class="truncate min-w-0 flex-1">{{ bulkDownloadProgress.title }}</span>
+          <button
+            type="button"
+            class="ui-action-btn px-3 py-1 rounded-lg text-xs font-semibold border disabled:opacity-60"
+            style="color: var(--text-secondary); border-color: var(--border)"
+            :disabled="bulkDownloadCancelled"
+            @click="cancelBulkDownload"
+          >{{ bulkDownloadCancelled ? "Stopping after this game…" : "Cancel" }}</button>
+        </div>
         <div v-if="status.running || status.checked > 0" class="space-y-2">
           <div
             class="flex items-center justify-between text-xs"
@@ -855,9 +931,10 @@ onUnmounted(() => {
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <label class="flex items-center gap-2"><input type="checkbox" :checked="selectedUpdateIds.size === persistedUpdates.length" @change="toggleAllUpdates" /> Select all ({{ selectedUpdateIds.size }} selected)</label>
           <template v-if="selectedUpdateIds.size">
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy" @click="bulkUpdate('updated')">Mark updated</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy" @click="bulkUpdate('skip')">Skip version</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && game.f95_url)" @click="bulkUpdate('check')">Re-check</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" :title="status.running || startingCheck ? CHECK_RUNNING_REASON : undefined" @click="bulkDownload">Download selected</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('updated')">Mark updated</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('skip')">Skip version</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && game.f95_url)" @click="bulkUpdate('check')">Re-check</button>
           </template>
         </div>
         <TransitionGroup name="list" tag="div" class="space-y-2">
@@ -901,6 +978,12 @@ onUnmounted(() => {
                 >
                   {{ downloadStatus(game.id) }}
                 </button>
+                <span
+                  v-if="needsChoice.get(game.id)"
+                  class="font-medium"
+                  style="color: var(--warning-text)"
+                  data-testid="update-needs-choice"
+                >{{ needsChoice.get(game.id) }}. Choose a build with Download update.</span>
               </p>
             </div>
             <MenuButton
@@ -911,6 +994,7 @@ onUnmounted(() => {
               :items="updateMenuItems(game)"
               menu-label="More update actions"
               button-label="More update actions"
+              :disabled="bulkDownloading"
               :main-disabled="updateMainDisabled(game)"
               :main-title="updateMainTitle(game)"
               @main="runUpdateMain(game)"

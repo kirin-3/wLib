@@ -49,7 +49,13 @@ globalThis.window = {
   },
 } as unknown as Window & typeof globalThis;
 
-const { setThemePreference, loadThemePreference, normalizeThemePreference } = await import(
+const {
+  setThemePreference,
+  loadThemePreference,
+  normalizeThemePreference,
+  nextThemePreference,
+  themeCycleLabel,
+} = await import(
   "./themePreference.ts"
 );
 
@@ -99,4 +105,16 @@ test("loadThemePreference restores the saved choice and tracks the system", () =
   systemPrefersLight = false;
   for (const listener of systemListeners) listener();
   assert.equal(rootClasses.has("light"), false);
+});
+
+test("nextThemePreference cycles system, light, dark and back to system", () => {
+  assert.equal(nextThemePreference("system"), "light");
+  assert.equal(nextThemePreference("light"), "dark");
+  assert.equal(nextThemePreference("dark"), "system");
+});
+
+test("themeCycleLabel names the current and the next mode", () => {
+  assert.equal(themeCycleLabel("system"), "Theme: System. Switch to Light");
+  assert.equal(themeCycleLabel("light"), "Theme: Light. Switch to Dark");
+  assert.equal(themeCycleLabel("dark"), "Theme: Dark. Switch to System");
 });

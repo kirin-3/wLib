@@ -21,6 +21,24 @@ export function preselect(builds: UpdateBuild[], host: HostPlatform): { build: U
   }
   return null;
 }
+// Download selected: what happens to one game, given the picker's preselection rule.
+export type BulkDownloadDecision =
+  | { kind: "start"; build: UpdateBuild; mirror: UpdateMirror }
+  | { kind: "needs-choice"; reason: string };
+export function bulkDownloadDecision(
+  links: { success?: boolean; error?: string; builds?: UpdateBuild[] },
+  host: HostPlatform,
+): BulkDownloadDecision {
+  if (!links.success) return { kind: "needs-choice", reason: `Links did not load: ${links.error || "unknown error"}` };
+  const builds = links.builds || [];
+  const choice = preselect(builds, host);
+  if (choice) return { kind: "start", ...choice };
+  const usable = orderBuilds(builds, host).suitable;
+  if (!builds.length) return { kind: "needs-choice", reason: "No builds were found in the thread" };
+  if (!usable.length) return { kind: "needs-choice", reason: "No build for this platform was found" };
+  if (!usable.some(build => build.kind === "full")) return { kind: "needs-choice", reason: "Only patch builds were found" };
+  return { kind: "needs-choice", reason: "No full build has an in-app mirror" };
+}
 export function downloadFailureMessage(error: string): string {
   const lower = error.toLowerCase();
   // Most specific first: several messages also mention the browser or extension.
