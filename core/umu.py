@@ -192,13 +192,15 @@ def _wrapper_path() -> str:
             prefix=".umu-wrapper-", dir=folder, delete=False
         ) as handle:
             temporary = handle.name
-            try:
+        # Close the file before the rename: Windows refuses to rename an open file.
+        try:
+            with open(temporary, "wb") as handle:
                 _ = handle.write(content)
-                os.chmod(temporary, 0o755)
-                os.replace(temporary, destination)
-            finally:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
+            os.chmod(temporary, 0o755)
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
     else:
         os.chmod(destination, 0o755)
     return destination
