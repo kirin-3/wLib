@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Event
 from collections.abc import Mapping
 from typing import BinaryIO, Protocol, cast
+from urllib.error import HTTPError
 from collections.abc import Callable
 
 from core.downloads.pacing import SpeedLimiter
@@ -194,8 +195,16 @@ def transfer(
         if offset and info.resume_factory is not None:
             try:
                 stream = info.resume_factory(offset)
-            except (OSError, http.client.HTTPException):
-                stream = None
+            except (OSError, http.client.HTTPException) as exc:
+                # Another 4xx (a 416 for a complete partial file, a 403)
+                # means the range will not work: start over, as before.
+                if isinstance(exc, HTTPError) and exc.code != 429 and exc.code < 500:
+                    stream = None
+                else:
+                    # A timeout, a 429 or a 5xx is short: keep the partial
+                    # file so the retry continues it.
+                    keep_part = True
+                    raise DownloadError("network error") from exc
             if stream is None:
                 part.unlink(missing_ok=True)
                 offset = 0

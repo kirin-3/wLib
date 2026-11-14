@@ -37,6 +37,7 @@ class FakeWorker:
         self.started: list[str] = []
         self.stopped: list[str] = []
         self.removed: list[str] = []
+        self.kept: list[bool] = []
         self.shares: list[tuple[int, bool]] = []
         self.cleaned: list[list[str]] = []
         self.cannot_continue: set[str] = set()
@@ -59,8 +60,9 @@ class FakeWorker:
         self.stopped.append(job.id)
         self._state(job.id).phase = PHASE_STOPPED
 
-    def remove(self, job):
+    def remove(self, job, *, keep_partial=False):
         self.removed.append(job.id)
+        self.kept.append(keep_partial)
         self._state(job.id).phase = PHASE_STOPPED
 
     def snapshot(self, job):
@@ -599,6 +601,66 @@ def test_replacement_takes_the_failed_jobs_place(worker, clock):
     assert worker.removed == [b] and queue.get(b) is None
     with pytest.raises(QueueError):
         _ = queue.add("host", 3, "Game 3", "1.0", {}, replaces="missing")
+
+
+
+def test_same_mirror_again_keeps_the_partial_file(worker, clock):
+    queue = make_queue(worker, clock)
+    a = add(queue, 1)
+    queue.get(a).source["part_file"] = "resume-abc.part"
+    worker.fail(a, "link expired or removed")
+    queue.tick()
+    new = queue.add("host", 1, "Game 1", "1.0", {"host": "pixeldrain"}, replaces=a)
+    assert worker.removed == [a] and worker.kept == [True]
+    # Startup cleanup keeps the partial files that jobs name.
+    assert new.source["part_file"] == "resume-abc.part"
+    worker.fail(new.id, "link expired or removed")
+    queue.tick()
+    other = queue.add("host", 1, "Game 1", "1.0", {"host": "mega"}, replaces=new.id)
+    assert worker.kept == [True, False] and "part_file" not in other.source
+
+
+def test_job_back_from_a_browser_check_waits_for_a_free_slot(worker, clock):
+    queue = make_queue(worker, clock)
+    a, b, c = (add(queue, game_id) for game_id in (1, 2, 3))
+    worker.states[a].phase = PHASE_NEEDS_USER
+    queue.tick()
+    assert queue.get(a).state == ATTENTION
+    assert queue.get(c).state == RUNNING  # The slot went to the next job.
+    worker.states[a].phase = PHASE_RUNNING
+    queue.tick()
+    assert [queue.get(job_id).state for job_id in (a, b, c)] == [QUEUED, RUNNING, RUNNING]
+    assert worker.stopped == [a] and order(queue)[0] == a
+    worker.finish(b)
+    queue.tick()
+    assert queue.get(a).state == RUNNING and worker.started.count(a) == 2
+
+
+def test_failed_preparation_keeps_the_pause(worker, clock):
+    worker.prepare_phase = PHASE_PREPARING
+    queue = make_queue(worker, clock)
+    job_id = add(queue, 1)
+    assert queue.pause(job_id)
+    worker.fail(job_id, "network error")
+    queue.tick()
+    job = queue.get(job_id)
+    assert (job.state, job.error_code, job.retry_at) == (PAUSED, "network", None)
+    clock.now += 3600
+    queue.tick()
+    assert queue.get(job_id).state == PAUSED and worker.started == []
+    assert queue.resume(job_id)
+    assert queue.get(job_id).state == RUNNING and worker.started == [job_id]
+
+
+
+def test_lasting_failure_while_paused_still_needs_the_user(worker, clock):
+    worker.prepare_phase = PHASE_PREPARING
+    queue = make_queue(worker, clock)
+    job_id = add(queue, 1)
+    assert queue.pause(job_id)
+    worker.fail(job_id, "link expired or removed")
+    queue.tick()
+    assert queue.get(job_id).state == ATTENTION and worker.started == []
 
 
 # --- holds (9.4) ------------------------------------------------------------

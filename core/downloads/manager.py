@@ -161,10 +161,18 @@ class DownloadManager:
             job.signals.interrupt.set()
             return True
 
-    def forget(self, job_id: str) -> None:
+    def forget(self, job_id: str, *, keep_partial: bool = False) -> None:
+        """Drop a job and stop its thread.
+
+        `keep_partial` also sets pause: the transfer checks pause before
+        cancel, so it keeps a resumable partial file. Cancel still ends a
+        resolve or a probe at once.
+        """
         with self._lock:
             job = self._jobs.pop(job_id, None)
         if job is not None:
+            if keep_partial:
+                job.signals.pause.set()
             job.signals.cancel.set()
             job.signals.interrupt.set()
 

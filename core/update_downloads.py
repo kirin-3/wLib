@@ -26,6 +26,8 @@ class _Link:
     url: str
     created: float
     version: str = ''
+    # Which thread read made this link; a later read replaces older links only.
+    fetch: int = 0
 
 
 def _in_app(host: str, url: str) -> bool:
@@ -44,9 +46,16 @@ class UpdateDownloads:
         self.queue = queue
         self.lock = threading.RLock()
         self.links: dict[str, _Link] = {}
+        # Bumped only when the picker closes (`clear`).
         self.generations: dict[int, int] = {}
+        self.fetches: dict[int, int] = {}
 
-    def get_links(self, game_id: int) -> dict[str, object]:
+    def get_links(self, game_id: int, *, picker: bool = True) -> dict[str, object]:
+        """Read the thread's builds and hold their links.
+
+        `picker` is False for a background read (a queued job's relink): it
+        neither fails when the picker closes nor makes the picker's read fail.
+        """
         game = database.get_game(game_id)
         if not game:
             return {'success':False, 'error':'Game not found'}
@@ -54,8 +63,9 @@ class UpdateDownloads:
         if not f95_url:
             return {'success':False, 'error':'Game has no F95Zone thread'}
         with self.lock:
-            generation = self.generations.get(game_id, 0) + 1
-            self.generations[game_id] = generation
+            generation = self.generations.get(game_id, 0)
+            fetch = self.fetches.get(game_id, 0) + 1
+            self.fetches[game_id] = fetch
         result = scraper.fetch_thread_download_links(f95_url)
         if not result.get('success'):
             return {'success':False, 'error':str(result.get('error') or 'Could not load download links')}
@@ -70,16 +80,17 @@ class UpdateDownloads:
             for mirror in build['mirrors']:
                 identifier = uuid.uuid4().hex
                 key = (build['label'], build['section'], build['platform'], mirror['host'], mirror['part'])
-                new_links[identifier] = _Link(game_id, key, mirror['url'], now, str(result.get('version') or ''))
+                new_links[identifier] = _Link(game_id, key, mirror['url'], now, str(result.get('version') or ''), fetch)
                 mirrors.append({'link_id':identifier, 'host':mirror['host'], 'label':mirror['label'], 'part':mirror['part'], 'split':mirror['split'],
                                 'in_app':_in_app(mirror['host'], mirror['url'])})
             output.append({**{k:v for k,v in build.items() if k != 'mirrors'}, 'mirrors':mirrors})
         with self.lock:
-            if self.generations.get(game_id) != generation:
+            if picker and self.generations.get(game_id, 0) != generation:
                 return {'success':False, 'error':'Download picker was closed'}
             # Retain stale identities for refresh matching, but discard their URLs.
+            # A read that finished after a newer one keeps the newer links.
             for link in self.links.values():
-                if link.game_id == game_id:
+                if link.game_id == game_id and link.fetch < fetch:
                     link.url = ''
             self.links.update(new_links)
         identifiers = tuple(new_links)
@@ -164,7 +175,7 @@ class UpdateDownloads:
                          if candidate.game_id == job.game_id and candidate.key == key and candidate.url
                          and now - candidate.created < LINK_SECONDS), None)
         if link is None:
-            result = self.get_links(job.game_id)
+            result = self.get_links(job.game_id, picker=False)
             if not result.get('success'):
                 raise DownloadError(str(result.get('error') or 'Could not reload links'))
             with self.lock:

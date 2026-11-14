@@ -245,6 +245,48 @@ def test_transfer_starts_over_when_the_host_ignores_ranges(tmp_path):
     assert path.read_bytes() == data and offsets == [len(b"PK\x03\x04garbage")]
 
 
+
+@pytest.mark.parametrize("error", [
+    TimeoutError("timed out"),
+    HTTPError("https://host/file", 429, "Too Many Requests", Message(), None),
+    HTTPError("https://host/file", 503, "Service Unavailable", Message(), None),
+])
+def test_short_error_while_resuming_keeps_the_partial_file(tmp_path, error):
+    from core.downloads.transfer import _resume_part
+
+    data = b"PK\x03\x04" + b"a" * 100
+    opened = []
+
+    def resume(offset):
+        raise error
+
+    def stream():
+        opened.append(0)
+        return io.BytesIO(data)
+
+    info = FileInfo("game.zip", len(data), stream, resume_factory=resume, resume_key="host:file-1")
+    part = _resume_part(tmp_path, info)
+    part.write_bytes(data[:40])
+    with pytest.raises(DownloadError, match="network error"):
+        transfer(info, "job", Event(), lambda *_: None, directory=tmp_path)
+    assert part.read_bytes() == data[:40] and opened == []
+
+
+
+def test_range_refused_with_a_4xx_starts_over(tmp_path):
+    from core.downloads.transfer import _resume_part
+
+    data = b"PK\x03\x04" + b"a" * 100
+
+    def resume(offset):
+        raise HTTPError("https://host/file", 416, "Range Not Satisfiable", Message(), None)
+
+    info = FileInfo("game.zip", len(data), lambda: io.BytesIO(data), resume_factory=resume, resume_key="host:file-1")
+    _resume_part(tmp_path, info).write_bytes(data)  # Complete, but never published.
+    path = transfer(info, "job", Event(), lambda *_: None, directory=tmp_path)
+    assert path.read_bytes() == data and not list(tmp_path.glob("*.part"))
+
+
 def test_cancel_drops_the_partial_file(tmp_path):
     data = b"PK\x03\x04" + b"a" * 100
     flag = Event()
@@ -424,6 +466,53 @@ def test_paused_resumable_transfer_continues_from_its_partial_file(tmp_path, mon
     assert queue.resume(job_id)
     assert _until(queue, lambda: queue.get(job_id).state == 'ready')
     assert opened == [0, kept]
+    assert (tmp_path / 'game.zip').read_bytes() == data
+    assert not list(tmp_path.glob('*.part'))
+
+
+
+def test_host_worker_keeps_the_partial_file_for_the_same_mirror(tmp_path, monkeypatch):
+    from core.downloads.queue import QueueJob
+    from core.downloads.workers import HostWorker
+
+    manager, _queue = _host_queue(tmp_path, monkeypatch, lambda url: None)
+    worker = HostWorker(manager)
+    part = tmp_path / 'resume-abc.part'
+    for keep in (True, False):
+        part.write_bytes(b'PK\x03\x04')
+        job = QueueJob(id=f'job{keep}', kind='host', game_id=1, state='attention',
+                       source={'host': 'pixeldrain', 'part_file': part.name})
+        worker.remove(job, keep_partial=keep)
+        assert part.exists() is keep
+
+
+
+def test_same_mirror_replacing_a_running_download_resumes_its_file(tmp_path, monkeypatch):
+    from core.downloads import transfer as transfer_module
+    from core.downloads.workers import HostContext
+
+    gate = threading.Event()
+    opened = []
+    data = b'PK\x03\x04' + bytes(range(256)) * 8
+    probes = []
+
+    def probe(url):
+        probes.append(url)
+        if len(probes) > 1:
+            # Let the replaced transfer release its partial file first.
+            deadline = time.monotonic() + 5
+            while transfer_module._active_parts and time.monotonic() < deadline:
+                time.sleep(0.01)
+        return _resumable_info(data, gate, opened, hold=256)
+
+    _manager, queue = _host_queue(tmp_path, monkeypatch, probe)
+    old = _add_host(queue, 1)
+    assert _until(queue, lambda: queue.get(old).bytes_done >= 256)
+    source = {'label': 'Win', 'section': '', 'platform': 'windows', 'host': 'pixeldrain', 'part': ''}
+    new = queue.add('host', 1, 'Game', '1.0', source, HostContext(_resolve_to()), replaces=old).id
+    gate.set()
+    assert _until(queue, lambda: queue.get(new).state == 'ready')
+    assert len(opened) == 2 and opened[0] == 0 and opened[1] >= 256
     assert (tmp_path / 'game.zip').read_bytes() == data
     assert not list(tmp_path.glob('*.part'))
 

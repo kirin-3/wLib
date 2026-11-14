@@ -109,7 +109,8 @@ class TorrentWorker:
     def stop(self, job: QueueJob) -> None:
         _ = self._supervisor().pause(job.id)
 
-    def remove(self, job: QueueJob) -> None:
+    def remove(self, job: QueueJob, *, keep_partial: bool = False) -> None:
+        del keep_partial  # Torrent data is the torrent's; cancel decides.
         supervisor = self._supervisor()
         snapshot = self._snapshot(job.id)
         if snapshot is None:
@@ -290,16 +291,17 @@ class HostWorker:
     def stop(self, job: QueueJob) -> None:
         _ = self._manager.pause(job.id)
 
-    def remove(self, job: QueueJob) -> None:
+    def remove(self, job: QueueJob, *, keep_partial: bool = False) -> None:
         snapshot = self._manager.snapshot(job.id) or {}
         part = str(snapshot.get("part_name") or job.source.get("part_file") or "")
         archive = str(snapshot.get("archive_path") or "")
         if not archive and job.source.get("archive"):
             archive = str(staging_dir() / str(job.source.get("archive")))
         busy = self._manager.busy(job.id)
-        self._manager.forget(job.id)
-        # A running transfer deletes its own partial file when cancelled.
-        if part and not busy:
+        # A running transfer deletes its own partial file when cancelled, and
+        # keeps a resumable one when paused.
+        self._manager.forget(job.id, keep_partial=keep_partial)
+        if part and not busy and not keep_partial:
             self._manager.delete_part(part)
         if job.state == READY and archive:
             _ = self._manager.delete_archive(archive)

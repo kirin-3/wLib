@@ -179,8 +179,12 @@ class Worker(Protocol):
         """Stop moving data and keep what can be continued."""
         ...
 
-    def remove(self, job: QueueJob) -> None:
-        """Stop and delete the job's data."""
+    def remove(self, job: QueueJob, *, keep_partial: bool = False) -> None:
+        """Stop and delete the job's data.
+
+        `keep_partial` keeps a resumable partial file for a new job that
+        downloads the same file.
+        """
         ...
 
     def snapshot(self, job: QueueJob) -> WorkerState: ...
@@ -360,6 +364,18 @@ class DownloadQueue:
             phase = state.phase
             if phase == PHASE_DONE:
                 self._finish(job, now)
+            elif (
+                phase == PHASE_FAILED
+                and job.state == PAUSED
+                and failures.retryable(failures.classify(state.error))
+            ):
+                # Paused while preparing: an automatic retry would start the
+                # job, so keep the pause; resuming it starts it with this
+                # error noted. Other failures need the user, as before.
+                job.error_code, job.error_text = failures.classify(state.error), state.error
+                job.retry_at = None
+                self._set_state(job, PAUSED)
+                self._save(job, "error_code", "error_text", "retry_at")
             elif phase == PHASE_FAILED:
                 self._fail(job, state.error, now)
             elif job.state == PAUSED:
@@ -373,7 +389,13 @@ class DownloadQueue:
                 if job.state in (PREPARING, ATTENTION):
                     self._set_state(job, QUEUED)
             elif phase == PHASE_RUNNING:
-                if job.state != RUNNING:
+                if job.state != RUNNING and len(self._running()) >= self._max_active:
+                    # Back from a browser check, but its slot went to another
+                    # job: stop it and make it the first waiting job.
+                    self._worker(job).stop(job)
+                    self._set_state(job, QUEUED)
+                    self._move_to_top_of_waiting([job])
+                elif job.state != RUNNING:
                     job.started_at = job.started_at or now
                     self._set_state(job, RUNNING)
             elif phase == PHASE_PREPARING:
@@ -569,6 +591,14 @@ class DownloadQueue:
                 id=uuid.uuid4().hex, kind=kind, game_id=game_id, title=title, version=version,
                 state=PREPARING, source=dict(source), created_at=now, updated_at=now,
             )
+            # The same build and mirror again resumes the old partial file.
+            # Workers add their own keys (part_file, archive) to the old source.
+            same = replaced is not None and replaced.kind == kind and bool(source) and all(
+                replaced.source.get(key) == value for key, value in source.items()
+            )
+            if same and replaced is not None and replaced.source.get("part_file"):
+                # Startup cleanup keeps the partial files that jobs name.
+                job.source["part_file"] = replaced.source["part_file"]
             ordered = self._ordered()
             if replaced is not None:
                 index = ordered.index(replaced)
@@ -585,7 +615,7 @@ class DownloadQueue:
                 self._store.delete(replaced.id)
             self._store.reorder([item.id for item in ordered])
         if replaced is not None:
-            self._remove_data(replaced)
+            self._remove_data(replaced, keep_partial=same)
         try:
             self._worker(job).prepare(job, context)
         except Exception as exc:
@@ -757,9 +787,9 @@ class DownloadQueue:
         if jobs:
             self.poke()
 
-    def _remove_data(self, job: QueueJob) -> None:
+    def _remove_data(self, job: QueueJob, *, keep_partial: bool = False) -> None:
         try:
-            self._worker(job).remove(job)
+            self._worker(job).remove(job, keep_partial=keep_partial)
         except Exception as exc:
             _log(f"could not delete the data of a {job.kind} download: {type(exc).__name__}")
 

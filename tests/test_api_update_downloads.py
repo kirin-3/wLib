@@ -208,3 +208,42 @@ def test_deleting_a_game_removes_its_downloads(monkeypatch):
     job = queue.add('host', game_id, 'Game', '1.0', {'host': 'pixeldrain'})
     assert api.delete_game(game_id)['success'] is True
     assert queue.get(job.id) is None and worker.removed == [job.id]
+
+
+def test_background_read_does_not_break_the_picker(monkeypatch):
+    monkeypatch.setattr(update_downloads.database, 'get_game', lambda _: {'f95_url': 'https://f95zone.to/threads/1/'})
+    service = UpdateDownloads(DownloadManager())
+    calls = [0]
+
+    def fetch(_):
+        calls[0] += 1
+        number = calls[0]
+        if number == 1:
+            # A queued job reads the thread again while the picker loads.
+            assert service.get_links(1, picker=False)['success']
+        return {'success': True, 'version': 'v1', 'builds': [{
+            'label': 'Win', 'section': '', 'platform': 'windows', 'kind': 'full',
+            'mirrors': [{'url': f'https://f95zone.to/dl/1/?u=fake{number}', 'host': 'mega',
+                         'label': 'MEGA', 'part': '', 'split': False}],
+        }]}
+
+    monkeypatch.setattr(update_downloads.scraper, 'fetch_thread_download_links', fetch)
+    response = service.get_links(1)
+    assert response['success']
+    identifier = response['builds'][0]['mirrors'][0]['link_id']
+    assert service.browser_link(1, identifier).endswith('fake1')
+    # The older read finished last but kept the newer read's link.
+    assert sorted(link.url[-5:] for link in service.links.values()) == ['fake1', 'fake2']
+
+
+def test_closed_picker_does_not_fail_a_background_read(monkeypatch):
+    monkeypatch.setattr(update_downloads.database, 'get_game', lambda _: {'f95_url': 'https://f95zone.to/threads/1/'})
+    service = UpdateDownloads(DownloadManager())
+
+    def fetch(_):
+        service.clear(1)
+        return {'success': True, 'version': 'v1', 'builds': []}
+
+    monkeypatch.setattr(update_downloads.scraper, 'fetch_thread_download_links', fetch)
+    assert service.get_links(1, picker=False)['success']
+    assert service.get_links(1) == {'success': False, 'error': 'Download picker was closed'}
