@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 # SPDX-License-Identifier: GPL-3.0-or-later
+import json
 import os
 import subprocess
 import sys
@@ -4292,3 +4293,81 @@ def test_wine_group_ignores_gamescope_processes():
     from core.launcher import _WINE_BACKGROUND_NAMES
 
     assert {"gamescope", "gamescope-wl", "xwayland"} <= _WINE_BACKGROUND_NAMES
+
+
+GAMESCOPE_AUTO = {**GAMESCOPE_PIXEL, "game_resolution": "", "scaler": "", "filter": ""}
+
+
+def _rpgm_game(folder, system):
+    (folder / "data").mkdir(parents=True)
+    (folder / "data" / "System.json").write_text(json.dumps(system))
+    game = folder / "Game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    return game
+
+
+def _launch_logged(monkeypatch, game, options, screen):
+    monkeypatch.setattr("core.launcher.display_info.screen_size", lambda: screen)
+    monkeypatch.setattr("core.launcher.host_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("core.launcher.get_setting", lambda key: "true" if key == "enable_logging" else "")
+    with patch("subprocess.Popen") as popen, patch("threading.Thread"):
+        assert Launcher().launch(str(game), gamescope=options)["success"]
+    return popen.call_args.args[0], game.with_name(f"{game.stem}_wlib.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_uses_native_mz_size(tmp_path, monkeypatch, _gamescope_host):
+    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+    argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
+    assert argv == ["/usr/bin/gamescope", "-f", "-W", "1920", "-H", "1080", "-w", "1280", "-h", "720", "--", str(game)]
+    note = "Gamescope game size 1280x720 from data/System.json"
+    assert note in log
+    assert log.index(note) < log.index("Gamescope: /usr/bin/gamescope")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_set_game_resolution_skips_detection(tmp_path, monkeypatch, _gamescope_host):
+    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+
+    def fail(_folder):
+        raise AssertionError("detection must not run")
+
+    monkeypatch.setattr("core.game_native_size.detect_native_size", fail)
+    argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_PIXEL, (1920, 1080))
+    assert argv[:-2] == GAMESCOPE_PREFIX[:-1]
+    assert "Gamescope game size" not in log
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_native_size_not_found_is_logged(tmp_path, monkeypatch, _gamescope_host):
+    game = tmp_path / "game.sh"
+    game.write_text("#!/bin/sh\n")
+    game.chmod(0o755)
+    argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
+    assert argv[:9] == ["/usr/bin/gamescope", "-f", "-W", "1920", "-H", "1080", "-w", "1920", "-h"]
+    assert "Gamescope game size: no native size found, using the output size" in log
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_native_size_too_large_is_logged(tmp_path, monkeypatch, _gamescope_host):
+    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1920, "screenHeight": 1080}})
+    argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1366, 768))
+    assert argv[2:10] == ["-W", "1366", "-H", "768", "-w", "1366", "-h", "768"]
+    assert (
+        "Gamescope game size: native 1920x1080 (data/System.json) is larger than the output 1366x768, using the output size"
+        in log
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux hosts only")
+def test_gamescope_detection_error_does_not_stop_launch(tmp_path, monkeypatch, _gamescope_host):
+    game = _rpgm_game(tmp_path, {"advanced": {"screenWidth": 1280, "screenHeight": 720}})
+
+    def boom(_folder):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("core.game_native_size.detect_native_size", boom)
+    argv, log = _launch_logged(monkeypatch, game, GAMESCOPE_AUTO, (1920, 1080))
+    assert argv[2:10] == ["-W", "1920", "-H", "1080", "-w", "1920", "-h", "1080"]
+    assert "no native size found" in log

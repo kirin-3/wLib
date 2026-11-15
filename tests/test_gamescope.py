@@ -95,6 +95,45 @@ def test_both_auto_unknown_screen_gives_no_size_flags():
     assert gamescope_argv(options(), None) == ["gamescope", "-f"]
 
 
+def size_flags(*values: int) -> list[str]:
+    flags = ["-W", "-H", "-w", "-h"] if len(values) == 4 else ["-w", "-h"]
+    return [part for flag, value in zip(flags, values, strict=True) for part in (flag, str(value))]
+
+
+@pytest.mark.parametrize(
+    ("opts", "screen", "native", "expected", "reason"),
+    [
+        # Output set, game Auto, no native size.
+        ({"output_resolution": "2560x1440"}, None, None, size_flags(2560, 1440, 2560, 1440), gamescope.GAME_SIZE_NOT_FOUND),
+        # Both Auto, native size found.
+        ({}, (1920, 1080), (1280, 720), size_flags(1920, 1080, 1280, 720), gamescope.GAME_SIZE_NATIVE),
+        # Output set, native size found.
+        ({"output_resolution": "2560x1440"}, (3840, 2160), (816, 624), size_flags(2560, 1440, 816, 624), gamescope.GAME_SIZE_NATIVE),
+        # Native size equal to the output fits.
+        ({}, (1920, 1080), (1920, 1080), size_flags(1920, 1080, 1920, 1080), gamescope.GAME_SIZE_NATIVE),
+        # Native size larger than the output.
+        ({}, (1366, 768), (1920, 1080), size_flags(1366, 768, 1366, 768), gamescope.GAME_SIZE_TOO_LARGE),
+        # Native size wider than the output only.
+        ({"output_resolution": "1280x1024"}, None, (1600, 900), size_flags(1280, 1024, 1280, 1024), gamescope.GAME_SIZE_TOO_LARGE),
+        # Screen size not known.
+        ({}, None, (816, 624), size_flags(816, 624), gamescope.GAME_SIZE_NATIVE),
+        # Set game resolution is not replaced.
+        ({"game_resolution": "1920x1080"}, (2560, 1440), (1280, 720), size_flags(1920, 1080), gamescope.GAME_SIZE_SET),
+    ],
+)
+def test_auto_game_size(
+    opts: dict[str, str],
+    screen: tuple[int, int] | None,
+    native: tuple[int, int] | None,
+    expected: list[str],
+    reason: str,
+):
+    argv = gamescope_argv(options(**opts), screen, native_size=native)
+    assert argv == ["gamescope", "-f", *expected]
+    _, why = gamescope.auto_game_size(options(**opts), screen, native)
+    assert why == reason
+
+
 def test_fps_and_extra_args_come_last():
     argv = gamescope_argv(options(fps_limit="60", args=["--hdr-enabled"]))
     assert argv == ["gamescope", "-f", "-r", "60", "--hdr-enabled"]

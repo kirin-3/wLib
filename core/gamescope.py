@@ -225,10 +225,44 @@ def resolve_options(
     }
 
 
+Size = tuple[int, int]
+
+# Why auto_game_size() chose its size.
+GAME_SIZE_SET = "set"  # The user set a game resolution.
+GAME_SIZE_NATIVE = "native"  # The game's native size fits the output.
+GAME_SIZE_NOT_FOUND = "not found"  # No native size; the output size is used.
+GAME_SIZE_TOO_LARGE = "larger than the output"  # Native size does not fit.
+
+
+def output_size(options: GamescopeOptions, screen_size: Size | None = None) -> Size | None:
+    """`-W/-H`: the set output, else the screen size when the game is also Auto."""
+    output = parse_resolution(options.get("output_resolution"))
+    if output is None and parse_resolution(options.get("game_resolution")) is None:
+        # Nested gamescope renders at 1280x720 by default; match the screen.
+        output = screen_size
+    return output
+
+
+def auto_game_size(
+    options: GamescopeOptions, screen_size: Size | None, native: Size | None
+) -> tuple[Size | None, str]:
+    """`-w/-h` and why: a set game size, else a native size that fits, else the output."""
+    game = parse_resolution(options.get("game_resolution"))
+    if game is not None:
+        return game, GAME_SIZE_SET
+    output = output_size(options, screen_size)
+    if native is None:
+        return output, GAME_SIZE_NOT_FOUND
+    if output is not None and (native[0] > output[0] or native[1] > output[1]):
+        return output, GAME_SIZE_TOO_LARGE
+    return native, GAME_SIZE_NATIVE
+
+
 def gamescope_argv(
     options: GamescopeOptions,
-    screen_size: tuple[int, int] | None = None,
+    screen_size: Size | None = None,
     binary: str = "gamescope",
+    native_size: Size | None = None,
 ) -> list[str]:
     """`gamescope <options>` without the trailing `--`."""
     argv = [binary]
@@ -237,13 +271,8 @@ def gamescope_argv(
         argv.append("-f")
     elif mode == "borderless":
         argv.append("-b")
-    output = parse_resolution(options.get("output_resolution"))
-    game = parse_resolution(options.get("game_resolution"))
-    if output is None and game is None and screen_size is not None:
-        # Nested gamescope renders at 1280x720 by default; match the screen.
-        output = game = screen_size
-    elif game is None:
-        game = output
+    output = output_size(options, screen_size)
+    game, _ = auto_game_size(options, screen_size, native_size)
     if output is not None:
         argv += ["-W", str(output[0]), "-H", str(output[1])]
     if game is not None:

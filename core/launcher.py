@@ -76,6 +76,35 @@ def gamescope_skip_reason(
     return ""
 
 
+def gamescope_native_size(
+    options: GamescopeOptions, screen_size: tuple[int, int] | None, game_dir: str
+) -> tuple[tuple[int, int] | None, str]:
+    """The game's native size for an Auto game resolution, and the debug-log note.
+
+    A set game resolution skips detection and gives no note. Detection errors
+    count as "no native size", so they never stop the launch.
+    """
+    if gamescope_mod.parse_resolution(options.get("game_resolution")) is not None:
+        return None, ""
+    from .game_native_size import detect_native_size
+
+    try:
+        found = detect_native_size(game_dir)
+    except Exception as exc:  # Best effort; never fail the launch.
+        print(f"Gamescope game size detection failed: {exc}")
+        found = None
+    native = (found.width, found.height) if found else None
+    size, why = gamescope_mod.auto_game_size(options, screen_size, native)
+    if found and why == gamescope_mod.GAME_SIZE_NATIVE:
+        return native, f"Gamescope game size {found.width}x{found.height} from {found.source}"
+    if found and why == gamescope_mod.GAME_SIZE_TOO_LARGE and size:
+        return native, (
+            f"Gamescope game size: native {found.width}x{found.height} ({found.source}) "
+            f"is larger than the output {size[0]}x{size[1]}, using the output size"
+        )
+    return native, "Gamescope game size: no native size found, using the output size"
+
+
 def _host_path_module():
     return ntpath if is_windows() else posixpath
 
@@ -1539,8 +1568,13 @@ class Launcher:
             if not reason:
                 gamescope_path = host_which("gamescope")
                 if gamescope_path:
+                    screen = display_info.screen_size()
+                    native, size_note = gamescope_native_size(gamescope, screen, game_dir)
+                    if size_note:
+                        performance_notes.append(size_note)
+                        print(size_note)
                     gamescope_cmd = gamescope_mod.gamescope_argv(
-                        gamescope, display_info.screen_size(), gamescope_path
+                        gamescope, screen, gamescope_path, native_size=native
                     )
                 else:
                     reason = "not installed"

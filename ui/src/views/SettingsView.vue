@@ -2041,7 +2041,7 @@ const browseUrm = async () => {
             </label>
             <label class="text-xs space-y-1" style="color: var(--text-secondary)">
               <span class="block">Game resolution</span>
-              <input v-model="gamescope.drafts.gamescope_game_resolution" type="text" class="settings-input w-full" placeholder="Auto (same as the output)"
+              <input v-model="gamescope.drafts.gamescope_game_resolution" type="text" class="settings-input w-full" placeholder="Auto (the game's own size when wLib finds it, else the output)"
                 :aria-invalid="!!gamescope.errors.gamescope_game_resolution"
                 @input="gamescope.checkText('gamescope_game_resolution')" @blur="gamescope.commitText('gamescope_game_resolution')" @keydown.enter.prevent="gamescope.commitText('gamescope_game_resolution')" />
               <span v-if="gamescope.errors.gamescope_game_resolution" class="block" role="alert" style="color: var(--danger-text)">{{ gamescope.errors.gamescope_game_resolution }}</span>
