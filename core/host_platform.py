@@ -221,6 +221,25 @@ def _is_sandbox_only_env_var(name: str) -> bool:
     return name.startswith(("QT_", "PYTHON", "FLATPAK_", "QTWEBENGINE_"))
 
 
+def host_tool_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Environment for host tools such as ffmpeg, without the bundle's libraries.
+
+    PyInstaller and AppImage builds point LD_LIBRARY_PATH at their own
+    libraries; host binaries that load them can fail to start. The value from
+    before the bundle changed it (LD_LIBRARY_PATH_ORIG) is restored, or the
+    variable is removed.
+    """
+    clean = dict(os.environ if environ is None else environ)
+    for var in ("APPIMAGE", "APPDIR", "ARGV0", "APPIMAGE_SILENT_INSTALL", "OWD", "APPIMAGE_EXTRACT_AND_RUN"):
+        _ = clean.pop(var, None)
+    original = str(clean.pop("LD_LIBRARY_PATH_ORIG", "") or "").strip()
+    if original:
+        clean["LD_LIBRARY_PATH"] = original
+    else:
+        _ = clean.pop("LD_LIBRARY_PATH", None)
+    return clean
+
+
 def host_which(name: str) -> str | None:
     """Find `name` on the host PATH (design D4).
 

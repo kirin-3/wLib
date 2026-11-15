@@ -234,11 +234,11 @@ def test_install_hints():
     which = _which({"dnf": "/usr/bin/dnf"})
     assert web_video.install_hint(which, windows=True)["command"] == "winget install Gyan.FFmpeg"
     linux = web_video.install_hint(which, windows=False, flatpak=False, nixos=False)
-    assert linux == {"command": "sudo dnf install ffmpeg-free", "package_manager": "dnf", "platform": "linux", "host": False}
+    assert linux == {"command": "sudo dnf install ffmpeg --allowerasing", "package_manager": "dnf", "platform": "linux", "host": False}
     nixos = web_video.install_hint(which, windows=False, flatpak=False, nixos=True)
     assert nixos["package_manager"] == "nixos" and "pkgs.ffmpeg" in nixos["command"]
     flatpak = web_video.install_hint(which, windows=False, flatpak=True, nixos=False)
-    assert flatpak["host"] is True and flatpak["command"] == "sudo dnf install ffmpeg-free"
+    assert flatpak["host"] is True and flatpak["command"] == "sudo dnf install ffmpeg --allowerasing"
     assert web_video.install_hint(_which({}), windows=False, flatpak=False, nixos=False)["command"] == ""
 
 
@@ -272,9 +272,11 @@ class FakeTools:
         self.encode_code = encode_code
         self.write = write
         self.commands: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
 
-    def run(self, cmd, **_kwargs):
+    def run(self, cmd, **kwargs):
         self.commands.append(cmd)
+        self.envs.append(kwargs.get("env"))
         path = cmd[-1]
         if path.endswith(web_video.PARTIAL_SUFFIX):
             text = _probe_json(*self.output)
@@ -282,8 +284,9 @@ class FakeTools:
             text = _probe_json("h264", "aac", 10.0)
         return subprocess.CompletedProcess(cmd, 0, text, "")
 
-    def popen(self, cmd, **_kwargs):
+    def popen(self, cmd, **kwargs):
         self.commands.append(cmd)
+        self.envs.append(kwargs.get("env"))
         if self.write:
             Path(cmd[-1]).write_bytes(b"converted")
         process = MagicMock()
@@ -321,6 +324,21 @@ def test_convert_replaces_the_file(clip):
     assert encode[encode.index("-c:v") + 1] == "libsvtav1" and encode[encode.index("-c:a") + 1] == "libopus"
     assert encode[-3:] == ["-f", "mp4", str(clip) + web_video.PARTIAL_SUFFIX]
     assert not Path(str(clip) + web_video.PARTIAL_SUFFIX).exists()
+
+
+def test_ffmpeg_does_not_get_the_bundled_libraries(clip, monkeypatch):
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/wlib/_internal")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/local/lib")
+    tools = FakeTools()
+    assert _convert(clip, tools)["ok"]
+    assert len(tools.envs) == 3
+    for env in tools.envs:
+        assert env is not None
+        assert env["LD_LIBRARY_PATH"] == "/usr/local/lib" and "LD_LIBRARY_PATH_ORIG" not in env
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG")
+    with patch("core.web_video.subprocess.run", side_effect=FakeTools().run) as run:
+        _ = web_video._run_text(["ffmpeg", "-encoders"], 5)  # pyright: ignore[reportPrivateUsage]
+    assert "LD_LIBRARY_PATH" not in run.call_args.kwargs["env"]
 
 
 @pytest.mark.parametrize(

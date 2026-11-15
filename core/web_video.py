@@ -24,6 +24,7 @@ from core.host_platform import (
     get_data_dir,
     host_command,
     host_system_layout,
+    host_tool_env,
     host_which,
     is_flatpak,
     is_windows,
@@ -422,7 +423,7 @@ LINUX_INSTALL_COMMANDS: tuple[tuple[str, str], ...] = (
     ("rpm-ostree", "rpm-ostree install ffmpeg-free"),
     ("pacman", "sudo pacman -S ffmpeg"),
     ("apt", "sudo apt install ffmpeg"),
-    ("dnf", "sudo dnf install ffmpeg-free"),
+    ("dnf", "sudo dnf install ffmpeg --allowerasing"),
     ("zypper", "sudo zypper install ffmpeg"),
     ("xbps-install", "sudo xbps-install ffmpeg"),
 )
@@ -476,6 +477,7 @@ def _run_text(cmd: list[str], timeout: float) -> str:
         check=False,
         stdin=subprocess.DEVNULL,
         timeout=timeout,
+        env=host_tool_env(),
         creationflags=no_console_window(),
     )
     return completed.stdout or ""
@@ -708,6 +710,7 @@ class Converter:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                env=host_tool_env(),
                 creationflags=no_console_window(),
             )
             self._process = process
