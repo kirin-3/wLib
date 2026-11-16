@@ -129,15 +129,15 @@ const stop = async () => {
             <button class="media-cancel px-4 py-2.5 rounded-lg text-sm font-medium mr-auto" @click="close">Cancel</button>
             <button class="media-secondary px-4 py-2.5 rounded-lg text-sm font-medium" :disabled="busy" @click="choose('play-anyway')">Play anyway</button>
             <button class="media-secondary px-4 py-2.5 rounded-lg text-sm font-medium" :disabled="busy" @click="choose('use-browser')">Use system browser</button>
-            <button v-if="convertible" class="media-primary px-5 py-2.5 rounded-lg text-sm font-bold" :disabled="busy" @click="step = 'confirm'">Convert videos</button>
+            <button v-if="convertible" class="media-primary ui-btn-solid px-5 py-2.5 rounded-lg text-sm font-bold" :disabled="busy" @click="step = 'confirm'">Convert videos</button>
           </template>
           <template v-else-if="step === 'confirm'">
             <button class="media-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="step = 'choices'">Back</button>
-            <button class="media-danger px-5 py-2.5 rounded-lg text-sm font-bold" :disabled="busy" @click="confirmConvert">Replace and convert</button>
+            <button class="media-danger ui-btn-solid px-5 py-2.5 rounded-lg text-sm font-bold" :disabled="busy" @click="confirmConvert">Replace and convert</button>
           </template>
           <template v-else>
             <button v-if="running" class="media-secondary px-5 py-2.5 rounded-lg text-sm font-medium" :disabled="status?.cancelled" @click="stop">Cancel conversion</button>
-            <button class="media-primary px-5 py-2.5 rounded-lg text-sm font-bold" @click="close">Close</button>
+            <button class="media-primary ui-btn-solid px-5 py-2.5 rounded-lg text-sm font-bold" @click="close">Close</button>
           </template>
         </div>
       </section>

@@ -126,7 +126,7 @@ const confirm = () => {
           <span v-if="reason && !loading" class="mr-auto text-xs" style="color: var(--text-muted)">{{ reason }}</span>
           <span v-else-if="!single && goingCount < entries.length" class="mr-auto text-xs" style="color: var(--text-muted)">{{ entries.length - goingCount }} skipped</span>
           <button class="files-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="close">Cancel</button>
-          <button class="files-danger px-6 py-2.5 rounded-lg text-sm font-bold" :disabled="!!reason" :title="reason" @click="confirm">{{ single || goingCount === 1 ? "Uninstall" : `Uninstall ${goingCount}` }}</button>
+          <button class="files-danger ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold" :disabled="!!reason" :title="reason" @click="confirm">{{ goingCount > 1 ? `Uninstall ${goingCount} games` : "Uninstall" }}</button>
         </div>
       </section>
     </div>

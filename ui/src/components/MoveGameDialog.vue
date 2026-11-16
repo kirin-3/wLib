@@ -30,6 +30,8 @@ useModalKeyboard(dialog, () => props.modelValue, close);
 const destination = computed(() => (choice.value === OTHER ? otherFolder.value : choice.value));
 const single = computed(() => props.games.length === 1);
 const goingCount = computed(() => actionableEntries(entries.value).length);
+// Before a folder is chosen there is no plan yet, so the button counts the selected games.
+const buttonCount = computed(() => (entries.value.length ? goingCount.value : props.games.length));
 const reason = computed(() => {
   if (!destination.value) return "Choose a destination folder.";
   return confirmReason(entries.value, loading.value, "move");
@@ -152,7 +154,7 @@ const start = async () => {
           <span v-if="reason && !loading" class="mr-auto text-xs" style="color: var(--text-muted)">{{ reason }}</span>
           <span v-else-if="!single && goingCount < entries.length" class="mr-auto text-xs" style="color: var(--text-muted)">{{ entries.length - goingCount }} skipped</span>
           <button class="files-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="close">Cancel</button>
-          <button class="files-primary px-6 py-2.5 rounded-lg text-sm font-bold" :disabled="!!reason || starting" :title="reason" @click="start">{{ single || goingCount === 1 ? "Move" : `Move ${goingCount}` }}</button>
+          <button class="files-primary ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold" :disabled="!!reason || starting" :title="reason" @click="start">{{ buttonCount > 1 ? `Move ${buttonCount} games` : "Move" }}</button>
         </div>
       </section>
     </div>
@@ -162,7 +164,7 @@ const start = async () => {
 <style scoped>
 .files-dialog { background: var(--bg-surface); border: 1px solid var(--border); box-shadow: var(--shadow-modal); }
 .files-icon { display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: 9999px; background: var(--brand-glow); color: var(--brand); }
-.files-label { display: block; margin-bottom: 0.4rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
+.files-label { display: block; margin-bottom: 0.375rem; font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); }
 .files-input { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-primary); }
 .files-row { background: var(--bg-inset); border: 1px solid var(--border); }
 .files-path { color: var(--text-secondary); }

@@ -140,7 +140,7 @@ const importSelected = async () => {
       >
         <div>
           <h3 id="import-folder-title" class="text-xl font-bold" style="color: var(--text-primary)">
-            Import Folder
+            Import folder
           </h3>
           <p class="text-xs mt-1" style="color: var(--text-muted)">
             Each subfolder with a game executable becomes one game. Titles, versions and engines are
@@ -237,13 +237,15 @@ const importSelected = async () => {
         <button
           @click="importSelected"
           :disabled="!selectedGames.length || importing"
-          class="px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          class="ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
           {{
             importing
               ? "Adding…"
-              : `Add ${selectedGames.length} game${selectedGames.length === 1 ? "" : "s"}`
+              : selectedGames.length
+                ? `Add ${selectedGames.length} game${selectedGames.length === 1 ? "" : "s"}`
+                : "Add games"
           }}
         </button>
       </div>

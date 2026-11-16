@@ -363,7 +363,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
             v-if="canDownload"
             :disabled="busy || exporting"
             @click="start()"
-            class="primary-btn px-6 py-2.5 rounded-lg text-sm font-bold inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="primary-btn ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold inline-flex items-center gap-2 disabled:cursor-not-allowed"
           >
             <IconLoader2 v-if="busy || (exporting && primaryAction === 'send')" class="w-4 h-4 animate-spin" />
             <IconSend v-else-if="primaryAction === 'send'" class="w-4 h-4" />

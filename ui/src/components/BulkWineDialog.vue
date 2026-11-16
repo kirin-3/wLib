@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { IconGlass } from "@tabler/icons-vue";
 import { api, type GameRecord, type RunnerInfo } from "../services/api";
 import { wineApplicable } from "../utils/bulkActions";
 import { useModalKeyboard } from "../utils/modalKeyboard";
@@ -70,9 +71,12 @@ const apply = () => {
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="bulk-wine-title" tabindex="-1" class="bulk-wine w-full max-w-lg rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none">
         <div class="px-6 pt-6 pb-4 overflow-y-auto min-h-0 space-y-5">
-          <div>
-            <h3 id="bulk-wine-title" class="text-lg font-bold" style="color: var(--text-primary)">Set Wine/Proton</h3>
-            <p class="mt-1 text-sm" style="color: var(--text-secondary)">{{ applicableCount }} of {{ games.length }} selected games can change. Native, custom, sandboxed and running games are skipped.</p>
+          <div class="flex gap-4">
+            <span class="wine-icon" aria-hidden="true"><IconGlass class="w-5 h-5" /></span>
+            <div class="min-w-0 pt-1">
+              <h3 id="bulk-wine-title" class="text-lg font-bold" style="color: var(--text-primary)">Set Wine/Proton</h3>
+              <p class="mt-1 text-sm" style="color: var(--text-secondary)">{{ applicableCount }} of {{ games.length }} selected games can change. Native, custom, sandboxed and running games are skipped.</p>
+            </div>
           </div>
 
           <fieldset class="space-y-2">
@@ -106,7 +110,7 @@ const apply = () => {
         <div class="px-6 py-4 flex items-center justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
           <span v-if="reason" class="mr-auto text-xs" style="color: var(--text-muted)">{{ reason }}</span>
           <button class="px-5 py-2.5 rounded-lg text-sm font-medium" style="color: var(--text-secondary)" @click="close">Cancel</button>
-          <button class="px-6 py-2.5 rounded-lg text-sm font-bold" style="background: var(--brand); color: var(--on-brand)" :disabled="!!reason" :style="reason ? 'opacity:.5;cursor:not-allowed' : ''" :title="reason" @click="apply">Apply</button>
+          <button class="ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold" style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)" :disabled="!!reason" :title="reason" @click="apply">Apply</button>
         </div>
       </section>
     </div>
@@ -119,5 +123,6 @@ const apply = () => {
 .wine-input:focus-visible, .wine-browse:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .wine-browse { color: var(--text-primary); border: 1px solid var(--border); }
 input[type="radio"] { accent-color: var(--brand); }
+.wine-icon { display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: 9999px; background: var(--brand-glow); color: var(--brand); }
 .bulk-wine { background: var(--bg-surface); border: 1px solid var(--border); box-shadow: var(--shadow-modal); }
 </style>

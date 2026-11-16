@@ -591,7 +591,7 @@ const summaryItems = computed(() => [
     showStar: true,
   },
   {
-    label: "Your Rating",
+    label: "Your rating",
     value: averagePersonalRating.value === "—" ? "Not rated" : `${averagePersonalRating.value}/5`,
     accent: averagePersonalRating.value === "—" ? "" : "color: var(--rating-accent)",
     showStar: true,
@@ -603,7 +603,7 @@ const summaryItems = computed(() => [
     showStar: false,
   },
   {
-    label: "Last Played",
+    label: "Last played",
     value: formatLastPlayed(props.game?.last_played),
     accent: "",
     showStar: false,
@@ -2162,8 +2162,9 @@ const removeAttachment = async (name: string) => {
     v-if="modelValue && game"
     class="fixed inset-0 z-50 flex items-center justify-center p-4"
   >
+    <!-- No backdrop blur here: it was removed for speed. A darker scrim keeps the page behind as quiet as the blurred scrim of the other dialogs. -->
     <div
-      class="absolute inset-0 bg-black/80"
+      class="absolute inset-0 bg-black/85"
       @click="requestClose"
     ></div>
 
@@ -2300,7 +2301,7 @@ const removeAttachment = async (name: string) => {
               style="color: var(--text-primary)"
             >
               <IconExternalLinkFilled class="ui-action-icon" />
-              Open in Browser
+              Open in browser
             </button>
             <button
               v-if="game.f95_url"
@@ -2310,7 +2311,7 @@ const removeAttachment = async (name: string) => {
               style="color: var(--text-primary)"
             >
               <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
-              {{ updateCheckState.running ? "Checking..." : "Check Updates" }}
+              {{ updateCheckState.running ? "Checking..." : "Check updates" }}
             </button>
             <button v-if="downloadStatusText" type="button" @click="closeAndNavigate('/downloads')"
               class="modal-toolbar-action ui-action-btn" style="color: var(--brand)"
@@ -2414,7 +2415,7 @@ const removeAttachment = async (name: string) => {
               style="color: var(--text-secondary)"
             >
               <IconStarFilled class="ui-section-icon" />
-              Your Ratings
+              Your ratings
             </h3>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div
@@ -2570,7 +2571,7 @@ const removeAttachment = async (name: string) => {
           </div>
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">
-              <label for="detail-exe" class="modal-label">Executable Path</label>
+              <label for="detail-exe" class="modal-label">Executable path</label>
               <div class="flex gap-2">
                 <input
                   v-model="exePath" id="detail-exe"
@@ -2590,7 +2591,7 @@ const removeAttachment = async (name: string) => {
             </div>
 
             <div class="col-span-2">
-              <label class="modal-label">Launch Targets</label>
+              <label class="modal-label">Launch targets</label>
               <div class="launch-target-panel">
                 <div class="launch-target-row launch-target-card">
                   <div class="launch-target-main">
@@ -2614,7 +2615,7 @@ const removeAttachment = async (name: string) => {
                           :disabled="savingDefaultLabel"
                           class="modal-btn ui-action-btn disabled:opacity-50"
                         >
-                          {{ savingDefaultLabel ? "Saving..." : "Save Name" }}
+                          {{ savingDefaultLabel ? "Saving..." : "Save name" }}
                         </button>
                       </div>
                     </div>
@@ -2675,7 +2676,7 @@ const removeAttachment = async (name: string) => {
                         :disabled="savingTargetId === target.id"
                         class="modal-btn ui-action-btn disabled:opacity-50"
                       >
-                        {{ savingTargetId === target.id ? "Saving..." : "Save Target" }}
+                        {{ savingTargetId === target.id ? "Saving..." : "Save target" }}
                       </button>
                     </div>
                   </div>
@@ -2761,7 +2762,7 @@ const removeAttachment = async (name: string) => {
                         :disabled="addingLaunchTarget"
                         class="modal-btn ui-action-btn disabled:opacity-50"
                       >
-                        {{ addingLaunchTarget ? "Adding..." : "Add Target" }}
+                        {{ addingLaunchTarget ? "Adding..." : "Add target" }}
                       </button>
                     </div>
                   </div>
@@ -2778,7 +2779,7 @@ const removeAttachment = async (name: string) => {
             </div>
 
             <div class="col-span-2">
-              <label for="detail-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
+              <label for="detail-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command-line arguments' }}</label>
               <input
                 v-model="commandLineArgs"
                 id="detail-command"
@@ -2790,13 +2791,13 @@ const removeAttachment = async (name: string) => {
             </div>
 
             <div class="col-span-2">
-              <label class="modal-label">Launch Options</label>
+              <label class="modal-label">Launch options</label>
               <div
                 class="rounded-lg p-3 space-y-2"
                 style="background: var(--bg-raised); border: 1px solid var(--border)"
               >
                 <div class="rounded-md px-2 py-2" style="background: var(--bg-surface)">
-                  <label for="detail-runtime" class="modal-label">Runtime Mode</label>
+                  <label for="detail-runtime" class="modal-label">Runtime mode</label>
                   <select v-model="launchMode" id="detail-runtime" class="modal-input w-full">
                     <option
                       v-for="option in launchModeOptions"
@@ -2838,13 +2839,13 @@ const removeAttachment = async (name: string) => {
                 >
                   <div class="flex items-center gap-2">
                     <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      Run with Japanese Locale
+                      Run with Japanese locale
                     </span>
                     <label class="relative inline-flex items-center cursor-pointer ml-auto">
                       <input
                         type="checkbox"
                         v-model="runJapaneseLocale"
-                        aria-label="Run with Japanese Locale"
+                        aria-label="Run with Japanese locale"
                         class="sr-only peer"
                       />
                       <div class="ui-toggle"></div>
@@ -2865,13 +2866,13 @@ const removeAttachment = async (name: string) => {
                 >
                   <div class="flex items-center gap-2">
                     <span class="text-sm font-medium" style="color: var(--text-primary)">
-                      Run in Wayland Compatibility Mode
+                      Run in Wayland compatibility mode
                     </span>
                     <label class="relative inline-flex items-center cursor-pointer ml-auto">
                       <input
                         type="checkbox"
                         v-model="runWayland"
-                        aria-label="Run in Wayland Compatibility Mode"
+                        aria-label="Run in Wayland compatibility mode"
                         class="sr-only peer"
                       />
                       <div class="ui-toggle"></div>
@@ -2907,7 +2908,7 @@ const removeAttachment = async (name: string) => {
                       class="text-[0.625rem] uppercase px-1.5 py-0.5 rounded font-bold"
                       style="background: var(--bg-overlay); color: var(--text-muted); border: 1px solid var(--border)"
                     >
-                      Not Installed
+                      Not installed
                     </span>
                     <label
                       class="relative inline-flex items-center ml-auto"
@@ -2947,7 +2948,7 @@ const removeAttachment = async (name: string) => {
               >
                 <div>
                   <p class="text-sm font-medium" style="color: var(--text-primary)">
-                    Use Custom Wine Prefix
+                    Use custom Wine prefix
                   </p>
                   <p class="text-xs" style="color: var(--text-muted)">
                     Isolate this game's save files and dependencies from the global prefix.
@@ -2957,7 +2958,7 @@ const removeAttachment = async (name: string) => {
                   <input
                     type="checkbox"
                     v-model="useCustomPrefix"
-                    aria-label="Use Custom Wine Prefix"
+                    aria-label="Use custom Wine prefix"
                     class="sr-only peer"
                     @change="onCustomPrefixToggle"
                   />
@@ -2974,7 +2975,7 @@ const removeAttachment = async (name: string) => {
               </div>
               <div v-if="useCustomPrefix" class="mt-3 p-4 rounded-lg space-y-4" style="background: var(--bg-inset); border: 1px dashed var(--border);">
                 <div>
-                  <label for="detail-prefix" class="modal-label">Custom Prefix Path</label>
+                  <label for="detail-prefix" class="modal-label">Custom prefix path</label>
                   <div class="flex gap-2">
                     <input
                       v-model="customPrefix" id="detail-prefix"
@@ -2998,7 +2999,7 @@ const removeAttachment = async (name: string) => {
                     class="w-full text-xs font-medium px-4 py-2 rounded-lg transition-colors"
                     style="background: var(--brand-glow); color: var(--brand); border: 1px solid var(--brand-deep);"
                   >
-                    Install RTPs to this Prefix
+                    Install RTPs to this prefix
                   </button>
                 </div>
               </div>
@@ -3126,7 +3127,7 @@ const removeAttachment = async (name: string) => {
             </div>
 
             <div class="col-span-2">
-              <label for="detail-cover" class="modal-label">Cover Image URL</label>
+              <label for="detail-cover" class="modal-label">Cover image URL</label>
               <input
                 v-model="coverImage" id="detail-cover"
                 type="text"
@@ -3309,7 +3310,7 @@ const removeAttachment = async (name: string) => {
                 class="save-btn ui-action-btn disabled:opacity-50"
               >
                 <IconDeviceFloppyFilled class="ui-action-icon" />
-                {{ saving ? "Saving..." : "Save Changes" }}
+                {{ saving ? "Saving..." : "Save changes" }}
               </button>
             </template>
             <button

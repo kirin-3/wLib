@@ -490,7 +490,7 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
           </p>
           <span v-else class="flex-1"></span>
           <button type="button" class="editor-btn" :disabled="!dirty || saving" @click="discard">Discard</button>
-          <button type="button" class="editor-btn editor-primary" :disabled="!dirty || hasErrors || saving" @click="doSave">
+          <button type="button" class="editor-btn editor-primary ui-btn-solid" :disabled="!dirty || hasErrors || saving" @click="doSave">
             <IconLoader2 v-if="saving" :size="14" class="animate-spin mr-1" /> Save
           </button>
         </div>

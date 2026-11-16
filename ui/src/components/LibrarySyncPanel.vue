@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { IconCloud, IconRefresh } from "@tabler/icons-vue";
+import { IconAlertTriangle, IconArrowsExchange, IconCloud, IconEye, IconEyeOff, IconHistory, IconLock, IconLockOpen, IconRefresh } from "@tabler/icons-vue";
 import { api, type LibrarySyncChoice, type LibrarySyncStatus, type SyncSnapshot } from "../services/api";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
@@ -19,6 +19,10 @@ const dialogElement = ref<HTMLElement | null>(null);
 const passphrase = ref("");
 const confirmation = ref("");
 const dialogError = ref("");
+const showPassphrase = ref(false);
+// Live check of the two encrypt fields; the submit check stays as the last guard.
+const passphraseMismatch = computed(() => dialog.value === "encrypt" && confirmation.value !== "" && passphrase.value !== confirmation.value);
+const canSubmitPassphrase = computed(() => passphrase.value !== "" && (dialog.value !== "encrypt" || passphrase.value === confirmation.value));
 let timer: ReturnType<typeof setInterval> | undefined;
 let requestVersion = 0;
 let previousState = "";
@@ -41,9 +45,10 @@ function closeDialog() {
   dialog.value = null;
   restoreTarget.value = null;
   passphrase.value = confirmation.value = dialogError.value = "";
+  showPassphrase.value = false;
 }
 const snapshotLabel = (snapshot: SyncSnapshot) =>
-  `${new Date(snapshot.created_at).toLocaleString()} · ${snapshot.games} ${snapshot.games === 1 ? "game" : "games"}`;
+  `${new Date(snapshot.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} · ${snapshot.games} ${snapshot.games === 1 ? "game" : "games"}`;
 async function loadSnapshots() {
   try {
     const result = await api.listSyncSnapshots();
@@ -242,37 +247,74 @@ onBeforeUnmount(() => {
     </div>
     <footer class="sync-footer"><button type="button" class="sync-link" @click="openPrivacy">Privacy policy</button></footer>
     <Teleport to="body">
-      <div v-if="dialog" class="sync-overlay" @click.self="closeDialog">
-        <section ref="dialogElement" class="sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title" tabindex="-1">
-          <template v-if="dialog === 'choice'">
-            <h3 id="sync-dialog-title">Choose which library to use</h3>
-            <p>{{ choiceMessage }} No library has been changed yet.</p>
-            <button type="button" :disabled="busy" @click="choose('use-remote')"><strong>Use sync file</strong><span>Replace this library, including deletions. Keep local launch options for matching games.</span></button>
-            <button type="button" :disabled="busy" @click="choose('use-local')"><strong>Use this machine</strong><span>Replace the sync file with this machine's library.</span></button>
-            <button type="button" :disabled="busy" @click="choose('merge-once')"><strong>Merge once</strong><span>Combine both libraries, using sync file values for matches, then upload. Delete nothing.</span></button>
-          </template>
-          <template v-else-if="dialog === 'restore' && !restoreTarget">
-            <h3 id="sync-dialog-title">Restore an earlier library</h3>
-            <p>wLib saves this machine's library before each sync changes it and keeps the last five copies.</p>
-            <p v-if="snapshotsLoaded && !snapshots.length">No earlier library is saved yet.</p>
-            <button v-for="snapshot in snapshots" :key="snapshot.name" type="button" :disabled="busy" @click="restoreTarget = snapshot"><strong>{{ snapshotLabel(snapshot) }}</strong></button>
-          </template>
-          <template v-else-if="dialog === 'restore' && restoreTarget">
-            <h3 id="sync-dialog-title">Restore this library?</h3>
-            <p>This machine's library goes back to {{ snapshotLabel(restoreTarget) }}, including its executable paths and launch options, and games added since are removed. The current library is saved first, so you can undo this the same way. The restored library is uploaded on the next sync.</p>
-            <button type="button" class="sync-primary" :disabled="busy" @click="restoreSnapshot"><strong>{{ busy ? 'Restoring...' : 'Restore' }}</strong></button>
-            <button type="button" :disabled="busy" @click="restoreTarget = null">Back</button>
-          </template>
-          <form v-else @submit.prevent="submitPassphrase">
-            <h3 id="sync-dialog-title">{{ dialog === 'unlock' ? 'Unlock the sync file' : 'Encrypt the sync file' }}</h3>
-            <p v-if="dialog === 'unlock'">Enter the passphrase used by the sync file. Your derived key will stay on this machine for automatic sync.</p>
-            <p v-else>A forgotten passphrase cannot be recovered. Keep it somewhere safe; without it, the file cannot be read.</p>
-            <label for="sync-passphrase">Passphrase</label><input id="sync-passphrase" v-model="passphrase" type="password" :autocomplete="dialog === 'unlock' ? 'current-password' : 'new-password'" :disabled="busy" />
-            <template v-if="dialog === 'encrypt'"><label for="sync-confirmation">Confirm passphrase</label><input id="sync-confirmation" v-model="confirmation" type="password" autocomplete="new-password" :disabled="busy" /></template>
-            <button type="submit" class="sync-primary" :disabled="busy">{{ busy ? 'Working...' : dialog === 'unlock' ? 'Unlock and sync' : 'Enable encryption' }}</button>
-          </form>
-          <p v-if="dialogError" class="sync-error" role="alert">{{ dialogError }}</p>
-          <button type="button" :disabled="busy" @click="closeDialog">Cancel</button>
+      <div v-if="dialog" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="closeDialog"></div>
+        <section ref="dialogElement" class="sync-dialog relative w-full max-w-lg rounded-2xl overflow-hidden flex flex-col outline-none" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title" tabindex="-1">
+          <div class="sync-dialog-body">
+            <div class="sync-dialog-head">
+              <span class="sync-dialog-icon" aria-hidden="true">
+                <IconArrowsExchange v-if="dialog === 'choice'" class="w-5 h-5" />
+                <IconHistory v-else-if="dialog === 'restore'" class="w-5 h-5" />
+                <IconLockOpen v-else-if="dialog === 'unlock'" class="w-5 h-5" />
+                <IconLock v-else class="w-5 h-5" />
+              </span>
+              <div class="min-w-0">
+                <template v-if="dialog === 'choice'">
+                  <h3 id="sync-dialog-title">Choose which library to use</h3>
+                  <p>{{ choiceMessage }} No library has been changed yet.</p>
+                </template>
+                <template v-else-if="dialog === 'restore' && !restoreTarget">
+                  <h3 id="sync-dialog-title">Restore an earlier library</h3>
+                  <p>wLib saves this machine's library before each sync changes it and keeps the last five copies.</p>
+                </template>
+                <template v-else-if="dialog === 'restore'">
+                  <h3 id="sync-dialog-title">Restore this library?</h3>
+                  <p>This machine's library goes back to {{ snapshotLabel(restoreTarget!) }}, including its executable paths and launch options, and games added since are removed. The current library is saved first, so you can undo this the same way. The restored library is uploaded on the next sync.</p>
+                </template>
+                <template v-else>
+                  <h3 id="sync-dialog-title">{{ dialog === 'unlock' ? 'Unlock the sync file' : 'Encrypt the sync file' }}</h3>
+                  <p v-if="dialog === 'unlock'">Enter the passphrase used by the sync file. Your derived key will stay on this machine for automatic sync.</p>
+                  <p v-else>A forgotten passphrase cannot be recovered. Keep it somewhere safe; without it, the file cannot be read.</p>
+                </template>
+              </div>
+            </div>
+            <div v-if="dialog === 'choice'" class="sync-options">
+              <button type="button" class="sync-option" :disabled="busy" @click="choose('use-remote')"><strong>Use sync file</strong><span>Replace this library, including deletions. Keep local launch options for matching games.</span><span class="sync-option-risk"><IconAlertTriangle class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />Games that are not in the sync file are removed from this machine.</span></button>
+              <button type="button" class="sync-option" :disabled="busy" @click="choose('use-local')"><strong>Use this machine</strong><span>Replace the sync file with this machine's library.</span><span class="sync-option-risk"><IconAlertTriangle class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />Changes that other machines saved to the sync file are lost.</span></button>
+              <button type="button" class="sync-option" :disabled="busy" @click="choose('merge-once')"><strong>Merge once</strong><span>Combine both libraries, using sync file values for matches, then upload. Delete nothing.</span></button>
+            </div>
+            <template v-else-if="dialog === 'restore' && !restoreTarget">
+              <p v-if="snapshotsLoaded && !snapshots.length" class="sync-dialog-note">No earlier library is saved yet.</p>
+              <div v-else class="sync-options">
+                <button v-for="snapshot in snapshots" :key="snapshot.name" type="button" class="sync-option" :disabled="busy" @click="restoreTarget = snapshot"><strong>{{ snapshotLabel(snapshot) }}</strong></button>
+              </div>
+            </template>
+            <form v-else-if="dialog === 'unlock' || dialog === 'encrypt'" id="sync-passphrase-form" class="sync-fields" @submit.prevent="submitPassphrase">
+              <label for="sync-passphrase">Passphrase</label>
+              <div class="sync-secret">
+                <input id="sync-passphrase" class="sync-pass" v-model="passphrase" :type="showPassphrase ? 'text' : 'password'" :autocomplete="dialog === 'unlock' ? 'current-password' : 'new-password'" spellcheck="false" :disabled="busy" />
+                <button type="button" class="sync-reveal" :aria-pressed="showPassphrase" :aria-label="showPassphrase ? 'Hide passphrase' : 'Show passphrase'" :title="showPassphrase ? 'Hide passphrase' : 'Show passphrase'" @click="showPassphrase = !showPassphrase">
+                  <IconEyeOff v-if="showPassphrase" class="w-4 h-4" /><IconEye v-else class="w-4 h-4" />
+                </button>
+              </div>
+              <template v-if="dialog === 'encrypt'">
+                <label for="sync-confirmation">Confirm passphrase</label>
+                <input id="sync-confirmation" class="sync-pass" v-model="confirmation" :type="showPassphrase ? 'text' : 'password'" autocomplete="new-password" spellcheck="false" :disabled="busy" :aria-invalid="passphraseMismatch" aria-describedby="sync-match" />
+                <p id="sync-match" class="sync-match" :class="{ 'sync-match-bad': passphraseMismatch, 'sync-match-ok': canSubmitPassphrase && confirmation !== '' }" aria-live="polite">{{ passphraseMismatch ? 'The passphrases do not match.' : canSubmitPassphrase && confirmation !== '' ? 'The passphrases match.' : 'Type the passphrase again.' }}</p>
+              </template>
+            </form>
+            <p v-if="dialogError" class="sync-error" role="alert">{{ dialogError }}</p>
+          </div>
+          <div class="sync-dialog-foot">
+            <template v-if="dialog === 'restore' && restoreTarget">
+              <button type="button" class="sync-cancel" :disabled="busy" @click="restoreTarget = null">Back</button>
+              <button type="button" class="sync-primary ui-btn-solid" :disabled="busy" @click="restoreSnapshot">{{ busy ? 'Restoring...' : 'Restore' }}</button>
+            </template>
+            <template v-else>
+              <button type="button" class="sync-cancel" :disabled="busy" @click="closeDialog">Cancel</button>
+              <button v-if="dialog === 'unlock' || dialog === 'encrypt'" type="submit" form="sync-passphrase-form" class="sync-primary ui-btn-solid" :disabled="busy || !canSubmitPassphrase">{{ busy ? 'Working...' : dialog === 'unlock' ? 'Unlock and sync' : 'Enable encryption' }}</button>
+            </template>
+          </div>
         </section>
       </div>
     </Teleport>
@@ -290,11 +332,11 @@ onBeforeUnmount(() => {
 .sync-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
 .sync-controls:empty { display: none; }
 label { font-size: .875rem; }
-button, select, input[type="password"] { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: .5rem; min-height: 44px; padding: .625rem .875rem; font-size: .875rem; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
-.sync-input, input[type="password"] { padding: .625rem 1rem; transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease, color .15s ease; }
-.sync-input:focus, input[type="password"]:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow); }
+button, select, .sync-pass { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: .5rem; min-height: 44px; padding: .625rem .875rem; font-size: .875rem; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.sync-input, .sync-pass { padding: .625rem 1rem; transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease, color .15s ease; }
+.sync-input:focus, .sync-pass:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-glow); }
 button:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
-button:focus-visible, .sync-dialog:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 .sync-btn { background: var(--bg-overlay); border-color: var(--border-hover); font-weight: 600; }
 .sync-btn:hover:not(:disabled) { background: var(--border-hover); }
 .sync-primary { background: var(--brand); color: var(--on-brand); border-color: var(--brand); box-shadow: var(--shadow-brand); font-weight: 600; }
@@ -307,12 +349,33 @@ dl > div { min-width: 0; max-width: 100%; }
 dd { margin: .25rem 0 0; font-size: .875rem; }
 .sync-error { color: var(--danger-text); font-size: .875rem; }
 .sync-encryption { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 44px; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-raised); }
-.sync-overlay { position: fixed; inset: 0; background: var(--overlay-scrim); z-index: 100; display: grid; place-items: center; padding: 1rem; }
-.sync-dialog { width: min(100%, 32rem); max-height: calc(var(--app-vh) - 2rem); overflow-y: auto; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: .75rem; padding: 1.5rem; box-shadow: var(--shadow-modal); }
-.sync-dialog h3 { font-size: 1.125rem; font-weight: 700; margin: 0 0 .5rem; }
-.sync-dialog p { margin: .5rem 0 1rem; }
-.sync-dialog button { display: block; width: 100%; text-align: left; margin-top: .75rem; }
-.sync-dialog button span { display: block; color: var(--text-secondary); font-size: .8125rem; margin-top: .25rem; }
-.sync-dialog form { display: grid; gap: .75rem; }
-@media (max-width: 480px) { .sync-card { padding: 1rem; } .sync-footer { padding-inline: 1rem; } .sync-controls select { width: 100%; } .sync-dialog { padding: 1rem; } }
+.sync-dialog { max-height: calc(var(--app-vh) * 0.9); background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); box-shadow: var(--shadow-modal); }
+.sync-dialog-body { display: grid; gap: 1rem; padding: 1.5rem 1.5rem 1rem; overflow-y: auto; min-height: 0; }
+.sync-dialog-head { display: flex; gap: 1rem; }
+.sync-dialog-head h3 { font-size: 1.125rem; font-weight: 700; margin: .25rem 0 0; }
+.sync-dialog-head p { margin: .25rem 0 0; font-size: .875rem; color: var(--text-secondary); }
+.sync-dialog-icon { display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: 9999px; background: var(--brand-glow); color: var(--brand); }
+.sync-dialog-note { margin: 0; font-size: .875rem; color: var(--text-muted); }
+.sync-options { display: grid; gap: .5rem; }
+.sync-option { display: block; width: 100%; text-align: left; background: var(--bg-inset); }
+.sync-option:hover:not(:disabled) { border-color: var(--border-hover); background: var(--bg-raised); }
+.sync-option span { display: block; color: var(--text-secondary); font-size: .8125rem; margin-top: .25rem; }
+.sync-option .sync-option-risk { display: flex; align-items: flex-start; gap: .375rem; color: var(--danger-text); }
+.sync-option .sync-option-risk svg { margin-top: .1rem; }
+.sync-secret { position: relative; }
+.sync-secret input { width: 100%; padding-right: 2.75rem; }
+.sync-reveal { position: absolute; top: 50%; right: .25rem; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; min-height: 0; width: 2.25rem; height: 2.25rem; padding: 0; background: transparent; border-color: transparent; color: var(--text-muted); }
+.sync-reveal:hover { color: var(--text-primary); background: var(--bg-overlay); }
+.sync-match { margin: 0; font-size: .8125rem; color: var(--text-muted); }
+.sync-match-bad { color: var(--danger-text); }
+.sync-match-ok { color: var(--success-text); }
+.sync-pass[aria-invalid="true"] { border-color: var(--danger-border); }
+.sync-fields { display: grid; gap: .5rem; }
+.sync-fields input + label { margin-top: .25rem; }
+.sync-dialog-foot { display: flex; justify-content: flex-end; gap: .75rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border); background: var(--bg-inset); }
+.sync-dialog-foot button { min-height: 0; padding: .625rem 1.25rem; }
+.sync-cancel { background: transparent; border-color: transparent; color: var(--text-secondary); font-weight: 500; }
+.sync-cancel:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-overlay); }
+.sync-dialog-foot .sync-primary { font-weight: 700; padding-inline: 1.5rem; }
+@media (max-width: 480px) { .sync-card { padding: 1rem; } .sync-footer { padding-inline: 1rem; } .sync-controls select { width: 100%; } .sync-dialog-body { padding: 1rem; } .sync-dialog-foot { padding: .75rem 1rem; } }
 </style>

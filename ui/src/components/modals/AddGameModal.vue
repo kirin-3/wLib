@@ -261,7 +261,7 @@ const save = () => {
       ref="modalRef"
       role="dialog"
       aria-modal="true"
-      aria-label="Add New Game"
+      aria-label="Add game"
       tabindex="-1"
       class="modal-content w-full max-w-lg rounded-2xl shadow-2xl relative overflow-hidden transform transition-all flex flex-col max-h-screen"
     >
@@ -273,7 +273,7 @@ const save = () => {
         "
       >
         <h3 class="text-xl font-bold" style="color: var(--text-primary)">
-          Add New Game
+          Add game
         </h3>
         <button
           @click="close"
@@ -304,10 +304,10 @@ const save = () => {
       <div class="p-6 overflow-y-auto space-y-5 flex-1">
         <div>
           <label
-            class="block text-sm font-medium mb-1.5 flex justify-between"
+            class="block text-sm font-medium mb-1.5"
             style="color: var(--text-secondary)"
           >
-            Game Title <span class="text-red-400 text-xs">*</span>
+            Game title <span class="text-red-400 text-xs" aria-hidden="true">*</span>
           </label>
           <input
             v-model="title"
@@ -320,10 +320,10 @@ const save = () => {
 
         <div>
           <label
-            class="block text-sm font-medium mb-1.5 flex justify-between"
+            class="block text-sm font-medium mb-1.5"
             style="color: var(--text-secondary)"
           >
-            Path to Executable <span v-if="!links.length" class="text-red-400 text-xs">*</span>
+            Path to executable <span v-if="!links.length" class="text-red-400 text-xs" aria-hidden="true">*</span>
           </label>
           <div class="flex gap-2">
             <input
@@ -353,7 +353,7 @@ const save = () => {
           <label
             class="block text-sm font-medium mb-1.5"
             style="color: var(--text-secondary)"
-            >F95Zone Thread URL</label
+            >F95Zone thread URL</label
           >
           <input
             v-model="f95Url"
@@ -412,7 +412,7 @@ const save = () => {
           <label
             class="block text-sm font-medium mb-1.5"
             style="color: var(--text-secondary)"
-            >Launch Mode</label
+            >Launch mode</label
           >
           <select v-model="launchMode" class="modal-input w-full !py-3 text-sm">
             <option
@@ -428,7 +428,7 @@ const save = () => {
           </p>
         </div>
         <div>
-          <label for="add-command" class="modal-label">{{ launchMode === 'custom' ? 'Command' : 'Command Line Arguments' }}</label>
+          <label for="add-command" class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">{{ launchMode === 'custom' ? 'Command' : 'Command-line arguments' }}</label>
           <input id="add-command" v-model="commandLineArgs" type="text" class="modal-input w-full font-mono" :placeholder="launchMode === 'custom' ? 'e.g. onscripter %command% or xsystem35' : 'e.g. gamemoderun %command% --fullscreen'" @keydown.enter="save" />
           <p v-if="launchMode === 'custom'" class="text-xs mt-2" style="color: var(--text-muted)">Use %command% for the target path, or run a command as written in the game folder.</p>
         </div>
@@ -457,10 +457,10 @@ const save = () => {
         <button
           @click="save"
           :disabled="!title.trim() || (!exePath.trim() && !links.length) || saving || isSubmitting"
-          class="px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          class="ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
-          {{ (saving || isSubmitting) ? "Adding…" : "Save to Library" }}
+          {{ (saving || isSubmitting) ? "Adding…" : "Save to library" }}
         </button>
       </div>
     </div>

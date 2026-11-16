@@ -894,7 +894,7 @@ watch(phase, (next, prev) => {
           v-else
           @click="install()"
           :disabled="!canInstall"
-          class="px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          class="ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >
           {{ phase === "installing" ? "Installing…" : isUpdate && !isWishlistTarget ? "Install update" : "Install game" }}
