@@ -164,9 +164,6 @@ def _match_case(real_root: str, parts: list[str]) -> str | None:
     parts = [part for part in parts if part not in ("", ".")]
     if not parts or len(parts) > _CASE_MATCH_MAX_PARTS:
         return None
-    # On Windows "D:" or "C:x" would leave the root; the root check would refuse it, but never look there.
-    if any(os.path.splitdrive(part)[0] for part in parts):
-        return None
     stack: list[tuple[str, int]] = [(real_root, 0)]
     steps = 0
     while stack and steps < _CASE_MATCH_MAX_STEPS:
@@ -196,6 +193,9 @@ def resolve_under_root(root: str, url_path: str) -> str | None:
         return None
     parts = relative.split("/")
     if any(part == ".." for part in parts):
+        return None
+    # On Windows "D:" leaves the root, and "C:x" joins onto a root on drive C: as if the drive were not there.
+    if any(os.path.splitdrive(part)[0] for part in parts):
         return None
     real_root = os.path.realpath(root)
     found = _file_inside(real_root, os.path.join(real_root, relative))

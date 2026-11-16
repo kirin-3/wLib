@@ -96,7 +96,8 @@ def test_case_lookup_is_bounded(game: Path) -> None:
         (folder / "f.txt").write_text("1")
     # Exact paths have no depth limit; the letter-case search stops after 64 parts.
     assert web_player.resolve_game_file(str(game), "/" + "d70/" * 70 + "f.txt") is not None
-    assert web_player.resolve_game_file(str(game), "/" + "D70/" * 70 + "f.txt") is None
+    if not (game / "D70").exists():  # a file system that ignores letter case finds it on the exact path
+        assert web_player.resolve_game_file(str(game), "/" + "D70/" * 70 + "f.txt") is None
     assert web_player.resolve_game_file(str(game), "/" + "D60/" * 60 + "F.TXT") is not None
 
 
