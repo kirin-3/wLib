@@ -4,6 +4,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { IconFolderShare } from "@tabler/icons-vue";
 import { api, type GameFilePlanEntry, type GameRecord, type LibraryFolder } from "../services/api";
 import { actionableEntries, confirmReason, formatBytes, planProblem } from "../utils/gameFiles";
+import PathText from "./PathText.vue";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 import { notifyError } from "../utils/toast";
 
@@ -134,15 +135,16 @@ const start = async () => {
 
           <p v-if="loading" class="text-sm" style="color: var(--text-muted)">Checking the game folders...</p>
           <ul v-else-if="entries.length" class="space-y-2" aria-label="Games to move">
-            <li v-for="entry in entries" :key="entry.game_id" class="files-row rounded-lg p-3">
+            <li v-for="entry in entries" :key="entry.game_id" class="files-row rounded-lg p-3" :class="{ 'files-row--skipped': planProblem(entry) }">
               <div class="flex items-start gap-2">
                 <div class="min-w-0 flex-1">
                   <div class="flex items-baseline gap-2">
-                    <span class="text-sm font-semibold truncate" style="color: var(--text-primary)">{{ entry.title }}</span>
+                    <span class="files-title text-sm font-semibold truncate">{{ entry.title }}</span>
+                    <span v-if="planProblem(entry)" class="files-skip-badge shrink-0">Skipped</span>
                     <span v-if="entry.size_bytes !== null && entry.size_bytes !== undefined" class="text-xs shrink-0" style="color: var(--text-muted)">{{ formatBytes(entry.size_bytes) }}</span>
                   </div>
-                  <div v-if="entry.root" class="files-path font-mono text-xs break-all">{{ entry.root }}</div>
-                  <div v-if="entry.target && !planProblem(entry)" class="mt-1 text-xs break-all" style="color: var(--text-muted)">To {{ entry.target }}{{ entry.same_device ? " (same drive)" : " (copied to another drive)" }}</div>
+                  <div v-if="entry.root" class="files-path font-mono text-xs"><PathText :path="entry.root" /></div>
+                  <div v-if="entry.target && !planProblem(entry)" class="mt-1 text-xs" style="color: var(--text-muted)">To <PathText :path="entry.target" />{{ entry.same_device ? " (same drive)" : " (copied to another drive)" }}</div>
                   <div v-if="planProblem(entry)" class="files-reason mt-1 text-xs" role="note">{{ planProblem(entry) }}</div>
                 </div>
                 <button v-if="entry.root && !entry.blocked_reason" type="button" class="ui-action-btn files-btn px-3 py-1.5 rounded-lg text-sm font-medium ui-hover-surface shrink-0" :aria-label="`Change the folder of ${entry.title}`" @click="changeRoot(entry)">Change...</button>
@@ -165,9 +167,13 @@ const start = async () => {
 .files-dialog { background: var(--bg-surface); border: 1px solid var(--border); box-shadow: var(--shadow-modal); }
 .files-icon { display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: 9999px; background: var(--brand-glow); color: var(--brand); }
 .files-label { display: block; margin-bottom: 0.375rem; font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); }
-.files-input { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-primary); }
+.files-input { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-primary); }
 .files-row { background: var(--bg-inset); border: 1px solid var(--border); }
 .files-path { color: var(--text-secondary); }
+.files-title { color: var(--text-primary); }
+.files-row--skipped { background: transparent; border-style: dashed; }
+.files-row--skipped .files-title, .files-row--skipped .files-path { color: var(--text-muted); }
+.files-skip-badge { padding: 0.05rem 0.4rem; border-radius: 0.25rem; font-size: 0.6875rem; font-weight: 600; color: var(--text-secondary); background: var(--bg-overlay); }
 .files-reason { color: var(--danger-text); }
 .files-btn { color: var(--text-primary); border: 1px solid var(--border); }
 .files-cancel { color: var(--text-secondary); }

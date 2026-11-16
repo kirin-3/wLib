@@ -56,15 +56,19 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="download-settings-title" tabindex="-1" class="quick w-full max-w-lg rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none" data-testid="download-quick-settings">
         <div class="px-6 pt-5 pb-5 overflow-y-auto min-h-0">
           <div class="flex items-start justify-between gap-3">
-            <h3 id="download-settings-title" class="text-lg font-bold" style="color: var(--text-primary)">Download settings</h3>
+            <div>
+              <h3 id="download-settings-title" class="text-lg font-bold" style="color: var(--text-primary)">Download settings</h3>
+              <p class="mt-0.5 text-xs" style="color: var(--text-muted)">Changes save automatically.</p>
+            </div>
             <button type="button" class="dialog-close ui-icon-btn p-1.5 rounded-lg" aria-label="Close" title="Close" @click="close">
               <IconX class="w-5 h-5" aria-hidden="true" />
             </button>
           </div>
           <div class="grid gap-3 mt-4 sm:grid-cols-2">
             <label class="field">
-              <span>Speed limit (KiB/s, 0 for no limit)</span>
-              <input v-model.number="limit" type="number" min="0" step="64" class="input" data-testid="quick-limit" @change="saveLimit" />
+              <span>Speed limit (KiB/s)</span>
+              <input v-model.number="limit" type="number" min="0" step="64" class="input" data-testid="quick-limit" aria-describedby="quick-limit-help" @change="saveLimit" />
+              <small id="quick-limit-help" class="help">0 means no limit. The limit is for file hosts and torrents together.</small>
             </label>
             <label class="field">
               <span>Downloads at the same time</span>
@@ -72,6 +76,8 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
                 <option v-for="count in MAX_ACTIVE_DOWNLOADS" :key="count" :value="count">{{ count }}</option>
               </select>
             </label>
+          </div>
+          <div class="mt-4 space-y-2">
             <label class="check">
               <input v-model="whilePlaying" type="checkbox" @change="saveWhilePlaying" />
               <span>Pause downloads while a game runs</span>
@@ -80,11 +86,12 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
               <input v-model="onBattery" type="checkbox" @change="saveOnBattery" />
               <span>Pause downloads on battery power</span>
             </label>
+            <p class="help" style="padding-left: calc(13px + 0.5rem)">A paused download that cannot continue keeps running.</p>
           </div>
-          <p class="text-xs mt-3" style="color: var(--text-secondary)">The limit is for file hosts and torrents together. A paused download that cannot continue keeps running.</p>
         </div>
-        <div class="px-6 py-3 text-sm" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
-          <RouterLink to="/settings#library-downloads" class="settings-link" @click="close">Open Settings › Library &amp; Downloads</RouterLink>
+        <div class="px-6 py-3 flex items-center gap-3 text-sm" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
+          <RouterLink to="/settings#library-downloads" class="settings-link" @click="close">More download settings</RouterLink>
+          <button type="button" class="dialog-done ml-auto px-5 py-2 rounded-lg text-sm font-semibold" @click="close">Done</button>
         </div>
       </section>
     </div>
@@ -94,14 +101,17 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
 <style scoped>
 .quick { background: var(--bg-surface); border: 1px solid var(--border); box-shadow: var(--shadow-modal); }
 .dialog-close { color: var(--text-secondary); }
-.dialog-close:focus-visible, .settings-link:focus-visible, .check input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.dialog-close:focus-visible, .dialog-done:focus-visible, .settings-link:focus-visible, .check input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .settings-link { color: var(--brand); text-decoration: underline; text-underline-offset: 2px; border-radius: 0.25rem; }
-.field { display: grid; gap: 0.3rem; font-size: 0.8rem; color: var(--text-secondary); }
+.field { display: grid; gap: 0.3rem; align-content: start; font-size: 0.8rem; color: var(--text-secondary); }
+.help { display: block; font-size: 0.75rem; color: var(--text-muted); }
+.dialog-done { color: var(--text-primary); background: var(--bg-raised); border: 1px solid var(--border); }
+.dialog-done:hover { background: var(--bg-overlay); border-color: var(--border-hover); }
 .check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-primary); }
 .input {
   padding: 0.4rem 0.6rem;
   border-radius: 0.5rem;
-  background: var(--bg-inset);
+  background: var(--bg-raised);
   border: 1px solid var(--border);
   color: var(--text-primary);
   font-size: 0.875rem;

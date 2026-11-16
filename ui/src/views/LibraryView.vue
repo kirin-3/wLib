@@ -2660,14 +2660,16 @@ onUnmounted(() => {
             {{ contextMenu.game.title }}
           </p>
           <template v-if="contextMenuView === 'actions'">
+            <div role="separator" class="context-sep" />
             <button @click="selection.toggle(contextMenu.game.id); selecting = true; closeContextMenu()">Select</button>
             <button @click="runContextAction('play')">
               {{ isWishlisted(contextMenu.game) ? "Set up" : runningGameIds.has(contextMenu.game.id) ? "Stop" : "Play" }}
             </button>
+            <div v-if="!(runningGameIds.has(contextMenu.game.id) && contextTools.length)" role="separator" class="context-sep" />
             <template v-if="runningGameIds.has(contextMenu.game.id) && contextTools.length">
-              <div role="separator" class="my-1 border-t" style="border-color: var(--border)" />
+              <div role="separator" class="context-sep" />
               <button v-for="tool in contextTools" :key="tool.id" type="button" class="context-item" :disabled="loadingCompanionId !== null" @click="launchContextTool(tool)">{{ tool.name }}</button>
-              <div role="separator" class="my-1 border-t" style="border-color: var(--border)" />
+              <div role="separator" class="context-sep" />
             </template>
             <button
               @click="runContextAction('folder')"
@@ -2699,9 +2701,10 @@ onUnmounted(() => {
               class="min-h-11"
               @click="runContextAction('skip-version')"
             >{{ isUpdateSkipped(contextMenu.game) ? `Stop skipping ${contextMenu.game.skipped_version}` : `Skip version ${contextMenu.game.latest_version}` }}</button>
+            <div role="separator" class="context-sep" />
             <label
-              class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs"
-              >Set status
+              class="context-status flex items-center justify-between gap-2"
+              ><span class="whitespace-nowrap">Set status</span>
               <select
                 :value="
                   normalizePlayStatus(
@@ -2715,8 +2718,7 @@ onUnmounted(() => {
                     ($event.target as HTMLSelectElement).value,
                   )
                 "
-                class="min-w-0 max-w-36 rounded px-1 py-1"
-                style="background: var(--bg-raised); color: var(--text-primary)"
+                class="context-status-select min-w-0 max-w-36"
               >
                 <option
                   v-for="status in allStatuses"
@@ -2733,6 +2735,7 @@ onUnmounted(() => {
             <button @click="runContextAction('favorite')">
               {{ contextMenu.game.is_favorite ? "Unfavorite" : "Favorite" }}
             </button>
+            <div role="separator" class="context-sep" />
             <button
               @click="runContextAction('remove')"
               style="color: var(--danger-text)"
@@ -3036,6 +3039,22 @@ onUnmounted(() => {
 }
 .game-context-menu > button:hover {
   background: var(--bg-raised);
+}
+.game-context-menu .context-sep {
+  margin: 0.25rem 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.game-context-menu .context-status {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+}
+.game-context-menu .context-status-select {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font-size: 0.75rem;
 }
 .game-context-menu button:disabled {
   opacity: 0.5;

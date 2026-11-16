@@ -95,11 +95,20 @@ const stop = async () => {
 
           <template v-if="step === 'choices'">
             <p class="text-sm" style="color: var(--text-secondary)">{{ unsupportedText(media?.count ?? 0) }} The game may show no video.</p>
-            <ul class="space-y-2 text-sm" style="color: var(--text-secondary)">
-              <li><strong style="color: var(--text-primary)">Convert videos</strong> replaces the game's video files with AV1 or VP9 and Opus copies that the built-in player can play.</li>
-              <li><strong style="color: var(--text-primary)">Use system browser</strong> opens this game in your browser from now on. Saves made in the built-in player do not carry over.</li>
-              <li><strong style="color: var(--text-primary)">Play anyway</strong> starts the built-in player. wLib does not ask again until the game's videos change.</li>
-            </ul>
+            <div class="media-options" role="group" aria-label="What to do">
+              <button v-if="convertible" type="button" class="media-option" :disabled="busy" @click="step = 'confirm'">
+                <strong>Convert videos</strong>
+                <span>Replaces the game's video files with AV1 or VP9 and Opus copies that the built-in player can play.</span>
+              </button>
+              <button type="button" class="media-option" :disabled="busy" @click="choose('use-browser')">
+                <strong>Use system browser</strong>
+                <span>Opens this game in your browser from now on. Saves made in the built-in player do not carry over.</span>
+              </button>
+              <button type="button" class="media-option" :disabled="busy" @click="choose('play-anyway')">
+                <strong>Play anyway</strong>
+                <span>Starts the built-in player. wLib does not ask again until the game's videos change.</span>
+              </button>
+            </div>
             <div v-if="!convertible" class="media-note rounded-lg p-3 text-sm" role="note">
               <p class="font-semibold" style="color: var(--text-primary)">{{ problem }}</p>
               <p class="mt-1" style="color: var(--text-secondary)">{{ hint.note }}</p>
@@ -126,10 +135,7 @@ const stop = async () => {
 
         <div class="px-6 py-4 flex flex-wrap items-center justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
           <template v-if="step === 'choices'">
-            <button class="media-cancel px-4 py-2.5 rounded-lg text-sm font-medium mr-auto" @click="close">Cancel</button>
-            <button class="media-secondary px-4 py-2.5 rounded-lg text-sm font-medium" :disabled="busy" @click="choose('play-anyway')">Play anyway</button>
-            <button class="media-secondary px-4 py-2.5 rounded-lg text-sm font-medium" :disabled="busy" @click="choose('use-browser')">Use system browser</button>
-            <button v-if="convertible" class="media-primary ui-btn-solid px-5 py-2.5 rounded-lg text-sm font-bold" :disabled="busy" @click="step = 'confirm'">Convert videos</button>
+            <button class="media-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="close">Cancel</button>
           </template>
           <template v-else-if="step === 'confirm'">
             <button class="media-cancel px-5 py-2.5 rounded-lg text-sm font-medium" @click="step = 'choices'">Back</button>
@@ -154,6 +160,12 @@ const stop = async () => {
 .media-reason { color: var(--danger-text); }
 .media-bar { background: var(--bg-inset); border: 1px solid var(--border); }
 .media-bar-fill { background: var(--brand); transition: width 0.3s ease; }
+.media-options { display: grid; gap: 0.5rem; }
+.media-option { display: block; width: 100%; text-align: left; padding: 0.75rem 1rem; border-radius: 0.5rem; border: 1px solid var(--border); background: var(--bg-inset); color: var(--text-primary); font-size: 0.875rem; }
+.media-option:hover:not(:disabled) { border-color: var(--border-hover); background: var(--bg-raised); }
+.media-option:disabled { opacity: 0.5; cursor: not-allowed; }
+.media-option:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.media-option span { display: block; margin-top: 0.25rem; color: var(--text-secondary); font-size: 0.8125rem; }
 .media-cancel { color: var(--text-secondary); }
 .media-cancel:hover { color: var(--text-primary); background: var(--bg-overlay); }
 .media-secondary { color: var(--text-primary); border: 1px solid var(--border); }

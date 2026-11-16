@@ -588,13 +588,13 @@ const summaryItems = computed(() => [
     label: "F95 Rating",
     value: f95Rating.value || "Unavailable",
     accent: f95Rating.value ? "color: var(--rating-accent)" : "",
-    showStar: true,
+    showStar: !!f95Rating.value,
   },
   {
     label: "Your rating",
     value: averagePersonalRating.value === "—" ? "Not rated" : `${averagePersonalRating.value}/5`,
     accent: averagePersonalRating.value === "—" ? "" : "color: var(--rating-accent)",
-    showStar: true,
+    showStar: averagePersonalRating.value !== "—",
   },
   {
     label: "Playtime",
@@ -2176,7 +2176,7 @@ const removeAttachment = async (name: string) => {
       tabindex="-1"
       class="modal-content relative flex h-[min(calc(var(--app-vh)*0.9),52rem)] w-full max-w-[56rem] flex-col overflow-hidden rounded-xl"
     >
-      <div class="absolute right-4 top-4 z-10">
+      <div class="detail-close absolute z-10">
         <button
           @click="requestClose"
           aria-label="Close"
@@ -3385,7 +3385,13 @@ const removeAttachment = async (name: string) => {
   grid-template-columns: 6rem minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
-  padding-right: 2.75rem;
+  padding-right: 2.875rem;
+}
+
+/* Same top edge and gap as the favorite and actions buttons in the header. */
+.detail-close {
+  top: 1.25rem;
+  right: 1.5rem;
 }
 
 .game-cover {
@@ -3544,7 +3550,7 @@ const removeAttachment = async (name: string) => {
   .game-header {
     grid-template-columns: 4.5rem minmax(0, 1fr);
     gap: 0.75rem;
-    padding-right: 1.5rem;
+    padding-right: 2.875rem;
   }
 
   .game-cover {
@@ -3924,10 +3930,10 @@ const removeAttachment = async (name: string) => {
 }
 
 .collection-chip {
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 9999px;
-  background: var(--bg-raised);
+  padding: 0.3rem 0.55rem;
+  border: 1px dashed var(--border-hover);
+  border-radius: 0.5rem;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 600;
@@ -3943,13 +3949,14 @@ const removeAttachment = async (name: string) => {
   outline-offset: 2px;
 }
 .collection-chip-active {
-  background: var(--brand);
-  border-color: var(--brand);
-  color: var(--on-brand);
+  background: var(--brand-glow);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+  color: var(--brand);
 }
 .collection-chip-active:hover {
-  background: var(--brand);
-  color: var(--on-brand);
+  background: var(--brand-glow);
+  color: var(--brand);
 }
 
 .launch-btn,

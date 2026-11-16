@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { IconCheck, IconFolderOpen, IconLoader2, IconX } from "@tabler/icons-vue";
+import { IconAlertTriangle, IconCheck, IconFolderOpen, IconLoader2, IconX } from "@tabler/icons-vue";
 import {
   api,
   type ArchiveInstallResponse,
@@ -650,13 +650,12 @@ watch(phase, (next, prev) => {
       </div>
 
       <div class="p-6 space-y-4 overflow-y-auto flex-1 min-h-0">
-        <div
-          v-if="libraryFolderMissing"
-          class="rounded-lg px-4 py-3 text-sm"
-          style="background: var(--bg-inset); color: var(--warning-text); border: 1px solid var(--border)"
-        >
-          Choose a library folder first — installs are placed inside it.
-          <button @click="browseLibraryFolder" class="link-btn ml-2 font-semibold">Choose folder</button>
+        <div v-if="libraryFolderMissing && !(outsideLibraryFolders && isUpdate)" class="install-warning">
+          <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <p class="min-w-0">
+            Choose a library folder first. Installs go inside it.
+            <button @click="browseLibraryFolder" class="link-btn ml-1 font-semibold">Choose folder</button>
+          </p>
         </div>
 
         <div v-if="libraryFolders.length" class="space-y-2">
@@ -667,15 +666,13 @@ watch(phase, (next, prev) => {
           <p v-else class="text-sm font-mono break-all">{{ libraryFolders[0]?.path }} — {{ formatLibraryFreeSpace(libraryFolders[0]?.available ? libraryFolders[0]?.free_bytes ?? null : null) }}</p>
           <p v-if="selectedFolderUnavailable" class="text-xs" style="color: var(--warning-text)">This library folder is unavailable. Mount its drive or choose another folder.</p>
         </div>
-        <div
-          v-if="outsideLibraryFolders && isUpdate"
-          class="rounded-lg px-4 py-3 text-sm space-y-2"
-          style="background: var(--bg-inset); color: var(--warning-text); border: 1px solid var(--border)"
-          data-testid="outside-library-warning"
-        >
+        <div v-if="outsideLibraryFolders && isUpdate" class="install-warning" data-testid="outside-library-warning">
+          <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+          <div class="min-w-0 space-y-2">
           <p>
             This game is outside your library folders.
-            <template v-if="libraryFolder">The update goes to <span class="font-mono break-all">{{ libraryFolder }}</span> instead of next to the current version.</template>
+            <template v-if="libraryFolderMissing">Add a library folder before you install.</template>
+            <template v-else-if="libraryFolder">The update goes to <span class="font-mono break-all">{{ libraryFolder }}</span> instead of next to the current version.</template>
           </p>
           <div class="flex flex-wrap gap-2">
             <button
@@ -692,6 +689,7 @@ watch(phase, (next, prev) => {
             </button>
           </div>
           <p v-if="addLibraryFolderError" style="color: var(--error-text)">{{ addLibraryFolderError }}</p>
+          </div>
         </div>
         <div v-if="target?.launch_targets?.length" class="space-y-2">
           <label for="install-part" class="text-sm">Part to update</label>
@@ -702,12 +700,14 @@ watch(phase, (next, prev) => {
         </div>
         <p v-if="ownTargetsInside.length" class="text-sm" style="color: var(--warning-text)">The old folder is kept if these targets are not found in the new version: {{ ownTargetsInside.join(', ') }}.</p>
 
+        <div>
+        <label for="install-archive-file" class="field-label">Archive file</label>
         <div class="flex gap-2">
           <input
+            id="install-archive-file"
             v-model="archive"
             type="text"
             placeholder="/path/to/Game-1.0-pc.zip"
-            aria-label="Archive file"
             class="modal-input flex-1 text-sm font-mono"
             :disabled="phase === 'installing'"
             @change="inspect"
@@ -718,6 +718,7 @@ watch(phase, (next, prev) => {
           </button>
         </div>
         <PathStatus :path="archive" kind="file" />
+        </div>
 
         <p v-if="inspectError" class="text-sm" style="color: var(--error-text)">{{ inspectError }}</p>
         <p v-if="toolError" class="text-sm" style="color: var(--error-text)">{{ toolError }}</p>
@@ -725,24 +726,24 @@ watch(phase, (next, prev) => {
         <div v-if="phase !== 'pick'" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="block">
             <span class="field-label">Title</span>
-            <input v-model="title" @input="edited.add('title')" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="title" @input="edited.add('title')" type="text" placeholder="Game title" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Version</span>
-            <input v-model="version" @input="edited.add('version')" type="text" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="version" @input="edited.add('version')" type="text" placeholder="1.0" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Creator</span>
-            <input v-model="creator" @input="edited.add('creator')" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
+            <input v-model="creator" @input="edited.add('creator')" type="text" placeholder="Developer name" class="modal-input w-full text-sm" :disabled="phase === 'installing'" @keydown.enter="canInstall && install()" />
           </label>
           <label class="block">
             <span class="field-label">Engine</span>
-            <input v-model="engine" @input="edited.add('engine')" list="install-engine-options" type="text" class="modal-input w-full text-sm" :disabled="phase === 'installing'" />
+            <input v-model="engine" @input="edited.add('engine')" list="install-engine-options" type="text" placeholder="Ren'Py, RPGM, Unity…" class="modal-input w-full text-sm" :disabled="phase === 'installing'" />
             <datalist id="install-engine-options">
               <option v-for="option in engineOptions" :key="option" :value="option" />
             </datalist>
           </label>
-          <label class="block">
+          <label class="block sm:col-span-2">
             <span class="field-label">F95Zone thread URL</span>
             <input v-model="f95Url" @change="lookupDetails" type="text" placeholder="https://f95zone.to/threads/…" class="modal-input w-full text-sm font-mono" :disabled="phase === 'installing'" @keydown.enter.prevent="lookupDetails" />
           </label>
@@ -965,6 +966,17 @@ watch(phase, (next, prev) => {
 }
 .link-btn:hover {
   text-decoration: underline;
+}
+
+.install-warning {
+  display: flex;
+  gap: 0.625rem;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  background: var(--bg-inset);
+  color: var(--warning-text);
+  border: 1px solid color-mix(in srgb, var(--warning-text) 35%, transparent);
 }
 
 .field-label {

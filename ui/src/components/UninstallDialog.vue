@@ -4,6 +4,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { IconAlertTriangle } from "@tabler/icons-vue";
 import { api, type GameFilePlanEntry, type GameRecord, type UninstallOptions } from "../services/api";
 import { actionableEntries, backupDefault, confirmReason, planProblem, showBackupOption } from "../utils/gameFiles";
+import PathText from "./PathText.vue";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const props = defineProps<{ modelValue: boolean; games: GameRecord[] }>();
@@ -86,18 +87,21 @@ const confirm = () => {
           <div class="flex gap-4">
             <span class="files-icon" aria-hidden="true"><IconAlertTriangle class="w-5 h-5" /></span>
             <div class="min-w-0 pt-1">
-              <h3 id="uninstall-title" class="text-lg font-bold" style="color: var(--text-primary)">{{ single ? `Uninstall ${entries[0]?.title || games[0]?.title || ""}?` : `Uninstall ${games.length} games?` }}</h3>
+              <h3 id="uninstall-title" class="text-lg font-bold" style="color: var(--text-primary)">{{ single ? `Uninstall ${entries[0]?.title || games[0]?.title || ""}?` : !loading && goingCount && goingCount < entries.length ? `Uninstall ${goingCount} of ${entries.length} games?` : `Uninstall ${games.length} games?` }}</h3>
               <p class="mt-1 text-sm" style="color: var(--text-secondary)">wLib deletes the folder shown for each game. You can undo for a few seconds after you confirm.</p>
             </div>
           </div>
 
           <p v-if="loading" class="text-sm" style="color: var(--text-muted)">Checking the game folders...</p>
           <ul v-else class="space-y-2" aria-label="Games to uninstall">
-            <li v-for="entry in entries" :key="entry.game_id" class="files-row rounded-lg p-3">
+            <li v-for="entry in entries" :key="entry.game_id" class="files-row rounded-lg p-3" :class="{ 'files-row--skipped': planProblem(entry) }">
               <div class="flex items-start gap-2">
                 <div class="min-w-0 flex-1">
-                  <div v-if="!single" class="text-sm font-semibold truncate" style="color: var(--text-primary)">{{ entry.title }}</div>
-                  <div v-if="entry.root" class="files-path font-mono text-xs break-all">{{ entry.root }}</div>
+                  <div v-if="!single" class="flex items-center gap-2 min-w-0">
+                    <span class="files-title text-sm font-semibold truncate">{{ entry.title }}</span>
+                    <span v-if="planProblem(entry)" class="files-skip-badge shrink-0">Skipped</span>
+                  </div>
+                  <div v-if="entry.root" class="files-path font-mono text-xs"><PathText :path="entry.root" /></div>
                   <div v-if="entry.root && !planProblem(entry)" class="mt-1 text-xs" style="color: var(--text-muted)">
                     <template v-if="entry.saves_inside_root">Saves are inside this folder.</template>
                     <template v-else-if="entry.saves_folder">Saves stay in {{ entry.saves_folder }}</template>
@@ -138,6 +142,10 @@ const confirm = () => {
 .files-icon { display: inline-flex; align-items: center; justify-content: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: 9999px; background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
 .files-row { background: var(--bg-inset); border: 1px solid var(--border); }
 .files-path { color: var(--text-secondary); }
+.files-title { color: var(--text-primary); }
+.files-row--skipped { background: transparent; border-style: dashed; }
+.files-row--skipped .files-title, .files-row--skipped .files-path { color: var(--text-muted); }
+.files-skip-badge { padding: 0.05rem 0.4rem; border-radius: 0.25rem; font-size: 0.6875rem; font-weight: 600; color: var(--text-secondary); background: var(--bg-overlay); }
 .files-reason { color: var(--danger-text); }
 .files-btn { color: var(--text-primary); border: 1px solid var(--border); }
 .files-cancel { color: var(--text-secondary); }

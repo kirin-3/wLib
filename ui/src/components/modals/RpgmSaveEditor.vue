@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { IconLoader2, IconX } from "@tabler/icons-vue";
+import { IconAlertCircle, IconLoader2, IconPlus, IconX } from "@tabler/icons-vue";
 import { api, type RpgmInventoryKind, type RpgmPatch, type RpgmSaveLoadResponse } from "../../services/api";
 import { confirmAction } from "../../utils/confirm";
 import { notify, notifyError } from "../../utils/toast";
@@ -294,15 +294,22 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
             <span v-else>A backup of the saves folder is made before each save.</span>
           </p>
         </div>
-        <button type="button" class="editor-btn" aria-label="Close" @click="close"><IconX :size="16" /></button>
+        <button type="button" class="editor-close shrink-0 p-1 rounded-lg" aria-label="Close" title="Close (Esc)" @click="close"><IconX class="w-5 h-5" /></button>
       </div>
 
       <div v-if="loading" class="p-10 flex items-center justify-center gap-2 text-sm" style="color: var(--text-muted)" role="status">
         <IconLoader2 :size="16" class="animate-spin" /> Reading save…
       </div>
-      <div v-else-if="loadError" class="p-6 space-y-3">
-        <p role="alert" class="text-sm" style="color: var(--danger-text)">{{ loadError }}</p>
-        <button type="button" class="editor-btn" @click="load">Try again</button>
+      <div v-else-if="loadError" class="p-6 flex gap-3">
+        <IconAlertCircle class="w-5 h-5 shrink-0" style="color: var(--danger-text)" aria-hidden="true" />
+        <div class="min-w-0 space-y-3">
+          <p role="alert" class="text-sm" style="color: var(--danger-text)">{{ loadError }}</p>
+          <p class="text-xs" style="color: var(--text-muted)">If the save file was moved or deleted, close the editor and choose the save again.</p>
+          <div class="flex gap-2">
+            <button type="button" class="editor-btn" @click="load">Try again</button>
+            <button type="button" class="editor-btn" @click="close">Close</button>
+          </div>
+        </div>
       </div>
 
       <template v-else-if="save && view && names">
@@ -327,7 +334,7 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
             <label v-if="view.gold !== null" class="block">
               <span class="text-xs font-medium" style="color: var(--text-secondary)">Gold{{ names.currency ? ` (${names.currency})` : "" }}</span>
               <input
-                class="editor-input w-full mt-1"
+                class="editor-input w-full max-w-xs mt-1 block"
                 inputmode="numeric"
                 :value="pendingValue(pathKey(GOLD_PATH), view.gold)"
                 aria-label="Gold"
@@ -366,15 +373,16 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
                 </select>
                 <input v-model="pickerQuery" class="editor-input flex-1" placeholder="Search by name or id" aria-label="Search the database" />
               </div>
-              <ul class="space-y-1 max-h-40 overflow-y-auto">
+              <ul class="editor-pick-list max-h-40 overflow-y-auto">
                 <li v-for="entry in pickerEntries" :key="entry.id">
                   <button type="button" class="editor-pick" :title="entry.description" @click="addEntry(entry.id, entry.name)">
                     <span class="truncate">{{ entry.name }}</span>
                     <span v-if="badgeForKind(entry.kind)" class="editor-badge">{{ badgeForKind(entry.kind) }}</span>
                     <span class="text-xs" style="color: var(--text-muted)">#{{ entry.id }}</span>
+                    <IconPlus class="editor-pick-add w-4 h-4 ml-auto shrink-0" aria-hidden="true" />
                   </button>
                 </li>
-                <li v-if="pickerEntries.length === 0" class="text-xs" style="color: var(--text-muted)">Nothing matches.</li>
+                <li v-if="pickerEntries.length === 0" class="text-xs px-3 py-2" style="color: var(--text-muted)">Nothing matches.</li>
               </ul>
             </section>
           </template>
@@ -517,8 +525,16 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
 .editor-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: var(--text-secondary); }
 .editor-error { color: var(--danger-text); font-size: 0.75rem; }
 .editor-dirty { color: var(--brand); font-weight: 600; }
-.editor-pick { display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.25rem 0.75rem; font-size: 0.8125rem; color: var(--text-primary); }
-.editor-pick:hover { border-color: var(--brand); }
+.editor-pick-list { border: 1px solid var(--border); border-radius: 0.5rem; background: var(--bg-inset); }
+.editor-pick-list > li + li { border-top: 1px solid var(--border); }
+.editor-pick { display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left; background: transparent; padding: 0.4rem 0.75rem; font-size: 0.8125rem; color: var(--text-primary); cursor: pointer; }
+.editor-pick:hover { background: var(--bg-overlay); }
+.editor-pick:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.editor-pick-add { color: var(--text-muted); }
+.editor-pick:hover .editor-pick-add { color: var(--brand); }
+.editor-close { color: var(--text-muted); }
+.editor-close:hover { color: var(--text-primary); }
+.editor-close:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .editor-badge { font-size: 0.625rem; padding: 0 0.375rem; border-radius: 9999px; background: var(--bg-overlay); color: var(--text-secondary); border: 1px solid var(--border); }
 .editor-link { color: var(--brand); background: none; border: 0; text-decoration: underline; font-size: 0.75rem; }
 </style>

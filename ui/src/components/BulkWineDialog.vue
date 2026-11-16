@@ -118,8 +118,8 @@ const apply = () => {
 </template>
 
 <style scoped>
-.wine-label { display: block; margin-bottom: 0.4rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); }
-.wine-input { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-primary); }
+.wine-label { display: block; margin-bottom: 0.375rem; font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); }
+.wine-input { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.5rem 0.75rem; color: var(--text-primary); }
 .wine-input:focus-visible, .wine-browse:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .wine-browse { color: var(--text-primary); border: 1px solid var(--border); }
 input[type="radio"] { accent-color: var(--brand); }

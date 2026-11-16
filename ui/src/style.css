@@ -384,9 +384,9 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   display: inline-block;
   width: 2.75rem;
   height: 1.5rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-hover);
   border-radius: 9999px;
-  background: var(--bg-overlay);
+  background: var(--bg-inset);
   transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease;
 }
 
