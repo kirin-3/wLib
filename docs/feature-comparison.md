@@ -1,6 +1,6 @@
 # Feature comparison: wLib, xLib, Atlas, f69
 
-Snapshot from 2026-11-03
+Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f69 0.15.24
 
 ✅ supported · ⚠️ partial or limited · ❌ not found in the source
 
@@ -11,11 +11,10 @@ Snapshot from 2026-11-03
 | Stack | Python, PyWebView, Vue 3 | Electron (bundled) | Electron, React | Zig, dvui, SDL3 (native) |
 | Source / license | Open, GPLv3+ | Closed source | Open, GPLv3 | Open, MIT |
 | Has ads? | ❌ | ✅ | ❌ | ❌ |
-| RAM usage (idle, Windows)* | ~125 MB | ~379 MB | ~281 MB | Not tested |
-| Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
+| RAM usage (idle, Windows)* | ~137 MB | ~294 MB | ~246 MB | ~69 MB || Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
 | Packaging | AppImage, deb, rpm, AUR, tar.gz, Flatpak, Nix, Windows | AppImage, Windows, macOS | deb, pacman, AppImage, Windows | deb, rpm, AUR, Nix, portable, Windows zip |
 
-\* Tested on a fresh Windows 11 VM with empty libraries, using wLib 0.4.4, xLibrary 3.11.4 and Atlas 0.9.14.
+\* Tested on 2026-11-16 on a Windows 11 VM (2 CPU cores, 12 GB RAM) with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. Each app ran for a 90-second warm-up, then 4 minutes of samples every 5 seconds. RAM is the median private bytes of the app and all its child processes.
 
 ## Library
 
@@ -33,7 +32,7 @@ Snapshot from 2026-11-03
 | Per-version play journal | ✅ | ✅ | ❌ | ✅ |
 | Multiple executables per game | ✅ | ✅ | ✅ | ❌ |
 | Bulk folder import | ✅ | ✅ (with undo) | ✅ (folder-scheme regex) | ✅ |
-| Thread screenshots | ✅ | ✅ | ✅ (+ custom previews) | ✅ |
+| Thread screenshots | ✅ | ✅ (+ custom screenshots) | ✅ (+ custom previews) | ✅ |
 | Browse full catalog (not just library) | ❌ | ✅ Showcase | ✅ Browse mode | ❌ |
 | Gamepad / Steam Deck UI | ✅ controller navigation, TV mode | ✅ | ❌ | ❌ |
 | Themes | Light/dark, accent, 80–150% scale | ✅ | Theme builder, banner editor | Presets, accent |
@@ -57,7 +56,7 @@ Snapshot from 2026-11-03
 | Library update check | ✅ | ✅ | ✅ | ✅ |
 | Skip / pin a version | ✅ skip | ❌ | ❌ | ✅ pin |
 | Desktop notifications | ✅ (Linux) | ✅ | ❌ | ✅ |
-| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier | ✅ aria2: donor DDL, masked links, MEGAcmd |
+| In-app downloads | ✅ via extension: MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire, Mixdrop +4; Downloads page with one queue (reorder, pause/resume, shared speed limit) | ✅ ~20 hosts, JDownloader hand-off; Downloads page with one queue (reorder, start now, speed limit, pause while playing or on battery); MEGA, Pixeldrain, Mediafire account sign-in | ✅ MEGA, Pixeldrain, Gofile, Buzzheavier; F95 and LewdCorner links | ✅ aria2: donor DDL, masked links, MEGAcmd |
 | Torrents / RPDL | ✅ RPDL, with seeding, in the same Downloads queue; export .torrent/magnet or send to a client's watch folder | ✅ | ❌ | ✅ |
 | Install from archive, keep saves | ✅ | ✅ | ✅ | ✅ |
 | App self-update | ⚠️ checks GitHub | ✅ | ✅ stable/nightly | ❌ |
@@ -66,7 +65,8 @@ Snapshot from 2026-11-03
 
 | Feature | wLib | xLib | Atlas | f69 |
 |---|---|---|---|---|
-| Save backup / restore | ✅ | ✅ | ⚠️ during updates only | ✅ (+ import saves) |
+| Save backup / restore | ✅ | ✅ | ⚠️ during updates only | ✅ (+ import saves, chapters can share one save folder) |
+| Apply patches, with rollback | ❌ | ✅ xdelta patches, version snapshots | ❌ | ❌ |
 | Ren'Py `.rpa` extract, dev console | ✅ (+ URM toggle) | ❌ | ❌ | ✅ |
 | RPG Maker MV/MZ decryption | ✅ | ❌ | ❌ | ✅ |
 | Unity BepInEx | ✅ installer | ⚠️ detects mod folders | ❌ | ✅ recipe preset |
@@ -87,7 +87,7 @@ Snapshot from 2026-11-03
 | Winecfg / Winetricks / runtime installs | ✅ | ❌ | ❌ | ❌ |
 | GameMode / MangoHud | ✅ (+ gamescope) | ❌ | ❌ | ❌ |
 | Sandbox | ✅ bubblewrap, Sandboxie-Plus | ⚠️ Sandboxie (Windows) | ❌ | ✅ bubblewrap, Sandboxie |
-| Per-game internet block | ✅ Linux + Windows | ⚠️ Windows firewall | ❌ | ⚠️ Linux only |
+| Per-game internet block | ✅ Linux + Windows | ✅ Linux (bubblewrap, unshare), Windows firewall, macOS | ❌ | ⚠️ Linux only |
 | Add to Steam as shortcut | ✅ Linux; changes apply after Steam exits | ✅ | ❌ | ❌ |
 | Custom launch command | ✅ | ✅ | ✅ | ✅ |
 
@@ -95,7 +95,7 @@ Snapshot from 2026-11-03
 
 | Feature | wLib | xLib | Atlas | f69 |
 |---|---|---|---|---|
-| Import from other apps | F95Checker, Atlas, XLibrary, f69, Playnite | F95Checker, Game-List, older XLibrary | F95Checker, XLibrary | F95Checker, XLibrary |
+| Import from other apps | F95Checker, Atlas, XLibrary, f69, Playnite | F95Checker, Game-List, Playnite, older XLibrary | F95Checker, XLibrary | F95Checker, XLibrary |
 | Export / backup | ✅ JSON, optional passphrase | ✅ local backups, plugin exports | ❌ | ✅ F95Checker DB export, auto DB backups |
 | Cloud sync | ✅ folder, Dropbox, Google Drive (encrypted) | ✅ Google Drive | ❌ | ❌ |
 | Browser extension | ✅ Chrome, Firefox (F95, DLsite, VNDB, Ryuugames) | ✅ Chrome, Firefox | ✅ Chrome, Firefox, Edge (F95, LewdCorner) | ❌ (stub only) |
