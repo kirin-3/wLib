@@ -13,6 +13,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Literal, override
 from urllib.parse import quote, unquote, urlsplit
 
@@ -116,15 +117,8 @@ def content_type(path: str) -> str:
     return guessed or "application/octet-stream"
 
 
-def resolve_under_root(root: str, url_path: str) -> str | None:
-    """Map a URL path onto a regular file inside root, or None when it escapes or is missing."""
-    relative = unquote(url_path).replace("\\", "/").lstrip("/")
-    if "\x00" in relative:
-        return None
-    if any(part == ".." for part in relative.split("/")):
-        return None
-    real_root = os.path.realpath(root)
-    candidate = os.path.realpath(os.path.join(real_root, relative))
+def _file_inside(real_root: str, path: str) -> str | None:
+    candidate = os.path.realpath(path)
     try:
         inside = os.path.commonpath([real_root, candidate]) == real_root
     except ValueError:
@@ -132,6 +126,82 @@ def resolve_under_root(root: str, url_path: str) -> str | None:
     if not inside or not os.path.isfile(candidate):
         return None
     return candidate
+
+
+@lru_cache(maxsize=256)
+def _names_by_lower_case(directory: str, _mtime_ns: int) -> dict[str, tuple[str, ...]]:
+    """Entry names of one folder keyed by lower(), each list sorted; the mtime in the key drops stale lists."""
+    names: dict[str, list[str]] = {}
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError:
+        return {}
+    for name in entries:
+        names.setdefault(name.lower(), []).append(name)
+    return {key: tuple(value) for key, value in names.items()}
+
+
+def _case_variants(directory: str, part: str) -> tuple[str, ...]:
+    try:
+        mtime_ns = os.stat(directory).st_mtime_ns
+    except OSError:
+        return ()
+    return _names_by_lower_case(directory, mtime_ns).get(part.lower(), ())
+
+
+# Bounds for the letter-case search, so a crafted path cannot make it slow.
+_CASE_MATCH_MAX_PARTS = 64
+_CASE_MATCH_MAX_STEPS = 256
+
+
+def _match_case(real_root: str, parts: list[str]) -> str | None:
+    """Find a file under real_root, matching each name in parts without regard to letter case.
+
+    Games made on Windows often ask for "Img/Hero.png" when the file is "img/hero.png".
+    An exact name is tried first, then the case variants in sorted order. When a folder
+    has no match, the search goes back and tries the next variant of the folders above.
+    """
+    parts = [part for part in parts if part not in ("", ".")]
+    if not parts or len(parts) > _CASE_MATCH_MAX_PARTS:
+        return None
+    # On Windows "D:" or "C:x" would leave the root; the root check would refuse it, but never look there.
+    if any(os.path.splitdrive(part)[0] for part in parts):
+        return None
+    stack: list[tuple[str, int]] = [(real_root, 0)]
+    steps = 0
+    while stack and steps < _CASE_MATCH_MAX_STEPS:
+        current, depth = stack.pop()
+        steps += 1
+        if depth == len(parts):
+            found = _file_inside(real_root, current)
+            if found is not None:
+                return found
+            continue
+        part = parts[depth]
+        variants = _case_variants(current, part)
+        names = [part] if part in variants or os.path.lexists(os.path.join(current, part)) else []
+        names += [name for name in variants if name != part]
+        # Reversed, so the stack pops the exact name first.
+        stack.extend((os.path.join(current, name), depth + 1) for name in reversed(names))
+    return None
+
+
+def resolve_under_root(root: str, url_path: str) -> str | None:
+    """Map a URL path onto a regular file inside root, or None when it escapes or is missing.
+
+    When the exact path is missing, the file is looked up again without regard to letter case.
+    """
+    relative = unquote(url_path).replace("\\", "/").lstrip("/")
+    if "\x00" in relative:
+        return None
+    parts = relative.split("/")
+    if any(part == ".." for part in parts):
+        return None
+    real_root = os.path.realpath(root)
+    found = _file_inside(real_root, os.path.join(real_root, relative))
+    if found is not None:
+        return found
+    return _match_case(real_root, parts)
 
 
 def resolve_game_file(root: str, url_path: str) -> tuple[str, str] | None:
