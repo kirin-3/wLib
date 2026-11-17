@@ -1,0 +1,42 @@
+[Unit]
+Description=SSH tunnel from the wLib catalog builder to its DLsite proxy
+Documentation=https://github.com/kirin-3/wLib/blob/master/docs/catalog.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/wlib-catalog/tunnel.env
+
+[Service]
+User=wlibcat
+Group=wlibcat
+# TUNNEL_TARGET (user@host) and TUNNEL_PORT; see docs/catalog.md.
+EnvironmentFile=/etc/wlib-catalog/tunnel.env
+# Through env: SELinux does not let systemd (init_t) run ssh_exec_t directly.
+ExecStart=/usr/bin/env ssh -N -T \
+    -i /etc/wlib-catalog/tunnel.key \
+    -o UserKnownHostsFile=/etc/wlib-catalog/tunnel_known_hosts \
+    -o StrictHostKeyChecking=yes \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -p ${TUNNEL_PORT} \
+    -L 127.0.0.1:8888:127.0.0.1:8888 \
+    ${TUNNEL_TARGET}
+Restart=always
+RestartSec=30
+
+ProtectSystem=strict
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

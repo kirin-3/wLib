@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 import pytest
 
 from catalog_fakes import FakeClock, FakeTransport, json_response
-from catalog_server.config import USER_AGENT
-from catalog_server.net import BudgetExhausted, Pacer, RateLimited
+from catalog_server.config import USER_AGENT, site_proxies_from_env
+from catalog_server.net import BudgetExhausted, Pacer, RateLimited, Request, urllib_transport
 from catalog_server.store import StateStore
 
 
@@ -148,3 +151,67 @@ def test_urllib_transport_turns_a_truncated_read_into_a_retryable_error(monkeypa
     monkeypatch.setattr(net, "urlopen", lambda *_a, **_k: Truncated())
     with pytest.raises(ConnectionError):
         net.urllib_transport(net.Request("GET", "https://example.com/x"))
+
+
+def test_only_sites_with_a_proxy_send_through_it(tmp_path):
+    clock = FakeClock()
+    transport = _ok_transport()
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    pacer = Pacer(
+        state,
+        transport,
+        clock=clock,
+        sleep=clock.sleep,
+        proxies={"dlsite": "http://127.0.0.1:8888"},
+    )
+    pacer.request("dlsite", "https://www.dlsite.com/maniax/")
+    pacer.request("f95", "https://f95zone.to/a")
+    assert [request.proxy for request in transport.requests] == ["http://127.0.0.1:8888", None]
+
+
+def test_urllib_transport_sends_through_the_proxy():
+    seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            seen.append(self.path)
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        proxy = f"http://127.0.0.1:{server.server_address[1]}"
+        response = urllib_transport(
+            Request("GET", "http://catalog.invalid/page", {"User-Agent": USER_AGENT}, proxy=proxy)
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert response.json() == {"ok": True}
+    # A proxy gets the absolute URL; a direct request would have failed to resolve.
+    assert seen == ["http://catalog.invalid/page"]
+
+
+def test_site_proxies_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", " http://127.0.0.1:8888 ")
+    monkeypatch.delenv("WLIB_CATALOG_F95_PROXY", raising=False)
+    assert site_proxies_from_env() == {"dlsite": "http://127.0.0.1:8888"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["socks5://127.0.0.1:1080", "http://user:secret@127.0.0.1:8888", "127.0.0.1:8888", "http:///x"],
+)
+def test_site_proxies_refuse_unsupported_urls(monkeypatch, value):
+    monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", value)
+    with pytest.raises(ValueError, match="WLIB_CATALOG_DLSITE_PROXY"):
+        site_proxies_from_env()

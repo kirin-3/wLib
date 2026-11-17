@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 
 REPOSITORY_URL = "https://github.com/kirin-3/wLib"
@@ -40,6 +41,34 @@ class R2Config:
     @property
     def endpoint(self) -> str:
         return f"https://{self.account_id}.r2.cloudflarestorage.com"
+
+
+def proxy_env_name(site: str) -> str:
+    return f"WLIB_CATALOG_{site.upper()}_PROXY"
+
+
+def site_proxies_from_env() -> dict[str, str]:
+    """Per-site proxies, e.g. WLIB_CATALOG_DLSITE_PROXY=http://127.0.0.1:8888.
+
+    Only plain http:// proxy URLs without credentials are accepted; HTTPS
+    requests reach the site through them with CONNECT.
+    """
+    proxies: dict[str, str] = {}
+    for site in SITE_LIMITS:
+        name = proxy_env_name(site)
+        value = os.environ.get(name, "").strip()
+        if not value:
+            continue
+        parts = urlsplit(value)
+        if (
+            parts.scheme != "http"
+            or not parts.hostname
+            or parts.username is not None
+            or parts.path not in ("", "/")
+        ):
+            raise ValueError(f"{name} must look like http://host:port")
+        proxies[site] = value
+    return proxies
 
 
 def data_dir() -> str:

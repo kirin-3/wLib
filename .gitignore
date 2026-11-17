@@ -93,3 +93,6 @@ AGENTS.md
 # Local Linux test container
 linux-test.Dockerfile
 .dockerignore
+
+# Private: catalog server operation notes
+docs/catalog.md

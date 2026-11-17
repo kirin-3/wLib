@@ -144,6 +144,12 @@ def test_cli_publish_needs_credentials(tmp_path, monkeypatch):
     assert main(["--data-dir", str(tmp_path), "run", "--sources", "none"]) == 2
 
 
+def test_cli_refuses_a_bad_proxy_setting(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_CATALOG_DLSITE_PROXY", "socks5://127.0.0.1:1080")
+    code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+    assert code == 2
+
+
 def test_cli_sources_none_only_publishes(tmp_path):
     from test_catalog_publish import MemoryStorage
 

@@ -12,6 +12,8 @@ WorkingDirectory=/opt/wlib-catalog
 Environment=WLIB_CATALOG_DATA_DIR=/var/lib/wlib-catalog
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/wlib-catalog/r2.env
+# Optional settings such as WLIB_CATALOG_DLSITE_PROXY; see docs/catalog.md.
+EnvironmentFile=-/etc/wlib-catalog/catalog.env
 ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
 TimeoutStartSec=3h
 MemoryMax=1G

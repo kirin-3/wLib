@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from http.client import HTTPException, HTTPResponse
 from typing import cast
 from urllib.error import HTTPError, URLError
+from urllib.request import HTTPSHandler, ProxyHandler, build_opener, urlopen
 from urllib.request import Request as UrllibRequest
-from urllib.request import urlopen
 
 from .config import SITE_LIMITS, USER_AGENT, SiteLimits
 from .store import StateStore
@@ -22,6 +22,8 @@ class Request:
     url: str
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     body: bytes | None = None
+    # An http:// proxy for this request; HTTPS goes through it with CONNECT.
+    proxy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,11 +80,17 @@ def urllib_transport(request: Request) -> Response:
         headers=dict(request.headers),
         method=request.method,
     )
+    context = ssl.create_default_context()
     try:
-        with cast(
-            HTTPResponse,
-            urlopen(raw, timeout=60, context=ssl.create_default_context()),
-        ) as response:
+        if request.proxy is None:
+            opened = cast(HTTPResponse, urlopen(raw, timeout=60, context=context))
+        else:
+            opener = build_opener(
+                ProxyHandler({"http": request.proxy, "https": request.proxy}),
+                HTTPSHandler(context=context),
+            )
+            opened = cast(HTTPResponse, opener.open(raw, timeout=60))
+        with opened as response:
             return Response(response.status, response.read(), dict(response.headers))
     except HTTPError as exc:
         with exc:
@@ -109,6 +117,7 @@ class Pacer:
         sleep: Callable[[float], None] = time.sleep,
         wait_for_budget: Collection[str] = (),
         limits: Mapping[str, SiteLimits] = SITE_LIMITS,
+        proxies: Mapping[str, str] | None = None,
     ) -> None:
         self._state: StateStore = state
         self._transport: Transport = transport
@@ -117,6 +126,8 @@ class Pacer:
         # Sites whose budget is waited out instead of ending the source's run.
         self.wait_for_budget: frozenset[str] = frozenset(wait_for_budget)
         self._limits: Mapping[str, SiteLimits] = limits
+        # Per-site proxy URL, e.g. DLsite through a host outside its blocked regions.
+        self._proxies: Mapping[str, str] = dict(proxies or {})
         self.paused: dict[str, str] = {}
         self.sent: dict[str, int] = {}
 
@@ -168,7 +179,9 @@ class Pacer:
             self._wait_turn(site)
             status: int | None = None
             try:
-                response = self._transport(Request(method, url, headers, body))
+                response = self._transport(
+                    Request(method, url, headers, body, self._proxies.get(site))
+                )
                 status = response.status
             except ConnectionError:
                 if attempt >= RETRY_ATTEMPTS:

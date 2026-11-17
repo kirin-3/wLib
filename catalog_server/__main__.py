@@ -13,7 +13,7 @@ from typing import IO
 
 from core.catalog_format import SOURCES
 
-from .config import data_dir, r2_config_from_env
+from .config import data_dir, r2_config_from_env, site_proxies_from_env
 from .net import Pacer, Transport, urllib_transport
 from .publish import R2Storage, Storage
 from .runner import run
@@ -166,6 +166,14 @@ def main(
                 return 2
             storage = R2Storage(config)
 
+    try:
+        proxies = site_proxies_from_env()
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+    for site, proxy in sorted(proxies.items()):
+        log.info("%s requests go through the proxy %s", site, proxy)
+
     selected = list(args.sources)
     until = list(args.until_swept)
     for name in until:
@@ -177,7 +185,9 @@ def main(
             return 0
         catalog, state = open_stores(folder)
         try:
-            pacer = Pacer(state, transport, sleep=sleep, wait_for_budget=until)
+            pacer = Pacer(
+                state, transport, sleep=sleep, wait_for_budget=until, proxies=proxies
+            )
             result = run(
                 catalog,
                 state,

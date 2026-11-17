@@ -54,8 +54,13 @@ chown -R root:root "$APP_DIR"
 
 install -m 0644 "$APP_DIR/catalog_server/deploy/wlib-catalog.service" /etc/systemd/system/
 install -m 0644 "$APP_DIR/catalog_server/deploy/wlib-catalog.timer" /etc/systemd/system/
+install -m 0644 "$APP_DIR/catalog_server/deploy/wlib-catalog-tunnel.service" /etc/systemd/system/
 systemctl daemon-reload
-systemd-analyze verify /etc/systemd/system/wlib-catalog.service /etc/systemd/system/wlib-catalog.timer
+systemd-analyze verify /etc/systemd/system/wlib-catalog.service /etc/systemd/system/wlib-catalog.timer \
+    /etc/systemd/system/wlib-catalog-tunnel.service
+if systemctl is-enabled --quiet wlib-catalog-tunnel.service; then
+    systemctl restart wlib-catalog-tunnel.service
+fi
 
 if systemctl is-enabled --quiet wlib-catalog.timer; then
     echo "Installed. The timer is enabled."
