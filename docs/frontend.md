@@ -34,6 +34,21 @@ Tag hues encode user assignments; checks and borders distinguish filter selectio
 without relying on hue. Only the anchored picker uses elevation, to separate its
 controls from library content. No new artwork or decorative motion is needed.
 
+## UI error reporting
+
+The main window reports uncaught Vue component errors, script exceptions, and
+unhandled promise rejections. Errors still appear in the webview console. Handled
+errors written with `console.error` and errors from games in the built-in web
+player are outside these capture points.
+
+`utils/uiErrorReporter.ts` queues up to 20 reports until the desktop bridge is
+ready. It sends the first occurrence immediately when connected, then summarizes
+any repeats after 10 seconds. It sends up to 20 reports per rolling minute and
+includes the number of dropped reports in the next send. The desktop backend
+enforces its own rate and field size limits and redacts magnet links and URL
+queries and fragments before writing to the app log. In a plain browser, errors
+appear in the console only.
+
 ## Library sync and backup encryption
 
 `SyncView.vue` (the `/sync` route, its own left-navigation entry) hosts `LibrarySyncPanel.vue`. It offers None/Folder/Dropbox/Google Drive locations, the directory picker or browser sign-in (Connect Dropbox or Connect Google Drive, disabled with the backend's reason when `dropbox_available` or `gdrive_available` is false), disconnect, Sync now, Pause sync and Resume, last sync/device/error status, and the external privacy-policy link. For `offline` ("Sync location is offline") the reason shows as muted text, not an alert. For `paused` ("Sync is paused") a line says changes on this machine are not synced until Resume; Resume (`sync-primary`) replaces Pause sync (`sync-btn`) while `status.paused` is true, and Sync now is disabled. Browser previews explicitly label mock data; `wlib-mock-sync` holds the mock status and can select `off`, `idle`, `syncing`, `needs_choice`, `needs_passphrase`, `error`, `offline`, or `paused` (with `paused: true`) for UI checks; the mock `pause_sync`/`resume_sync` change it like the backend.

@@ -1,20 +1,86 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Callable
 import io
 import logging
 from logging.handlers import RotatingFileHandler, WatchedFileHandler
 import os
 import platform
+import re
 import sys
 import threading
+import time
 from typing import TextIO, final, cast
+
+from core.app_version import APP_VERSION
 
 MAX_BYTES = 2 * 1024 * 1024
 BACKUP_COUNT = 3
+# A stack frame ends a URL with ":line:column" and maybe ")" after the query
+# (Vite dev URLs such as "App.vue?t=1:42:7)"). Keep that suffix; drop the query.
+_UI_URL = re.compile(
+    r"""magnet:\?[^\s"'<>]*"""
+    + r"""|((?:(?:https?|wss?)://|file:/+)[^\s"'<>?#]*)"""
+    + r"""(?:[?#][^\s"'<>]*?(?=(?::\d+:\d+)?\)?(?:[\s"'<>]|$)))?""",
+    re.IGNORECASE,
+)
 
 # Set while a chained exception hook prints a traceback that was already logged.
 _muted = threading.local()
+
+
+def redact_ui_text(text: str) -> str:
+    return _UI_URL.sub(lambda match: match[1] or "magnet:<removed>", text)
+
+
+def _ui_log_field(value: object, limit: int, *, multiline: bool = False) -> str:
+    text = redact_ui_text(str(value))
+    if not multiline:
+        text = " ".join(text.splitlines())
+    marker = "… [cut]"
+    if len(text) > limit:
+        return text[: limit - len(marker)] + marker
+    return text
+
+
+def format_ui_error(report: object, version: str) -> str:
+    fields = cast(dict[str, object], report) if isinstance(report, dict) else {}
+    source = _ui_log_field(fields.get("source", "unknown"), 500)
+    where = _ui_log_field(fields.get("where", "unknown"), 500)
+    route = _ui_log_field(fields.get("route", "/"), 500)
+    count = _ui_log_field(fields.get("count", 1), 500)
+    dropped = _ui_log_field(fields.get("dropped", 0), 500)
+    message = _ui_log_field(fields.get("message", ""), 2000)
+    stack = _ui_log_field(fields.get("stack", ""), 8000, multiline=True)
+    lines = [
+        f"UI error ({source}) in {where} on {route} [x{count}]: {message}",
+        f"App version: {version}",
+    ]
+    if dropped != "0":
+        lines.append(f"UI error reports dropped: {dropped}")
+    if stack:
+        lines.append(stack)
+    return "\n".join(lines)
+
+
+@final
+class UiErrorLimiter:
+    def __init__(self, now: Callable[[], float] = time.monotonic) -> None:
+        self._now = now
+        self._entries: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        with self._lock:
+            now = self._now()
+            while self._entries and self._entries[0] <= now - 60:
+                _ = self._entries.popleft()
+            if len(self._entries) >= 20:
+                return False
+            self._entries.append(now)
+            return True
 
 
 @final
@@ -134,7 +200,6 @@ def setup_app_log(data_dir: str, *, rotate: bool = True) -> str | None:
 
     sys.excepthook = main_exception
     threading.excepthook = thread_exception
-    from core.api import APP_VERSION
     from core.diagnostics import packaging_label
 
     logger.info(

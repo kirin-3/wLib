@@ -575,6 +575,8 @@ export class MockBackend {
         return { success: true, report: MOCK_DIAGNOSTICS_REPORT };
       case "open_log_folder":
         return { success: false, error: "The log folder is available in the desktop app." };
+      case "log_ui_error":
+        return { success: true };
       case "set_window_focused":
         return { success: true, mock: true };
       case "get_game_play_sessions": {

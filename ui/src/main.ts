@@ -13,6 +13,16 @@ import { startRunningGamesTracking, refreshRunningGames } from "./composables/us
 import { loadInterfaceScale } from "./utils/interfaceScalePreference";
 import { loadTextSizePreference } from "./utils/textSizePreference";
 import { loadThemePreference } from "./utils/themePreference";
+import { createUiErrorReporter } from "./utils/uiErrorReporter";
+
+const reporter = createUiErrorReporter();
+window.addEventListener("error", (event) => {
+  reporter.reportWindow(event, router.currentRoute.value.path);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  reporter.reportRejection(event, router.currentRoute.value.path);
+});
+onWebviewReady(() => reporter.connect((report) => api.logUiError(report)));
 
 loadMotionPreference();
 startRunningGamesTracking();
@@ -26,5 +36,11 @@ loadInterfaceScale();
 loadTvMode();
 
 const app = createApp(App);
+app.config.errorHandler = (error, instance, info) => {
+  console.error(error);
+  const component = instance?.$options;
+  const name = component?.__name || component?.name || "Vue";
+  reporter.reportVue(error, `${name} / ${info}`, router.currentRoute.value.path);
+};
 app.use(router);
 app.mount("#app");

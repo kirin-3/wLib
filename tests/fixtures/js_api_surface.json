@@ -336,6 +336,9 @@
     "game_id",
     "file"
   ],
+  "log_ui_error": [
+    "report"
+  ],
   "lookup_thread_details": [
     "url"
   ],

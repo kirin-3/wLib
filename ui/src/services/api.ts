@@ -39,6 +39,16 @@ export interface ApiBasicResponse {
   code?: string;
 }
 
+export interface UiErrorReport {
+  source: "vue" | "window" | "promise";
+  message: string;
+  stack: string;
+  where: string;
+  route: string;
+  count: number;
+  dropped: number;
+}
+
 export interface DownloadAccounts extends ApiBasicResponse {
   pixeldrain: { connected: boolean; username: string };
   mega: { connected: boolean; email: string };
@@ -1499,7 +1509,8 @@ class ApiService {
       return (await invoker(...args)) as T;
     }
 
-    if (!this._mockWarnings.has(method)) {
+    // The browser already shows the original error in its console.
+    if (method !== "log_ui_error" && !this._mockWarnings.has(method)) {
       console.warn(`[ApiService] Mocking call to ${method}`, args);
       this._mockWarnings.add(method);
     }
@@ -1989,6 +2000,10 @@ class ApiService {
 
   async openLogFolder(): Promise<ApiBasicResponse> {
     return this.invoke("open_log_folder");
+  }
+
+  async logUiError(report: UiErrorReport): Promise<ApiBasicResponse> {
+    return this.invoke("log_ui_error", report);
   }
 
   async getPerformanceTools(refresh = false): Promise<{ gamemode: boolean; mangohud: boolean; gamescope: boolean }> {

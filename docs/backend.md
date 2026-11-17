@@ -18,6 +18,13 @@ controls per-game launch output. Logs are local and never exported or synced.
 Setup failure prints one warning and leaves the original streams and hooks intact.
 Backend and packaged smoke tests do not install logging.
 
+The log also records uncaught UI errors under `wlib.ui` with the source, page
+path, error location, repeat count, app version, and stack trace when available.
+The backend accepts up to 20 UI error entries per rolling minute. It removes
+magnet links and strips queries and fragments from HTTP, HTTPS, WebSocket, and
+file URLs in every field. It then caps messages at 2,000 characters, stacks
+at 8,000, and other fields at 500, including the truncation marker.
+
 `core/diagnostics.py` keeps copies of renderer stages under a lock and collects
 environment facts, paths, database size including WAL, and a game count. Tool
 discovery reuses Flatpak-aware host lookups and runner discovery; Windows omits
@@ -31,6 +38,8 @@ collectors, so collecting diagnostics does not construct another API or load gam
   `<user>` (segment replacement skips names shorter than three characters).
 - `open_log_folder()` creates the log folder and opens it in the system file
   manager. Errors include the folder path.
+- `log_ui_error(report)` accepts an uncaught UI error report and returns
+  `{success: true}` even if the log entry is dropped or cannot be written.
 
 Reports contain no game titles, tags, URLs, or notes. The page requests basic
 details and slower tool checks in parallel.

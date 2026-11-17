@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import threading
@@ -18,6 +19,7 @@ from core.host_platform import (
     is_windows,
 )
 from core.bridge_exposure import hide_from_js, python_only
+from core.app_log import UiErrorLimiter, format_ui_error
 from core.app_version import APP_VERSION
 from core.api_mixins.base import ApiBase
 from core.api_mixins.types import (
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from webview import Window
 
 _tag_color_lock = threading.Lock()
+_ui_error_limiter = UiErrorLimiter()
 
 
 class SettingsMixin(ApiBase):
@@ -186,6 +189,15 @@ class SettingsMixin(ApiBase):
             return {"success": True}
         except OSError as exc:
             return {"success": False, "error": f"Could not open {path}: {exc}"}
+
+    def log_ui_error(self, report: object = None) -> dict[str, object]:
+        try:
+            if _ui_error_limiter.allow():
+                logging.getLogger("wlib.ui").error(format_ui_error(report, APP_VERSION))
+        except Exception:
+            # The error reporting bridge must never create another UI error.
+            pass
+        return {"success": True}
 
     def set_tag_color(self, tag: object, swatch: object = None) -> dict[str, object]:
         from core.database import TAG_COLOR_SWATCHES, get_tag_colors, update_setting
