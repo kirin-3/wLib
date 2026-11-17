@@ -155,6 +155,14 @@ and inserted. `sync_game_links_insert` and `sync_game_links_delete` advance
 `sync_local_modified_at` using the same monotonic UTC rule as game changes.
 No-op replacements leave the sync timestamp unchanged.
 
+### Table: `steam_shortcuts`
+
+Records device-local Steam shortcut state by `(account_id, game_id)`. `game_id`
+references `games.id` with `ON DELETE CASCADE`; `app_id` holds the Steam shortcut
+ID, while `state` and `art_key` track synchronization and artwork. The records
+and Steam account settings are not exported or synced. See [Steam shortcuts and headless launches](backend.md#steam-shortcuts-and-headless-launches)
+for how shortcut files are updated.
+
 ### Table: `game_launch_targets`
 Stores additional executable targets for games that ship with multiple playable parts. The canonical default executable remains `games.exe_path`; this table only contains extra named targets.
 

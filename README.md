@@ -50,6 +50,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - A wishlist that tells you when a game is marked Completed.
 - Playtime tracking and a per-version **Journal**. **Unplayed update** and **New since finished** collections show what's new.
 - Thread screenshots in the detail window, served from the shared game catalog.
+- View and edit thread details such as the overview, original title, aliases, languages and developer links. Search aliases and filter by developer or language.
 - Import a whole folder of installed games at once. wLib guesses the title, version and engine, and you can fix them afterwards.
 - More than one executable per game, with one as the default for Play.
 - Uninstall a game (it can stay in the library as Wishlist, with an optional save backup first) or move its folder to another drive. Moves run in the background and update every path for you.

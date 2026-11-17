@@ -11,7 +11,8 @@ Snapshot from 2026-11-16: wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.15 (nightly), f
 | Stack | Python, PyWebView, Vue 3 | Electron (bundled) | Electron, React | Zig, dvui, SDL3 (native) |
 | Source / license | Open, GPLv3+ | Closed source | Open, GPLv3 | Open, MIT |
 | Has ads? | ❌ | ✅ | ❌ | ❌ |
-| RAM usage (idle, Windows)* | ~137 MB | ~294 MB | ~246 MB | ~69 MB || Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
+| RAM usage (idle, Windows)* | ~137 MB | ~294 MB | ~246 MB | ~69 MB |
+| Platforms | Linux, Windows | Windows, Linux, macOS | Windows, Linux | Linux, Windows |
 | Packaging | AppImage, deb, rpm, AUR, tar.gz, Flatpak, Nix, Windows | AppImage, Windows, macOS | deb, pacman, AppImage, Windows | deb, rpm, AUR, Nix, portable, Windows zip |
 
 \* Tested on 2026-11-16 on a Windows 11 VM (2 CPU cores, 12 GB RAM) with empty libraries, using wLib 0.4.7, XLibrary 3.13.0, Atlas 0.9.14 and f69 0.14.1. Each app ran for a 90-second warm-up, then 4 minutes of samples every 5 seconds. RAM is the median private bytes of the app and all its child processes.

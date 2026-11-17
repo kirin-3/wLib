@@ -82,6 +82,7 @@ flowchart TD
 | Game files and library tools | `core/archive_install.py`, `core/game_scan.py`, `core/game_saves.py`, `core/game_attachments.py`, `core/game_covers.py` |
 | Mod tools | `core/game_tools.py`, `core/renpy_tools.py`, `core/rpgm_tools.py`, `core/unity_tools.py` |
 | Launching and updates | `core/launcher.py`, `core/game_sandbox.py`, `core/umu.py`, `core/umu_launch_wrapper.py`, `core/desktop_notify.py` |
+| Built-in web player | `core/web_launch.py`, `core/web_player.py`, `core/web_video.py`, `core/api_mixins/web_media.py` |
 | Scraping, catalog, and extension bridge | `core/scraper.py`, `core/f95zone.py`, `core/catalog.py`, `core/catalog_format.py`, `core/game_lookup.py`, `core/store_links.py`, `core/extension_server.py`, `core/extension_bridge.py`, `core/extension_ws.py` |
 | In-app downloads | `core/downloads/queue.py` (one ordered queue, slots, holds and retries over both workers), `core/downloads/pacing.py` (the shared speed limit), `core/power.py` (battery state for the battery hold), `core/downloads/manager.py` and `core/downloads/transfer.py` (file hosts), `core/downloads/torrents.py` (torrent helper supervisor), `core/update_downloads.py` |
 | Diagnostics and logs | `core/app_log.py`, `core/diagnostics.py` |
@@ -114,6 +115,7 @@ flowchart TD
 | Game catalog cache | `~/.local/share/wLib/catalog.db` + `catalog.json` | `%LOCALAPPDATA%\wLib\catalog.db` + `catalog.json` |
 | Local covers | `~/.local/share/wLib/covers/` | `%LOCALAPPDATA%\wLib\covers\` |
 | Remote cover cache | `~/.local/share/wLib/covers/cache/` | `%LOCALAPPDATA%\wLib\covers\cache\` |
+| Generated animated-cover card copies | `~/.local/share/wLib/covers/cards/` | `%LOCALAPPDATA%\wLib\covers\cards\` |
 | Sandbox storage | `~/.local/share/wLib/sandbox/<game id>/` | `%LOCALAPPDATA%\wLib\sandbox\<game id>\` |
 | Save backups | `~/.local/share/wLib/save-backups/<game id>/` | `%LOCALAPPDATA%\wLib\save-backups\<game id>\` |
 | PDF, TXT and MD attachments | `~/.local/share/wLib/attachments/<game id>/` | `%LOCALAPPDATA%\wLib\attachments\<game id>\` |
@@ -121,9 +123,15 @@ flowchart TD
 | Database copies made before a schema update (last three) | `~/.local/share/wLib/db-backups/` | `%LOCALAPPDATA%\wLib\db-backups\` |
 | Sync snapshots (last five) | `~/.local/share/wLib/sync/snapshots/` | `%LOCALAPPDATA%\wLib\sync\snapshots\` |
 | Sandboxes of removed games (30 days) | `~/.local/share/wLib/sandbox/removed/` | `%LOCALAPPDATA%\wLib\sandbox\removed\` |
+| Built-in player profiles, including removed games for 30 days | `~/.local/share/wLib/web-player/` | `%LOCALAPPDATA%\wLib\web-player\` |
+| Built-in player video scan cache | `~/.local/share/wLib/web-video-scan/` | `%LOCALAPPDATA%\wLib\web-video-scan\` |
+| Torrent data, resume and seeding state | `~/.local/share/wLib/downloads/torrents/` | `%LOCALAPPDATA%\wLib\downloads\torrents\` |
+| Allowed extension token hashes | `~/.local/share/wLib/extension-pairing.json` | `%LOCALAPPDATA%\wLib\extension-pairing.json` |
 | Uninstall and move job records (device-local, never exported or synced) | `~/.local/share/wLib/game-file-jobs.json` | `%LOCALAPPDATA%\wLib\game-file-jobs.json` |
 
 Attachment copies are limited to PDF, TXT and MD. PDF files must start with `%PDF-`; text files must contain no NUL in their first 8 KiB. The bridge exposes `browse_attachment_file` and reports rejected types as `unsupported_attachment`.
+
+The generated cover copies, player profiles and scan cache, torrent data, and extension pairing file are device-local and are not exported or synced. Torrent files and resume data can contain tracker credentials. See [Backend Systems](backend.md) for their lifecycle and [the privacy policy](../PRIVACY.md) for the data included in backups and sync.
 
 `WLIB_DATA_DIR` overrides the app-data root and `WLIB_CACHE_DIR` overrides the cache root. Linux also respects `XDG_DATA_HOME` and `XDG_CACHE_HOME`; an existing legacy `~/.local/share/wLib` library is retained when the configured XDG data directory does not yet exist. On Windows, a missing `LOCALAPPDATA` falls back to `~/AppData/Local/wLib`.
 

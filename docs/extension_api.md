@@ -39,6 +39,8 @@ Because of that restriction, the extension does not call `GET /api/check` direct
 
 **`GET /covers/cache/<name>`** serves a cached remote cover from `<data dir>/covers/cache/`. It shares the same random-name regex, content type mapping, nosniff protection, and private immutable cache header as `/covers/<name>`.
 
+**`GET /covers/cards/<name>`** serves generated still and animated WebP card copies from `<data dir>/covers/cards/`. Names are restricted to a source's 32-hex stem followed by `.still.webp` or `.anim.webp`; there is no listing. These responses use the same Host check and cache and nosniff headers as the other cover routes.
+
 ### 1. Check if Game Exists 
 **`GET /api/check?url={page_url}&id={source:id}`**
 Allows the extension to decorate an F95Zone page based on ownership.
@@ -69,7 +71,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
 **`GET /api/open?url={page_url}&id={source:id}`**
 Requests that the OS brings the wLib window to the foreground and opens the modal to the specified game.
 - **Requires:** an extension `Origin` or the `X-wLib-Extension` header; otherwise HTTP 403. A call with `url` or `id` also requires a paired token (see Extension Pairing).
-- **Action:** The query accepts the same repeated IDs as `/api/check`. The response and `wlib-extension-open` detail include `gameId` when resolved, so games without an F95 thread can open. Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
+- **Action:** Supply a page URL; the query also accepts the same repeated IDs as `/api/check` to help resolve it. The response and `wlib-extension-open` detail include `gameId` when resolved, so games without an F95 thread can open. Triggers pywebview window activation. Emits JavaScript custom event `wlib-extension-open` using the stored library URL when an equivalent thread match is found.
 - **Response:**
   ```json
   {
@@ -127,10 +129,10 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Handshake:** `GET /api/bridge?token=<pairing token>` with `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`, and `Sec-WebSocket-Version: 13`. The server answers `101 Switching Protocols` with `Sec-WebSocket-Accept` (base64(SHA-1(key + GUID)), RFC 6455 sample `dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
 - **Origin rules (stricter than the REST endpoints):** `Origin` must start with `chrome-extension://` or `moz-extension://`. Web origins (`https://example.com`), missing origins, missing upgrades (HTTP 400), and bad `Host` values (HTTP 403, same single-Host check as the other endpoints) are rejected before any message is exchanged. A missing or unpaired token receives HTTP 403 (see Extension Pairing).
 - **Socket:** the upgraded socket uses a 60-second timeout (plain endpoints use 10 seconds). One handler thread is held per browser; idle stalled peers drop on timeout.
-- **Protocol (`protocol: 1`, JSON text messages):**
+- **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 1, "extension_version": "1.2.6", "can_fetch": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.6", "can_fetch": true, "can_resolve": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -141,13 +143,13 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
    "final_url": "https://f95zone.to/threads/slug.123/", "body": "<html>..."}
   {"type": "fetch_result", "id": "...", "ok": false, "error": "refused|timeout|too_large|offsite_redirect|network"}
   ```
-  A connection is eligible only after `hello` with `protocol == 1` and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
+  A connection is eligible for fetches only after `hello` with protocol 1 or 2 and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Download resolution also requires `can_resolve == true`. Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
 - **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result.
 - **Firefox lifetime:** Firefox suspends an idle event page after 30 seconds and does not count WebSocket traffic as activity. In Firefox, each 20-second ping also writes `wlibBridgeKeepalive` to `storage.local`; the resulting `storage.onChanged` event keeps the page alive while the bridge is connected.
 - **Handshake:** the 101 reply uses an `HTTP/1.1` status line. Firefox drops WebSocket handshakes answered with `BaseHTTPRequestHandler`'s default `HTTP/1.0`.
 - **CSP:** the manifest sets `extension_pages` to `script-src 'self'; object-src 'self'`. Firefox's MV3 default adds `upgrade-insecure-requests`, which rewrites `ws://localhost:8183` to `wss://` and stops the bridge connecting.
 - **Limits:** wLib waits at most 30 seconds per `fetch` and never waits for an extension to connect (`unavailable` fails immediately). A dropped connection fails its pending requests at once. The extension refuses bodies over 4 MiB (`too_large`); wLib rejects bridge messages over 8 MiB. Only the newest eligible connection receives a request.
-- **Security notes:** the bridge accepts only extension-scheme origins on the local host, but a local process can forge an `Origin` and pose as the bridge. It only receives F95 thread/batch URLs and can return forged page content; that content is treated as untrusted input at the same level as F95 HTML itself, and local attackers already have stronger options, so this is accepted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`. The tab fallback finds F95 tabs through the `f95zone.to` host permission and runs only the allowlisted fetch in them.
+- **Security notes:** the bridge requires both an extension-scheme origin and an allowed pairing token. Origin alone can be forged by a local process; pairing prevents an unknown caller from using the bridge until allowed. The app treats returned page content as untrusted. Cookies, session tokens, and clearance values are never sent to wLib; the manifest requests no `tabs` or `cookies`. The tab fallback finds F95 tabs through the `f95zone.to` host permission and runs only the allowlisted fetch in them.
 
 ## OAuth Callback Pages
 

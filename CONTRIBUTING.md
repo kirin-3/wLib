@@ -225,7 +225,7 @@ wLib stores its data under `~/.local/share/wLib` on Linux or `%LOCALAPPDATA%\wLi
 - **Linux Launcher Logs**: `wlib-launch.log` or `appimage-launch.log` - Linux release-launch context
 - **Extension Files**: `extension/` - Installed browser extension copies
 - **Save Backups**: `save-backups/<game id>/` - Local save backups, never exported or synced
-- **PDF Attachments**: `attachments/<game id>/` - Local PDF attachments, never exported or synced
+- **Attachments**: `attachments/<game id>/` - Local PDF, TXT and MD attachments, never exported or synced
 - **Local Covers**: `covers/` - Device-local cover images, never exported or synced
 - **Sandbox Storage**: `sandbox/<game id>/` - Per-game private home and persistent sandbox data
 - **Game Catalog**: `catalog.db` - Read-only cached catalog, download-only and deleted when disabled
