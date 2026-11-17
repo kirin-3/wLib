@@ -2201,8 +2201,8 @@ const removeAttachment = async (name: string) => {
             <img v-if="hasCoverImage" :src="displayedCover" :alt="`${title || game.title} cover`" @error="onCoverError" />
             <CoverPlaceholder v-else :title="game.title" class="h-full w-full" />
           </div>
-          <div class="min-w-0">
-            <div class="flex items-start gap-3">
+          <div class="game-info">
+            <div class="game-title-row">
               <h2 id="game-detail-title" class="game-title flex-1 min-w-0" :title="title || game.title">{{ title || game.title || 'Untitled game' }}</h2>
               <div class="modal-toolbar-group shrink-0">
                 <button
@@ -2228,8 +2228,8 @@ const removeAttachment = async (name: string) => {
                 </div>
               </div>
             </div>
-            <p v-if="game.developer" class="text-sm mt-1 break-words" style="color: var(--text-secondary)">by {{ game.developer }}</p>
-            <div class="flex flex-wrap items-center gap-2 mt-3">
+            <p v-if="game.developer" class="game-developer">by {{ game.developer }}</p>
+            <div class="game-badges">
               <span class="identity-badge" :style="selectedEngineStyle">{{ engine }}</span>
               <span v-if="version" class="identity-badge version-badge">{{ version }}</span>
               <span v-if="hasUpdate" class="identity-badge update-badge">Update: {{ latestVersion }}</span>
@@ -2247,7 +2247,7 @@ const removeAttachment = async (name: string) => {
                 </div>
               </div>
             </div>
-            <div class="flex flex-wrap items-center gap-2 mt-3">
+            <div class="game-actions">
               <MenuButton
                 radio
                 class="play-status-menu"
@@ -2287,45 +2287,41 @@ const removeAttachment = async (name: string) => {
                   Stop skipping {{ skippedVersion }}
                 </button>
               </template>
+              <button
+                v-if="f95Url.trim() || game.links?.length"
+                @click="openInBrowser"
+                class="modal-toolbar-action ui-action-btn"
+                style="color: var(--text-primary)"
+              >
+                <IconExternalLinkFilled class="ui-action-icon" />
+                Open in browser
+              </button>
+              <button
+                v-if="game.f95_url"
+                @click="requestUpdateCheck"
+                :disabled="updateCheckState.running"
+                class="modal-toolbar-action ui-action-btn"
+                style="color: var(--text-primary)"
+              >
+                <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
+                {{ updateCheckState.running ? "Checking..." : "Check updates" }}
+              </button>
+              <button v-if="downloadStatusText" type="button" @click="closeAndNavigate('/downloads')"
+                class="modal-toolbar-action ui-action-btn" style="color: var(--brand)"
+                :title="`${downloadStatusText}. Open Downloads`" data-testid="game-download-status">
+                {{ downloadStatusText }}
+              </button>
+              <button
+                v-if="!hasUpdate && props.game && isWishlisted(props.game)"
+                @click="openInstallArchive({ gameId: props.game.id })"
+                class="modal-toolbar-action ui-action-btn"
+                style="color: var(--text-primary)"
+                title="Install this wishlisted game from a downloaded archive"
+              >
+                <IconDownload class="ui-action-icon" />
+                Install from archive
+              </button>
             </div>
-          </div>
-        </div>
-        <div class="modal-toolbar">
-          <div class="modal-toolbar-group">
-            <button
-              v-if="f95Url.trim() || game.links?.length"
-              @click="openInBrowser"
-              class="modal-toolbar-action ui-action-btn"
-              style="color: var(--text-primary)"
-            >
-              <IconExternalLinkFilled class="ui-action-icon" />
-              Open in browser
-            </button>
-            <button
-              v-if="game.f95_url"
-              @click="requestUpdateCheck"
-              :disabled="updateCheckState.running"
-              class="modal-toolbar-action ui-action-btn"
-              style="color: var(--text-primary)"
-            >
-              <IconRefresh class="ui-action-icon" :class="updateCheckState.running ? 'animate-spin' : ''" />
-              {{ updateCheckState.running ? "Checking..." : "Check updates" }}
-            </button>
-            <button v-if="downloadStatusText" type="button" @click="closeAndNavigate('/downloads')"
-              class="modal-toolbar-action ui-action-btn" style="color: var(--brand)"
-              :title="`${downloadStatusText}. Open Downloads`" data-testid="game-download-status">
-              {{ downloadStatusText }}
-            </button>
-            <button
-              v-if="!hasUpdate && props.game && isWishlisted(props.game)"
-              @click="openInstallArchive({ gameId: props.game.id })"
-              class="modal-toolbar-action ui-action-btn"
-              style="color: var(--text-primary)"
-              title="Install this wishlisted game from a downloaded archive"
-            >
-              <IconDownload class="ui-action-icon" />
-              Install from archive
-            </button>
           </div>
         </div>
       </header>
@@ -3335,8 +3331,6 @@ const removeAttachment = async (name: string) => {
 </template>
 
 <style scoped>
-/* Hide the toolbar row when no action applies. */
-.detail-header .modal-toolbar:not(:has(button)) { display: none; }
 .favorite-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 2.375rem; padding-inline: .5rem; color: var(--text-muted); }
 .favorite-toggle--on { color: var(--rating-accent); border-color: color-mix(in srgb, var(--rating-accent) 45%, transparent); background: color-mix(in srgb, var(--rating-accent) 14%, transparent); }
 .play-status-menu :deep(.menu-button-toggle) { border-color: var(--ui-status-border, var(--border)); background: var(--ui-status-bg, var(--bg-raised)); color: var(--ui-status-text, var(--text-secondary)); font-weight: 600; }
@@ -3380,10 +3374,59 @@ const removeAttachment = async (name: string) => {
 
 .game-header {
   display: grid;
-  grid-template-columns: 6rem minmax(0, 1fr);
-  align-items: center;
-  gap: 1rem;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1.25rem;
   padding-right: 2.875rem;
+}
+
+/* The cover takes the full height of the text column, so its top edge lines up with the title row
+   and its bottom edge with the action row. */
+.game-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.game-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+/* Square icon buttons, the same size as the close button next to them. */
+.game-title-row .modal-toolbar-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.375rem;
+  min-width: 0;
+  padding: 0;
+}
+
+.game-developer {
+  margin-top: 0.125rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.game-badges,
+.game-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.game-badges {
+  margin-top: 0.75rem;
+}
+
+/* margin-top: auto keeps the action row on the bottom edge of the cover when the text is short. */
+.game-actions {
+  margin-top: auto;
+  padding-top: 0.75rem;
 }
 
 /* Same top edge and gap as the favorite and actions buttons in the header. */
@@ -3393,11 +3436,12 @@ const removeAttachment = async (name: string) => {
 }
 
 .game-cover {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 6rem;
-  height: 7.5rem;
+  width: 7rem;
+  min-height: 8.75rem;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 0.625rem;
@@ -3405,13 +3449,18 @@ const removeAttachment = async (name: string) => {
   color: var(--text-muted);
 }
 
+/* Out of flow, so the image's own size never makes the header taller than the text. */
 .game-cover img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
 .game-title {
+  /* Centers the first line on the 2.375rem favorite and actions buttons. */
+  padding-top: 0.3rem;
   font-size: 1.375rem;
   font-weight: 700;
   line-height: 1.3;
@@ -3438,10 +3487,6 @@ const removeAttachment = async (name: string) => {
 .footer-launch-btn {
   justify-content: center;
   min-width: 6.5rem;
-}
-
-.detail-header .modal-toolbar {
-  margin-top: 1rem;
 }
 
 .detail-tabs {
@@ -3545,15 +3590,33 @@ const removeAttachment = async (name: string) => {
 }
 
 @media (max-width: 640px) {
+  /* The info column dissolves into the grid, so the action row can use the full width under the cover. */
   .game-header {
     grid-template-columns: 4.5rem minmax(0, 1fr);
-    gap: 0.75rem;
+    align-items: start;
+    column-gap: 0.75rem;
+    row-gap: 0;
     padding-right: 2.875rem;
   }
 
+  .game-info {
+    display: contents;
+  }
+
+  .game-info > * {
+    grid-column: 2;
+  }
+
   .game-cover {
+    grid-row: 1 / span 3;
     width: 4.5rem;
     height: 6rem;
+    min-height: 0;
+  }
+
+  .game-info > .game-actions {
+    grid-column: 1 / -1;
+    margin-right: -2.875rem;
   }
 
   .game-title {
@@ -3825,6 +3888,8 @@ const removeAttachment = async (name: string) => {
 .identity-badge {
   display: inline-flex;
   align-items: center;
+  min-height: 1.75rem;
+  line-height: 1;
   gap: 0.35rem;
   border-radius: 0.5rem;
   padding: 0.3rem 0.55rem;
@@ -3928,6 +3993,10 @@ const removeAttachment = async (name: string) => {
 }
 
 .collection-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  line-height: 1;
   padding: 0.3rem 0.55rem;
   border: 1px dashed var(--border-hover);
   border-radius: 0.5rem;
