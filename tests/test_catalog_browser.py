@@ -213,3 +213,20 @@ def test_check_f95_login_needs_a_cookie(tmp_path, monkeypatch):
     monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
     assert main(["--data-dir", str(tmp_path), "check-f95-login"]) == 2
+
+
+def test_check_f95_login_works_while_the_feed_budget_is_used_up(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", COOKIE)
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
+    state = StateStore(str(tmp_path / "state.sqlite"))
+    clock = FakeClock()
+    for _ in range(90):
+        state.log_request("f95", clock(), 200)
+    state.close()
+    browser = FakeBrowser(lambda url: FakePage(200, _f95_home(True)))
+    result = main(
+        ["--data-dir", str(tmp_path), "check-f95-login"],
+        browser=BrowserTransport(cookies=f95_login_cookies(COOKIE), session_factory=browser),
+    )
+    assert result == 0
+    assert "Logged in to F95 as SomeUser" in capsys.readouterr().out

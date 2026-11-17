@@ -23,7 +23,7 @@ from .config import (
     r2_config_from_env,
     site_proxies_from_env,
 )
-from .net import BudgetExhausted, Pacer, RateLimited, Transport, urllib_transport
+from .net import Pacer, Request, Transport, urllib_transport
 from .publish import R2Storage, Storage
 from .runner import run
 from .sources import get_sources
@@ -179,39 +179,30 @@ class NetworkSettings:
         return BrowserTransport(cookies=cookies)
 
 
-def _check_f95_login(
-    folder: str,
-    settings: NetworkSettings,
-    transport: Transport,
-    browser: BrowserTransport | None,
-    sleep: Callable[[float], None],
-) -> int:
+def _check_f95_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
     if settings.f95_cookie is None:
         log.error("no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env")
+        return 2
+    browser = settings.browser(given)
+    if browser is None:  # NetworkSettings needs f95 in the browser sites for a cookie.
         return 2
     with _run_lock(folder) as acquired:
         if not acquired:
             log.error("a catalog run is in progress; try again when it ends")
             return 1
-        _, state = open_stores(folder)
-        browser = settings.browser(browser)
+        # One request to the home page, outside the Pacer: its budget is for
+        # F95's rate-limited latest_data feed, which this does not use.
         try:
-            pacer = Pacer(
-                state,
-                transport,
-                sleep=sleep,
-                proxies=settings.proxies,
-                transports={"f95": browser} if browser is not None else None,
-            )
-            try:
-                html = pacer.request("f95", F95_HOME_URL).text()
-            except (BudgetExhausted, RateLimited) as exc:
-                log.error("%s; try again later", exc)
-                return 1
+            response = browser(Request("GET", F95_HOME_URL))
+        except ConnectionError as exc:
+            log.error("could not open F95: %s", exc)
+            return 1
         finally:
-            if browser is not None:
-                browser.close()
-            state.close()
+            browser.close()
+    if response.status != 200:
+        log.error("F95 answered HTTP %s", response.status)
+        return 1
+    html = response.text()
     if not _LOGGED_IN_RE.search(html):
         log.error("F95 does not see a login; the xf_user cookie is wrong or expired")
         return 1
@@ -239,7 +230,7 @@ def main(
         log.error("%s", exc)
         return 2
     if args.command == "check-f95-login":
-        return _check_f95_login(folder, settings, transport, browser, sleep)
+        return _check_f95_login(folder, settings, browser)
 
     storage: Storage | None = None
     if not args.no_publish:
