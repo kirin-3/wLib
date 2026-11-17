@@ -168,7 +168,6 @@ Before making architectural changes, reviewing our internal documentation is hig
 - [Backend Systems](docs/backend.md)
 - [Frontend Details](docs/frontend.md)
 - [Database & Schema](docs/database.md)
-- [Game Catalog](docs/catalog.md)
 - [Browser Extension API](docs/extension_api.md)
 - [Build & Packaging](docs/build.md)
 

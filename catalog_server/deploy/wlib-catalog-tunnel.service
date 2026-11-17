@@ -1,6 +1,5 @@
 [Unit]
 Description=SSH tunnel from the wLib catalog builder to its DLsite proxy
-Documentation=https://github.com/kirin-3/wLib/blob/master/docs/catalog.md
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/etc/wlib-catalog/tunnel.env
@@ -8,7 +7,7 @@ ConditionPathExists=/etc/wlib-catalog/tunnel.env
 [Service]
 User=wlibcat
 Group=wlibcat
-# TUNNEL_TARGET (user@host) and TUNNEL_PORT; see docs/catalog.md.
+# TUNNEL_TARGET (user@host) and TUNNEL_PORT.
 EnvironmentFile=/etc/wlib-catalog/tunnel.env
 # Through env: SELinux does not let systemd (init_t) run ssh_exec_t directly.
 ExecStart=/usr/bin/env ssh -N -T \

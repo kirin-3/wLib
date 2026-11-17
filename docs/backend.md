@@ -46,8 +46,8 @@ details and slower tool checks in parallel.
 
 ## Game catalog client
 
-`core/catalog.py` keeps a read-only copy of the published catalog (see
-`docs/catalog.md`) as `<data dir>/catalog.db`, with a `catalog.json` sidecar
+`core/catalog.py` keeps a read-only copy of the published catalog as
+`<data dir>/catalog.db`, with a `catalog.json` sidecar
 holding the installed manifest, `last_check` and `last_error`. `Api.__init__`
 creates `self.catalog` and starts a daemon-thread check unless the
 `catalog_enabled` setting is `"0"` (default on). A check skips when the last one
@@ -74,8 +74,7 @@ the catalog.
   turning it on starts a check. The setting is local and not part of sync or
   JSON export.
 - After a new snapshot installs, and once per start when one is installed,
-  `_fill_ratings_from_catalog` fills F95 ratings from the catalog (see
-  "F95 rating fill" in `docs/catalog.md`). It is guarded by the device-local
+  `_fill_ratings_from_catalog` fills F95 ratings from the catalog. It is guarded by the device-local
   setting `catalog_rating_fill_sha`, so each snapshot is used once.
 
 ## Library sync and encrypted backups
@@ -336,7 +335,7 @@ This module handles native host launching and Linux compatibility runtimes.
 - `core/game_covers.py`: recognizes JPEG, PNG, WebP, GIF and AVIF content, enforces the 20 MiB limit, and atomically stores device-local cover files.
 - `core/cover_cards.py` and `core/webp_anim.py`: `CoverCardService` makes a still copy and a card-size animated copy (at most 640 px wide, never upscaled, at most 300 frames and 16 MiB) of each animated GIF or WebP local or cached cover, using Qt's image reader and WebP writer plus a small pure-Python animated-WebP muxer. Copies live in the device-local `covers/cards/` folder as `<source-stem>.still.webp` and `<source-stem>.anim.webp`, are served by the `/covers/cards/` route (strict name pattern, no listing), and are never exported, synced or counted as library changes. The still copy is written last. Orphans are swept at startup and after a cover is replaced, cleared, deleted or purged. `get_games` adds `cover_card_still_url` and `cover_card_anim_url` for the shown source only. If Qt has no WebP writer the service disables itself and covers behave as before.
 - `core/litedb.py`: dependency-free LiteDB 4 reader used by Playnite import.
-- `core/catalog_format.py`: shared catalog schema version, manifest field names, and `meta` keys (see [Game Catalog](catalog.md)).
+- `core/catalog_format.py`: shared catalog schema version, manifest field names, and `meta` keys.
 - `core/f95zone.py`: host-limited thread-ID extraction, thread URL normalization, and equivalent-thread matching used by the database, scraper, and backup import.
 - `core/versions.py`: normalized version comparison mirrored by `normalizeVersion()` in `ui/src/utils/libraryGames.ts`.
 - `core/backup_format.py`: leaf module with shared backup format identifiers, the SQLite integer bound, and `BackupValidationError`; `core.library_backup` re-exports these names.
