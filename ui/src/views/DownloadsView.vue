@@ -2,6 +2,7 @@
 <!-- Every in-app download in one ordered list, grouped by what it needs. -->
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue';
+import { useEventListener } from "../composables/useEventListener";
 import {useRouter} from 'vue-router';
 import {
   IconAlertTriangle, IconDownload, IconInfoCircle, IconPackage, IconPlayerPause, IconPlayerPlay, IconReload, IconSettings, IconTrash, IconX,
@@ -176,11 +177,10 @@ onMounted(() => {
   downloads.startPolling();
   downloads.wantHistory(true);
   void loadOffers();
-  window.addEventListener('focus', onFocus);
 });
+useEventListener(window, 'focus', onFocus);
 onBeforeUnmount(() => {
   downloads.wantHistory(false);
-  window.removeEventListener('focus', onFocus);
 });
 </script>
 

@@ -1,13 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import { TAG_COLOR_SWATCHES, colorForTag, setTagColor, type TagSwatch } from "../utils/tagColors";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import { notifyError } from "../utils/toast";
 
 const props = defineProps<{ tag: string; anchor: HTMLElement }>();
 const emit = defineEmits<{ close: [] }>();
-const panel = ref<HTMLElement | null>(null);
+const panel = useTemplateRef<HTMLElement>("panel");
 const left = ref(8);
 const top = ref(8);
 const options = [...TAG_COLOR_SWATCHES, null];

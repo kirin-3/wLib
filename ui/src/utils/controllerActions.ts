@@ -7,14 +7,14 @@ import { moveFocus, scopeRoot } from "./spatialFocus.ts";
 type NamedAction = "play" | "search" | "menu" | "prevTab" | "nextTab" | "pageUp" | "pageDown";
 export interface ControllerHint { button: string; label: string }
 export type ControllerHandlers = Partial<Record<NamedAction, () => void>> & { hints?: ControllerHint[] | (() => ControllerHint[]); back?: () => boolean; move?: (direction: Direction) => boolean };
-export interface ControllerScope { scope: Ref<HTMLElement | null>; handlers: ControllerHandlers }
+export interface ControllerScope { scope: Readonly<Ref<HTMLElement | null>>; handlers: ControllerHandlers }
 const scopes: ControllerScope[] = [];
 export function chooseScope(entries: readonly ControllerScope[], active: Element | null, fallback: Element | null): ControllerScope | undefined {
   const target = active && active !== document.body ? active : fallback;
   return entries.filter(entry => entry.scope.value && target && (!fallback || fallback === entry.scope.value || fallback.contains(entry.scope.value)) && (entry.scope.value === target || entry.scope.value.contains(target) || ((!active || active === document.body) && target.contains(entry.scope.value))))
     .sort((a, b) => a.scope.value?.contains(b.scope.value ?? null) ? 1 : -1)[0];
 }
-export function useControllerActions(scope: Ref<HTMLElement | null>, handlers: ControllerHandlers): void {
+export function useControllerActions(scope: Readonly<Ref<HTMLElement | null>>, handlers: ControllerHandlers): void {
   const entry = { scope, handlers };
   scopes.push(entry);
   onBeforeUnmount(() => { const i = scopes.indexOf(entry); if (i >= 0) scopes.splice(i, 1); });

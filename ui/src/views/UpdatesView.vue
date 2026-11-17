@@ -4,7 +4,8 @@ import { gameCoverSrc } from "../utils/gameCover";
 import CoverImage from "../components/CoverImage.vue";
 import CoverPlaceholder from "../components/CoverPlaceholder.vue";
 import { refreshRunningGames } from "../composables/useRunningGames";
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
+import { ref, useTemplateRef, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import MenuButton, { type MenuButtonItem } from "../components/MenuButton.vue";
 import UpdateSettingsDialog from "../components/UpdateSettingsDialog.vue";
 import { useRouter } from "vue-router";
@@ -547,7 +548,7 @@ const chooseUpdateMenuItem = (game: GameRecord, id: string) => {
 // When a row leaves while focus is in it (or focus was lost), move focus to
 // the main part of the row now at the same place, else the previous row, else
 // "Check All Games". Rows that animate out still hold the leave class.
-const checkActions = ref<HTMLElement | null>(null);
+const checkActions = useTemplateRef<HTMLElement>("checkActions");
 const focusUpdateRow = (index: number) => {
   const rows = [...document.querySelectorAll<HTMLElement>("[data-update-row]")]
     .filter((row) => !row.classList.contains("list-leave-active") && !row.classList.contains("list-leave-from"));
@@ -656,7 +657,6 @@ const handleLibraryRefresh = async () => {
 };
 
 onMounted(() => {
-  window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
   onWebviewReady(() => void refreshRunningGames(() => api.getRunningGames()));
   onWebviewReady(async () => {
     if (disposed) return;
@@ -691,12 +691,12 @@ onMounted(() => {
     }
   });
 });
+useEventListener(window, "wlib-refresh-library", handleLibraryRefresh);
 
 onUnmounted(() => {
   disposed = true;
   offersRequest++;
   statusRequest++;
-  window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
   stopPolling();
 });
 </script>

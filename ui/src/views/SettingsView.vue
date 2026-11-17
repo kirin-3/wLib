@@ -11,7 +11,7 @@ import { confirmAction } from "../utils/confirm";
 import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
 import { formatLibraryFreeSpace } from "../utils/installArchive";
 import type { LibraryFolder } from "../services/api";
-import { computed, ref, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
+import { computed, ref, useTemplateRef, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
 import { onBeforeRouteLeave, useRoute } from "vue-router";
 import { settingsVisibleRows } from "../utils/settingsVisibility";
 import { matchSettings, type SettingsSearchSection } from "../utils/settingsSearch";
@@ -1045,9 +1045,9 @@ const removeCollection = async (name: string) => {
   collectionError.value = "";
 };
 
-const settingsRoot = ref<HTMLElement | null>(null);
-const desktopSearch = ref<HTMLInputElement | null>(null);
-const mobileSearch = ref<HTMLInputElement | null>(null);
+const settingsRoot = useTemplateRef<HTMLElement>("settingsRoot");
+const desktopSearch = useTemplateRef<HTMLInputElement>("desktopSearch");
+const mobileSearch = useTemplateRef<HTMLInputElement>("mobileSearch");
 const searchQuery = ref("");
 const visibleRows = ref<Set<string> | null>(null);
 provide(settingsVisibleRows, visibleRows);

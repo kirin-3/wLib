@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, useTemplateRef, watch } from "vue";
 import { IconAlertTriangle, IconCheck, IconFolderOpen, IconLoader2, IconX } from "@tabler/icons-vue";
 import {
   api,
@@ -15,13 +15,13 @@ import { createInstallPreview, defaultDeleteArchive, mergeArchiveFields, openIns
 import { defaultTargetLabel, isWishlisted } from "../../utils/libraryGames";
 import PathStatus from "../PathStatus.vue";
 
+const isOpen = defineModel<boolean>({ required: true });
 const props = defineProps<{
-  modelValue: boolean;
   game?: GameRecord | null;
   preselectedArchive?: string;
   seed?: InstallArchiveSeed | undefined;
 }>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean]; installed: [archivePath: string] }>();
+const emit = defineEmits<{ installed: [archivePath: string] }>();
 
 type Phase = "pick" | "inspecting" | "ready" | "installing" | "done";
 
@@ -150,11 +150,11 @@ const canInstall = computed(
 
 const close = () => {
   if (phase.value === "installing" || inspecting.value) return;
-  emit("update:modelValue", false);
+  isOpen.value = false;
 };
 
-const modalRef = ref<HTMLElement | null>(null);
-useModalKeyboard(modalRef, () => props.modelValue, close);
+const modalRef = useTemplateRef<HTMLElement>("modalRef");
+useModalKeyboard(modalRef, () => isOpen.value, close);
 
 let inspectRequestId = 0;
 // Title and version guessed from the current archive's file name.
@@ -227,7 +227,7 @@ const preview = createInstallPreview(
   },
 );
 const updatePreview = () => {
-  if (!props.modelValue || phase.value === "installing" || phase.value === "done") return;
+  if (!isOpen.value || phase.value === "installing" || phase.value === "done") return;
   preview.schedule({
     title: title.value, version: version.value, creator: creator.value,
     engine: engine.value, game_id: target.value?.id, library_folder: libraryFolder.value,
@@ -244,7 +244,7 @@ const lookupDetails = async () => {
   lookupMessage.value = "";
   try {
     const info = await api.lookupThreadDetails(url);
-    if (requestId !== lookupRequestId || !props.modelValue || f95Url.value.trim() !== url) return;
+    if (requestId !== lookupRequestId || !isOpen.value || f95Url.value.trim() !== url) return;
     if (!info.success) throw new Error(info.error || "Thread unavailable");
     const fields = mergeArchiveFields(
       { title: title.value, version: version.value, creator: creator.value, engine: engine.value },
@@ -258,7 +258,7 @@ const lookupDetails = async () => {
     coverImage.value = info.cover_image || "";
     tags.value = info.tags || "";
   } catch (error) {
-    if (requestId !== lookupRequestId || !props.modelValue || f95Url.value.trim() !== url) return;
+    if (requestId !== lookupRequestId || !isOpen.value || f95Url.value.trim() !== url) return;
     lookupMessage.value = "Thread details could not be loaded. You can still install using the details above.";
     console.error("Failed to load thread details", error);
   } finally {
@@ -280,7 +280,7 @@ watch(f95Url, () => {
 const loadLibraryFolder = async () => {
   try {
     const [settings, folders] = await Promise.all([api.getSettings(), api.listLibraryFolders()]);
-    if (!props.modelValue) return;
+    if (!isOpen.value) return;
     libraryFolders.value = folders;
     if (!libraryFolder.value) libraryFolder.value = settings?.library_folder || "";
     libraryFolderMissing.value = !libraryFolder.value.trim();
@@ -302,7 +302,7 @@ const inspect = async () => {
   duplicateGameId.value = null;
   try {
     const info = await api.inspectArchive(path, target.value?.id ?? null, targetId.value, folderEdited.value ? libraryFolder.value : null);
-    if (requestId !== inspectRequestId || !props.modelValue) {
+    if (requestId !== inspectRequestId || !isOpen.value) {
       if (info.downloaded_by_wlib) void api.releaseDownloadArchive(path);
       return;
     }
@@ -349,7 +349,7 @@ const inspect = async () => {
     phase.value = "ready";
     updatePreview();
   } catch (e) {
-    if (requestId !== inspectRequestId || !props.modelValue) return;
+    if (requestId !== inspectRequestId || !isOpen.value) return;
     inspectError.value = e instanceof Error ? e.message : String(e);
     phase.value = "pick";
   } finally {
@@ -371,7 +371,7 @@ const installIntoDuplicate = () => {
 const browseArchive = async () => {
   try {
     const path = await api.browseArchiveFile(archive.value);
-    if (path && props.modelValue) {
+    if (path && isOpen.value) {
       if (archive.value && archive.value !== path) void api.releaseDownloadArchive(archive.value);
       archive.value = path;
       await inspect();
@@ -394,10 +394,10 @@ const addLibraryFolder = async (path: string) => {
       library_folders: before.includes(path) ? before : [...before, path],
       library_folder: defaultFolder || path,
     });
-    if (!props.modelValue) return;
+    if (!isOpen.value) return;
     if (res?.success === false) throw new Error(res.error || "Could not add the library folder");
     const after = await api.listLibraryFolders();
-    if (!props.modelValue) return;
+    if (!isOpen.value) return;
     libraryFolders.value = after;
     // The backend may store a canonical spelling of the path.
     libraryFolder.value = after.find((folder) => !before.includes(folder.path))?.path ?? path;
@@ -414,7 +414,7 @@ const addLibraryFolder = async (path: string) => {
 const chooseFolderToAdd = async () => {
   try {
     const path = await api.browseDirectory(suggestedLibraryFolder.value || libraryFolder.value);
-    if (path && props.modelValue) await addLibraryFolder(path);
+    if (path && isOpen.value) await addLibraryFolder(path);
   } catch (e) {
     addLibraryFolderError.value = e instanceof Error ? e.message : String(e);
   }
@@ -423,16 +423,16 @@ const chooseFolderToAdd = async () => {
 const browseLibraryFolder = async () => {
   try {
     const path = await api.browseDirectory(libraryFolder.value);
-    if (!path || !props.modelValue) return;
+    if (!path || !isOpen.value) return;
     const res = await api.saveSettings({ library_folder: path, library_folders: [path] });
-    if (!props.modelValue) return;
+    if (!isOpen.value) return;
     if (res?.success === false) throw new Error(res.error || "Could not save library folder");
     libraryFolder.value = path;
     libraryFolders.value = await api.listLibraryFolders();
     libraryFolderMissing.value = false;
     if (archive.value.trim()) await inspect();
   } catch (e) {
-    if (props.modelValue) {
+    if (isOpen.value) {
       notifyError(e instanceof Error ? e.message : String(e));
     }
   }
@@ -567,7 +567,7 @@ const seedForm = () => {
   }
   const requestId = inspectRequestId;
   void loadLibraryFolder().then(() => {
-    if (!props.modelValue || requestId !== inspectRequestId) return;
+    if (!isOpen.value || requestId !== inspectRequestId) return;
     void lookupDetails();
     if (seededArchive.value) {
       archive.value = seededArchive.value;
@@ -585,7 +585,7 @@ const hasPendingRequest = () =>
 // while it is open; a superseded inspection is cheap to cancel. A running install
 // owns the form, so the request waits until the install ends (see below).
 watch(
-  () => [props.modelValue, props.game?.id ?? null, props.preselectedArchive, props.seed] as const,
+  () => [isOpen.value, props.game?.id ?? null, props.preselectedArchive, props.seed] as const,
   ([open]) => {
     if (!open) {
       stopPolling();
@@ -603,14 +603,14 @@ watch(
 // meanwhile instead of letting a retry reuse the old game's fields. A finished
 // install keeps showing its result for the game it installed.
 watch(phase, (next, prev) => {
-  if (prev !== "installing" || next !== "ready" || !props.modelValue || !hasPendingRequest()) return;
+  if (prev !== "installing" || next !== "ready" || !isOpen.value || !hasPendingRequest()) return;
   if (installError.value) notifyError(`Install for ${target.value?.title || "archive"} failed: ${installError.value}`);
   seedForm();
 });
 </script>
 
 <template>
-  <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
 
     <div

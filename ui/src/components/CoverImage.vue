@@ -3,7 +3,7 @@
 // stacked on top. CSS (html[data-cover-animation]) decides when the animated
 // layer shows, so changing the mode or hovering never re-renders this. An
 // animated cover with no still copy gets its first frame drawn on a canvas.
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, useTemplateRef, watch } from "vue";
 import { coverAnimError, coverCardSources, gameCoverError } from "../utils/gameCover";
 
 type CoverGame = Parameters<typeof coverCardSources>[0];
@@ -14,7 +14,7 @@ const sources = computed(() => coverCardSources(props.game));
 // Matches the card copies' size; a larger frame only costs memory.
 const FRAME_MAX_WIDTH = 640;
 
-const canvas = ref<HTMLCanvasElement | null>(null);
+const canvas = useTemplateRef<HTMLCanvasElement>("canvas");
 let observer: IntersectionObserver | null = null;
 let run = 0;
 

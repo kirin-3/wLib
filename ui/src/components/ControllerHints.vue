@@ -1,11 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, ref } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import { currentHints, defaultHints, type ControllerHint } from "../utils/controllerActions";
 const hints = ref<ControllerHint[]>(defaultHints);
 const update = () => { hints.value = currentHints(); };
-onMounted(() => { update(); document.addEventListener("focusin", update); window.addEventListener("wlib-controller-action", update); });
-onUnmounted(() => { document.removeEventListener("focusin", update); window.removeEventListener("wlib-controller-action", update); });
+onMounted(update);
+useEventListener(document, "focusin", update);
+useEventListener(window, "wlib-controller-action", update);
 </script>
 <template>
   <div class="controller-hints" aria-label="Controller shortcuts">

@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import { gameCoverSrc, gameCoverError } from "../utils/gameCover";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import { useModalKeyboard } from "../utils/modalKeyboard";
@@ -15,7 +16,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-const container = ref<HTMLElement | null>(null);
+const container = useTemplateRef<HTMLElement>("container");
 const isOpen = computed(() => props.startIndex !== null);
 const currentIndex = ref(0);
 const failed = ref(false);
@@ -81,13 +82,7 @@ const onResize = () => {
   windowHeight.value = window.innerHeight;
 };
 
-onMounted(() => {
-  window.addEventListener("resize", onResize);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("resize", onResize);
-});
+useEventListener(window, "resize", onResize);
 
 const fittedStyle = computed(() => {
   if (!naturalWidth.value || !naturalHeight.value) {

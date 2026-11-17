@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import { IconAlertTriangle, IconArrowsExchange, IconCloud, IconEye, IconEyeOff, IconHistory, IconLock, IconLockOpen, IconRefresh } from "@tabler/icons-vue";
 import { api, type LibrarySyncChoice, type LibrarySyncStatus, type SyncSnapshot } from "../services/api";
 import { useModalKeyboard } from "../utils/modalKeyboard";
@@ -15,7 +15,7 @@ const snapshots = ref<SyncSnapshot[]>([]);
 const snapshotsLoaded = ref(false);
 const restoreTarget = ref<SyncSnapshot | null>(null);
 const restoreMessage = ref("");
-const dialogElement = ref<HTMLElement | null>(null);
+const dialogElement = useTemplateRef<HTMLElement>("dialogElement");
 const passphrase = ref("");
 const confirmation = ref("");
 const dialogError = ref("");

@@ -11,7 +11,8 @@ import {
 import GameCard from "../components/library/GameCard.vue";
 import GameRow from "../components/library/GameRow.vue";
 import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
-import { ref, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from "vue";
+import { ref, useTemplateRef, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import { gamesStore } from "../composables/useGamesStore";
 import { nextRenderLimit, RENDER_BATCH } from "../utils/gamesStore";
 import { toCssPx } from "../utils/interfaceScalePreference";
@@ -184,10 +185,10 @@ const showNewCollectionInline = ref(false);
 const collectionError = ref("");
 const renamingCollection = ref<string | null>(null);
 const renameCollectionDraft = ref("");
-const newCollectionInput = ref<HTMLInputElement | null>(null);
-const collectionTabsElement = ref<HTMLElement | null>(null);
+const newCollectionInput = useTemplateRef<HTMLInputElement>("newCollectionInput");
+const collectionTabsElement = useTemplateRef<HTMLElement>("collectionTabsElement");
 const collectionTabMenu = ref<{ name: string; x: number; y: number } | null>(null);
-const collectionTabMenuElement = ref<HTMLElement | null>(null);
+const collectionTabMenuElement = useTemplateRef<HTMLElement>("collectionTabMenuElement");
 // Saved filter presets listed after Quick filters in the filters pane.
 const savedPresets = ref<LibraryFilterPreset[]>([]);
 // True once Settings has answered, so a save can't treat "not loaded" as empty.
@@ -196,22 +197,22 @@ const newPresetName = ref("");
 const presetError = ref("");
 // "Save as preset" in the active-filter chip row opens an inline name field.
 const savePresetOpen = ref(false);
-const savePresetButton = ref<HTMLButtonElement | null>(null);
-const savePresetInput = ref<HTMLInputElement | null>(null);
-const quickFiltersList = ref<HTMLElement | null>(null);
+const savePresetButton = useTemplateRef<HTMLButtonElement>("savePresetButton");
+const savePresetInput = useTemplateRef<HTMLInputElement>("savePresetInput");
+const quickFiltersList = useTemplateRef<HTMLElement>("quickFiltersList");
 const showAddModal = ref(false);
 const showImportModal = ref(false);
 const showDetailModal = ref(false);
 const detailModal = ref<{ requestClose: () => Promise<boolean> } | null>(null);
 const selectedGame = ref<GameRecord | null>(null);
 const openLaunchTargetMenuId = ref<number | null>(null);
-const searchInput = ref<HTMLInputElement | null>(null);
+const searchInput = useTemplateRef<HTMLInputElement>("searchInput");
 const tagSearchQuery = ref("");
 const markingUpdatedIds = ref(new Set<number>());
 const contextMenu = ref<{ game: GameRecord; x: number; y: number } | null>(
   null,
 );
-const contextMenuElement = ref<HTMLElement | null>(null);
+const contextMenuElement = useTemplateRef<HTMLElement>("contextMenuElement");
 const contextTools = ref<CompanionTool[]>([]);
 let contextToolsRequest = 0;
 const loadingCompanionId = ref<number | null>(null);
@@ -280,7 +281,7 @@ const selection = useLibrarySelection();
 const selectedIds = selection.selectedIds;
 const selecting = ref(false);
 const bulkBar = ref<InstanceType<typeof BulkActionBar> | null>(null);
-const libraryControllerScope = ref<HTMLElement | null>(null);
+const libraryControllerScope = useTemplateRef<HTMLElement>("libraryControllerScope");
 useControllerActions(libraryControllerScope, {
   play: () => {
     const card = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-game-id]");
@@ -1884,14 +1885,6 @@ watch(showImportModal, (open) => {
 onMounted(() => {
   restoreLibraryViewState();
   libraryFiltersPaneOpen.value = !isFiltersCollapsed.value;
-
-  window.addEventListener("wlib-refresh-library", handleLibraryRefresh);
-  window.addEventListener("wlib-playtime-tick", handlePlaytimeTick);
-  document.addEventListener("click", handleDocumentClick);
-  document.addEventListener("keydown", handleLibraryKeyboard);
-  document.addEventListener("scroll", handleLibraryScroll, true);
-  window.addEventListener("resize", handleDocumentClick);
-  window.addEventListener("resize", fillRenderedGames);
   onWebviewReady(() => {
     void loadTagColors().catch(console.error);
     void loadGames();
@@ -1899,17 +1892,17 @@ onMounted(() => {
     void loadLibrarySettings();
   });
 });
+useEventListener(window, "wlib-refresh-library", handleLibraryRefresh);
+useEventListener(window, "wlib-playtime-tick", handlePlaytimeTick);
+useEventListener(document, "click", handleDocumentClick);
+useEventListener(document, "keydown", handleLibraryKeyboard);
+useEventListener(document, "scroll", handleLibraryScroll, true);
+useEventListener(window, "resize", handleDocumentClick);
+useEventListener(window, "resize", fillRenderedGames);
 
 onUnmounted(() => {
   libraryFiltersPaneOpen.value = false;
   settingsRequest++;
-  window.removeEventListener("wlib-refresh-library", handleLibraryRefresh);
-  window.removeEventListener("wlib-playtime-tick", handlePlaytimeTick);
-  window.removeEventListener("resize", fillRenderedGames);
-  document.removeEventListener("click", handleDocumentClick);
-  document.removeEventListener("keydown", handleLibraryKeyboard);
-  document.removeEventListener("scroll", handleLibraryScroll, true);
-  window.removeEventListener("resize", handleDocumentClick);
   if (modalUpdateTimeout) {
     clearTimeout(modalUpdateTimeout);
   }

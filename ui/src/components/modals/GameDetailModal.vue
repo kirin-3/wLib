@@ -6,7 +6,8 @@ import { addLeaveGuard } from "../../utils/leaveGuard";
 import { useControllerActions } from "../../utils/controllerActions";
 import { gameCoverSrc, gameCoverError } from "../../utils/gameCover";
 import CoverPlaceholder from "../CoverPlaceholder.vue";
-import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { ref, useTemplateRef, watch, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { useEventListener } from "../../composables/useEventListener";
 import { useRouter } from "vue-router";
 import { sandboxSwitchState, networkSwitchState } from "../../utils/sandbox";
 import { HTML_PLAYER_OPTIONS, isHtmlTarget, normalizeHtmlPlayer, resolveWebPlayer } from "../../utils/webPlayer";
@@ -114,8 +115,8 @@ const ENGINE_HUES: Record<Exclude<EngineOption, "Others">, string> = {
   "Wolf RPG": "145, 91, 53",
 };
 
+const isOpen = defineModel<boolean>({ required: true });
 const props = defineProps<{
-  modelValue: boolean;
   game: GameRecord | null;
   updateCheckState: UpdateCheckState;
   isRunning?: boolean;
@@ -124,7 +125,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  "update:modelValue": [value: boolean];
   updated: [];
   remove: [game: GameRecord];
   uninstall: [game: GameRecord];
@@ -258,7 +258,7 @@ const loadScreenshots = async () => {
   inCatalog.value = false;
   fullFallbacks.value = new Set();
   failedScreenshots.value = new Set();
-  if (!props.modelValue || typeof id !== "number") return;
+  if (!isOpen.value || typeof id !== "number") return;
   try {
     const result = await api.getGameScreenshots(id);
     if (request !== screenshotsRequest) return;
@@ -268,9 +268,9 @@ const loadScreenshots = async () => {
     }
   } catch { /* Stored screenshots remain available. */ }
 };
-watch(() => [props.modelValue, props.game?.id] as const, () => { void loadScreenshots(); }, { immediate: true });
+watch(() => [isOpen.value, props.game?.id] as const, () => { void loadScreenshots(); }, { immediate: true });
 watch(() => props.updateCheckState.running, (running, previous) => {
-  if (previous && !running && props.modelValue) void loadScreenshots();
+  if (previous && !running && isOpen.value) void loadScreenshots();
 });
 const hasCoverImage = computed(() => !!displayedCover.value && !coverImageFailed.value);
 const galleryImages = computed(() => [
@@ -341,10 +341,10 @@ const collectionError = ref("");
 const collectionBusy = ref(false);
 const actionsOpen = ref(false);
 const collectionsOpen = ref(false);
-const actionsContainer = ref<HTMLElement | null>(null);
-const collectionsContainer = ref<HTMLElement | null>(null);
-const actionsButton = ref<HTMLButtonElement | null>(null);
-const collectionsButton = ref<HTMLButtonElement | null>(null);
+const actionsContainer = useTemplateRef<HTMLElement>("actionsContainer");
+const collectionsContainer = useTemplateRef<HTMLElement>("collectionsContainer");
+const actionsButton = useTemplateRef<HTMLButtonElement>("actionsButton");
+const collectionsButton = useTemplateRef<HTMLButtonElement>("collectionsButton");
 function closePopover(kind: "actions" | "collections", focus = true) {
   if (kind === "actions") actionsOpen.value = false;
   else collectionsOpen.value = false;
@@ -380,7 +380,7 @@ const ratingGameplay = ref(0);
 
 const saving = ref(false);
 const deleting = ref(false);
-const engineDropdownRef = ref<HTMLElement | null>(null);
+const engineDropdownRef = useTemplateRef<HTMLElement>("engineDropdownRef");
 
 const customStatuses = ref<string[]>([]);
 const statuses = computed(() => getPlayStatusOptions([...customStatuses.value, playStatus.value]));
@@ -464,7 +464,7 @@ const toggleSkippedVersion = async () => {
   if (next && updateSkipped.value) void nextTick(() => stopSkippingButton.value?.focus());
   else if (!next && !updateSkipped.value) void nextTick(() => updateMenu.value?.focus());
 };
-const stopSkippingButton = ref<HTMLButtonElement | null>(null);
+const stopSkippingButton = useTemplateRef<HTMLButtonElement>("stopSkippingButton");
 const updateMenu = ref<InstanceType<typeof MenuButton> | null>(null);
 
 const sessions = ref<PlaySession[]>([]);
@@ -518,12 +518,12 @@ const journalDuration = (seconds: number) => {
 };
 const handleJournalTick = (event: Event) => {
   const detail = (event as CustomEvent<PlaytimeTickDetail>).detail;
-  if (detail?.gameId === props.game?.id && props.modelValue && activeTab.value === "Journal") {
+  if (detail?.gameId === props.game?.id && isOpen.value && activeTab.value === "Journal") {
     void loadJournal();
   }
 };
 
-watch(() => [props.modelValue, props.game?.id, activeTab.value, props.isRunning] as const, ([open, , tab], previous) => {
+watch(() => [isOpen.value, props.game?.id, activeTab.value, props.isRunning] as const, ([open, , tab], previous) => {
   if (!open || props.game?.id !== previous?.[1]) {
     journalRequestId++;
     sessions.value = [];
@@ -558,7 +558,7 @@ const resetLaunchTargetForms = () => {
 };
 
 const isCurrentGame = (gameId: number): boolean => {
-  return props.modelValue && props.game?.id === gameId;
+  return isOpen.value && props.game?.id === gameId;
 };
 
 const normalizeEngine = (value: string | null | undefined): EngineOption => {
@@ -695,7 +695,7 @@ const setSteamMark = async (event: Event) => {
   }
   await refreshSteamState();
 };
-watch(() => [props.modelValue, props.game?.id, activeTab.value, platformCapabilities.value.platform] as const, ([open, id, tab, platform], _previous, cleanup) => {
+watch(() => [isOpen.value, props.game?.id, activeTab.value, platformCapabilities.value.platform] as const, ([open, id, tab, platform], _previous, cleanup) => {
   if (!open || !id || tab !== "Launch" || platform !== "linux") return;
   void refreshSteamState();
   const timer = setInterval(refreshSteamState, 3000);
@@ -838,7 +838,7 @@ const refreshUntouchedFields = (g: GameRecord) => {
 };
 
 watch(
-  () => [props.modelValue, props.game] as const,
+  () => [isOpen.value, props.game] as const,
   ([isOpen, g]) => {
     if (isOpen && g && typeof g.id === "number") {
       localCoverUrl.value = g.cover_local_url || "";
@@ -932,7 +932,7 @@ watch(
 );
 
 watch(
-  () => props.modelValue,
+  () => isOpen.value,
   async (open) => {
     if (open) {
       availableRunners.value = [];
@@ -1008,7 +1008,7 @@ watch(
 watch(
   () => props.game?.launch_targets,
   () => {
-    if (props.modelValue) {
+    if (isOpen.value) {
       syncLaunchTargets(props.game);
     }
   },
@@ -1028,7 +1028,7 @@ watch(
 watch(
   () => [activeTab.value, props.game?.id] as const,
   ([tab, gameId]) => {
-    if (props.modelValue && tab === "Notes" && typeof gameId === "number") {
+    if (isOpen.value && tab === "Notes" && typeof gameId === "number") {
       void loadAttachments();
     }
   },
@@ -1083,13 +1083,11 @@ const handleOutsideClick = (event: MouseEvent) => {
 
 onMounted(() => {
   onWebviewReady(() => { void loadTagColors().catch(console.error); });
-  document.addEventListener("mousedown", handleOutsideClick);
-  window.addEventListener("wlib-playtime-tick", handleJournalTick);
 });
+useEventListener(document, "mousedown", handleOutsideClick);
+useEventListener(window, "wlib-playtime-tick", handleJournalTick);
 
 onBeforeUnmount(() => {
-  document.removeEventListener("mousedown", handleOutsideClick);
-  window.removeEventListener("wlib-playtime-tick", handleJournalTick);
   journalRequestId++;
 });
 
@@ -1112,7 +1110,7 @@ const close = () => {
   // Closed on purpose: a navigation right after must not ask again.
   removeLeaveGuard?.();
   removeLeaveGuard = null;
-  emit("update:modelValue", false);
+  isOpen.value = false;
 };
 
 // User-initiated close (X, backdrop, Esc): don't drop unsaved form edits silently.
@@ -1132,7 +1130,7 @@ defineExpose({ requestClose });
 // would unmount this modal with its edits; ask first, as closing does.
 let removeLeaveGuard: (() => void) | null = null;
 watch(
-  () => props.modelValue,
+  () => isOpen.value,
   (open) => {
     removeLeaveGuard?.();
     removeLeaveGuard = open
@@ -1152,7 +1150,7 @@ const closeAndNavigate = async (hash: string) => {
 const downloadJob = computed(() => (props.game ? updateDownloads.jobFor(props.game.id) : undefined));
 const downloadStatusText = computed(() => gameDownloadStatus(downloadJob.value));
 
-const modalRef = ref<HTMLElement | null>(null);
+const modalRef = useTemplateRef<HTMLElement>("modalRef");
 useControllerActions(modalRef, {
   back: () => { if (actionsOpen.value) { closePopover("actions"); return true; } if (collectionsOpen.value) { closePopover("collections"); return true; } return false; },
   play: () => launchGame(),
@@ -1198,7 +1196,7 @@ const onTabKeydown = (event: KeyboardEvent, index: number) => {
 };
 useModalKeyboard(
   modalRef,
-  () => props.modelValue && !!props.game,
+  () => isOpen.value && !!props.game,
   () => {
     if (engineMenuOpen.value) engineMenuOpen.value = false;
     else requestClose();
@@ -1388,7 +1386,7 @@ const browseEditTargetPath = async () => {
   }
 };
 
-const defaultLabelInput = ref<HTMLInputElement | null>(null);
+const defaultLabelInput = useTemplateRef<HTMLInputElement>("defaultLabelInput");
 
 const startRenameDefaultTarget = () => {
   defaultLabelDraft.value = defaultLabel.value;
@@ -1660,7 +1658,7 @@ const createModalCollection = async () => {
   try {
     const result = await api.createCollection(name);
     // The collection list is global, so keep it fresh in any open modal.
-    if (result.success && result.collections && props.modelValue) {
+    if (result.success && result.collections && isOpen.value) {
       collectionOptions.value = result.collections;
     }
     // Closing the modal mid-request is allowed, so the answer can arrive after it
@@ -1929,7 +1927,7 @@ const loadExecutableModifiedTime = async () => {
   executableModifiedKnown.value = false;
 
   const path = exePath.value.trim();
-  if (!path || !props.modelValue) {
+  if (!path || !isOpen.value) {
     loadingExecutableModifiedAt.value = false;
     executableModifiedKnown.value = !path;
     return;
@@ -1938,14 +1936,14 @@ const loadExecutableModifiedTime = async () => {
   loadingExecutableModifiedAt.value = true;
   try {
     const result = await api.getExecutableModifiedTime(path);
-    if (executableModifiedRequestId.value !== requestId || !props.modelValue) {
+    if (executableModifiedRequestId.value !== requestId || !isOpen.value) {
       return;
     }
 
     executableModifiedKnown.value = true;
     executableModifiedAt.value = result.success ? result.modified_at : null;
   } catch (e) {
-    if (executableModifiedRequestId.value !== requestId || !props.modelValue) {
+    if (executableModifiedRequestId.value !== requestId || !isOpen.value) {
       return;
     }
 
@@ -2159,7 +2157,7 @@ const removeAttachment = async (name: string) => {
 
 <template>
   <div
-    v-if="modelValue && game"
+    v-if="isOpen && game"
     class="fixed inset-0 z-50 flex items-center justify-center p-4"
   >
     <!-- No backdrop blur here: it was removed for speed. A darker scrim keeps the page behind as quiet as the blurred scrim of the other dialogs. -->
@@ -2507,7 +2505,7 @@ const removeAttachment = async (name: string) => {
             <p v-else class="text-xs" style="color:var(--text-secondary)">{{ steamStateLabel(steamState.state) }}</p>
             <p v-if="steamState.eligible && steamState.mode === 'all-installed'" class="text-xs" style="color:var(--text-secondary)">All installed games are included; this mark is saved for marked mode.</p>
           </div>
-          <GameCompanionTools v-if="modelValue && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
+          <GameCompanionTools v-if="isOpen && game && platformCapabilities.companion_tools" :key="game.id" :game-id="game.id" @settings="closeAndNavigate('/settings#custom-tools')" />
           <div v-if="htmlTargetPath" class="space-y-2">
             <label for="detail-html-player" class="modal-label">Opens in</label>
             <select id="detail-html-player" v-model="htmlPlayer" class="modal-input w-full">
@@ -3009,7 +3007,7 @@ const removeAttachment = async (name: string) => {
           <GameSavesSection
             v-if="game && typeof game.id === 'number'"
             :game-id="game.id"
-            :active="modelValue && activeTab === 'Launch'"
+            :active="isOpen && activeTab === 'Launch'"
           />
         </section>
 
@@ -3281,7 +3279,7 @@ const removeAttachment = async (name: string) => {
           tabindex="0"
           class="space-y-6"
         >
-          <GameToolsTab :game-id="game.id" :engine="toolEngine" :active="modelValue && activeTab === 'Tools'" />
+          <GameToolsTab :game-id="game.id" :engine="toolEngine" :active="isOpen && activeTab === 'Tools'" />
         </section>
       </div>
 

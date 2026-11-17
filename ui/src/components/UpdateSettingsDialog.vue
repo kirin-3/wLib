@@ -1,11 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { ref } from "vue";
+import { useTemplateRef } from "vue";
 import { IconX } from "@tabler/icons-vue";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
-const props = defineProps<{
-  modelValue: boolean;
+const isOpen = defineModel<boolean>({ required: true });
+defineProps<{
   frequency: string;
   notificationsAvailable: boolean;
   desktopNotifications: boolean;
@@ -14,7 +14,6 @@ const props = defineProps<{
   notificationsError: string;
 }>();
 const emit = defineEmits<{
-  (event: "update:modelValue", value: boolean): void;
   (event: "set-frequency", value: string): void;
   (event: "set-notifications", value: Event): void;
   (event: "retry-notifications"): void;
@@ -26,14 +25,14 @@ const frequencyOptions = [
   { key: "off", label: "Off" },
 ];
 
-const dialog = ref<HTMLElement | null>(null);
-const close = () => emit("update:modelValue", false);
-useModalKeyboard(dialog, () => props.modelValue, close);
+const dialog = useTemplateRef<HTMLElement>("dialog");
+const close = () => { isOpen.value = false; };
+useModalKeyboard(dialog, () => isOpen.value, close);
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
+    <div v-if="isOpen" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="update-settings-title" tabindex="-1" class="settings-dialog w-full max-w-md rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none">
         <div class="px-6 pt-5 pb-5 overflow-y-auto min-h-0 space-y-5">

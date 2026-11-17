@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from "vue";
+import { computed, ref, useTemplateRef, watch, onMounted, onUnmounted } from "vue";
+import { useEventListener } from "./composables/useEventListener";
 import { modalStack } from "./utils/modalKeyboard";
 import { inputModality, listenForPointer, setInputModality } from "./utils/inputModality";
 import { gamingMode, tvModeActive } from "./utils/tvMode";
@@ -64,9 +65,10 @@ const route = useRoute();
 let stopControllerInput: (() => void) | undefined;
 let stopPointer: (() => void) | undefined;
 const openControllerKeyboard = () => { if (gamingMode.value) void api.openSteamKeyboard(); };
-onMounted(() => { window.addEventListener("wlib-controller-text", openControllerKeyboard); stopPointer = listenForPointer(); stopControllerInput = startControllerInput(action => { setInputModality("controller"); dispatchController(action, () => router.back()); window.dispatchEvent(new Event("wlib-controller-action")); }); });
-onUnmounted(() => { window.removeEventListener("wlib-controller-text", openControllerKeyboard); stopControllerInput?.(); stopPointer?.(); });
-const mainRef = ref<HTMLElement | null>(null);
+useEventListener(window, "wlib-controller-text", openControllerKeyboard);
+onMounted(() => { stopPointer = listenForPointer(); stopControllerInput = startControllerInput(action => { setInputModality("controller"); dispatchController(action, () => router.back()); window.dispatchEvent(new Event("wlib-controller-action")); }); });
+onUnmounted(() => { stopControllerInput?.(); stopPointer?.(); });
+const mainRef = useTemplateRef<HTMLElement>("mainRef");
 // Give controller users the full Undo window without requiring them to cross
 // the whole page first. Focusing the button holds the timer until focus leaves.
 // When that toast goes away, focus goes back to where the user was.
@@ -404,15 +406,6 @@ const handleLaunchError = (event: Event) => {
 };
 
 onMounted(() => {
-  window.addEventListener("wlib-launch-error", handleLaunchError);
-  window.addEventListener("wlib-steam-covers", handleSteamCovers);
-  window.addEventListener("keydown", handleGlobalShortcut);
-  window.addEventListener("wlib-extension-add", handleExtensionAdd);
-  window.addEventListener("wlib-extension-open", handleExtensionOpen);
-  window.addEventListener(EXTENSION_PAIRING_EVENT, handleExtensionPairing);
-  window.addEventListener("wlib-refresh-library", refreshUpdateCount);
-  window.addEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
-
   // Check for App Updates on Startup
   onWebviewReady(async () => {
     void refreshUpdateCount();
@@ -467,17 +460,17 @@ onMounted(() => {
     }
   });
 });
+useEventListener(window, "wlib-launch-error", handleLaunchError);
+useEventListener(window, "wlib-steam-covers", handleSteamCovers);
+useEventListener(window, "keydown", handleGlobalShortcut);
+useEventListener(window, "wlib-extension-add", handleExtensionAdd);
+useEventListener(window, "wlib-extension-open", handleExtensionOpen);
+useEventListener(window, EXTENSION_PAIRING_EVENT, handleExtensionPairing);
+useEventListener(window, "wlib-refresh-library", refreshUpdateCount);
+useEventListener(window, INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
 
 onUnmounted(() => {
   updateDownloads.stopPolling();
-  window.removeEventListener("wlib-launch-error", handleLaunchError);
-  window.removeEventListener("wlib-steam-covers", handleSteamCovers);
-  window.removeEventListener("keydown", handleGlobalShortcut);
-  window.removeEventListener("wlib-extension-add", handleExtensionAdd);
-  window.removeEventListener("wlib-extension-open", handleExtensionOpen);
-  window.removeEventListener(EXTENSION_PAIRING_EVENT, handleExtensionPairing);
-  window.removeEventListener("wlib-refresh-library", refreshUpdateCount);
-  window.removeEventListener(INSTALL_ARCHIVE_EVENT, handleInstallArchiveRequest);
   window.removeEventListener("focus", handleWindowFocus);
   window.removeEventListener("blur", reportWindowFocus);
   document.removeEventListener("visibilitychange", reportWindowFocus);

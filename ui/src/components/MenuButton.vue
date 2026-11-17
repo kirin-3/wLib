@@ -17,7 +17,7 @@ export interface MenuButtonItem {
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, ref, useId, useTemplateRef, watch } from "vue";
 import { IconCheck, IconChevronDown } from "@tabler/icons-vue";
 import { initialMenuIndex, menuKeyAction } from "../utils/menuKeyboard";
 
@@ -42,8 +42,8 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ select: [id: string]; main: [] }>();
 
 const open = ref(false);
-const root = ref<HTMLElement | null>(null);
-const toggleButton = ref<HTMLButtonElement | null>(null);
+const root = useTemplateRef<HTMLElement>("root");
+const toggleButton = useTemplateRef<HTMLButtonElement>("toggleButton");
 let itemRefs: HTMLButtonElement[] = [];
 onBeforeUpdate(() => { itemRefs = []; });
 function setItemRef(el: unknown, index: number) {

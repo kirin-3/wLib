@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   api,
@@ -33,9 +33,9 @@ interface AddGamePayload {
 }
 
 // saving: the parent is still adding (it fetches F95 metadata, which can take minutes).
-const props = defineProps<{ modelValue: boolean; saving?: boolean }>();
+const isOpen = defineModel<boolean>({ required: true });
+const props = defineProps<{ saving?: boolean }>();
 const emit = defineEmits<{
-  "update:modelValue": [value: boolean];
   save: [payload: AddGamePayload];
 }>();
 
@@ -123,7 +123,7 @@ const parseImportedTags = (rawTags: string): string => {
 
 // Auto-fill from query params when opened
 watch(
-  () => [props.modelValue, route.query] as const,
+  () => [isOpen.value, route.query] as const,
   ([isOpen, query]) => {
     if (!isOpen) {
       return;
@@ -145,7 +145,7 @@ watch(
 );
 
 watch(
-  () => props.modelValue,
+  () => isOpen.value,
   (isOpen) => {
     if (isOpen) {
       void loadRpgmakerLinuxRunnerStatus();
@@ -174,7 +174,7 @@ const close = () => {
   if (readQueryValue(route.query.action) === "import") {
     router.replace({ query: {} });
   }
-  emit("update:modelValue", false);
+  isOpen.value = false;
 };
 
 const installFromArchive = async () => {
@@ -185,13 +185,13 @@ const installFromArchive = async () => {
     engine: engine.value, f95Url: f95Url.value, coverImage: coverImage.value,
     tags: tags.value, rating: rating.value,
   };
-  emit("update:modelValue", false);
+  isOpen.value = false;
   await router.replace({ query: {} });
   openInstallArchive({ seed });
 };
 
-const modalRef = ref<HTMLElement | null>(null);
-useModalKeyboard(modalRef, () => props.modelValue, close);
+const modalRef = useTemplateRef<HTMLElement>("modalRef");
+useModalKeyboard(modalRef, () => isOpen.value, close);
 
 // Values filled from the exe path; replaced again when the path changes, unless edited.
 const guessed = ref({ title: "", version: "", engine: "" });
@@ -202,7 +202,7 @@ const inspectExePath = async () => {
   if (!path) return;
   try {
     const guess = await api.inspectGamePath(path);
-    if (request !== inspectRequest || !props.modelValue || !guess?.success) return;
+    if (request !== inspectRequest || !isOpen.value || !guess?.success) return;
     if (!title.value || title.value === guessed.value.title) title.value = guess.title || "";
     if (!version.value || version.value === guessed.value.version) version.value = guess.version || "";
     if (!engine.value || engine.value === guessed.value.engine) engine.value = guess.engine || "";
@@ -215,7 +215,7 @@ const inspectExePath = async () => {
 const browseExe = async () => {
   try {
     const p = await api.browseFile(exePath.value || "");
-    if (!props.modelValue) return;
+    if (!isOpen.value) return;
     if (p) {
       exePath.value = p;
       void inspectExePath();
@@ -247,7 +247,7 @@ const save = () => {
 
 <template>
   <div
-    v-if="modelValue"
+    v-if="isOpen"
     class="fixed inset-0 z-50 flex items-center justify-center p-4"
   >
     <!-- Overlay -->

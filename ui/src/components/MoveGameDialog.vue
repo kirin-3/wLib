@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, useTemplateRef, watch } from "vue";
 import { IconFolderShare } from "@tabler/icons-vue";
 import { api, type GameFilePlanEntry, type GameRecord, type LibraryFolder } from "../services/api";
 import { actionableEntries, confirmReason, formatBytes, planProblem } from "../utils/gameFiles";
@@ -8,14 +8,14 @@ import PathText from "./PathText.vue";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 import { notifyError } from "../utils/toast";
 
-const props = defineProps<{ modelValue: boolean; games: GameRecord[] }>();
+const isOpen = defineModel<boolean>({ required: true });
+const props = defineProps<{ games: GameRecord[] }>();
 const emit = defineEmits<{
-  (event: "update:modelValue", value: boolean): void;
   (event: "started", queued: number): void;
 }>();
 
 const OTHER = "__other__";
-const dialog = ref<HTMLElement | null>(null);
+const dialog = useTemplateRef<HTMLElement>("dialog");
 const folders = ref<LibraryFolder[]>([]);
 const choice = ref("");
 const otherFolder = ref("");
@@ -25,8 +25,8 @@ const loading = ref(false);
 const starting = ref(false);
 let request = 0;
 
-const close = () => emit("update:modelValue", false);
-useModalKeyboard(dialog, () => props.modelValue, close);
+const close = () => { isOpen.value = false; };
+useModalKeyboard(dialog, () => isOpen.value, close);
 
 const destination = computed(() => (choice.value === OTHER ? otherFolder.value : choice.value));
 const single = computed(() => props.games.length === 1);
@@ -54,7 +54,7 @@ const plan = async () => {
   }
 };
 
-watch(() => props.modelValue, async (open) => {
+watch(() => isOpen.value, async (open) => {
   if (!open) return;
   request++;
   entries.value = [];
@@ -111,7 +111,7 @@ const start = async () => {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
+    <div v-if="isOpen" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="move-title" tabindex="-1" class="files-dialog w-full max-w-xl rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none">
         <div class="px-6 pt-6 pb-4 overflow-y-auto min-h-0 space-y-4">

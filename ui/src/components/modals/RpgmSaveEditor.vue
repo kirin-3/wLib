@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import { IconAlertCircle, IconLoader2, IconPlus, IconX } from "@tabler/icons-vue";
 import { api, type RpgmInventoryKind, type RpgmPatch, type RpgmSaveLoadResponse } from "../../services/api";
 import { confirmAction } from "../../utils/confirm";
@@ -31,8 +31,9 @@ import {
   type Validated,
 } from "../../utils/rpgmSaveEditor";
 
-const props = defineProps<{ modelValue: boolean; gameId: number; file: string }>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean]; saved: [backup: string] }>();
+const isOpen = defineModel<boolean>({ required: true });
+const props = defineProps<{ gameId: number; file: string }>();
+const emit = defineEmits<{ saved: [backup: string] }>();
 
 type Tab = "party" | "actors" | "switches" | "variables" | "raw";
 const TABS: { id: Tab; label: string }[] = [
@@ -45,7 +46,7 @@ const TABS: { id: Tab; label: string }[] = [
 const KIND_KEY: Record<RpgmInventoryKind, string> = { item: "_items", weapon: "_weapons", armor: "_armors" };
 const KIND_LABEL: Record<RpgmInventoryKind, string> = { item: "Items", weapon: "Weapons", armor: "Armors" };
 
-const modalRef = ref<HTMLElement | null>(null);
+const modalRef = useTemplateRef<HTMLElement>("modalRef");
 const loading = ref(false);
 const loadError = ref("");
 const saveError = ref("");
@@ -100,7 +101,7 @@ const load = async (): Promise<void> => {
 };
 
 watch(
-  () => [props.modelValue, props.file] as const,
+  () => [isOpen.value, props.file] as const,
   ([open]) => {
     if (open) {
       tab.value = "party";
@@ -128,10 +129,10 @@ const close = async (): Promise<void> => {
     });
     if (!ok) return;
   }
-  emit("update:modelValue", false);
+  isOpen.value = false;
 };
 
-useModalKeyboard(modalRef, () => props.modelValue, () => void close());
+useModalKeyboard(modalRef, () => isOpen.value, () => void close());
 
 const discard = (): void => {
   reset();
@@ -276,7 +277,7 @@ const slotLabel = computed(() => props.file.replace(/^file(\d+)\..*$/, "Slot $1"
 
 <template>
   <Teleport to="body">
-  <div v-if="modelValue" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
+  <div v-if="isOpen" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
     <div
       ref="modalRef"

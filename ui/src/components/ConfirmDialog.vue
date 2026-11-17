@@ -1,13 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, useTemplateRef, watch } from "vue";
 import { IconAlertTriangle, IconHelpCircle } from "@tabler/icons-vue";
 import { confirmQueue, resolveConfirmation } from "../utils/confirm";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
 const current = computed(() => confirmQueue[0]);
-const dialog = ref<HTMLElement | null>(null);
-const cancelButton = ref<HTMLButtonElement | null>(null);
+const dialog = useTemplateRef<HTMLElement>("dialog");
+const cancelButton = useTemplateRef<HTMLButtonElement>("cancelButton");
 const checked = ref(false);
 const cancel = () => resolveConfirmation(false, checked.value);
 useModalKeyboard(dialog, () => Boolean(current.value), cancel);

@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, ref, useTemplateRef } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import { IconChevronDown, IconChevronLeft, IconChevronRight } from "@tabler/icons-vue";
 import type { GameRecord } from "../services/api";
 import { addTagCsv, launchModeApplicable, removeTagCsv } from "../utils/bulkActions";
@@ -32,7 +33,7 @@ const emit = defineEmits<{
   (event: "wine"): void;
 }>();
 
-const root = ref<HTMLElement | null>(null);
+const root = useTemplateRef<HTMLElement>("root");
 const openMenu = ref<MenuId | null>(null);
 const panelStyle = ref<Record<string, string>>({});
 const subView = ref<SubView>("");
@@ -118,8 +119,8 @@ const onOutside = (event: MouseEvent) => {
   if (openMenu.value && !root.value?.contains(event.target as Node)) closeMenu(false);
 };
 const onResize = () => { closeMenu(false); };
-onMounted(() => { document.addEventListener("mousedown", onOutside); window.addEventListener("resize", onResize); });
-onUnmounted(() => { document.removeEventListener("mousedown", onOutside); window.removeEventListener("resize", onResize); });
+useEventListener(document, "mousedown", onOutside);
+useEventListener(window, "resize", onResize);
 
 defineExpose({ closeMenu, focusFirst: () => root.value?.querySelector<HTMLElement>("button, select")?.focus() });
 

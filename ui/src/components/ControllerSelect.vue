@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from "vue";
+import { nextTick, ref, useTemplateRef } from "vue";
+import { useEventListener } from "../composables/useEventListener";
 import { toCssPx } from "../utils/interfaceScalePreference";
 const source = ref<HTMLSelectElement | null>(null);
-const overlay = ref<HTMLElement | null>(null);
+const overlay = useTemplateRef<HTMLElement>("overlay");
 const position = ref({ x: 0, y: 0 });
 const options = ref<{ value: string; text: string; disabled: boolean }[]>([]);
 function close(restoreFocus = true) { const element = source.value; source.value = null; if (restoreFocus) element?.focus(); }
@@ -38,8 +39,8 @@ function keydown(event: KeyboardEvent) {
   const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
   buttons[Math.max(0, Math.min(buttons.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))]?.focus();
 }
-onMounted(() => { window.addEventListener("wlib-controller-select", open); window.addEventListener("pointerdown", pointerOutside, true); });
-onUnmounted(() => { window.removeEventListener("wlib-controller-select", open); window.removeEventListener("pointerdown", pointerOutside, true); });
+useEventListener(window, "wlib-controller-select", open);
+useEventListener(window, "pointerdown", pointerOutside, true);
 </script>
 <template>
   <Teleport to="body">

@@ -66,6 +66,13 @@ The wLib UI is a Vue 3 SPA built with the Composition API, TypeScript, and Vite.
 - Production bundles are built with Vite (`npm run build`).
 - Source files live in `ui/src/`.
 
+## Vue patterns
+
+- Use `defineModel<boolean>({ required: true })` for dialog open state. The parent binds it with `v-model`.
+- Use `useTemplateRef` for element refs and give it the same key as the template's `ref` attribute.
+- Use `composables/useEventListener.ts` for listeners that run for a component's mounted lifetime. It registers on mount and cleans up with the component's effect scope.
+- Manage listeners explicitly when their lifetime depends on menu visibility, scroll pinning, webview readiness in `App.vue`, or the initial position in `components/TagColorPicker.vue`. Listeners owned by `utils/`, `main.ts`, and `services/api.ts` also manage their own lifetime.
+
 ## Core Entry Points
 
 - `ui/src/main.ts`: app bootstrap and plugin registration.

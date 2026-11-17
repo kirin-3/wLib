@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import {computed, ref, watch} from 'vue';
+import {computed, ref, useTemplateRef, watch} from 'vue';
 import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
 import {useRouter} from 'vue-router';
 import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
@@ -40,7 +40,7 @@ const exportError = ref('');
 const sentMessage = ref('');
 const primaryAction = computed(()=>chosenTorrent.value ? rpdlPrimaryAction(watchFolder.value) : 'download');
 const platform = ref<HostPlatform>('linux');
-const modal = ref<HTMLElement | null>(null);
+const modal = useTemplateRef<HTMLElement>("modal");
 let generation = 0;
 const updateVersion = computed(() => (game.value?.latest_version || '').trim());
 const rpdlNoteText = computed(() => rpdlNote(rpdl.value));

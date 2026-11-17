@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, useTemplateRef, watch } from "vue";
 import { IconMovie } from "@tabler/icons-vue";
 import type { GameRecord, WebMediaInfo } from "../services/api";
 import { useWebMediaConversion } from "../composables/useWebMediaConversion";
@@ -16,29 +16,28 @@ import {
   type WebMediaStep,
 } from "../utils/webMedia";
 
+const isOpen = defineModel<boolean>({ required: true });
 const props = defineProps<{
-  modelValue: boolean;
   game: GameRecord | null;
   media: WebMediaInfo | null;
   /** The launch result code that opened the dialog. */
   code: string;
 }>();
 const emit = defineEmits<{
-  (event: "update:modelValue", value: boolean): void;
   (event: "convert"): void;
   (event: "use-browser"): void;
   (event: "play-anyway"): void;
 }>();
 
-const dialog = ref<HTMLElement | null>(null);
+const dialog = useTemplateRef<HTMLElement>("dialog");
 const step = ref<WebMediaStep>("choices");
 const busy = ref(false);
 const { webMediaStatus, cancel } = useWebMediaConversion();
 
-const close = () => emit("update:modelValue", false);
-useModalKeyboard(dialog, () => props.modelValue, close);
+const close = () => { isOpen.value = false; };
+useModalKeyboard(dialog, () => isOpen.value, close);
 
-watch(() => props.modelValue, async (open) => {
+watch(() => isOpen.value, async (open) => {
   if (!open) return;
   step.value = initialStep(props.code);
   busy.value = false;
@@ -81,7 +80,7 @@ const stop = async () => {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
+    <div v-if="isOpen" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="web-media-title" tabindex="-1" class="media-dialog w-full max-w-lg rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none">
         <div class="px-6 pt-6 pb-4 overflow-y-auto min-h-0 space-y-4">

@@ -1,14 +1,13 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import { IconLoader2, IconX } from "@tabler/icons-vue";
 import { api, type ScannedGame } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { useModalKeyboard } from "../../utils/modalKeyboard";
 import PathStatus from "../PathStatus.vue";
 
-const props = defineProps<{ modelValue: boolean }>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
+const isOpen = defineModel<boolean>({ required: true });
 
 const folder = ref("");
 const games = ref<ScannedGame[]>([]);
@@ -32,7 +31,7 @@ const resetState = () => {
 };
 
 watch(
-  () => props.modelValue,
+  () => isOpen.value,
   (isOpen) => {
     if (!isOpen) {
       resetState();
@@ -43,11 +42,11 @@ watch(
 const close = () => {
   if (importing.value) return;
   resetState();
-  emit("update:modelValue", false);
+  isOpen.value = false;
 };
 
-const modalRef = ref<HTMLElement | null>(null);
-useModalKeyboard(modalRef, () => props.modelValue, close);
+const modalRef = useTemplateRef<HTMLElement>("modalRef");
+useModalKeyboard(modalRef, () => isOpen.value, close);
 
 // A newer scan (another folder picked mid-scan) replaces the older one.
 let scanToken = 0;
@@ -56,7 +55,7 @@ const scan = async () => {
   const path = folder.value.trim();
   if (!path) return;
   const token = ++scanToken;
-  const current = () => token === scanToken && props.modelValue;
+  const current = () => token === scanToken && isOpen.value;
   scanning.value = true;
   games.value = [];
   selected.value = new Set();
@@ -82,7 +81,7 @@ const scan = async () => {
 const browse = async () => {
   try {
     const path = await api.browseDirectory(folder.value);
-    if (path && props.modelValue) {
+    if (path && isOpen.value) {
       folder.value = path;
       void scan();
     }
@@ -123,7 +122,7 @@ const importSelected = async () => {
 </script>
 
 <template>
-  <div v-if="modelValue" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
 
     <div

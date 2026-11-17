@@ -1,19 +1,19 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, useTemplateRef, watch } from "vue";
 import { IconAlertTriangle } from "@tabler/icons-vue";
 import { api, type GameFilePlanEntry, type GameRecord, type UninstallOptions } from "../services/api";
 import { actionableEntries, backupDefault, confirmReason, planProblem, showBackupOption } from "../utils/gameFiles";
 import PathText from "./PathText.vue";
 import { useModalKeyboard } from "../utils/modalKeyboard";
 
-const props = defineProps<{ modelValue: boolean; games: GameRecord[] }>();
+const isOpen = defineModel<boolean>({ required: true });
+const props = defineProps<{ games: GameRecord[] }>();
 const emit = defineEmits<{
-  (event: "update:modelValue", value: boolean): void;
   (event: "confirm", games: GameRecord[], options: UninstallOptions): void;
 }>();
 
-const dialog = ref<HTMLElement | null>(null);
+const dialog = useTemplateRef<HTMLElement>("dialog");
 const entries = ref<GameFilePlanEntry[]>([]);
 const overrides = ref<Record<string, string>>({});
 const loading = ref(false);
@@ -22,15 +22,15 @@ const backup = ref(false);
 const removeFromLibrary = ref(false);
 let request = 0;
 
-const close = () => emit("update:modelValue", false);
-useModalKeyboard(dialog, () => props.modelValue, close);
+const close = () => { isOpen.value = false; };
+useModalKeyboard(dialog, () => isOpen.value, close);
 
 const backupVisible = computed(() => showBackupOption(entries.value));
 const reason = computed(() => loadError.value || confirmReason(entries.value, loading.value, "uninstall"));
 const goingCount = computed(() => actionableEntries(entries.value).length);
 const single = computed(() => entries.value.length === 1);
 
-watch(() => props.modelValue, async (open) => {
+watch(() => isOpen.value, async (open) => {
   if (!open) return;
   const current = ++request;
   entries.value = [];
@@ -80,7 +80,7 @@ const confirm = () => {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
+    <div v-if="isOpen" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="uninstall-title" tabindex="-1" class="files-dialog w-full max-w-xl rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none">
         <div class="px-6 pt-6 pb-4 overflow-y-auto min-h-0 space-y-4">

@@ -1,19 +1,20 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- The four queue settings in a dialog, also in Settings > Library & Downloads. A change saves at once. -->
 <script setup lang="ts">
-import {ref, watch} from 'vue';
+import {ref, useTemplateRef, watch} from 'vue';
 import {IconX} from '@tabler/icons-vue';
 import {useModalKeyboard} from '../../utils/modalKeyboard';
 import {api, type DownloadQueueSettings, type SettingsPayload} from '../../services/api';
 import {MAX_ACTIVE_DOWNLOADS, clampLimitKib} from '../../utils/downloadQueue';
 import {notify} from '../../utils/toast';
 
-const props = defineProps<{ modelValue: boolean; settings: DownloadQueueSettings }>();
-const emit = defineEmits<{ saved: []; 'update:modelValue': [value: boolean] }>();
+const isOpen = defineModel<boolean>({ required: true });
+const props = defineProps<{ settings: DownloadQueueSettings }>();
+const emit = defineEmits<{ saved: [] }>();
 
-const dialog = ref<HTMLElement | null>(null);
-const close = () => emit('update:modelValue', false);
-useModalKeyboard(dialog, () => props.modelValue, close);
+const dialog = useTemplateRef<HTMLElement>("dialog");
+const close = () => { isOpen.value = false; };
+useModalKeyboard(dialog, () => isOpen.value, close);
 
 const limit = ref(props.settings.download_limit_kib);
 const slots = ref(props.settings.download_max_active);
@@ -51,7 +52,7 @@ const saveOnBattery = () => { void save({download_pause_on_battery: onBattery.va
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
+    <div v-if="isOpen" class="fixed inset-0 z-[150] flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" @click="close"></div>
       <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="download-settings-title" tabindex="-1" class="quick w-full max-w-lg rounded-2xl relative overflow-hidden flex flex-col max-h-[calc(var(--app-vh)*0.9)] outline-none" data-testid="download-quick-settings">
         <div class="px-6 pt-5 pb-5 overflow-y-auto min-h-0">

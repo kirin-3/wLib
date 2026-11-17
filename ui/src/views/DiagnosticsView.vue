@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
 import { IconAlertTriangle, IconAppWindow, IconArrowLeft, IconClipboardText, IconCopy, IconCpu, IconDatabase, IconFolderOpen, IconLoader2, IconPuzzle, IconRefresh, IconStethoscope, IconTools } from "@tabler/icons-vue";
 import { api, onWebviewReady, type DiagnosticsBasic, type DiagnosticsTools } from "../services/api";
 import { copyText } from "../utils/copyText";
@@ -15,7 +15,7 @@ const toolsError = ref("");
 const copying = ref(false);
 const opening = ref(false);
 const manualReport = ref("");
-const reportBox = ref<HTMLTextAreaElement | null>(null);
+const reportBox = useTemplateRef<HTMLTextAreaElement>("reportBox");
 let request = 0;
 const busy = computed(() => basicLoading.value || toolsLoading.value);
 const unavailable = (value: unknown): string => value == null || value === "" ? "Not available"
