@@ -14,7 +14,7 @@ from collections.abc import Callable
 from html.parser import HTMLParser
 from typing import override
 
-from ..net import Response
+from ..net import RateLimited
 from .base import SourceContext
 
 log = logging.getLogger(__name__)
@@ -268,11 +268,6 @@ def parse_first_post(post_html: str) -> dict[str, object]:
     }
 
 
-def _logged_in(response: Response) -> bool:
-    match = _LOGGED_IN_RE.search(response.text())
-    return match is not None and match.group(1) == "true"
-
-
 class F95ThreadsSource:
     """Reads first posts with its own pacer budget (`f95_threads`)."""
 
@@ -291,12 +286,17 @@ class F95ThreadsSource:
         response = ctx.pacer.request(
             self.name, THREAD_URL.format(thread_id=thread_id), ok_statuses=MISSING_STATUSES
         )
+        login = _LOGGED_IN_RE.search(response.text())
+        if login is None:
+            # Not an F95 page at all, e.g. a Cloudflare challenge: stop, store nothing.
+            raise ValueError(f"F95 answered HTTP {response.status} without its own page")
+        if login.group(1) != "true":
+            # Without the login F95 hides the links; never store such a page.
+            raise ValueError("F95 sees no login; check the cookie with check-f95-login")
         if response.status in MISSING_STATUSES:
+            # F95's own "not found" or "no permission" page.
             details: dict[str, object] = {"status": "missing"}
         else:
-            if not _logged_in(response):
-                # Without the login F95 hides the links; never store such a page.
-                raise ValueError("F95 sees no login; check the cookie with check-f95-login")
             try:
                 details = {"status": "ok", **parse_first_post(first_post_html(response.text()))}
             except ValueError:
@@ -306,6 +306,9 @@ class F95ThreadsSource:
         ctx.rows += ctx.catalog.upsert_f95_details(thread_id, thread_ts, ctx.now(), details)
 
     def incremental(self, ctx: SourceContext) -> None:
+        if "f95" in ctx.pacer.paused:
+            # F95 rate-limited the feed in this run; leave it alone until the next one.
+            raise RateLimited(self.name, f"f95 is paused: {ctx.pacer.paused['f95']}")
         since = self._since(ctx)
         while queue := ctx.catalog.f95_details_queue(since, QUEUE_CHUNK):
             for thread_id, thread_ts in queue:

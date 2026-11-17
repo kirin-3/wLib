@@ -12,6 +12,8 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from typing import IO
 
+from core.catalog_format import SOURCES
+
 from .browser import BrowserTransport, f95_login_cookies
 from .config import (
     BROWSER_SITES_ENV,
@@ -47,7 +49,14 @@ def _source_list(value: str) -> list[str]:
 def _until_swept(value: str) -> list[str]:
     if value == "none":
         raise argparse.ArgumentTypeError("use a source name or 'all'")
-    return _source_list(value)
+    if value == "all":
+        # Only the sources have a sweep; builder steps such as f95_threads do not.
+        return list(SOURCES)
+    names = _source_list(value)
+    unswept = [name for name in names if name not in SOURCES]
+    if unswept:
+        raise argparse.ArgumentTypeError(f"{', '.join(unswept)} has no sweep")
+    return names
 
 
 class Args(argparse.Namespace):

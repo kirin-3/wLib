@@ -212,7 +212,8 @@ def test_changed_threads_first_then_most_viewed_old_ones(tmp_path):
 
 def test_missing_and_unreadable_threads_are_kept_so_the_queue_moves(tmp_path):
     transport = FakeTransport()
-    transport.route("/threads/1/", Response(404, b"gone"))
+    # F95's own "not found" page, logged in.
+    transport.route("/threads/1/", Response(404, b'<html data-logged-in="true">Not found</html>'))
     transport.route("/threads/2/", Response(200, b'<html data-logged-in="true"><body></body></html>'))
     transport.route("/threads/3/", _page())
     ctx, _ = make_context(tmp_path, transport)
@@ -315,3 +316,36 @@ def test_details_from_before_the_languages_column_are_read_again(tmp_path):
         assert rows(catalog, "SELECT languages FROM f95_thread_details") == [('["English"]',)]
     finally:
         catalog.close()
+
+
+@pytest.mark.parametrize("status", [403, 404, 503])
+def test_a_page_that_is_not_f95s_stops_the_step_without_storing(tmp_path, status):
+    transport = FakeTransport()
+    challenge = Response(status, b"<html><title>Just a moment...</title></html>")
+    transport.route("/threads/", challenge)
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.upsert("f95_threads", "thread_id", [_thread(1, 10)])
+    result = run_source(F95ThreadsSource(), ctx)
+    assert result.status == "error"
+    # A 503 already fails in the Pacer after its retries.
+    assert ("without its own page" if status != 503 else "HTTP 503") in str(result.detail)
+    assert _details(ctx) == {}
+
+
+def test_the_step_waits_while_f95_is_rate_limited(tmp_path):
+    transport = FakeTransport()
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.upsert("f95_threads", "thread_id", [_thread(1, 10)])
+    ctx.pacer.paused["f95"] = "rate limited (HTTP 429)"
+    result = run_source(F95ThreadsSource(), ctx)
+    assert result.status == "rate_limited"
+    assert transport.requests == []
+
+
+def test_until_swept_all_means_the_sources_with_a_sweep():
+    from catalog_server.__main__ import build_parser
+
+    args = build_parser().parse_args(["run", "--until-swept", "all"])
+    assert "f95_threads" not in args.until_swept
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "--until-swept", "f95_threads"])
