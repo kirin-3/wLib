@@ -234,6 +234,77 @@ def f95_thread_ratings(thread_ids: Sequence[int]) -> tuple[str, dict[int, float]
     return built_at, ratings
 
 
+# Order of the developer links a game keeps.
+_LINK_KINDS = ("patreon", "subscribestar", "itch", "kofi", "steam", "discord")
+
+
+def _detail_links(raw: object) -> list[str]:
+    try:
+        ids = cast(object, json.loads(str(raw or "{}")))
+    except ValueError:
+        return []
+    if not isinstance(ids, dict):
+        return []
+    by_kind = cast(dict[str, object], ids)
+    urls: list[str] = []
+    for kind in (*_LINK_KINDS, *sorted(set(by_kind) - set(_LINK_KINDS))):
+        entries = by_kind.get(kind)
+        if not isinstance(entries, list):
+            continue
+        for entry in cast(list[object], entries):
+            url = cast(dict[str, object], entry).get("url") if isinstance(entry, dict) else None
+            if isinstance(url, str) and url not in urls:
+                urls.append(url)
+    return urls
+
+
+def f95_thread_details(thread_ids: Sequence[int]) -> dict[int, dict[str, object]]:
+    """First-post details per F95 thread, in the games-table field names.
+
+    Only threads the catalog read successfully are included. Returns {} when
+    the catalog is off, missing, unreadable or older than the details table.
+    """
+    ids = sorted({int(thread_id) for thread_id in thread_ids})
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    details: dict[int, dict[str, object]] = {}
+    try:
+        if database.get_setting("catalog_enabled") == "0" or not path.is_file():
+            return {}
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            has_table = cast(
+                tuple[int] | None,
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'f95_thread_details'"
+                ).fetchone(),
+            )
+            if has_table is None:
+                return {}
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = cast(
+                    list[tuple[object, ...]],
+                    conn.execute(
+                        "SELECT thread_id, overview, original_title, aliases, language, external_ids "
+                        + f"FROM f95_thread_details WHERE status = 'ok' AND thread_id IN ({placeholders})",
+                        chunk,
+                    ).fetchall(),
+                )
+                for thread_id, overview, original, aliases, language, external in rows:
+                    if not isinstance(thread_id, int):
+                        continue
+                    details[thread_id] = {
+                        "overview": overview or "",
+                        "original_title": original or "",
+                        "aliases": _strings(aliases),
+                        "language": language or "",
+                        "external_links": _detail_links(external),
+                    }
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return details
+
+
 def screenshot_urls(url: str) -> dict[str, str]:
     """Map F95 media hosts to preview and full-size versions."""
     try:

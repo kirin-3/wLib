@@ -65,6 +65,7 @@ _torrent_exit_hook = False
 
 # Device-local: the catalog snapshot SHA-256 whose ratings were last filled.
 CATALOG_RATING_FILL_SETTING = "catalog_rating_fill_sha"
+CATALOG_DETAILS_FILL_SETTING = "catalog_details_fill_sha"
 
 
 class ApiBase:
@@ -244,7 +245,7 @@ class ApiBase:
                 get_data_dir(),
                 app_version=APP_VERSION,
                 enabled=self._catalog_enabled,
-                on_installed=self._fill_ratings_from_catalog,
+                on_installed=self._on_catalog_installed,
             )
         )
         if self._catalog_enabled():
@@ -900,6 +901,10 @@ class ApiBase:
         except Exception as e:
             print(f"Failed to fetch metadata for game {game_id}: {e}")
         finally:
+            try:
+                _ = self._fill_thread_details_from_catalog([game_id])
+            except Exception as e:  # catalog details are optional
+                print(f"Failed to fill catalog details for game {game_id}: {e}")
             self.cover_cache.wake()
             with self._metadata_lock:
                 self._metadata_pending.discard(game_id)
@@ -1166,6 +1171,76 @@ class ApiBase:
                 )
                 conn.commit()
         return previous
+
+    def _on_catalog_installed(self) -> None:
+        """Runs on the catalog thread after a snapshot installs and once at startup."""
+        _ = self._fill_ratings_from_catalog()
+        _ = self._fill_thread_details_from_catalog()
+
+    def _fill_thread_details_from_catalog(self, game_ids: Sequence[int] = ()) -> int:
+        """Apply the catalog's F95 thread details to games (``core.thread_details``).
+
+        With a new snapshot every F95 game is checked; otherwise only games
+        never filled, or the given ``game_ids`` (a game just added). A field
+        the user edited keeps their value. Returns the number of games changed.
+        """
+        import sqlite3
+
+        from core.database import get_connection, get_setting, update_setting
+        from core.f95zone import extract_thread_id
+        from core.game_lookup import f95_thread_details
+        from core.thread_details import BASELINE_COLUMN, THREAD_DETAIL_FIELDS, merge_thread_details
+
+        if not self._catalog_enabled():
+            return 0
+        snapshot_sha = self.catalog.installed_sha256()
+        if not snapshot_sha:
+            return 0
+        new_snapshot = get_setting(CATALOG_DETAILS_FILL_SETTING) != snapshot_sha
+        columns = ", ".join(("id", "f95_url", BASELINE_COLUMN, *THREAD_DETAIL_FIELDS))
+        where = "f95_url IS NOT NULL AND f95_url != ''"
+        params: list[object] = []
+        if not new_snapshot:
+            wanted = sorted({int(game_id) for game_id in game_ids})
+            marks = ",".join("?" for _ in wanted)
+            where += f" AND ({BASELINE_COLUMN} IS NULL" + (f" OR id IN ({marks}))" if wanted else ")")
+            params.extend(wanted)
+        changed = 0
+        with closing(get_connection()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = cast(
+                list[sqlite3.Row],
+                conn.execute(f"SELECT {columns} FROM games WHERE {where}", params).fetchall(),
+            )
+            by_thread: dict[int, list[dict[str, object]]] = {}
+            for row in rows:
+                thread_id = extract_thread_id(cast(object, row["f95_url"]))
+                if thread_id.isdigit():
+                    by_thread.setdefault(int(thread_id), []).append(
+                        {str(key): cast(object, row[key]) for key in row.keys()}
+                    )
+            details = f95_thread_details(list(by_thread)) if by_thread else {}
+            for thread_id, games in by_thread.items():
+                catalog = details.get(thread_id)
+                if catalog is None:
+                    continue
+                for game in games:
+                    updates = merge_thread_details(game, catalog)
+                    if not updates:
+                        continue
+                    assignments = ", ".join(f"{column} = ?" for column in updates)
+                    _ = conn.execute(
+                        f"UPDATE games SET {assignments} WHERE id = ?",
+                        (*updates.values(), game["id"]),
+                    )
+                    if set(updates) != {BASELINE_COLUMN}:
+                        changed += 1
+            conn.commit()
+        if new_snapshot:
+            update_setting(CATALOG_DETAILS_FILL_SETTING, snapshot_sha)
+        if changed:
+            self._refresh_synced_library()
+        return changed
 
     def _fill_ratings_from_catalog(self) -> int:
         """Fill F95 ratings from the installed catalog, once per snapshot.

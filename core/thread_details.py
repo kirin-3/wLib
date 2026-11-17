@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""F95 thread details a game keeps: overview, original title, aliases,
+language and the developer's links.
+
+The catalog fills them and the user may edit them. `thread_details_baseline`
+holds the catalog values applied last (JSON, NULL = never filled). A field
+takes a new catalog value only while it is empty or still equal to that
+baseline, so the user's own edits are never overwritten.
+"""
+
+import json
+from collections.abc import Mapping
+from typing import cast
+
+THREAD_DETAIL_FIELDS: tuple[str, ...] = (
+    "overview",
+    "original_title",
+    "aliases",
+    "language",
+    "external_links",
+)
+LIST_FIELDS: frozenset[str] = frozenset({"aliases", "external_links"})
+BASELINE_COLUMN = "thread_details_baseline"
+_MAX_LIST_ITEMS = 50
+_MAX_TEXT_CHARS = 20_000
+
+
+def _decoded(value: object) -> object:
+    if isinstance(value, str):
+        try:
+            return cast(object, json.loads(value))
+        except ValueError:
+            return None
+    return value
+
+
+def normalize_detail(field: str, value: object) -> str | list[str]:
+    """The clean value of one field; lists come as Python lists or JSON text."""
+    if field not in LIST_FIELDS:
+        text = value if isinstance(value, str) else ""
+        return text.strip()[:_MAX_TEXT_CHARS]
+    items = _decoded(value)
+    if field == "aliases" and isinstance(value, str) and not isinstance(items, list):
+        # Typed in the Info tab as "Alias one, Alias two".
+        items = value.split(",")
+    if not isinstance(items, list):
+        return []
+    cleaned: list[str] = []
+    for item in cast(list[object], items):
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or text in cleaned:
+            continue
+        if field == "external_links" and not text.startswith(("https://", "http://")):
+            continue
+        cleaned.append(text)
+        if len(cleaned) >= _MAX_LIST_ITEMS:
+            break
+    return cleaned
+
+
+def column_value(field: str, value: object) -> str:
+    """The value stored in the games column (lists as JSON text)."""
+    clean = normalize_detail(field, value)
+    return json.dumps(clean, ensure_ascii=False) if isinstance(clean, list) else clean
+
+
+def normalize_baseline(value: object) -> str | None:
+    """Stored baseline JSON with only known fields, or None for "never filled"."""
+    decoded = _decoded(value)
+    if not isinstance(decoded, dict):
+        return None
+    source = cast(dict[str, object], decoded)
+    return json.dumps(
+        {field: normalize_detail(field, source.get(field)) for field in THREAD_DETAIL_FIELDS},
+        ensure_ascii=False,
+    )
+
+
+def merge_thread_details(
+    current: Mapping[str, object], catalog: Mapping[str, object]
+) -> dict[str, object]:
+    """Column updates that apply `catalog` to a game row; {} when nothing changes."""
+    raw_baseline = _decoded(current.get(BASELINE_COLUMN))
+    baseline = (
+        cast(dict[str, object], raw_baseline) if isinstance(raw_baseline, dict) else None
+    )
+    updates: dict[str, object] = {}
+    new_baseline: dict[str, object] = {}
+    for field in THREAD_DETAIL_FIELDS:
+        new = normalize_detail(field, catalog.get(field))
+        new_baseline[field] = new
+        stored = normalize_detail(field, current.get(field))
+        untouched = baseline is not None and stored == normalize_detail(
+            field, baseline.get(field)
+        )
+        if (not stored or untouched) and stored != new:
+            updates[field] = column_value(field, new)
+    encoded = json.dumps(new_baseline, ensure_ascii=False)
+    if updates or current.get(BASELINE_COLUMN) != encoded:
+        updates[BASELINE_COLUMN] = encoded
+    return updates

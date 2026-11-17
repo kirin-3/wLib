@@ -41,6 +41,8 @@ from core.database import (
 from core.f95zone import normalize_thread_url, thread_match_key, thread_urls_match
 from core.host_platform import is_windows
 from core.store_links import MATCHABLE_SOURCES, coerce_store_links
+from core.thread_details import BASELINE_COLUMN, THREAD_DETAIL_FIELDS, normalize_baseline
+from core.thread_details import column_value as thread_detail_column_value
 
 __all__ = [
     "BACKUP_FORMAT",
@@ -91,6 +93,9 @@ METADATA_FIELDS = (
     "thread_completed",
     "cover_image_path",
     "screenshots",
+    *THREAD_DETAIL_FIELDS,
+    # Kept with the details so the catalog never overwrites restored edits.
+    BASELINE_COLUMN,
     "links",
 )
 USER_STATE_FIELDS = (
@@ -1501,6 +1506,11 @@ def _normalize_game_field(field: str, value: object) -> object:
         return json.dumps(database.normalize_note_links(value))
     if field == "screenshots":
         return _screenshots_json_text(value)
+    if field in THREAD_DETAIL_FIELDS:
+        return thread_detail_column_value(field, value)
+    if field == BASELINE_COLUMN:
+        # NULL means "never filled from the catalog".
+        return normalize_baseline(value)
     if field in BOOLEAN_GAME_FIELDS:
         return 1 if _coerce_bool(value) else 0
     if field in INTEGER_GAME_FIELDS:
@@ -2091,7 +2101,7 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
     if field in ("collections", "note_links"):
         # Membership and note links are JSON lists; "[]" means none yet.
         return _coerce_text(local_value).strip() in ("", "[]")
-    if field == "screenshots":
+    if field in ("screenshots", "aliases", "external_links"):
         return _coerce_text(local_value).strip() in ("", "[]")
     if field == "launch_mode":
         # New games start on the default mode, which nobody chose.

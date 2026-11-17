@@ -240,4 +240,4 @@ def test_catalog_fill_does_nothing_when_the_catalog_is_off(rating_catalog):
 
 def test_catalog_fill_is_the_install_callback(started):
     api = Api()
-    assert api.catalog.on_installed == api._fill_ratings_from_catalog
+    assert api.catalog.on_installed == api._on_catalog_installed

@@ -119,6 +119,12 @@ Stores the library records and their associated configuration flags.
 | `thread_completed` | `BOOLEAN DEFAULT 0` | Whether the F95 thread currently has a `Completed` prefix. Added to existing databases during `init_db()`. |
 | `collections` | `TEXT DEFAULT '[]'` | JSON array of collection names the game belongs to. Read back as a decoded `list[str]`, matched against the collection list case-insensitively; names that no longer exist are hidden. Part of `SYNC_GAME_COLUMNS`, so membership changes bump the sync time. |
 | `screenshots` | `TEXT DEFAULT '[]'` | JSON list of remote screenshot URLs collected from the thread starter post. Refreshed from thread page reads alongside thread edit metadata; an empty page result keeps the stored list. Read back as a decoded `list[str]` of non-empty strings, empty when none are stored. Not user-editable (`update_game` ignores it) and not part of `SYNC_GAME_COLUMNS`, so a refresh alone does not bump the sync time. |
+| `overview` | `TEXT DEFAULT ''` | Overview text from the F95 thread's first post. Filled from the catalog (`f95_thread_details`), user-editable in the Info tab (see "F95 thread details" below). |
+| `original_title` | `TEXT DEFAULT ''` | Original (often Japanese) title from the first post. Same fill and edit rules as `overview`. |
+| `aliases` | `TEXT DEFAULT '[]'` | JSON list of other titles. `update_game` also takes a comma-separated string; read back as `list[str]`. Same fill and edit rules. |
+| `language` | `TEXT DEFAULT ''` | The first post's Language text as written, e.g. `English (Sonnet 5.5 & Opus 5.5), Japanese`. The UI makes `Language: <name>` filter tags from it. Same fill and edit rules. |
+| `external_links` | `TEXT DEFAULT '[]'` | JSON list of the developer's http(s) links (Patreon, SubscribeStar, itch, Ko-fi, Steam, Discord) from the first post; read back as `list[str]`. Same fill and edit rules. |
+| `thread_details_baseline` | `TEXT` (nullable) | JSON object of the five detail values the catalog applied last. NULL means never filled. A detail field takes a new catalog value only while it is empty or equal to its baseline value, so user edits are kept (`core/thread_details.py`). Cleared with the five fields when `f95_url` moves to another thread. |
 
 ### Table: `game_links`
 
@@ -293,3 +299,14 @@ from exports and sync; applying backups or sync preserves existing covers.
 `init_db()` adds nullable `cover_cache` and `cover_cache_url` columns. Dedicated helpers read the work list, list referenced names, clear one/all rows, and set both fields guarded by the current `cover_image_path`. Neither column is in `SYNC_GAME_COLUMNS` or the generic `update_game` allowlist. Cache writes and purge never change the sync timestamp. JSON exports, semantic backups and sync omit both columns and all files in `covers/cache/`; imports preserve existing cache columns. The background downloader shares F95 pacing, and purge removes only this cache while disabling downloads until the next launch.
 
 `gamemode_enabled` and `mangohud_enabled` are general boolean settings, both defaulting to `false`. The gamescope settings are general settings (exported and synced) with `INSERT OR IGNORE` defaults: `gamescope_enabled` (`false`), `gamescope_window_mode` (`fullscreen|borderless|windowed`, default `fullscreen`), `gamescope_output_resolution` and `gamescope_game_resolution` (`WxH` or empty for Auto), `gamescope_scaler` (`auto|integer|fit|fill|stretch`, default `auto`), `gamescope_filter` (`linear|nearest|fsr|nis|pixel`, default `linear`), `gamescope_fps_limit` (1–1000 or empty for Off) and `gamescope_args` (empty). `save_settings` refuses an invalid value with `{"success": false, "field": <key>, "error": ...}` and saves nothing; backup import turns an invalid value into the default. `html_builtin_player` ("Play HTML games in the built-in player") is a general boolean setting that is exported and synced; an absent row reads as `true`. `web_player_devtools` ("Web player DevTools (F12)") works the same way: general, boolean, exported and synced, and an absent row reads as `true`. `html_player_notice_shown` is a device-local flag (not exported or synced) set after the one-time built-in player note.
+
+
+### F95 thread details
+
+`ApiBase._fill_thread_details_from_catalog` applies the catalog's
+`f95_thread_details` rows (status `ok` only) to games by F95 thread ID. It runs
+from the catalog install callback (`_on_catalog_installed`, after the rating
+fill): with a new snapshot (`catalog_details_fill_sha` setting differs) it checks
+every F95 game, otherwise only games never filled. A newly added F95 game is
+filled right after its metadata fetch. The five fields and the baseline are
+exported and imported in the metadata section and are in `SYNC_GAME_COLUMNS`.

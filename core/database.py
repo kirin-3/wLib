@@ -30,6 +30,13 @@ from core.store_links import (
 )
 from core import gamescope
 from core.versions import normalize_version
+from core.thread_details import (
+    BASELINE_COLUMN,
+    LIST_FIELDS,
+    THREAD_DETAIL_FIELDS,
+    normalize_detail,
+)
+from core.thread_details import column_value as thread_detail_column_value
 
 DATA_DIR = get_data_dir()
 try:
@@ -117,6 +124,8 @@ SYNC_GAME_COLUMNS = (
     "last_played",
     "date_added",
     "collections",
+    *THREAD_DETAIL_FIELDS,
+    BASELINE_COLUMN,
 )
 CANONICAL_LAUNCH_MODES = (
     DEFAULT_LAUNCH_MODE,
@@ -875,6 +884,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # Optional name of the canonical default launch target ("" shows "Default").
         ("default_target_label", "TEXT DEFAULT ''"),
         ("sync_uid", "TEXT"),
+        # F95 first-post details (core/thread_details.py); lists are JSON text.
+        ("overview", "TEXT DEFAULT ''"),
+        ("original_title", "TEXT DEFAULT ''"),
+        ("aliases", "TEXT DEFAULT '[]'"),
+        ("language", "TEXT DEFAULT ''"),
+        ("external_links", "TEXT DEFAULT '[]'"),
+        ("thread_details_baseline", "TEXT"),
     ]
 
     for col_name, col_type in new_columns:
@@ -1330,6 +1346,8 @@ def get_all_games() -> list[dict[str, object]]:
         ]
         game_dict["note_links"] = normalize_note_links(game_dict.get("note_links"))
         game_dict["screenshots"] = _decode_game_screenshots(game_dict.get("screenshots"))
+        for field in LIST_FIELDS:
+            game_dict[field] = normalize_detail(field, game_dict.get(field))
         game_id = int(str(game_dict["id"]))
         game_dict["launch_targets"] = targets_by_game.get(game_id, [])
         game_dict["links"] = links_by_game.get(game_id, [])
@@ -1620,6 +1638,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "skipped_version",
         "is_favorite",
         "thread_completed",
+        *THREAD_DETAIL_FIELDS,
     }
     # Only allow known columns
     # `f95_tags` may be set back to NULL ("no baseline yet"), as an undo does.
@@ -1656,6 +1675,10 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
+
+    for field in THREAD_DETAIL_FIELDS:
+        if field in safe_fields:
+            safe_fields[field] = thread_detail_column_value(field, safe_fields[field])
 
     if "play_status" in safe_fields:
         safe_fields["play_status"] = normalize_play_status(safe_fields["play_status"])
@@ -1704,6 +1727,10 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 safe_fields["thread_main_post_checked_at"] = None
                 safe_fields["thread_completed"] = 0
                 safe_fields["screenshots"] = "[]"
+                # The old thread's details too; the catalog fills the new ones.
+                for field in THREAD_DETAIL_FIELDS:
+                    safe_fields[field] = thread_detail_column_value(field, "")
+                safe_fields[BASELINE_COLUMN] = None
 
         if "version" in safe_fields:
             _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))
@@ -1735,6 +1762,11 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         values: tuple[object, ...] = tuple(safe_fields.values()) + (game_id,)
         _ = cursor.execute(f"UPDATE games SET {set_clause} WHERE id = ?", values)
         conn.commit()
+    # Callers see the same shapes as get_all_games: lists, no merge state.
+    _ = safe_fields.pop(BASELINE_COLUMN, None)
+    for field in LIST_FIELDS:
+        if field in safe_fields:
+            safe_fields[field] = normalize_detail(field, safe_fields[field])
     return safe_fields
 
 
