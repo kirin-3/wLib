@@ -17,6 +17,12 @@ from typing import BinaryIO, Protocol, cast
 from urllib.error import HTTPError
 from collections.abc import Callable
 
+from core.archive_formats import (
+    SIGNATURE_BYTES,
+    archive_suffix,
+    looks_like_archive,
+    split_archive_name,
+)
 from core.downloads.pacing import SpeedLimiter
 from core.host_platform import get_data_subdir
 
@@ -161,8 +167,8 @@ def transfer(
             info.close()
         raise DownloadError("Invalid download job")
     name = _safe_name(info.name)
-    suffix = Path(name).suffix.lower()
-    if suffix not in (".zip", ".rar", ".7z"):
+    suffix = archive_suffix(name)
+    if not suffix:
         if info.close:
             info.close()
         raise DownloadError("file invalid")
@@ -176,8 +182,11 @@ def transfer(
     part = resume_part or directory / f"{job_id}.part"
     keep_part = False
     target = directory / name
+    stem, name_suffix = split_archive_name(name)
+    # `Game.tar.bz2` becomes `Game-<job>.tar.bz2`, not `Game.tar-<job>.bz2`.
+    unique = directory / f"{stem}-{job_id}{name_suffix}"
     if target.exists():
-        target = directory / f"{Path(name).stem}-{job_id}{suffix}"
+        target = unique
     done = 0
     try:
         offset = 0
@@ -267,17 +276,16 @@ def transfer(
         if info.decryptor:
             info.decryptor.finish()
         with part.open("rb") as stream:
-            header = stream.read(8)
-        signatures = {".zip": (b"PK\x03\x04",), ".7z": (b"7z\xbc\xaf\x27\x1c",), ".rar": (b"Rar!\x1a\x07",)}
-        if not any(header.startswith(signature) for signature in signatures[suffix]):
+            header = stream.read(SIGNATURE_BYTES)
+        if not looks_like_archive(header, suffix):
             raise DownloadError("file invalid")
         if target.exists():
-            target = directory / f"{Path(name).stem}-{job_id}{suffix}"
+            target = unique
         keep_part = False
         try:
             os.link(part, target)
         except FileExistsError:
-            target = directory / f"{Path(name).stem}-{job_id}{suffix}"
+            target = unique
             os.link(part, target)
         except OSError:
             # Filesystems without hard links (FAT, some FUSE mounts).

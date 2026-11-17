@@ -43,6 +43,20 @@ def check_torrent_helper() -> int:
             proc.kill()
 
 
+def check_archive_codecs() -> None:
+    """Tar installs need bz2, gzip and lzma; a packaged Python may lack _bz2 or _lzma."""
+    import bz2
+    import gzip
+    import lzma
+    import tarfile
+
+    sample = b"wlib"
+    for module in (bz2, gzip, lzma):
+        if module.decompress(module.compress(sample)) != sample:
+            raise RuntimeError(f"{module.__name__} round trip failed during smoke check")
+    _ = tarfile.open
+
+
 CATALOG_WAIT_SECONDS = 120
 
 
@@ -91,6 +105,7 @@ def main() -> None:
                 f"extension sync failed during smoke check: {sync_result.get('error', 'unknown error')}"
             )
 
+        check_archive_codecs()
         port = check_torrent_helper()
         wait_for_catalog_check(api.catalog)
 

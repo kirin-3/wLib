@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Install games from downloaded archives (.zip/.7z/.rar)."""
+"""Install games from downloaded archives (.zip/.7z/.rar and tar archives)."""
 
 from __future__ import annotations
 
+import errno
+import importlib
+import io
 import json
 import logging
 import ntpath
@@ -13,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -20,8 +24,12 @@ import zipfile
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from typing import cast
+from typing import cast, override
 
+from core.archive_formats import ARCHIVE_SUFFIXES, TAR_COMPRESSION_MODULES
+from core.archive_formats import archive_family as _archive_family
+from core.archive_formats import archive_suffix as archive_suffix
+from core.archive_formats import split_archive_name as _split_archive_name
 from core.archive_volumes import RAR_OLD_RE as _RAR_OLD_RE
 from core.archive_volumes import RAR_PART_RE as _RAR_PART_RE
 from core.archive_volumes import SPLIT_RE as _SPLIT_RE
@@ -49,7 +57,11 @@ _WINDOWS_RESERVED_NAMES = {
 
 _INVALID_SEGMENT_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
-ARCHIVE_EXTENSIONS = (".zip", ".7z", ".rar")
+ARCHIVE_EXTENSIONS = ARCHIVE_SUFFIXES
+UNSUPPORTED_FORMAT_MESSAGE = (
+    "Unsupported archive format. Choose a .zip, .7z, .rar, .tar, .tar.gz, "
+    ".tgz, .tar.bz2, .tbz2, .tbz, .tar.xz or .txz file."
+)
 STAGING_PREFIX = ".wlib-staging-"
 TRASH_PREFIX = ".wlib-trash-"
 SCRATCH_PREFIX = ".wlib-scratch-"
@@ -308,7 +320,7 @@ def check_volume_set(volumes: VolumeSet) -> None:
 
 
 def archive_format(archive_path: str) -> str:
-    """'zip' | '7z' | 'rar' | '' based on the file extension.
+    """'zip' | '7z' | 'rar' | 'tar' | '' based on the file extension.
 
     Split archives (`.7z.001`, `.zip.001`) and spanned zips (`.zip` with
     `.z01`...) need 7-Zip, so they report '7z'.
@@ -317,16 +329,12 @@ def archive_format(archive_path: str) -> str:
     split = _SPLIT_RE.match(os.path.basename(lower))
     if split:
         return "rar" if split.group("base").endswith(".rar") else "7z"
-    if lower.endswith(".zip"):
+    family = _archive_family(lower)
+    if family == "zip":
         stem = lower[: -len(".zip")]
         if os.path.exists(stem + ".z01") or os.path.exists(archive_path[: -len(".zip")] + ".z01"):
             return "7z"
-        return "zip"
-    if lower.endswith(".7z"):
-        return "7z"
-    if lower.endswith(".rar"):
-        return "rar"
-    return ""
+    return family
 
 
 _PART_SUFFIX_RE = re.compile(r"\.part\d+$", re.IGNORECASE)
@@ -343,7 +351,9 @@ def archive_stem(archive_path: str) -> str:
     split = _SPLIT_RE.match(name.lower())
     if split:
         name = name[: len(split.group("base"))]
-    stem = os.path.splitext(name)[0]
+    stem, suffix = _split_archive_name(name)
+    if not suffix:
+        stem = os.path.splitext(name)[0]
     return _PART_SUFFIX_RE.sub("", stem)
 
 
@@ -391,14 +401,14 @@ def detect_archive_tool(
 ) -> tuple[str | None, str | None]:
     """Return (tool, error) for an archive.
 
-    `.zip` needs no tool → (None, None). Flatpak prefers its bundled 7zz
+    `.zip` and tar archives need no tool → (None, None). Flatpak prefers its bundled 7zz
     when the archive and destination are accessible in the sandbox. Otherwise search
     `7zz`/`7z`/`7za`, then `bsdtar`, then `unrar` (rar only), plus the
     Windows `Program Files\\7-Zip` paths. Uses `host_which` and
     `os.path.isfile` so tests can monkeypatch them.
     """
     fmt = archive_format(archive_path)
-    if fmt == "zip":
+    if fmt in ("zip", "tar"):
         return None, None
     if fmt not in ("7z", "rar"):
         return None, f"Unsupported archive format: {archive_path or '(none)'}"
@@ -878,14 +888,17 @@ def _sweep_stale_scratch(parent: str) -> None:
 
 
 def _extract_tool_via_local_scratch(
-    tool: str,
+    extract: Callable[[str], object],
     archive_path: str,
     staging: str,
     workers: int,
     required_bytes: int | None,
     cancel: threading.Event | None = None,
 ) -> bool:
-    """Run a 7z/rar extractor into local scratch, then copy into staging.
+    """Run `extract(folder)` into local scratch, then copy into staging.
+
+    Used for the extractors that write one file at a time (7-Zip, unrar and
+    tarfile), which are slow on a network share.
 
     Returns False without extracting when local disk can't hold the archive;
     the caller then extracts straight into staging. An archive whose unpacked
@@ -904,7 +917,7 @@ def _extract_tool_via_local_scratch(
     except (OSError, ArchiveInstallError):
         return False
     try:
-        _ = extract_with_tool(tool, archive_path, scratch, cancel)
+        _ = extract(scratch)
         try:
             _ = apply_execute_bits(scratch)
         except OSError:
@@ -1108,6 +1121,165 @@ def extract_zip(
                 f"Archive is password-protected or encrypted: {exc}"
             ) from exc
         raise ArchiveInstallError(f"Archive is corrupt or incomplete: {exc}") from exc
+    check_symlinks_inside_staging(staging_dir)
+    return count
+
+
+class _TarReader(io.RawIOBase):
+    """The compressed archive file as tarfile reads it.
+
+    Each read reports (compressed bytes read, archive size) and stops with
+    InstallCancelled once `cancel` is set, so a cancel works inside one large
+    member too.
+    """
+
+    def __init__(
+        self,
+        raw: io.BufferedReader,
+        size: int,
+        progress: Callable[[int, int], None] | None,
+        cancel: threading.Event | None,
+    ) -> None:
+        super().__init__()
+        self._raw: io.BufferedReader = raw
+        self._size: int = size
+        self._progress: Callable[[int, int], None] | None = progress
+        self._cancel: threading.Event | None = cancel
+        self._done: int = 0
+        self._last_report: float = 0.0
+
+    @override
+    def readable(self) -> bool:
+        return True
+
+    @override
+    def readinto(self, buffer: memoryview | bytearray) -> int:  # pyright: ignore[reportIncompatibleMethodOverride]
+        _check_cancel(self._cancel)
+        count = self._raw.readinto(buffer)
+        self._done += count
+        if self._progress is not None:
+            now = time.monotonic()
+            if self._done >= self._size or now - self._last_report >= 0.5:
+                self._last_report = now
+                try:
+                    self._progress(min(self._done, self._size), self._size)
+                except Exception:
+                    pass
+        return count
+
+
+def _tar_codec_error(archive_path: str) -> str:
+    """The error for a compressed tar whose codec this Python lacks, or ""."""
+    suffix = archive_suffix(archive_path)
+    module = TAR_COMPRESSION_MODULES.get(suffix)
+    if not module:
+        return ""
+    try:
+        _ = importlib.import_module(module)
+    except ImportError:
+        return f"This build of wLib cannot read {suffix} archives."
+    return ""
+
+
+def _disk_full(exc: BaseException) -> bool:
+    return isinstance(exc, OSError) and exc.errno in (
+        errno.ENOSPC,
+        getattr(errno, "EDQUOT", -1),
+    )
+
+
+_DISK_FULL_MESSAGE = (
+    "Not enough free space: the library drive filled up while the archive was extracted."
+)
+
+
+def extract_tar(
+    archive_path: str,
+    staging_dir: str,
+    *,
+    progress: Callable[[int, int], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> int:
+    """Extract a tar archive (plain, gzip, bzip2 or xz) into staging.
+
+    Reads the archive once, in stream mode, so a compressed archive is not
+    decompressed again for each member. Each member is checked before it is
+    written: the same name rules as the other formats, no two members that
+    land on one file, no special files, and hard links only to a file that
+    was extracted earlier. The tarfile "data" filter then refuses links out
+    of staging and clears setuid and group/other write bits. Returns the
+    number of members extracted.
+    """
+    codec_error = _tar_codec_error(archive_path)
+    if codec_error:
+        raise ArchiveInstallError(codec_error)
+    os.makedirs(staging_dir, exist_ok=True)
+    windows = _is_windows()
+    # Key -> True for a folder, False for anything else.
+    seen: dict[str, bool] = {}
+    files: set[str] = set()
+    count = 0
+    try:
+        size = os.path.getsize(archive_path)
+        with open(archive_path, "rb") as raw:
+            reader = _TarReader(raw, size, progress, cancel)
+            with tarfile.open(fileobj=reader, mode="r|*") as tf:
+                for member in tf:
+                    _check_cancel(cancel)
+                    name = member.name
+                    # `tar -C dir .` stores the root itself as "./"; it names
+                    # staging, so there is nothing to write for it.
+                    if member.isdir() and not [
+                        p for p in name.replace("\\", "/").split("/") if p not in ("", ".")
+                    ]:
+                        continue
+                    check_archive_entry_safe(name)
+                    _ = _target_inside_staging(staging_dir, name)
+                    path = posixpath.normpath(name.replace("\\", "/"))
+                    key = _windows_name_key(path) if windows else path
+                    is_dir = member.isdir()
+                    earlier = seen.get(key)
+                    if earlier is not None and not (earlier and is_dir):
+                        raise ArchiveSafetyError(
+                            f"Archive has duplicate or colliding entry: {name!r}"
+                        )
+                    seen[key] = is_dir
+                    if not (is_dir or member.isreg() or member.issym() or member.islnk()):
+                        raise ArchiveSafetyError(
+                            f"Archive entry is a device or special file: {name!r}"
+                        )
+                    if member.islnk():
+                        link = member.linkname
+                        check_archive_entry_safe(link)
+                        link_path = posixpath.normpath(link.replace("\\", "/"))
+                        link_key = _windows_name_key(link_path) if windows else link_path
+                        if link_key not in files:
+                            raise ArchiveSafetyError(
+                                f"Archive hard link does not point to an earlier file in the archive: {name!r}"
+                            )
+                    if member.isreg() or member.islnk():
+                        files.add(key)
+                    tf.extract(member, staging_dir, filter="data")
+                    count += 1
+    except tarfile.FilterError as exc:
+        raise ArchiveSafetyError(f"Archive entry is unsafe: {exc}") from exc
+    except ArchiveInstallError:
+        raise
+    except tarfile.CompressionError as exc:
+        raise ArchiveInstallError(
+            f"This build of wLib cannot read this archive's compression: {exc}"
+        ) from exc
+    except OSError as exc:
+        if _disk_full(exc):
+            raise ArchiveInstallError(_DISK_FULL_MESSAGE) from exc
+        raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+    except (tarfile.TarError, EOFError, KeyError, zlib.error, ValueError) as exc:
+        raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+    except Exception as exc:
+        # lzma.LZMAError; lzma itself may be missing from the build.
+        if type(exc).__name__ == "LZMAError":
+            raise ArchiveInstallError(f"Extraction failed: {exc}") from exc
+        raise
     check_symlinks_inside_staging(staging_dir)
     return count
 
@@ -1865,6 +2037,17 @@ def uncompressed_size(archive_path: str, *, library_folder: str = "") -> int | N
         except (OSError, zipfile.BadZipFile):
             # Extraction reports a broken zip with a clear message.
             return None
+    if fmt == "tar":
+        # Only a plain tar lists its sizes without full decompression.
+        if archive_suffix(archive_path) != ".tar":
+            return None
+        try:
+            # "r:" refuses compressed data, so this reads the headers only.
+            with tarfile.open(archive_path, "r:") as tf:
+                total = sum(m.size for m in tf.getmembers() if m.isreg())
+        except (OSError, tarfile.TarError, EOFError):
+            return None
+        return total if total > 0 else None
     if fmt in ("7z", "rar"):
         tool, _err = detect_archive_tool(archive_path, library_folder=library_folder)
         if tool and "7z" in _tool_basename(tool):
@@ -2475,10 +2658,12 @@ def install_archive(
             # Any part may be chosen; extraction always starts from the first.
             archive_path = volumes.first
         fmt = archive_format(archive_path)
-        if fmt not in ("zip", "7z", "rar"):
-            raise ArchiveInstallError(
-                "Unsupported archive format. Choose a .zip, .7z, or .rar file."
-            )
+        if fmt not in ("zip", "7z", "rar", "tar"):
+            raise ArchiveInstallError(UNSUPPORTED_FORMAT_MESSAGE)
+        if fmt == "tar":
+            codec_error = _tar_codec_error(archive_path)
+            if codec_error:
+                raise ArchiveInstallError(codec_error)
     if not title.strip():
         raise ArchiveInstallError("A title is required.")
     if not library_folder.strip():
@@ -2629,11 +2814,19 @@ def install_archive(
         if tool_error:
             raise ArchiveInstallError(tool_error)
         required_bytes = uncompressed_size(archive_path, library_folder=library_folder)
+    # A compressed tar does not record its unpacked size; it needs at least
+    # its own size.
+    min_free = required_bytes
+    if fmt == "tar" and not required_bytes:
+        try:
+            min_free = os.path.getsize(archive_path)
+        except OSError:
+            min_free = None
     # A download that is not seeding and sits on the library's drive is only
     # renamed into place, which takes no room; _place_folder checks the room
     # itself if that rename fails and it copies after all.
     if not (folder_source and not seeding and _same_drive(archive_path, library_folder)):
-        ensure_free_space(library_folder, required_bytes)
+        ensure_free_space(library_folder, min_free)
     network = is_network_filesystem(library_folder)
     workers = NETWORK_IO_WORKERS if network else 1
     _check_cancel(cancel)
@@ -2646,7 +2839,8 @@ def install_archive(
     try:
         if not folder_source:
             _progress("extracting")
-        with _ExtractMeter(staging, required_bytes, bytes_cb):
+        # tar reports progress itself, as the part of the archive read so far.
+        with _ExtractMeter(staging, required_bytes, None if fmt == "tar" else bytes_cb):
             if folder_source:
                 moved_from = _place_folder(
                     archive_path,
@@ -2687,8 +2881,34 @@ def install_archive(
                         _ = apply_execute_bits(staging)
                     except OSError:
                         pass
+            elif fmt == "tar" and network and _extract_tool_via_local_scratch(
+                lambda folder: extract_tar(
+                    archive_path, folder, progress=bytes_cb, cancel=cancel
+                ),
+                archive_path,
+                staging,
+                workers,
+                required_bytes,
+                cancel,
+            ):
+                # tarfile writes one file at a time, like 7-Zip and unrar below.
+                pass
+            elif fmt == "tar":
+                _ = extract_tar(archive_path, staging, progress=bytes_cb, cancel=cancel)
+                _progress("fixing permissions")
+                try:
+                    _ = apply_execute_bits(staging)
+                except OSError:
+                    pass
             elif network and _extract_tool_via_local_scratch(
-                cast(str, tool), archive_path, staging, workers, required_bytes, cancel
+                lambda folder: extract_with_tool(
+                    cast(str, tool), archive_path, folder, cancel
+                ),
+                archive_path,
+                staging,
+                workers,
+                required_bytes,
+                cancel,
             ):
                 # 7-Zip/unrar write one file at a time. On a network share every
                 # file waits for the server, so they extract on local disk, modes
@@ -3313,10 +3533,7 @@ def find_download_offers(*, now: float | None = None) -> list[dict[str, object]]
     }
     for name in sorted(names):
         lower = name.lower()
-        if not (
-            lower.endswith((".zip", ".7z", ".rar"))
-            or _SPLIT_RE.match(lower)
-        ):
+        if not (archive_suffix(lower) or _SPLIT_RE.match(lower)):
             continue
         path = os.path.join(folder, name)
         volumes = volume_set(path)

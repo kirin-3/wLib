@@ -1170,7 +1170,7 @@ export class MockBackend {
         return {success:true,mock:true};
       case "inspect_archive": {
         const fileName = String(args[0]).split(/[/\\]/).pop() || "";
-        const stem = fileName.replace(/\.(zip|7z|rar)$/i, "");
+        const stem = fileName.replace(/\.(zip|7z|rar|tar|tar\.gz|tgz|tar\.bz2|tbz2?|tar\.xz|txz)$/i, "");
         const versionMatch = stem.match(/[-_ ]v?(\d[\d._]*[a-z]?)$/i);
         const guessedVersion = versionMatch?.[1] ? versionMatch[1].replace(/_/g, ".") : "";
         const guessedTitle = (versionMatch ? stem.slice(0, versionMatch.index) : stem).replace(/[_-]+/g, " ").trim() || stem;

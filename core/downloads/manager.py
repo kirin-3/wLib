@@ -21,6 +21,7 @@ from typing import final
 from urllib.parse import urlsplit
 
 from core import extension_bridge
+from core.archive_formats import archive_suffix
 from core.downloads.hosts import buzzheavier, mega, pixeldrain
 from core.downloads.pacing import SpeedLimiter, host_limiter
 from core.downloads.transfer import (
@@ -413,7 +414,7 @@ class DownloadManager:
                 if path.suffix == '.part':
                     if path.name not in keep:
                         path.unlink()
-                elif path.suffix.lower() in ('.zip','.rar','.7z') and path.stat().st_mtime < now - 7 * 86400:
+                elif archive_suffix(path.name) and path.stat().st_mtime < now - 7 * 86400:
                     path.unlink()
             except OSError:
                 continue

@@ -402,3 +402,42 @@ def test_local_zip_install_uses_one_worker_per_core(tmp_path, monkeypatch):
     apply_execute_bits(str(reference))
     assert _snapshot(lib / "Game") == _snapshot(reference / "Game")
     assert os.access(str(result["exe_path"]), os.X_OK)
+
+
+def test_network_tar_goes_through_local_scratch(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    _isolated_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(ai, "is_network_filesystem", lambda _p: True)
+    scratch_parent = tmp_path / "scratch"
+    monkeypatch.setattr(ai, "_scratch_parent", lambda: str(scratch_parent))
+    archive = tmp_path / "Game-1.0-linux.tar.bz2"
+    with tarfile.open(archive, "w:bz2") as tf:
+        for name, data, mode in (
+            ("Game/Game.sh", b"#!/bin/sh\n", 0o755),
+            ("Game/lib/engine", ELF, 0o644),  # no mode bits: ELF gains +x
+            ("Game/game/script.rpy", b"label start:", 0o644),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = mode
+            tf.addfile(info, io.BytesIO(data))
+    seen = {}
+    real_extract_tar = ai.extract_tar
+
+    def spy(archive_path, dest, **kwargs):
+        seen["dest"] = dest
+        return real_extract_tar(archive_path, dest, **kwargs)
+
+    monkeypatch.setattr(ai, "extract_tar", spy)
+    lib = tmp_path / "lib"
+    result = ai.install_archive(
+        str(archive), library_folder=str(lib), pattern="{title}", title="Game",
+    )
+    assert seen["dest"].startswith(str(scratch_parent))
+    assert not os.path.exists(seen["dest"])  # scratch cleaned up
+    assert result["exe_path"] == str(lib / "Game" / "Game.sh")
+    assert os.access(str(result["exe_path"]), os.X_OK)
+    assert os.access(str(lib / "Game" / "lib" / "engine"), os.X_OK)
+    assert (lib / "Game" / "game" / "script.rpy").read_bytes() == b"label start:"

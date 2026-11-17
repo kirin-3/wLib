@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, cast, final
 
+from core.archive_formats import ARCHIVE_SUFFIXES as _ARCHIVE_SUFFIXES
 from core.downloads import seeding, torrent_settings
 from core.downloads.bencode import TorrentMeta, parse_torrent
 from core.downloads.transfer import DownloadError, staging_dir
@@ -37,9 +38,11 @@ PAUSED_KEEP_SECONDS = 30 * 86400
 DISK_CHECK_SECONDS = 5.0
 STATE_SAVE_SECONDS = 15.0
 REMOVE_WAIT_SECONDS = 3.0
-ARCHIVE_SUFFIXES = (".zip", ".rar", ".7z")
+ARCHIVE_SUFFIXES = _ARCHIVE_SUFFIXES
 # Names that can be an archive or one part of a multi-part archive.
-_VOLUME_NAME = re.compile(r"\.(?:zip|rar|7z|r\d{2,3}|z\d{2,3}|\d{3})$")
+_VOLUME_NAME = re.compile(
+    "(?:" + "|".join(re.escape(s) for s in ARCHIVE_SUFFIXES) + r"|\.r\d{2,3}|\.z\d{2,3}|\.\d{3})$"
+)
 # Files a release may carry next to its archive without being part of the game.
 EXTRA_SUFFIXES = (".txt", ".nfo", ".url", ".md", ".sfv", ".jpg", ".jpeg", ".png", ".webp")
 

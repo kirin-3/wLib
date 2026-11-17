@@ -4380,6 +4380,42 @@ def test_inspect_archive_strips_multipart_suffix(tmp_path, monkeypatch):
     assert inspected["version"] == "0.8"
 
 
+def test_inspect_archive_accepts_tarballs(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.database.DATA_DIR", str(tmp_path / "data"))
+    update_setting("library_folder", str(tmp_path / "lib"))
+    archive = tmp_path / "Eternum-0.8-linux.tar.bz2"
+    archive.write_bytes(b"BZh")
+
+    inspected = Api().inspect_archive(str(archive))
+
+    assert inspected["success"] is True
+    assert inspected["title"] == "Eternum"
+    assert ".tar" not in str(inspected["version"])
+
+    bare = tmp_path / "Eternum-0.8.bz2"
+    bare.write_bytes(b"BZh")
+    refused = Api().inspect_archive(str(bare))
+    assert refused["success"] is False
+    for suffix in (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"):
+        assert suffix in str(refused["error"])
+
+
+def test_archive_file_dialog_lists_tar_patterns(monkeypatch):
+    api = Api()
+    recorded: list[tuple[str, ...]] = []
+    monkeypatch.setattr("sys.platform", "win32")
+
+    def fake_browse_qt_dialog(dialog_kind, directory="", file_types=()):
+        _ = (dialog_kind, directory)
+        recorded.append(tuple(file_types))
+        return ""
+
+    monkeypatch.setattr(api, "_browse_qt_dialog", fake_browse_qt_dialog)
+    api.browse_archive_file()
+    patterns = recorded[0][0]
+    for pattern in ("*.tar", "*.tar.gz", "*.tgz", "*.tar.bz2", "*.tbz2", "*.tbz", "*.tar.xz", "*.txz"):
+        assert pattern in patterns.split("(")[1].rstrip(")").split(";")
+
 def test_inspect_archive_expands_tilde_saved_paths(tmp_path, monkeypatch):
     # A game added with a typed "~/..." executable launches because the
     # launcher expands it; the update preview must resolve the same folder.

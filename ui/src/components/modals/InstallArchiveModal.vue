@@ -635,7 +635,7 @@ watch(phase, (next, prev) => {
                 ? "Extracts the archive into your library folder and moves this game from your wishlist into your library."
                 : isUpdate
                 ? "Extracts the archive into your library folder, carries saves over, and points the game at the new version."
-                : "Extracts a downloaded .zip, .7z or .rar into your library folder and adds it as a game."
+                : "Extracts a downloaded .zip, .7z, .rar or tar archive (.tar.gz, .tar.bz2, .tar.xz) into your library folder and adds it as a game."
             }}
           </p>
         </div>

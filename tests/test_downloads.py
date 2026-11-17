@@ -31,6 +31,28 @@ def test_transfer_progress_cancel_invalid_and_space(tmp_path, monkeypatch):
         transfer(FileInfo('large.zip', 1, lambda: pytest.fail('must not open stream')), 'space', Event(), lambda *_: None, directory=tmp_path)
 
 
+def test_transfer_accepts_tarballs_and_keeps_the_double_extension(tmp_path):
+    import bz2
+    import gzip
+
+    data = bz2.compress(b'tar data')
+    path = transfer(FileInfo('Game-1.0-linux.tar.bz2', len(data), lambda: io.BytesIO(data)), 'tarjob', Event(), lambda *_: None, directory=tmp_path)
+    assert path.name == 'Game-1.0-linux.tar.bz2' and path.read_bytes() == data
+    gz = gzip.compress(b'tar data')
+    first = transfer(FileInfo('Game-1.0-linux.tar.gz', len(gz), lambda: io.BytesIO(gz)), 'gz1', Event(), lambda *_: None, directory=tmp_path)
+    second = transfer(FileInfo('Game-1.0-linux.tar.gz', len(gz), lambda: io.BytesIO(gz)), 'gz2', Event(), lambda *_: None, directory=tmp_path)
+    assert first.name == 'Game-1.0-linux.tar.gz'
+    assert second.name == 'Game-1.0-linux-gz2.tar.gz'
+
+
+def test_transfer_rejects_a_page_under_a_tarball_name(tmp_path):
+    page = b'<!DOCTYPE html><html><body>Download</body></html>' + b' ' * 600
+    with pytest.raises(DownloadError, match='file invalid'):
+        transfer(FileInfo('Game-1.0-linux.tar.xz', len(page), lambda: io.BytesIO(page)), 'page', Event(), lambda *_: None, directory=tmp_path)
+    assert list(tmp_path.iterdir()) == []
+    with pytest.raises(DownloadError, match='file invalid'):
+        transfer(FileInfo('Game-1.0-linux.bz2', 3, lambda: pytest.fail('must not open stream')), 'bare', Event(), lambda *_: None, directory=tmp_path)
+
 def test_pixeldrain_probe_and_error_mapping(monkeypatch):
     urls = []
     def urlopen(request, **kwargs):
@@ -600,6 +622,21 @@ def test_cleanup_keeps_owned_partials_and_deletes_orphans(tmp_path, monkeypatch)
     assert owned.exists()
     assert not orphan.exists() and not job_part.exists() and not old_archive.exists()
 
+
+def test_cleanup_deletes_old_tarballs_and_keeps_recent_ones(tmp_path, monkeypatch):
+    import os
+
+    manager, _ = _host_queue(tmp_path, monkeypatch, lambda url: pytest.fail('no probe'))
+    old = tmp_path / 'Game-1.0-linux.tar.gz'
+    recent = tmp_path / 'Game-2.0-linux.tar.gz'
+    other = tmp_path / 'notes.gz'
+    for path in (old, recent, other):
+        path.write_bytes(b'x')
+    os.utime(old, (1, 1))
+    os.utime(other, (1, 1))
+    manager.cleanup()
+    assert not old.exists()
+    assert recent.exists() and other.exists()
 
 def test_failed_host_job_untouched_for_30_days_is_removed(tmp_path, monkeypatch):
     from core.database import insert_download_job, list_download_jobs

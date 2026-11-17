@@ -16,9 +16,9 @@ _NOT_FOUND = "The download was not found"
 
 class DownloadsMixin(ApiBase):
     def browse_archive_file(self, start_path: str = "") -> str:
-        """Opens a native file dialog to select a game archive (.zip/.7z/.rar)."""
+        """Opens a native file dialog to select a game archive (.zip/.7z/.rar/tar)."""
         file_types = (
-            "Game Archives (*.zip;*.7z;*.rar;*.001)",
+            "Game Archives (*.zip;*.7z;*.rar;*.001;*.tar;*.tar.gz;*.tgz;*.tar.bz2;*.tbz2;*.tbz;*.tar.xz;*.txz)",
             "All files (*.*)",
         )
 
@@ -465,6 +465,7 @@ class DownloadsMixin(ApiBase):
     ) -> dict[str, object]:
         """Read-only preview for the install-from-archive dialog."""
         from core.archive_install import (
+            UNSUPPORTED_FORMAT_MESSAGE,
             archive_format,
             archive_stem,
             build_destination,
@@ -492,11 +493,8 @@ class DownloadsMixin(ApiBase):
         else:
             if not archive_path or not os.path.isfile(archive_path):
                 return {"success": False, "error": "Archive file was not found."}
-            if archive_format(archive_path) not in ("zip", "7z", "rar"):
-                return {
-                    "success": False,
-                    "error": "Unsupported archive format. Choose a .zip, .7z, or .rar file.",
-                }
+            if archive_format(archive_path) not in ("zip", "7z", "rar", "tar"):
+                return {"success": False, "error": UNSUPPORTED_FORMAT_MESSAGE}
             from core.archive_install import ArchiveInstallError, check_volume_set, volume_set
 
             volumes = volume_set(archive_path)

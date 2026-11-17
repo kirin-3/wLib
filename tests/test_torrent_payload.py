@@ -21,6 +21,15 @@ def test_single_archive_with_readme_is_an_archive(tmp_path: Path) -> None:
     assert find_payload(data) == ("archive", str(data / "Game-1.0" / "Game-1.0-pc.zip"))
 
 
+def test_single_tarball_with_readme_is_an_archive(tmp_path: Path) -> None:
+    data = _files(tmp_path, "Game-1.0/Game-1.0-linux.tar.bz2", "Game-1.0/readme.txt")
+    assert find_payload(data) == ("archive", str(data / "Game-1.0" / "Game-1.0-linux.tar.bz2"))
+
+
+def test_game_folder_with_a_bare_bz2_stays_a_folder(tmp_path: Path) -> None:
+    data = _files(tmp_path, "Game-1.0/Game-1.0.bz2")
+    assert find_payload(data) == ("folder", str(data / "Game-1.0"))
+
 def test_multi_part_rar_installs_from_its_first_part(tmp_path: Path) -> None:
     data = _files(tmp_path, "Game.part1.rar", "Game.part2.rar", "Game.part3.rar")
     kind, path = find_payload(data)

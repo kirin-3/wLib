@@ -3178,7 +3178,12 @@ def test_scratch_copy_honours_cancel(tmp_path, monkeypatch):
     monkeypatch.setattr(ai, "copy_tree_parallel", copy_then_cancel)
     with pytest.raises(ai.InstallCancelled):
         ai._extract_tool_via_local_scratch(
-            "7z", str(archive), str(staging), 1, 10, cancel
+            lambda dest: ai.extract_with_tool("7z", str(archive), dest, cancel),
+            str(archive),
+            str(staging),
+            1,
+            10,
+            cancel,
         )
     assert list(staging.iterdir()) == []
 
@@ -3255,3 +3260,404 @@ def test_extract_zip_does_not_decode_unicode_path_name_again(tmp_path):
     staging = tmp_path / "out"
     assert extract_zip(str(archive), str(staging)) == 1
     assert (staging / "Caféine" / "save.txt").read_bytes() == b"data"
+
+
+# --- tar archives -----------------------------------------------------------
+
+import io as _io  # noqa: E402
+import stat  # noqa: E402
+import tarfile as _tarfile  # noqa: E402
+
+_TAR_MODES = {".tar": "w", ".tar.gz": "w:gz", ".tar.bz2": "w:bz2", ".tar.xz": "w:xz"}
+
+
+def _tar_entry(tf, name, data=b"", *, mode=0o644, kind=None, linkname=""):
+    info = _tarfile.TarInfo(name)
+    info.mode = mode
+    if kind is not None:
+        info.type = kind
+        info.linkname = linkname
+        tf.addfile(info)
+        return
+    if name.endswith("/"):
+        info.type = _tarfile.DIRTYPE
+        info.mode = 0o755
+        tf.addfile(info)
+        return
+    info.size = len(data)
+    tf.addfile(info, _io.BytesIO(data))
+
+
+def _write_tar(path, entries, compression=".tar"):
+    """entries: list of (name, data) or (name, data, kwargs)."""
+    with _tarfile.open(str(path), _TAR_MODES[compression]) as tf:
+        for entry in entries:
+            name, data, *rest = entry
+            _tar_entry(tf, name, data, **(rest[0] if rest else {}))
+    return path
+
+
+def test_archive_format_and_stem_for_tar(tmp_path):
+    from core.archive_install import archive_format, archive_stem
+    from core.game_scan import guess_title_and_version
+
+    assert archive_format("Eternum-0.8-linux.tar.bz2") == "tar"
+    assert archive_format("Eternum-0.8-linux.TGZ") == "tar"
+    assert archive_format("Eternum-0.8-linux.txz") == "tar"
+    assert archive_format("Eternum-0.8-linux.bz2") == ""
+    assert archive_format("Eternum-0.8.zip") == "zip"
+    assert archive_format("Eternum-0.8.part1.rar") == "rar"
+    assert archive_format("Eternum-0.8.7z.001") == "7z"
+    assert archive_stem("Eternum-0.8-linux.tar.bz2") == "Eternum-0.8-linux"
+    assert archive_stem("/dl/Eternum-0.8-linux.tar.gz") == "Eternum-0.8-linux"
+    assert archive_stem("Eternum-0.8.7z.001") == "Eternum-0.8"
+    title, version = guess_title_and_version(archive_stem("Eternum-0.8-linux.tar.gz"))
+    assert title == "Eternum"
+    assert ".tar" not in title and ".tar" not in version
+    assert "0.8" in version
+
+
+def test_detect_archive_tool_needs_no_tool_for_tar(monkeypatch):
+    import core.archive_install as ai
+
+    def no_lookup(_name):
+        raise AssertionError("no tool lookup for a tarball")
+
+    monkeypatch.setattr(ai, "host_which", no_lookup)
+    monkeypatch.setattr(ai, "_windows_7zip", lambda: no_lookup("7z"))
+    for name in ("Game.tar", "Game.tar.gz", "Game.tar.bz2", "Game.tar.xz", "Game.tgz"):
+        assert detect_archive_tool(name) == (None, None)
+
+
+@pytest.mark.parametrize("compression", [".tar", ".tar.gz", ".tar.bz2", ".tar.xz"])
+def test_extract_tar_formats(tmp_path, compression):
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(
+        tmp_path / f"Game{compression}",
+        [("Game/", b""), ("Game/game/script.rpy", b"label start:"), ("Game/readme.txt", b"hi")],
+        compression,
+    )
+    staging = tmp_path / "staging"
+    assert extract_tar(str(archive), str(staging)) == 3
+    assert (staging / "Game" / "game" / "script.rpy").read_bytes() == b"label start:"
+    assert (staging / "Game" / "readme.txt").read_bytes() == b"hi"
+
+
+def test_extract_tar_accepts_dot_root_entry(tmp_path):
+    """`tar -C dir .` stores the root as "./" and every name under "./"."""
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(
+        tmp_path / "Game-1.0-linux.tar.bz2",
+        [("./", b""), ("./Game/", b""), ("./Game/Game.sh", b"#!/bin/sh\n")],
+        ".tar.bz2",
+    )
+    staging = tmp_path / "staging"
+    assert extract_tar(str(archive), str(staging)) == 2
+    assert os.listdir(staging) == ["Game"]
+    assert (staging / "Game" / "Game.sh").read_bytes() == b"#!/bin/sh\n"
+
+
+def test_extract_tar_reads_compression_from_content(tmp_path):
+    from core.archive_install import extract_tar
+
+    bz2_data = _write_tar(tmp_path / "real.tar.bz2", [("a.txt", b"bz2")], ".tar.bz2")
+    misnamed = tmp_path / "Game-1.0.tar.gz"
+    bz2_data.rename(misnamed)
+    staging = tmp_path / "staging"
+    _ = extract_tar(str(misnamed), str(staging))
+    assert (staging / "a.txt").read_bytes() == b"bz2"
+
+
+def test_extract_tar_corrupt_archive_reports_failure(tmp_path):
+    from core.archive_install import extract_tar
+
+    archive = tmp_path / "Game.tar.gz"
+    archive.write_bytes(b"\x1f\x8b" + os.urandom(200))
+    with pytest.raises(ArchiveInstallError, match="Extraction failed"):
+        _ = extract_tar(str(archive), str(tmp_path / "staging"))
+
+
+def test_extract_tar_disk_full_reports_free_space(tmp_path, monkeypatch):
+    import errno
+
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(tmp_path / "Game.tar.xz", [("a.txt", b"x")], ".tar.xz")
+
+    def full(*_a, **_k):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(_tarfile.TarFile, "extract", full)
+    with pytest.raises(ArchiveInstallError, match="Not enough free space"):
+        _ = extract_tar(str(archive), str(tmp_path / "staging"))
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [("ok.txt", b"x"), ("../evil.txt", b"x")],
+        [("/tmp/wlib-abs-evil.txt", b"x")],
+        [("Game/data", b"", {"kind": _tarfile.SYMTYPE, "linkname": "/home"})],
+        [("Game/data", b"", {"kind": _tarfile.SYMTYPE, "linkname": "../../outside"})],
+        [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "../outside.txt"})],
+        [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "/etc/passwd"})],
+        [("Game/a.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "Game/missing.txt"})],
+        [("Game/tty", b"", {"kind": _tarfile.CHRTYPE})],
+        [("Game/disk", b"", {"kind": _tarfile.BLKTYPE})],
+        [("Game/pipe", b"", {"kind": _tarfile.FIFOTYPE})],
+        [("Game/a.txt", b"one"), ("Game/a.txt", b"two")],
+    ],
+    ids=[
+        "dotdot", "absolute", "symlink-home", "symlink-up", "hardlink-up",
+        "hardlink-abs", "hardlink-missing", "chardev", "blockdev", "fifo", "duplicate",
+    ],
+)
+def test_extract_tar_rejects_unsafe_entries(tmp_path, entries):
+    from core.archive_install import extract_tar
+
+    work = tmp_path / "work"
+    work.mkdir()
+    archive = _write_tar(work / "Game.tar.gz", entries, ".tar.gz")
+    staging = work / "staging"
+    before = set(os.listdir(tmp_path))
+    with pytest.raises(ArchiveSafetyError):
+        _ = extract_tar(str(archive), str(staging))
+    assert set(os.listdir(tmp_path)) == before
+    assert not (tmp_path / "outside").exists()
+    assert not (work / "evil.txt").exists()
+    assert not os.path.exists("/tmp/wlib-abs-evil.txt")
+
+
+def test_extract_tar_keeps_hard_link_to_earlier_member(tmp_path):
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(
+        tmp_path / "Game.tar",
+        [
+            ("Game/a.txt", b"data"),
+            ("Game/b.txt", b"", {"kind": _tarfile.LNKTYPE, "linkname": "Game/a.txt"}),
+            ("Game/c", b"", {"kind": _tarfile.SYMTYPE, "linkname": "a.txt"}),
+        ],
+    )
+    staging = tmp_path / "staging"
+    _ = extract_tar(str(archive), str(staging))
+    assert (staging / "Game" / "b.txt").read_bytes() == b"data"
+    assert (staging / "Game" / "c").read_bytes() == b"data"
+
+
+def test_extract_tar_rejects_case_collisions_on_windows(tmp_path, monkeypatch):
+    import core.archive_install as ai
+
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: False)
+    archive = _write_tar(
+        tmp_path / "Game.tar", [("Game/Game.exe", b"1"), ("Game/game.exe", b"2")]
+    )
+    # Both names are distinct files on Linux.
+    _ = ai.extract_tar(str(archive), str(tmp_path / "linux"))
+    monkeypatch.setattr(ai, "_is_windows", lambda platform=None: True)
+    with pytest.raises(ArchiveSafetyError):
+        _ = ai.extract_tar(str(archive), str(tmp_path / "windows"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix modes")
+def test_extract_tar_keeps_modes_and_clears_unsafe_bits(tmp_path):
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(
+        tmp_path / "Game.tar.bz2",
+        [
+            ("Game/Game.sh", b"#!/bin/sh\n", {"mode": 0o755}),
+            ("Game/suid", b"x", {"mode": 0o4755}),
+            ("Game/shared.txt", b"x", {"mode": 0o666}),
+        ],
+        ".tar.bz2",
+    )
+    staging = tmp_path / "staging"
+    _ = extract_tar(str(archive), str(staging))
+    assert stat.S_IMODE(os.stat(staging / "Game" / "Game.sh").st_mode) == 0o755
+    assert stat.S_IMODE(os.stat(staging / "Game" / "suid").st_mode) == 0o755
+    assert stat.S_IMODE(os.stat(staging / "Game" / "shared.txt").st_mode) == 0o644
+
+
+def test_extract_tar_reports_progress_up_to_archive_size(tmp_path):
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(
+        tmp_path / "Game.tar.gz",
+        [(f"Game/f{i}.bin", os.urandom(200_000)) for i in range(10)],
+        ".tar.gz",
+    )
+    size = os.path.getsize(archive)
+    reports: list[tuple[int, int]] = []
+    _ = extract_tar(
+        str(archive), str(tmp_path / "staging"), progress=lambda d, t: reports.append((d, t))
+    )
+    assert reports
+    done = [d for d, _t in reports]
+    assert done == sorted(done)
+    assert all(t == size for _d, t in reports)
+    assert reports[-1] == (size, size)
+
+
+def test_extract_tar_cancel_stops_inside_a_large_member(tmp_path):
+    from core.archive_install import InstallCancelled, extract_tar
+
+    big = 8 * 1024 * 1024
+    archive = _write_tar(tmp_path / "Game.tar", [("Game/archive.rpa", os.urandom(big))])
+    cancel = threading.Event()
+    staging = tmp_path / "staging"
+    with pytest.raises(InstallCancelled):
+        _ = extract_tar(
+            str(archive), str(staging), progress=lambda _d, _t: cancel.set(), cancel=cancel
+        )
+    partial = staging / "Game" / "archive.rpa"
+    assert not partial.exists() or partial.stat().st_size < big
+
+
+def test_extract_tar_reports_missing_codec(tmp_path, monkeypatch):
+    from core.archive_install import extract_tar
+
+    archive = _write_tar(tmp_path / "Game.tar.bz2", [("a.txt", b"x")], ".tar.bz2")
+    monkeypatch.setitem(sys.modules, "bz2", None)
+    with pytest.raises(ArchiveInstallError, match=r"cannot read \.tar\.bz2 archives"):
+        _ = extract_tar(str(archive), str(tmp_path / "staging"))
+
+
+def test_install_tar_reports_missing_codec_before_staging(tmp_path, monkeypatch):
+    _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    archive = _write_tar(tmp_path / "Game-1.0.tar.xz", [("a.txt", b"x")], ".tar.xz")
+    monkeypatch.setitem(sys.modules, "lzma", None)
+    lib = tmp_path / "lib"
+    with pytest.raises(ArchiveInstallError, match=r"cannot read \.tar\.xz archives"):
+        _ = install_archive(str(archive), library_folder=str(lib), pattern="{title}", title="Game")
+    assert not lib.exists() or not any(lib.iterdir())
+
+
+def test_uncompressed_size_for_tar(tmp_path):
+    from core.archive_install import uncompressed_size
+
+    plain = _write_tar(tmp_path / "Game.tar", [("a.bin", b"x" * 1000), ("b.bin", b"y" * 500)])
+    assert uncompressed_size(str(plain)) == 1500
+    packed = _write_tar(tmp_path / "Game.tar.gz", [("a.bin", b"x" * 1000)], ".tar.gz")
+    assert uncompressed_size(str(packed)) is None
+
+
+def test_compressed_tar_needs_its_own_size_free(tmp_path, monkeypatch):
+    import types
+
+    import core.archive_install as ai
+
+    _isolated_db(tmp_path, monkeypatch)
+    archive = _write_tar(
+        tmp_path / "Game-1.0.tar.bz2", [("Game/Game.sh", os.urandom(3000))], ".tar.bz2"
+    )
+    size = os.path.getsize(archive)
+    monkeypatch.setattr(
+        ai.shutil,
+        "disk_usage",
+        lambda _p: types.SimpleNamespace(total=size * 10, used=0, free=size * 2 // 3),
+    )
+    called = []
+    monkeypatch.setattr(ai, "extract_tar", lambda *a, **k: called.append(a))
+    lib = tmp_path / "lib"
+    with pytest.raises(ArchiveInstallError, match="Not enough free space"):
+        _ = ai.install_archive(str(archive), library_folder=str(lib), pattern="{title}", title="Game")
+    assert called == []
+    assert not any(name.startswith(ai.STAGING_PREFIX) for name in os.listdir(lib))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix modes")
+def test_install_new_game_from_tar_bz2(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    archive = _write_tar(
+        tmp_path / "Eternum-0.8-linux.tar.bz2",
+        [
+            ("Eternum-0.8-linux/", b""),
+            ("Eternum-0.8-linux/Eternum.sh", b"#!/bin/sh\n", {"mode": 0o755}),
+            ("Eternum-0.8-linux/game/script.rpy", b"label start:"),
+        ],
+        ".tar.bz2",
+    )
+    lib = tmp_path / "lib"
+    progress: list[tuple[int, int]] = []
+    result = install_archive(
+        str(archive),
+        library_folder=str(lib),
+        pattern="{title}/{version}",
+        title="Eternum",
+        version="0.8",
+        bytes_cb=lambda d, t: progress.append((d, t)),
+    )
+    exe = lib / "Eternum" / "0.8" / "Eternum.sh"
+    assert result["exe_path"] == str(exe)
+    assert os.access(exe, os.X_OK)
+    assert (lib / "Eternum" / "0.8" / "game" / "script.rpy").is_file()
+    assert progress and progress[-1][1] == os.path.getsize(archive)
+    assert db.get_all_games()[0]["version"] == "0.8"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix modes")
+def test_update_from_tar_gz_carries_renpy_saves(tmp_path, monkeypatch):
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import install_archive
+
+    lib = tmp_path / "lib"
+
+    def install(version, game_id=None):
+        archive = _write_tar(
+            tmp_path / f"Game-{version}-linux.tar.gz",
+            [
+                (f"Game-{version}-linux/Game.sh", b"#!/bin/sh\n", {"mode": 0o755}),
+                (f"Game-{version}-linux/game/script.rpy", version.encode()),
+            ],
+            ".tar.gz",
+        )
+        return install_archive(
+            str(archive),
+            library_folder=str(lib),
+            pattern="{title}/{version}",
+            title="Game",
+            version=version,
+            game_id=game_id,
+        )
+
+    first = install("1.0")
+    old = lib / "Game" / "1.0"
+    (old / "game" / "saves").mkdir()
+    (old / "game" / "saves" / "1-1-LT1.save").write_text("slot")
+    result = install("2.0", int(str(first["game_id"])))
+    new = lib / "Game" / "2.0"
+    assert result["exe_path"] == str(new / "Game.sh")
+    assert (new / "game" / "saves" / "1-1-LT1.save").read_text() == "slot"
+    assert (new / "game" / "script.rpy").read_bytes() == b"2.0"
+    assert db.get_all_games()[0]["version"] == "2.0"
+
+
+def test_find_download_offers_includes_tarballs(tmp_path, monkeypatch):
+    import time as _time
+
+    db = _isolated_db(tmp_path, monkeypatch)
+    from core.archive_install import find_download_offers
+
+    downloads = tmp_path / "dl"
+    downloads.mkdir()
+    db.update_setting("downloads_folder", str(downloads))
+    db.update_setting("download_detection_enabled", "true")
+    game_id = db.add_game("Eternum", "/games/Eternum/0.7/Eternum.sh", version="0.7")
+    assert game_id is not None
+    db.update_game(int(game_id), {"latest_version": "0.8"})
+    old = _time.time() - 60
+    for name in ("Eternum-0.8-linux.tar.bz2", "Eternum-0.8-linux.tar.bz2.crdownload", "Eternum-0.8.bz2"):
+        path = downloads / name
+        path.write_bytes(b"x" * 16)
+        os.utime(path, (old, old))
+    offers = find_download_offers()
+    assert [o["archive_path"] for o in offers] == [str(downloads / "Eternum-0.8-linux.tar.bz2")]
+    assert offers[0]["archive_version"] and ".tar" not in str(offers[0]["archive_version"])
+    assert offers[0]["guessed_title"] == "Eternum"

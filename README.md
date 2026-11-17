@@ -60,7 +60,7 @@ wLib began as an open-source, Linux-first alternative to XLibrary, back when XLi
 - **Download update** reads the thread's links through the extension, picks a suitable build, and downloads it from MEGA, Pixeldrain, Gofile, Buzzheavier, Mediafire and other hosts. Sign in to your own Pixeldrain or MEGA account to use it for downloads.
 - **RPDL torrents** show up next to the thread's links, matched to the game's title and version. Downloads resume after a restart, and you choose whether to keep seeding, up to a ratio or time limit. You can also save the `.torrent`, copy the magnet link, or send it to your own torrent client's watch folder.
 - **Downloads page** lists every download in one queue: reorder it, start one now, pause and resume, and see why one failed with the next step to take. Set how many run at once and a speed limit for file hosts and torrents together, and let downloads wait while you play or run on battery.
-- Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
+- Install a new game or an update from a `.zip`, `.7z` or `.rar`, including multi-part archives, or from a tar archive (`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`), the format of many Ren'Py Linux builds. wLib moves your saves over and removes the old version, and it also spots matching archives in your Downloads folder. Installs use every CPU core and are fast on NFS and SMB network drives too.
 - Skip a version you don't want, and undo the skip any time.
 - Desktop notifications for new releases and completed wishlist games (Linux).
 
@@ -292,6 +292,7 @@ To install it, add the flake as an input and put `inputs.wlib.packages.x86_64-li
 | Use the runtime installers on Linux | Winetricks |
 | Play `.jar` games | Java |
 | Install from `.7z` or `.rar` | 7-Zip on Windows; `7z`, `bsdtar` or `unrar` on Linux (included in Flatpak and Nix) |
+| Install from `.zip` or a tar archive (`.tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`) | Nothing: wLib extracts these itself |
 | Run games in a sandbox | bubblewrap on Linux, Sandboxie-Plus on Windows (wLib can install either from **Settings > Sandbox**) |
 | Use GameMode, MangoHud or gamescope | `gamemode`, `mangohud`, `gamescope` |
 | Convert HTML game videos for the built-in player | `ffmpeg` |
