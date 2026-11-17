@@ -13,7 +13,14 @@ from catalog_server.sources.f95_threads import (
     F95ThreadsSource,
     first_post_html,
     parse_first_post,
+    parse_languages,
 )
+
+
+def _ids(details: dict[str, object]) -> dict[str, list[str]]:
+    ids = details["external_ids"]
+    assert isinstance(ids, dict)
+    return {kind: [entry["id"] for entry in entries] for kind, entries in ids.items()}
 
 
 def _parse(name: str) -> dict[str, object]:
@@ -27,13 +34,19 @@ def test_overview_language_and_developer_ids():
     # The overview ends at the next section (here "Trailer").
     assert overview.endswith("alcohol, drugs and sex.")
     assert details["language"] == "English"
+    assert details["languages"] == ["English"]
     assert details["original_title"] is None
     assert details["aliases"] == []
-    # GOG, X and Bluesky links are not among the kept IDs.
+    # GOG, X and Bluesky links are not among the kept IDs; each ID keeps its link.
     assert details["external_ids"] == {
-        "patreon": ["drpinkcake"],
-        "steam": ["1126320"],
-        "discord": ["KyCc5E4"],
+        "patreon": [{"id": "drpinkcake", "url": "https://www.patreon.com/DrPinkCake/overview"}],
+        "steam": [
+            {
+                "id": "1126320",
+                "url": "https://store.steampowered.com/app/1126320/Being_a_DIK__Season_1/",
+            }
+        ],
+        "discord": [{"id": "KyCc5E4", "url": "https://discordapp.com/invite/KyCc5E4"}],
     }
 
 
@@ -42,6 +55,7 @@ def test_original_name_and_aliases():
     assert details["original_title"] == "欲望牢獄ギャルギャルシティ"
     assert details["aliases"] == ["Gyaru Gyaru City"]
     assert details["language"] == "English (Hoshi2Star MTL)"
+    assert details["languages"] == ["English"]
     # Only the first post counts; the second one has its own labels.
     assert details["language"] != "German"
 
@@ -67,7 +81,7 @@ def test_translator_links_are_not_developer_ids():
     details = parse_first_post(post)
     assert details["original_title"] == "原題"
     assert details["overview"] == "Text."
-    assert details["external_ids"] == {"steam": ["42"]}
+    assert _ids(details) == {"steam": ["42"]}
 
 
 @pytest.mark.parametrize(
@@ -89,7 +103,7 @@ def test_translator_links_are_not_developer_ids():
 )
 def test_external_id_forms(url, kind, value):
     post = f'<div class="bbWrapper"><b>Developer</b>: Dev <a href="{url}">link</a><br>'
-    assert parse_first_post(post)["external_ids"] == {kind: [value]}
+    assert parse_first_post(post)["external_ids"] == {kind: [{"id": value, "url": url}]}
 
 
 @pytest.mark.parametrize(
@@ -98,6 +112,33 @@ def test_external_id_forms(url, kind, value):
 def test_links_that_are_not_ids_are_skipped(url):
     post = f'<div class="bbWrapper"><b>Developer</b>: Dev <a href="{url}">link</a><br>'
     assert parse_first_post(post)["external_ids"] == {}
+
+
+@pytest.mark.parametrize(
+    ("text", "names"),
+    [
+        ("English", ["English"]),
+        ("English (Sonnet 5.5 & Opus 5.5)", ["English"]),
+        ("English, Japanese", ["English", "Japanese"]),
+        ("Japanese (Original) / English (MTL)", ["Japanese", "English"]),
+        ("english + chinese", ["English", "Chinese"]),
+        ("English MTL", ["English"]),
+        ("Spanish and Portuguese", ["Spanish", "Portuguese"]),
+        ("Other", []),
+    ],
+)
+def test_language_names_from_the_free_text(text, names):
+    assert parse_languages(text) == names
+
+
+def test_language_keeps_the_free_text_with_link_names():
+    post = (
+        '<div class="bbWrapper"><b>Language</b>: English (<a href="https://x.test/a">Sonnet 5.5</a>'
+        + ' &amp; <a href="https://x.test/b">Opus 5.5</a>), Japanese<br>'
+    )
+    details = parse_first_post(post)
+    assert details["language"] == "English (Sonnet 5.5 & Opus 5.5), Japanese"
+    assert details["languages"] == ["English", "Japanese"]
 
 
 def test_a_page_without_posts_is_refused():
@@ -134,7 +175,7 @@ def _thread_id(url: str) -> int:
 def _details(ctx) -> dict[int, tuple[object, ...]]:
     found = rows(
         ctx.catalog,
-        "SELECT thread_id, thread_ts, status, original_title, aliases, external_ids "
+        "SELECT thread_id, thread_ts, status, original_title, aliases, languages "
         + "FROM f95_thread_details",
     )
     return {row[0]: row[1:] for row in found}
@@ -244,5 +285,33 @@ def test_cli_reads_thread_pages_through_the_logged_in_browser(tmp_path, monkeypa
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
     try:
         assert rows(catalog, "SELECT thread_id, status FROM f95_thread_details") == [(7, "ok")]
+    finally:
+        catalog.close()
+
+
+def test_details_from_before_the_languages_column_are_read_again(tmp_path):
+    import sqlite3
+
+    from catalog_server.store import CatalogStore
+
+    path = tmp_path / "catalog.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE f95_thread_details (thread_id INTEGER PRIMARY KEY, thread_ts INTEGER, "
+        + "fetched_at TEXT NOT NULL, status TEXT NOT NULL, overview TEXT, original_title TEXT, "
+        + "aliases TEXT NOT NULL DEFAULT '[]', language TEXT, "
+        + "external_ids TEXT NOT NULL DEFAULT '{}')"
+    )
+    conn.execute(
+        "INSERT INTO f95_thread_details (thread_id, thread_ts, fetched_at, status, external_ids) "
+        + "VALUES (1, 10, 'x', 'ok', '{\"patreon\": [\"old\"]}')"
+    )
+    conn.commit()
+    conn.close()
+    catalog = CatalogStore(str(path))
+    try:
+        assert rows(catalog, "SELECT COUNT(*) FROM f95_thread_details") == [(0,)]
+        catalog.upsert_f95_details(1, 10, "now", {"status": "ok", "languages": ["English"]})
+        assert rows(catalog, "SELECT languages FROM f95_thread_details") == [('["English"]',)]
     finally:
         catalog.close()

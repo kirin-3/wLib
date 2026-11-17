@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     original_title TEXT,
     aliases TEXT NOT NULL DEFAULT '[]',
     language TEXT,
+    languages TEXT NOT NULL DEFAULT '[]',
     external_ids TEXT NOT NULL DEFAULT '{{}}'
 );
 CREATE TABLE IF NOT EXISTS meta (
@@ -205,6 +206,16 @@ class CatalogStore:
         if "screens" not in columns:
             with self.conn:
                 _ = self.conn.execute("ALTER TABLE f95_threads ADD COLUMN screens TEXT")
+        details = {
+            str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(f95_thread_details)"))
+        }
+        if "languages" not in details:
+            with self.conn:
+                _ = self.conn.execute(
+                    "ALTER TABLE f95_thread_details ADD COLUMN languages TEXT NOT NULL DEFAULT '[]'"
+                )
+                # Rows from before the column have the older external_ids form; read them again.
+                _ = self.conn.execute("DELETE FROM f95_thread_details")
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:
@@ -333,8 +344,8 @@ class CatalogStore:
         with self.conn:
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
-                + "status, overview, original_title, aliases, language, external_ids) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + "status, overview, original_title, aliases, language, languages, external_ids) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     thread_ts,
@@ -344,6 +355,7 @@ class CatalogStore:
                     details.get("original_title"),
                     json.dumps(details.get("aliases") or [], ensure_ascii=False),
                     details.get("language"),
+                    json.dumps(details.get("languages") or [], ensure_ascii=False),
                     json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
                 ),
             )

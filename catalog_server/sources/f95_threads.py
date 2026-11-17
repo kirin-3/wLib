@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Details from the first post of F95 threads: overview, original title,
-aliases, language and the developer's external IDs.
+aliases, language (as written and as a list of names) and the developer's
+external IDs with their links.
 
 Threads whose feed `ts` is newer than their stored details are read first,
 newest first. Spare budget then fills in threads that were never read, most
@@ -48,6 +49,9 @@ _ALIAS_LABELS = frozenset(
 _LANGUAGE_LABELS = frozenset({"language", "languages"})
 # Lines whose links belong to the game or its developer, not to a translator.
 _ID_LINK_LABELS = frozenset({"developer", "developers", "publisher", "store", "stores"})
+_LANGUAGE_SPLIT_RE = re.compile(r",|;|/|&|\+|\band\b|\|", re.I)
+_LANGUAGE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z -]{1,24}")
+_NOT_LANGUAGES = frozenset({"MTL", "AI", "LLM", "TL", "OTHER", "OTHERS", "NONE", "UNKNOWN"})
 _ALIAS_SPLIT_RE = re.compile(r"\s*(?:,|;|\||\s/\s)\s*")
 
 _SKIP_TAGS = frozenset({"noscript", "script", "style", "button", "iframe", "template"})
@@ -167,21 +171,44 @@ def _label(line: str) -> tuple[str, str] | None:
     return match.group(1).strip().lower(), match.group(2).strip()
 
 
-def _external_ids(urls: list[str]) -> dict[str, list[str]]:
-    found: dict[str, list[str]] = {}
-    for url in urls:
+def _external_ids(urls: list[str]) -> dict[str, list[dict[str, str]]]:
+    """`{kind: [{"id": ..., "url": ...}]}`; the URL is the link as the post has it."""
+    found: dict[str, list[dict[str, str]]] = {}
+    for raw in urls:
+        url = raw.strip()
         for kind, pattern, pick in _ID_PATTERNS:
-            match = pattern.match(url.strip())
+            match = pattern.match(url)
             if match is None:
                 continue
             value = pick(match)
             if value is None:
                 # Not an ID form of this pattern (e.g. patreon.com/user?u=); try the next.
                 continue
-            if value not in found.setdefault(kind, []):
-                found[kind].append(value)
+            entries = found.setdefault(kind, [])
+            if all(entry["id"] != value for entry in entries):
+                entries.append({"id": value, "url": url})
             break
-    return {kind: values for kind, values in found.items() if values}
+    return found
+
+
+def parse_languages(text: str | None) -> list[str]:
+    """Language names from the free text: `English (Sonnet 5.5 & Opus 5.5), Japanese`
+    gives `["English", "Japanese"]`. Notes in brackets are not languages."""
+    if not text:
+        return []
+    plain = re.sub(r"\([^)]*\)|\[[^\]]*\]", ",", text)
+    names: list[str] = []
+    for part in _LANGUAGE_SPLIT_RE.split(plain):
+        # "English MTL": a note word after the name is not part of it.
+        words = [word for word in part.split() if word.upper() not in _NOT_LANGUAGES]
+        name = " ".join(words).strip(" .-:")
+        # Words only: version numbers and long phrases are not names.
+        if not _LANGUAGE_NAME_RE.fullmatch(name):
+            continue
+        name = " ".join(word[:1].upper() + word[1:].lower() for word in name.split())
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _tidy(lines: list[str]) -> str:
@@ -236,6 +263,7 @@ def parse_first_post(post_html: str) -> dict[str, object]:
         "original_title": original_title,
         "aliases": aliases,
         "language": language,
+        "languages": parse_languages(language),
         "external_ids": _external_ids(id_urls),
     }
 
