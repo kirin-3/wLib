@@ -1,2 +1,4 @@
 # Server-only dependencies for the catalog builder. The app never installs these.
 boto3>=1.34
+# The headless browser for WLIB_CATALOG_BROWSER_SITES (patched Chromium).
+scrapling[fetchers]>=0.5.1,<0.6

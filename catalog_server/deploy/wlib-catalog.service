@@ -1,6 +1,5 @@
 [Unit]
 Description=Build and publish the wLib game catalog
-Documentation=https://github.com/kirin-3/wLib/blob/master/docs/catalog.md
 Wants=network-online.target
 After=network-online.target
 
@@ -11,12 +10,16 @@ Group=wlibcat
 WorkingDirectory=/opt/wlib-catalog
 Environment=WLIB_CATALOG_DATA_DIR=/var/lib/wlib-catalog
 Environment=PYTHONUNBUFFERED=1
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/wlib-catalog/.browsers
 EnvironmentFile=/etc/wlib-catalog/r2.env
-# Optional settings such as WLIB_CATALOG_DLSITE_PROXY; see docs/catalog.md.
+# Optional settings such as WLIB_CATALOG_DLSITE_PROXY and WLIB_CATALOG_BROWSER_SITES.
 EnvironmentFile=-/etc/wlib-catalog/catalog.env
+# Optional F95 login: WLIB_CATALOG_F95_COOKIE (root 0600).
+EnvironmentFile=-/etc/wlib-catalog/f95.env
 ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
 TimeoutStartSec=3h
-MemoryMax=1G
+# Up to two headless Chromium browsers (F95 direct, DLsite through the proxy).
+MemoryMax=2G
 Nice=10
 
 ProtectSystem=strict

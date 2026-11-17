@@ -71,6 +71,41 @@ def site_proxies_from_env() -> dict[str, str]:
     return proxies
 
 
+BROWSER_SITES_ENV = "WLIB_CATALOG_BROWSER_SITES"
+F95_COOKIE_ENV = "WLIB_CATALOG_F95_COOKIE"
+
+
+def browser_sites_from_env() -> frozenset[str]:
+    """Sites fetched through the headless browser, e.g. WLIB_CATALOG_BROWSER_SITES=f95,dlsite."""
+    value = os.environ.get(BROWSER_SITES_ENV, "")
+    sites = frozenset(part.strip() for part in value.split(",") if part.strip())
+    unknown = sorted(sites - SITE_LIMITS.keys())
+    if unknown:
+        raise ValueError(
+            f"{BROWSER_SITES_ENV} has unknown site(s): {', '.join(unknown)}; "
+            + f"choose from {', '.join(SITE_LIMITS)}"
+        )
+    if "vndb" in sites:
+        # VNDB is a JSON API that needs POST requests; the browser only sends GET.
+        raise ValueError(f"{BROWSER_SITES_ENV} cannot include vndb")
+    return sites
+
+
+def f95_cookie_from_env() -> str | None:
+    """The value of F95's `xf_user` login cookie, from /etc/wlib-catalog/f95.env."""
+    value = os.environ.get(F95_COOKIE_ENV, "").strip()
+    if not value:
+        return None
+    value = value.removeprefix("xf_user=")
+    # The browser shows the cookie as `<user id>%2C<key>`; a copy that decoded
+    # the comma still works.
+    value = value.replace(",", "%2C")
+    if any(char in value for char in ' ;"\\') or not value.isprintable():
+        # The message never shows the value: it is a login secret.
+        raise ValueError(f"{F95_COOKIE_ENV} must be only the value of the xf_user cookie")
+    return value
+
+
 def data_dir() -> str:
     return os.environ.get("WLIB_CATALOG_DATA_DIR") or DEFAULT_DATA_DIR
 

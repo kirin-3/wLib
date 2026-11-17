@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Command line: `python -m catalog_server run|status`."""
+"""Command line: `python -m catalog_server run|status|check-f95-login`."""
 
 import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable, Generator, Sequence
@@ -13,8 +14,16 @@ from typing import IO
 
 from core.catalog_format import SOURCES
 
-from .config import data_dir, r2_config_from_env, site_proxies_from_env
-from .net import Pacer, Transport, urllib_transport
+from .browser import BrowserTransport, f95_login_cookies
+from .config import (
+    BROWSER_SITES_ENV,
+    browser_sites_from_env,
+    data_dir,
+    f95_cookie_from_env,
+    r2_config_from_env,
+    site_proxies_from_env,
+)
+from .net import BudgetExhausted, Pacer, RateLimited, Transport, urllib_transport
 from .publish import R2Storage, Storage
 from .runner import run
 from .sources import get_sources
@@ -88,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish even when the catalog is empty or a source lost over half its rows",
     )
     _ = commands.add_parser("status", help="show recent runs and source cursors")
+    _ = commands.add_parser(
+        "check-f95-login", help="open F95 in the browser with the login cookie and report the account"
+    )
     return parser
 
 
@@ -140,10 +152,79 @@ def _status(folder: str) -> int:
     return 0
 
 
+F95_HOME_URL = "https://f95zone.to/"
+_LOGGED_IN_RE = re.compile(r'<html[^>]*\sdata-logged-in="true"')
+_ACCOUNT_NAME_RE = re.compile(
+    r'<a href="/account/"[^>]*>.*?<span class="p-navgroup-linkText">([^<]+)</span>', re.S
+)
+
+
+class NetworkSettings:
+    """Proxies, browser sites and the F95 login, read from the environment."""
+
+    def __init__(self) -> None:
+        self.proxies: dict[str, str] = site_proxies_from_env()
+        self.browser_sites: frozenset[str] = browser_sites_from_env()
+        self.f95_cookie: str | None = f95_cookie_from_env()
+        if self.f95_cookie is not None and "f95" not in self.browser_sites:
+            # Only the browser keeps the cookie to f95zone.to.
+            raise ValueError(f"the F95 login cookie needs f95 in {BROWSER_SITES_ENV}")
+
+    def browser(self, given: BrowserTransport | None) -> BrowserTransport | None:
+        if not self.browser_sites:
+            return None
+        if given is not None:
+            return given
+        cookies = f95_login_cookies(self.f95_cookie) if self.f95_cookie else []
+        return BrowserTransport(cookies=cookies)
+
+
+def _check_f95_login(
+    folder: str,
+    settings: NetworkSettings,
+    transport: Transport,
+    browser: BrowserTransport | None,
+    sleep: Callable[[float], None],
+) -> int:
+    if settings.f95_cookie is None:
+        log.error("no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env")
+        return 2
+    with _run_lock(folder) as acquired:
+        if not acquired:
+            log.error("a catalog run is in progress; try again when it ends")
+            return 1
+        _, state = open_stores(folder)
+        browser = settings.browser(browser)
+        try:
+            pacer = Pacer(
+                state,
+                transport,
+                sleep=sleep,
+                proxies=settings.proxies,
+                transports={"f95": browser} if browser is not None else None,
+            )
+            try:
+                html = pacer.request("f95", F95_HOME_URL).text()
+            except (BudgetExhausted, RateLimited) as exc:
+                log.error("%s; try again later", exc)
+                return 1
+        finally:
+            if browser is not None:
+                browser.close()
+            state.close()
+    if not _LOGGED_IN_RE.search(html):
+        log.error("F95 does not see a login; the xf_user cookie is wrong or expired")
+        return 1
+    name = _ACCOUNT_NAME_RE.search(html)
+    print(f"Logged in to F95 as {name.group(1).strip() if name else '(unknown name)'}")
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     transport: Transport = urllib_transport,
+    browser: BrowserTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
     storage_factory: Callable[[], Storage | None] | None = None,
 ) -> int:
@@ -151,6 +232,14 @@ def main(
     folder = args.data_dir or data_dir()
     if args.command == "status":
         return _status(folder)
+
+    try:
+        settings = NetworkSettings()
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+    if args.command == "check-f95-login":
+        return _check_f95_login(folder, settings, transport, browser, sleep)
 
     storage: Storage | None = None
     if not args.no_publish:
@@ -166,13 +255,12 @@ def main(
                 return 2
             storage = R2Storage(config)
 
-    try:
-        proxies = site_proxies_from_env()
-    except ValueError as exc:
-        log.error("%s", exc)
-        return 2
-    for site, proxy in sorted(proxies.items()):
+    for site, proxy in sorted(settings.proxies.items()):
         log.info("%s requests go through the proxy %s", site, proxy)
+    if settings.browser_sites:
+        log.info("%s requests go through the browser", ", ".join(sorted(settings.browser_sites)))
+    if settings.f95_cookie is not None:
+        log.info("f95 requests send the login cookie")
 
     selected = list(args.sources)
     until = list(args.until_swept)
@@ -184,9 +272,17 @@ def main(
             log.info("another catalog run is in progress; skipping this one")
             return 0
         catalog, state = open_stores(folder)
+        browser = settings.browser(browser)
         try:
             pacer = Pacer(
-                state, transport, sleep=sleep, wait_for_budget=until, proxies=proxies
+                state,
+                transport,
+                sleep=sleep,
+                wait_for_budget=until,
+                proxies=settings.proxies,
+                transports=dict.fromkeys(settings.browser_sites, browser)
+                if browser is not None
+                else None,
             )
             result = run(
                 catalog,
@@ -199,6 +295,8 @@ def main(
                 force_publish=args.force_publish,
             )
         finally:
+            if browser is not None:
+                browser.close()
             catalog.close()
             state.close()
     failed = [name for name, outcome in result.sources.items() if outcome.status == "error"]

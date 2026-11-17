@@ -118,6 +118,7 @@ class Pacer:
         wait_for_budget: Collection[str] = (),
         limits: Mapping[str, SiteLimits] = SITE_LIMITS,
         proxies: Mapping[str, str] | None = None,
+        transports: Mapping[str, Transport] | None = None,
     ) -> None:
         self._state: StateStore = state
         self._transport: Transport = transport
@@ -128,6 +129,8 @@ class Pacer:
         self._limits: Mapping[str, SiteLimits] = limits
         # Per-site proxy URL, e.g. DLsite through a host outside its blocked regions.
         self._proxies: Mapping[str, str] = dict(proxies or {})
+        # Per-site transport in place of `transport`, e.g. the headless browser.
+        self._transports: Mapping[str, Transport] = dict(transports or {})
         self.paused: dict[str, str] = {}
         self.sent: dict[str, int] = {}
 
@@ -179,7 +182,8 @@ class Pacer:
             self._wait_turn(site)
             status: int | None = None
             try:
-                response = self._transport(
+                transport = self._transports.get(site, self._transport)
+                response = transport(
                     Request(method, url, headers, body, self._proxies.get(site))
                 )
                 status = response.status
