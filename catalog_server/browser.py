@@ -2,8 +2,10 @@
 """GET requests through Scrapling's StealthySession (a patched, headless Chromium).
 
 Scrapling is a server-only dependency, imported only when the first request
-needs a browser. One browser runs per proxy (None = direct) and stays open for
-the whole run; `close()` shuts them all.
+needs a browser. Playwright's sync API allows one live browser per thread, so
+one browser runs at a time: it stays open while requests use the same proxy
+(None = direct) and restarts when the proxy changes. Sources run one after
+another, so that happens about once per run. `close()` shuts it.
 """
 
 import importlib
@@ -66,11 +68,12 @@ class BrowserTransport:
     ) -> None:
         self._cookies: list[dict[str, object]] = [dict(cookie) for cookie in cookies]
         self._session_factory: SessionFactory = session_factory
-        self._sessions: dict[str | None, BrowserSession] = {}
+        self._live: tuple[str | None, BrowserSession] | None = None
 
     def _session(self, proxy: str | None) -> BrowserSession:
-        session = self._sessions.get(proxy)
-        if session is None:
+        if self._live is not None and self._live[0] != proxy:
+            self.close()
+        if self._live is None:
             options: dict[str, object] = {
                 "headless": True,
                 "disable_resources": True,
@@ -85,13 +88,14 @@ class BrowserTransport:
                 options["block_webrtc"] = True
             session = self._session_factory(**options)
             session.start()
-            self._sessions[proxy] = session
-        return session
+            self._live = (proxy, session)
+        return self._live[1]
 
-    def _drop(self, proxy: str | None) -> None:
-        session = self._sessions.pop(proxy, None)
-        if session is None:
+    def close(self) -> None:
+        if self._live is None:
             return
+        _, session = self._live
+        self._live = None
         try:
             session.close()
         except Exception:  # noqa: BLE001 - a dead browser may fail to close
@@ -104,13 +108,9 @@ class BrowserTransport:
             page = self._session(request.proxy).fetch(request.url)
         except Exception as exc:  # noqa: BLE001 - every browser failure is retried
             # A new browser starts for the next attempt.
-            self._drop(request.proxy)
+            self.close()
             raise ConnectionError(f"{request.url}: {exc}") from exc
         if page.status == 0:
-            self._drop(request.proxy)
+            self.close()
             raise ConnectionError(f"{request.url}: the browser got no response")
         return Response(page.status, bytes(page.body), dict(page.headers))
-
-    def close(self) -> None:
-        for proxy in list(self._sessions):
-            self._drop(proxy)

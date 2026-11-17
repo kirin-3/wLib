@@ -58,7 +58,7 @@ class FakeBrowser:
         return session
 
 
-def test_one_browser_per_proxy_stays_open_until_close():
+def test_the_browser_stays_open_and_restarts_when_the_proxy_changes():
     browser = FakeBrowser(lambda url: FakePage(200, b'{"ok": true}', {"Content-Type": "application/json"}))
     transport = BrowserTransport(session_factory=browser)
     first = transport(Request("GET", "https://f95zone.to/a"))
@@ -73,9 +73,10 @@ def test_one_browser_per_proxy_stays_open_until_close():
     assert proxied.options["block_webrtc"] is True
     # The Pacer owns retries, so the browser must not retry on its own.
     assert direct.options["retries"] == 1
-    assert not direct.closed
+    # Playwright's sync API allows only one live browser per thread.
+    assert direct.closed and not proxied.closed
     transport.close()
-    assert direct.closed and proxied.closed
+    assert proxied.closed
 
 
 def test_a_browser_failure_is_retryable_and_starts_a_new_browser():

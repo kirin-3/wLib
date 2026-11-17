@@ -18,7 +18,7 @@ EnvironmentFile=-/etc/wlib-catalog/catalog.env
 EnvironmentFile=-/etc/wlib-catalog/f95.env
 ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
 TimeoutStartSec=3h
-# Up to two headless Chromium browsers (F95 direct, DLsite through the proxy).
+# Headroom for the headless Chromium of WLIB_CATALOG_BROWSER_SITES.
 MemoryMax=2G
 Nice=10
 
