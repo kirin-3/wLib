@@ -53,7 +53,15 @@ async function fetchWLibJson(url, options, timeoutMs = WLIB_REQUEST_TIMEOUT_MS) 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await fetch(url, { ...(options || {}), headers, signal: controller.signal });
+        let response;
+        try {
+            response = await fetch(url, { ...(options || {}), headers, signal: controller.signal });
+        } catch (error) {
+            // Only fetch's own TypeError means "no connection"; a TypeError
+            // from our code later in the chain is a bug and must stay visible.
+            if (error?.name === "TypeError") error.wlibOffline = true;
+            throw error;
+        }
         const data = await response.json();
         return { response, data };
     } finally {
@@ -61,11 +69,46 @@ async function fetchWLibJson(url, options, timeoutMs = WLIB_REQUEST_TIMEOUT_MS) 
     }
 }
 
+class WLibServerError extends Error {
+    constructor(status, data) {
+        const serverText = typeof data?.error === "string" ? data.error.trim() : "";
+        super(serverText ? `HTTP ${status}: ${serverText}` : `HTTP ${status}`);
+        this.name = "WLibServerError";
+        this.status = status;
+        this.serverText = serverText;
+        this.error_code = data?.error_code;
+        this.attached = data?.attached === true;
+    }
+}
+
 function readWLibResponse({ response, data }) {
-    if (!response.ok || data.success === false) {
-        throw new Error(data.error || `Request failed with status ${response.status}`);
+    if (!response.ok || data?.success === false) {
+        throw new WLibServerError(response.status, data);
     }
     return data;
+}
+
+function wlibFailure(action, error) {
+    let failure = "offline";
+    let userText = "Make sure wLib is open. If it is, reload the wLib extension in your browser.";
+    switch (error?.name) {
+        case "AbortError":
+            failure = "timeout";
+            userText = "wLib did not answer. Try again.";
+            break;
+        case "SyntaxError":
+            failure = "foreign";
+            userText = "Another program answered on port 8183, not wLib.";
+            break;
+        case "WLibServerError":
+            failure = "server";
+            userText = error.serverText || "wLib could not do this. Check the wLib log.";
+            break;
+    }
+    const detail = `${error?.name || "Error"}: ${error?.message ?? String(error)}`;
+    const level = error?.wlibOffline === true ? "debug" : "warn";
+    console[level](`wLib ${action} (${failure}):`, detail);
+    return { success: false, failure, error: userText, detail };
 }
 
 // Minimum wLib app version this extension works with. Raise by hand only when
@@ -216,22 +259,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "saveThreadLinks") {
         fetchWLibJson("http://localhost:8183/api/thread-links", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(message.payload) })
             .then(readWLibResponse).then(data => sendResponse({success:true,data}))
-            .catch(error => sendResponse({success:false,error:error.message}));
+            .catch(error => sendResponse(wlibFailure(message.action, error)));
         return true;
     }
     if (message.action === "checkGameInWLib") {
         fetchWLibJson(`http://localhost:8183/api/check?${pageQuery(message)}`)
-            .then(({ response, data }) => {
-                if (!response.ok) {
-                    throw new Error(data.error || `Request failed with status ${response.status}`);
-                }
+            .then(readWLibResponse)
+            .then(data => {
                 sendResponse({ success: true, data: normalizeCheckPayload(data) });
                 maybeReloadForNewExtensionVersion(data);
             })
-            .catch(error => {
-                console.error("wLib Check Error:", error);
-                sendResponse({ success: false, error: error.message });
-            });
+            .catch(error => sendResponse(wlibFailure(message.action, error)));
         return true;
     }
 
@@ -248,10 +286,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 console.log("wLib Response:", data);
                 sendResponse({ success: true, data });
             })
-            .catch(error => {
-                console.error("wLib Connection Error:", error);
-                sendResponse({ success: false, error: error.message });
-            });
+            .catch(error => sendResponse(wlibFailure(message.action, error)));
 
         // Return true to indicate we will send a response asynchronously
         return true;
@@ -269,11 +304,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }),
         })
             .then(({ response, data }) => {
-                sendResponse(response.ok && data.success
-                    ? { success: true, data }
-                    : { success: false, error: data.error, error_code: data.error_code, attached: data.attached === true });
+                if (!response.ok || !data?.success) {
+                    throw new WLibServerError(response.status, data);
+                }
+                sendResponse({ success: true, data });
             })
-            .catch(error => sendResponse({ success: false, error: error.message }));
+            .catch(error => sendResponse({
+                ...wlibFailure(message.action, error),
+                error_code: error?.error_code,
+                attached: error?.attached === true,
+            }));
         return true;
     }
 
@@ -281,7 +321,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         fetchWLibJson(`http://localhost:8183/api/open?${pageQuery(message)}`)
             .then(readWLibResponse)
             .then(data => sendResponse({ success: true, data }))
-            .catch(error => sendResponse({ success: false, error: error.message }));
+            .catch(error => sendResponse(wlibFailure(message.action, error)));
         return true;
     }
 });
@@ -536,12 +576,12 @@ async function bridgeGetCanFetch() {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.6");
+            return String(chrome.runtime.getManifest().version || "1.2.7");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.6";
+    return "1.2.7";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic

@@ -3,8 +3,13 @@
 // the F95 widget in content.js so both share content.css.
 (() => {
     const send = message => new Promise(resolve => {
-        try { chrome.runtime.sendMessage(message,response => { const error = chrome.runtime.lastError; resolve(error ? {success:false,error:error.message} : response || {success:false}); }); }
-        catch (error) { resolve({success:false,error:error.message}); }
+        try {
+            chrome.runtime.sendMessage(message, response => {
+                resolve(chrome.runtime.lastError || chrome.runtime.id === undefined ? undefined : response);
+            });
+        } catch (_error) {
+            resolve(undefined);
+        }
     });
     const placementHelper = globalThis.WLibWidgetPlacement;
     const placementPromise = placementHelper ? placementHelper.load() : Promise.resolve({side:'right',collapsed:false});
@@ -80,11 +85,18 @@
             const value = document.createElement('span'); value.className = `wlib-play-status ${playStatusClass(playStatus)}`; value.textContent = playStatus;
             line.append(value); library.append(divider,line);
         }
-        function failure() { status.textContent = 'Make sure wLib is open, then retry.'; library.replaceChildren(); actions.replaceChildren(); button('Retry',check,{iconName:'libraryPlus'}); }
+        function failure(response) {
+            status.textContent = response
+                ? response.error || 'The wLib extension did not return an answer. Try again.'
+                : 'wLib extension updated. Refresh this page.';
+            library.replaceChildren();
+            actions.replaceChildren();
+            button('Retry',check,{iconName:'libraryPlus'});
+        }
         async function check() {
             status.textContent = 'Checking wLib…';
             const response = await send({action:'checkGameInWLib',url:location.href,ids});
-            if (!response.success || !response.data) { failure(); return; }
+            if (!response?.success || !response.data) { failure(response); return; }
             const state = response.data;
             warning.hidden = !state.appOutdated;
             actions.replaceChildren();
@@ -92,18 +104,18 @@
             showLibraryStatus(state);
             if (state.exists) button('Open in wLib',async () => {
                 const reply = await send({action:'openWLib',url:location.href,ids});
-                if (!reply.success) failure(); else status.textContent = 'Brought wLib to front.';
+                if (!reply?.success) failure(reply); else status.textContent = 'Brought wLib to front.';
             },{iconName:'externalLink',variant:'open'});
             else {
                 button('Add to wLib',async () => {
                     const reply = await send({action:'addGameToWLib',payload});
-                    if (!reply.success) failure(); else status.textContent = 'Game sent to wLib successfully.';
+                    if (!reply?.success) failure(reply); else status.textContent = 'Game sent to wLib successfully.';
                 },{iconName:'libraryPlus'});
                 button('Wishlist',async () => {
                     const reply = await send({action:'wishlistGameInWLib',payload});
-                    if (reply.success || reply.error_code === 'duplicate_url') {
+                    if (reply?.success || reply?.error_code === 'duplicate_url') {
                         await check(); status.textContent = reply.success ? 'Wishlisted' : 'Already in wLib';
-                    } else failure();
+                    } else failure(reply);
                 },{variant:'secondary'});
             }
         }

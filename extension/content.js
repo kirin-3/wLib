@@ -155,7 +155,12 @@ function isExtensionContextInvalidated() {
 function wlibConnectionStatusMessage() {
     return isExtensionContextInvalidated()
         ? 'wLib extension updated. Refresh this page.'
-        : 'Error: Make sure wLib is open.';
+        : 'Could not contact the wLib extension. Refresh this page.';
+}
+
+function wlibResponseError(error, response) {
+    if (error || isExtensionContextInvalidated()) return wlibConnectionStatusMessage();
+    return response?.error || 'The wLib extension did not return an answer. Try again.';
 }
 
 // chrome.runtime.sendMessage throws synchronously once an extension update
@@ -183,19 +188,20 @@ function checkGameInWLib(url, links = []) {
             url,
             ids: links.map(link => `${link.source}:${link.id}`),
         }, (error, response) => {
-            if (error) {
-                console.warn('wLib extension: Could not connect to background wLib service.', error);
-                resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false, reachable: false });
-                return;
-            }
-
-            if (response && response.success && response.data) {
+            if (!error && !isExtensionContextInvalidated() && response?.success && response.data) {
                 resolve({ ...normalizeCheckResult(response.data), reachable: true });
                 return;
             }
 
-            console.warn('wLib extension: Check request failed.', response?.error || response);
-            resolve({ exists: false, playStatus: '', wishlisted: false, appOutdated: false, reachable: false });
+            if (error) {
+                console.warn('wLib extension: Could not connect to background wLib service.', error);
+            } else {
+                console.debug('wLib extension: Check request failed.', response?.error || response);
+            }
+            resolve({
+                exists: false, playStatus: '', wishlisted: false, appOutdated: false, reachable: false,
+                failureText: wlibResponseError(error, response),
+            });
         });
     });
 }
@@ -226,6 +232,7 @@ async function initThreadPageExtension() {
     gameInfo.existsInWLib = checkResult.exists;
     // Closed wLib: "not in library" would be a guess, so the widget says so.
     gameInfo.wlibReachable = checkResult.reachable;
+    gameInfo.failureText = checkResult.failureText;
     gameInfo.playStatus = checkResult.playStatus;
     gameInfo.wishlisted = checkResult.wishlisted;
     gameInfo.appOutdated = checkResult.appOutdated;
@@ -690,7 +697,7 @@ async function injectUI(gameInfo) {
     const statusEl = document.createElement('div');
     statusEl.className = 'wlib-status';
     statusEl.setAttribute('aria-live', 'polite');
-    if (unreachable) statusEl.textContent = wlibConnectionStatusMessage();
+    if (unreachable) statusEl.textContent = gameInfo.failureText;
 
     const collapsedToggle = document.createElement('button');
     collapsedToggle.type = 'button';
@@ -720,7 +727,7 @@ async function injectUI(gameInfo) {
         if (unreachable) {
             void checkGameInWLib(gameInfo.url, gameInfo.links || []).then(result => {
                 if (!result.reachable) {
-                    statusEl.textContent = wlibConnectionStatusMessage();
+                    statusEl.textContent = result.failureText;
                     btn.disabled = false;
                     return;
                 }
@@ -738,7 +745,7 @@ async function injectUI(gameInfo) {
                 url: gameInfo.url
             }, (error, response) => {
                 if (error || !response?.success) {
-                    statusEl.textContent = wlibConnectionStatusMessage();
+                    statusEl.textContent = wlibResponseError(error, response);
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Open in wLib', 'externalLink', 'open');
                     return;
@@ -772,7 +779,7 @@ async function injectUI(gameInfo) {
                         setTimeout(() => container.remove(), 300);
                     }, 3000);
                 } else {
-                    statusEl.textContent = wlibConnectionStatusMessage();
+                    statusEl.textContent = wlibResponseError(error, response);
                     btn.disabled = false;
                     setActionButtonContent(btn, 'Retry', 'libraryPlus', 'default');
                 }
@@ -812,9 +819,7 @@ async function injectUI(gameInfo) {
                     wishlistBtn.disabled = false;
                     btn.disabled = false;
                     wishlistBtn.textContent = 'Retry';
-                    statusEl.textContent = isExtensionContextInvalidated()
-                        ? 'wLib extension updated. Refresh this page.'
-                        : 'Make sure wLib is open';
+                    statusEl.textContent = wlibResponseError(error, response);
                 }
             });
         });
@@ -836,7 +841,7 @@ async function injectUI(gameInfo) {
                 } else {
                     attachBtn.disabled = false;
                     attachBtn.textContent = 'Attach F95 thread';
-                    statusEl.textContent = response?.error || wlibConnectionStatusMessage();
+                    statusEl.textContent = wlibResponseError(error, response);
                 }
             });
         });

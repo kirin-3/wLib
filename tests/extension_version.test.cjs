@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const source = readFileSync(path.join(__dirname, '..', 'extension', 'content.js'), 'utf8');
 const backgroundSource = readFileSync(path.join(__dirname, '..', 'extension', 'background.js'), 'utf8');
 const parser = source.slice(source.indexOf('function extractGameInfo()'), source.indexOf('function getPlayStatusToneClass'));
+const offlineText = 'Make sure wLib is open. If it is, reload the wLib extension in your browser.';
 
 const extractFromTitle = (title, labels = [], postHtml = null) => {
   const heading = {
@@ -42,7 +43,7 @@ test('wishlist message passes duplicate code and serializes tags', async () => {
       return {
         ok: false,
         status: 409,
-        json: async () => ({ success: false, error: 'Already saved', error_code: 'duplicate_url' }),
+        json: async () => ({ success: false, error: 'Already saved', error_code: 'duplicate_url', attached: true }),
       };
     },
     console,
@@ -58,6 +59,7 @@ test('wishlist message passes duplicate code and serializes tags', async () => {
   assert.equal(request.options.headers['X-wLib-Extension'], '1');
   assert.equal(JSON.parse(request.options.body).tags, "sandbox, Ren'Py");
   assert.equal(response.error_code, 'duplicate_url');
+  assert.equal(response.attached, true);
 });
 
 test('extension parses title versions exactly like the scraper', () => {
@@ -95,8 +97,8 @@ const messageHelpers = source.slice(
   source.indexOf('function initWLibExtension()'),
 );
 
-const runThreadCheck = (runtime) => {
-  const context = { console, chrome: { runtime } };
+const runThreadCheck = (runtime, log = console) => {
+  const context = { console: log, chrome: { runtime } };
   vm.createContext(context);
   vm.runInContext(messageHelpers, context);
   return vm.runInContext(
@@ -121,6 +123,7 @@ test('thread check survives a reload that invalidated the extension context', as
     wishlisted: false,
     appOutdated: false,
     reachable: false,
+    failureText: 'wLib extension updated. Refresh this page.',
   });
 });
 
@@ -140,7 +143,24 @@ test('thread check treats a missing background receiver as a failed check', asyn
     wishlisted: false,
     appOutdated: false,
     reachable: false,
+    failureText: 'Could not contact the wLib extension. Refresh this page.',
   });
+});
+
+test('thread check preserves offline text and logs it at debug level', async () => {
+  const calls = [];
+  const result = await runThreadCheck({
+    id: 'test',
+    sendMessage(_message, callback) {
+      callback({ success: false, failure: 'offline', error: offlineText });
+    },
+  }, {
+    debug: () => calls.push('debug'),
+    warn: () => calls.push('warn'),
+  });
+  assert.equal(result.reachable, false);
+  assert.equal(result.failureText, offlineText);
+  assert.deepEqual(calls, ['debug']);
 });
 
 test('thread check still normalizes a successful response', async () => {
@@ -178,7 +198,7 @@ const createTilePage = (urls) => {
   const timers = new Map();
   const badges = new Set();
   const requests = [];
-  let respond = () => ({ success: false, error: 'Failed to fetch' });
+  let respond = () => ({ success: false, failure: 'offline', error: offlineText });
   class FakeElement {
     constructor() { this.dataset = {}; this.classList = { add() {} }; }
   }
@@ -193,7 +213,7 @@ const createTilePage = (urls) => {
   }
   const tiles = urls.map(url => new FakeAnchor(url));
   const context = {
-    console: { warn() {}, error() {} },
+    console: { debug() {}, warn() {}, error() {} },
     URL,
     Date: { now: () => clock },
     HTMLAnchorElement: FakeAnchor,
@@ -356,6 +376,46 @@ const runBackground = (stubs) => {
   return context;
 };
 
+const rejectFetch = error => async () => { throw error; };
+const jsonReply = (status, data) => async () => new Response(JSON.stringify(data), { status });
+
+for (const [label, fetch, failure, userText, level, detail, action = 'checkGameInWLib'] of [
+  ['offline', rejectFetch(new TypeError('Failed to fetch')), 'offline', offlineText, 'debug', 'TypeError: Failed to fetch'],
+  ['timeout', (_url, { signal }) => new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason));
+  }), 'timeout', 'wLib did not answer. Try again.', 'warn', 'AbortError: This operation was aborted'],
+  ['foreign', async () => new Response('<html>Other program</html>'), 'foreign', 'Another program answered on port 8183, not wLib.', 'warn', 'SyntaxError:'],
+  ['starting', jsonReply(503, { error: 'Application is not ready' }), 'server', 'Application is not ready', 'warn', 'WLibServerError: HTTP 503: Application is not ready'],
+  ['server without error text', jsonReply(500, {}), 'server', 'wLib could not do this. Check the wLib log.', 'warn', 'WLibServerError: HTTP 500'],
+  ['server failure with HTTP 200', jsonReply(200, { success: false, error: 'Could not check game' }), 'server', 'Could not check game', 'warn', 'WLibServerError: HTTP 200: Could not check game'],
+  ['unexpected', rejectFetch(new Error('Unexpected problem')), 'offline', offlineText, 'warn', 'Error: Unexpected problem'],
+  ['code TypeError after fetch', async () => ({ ok: true, status: 200, json: async () => { throw new TypeError('bug'); } }), 'offline', offlineText, 'warn', 'TypeError: bug'],
+  ['offline wishlist', rejectFetch(new TypeError('NetworkError when attempting to fetch resource.')), 'offline', offlineText, 'debug', 'TypeError: NetworkError when attempting to fetch resource.', 'wishlistGameInWLib'],
+]) {
+  test(`extension reports ${label} without exposing diagnostics in the widget text`, async () => {
+    let listener;
+    const logs = [];
+    runBackground({
+      chrome: { runtime: { onMessage: { addListener: value => { listener = value; } } } },
+      fetch,
+      setTimeout: callback => setTimeout(callback, 5),
+      console: Object.fromEntries(['debug', 'warn', 'error'].map(method => [
+        method, (...args) => logs.push([method, ...args]),
+      ])),
+    });
+    const response = await new Promise(resolve => listener({
+      action,
+      url: 'https://f95zone.to/threads/game.123/',
+      payload: {},
+    }, {}, resolve));
+    assert.equal(response.success, false);
+    assert.equal(response.failure, failure);
+    assert.equal(response.error, userText);
+    assert.ok(response.detail.startsWith(detail), response.detail);
+    assert.deepEqual(logs, [[level, `wLib ${action} (${failure}):`, response.detail]]);
+  });
+}
+
 test('version comparison orders releases and ignores v-prefix/suffix', () => {
   const context = runBackground({});
   const compare = (a, b) => vm.runInContext(`compareVersions(${JSON.stringify(a)}, ${JSON.stringify(b)})`, context);
@@ -428,7 +488,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.6');
+  assert.equal(manifest.version, '1.2.7');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -907,7 +967,7 @@ function makePairingContext(stored = {}) {
   const sockets = [];
   const context = {
     chrome: {
-      runtime: { onMessage: { addListener: () => {} }, getManifest: () => ({ version: '1.2.6' }) },
+      runtime: { onMessage: { addListener: () => {} }, getManifest: () => ({ version: '1.2.7' }) },
       storage: {
         local: {
           get: async (key) => ({ [key]: stored[key] }),

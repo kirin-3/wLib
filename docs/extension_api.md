@@ -54,7 +54,7 @@ Allows the extension to decorate an F95Zone page based on ownership.
     "playStatus": "Playing",
     "wishlisted": false,
     "app_version": "0.4.7",
-    "extension_version": "1.2.6"
+    "extension_version": "1.2.7"
   }
   ```
 - **Contract Notes:**
@@ -132,7 +132,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.6", "can_fetch": true, "can_resolve": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.7", "can_fetch": true, "can_resolve": true}
   {"type": "status", "can_fetch": false}
   {"type": "ping"}
   // app -> ext
@@ -162,7 +162,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is currently `1.2.6`, and its `MIN_APP_VERSION` floor is `0.4.6`.
+The bundled manifest is currently `1.2.7`, and its `MIN_APP_VERSION` floor is `0.4.6`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -187,11 +187,22 @@ On Windows, Chromium-based browsers load `%LOCALAPPDATA%\wLib\extension\chrome` 
 
 On F95 thread pages, the content script injects a floating widget near the upper-right viewport edge by default using rem-based offsets instead of anchoring it into the page rails.
 
-- The expanded widget shows the wLib logo, side and collapse controls, `Add to wLib` and `Wishlist` for an unsaved thread, or `Open in wLib` for a saved thread. It shows transient feedback for each action, including duplicate and connection errors for Wishlist.
+- The expanded widget shows the wLib logo, side and collapse controls, `Add to wLib` and `Wishlist` for an unsaved thread, or `Open in wLib` for a saved thread. It shows `Check again` after a failed check and displays action feedback, including when a game is already in wLib.
 - When the thread already matches a library entry, the widget also renders a non-interactive status line beneath the action. An exe-less game says `Wishlisted`; an installed game shows its play status.
 - The side arrow moves the widget between edges. Collapse compresses it into a logo button in the bottom corner on the current side; expanding reverses that transition. Side and collapse state are saved locally, shared across F95 and supported store pages, and updated live in open tabs.
 - The latest-alpha page continues to reuse `GET /api/check` for its `In wLib` tile badges, but it only reads the `exists` field and ignores `playStatus`. Answers are cached per thread for the page's lifetime; a failed check (wLib closed or not ready) is not cached and is retried on a timer that backs off from 5 s to 60 s.
 - Reduced-motion preferences are respected by shortening the collapse/expand transition to an effectively instant state change.
+
+## Widget Connection Errors
+
+The extension background script sends `{ success: false, failure, error, detail }` when a wLib request fails. The F95 and store widgets display `error`. The background console logs `detail`, which carries the original error name and message, including the HTTP status for a wLib server error.
+
+- `offline` means the browser could not reach wLib. The widget asks the user to open wLib or reload the extension if wLib is already open. Connection failures log at debug level only.
+- `timeout` means the request exceeded its time limit. The widget asks the user to try again.
+- `foreign` means the answer on port 8183 could not be parsed as JSON. The widget says another program answered.
+- `server` means wLib returned an HTTP error or `success: false`. The widget shows wLib's error text or asks the user to check the wLib log if the response has no error text.
+
+The background logs timeouts, foreign responses, and server failures at warning level. Unexpected exceptions use the offline message and log at warning level. Wishlist replies also retain `error_code` and `attached`. If an extension reload invalidates the page's connection, the widget asks the user to refresh the page.
 
 ## First-post store link capture
 
