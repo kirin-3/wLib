@@ -18,6 +18,12 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 dnf install -y git xz python3 >/dev/null
+# Rocky 9 ships Python 3.9 as python3; use its python3.12 package instead.
+if [ -z "${WLIB_CATALOG_PYTHON:-}" ] \
+    && ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+    dnf install -y python3.12 >/dev/null
+    PYTHON=python3.12
+fi
 if ! "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
     echo "$PYTHON must be Python 3.12 or newer; set WLIB_CATALOG_PYTHON." >&2
     exit 1

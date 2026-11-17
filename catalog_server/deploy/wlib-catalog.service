@@ -14,7 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/wlib-catalog/r2.env
 ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
 TimeoutStartSec=3h
-MemoryMax=400M
+MemoryMax=1G
 Nice=10
 
 ProtectSystem=strict

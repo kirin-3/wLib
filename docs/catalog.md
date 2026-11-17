@@ -164,7 +164,7 @@ Setup (as root, from a checkout):
 bash catalog_server/deploy/setup.sh
 ```
 
-It installs git, xz and Python 3; the selected interpreter must be 3.12 or newer (`WLIB_CATALOG_PYTHON` overrides the default `python3`). It creates the `wlibcat` system user and `/var/lib/wlib-catalog`, clones the repository into `/opt/wlib-catalog`, creates the venv, installs `wlib-catalog.service` and `wlib-catalog.timer`, and leaves the timer off. Put the token in `/etc/wlib-catalog/r2.env` (root-owned, mode 0600):
+It installs git, xz and Python 3; the selected interpreter must be 3.12 or newer (`WLIB_CATALOG_PYTHON` overrides the default `python3`). When `python3` is older, as on Rocky 9, it installs and uses the `python3.12` package. It creates the `wlibcat` system user and `/var/lib/wlib-catalog`, clones the repository into `/opt/wlib-catalog`, creates the venv, installs `wlib-catalog.service` and `wlib-catalog.timer`, and leaves the timer off. Put the token in `/etc/wlib-catalog/r2.env` (root-owned, mode 0600):
 
 ```
 R2_ACCOUNT_ID=…
