@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 export type FilterKind = 'status' | 'install' | 'source' | 'engine' | 'tag' | 'collection';
-export interface FilterChip { kind: FilterKind; value: string; label: string; key: string }
+// `excluded` marks a "Not ..." chip, so removing it clears the excluded value.
+export interface FilterChip { kind: FilterKind; value: string; label: string; key: string; excluded: boolean }
 export interface FilterChipInput {
   statuses: string[]; install: string; sources: string[]; engines: string[]; tags: string[]; collection: string;
+  excludedSources?: string[]; excludedEngines?: string[]; excludedTags?: string[];
   statusLabels: Record<string, string>; sourceLabels: Record<string, string>;
 }
 export function activeFilterChips(input: FilterChipInput): FilterChip[] {
   const chips: FilterChip[] = [];
-  const add = (kind: FilterKind, title: string, value: string, display = value) => chips.push({ kind, value, label: `${title}: ${display}`, key: `${kind}:${value}` });
+  const add = (kind: FilterKind, title: string, value: string, display = value) =>
+    chips.push({ kind, value, label: `${title}: ${display}`, key: `${kind}:${value}`, excluded: false });
+  const addNot = (kind: FilterKind, title: string, value: string, display = value) =>
+    chips.push({ kind, value, label: `Not ${title.toLowerCase()}: ${display}`, key: `${kind}:not:${value}`, excluded: true });
   for (const value of input.statuses) add('status', 'Status', value, input.statusLabels[value.toLowerCase()] || value);
   if (input.install) add('install', 'Install state', input.install, input.install === 'installed' ? 'Installed' : 'Wishlist');
   for (const value of input.sources) add('source', 'Source', value, input.sourceLabels[value] || value);
+  for (const value of input.excludedSources ?? []) addNot('source', 'Source', value, input.sourceLabels[value] || value);
   for (const value of input.engines) add('engine', 'Engine', value);
+  for (const value of input.excludedEngines ?? []) addNot('engine', 'Engine', value);
   for (const value of input.tags) add('tag', 'Tag', value);
+  for (const value of input.excludedTags ?? []) addNot('tag', 'Tag', value);
   if (input.collection !== 'All') add('collection', 'Collection', input.collection);
   return chips;
 }

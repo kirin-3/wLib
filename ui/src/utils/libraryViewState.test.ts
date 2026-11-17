@@ -288,6 +288,9 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterInstallState: "installed",
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
+    filterExcludedSources: [],
+    filterExcludedEngines: [],
+    filterExcludedTags: [],
     sortBy: "rating",
     sortDir: "desc",
   });
@@ -314,6 +317,9 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterInstallState: "",
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
+    filterExcludedSources: [],
+    filterExcludedEngines: [],
+    filterExcludedTags: [],
     sortBy: "title",
     sortDir: "asc",
   });
@@ -541,4 +547,53 @@ test("list header toggle flips the active field and starts others with their def
   assert.deepEqual(toggleSortState({ sortBy: "title", sortDir: "asc" }, "title"), { sortBy: "title", sortDir: "desc" });
   assert.deepEqual(toggleSortState({ sortBy: "title", sortDir: "asc" }, "last_played"), { sortBy: "last_played", sortDir: "desc" });
   assert.deepEqual(toggleSortState({ sortBy: "rating", sortDir: "desc" }, "version"), { sortBy: "version", sortDir: "asc" });
+});
+
+test("excluded filters round-trip, default for older data, and lose to included values", () => {
+  const options = { validEngines: ["RPGM", "Ren'Py"], validTags: ["3dcg", "Netorare", "Sandbox"] };
+  const saved = normalizeLibraryViewState(
+    {
+      filterTags: ["3dcg"],
+      filterExcludedTags: ["netorare", "ghost-tag"],
+      filterExcludedEngines: ["RPGM", "Ghost"],
+      filterExcludedSources: ["dlsite", "unknown"],
+    },
+    options,
+  );
+  // Unknown excluded values are dropped; known tags take the library's spelling.
+  assert.deepEqual(saved.filterExcludedTags, ["Netorare"]);
+  assert.deepEqual(saved.filterExcludedEngines, ["RPGM"]);
+  assert.deepEqual(saved.filterExcludedSources, ["dlsite"]);
+  // Round-trip.
+  assert.deepEqual(normalizeLibraryViewState(JSON.parse(JSON.stringify(saved)) as unknown, options), saved);
+
+  // Old state without the keys restores with nothing excluded.
+  const old = normalizeLibraryViewState({ filterTags: ["3dcg"], filterEngines: ["RPGM"] }, options);
+  assert.deepEqual(old.filterTags, ["3dcg"]);
+  assert.deepEqual(old.filterExcludedTags, []);
+  assert.deepEqual(old.filterExcludedEngines, []);
+  assert.deepEqual(old.filterExcludedSources, []);
+
+  // The same value in both lists stays included only.
+  const both = normalizeFilterPreset(
+    {
+      name: "Both",
+      filterTags: ["Sandbox"],
+      filterExcludedTags: ["sandbox", "netorare"],
+      filterEngines: ["RPGM"],
+      filterExcludedEngines: ["RPGM"],
+      filterSources: ["dlsite"],
+      filterExcludedSources: ["dlsite", "f95"],
+    },
+    options,
+  );
+  assert.deepEqual(both?.filterTags, ["Sandbox"]);
+  assert.deepEqual(both?.filterExcludedTags, ["Netorare"]);
+  assert.deepEqual(both?.filterEngines, ["RPGM"]);
+  assert.deepEqual(both?.filterExcludedEngines, []);
+  assert.deepEqual(both?.filterExcludedSources, ["f95"]);
+
+  // Without lists (before games load) the casing rule still applies.
+  const unloaded = normalizeFilterAndSort({ filterTags: ["Sandbox"], filterExcludedTags: ["sandbox", "rpg"] });
+  assert.deepEqual(unloaded.filterExcludedTags, ["rpg"]);
 });

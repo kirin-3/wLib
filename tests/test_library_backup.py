@@ -428,6 +428,9 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
             "filterSources": ["dlsite"],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
+            "filterExcludedSources": [],
+            "filterExcludedEngines": [],
+            "filterExcludedTags": [],
             "sortBy": "rating",
             "sortDir": "desc",
         }
@@ -439,6 +442,42 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
     restored = api.get_settings()["library_filter_presets"]
     assert [preset["name"] for preset in restored] == ["Ren'Py now"]
     assert restored[0]["filterSources"] == ["dlsite"]
+
+
+def test_library_filter_presets_keep_excluded_values_through_backup(tmp_path):
+    api = Api()
+    saved = api.save_library_filter_presets(
+        [
+            {
+                "name": "No NTR",
+                "filterTags": ["3dcg"],
+                "filterExcludedTags": ["netorare"],
+                "filterExcludedEngines": ["RPGM"],
+                "filterExcludedSources": ["dlsite"],
+            },
+            {"name": "Old preset", "filterTags": ["sandbox"]},
+        ]
+    )
+    assert saved["success"]
+
+    sections = [SECTION_SETTINGS_GENERAL]
+    destination = tmp_path / "excluded-presets.json"
+    result = api.export_library_backup({"sections": sections}, str(destination))
+    assert result["success"]
+
+    update_setting("library_filter_presets", "[]")
+    result = api.import_library_backup(str(destination), {"sections": sections})
+    assert result["success"]
+    restored = api.get_settings()["library_filter_presets"]
+    assert [preset["name"] for preset in restored] == ["No NTR", "Old preset"]
+    assert restored[0]["filterTags"] == ["3dcg"]
+    assert restored[0]["filterExcludedTags"] == ["netorare"]
+    assert restored[0]["filterExcludedEngines"] == ["RPGM"]
+    assert restored[0]["filterExcludedSources"] == ["dlsite"]
+    assert restored[1]["filterTags"] == ["sandbox"]
+    assert restored[1]["filterExcludedTags"] == []
+    assert restored[1]["filterExcludedEngines"] == []
+    assert restored[1]["filterExcludedSources"] == []
 
 
 def test_collections_and_membership_round_trip(tmp_path):
@@ -2176,6 +2215,9 @@ def test_import_settings_preserves_json_types(tmp_path):
             "filterSources": [],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
+            "filterExcludedSources": [],
+            "filterExcludedEngines": [],
+            "filterExcludedTags": [],
             "sortBy": "rating",
             "sortDir": "desc",
         }

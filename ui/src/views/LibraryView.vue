@@ -17,6 +17,7 @@ import { gamesStore } from "../composables/useGamesStore";
 import { nextRenderLimit, RENDER_BATCH } from "../utils/gamesStore";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
+import FilterPill from "../components/FilterPill.vue";
 import { colorForTag, loadTagColors } from "../utils/tagColors";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -112,15 +113,20 @@ import {
   gameFolder,
   gameTags,
   hasAvailableUpdate,
-  hasTagFilter,
   hasUnplayedUpdate,
   isUpdateSkipped,
   hasNewSinceFinished,
   isWishlisted,
   matchesGameSearch,
+  matchesEngineFilter,
   matchesSourceFilter,
   matchesTagFilter,
-  toggleTagFilter,
+  cycleFilterValue,
+  engineFilterKey,
+  filterValueState,
+  orderTagOptions,
+  pinnedTagKeysFor,
+  tagFilterKey,
 } from "../utils/libraryGames";
 
 interface UpdateNotice {
@@ -316,6 +322,9 @@ const filterEngines = ref<string[]>([
   ...DEFAULT_LIBRARY_VIEW_STATE.filterEngines,
 ]);
 const filterTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterTags]);
+const filterExcludedSources = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterExcludedSources]);
+const filterExcludedEngines = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterExcludedEngines]);
+const filterExcludedTags = ref<string[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterExcludedTags]);
 const tagColorPicker = ref<{ tag: string; anchor: HTMLElement } | null>(null);
 function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   event.preventDefault();
@@ -433,20 +442,28 @@ const chooseAddMenuItem = (id: string) => {
   else if (id === "archive") openInstallArchive();
 };
 
-const toggleFilter = (arr: string[], val: string) => {
-  const idx = arr.indexOf(val);
-  if (idx === -1) arr.push(val);
-  else arr.splice(idx, 1);
+// Source, engine and tag pills cycle neutral -> include -> exclude -> neutral.
+// Tags are case-insensitive, so every spelling of the tag leaves both lists.
+const sourceState = (source: string) =>
+  filterValueState(filterSources.value, filterExcludedSources.value, source);
+const cycleSource = (source: string) => {
+  const next = cycleFilterValue(filterSources.value, filterExcludedSources.value, source);
+  filterSources.value = next.included;
+  filterExcludedSources.value = next.excluded;
 };
-
-// Tags are case-insensitive, so the pill's spelling may differ from a saved
-// filter. Toggle every spelling and keep the visible one when selecting.
-const toggleTag = (tag: string) => {
-  filterTags.value = toggleTagFilter(
-    filterTags.value,
-    tag,
-    !hasTagFilter(filterTags.value, tag),
-  );
+const engineState = (engine: string) =>
+  filterValueState(filterEngines.value, filterExcludedEngines.value, engine, engineFilterKey);
+const cycleEngine = (engine: string) => {
+  const next = cycleFilterValue(filterEngines.value, filterExcludedEngines.value, engine, engineFilterKey);
+  filterEngines.value = next.included;
+  filterExcludedEngines.value = next.excluded;
+};
+const tagState = (tag: string) =>
+  filterValueState(filterTags.value, filterExcludedTags.value, tag, tagFilterKey);
+const cycleTag = (tag: string) => {
+  const next = cycleFilterValue(filterTags.value, filterExcludedTags.value, tag, tagFilterKey);
+  filterTags.value = next.included;
+  filterExcludedTags.value = next.excluded;
 };
 
 // Status filters keep the spelling they were restored with, so the checkbox
@@ -462,8 +479,7 @@ const applyStatusFilter = (status: string, event: Event): void => {
   );
 };
 
-const normalizeEngineFilterValue = (value: unknown): string =>
-  typeof value === "string" ? value.trim() : "";
+const normalizeEngineFilterValue = engineFilterKey;
 
 // Derived unique values for filter pills
 const uniqueEngines = computed(() => {
@@ -480,24 +496,84 @@ const tagCounts = computed(
   () => new Map(tagOptions.value.map((option) => [option.label, option.count])),
 );
 const uniqueTags = computed(() => tagOptions.value.map((option) => option.label));
-const visibleTags = computed(() =>
-  uniqueTags.value.filter((tag) =>
-    tag.toLowerCase().includes(tagSearchQuery.value.trim().toLowerCase()),
-  ),
+
+// Active tags sit in a pinned group at the top of the tag list. The group comes
+// from a snapshot that only updates while the user is not working in the list,
+// so a pill never moves under the pointer or focus between two clicks.
+const pinnedTagKeys = ref<string[]>([]);
+const tagList = useTemplateRef<HTMLElement>("tagList");
+let tagListPointerInside = false;
+let tagListFocusInside = false;
+let tagListPointerDown = false;
+let restoringTagFocus = false;
+const settlePinnedTags = () => {
+  const list = tagList.value;
+  const active = document.activeElement;
+  // A focused pill that changes group is a new element, so keep its focus.
+  const focusedTag =
+    list && active instanceof HTMLElement && list.contains(active) ? active.dataset.tag : undefined;
+  pinnedTagKeys.value = pinnedTagKeysFor(filterTags.value, filterExcludedTags.value);
+  if (focusedTag === undefined) return;
+  void nextTick(() => {
+    const pill = [...(tagList.value?.querySelectorAll<HTMLElement>("[data-tag]") ?? [])].find(
+      (element) => element.dataset.tag === focusedTag,
+    );
+    if (!pill || pill === document.activeElement) return;
+    restoringTagFocus = true;
+    pill.focus({ preventScroll: true });
+    restoringTagFocus = false;
+  });
+};
+const orderedTags = computed(() =>
+  orderTagOptions(tagOptions.value, pinnedTagKeys.value, tagSearchQuery.value),
 );
+const onTagListPointerEnter = () => { tagListPointerInside = true; };
+const onTagListPointerLeave = () => {
+  tagListPointerInside = false;
+  if (!tagListFocusInside) settlePinnedTags();
+};
+// Pointer clicks also focus the pill. Only keyboard and controller focus keep
+// the list engaged after the pointer leaves.
+const onTagListPointerDown = () => {
+  tagListPointerDown = true;
+  tagListFocusInside = false;
+};
+const onTagListFocusIn = () => {
+  if (!tagListPointerDown && !restoringTagFocus) tagListFocusInside = true;
+  tagListPointerDown = false;
+};
+const onTagListFocusOut = (event: FocusEvent) => {
+  const next = event.relatedTarget;
+  if (next instanceof Node && tagList.value?.contains(next)) return;
+  tagListFocusInside = false;
+  tagListPointerDown = false;
+  settlePinnedTags();
+};
+watch(
+  [filterTags, filterExcludedTags],
+  () => {
+    if (!tagListPointerInside && !tagListFocusInside) settlePinnedTags();
+  },
+  { deep: true },
+);
+watch(tagSearchQuery, settlePinnedTags);
+watch(isFiltersCollapsed, (collapsed) => { if (!collapsed) settlePinnedTags(); });
+watch(() => filterSections.value.tags, (open) => { if (open) settlePinnedTags(); });
 
 const activeFilterCount = computed(
   () =>
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
     (filterInstallState.value ? 1 : 0) +
-    (filterSources.value.length > 0 ? 1 : 0) +
-    (filterEngines.value.length > 0 ? 1 : 0) +
-    (filterTags.value.length > 0 ? 1 : 0),
+    (filterSources.value.length || filterExcludedSources.value.length ? 1 : 0) +
+    (filterEngines.value.length || filterExcludedEngines.value.length ? 1 : 0) +
+    (filterTags.value.length || filterExcludedTags.value.length ? 1 : 0),
 );
 const activeFilterChips = computed(() => buildFilterChips({
   statuses: filterStatuses.value, install: filterInstallState.value, sources: filterSources.value,
   engines: filterEngines.value, tags: filterTags.value, collection: filterCollection.value,
+  excludedSources: filterExcludedSources.value, excludedEngines: filterExcludedEngines.value,
+  excludedTags: filterExcludedTags.value,
   statusLabels: Object.fromEntries(allStatuses.value.map(status => [status.value.toLowerCase(), status.label])),
   sourceLabels: Object.fromEntries(LIBRARY_SOURCES.map(source => [source.key, source.label])),
 }));
@@ -505,9 +581,18 @@ const removeFilterChip = (chip: FilterChip) => {
   switch (chip.kind) {
     case "status": filterStatuses.value = removeFilterValue(filterStatuses.value, chip.value); break;
     case "install": filterInstallState.value = ""; break;
-    case "source": filterSources.value = removeFilterValue(filterSources.value, chip.value); break;
-    case "engine": filterEngines.value = removeFilterValue(filterEngines.value, chip.value); break;
-    case "tag": filterTags.value = removeFilterValue(filterTags.value, chip.value); break;
+    case "source":
+      if (chip.excluded) filterExcludedSources.value = removeFilterValue(filterExcludedSources.value, chip.value);
+      else filterSources.value = removeFilterValue(filterSources.value, chip.value);
+      break;
+    case "engine":
+      if (chip.excluded) filterExcludedEngines.value = removeFilterValue(filterExcludedEngines.value, chip.value);
+      else filterEngines.value = removeFilterValue(filterEngines.value, chip.value);
+      break;
+    case "tag":
+      if (chip.excluded) filterExcludedTags.value = removeFilterValue(filterExcludedTags.value, chip.value);
+      else filterTags.value = removeFilterValue(filterTags.value, chip.value);
+      break;
     case "collection": filterCollection.value = "All"; break;
   }
 };
@@ -515,10 +600,22 @@ const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
   filterInstallState.value = "";
-  filterSources.value = [];
-  filterEngines.value = [];
-  filterTags.value = [];
+  clearSourceFilters();
+  clearEngineFilters();
+  clearTagFilters();
   filterCollection.value = "All";
+};
+const clearSourceFilters = () => {
+  filterSources.value = [];
+  filterExcludedSources.value = [];
+};
+const clearEngineFilters = () => {
+  filterEngines.value = [];
+  filterExcludedEngines.value = [];
+};
+const clearTagFilters = () => {
+  filterTags.value = [];
+  filterExcludedTags.value = [];
 };
 
 const applyLibraryViewState = (state: LibraryViewState) => {
@@ -532,6 +629,9 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   filterSources.value = [...state.filterSources];
   filterEngines.value = [...state.filterEngines];
   filterTags.value = [...state.filterTags];
+  filterExcludedSources.value = [...state.filterExcludedSources];
+  filterExcludedEngines.value = [...state.filterExcludedEngines];
+  filterExcludedTags.value = [...state.filterExcludedTags];
   isFiltersCollapsed.value = state.isFiltersCollapsed;
   filterSections.value = { ...state.filterSections };
   activeCollection.value = state.activeCollection;
@@ -549,6 +649,9 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterSources: filterSources.value,
     filterEngines: filterEngines.value,
     filterTags: filterTags.value,
+    filterExcludedSources: filterExcludedSources.value,
+    filterExcludedEngines: filterExcludedEngines.value,
+    filterExcludedTags: filterExcludedTags.value,
     isFiltersCollapsed: isFiltersCollapsed.value,
     filterSections: filterSections.value,
     activeCollection: activeCollection.value,
@@ -626,15 +729,12 @@ const filteredGames = computed(() => {
     result = result.filter(isWishlisted);
   if (filterInstallState.value === "installed")
     result = result.filter((game) => !isWishlisted(game));
-  result = result.filter((game) => matchesSourceFilter(game, filterSources.value));
-  if (filterEngines.value.length) {
-    result = result.filter((g) =>
-      filterEngines.value.includes(normalizeEngineFilterValue(g.engine)),
-    );
-  }
-  if (filterTags.value.length) {
-    result = result.filter((game) => matchesTagFilter(game, filterTags.value));
-  }
+  result = result.filter(
+    (game) =>
+      matchesSourceFilter(game, filterSources.value, filterExcludedSources.value) &&
+      matchesEngineFilter(game, filterEngines.value, filterExcludedEngines.value) &&
+      matchesTagFilter(game, filterTags.value, filterExcludedTags.value),
+  );
   return result;
 });
 
@@ -1090,6 +1190,9 @@ const applyFilterPreset = (preset: LibraryFilterPreset) => {
   filterSources.value = [...normalized.filterSources];
   filterEngines.value = [...normalized.filterEngines];
   filterTags.value = [...normalized.filterTags];
+  filterExcludedSources.value = [...normalized.filterExcludedSources];
+  filterExcludedEngines.value = [...normalized.filterExcludedEngines];
+  filterExcludedTags.value = [...normalized.filterExcludedTags];
   sortBy.value = normalized.sortBy;
   sortDir.value = normalized.sortDir;
 };
@@ -1126,6 +1229,9 @@ const saveFilterPreset = async () => {
     filterSources: [...filterSources.value],
     filterEngines: [...filterEngines.value],
     filterTags: [...filterTags.value],
+    filterExcludedSources: [...filterExcludedSources.value],
+    filterExcludedEngines: [...filterExcludedEngines.value],
+    filterExcludedTags: [...filterExcludedTags.value],
     sortBy: sortBy.value,
     sortDir: sortDir.value,
   };
@@ -1799,6 +1905,9 @@ watch(
     filterSources,
     filterEngines,
     filterTags,
+    filterExcludedSources,
+    filterExcludedEngines,
+    filterExcludedTags,
     isFiltersCollapsed,
     filterSections,
     activeCollection,
@@ -1811,7 +1920,7 @@ watch(
 
 // A new filter, sort or layout starts again from the first cards.
 watch(
-  [layoutMode, sortBy, sortDir, filterCollection, filterStatuses, filterInstallState, filterSources, filterEngines, filterTags, activeCollection, searchQuery],
+  [layoutMode, sortBy, sortDir, filterCollection, filterStatuses, filterInstallState, filterSources, filterEngines, filterTags, filterExcludedSources, filterExcludedEngines, filterExcludedTags, activeCollection, searchQuery],
   () => {
     renderLimit.value = RENDER_BATCH;
   },
@@ -1829,24 +1938,30 @@ watch(activeCollection, () => {
 });
 
 watch(uniqueEngines, (engines) => {
-  const normalizedEngines = normalizeLibraryViewState(
-    { filterEngines: filterEngines.value },
+  const normalized = normalizeLibraryViewState(
+    { filterEngines: filterEngines.value, filterExcludedEngines: filterExcludedEngines.value },
     { validEngines: engines },
-  ).filterEngines;
+  );
 
-  if (!sameStringArray(normalizedEngines, filterEngines.value)) {
-    filterEngines.value = normalizedEngines;
+  if (!sameStringArray(normalized.filterEngines, filterEngines.value)) {
+    filterEngines.value = normalized.filterEngines;
+  }
+  if (!sameStringArray(normalized.filterExcludedEngines, filterExcludedEngines.value)) {
+    filterExcludedEngines.value = normalized.filterExcludedEngines;
   }
 });
 
 watch(uniqueTags, (tags) => {
-  const normalizedTags = normalizeLibraryViewState(
-    { filterTags: filterTags.value },
+  const normalized = normalizeLibraryViewState(
+    { filterTags: filterTags.value, filterExcludedTags: filterExcludedTags.value },
     { validTags: tags },
-  ).filterTags;
+  );
 
-  if (!sameStringArray(normalizedTags, filterTags.value)) {
-    filterTags.value = normalizedTags;
+  if (!sameStringArray(normalized.filterTags, filterTags.value)) {
+    filterTags.value = normalized.filterTags;
+  }
+  if (!sameStringArray(normalized.filterExcludedTags, filterExcludedTags.value)) {
+    filterExcludedTags.value = normalized.filterExcludedTags;
   }
 });
 
@@ -2043,6 +2158,10 @@ onUnmounted(() => {
           </label>
         </div>
 
+        <p class="filter-legend mx-6 mt-4 px-2 text-[0.6875rem] leading-snug" style="color: var(--text-muted)">
+          Pills: click once to show, twice to hide, three times to clear.
+        </p>
+
         <div class="p-6 pb-2 pt-4">
           <button
             @click="toggleFilterSection('sources')"
@@ -2053,21 +2172,20 @@ onUnmounted(() => {
             <span class="text-sm">{{ filterSections.sources ? "▾" : "▸" }}</span>
           </button>
           <div v-show="filterSections.sources" class="mt-3">
-            <div class="mb-2 flex justify-end">
-              <button v-if="filterSources.length" @click="filterSources = []"
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <p class="text-xs" style="color: var(--text-muted)">Matches any included value</p>
+              <button v-if="filterSources.length || filterExcludedSources.length" @click="clearSourceFilters"
                 class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
                 style="color: var(--text-muted)">Clear</button>
             </div>
             <div class="flex flex-wrap gap-1.5">
-              <button v-for="source in LIBRARY_SOURCES" :key="source.key"
-                @click="toggleFilter(filterSources, source.key)"
-                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
-                :aria-pressed="filterSources.includes(source.key)"
-                :style="filterSources.includes(source.key)
-                  ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                  : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'">
-                {{ source.label }}
-              </button>
+              <FilterPill
+                v-for="source in LIBRARY_SOURCES"
+                :key="source.key"
+                :label="source.label"
+                :state="sourceState(source.key)"
+                @activate="cycleSource(source.key)"
+              />
             </div>
           </div>
         </div>
@@ -2082,10 +2200,11 @@ onUnmounted(() => {
             <span class="text-sm">{{ filterSections.engines ? "▾" : "▸" }}</span>
           </button>
           <div v-show="filterSections.engines" class="mt-3">
-            <div class="mb-2 flex justify-end">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <p class="text-xs" style="color: var(--text-muted)">Matches any included value</p>
               <button
-                v-if="filterEngines.length"
-                @click="filterEngines = []"
+                v-if="filterEngines.length || filterExcludedEngines.length"
+                @click="clearEngineFilters"
                 class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
                 style="color: var(--text-muted)"
               >
@@ -2093,19 +2212,13 @@ onUnmounted(() => {
               </button>
             </div>
             <div class="flex flex-wrap gap-1.5">
-              <button
+              <FilterPill
                 v-for="engine in uniqueEngines"
                 :key="engine"
-                @click="toggleFilter(filterEngines, engine)"
-                class="filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
-                :style="
-                  filterEngines.includes(engine)
-                    ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                    : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
-                "
-              >
-                {{ engine }}
-              </button>
+                :label="engine"
+                :state="engineState(engine)"
+                @activate="cycleEngine(engine)"
+              />
               <div
                 v-if="!uniqueEngines.length"
                 class="text-xs italic"
@@ -2134,45 +2247,67 @@ onUnmounted(() => {
               placeholder="Search tags..."
               class="library-search-input w-full rounded-lg px-3 py-2 text-xs mb-2"
             />
-            <p class="text-xs mb-2" style="color: var(--text-muted)">
-              Matches all selected tags.
-            </p>
-            <div class="mb-2 flex justify-end">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <p class="text-xs" style="color: var(--text-muted)">Matches all included tags</p>
               <button
-                v-if="filterTags.length"
-                @click="filterTags = []"
+                v-if="filterTags.length || filterExcludedTags.length"
+                @click="clearTagFilters"
                 class="cursor-pointer hover:text-red-400 text-[0.625rem] normal-case tracking-normal transition-colors"
                 style="color: var(--text-muted)"
               >
                 Clear
               </button>
             </div>
-            <div class="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto">
-              <button
-                v-for="tag in visibleTags"
-                :key="tag"
-                @click="toggleTag(tag)"
-                @contextmenu="openTagColorPicker($event, tag)"
-                @keydown.shift.f10.prevent="openTagColorPicker($event, tag)"
-                :data-tag-color="colorForTag(tag)"
-                :aria-pressed="hasTagFilter(filterTags, tag)"
-                class="tag-pill filter-tag-btn px-2.5 py-1 rounded-full text-[0.6875rem] font-medium"
-                :style="
-                  colorForTag(tag) ? undefined : hasTagFilter(filterTags, tag)
-                    ? 'background: var(--brand-glow); border: 1px solid var(--brand-deep); color: var(--brand)'
-                    : 'background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-secondary)'
-                "
-              >
-                <IconCheck v-if="colorForTag(tag) && hasTagFilter(filterTags, tag)" class="inline w-3 h-3 mr-1" aria-hidden="true" />
-                {{ tag }}
-                <span class="ml-1 opacity-70">{{ tagCounts.get(tag) }}</span>
-              </button>
+            <div
+              ref="tagList"
+              class="max-h-64 overflow-y-auto"
+              @pointerenter="onTagListPointerEnter"
+              @pointerleave="onTagListPointerLeave"
+              @pointerdown="onTagListPointerDown"
+              @focusin="onTagListFocusIn"
+              @focusout="onTagListFocusOut"
+            >
               <div
-                v-if="!visibleTags.length"
-                class="text-xs italic"
-                style="color: var(--text-muted)"
+                v-if="orderedTags.pinned.length"
+                role="group"
+                aria-label="Active tags"
+                class="pinned-tags flex flex-wrap gap-1.5 p-1.5 mb-2 rounded-lg"
               >
-                {{ uniqueTags.length ? "No matching tags" : "No tags found" }}
+                <FilterPill
+                  v-for="option in orderedTags.pinned"
+                  :key="option.label"
+                  :data-tag="option.label"
+                  :label="option.label"
+                  :count="option.count"
+                  :color="colorForTag(option.label)"
+                  :state="tagState(option.label)"
+                  class="tag-pill"
+                  @activate="cycleTag(option.label)"
+                  @contextmenu="openTagColorPicker($event, option.label)"
+                  @keydown.shift.f10.prevent="openTagColorPicker($event, option.label)"
+                />
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                <FilterPill
+                  v-for="option in orderedTags.rest"
+                  :key="option.label"
+                  :data-tag="option.label"
+                  :label="option.label"
+                  :count="option.count"
+                  :color="colorForTag(option.label)"
+                  :state="tagState(option.label)"
+                  class="tag-pill"
+                  @activate="cycleTag(option.label)"
+                  @contextmenu="openTagColorPicker($event, option.label)"
+                  @keydown.shift.f10.prevent="openTagColorPicker($event, option.label)"
+                />
+                <div
+                  v-if="!orderedTags.rest.length && (tagSearchQuery.trim() || !orderedTags.pinned.length)"
+                  class="text-xs italic"
+                  style="color: var(--text-muted)"
+                >
+                  {{ uniqueTags.length ? "No matching tags" : "No tags found" }}
+                </div>
               </div>
             </div>
           </div>
@@ -3177,7 +3312,8 @@ onUnmounted(() => {
   border-bottom-left-radius: 0;
 }
 
-.filter-tag-btn {
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+.pinned-tags {
+  background: var(--bg-raised);
+  border: 1px solid var(--brand-deep);
 }
 </style>

@@ -58,6 +58,9 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   catalog_enabled: true,
 };
 
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
 export const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[] => {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -88,9 +91,10 @@ export const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[
       filterEngines: Array.isArray(source.filterEngines)
         ? source.filterEngines.filter((engine): engine is string => typeof engine === "string")
         : [],
-      filterTags: Array.isArray(source.filterTags)
-        ? source.filterTags.filter((tag): tag is string => typeof tag === "string")
-        : [],
+      filterTags: stringList(source.filterTags),
+      filterExcludedSources: stringList(source.filterExcludedSources),
+      filterExcludedEngines: stringList(source.filterExcludedEngines),
+      filterExcludedTags: stringList(source.filterExcludedTags),
       sortBy:
         typeof source.sortBy === "string" && VALID_SORT_FIELDS.has(source.sortBy as LibraryFilterPreset["sortBy"])
           ? (source.sortBy as LibraryFilterPreset["sortBy"])

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { LIBRARY_SOURCES } from "./libraryGames.ts";
+import { LIBRARY_SOURCES, tagFilterKey } from "./libraryGames.ts";
 import { PLAY_STATUSES } from "./playStatus.ts";
 
 export type CardSize = 0 | 1 | 2 | 3 | 4;
@@ -45,6 +45,9 @@ export interface LibraryViewState {
   filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
+  filterExcludedSources: string[];
+  filterExcludedEngines: string[];
+  filterExcludedTags: string[];
   isFiltersCollapsed: boolean;
   filterSections: FilterSections;
   // Selected user collection tab; "" means "All". Validated against the
@@ -62,6 +65,9 @@ export interface LibraryFilterPreset {
   filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
+  filterExcludedSources: string[];
+  filterExcludedEngines: string[];
+  filterExcludedTags: string[];
   sortBy: SortField;
   sortDir: SortDir;
 }
@@ -74,6 +80,9 @@ export type NormalizedFilterAndSort = Pick<
   | "filterSources"
   | "filterEngines"
   | "filterTags"
+  | "filterExcludedSources"
+  | "filterExcludedEngines"
+  | "filterExcludedTags"
   | "sortBy"
   | "sortDir"
 >;
@@ -121,6 +130,9 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   filterSources: [],
   filterEngines: [],
   filterTags: [],
+  filterExcludedSources: [],
+  filterExcludedEngines: [],
+  filterExcludedTags: [],
   isFiltersCollapsed: true,
   filterSections: { ...DEFAULT_FILTER_SECTIONS },
   activeCollection: "",
@@ -385,10 +397,8 @@ export const normalizeFilterAndSort = (
       ? source.filterInstallState
       : "";
 
-  const filterSources = filterAllowedValues(
-    normalizeStringArray(source.filterSources),
-    LIBRARY_SOURCES.map(({ key }) => key),
-  );
+  const sourceKeys = LIBRARY_SOURCES.map(({ key }) => key);
+  const filterSources = filterAllowedValues(normalizeStringArray(source.filterSources), sourceKeys);
 
   const filterEngines = filterAllowedValues(
     normalizeStringArray(source.filterEngines),
@@ -397,6 +407,30 @@ export const normalizeFilterAndSort = (
 
   const filterTags = normalizeFilterTags(source.filterTags, options.validTags);
 
+  // Excluded lists use the same validators. A value that is also included
+  // stays included only, so hand-edited or synced data can't hold both.
+  const withoutIncluded = (
+    excluded: string[],
+    included: readonly string[],
+    key: (value: string) => string = (value) => value,
+  ): string[] => {
+    const includedKeys = new Set(included.map(key));
+    return excluded.filter((value) => !includedKeys.has(key(value)));
+  };
+  const filterExcludedSources = withoutIncluded(
+    filterAllowedValues(normalizeStringArray(source.filterExcludedSources), sourceKeys),
+    filterSources,
+  );
+  const filterExcludedEngines = withoutIncluded(
+    filterAllowedValues(normalizeStringArray(source.filterExcludedEngines), options.validEngines),
+    filterEngines,
+  );
+  const filterExcludedTags = withoutIncluded(
+    normalizeFilterTags(source.filterExcludedTags, options.validTags),
+    filterTags,
+    tagFilterKey,
+  );
+
   return {
     filterCollection,
     filterStatuses,
@@ -404,6 +438,9 @@ export const normalizeFilterAndSort = (
     filterSources,
     filterEngines,
     filterTags,
+    filterExcludedSources,
+    filterExcludedEngines,
+    filterExcludedTags,
     sortBy,
     sortDir,
   };

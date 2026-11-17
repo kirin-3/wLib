@@ -78,6 +78,7 @@ class BrowserTransport:
                 "headless": True,
                 "disable_resources": True,
                 "google_search": False,
+                "solve_cloudflare": True,
                 "timeout": PAGE_TIMEOUT_MS,
                 # The Pacer retries and counts every attempt against the budget.
                 "retries": 1,

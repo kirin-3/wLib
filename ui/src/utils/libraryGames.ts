@@ -25,10 +25,66 @@ export const gameSources = (game: Pick<GameRecord, "f95_url" | "links">): Set<st
 export const matchesSourceFilter = (
   game: Pick<GameRecord, "f95_url" | "links">,
   selected: readonly string[],
+  excluded: readonly string[] = [],
 ): boolean => {
-  if (!selected.length) return true;
+  if (!selected.length && !excluded.length) return true;
   const sources = gameSources(game);
-  return selected.some((source) => sources.has(source));
+  if (excluded.some((source) => sources.has(source))) return false;
+  return !selected.length || selected.some((source) => sources.has(source));
+};
+
+// Engine identity is the trimmed value. Keep in step with uniqueEngines in LibraryView.
+export const engineFilterKey = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+
+export const matchesEngineFilter = (
+  game: Pick<GameRecord, "engine">,
+  selected: readonly string[],
+  excluded: readonly string[] = [],
+): boolean => {
+  const engine = engineFilterKey(game.engine);
+  // An empty engine never matches an excluded value.
+  if (engine && excluded.some((value) => engineFilterKey(value) === engine)) return false;
+  return !selected.length || selected.some((value) => engineFilterKey(value) === engine);
+};
+
+export type FilterValueState = "neutral" | "include" | "exclude";
+
+export interface FilterValueLists {
+  included: string[];
+  excluded: string[];
+}
+
+const exactFilterKey = (value: string): string => String(value ?? "").trim();
+
+export const filterValueState = (
+  included: readonly string[],
+  excluded: readonly string[],
+  value: string,
+  key: (value: string) => string = exactFilterKey,
+): FilterValueState => {
+  const target = key(value);
+  if (included.some((entry) => key(entry) === target)) return "include";
+  if (excluded.some((entry) => key(entry) === target)) return "exclude";
+  return "neutral";
+};
+
+// Moves a value to its next state: neutral -> include -> exclude -> neutral.
+// Every spelling with the same key leaves both lists first, so a value is
+// never in both lists.
+export const cycleFilterValue = (
+  included: readonly string[],
+  excluded: readonly string[],
+  value: string,
+  key: (value: string) => string = exactFilterKey,
+): FilterValueLists => {
+  const state = filterValueState(included, excluded, value, key);
+  const target = key(value);
+  const nextIncluded = included.filter((entry) => key(entry) !== target);
+  const nextExcluded = excluded.filter((entry) => key(entry) !== target);
+  if (state === "neutral") nextIncluded.push(value);
+  else if (state === "include") nextExcluded.push(value);
+  return { included: nextIncluded, excluded: nextExcluded };
 };
 
 // "v0.8", "0.8" and "V 0.8 " are the same version. Keep in sync with
@@ -130,9 +186,11 @@ export const gameFilterTags = (game: FilterTagFields): string[] => {
 export const matchesTagFilter = (
   game: FilterTagFields,
   selectedTags: readonly string[],
+  excludedTags: readonly string[] = [],
 ): boolean => {
-  if (!selectedTags.length) return true;
+  if (!selectedTags.length && !excludedTags.length) return true;
   const keys = new Set(gameFilterTags(game).map(tagFilterKey));
+  if (excludedTags.some((tag) => keys.has(tagFilterKey(tag)))) return false;
   return selectedTags.every((tag) => keys.has(tagFilterKey(tag)));
 };
 
@@ -161,6 +219,52 @@ export const buildTagFilterOptions = (
   return [...byKey.values()].sort((a, b) =>
     a.label.localeCompare(b.label, undefined, { numeric: true }),
   );
+};
+
+const compareTagLabels = (a: string, b: string): number =>
+  a.localeCompare(b, undefined, { numeric: true });
+
+// The pinned group of the tag list: included tag keys A-Z, then excluded A-Z.
+export const pinnedTagKeysFor = (
+  included: readonly string[],
+  excluded: readonly string[],
+): string[] => {
+  const seen = new Set<string>();
+  const group = (values: readonly string[]): string[] =>
+    [...values]
+      .sort(compareTagLabels)
+      .map(tagFilterKey)
+      .filter((key) => {
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  return [...group(included), ...group(excluded)];
+};
+
+export interface OrderedTagOptions {
+  pinned: TagFilterOption[];
+  rest: TagFilterOption[];
+}
+
+// Pinned tags come first in snapshot order and ignore the search. The other
+// tags stay A-Z and only show when their name contains the search text.
+export const orderTagOptions = (
+  options: readonly TagFilterOption[],
+  pinnedKeys: readonly string[],
+  search: string,
+): OrderedTagOptions => {
+  const byKey = new Map(options.map((option) => [tagFilterKey(option.label), option]));
+  const pinned = pinnedKeys
+    .map((key) => byKey.get(key))
+    .filter((option): option is TagFilterOption => !!option);
+  const pinnedSet = new Set(pinnedKeys);
+  const query = search.trim().toLowerCase();
+  const rest = options
+    .filter((option) => !pinnedSet.has(tagFilterKey(option.label)))
+    .filter((option) => !query || option.label.toLowerCase().includes(query))
+    .sort((a, b) => compareTagLabels(a.label, b.label));
+  return { pinned, rest };
 };
 
 const normalizeSearchText = (text: unknown): string =>

@@ -2341,6 +2341,9 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
         "filterSources": string_list(source.get("filterSources")),
         "filterEngines": string_list(source.get("filterEngines")),
         "filterTags": string_list(source.get("filterTags")),
+        "filterExcludedSources": string_list(source.get("filterExcludedSources")),
+        "filterExcludedEngines": string_list(source.get("filterExcludedEngines")),
+        "filterExcludedTags": string_list(source.get("filterExcludedTags")),
         "sortBy": str(source.get("sortBy") or ""),
         "sortDir": sort_dir if sort_dir in FILTER_PRESET_SORT_DIRECTIONS else "",
     }

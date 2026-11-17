@@ -1518,6 +1518,31 @@ def test_library_filter_presets_drop_invalid_entries_and_duplicates():
     assert get_library_filter_presets() == []
 
 
+def test_library_filter_presets_keep_excluded_lists():
+    update_setting(
+        "library_filter_presets",
+        json.dumps(
+            [
+                {
+                    "name": "No NTR",
+                    "filterExcludedTags": ["netorare", 3],
+                    "filterExcludedEngines": ["RPGM"],
+                    "filterExcludedSources": ["dlsite"],
+                },
+                {"name": "Broken", "filterExcludedTags": "netorare"},
+                {"name": "Old", "filterTags": ["sandbox"]},
+            ]
+        ),
+    )
+    presets = get_library_filter_presets()
+    assert presets[0]["filterExcludedTags"] == ["netorare"]
+    assert presets[0]["filterExcludedEngines"] == ["RPGM"]
+    assert presets[0]["filterExcludedSources"] == ["dlsite"]
+    assert presets[1]["filterExcludedTags"] == []
+    for key in ("filterExcludedTags", "filterExcludedEngines", "filterExcludedSources"):
+        assert presets[2][key] == []
+
+
 def test_find_game_by_f95_url_includes_exe_path():
     game_id = add_game(
         title="Installed Game",

@@ -22,8 +22,14 @@ import {
   isWishlisted,
   matchesGameSearch,
   matchesTagFilter,
+  matchesEngineFilter,
   normalizeVersion,
   toggleTagFilter,
+  cycleFilterValue,
+  filterValueState,
+  tagFilterKey,
+  pinnedTagKeysFor,
+  orderTagOptions,
 } from "./libraryGames.ts";
 import type { GameRecord } from "../services/api.ts";
 
@@ -430,4 +436,113 @@ test("automatic developer and language tags filter and search without being stor
     options.map(({ label, count }) => `${label}=${count}`),
     ["Developer: Other=1", "Developer: Studio=1", "fantasy=2", "Language: English=2", "Language: Japanese=2"],
   );
+});
+
+test("filter values cycle neutral, include, exclude, neutral", () => {
+  let lists = { included: [] as string[], excluded: [] as string[] };
+  lists = cycleFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: ["sandbox"], excluded: [] });
+  assert.equal(filterValueState(lists.included, lists.excluded, "Sandbox", tagFilterKey), "include");
+  lists = cycleFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: [], excluded: ["sandbox"] });
+  assert.equal(filterValueState(lists.included, lists.excluded, "sandbox", tagFilterKey), "exclude");
+  lists = cycleFilterValue(lists.included, lists.excluded, "sandbox", tagFilterKey);
+  assert.deepEqual(lists, { included: [], excluded: [] });
+  assert.equal(filterValueState([], [], "sandbox", tagFilterKey), "neutral");
+
+  // Engines use the exact trimmed value.
+  assert.deepEqual(cycleFilterValue(["RPGM"], [], "RPGM"), { included: [], excluded: ["RPGM"] });
+  assert.equal(filterValueState(["rpgm"], [], "RPGM"), "neutral");
+});
+
+test("cycling a tag removes every spelling from both lists", () => {
+  // Included with two spellings: the next state is exclude, with one spelling.
+  assert.deepEqual(
+    cycleFilterValue(["Sandbox", "sandbox ", "rpg"], ["SANDBOX"], "sandbox", tagFilterKey),
+    { included: ["rpg"], excluded: ["sandbox"] },
+  );
+  // Excluded with two spellings: the next state is neutral.
+  assert.deepEqual(
+    cycleFilterValue([], ["Sandbox", "sandbox"], "sandbox", tagFilterKey),
+    { included: [], excluded: [] },
+  );
+  // A value never ends up in both lists.
+  let lists = { included: ["a"], excluded: ["A"] };
+  for (let step = 0; step < 6; step += 1) {
+    lists = cycleFilterValue(lists.included, lists.excluded, "a", tagFilterKey);
+    const inBoth = lists.included.some((value) =>
+      lists.excluded.some((other) => tagFilterKey(other) === tagFilterKey(value)),
+    );
+    assert.equal(inBoth, false);
+  }
+});
+
+test("tag filters hide games with any excluded tag", () => {
+  const ntr = { tags: "3dcg, Netorare" };
+  const sandbox = { tags: "3dcg, sandbox" };
+  const plain = { tags: "3dcg" };
+  const other = { tags: "vn" };
+  // Exclude only.
+  assert.equal(matchesTagFilter(ntr, [], ["netorare"]), false);
+  assert.equal(matchesTagFilter(other, [], ["netorare"]), true);
+  // Include + exclude.
+  const include = ["3dcg"], exclude = ["netorare", "sandbox"];
+  assert.equal(matchesTagFilter(ntr, include, exclude), false);
+  assert.equal(matchesTagFilter(sandbox, include, exclude), false);
+  assert.equal(matchesTagFilter(plain, include, exclude), true);
+  assert.equal(matchesTagFilter(other, include, exclude), false);
+  // Automatic tag.
+  assert.equal(matchesTagFilter({ tags: "", language: "Japanese" }, [], ["Language: Japanese"]), false);
+  assert.equal(matchesTagFilter({ tags: "", developer: "Studio X" }, [], ["developer: studio x"]), false);
+  // Casing.
+  assert.equal(matchesTagFilter({ tags: "sandbox" }, [], ["Sandbox"]), false);
+});
+
+test("source filters hide games that match any excluded source", () => {
+  const link = (source: string) => ({ source, id: "1", url: "url" });
+  const both = { f95_url: "thread", links: [link("dlsite")] };
+  const f95 = { f95_url: "thread" };
+  const none = { links: [] };
+  assert.equal(matchesSourceFilter(both, [], ["dlsite"]), false);
+  assert.equal(matchesSourceFilter(f95, [], ["dlsite"]), true);
+  assert.equal(matchesSourceFilter(none, [], ["dlsite"]), true);
+  assert.equal(matchesSourceFilter(both, ["f95"], ["dlsite"]), false);
+  assert.equal(matchesSourceFilter(f95, ["f95"], ["dlsite"]), true);
+  assert.equal(matchesSourceFilter(none, ["f95"], ["dlsite"]), false);
+});
+
+test("engine filters match any included engine and hide excluded ones", () => {
+  assert.equal(matchesEngineFilter({ engine: "RPGM" }, [], []), true);
+  assert.equal(matchesEngineFilter({ engine: " RPGM " }, [], ["RPGM"]), false);
+  assert.equal(matchesEngineFilter({ engine: "Ren'Py" }, [], ["RPGM"]), true);
+  // An empty engine is never hidden by an excluded engine.
+  assert.equal(matchesEngineFilter({ engine: "" }, [], ["RPGM"]), true);
+  assert.equal(matchesEngineFilter({ engine: "" }, ["RPGM"], []), false);
+  assert.equal(matchesEngineFilter({ engine: "Ren'Py" }, ["Ren'Py", "Unity"], ["RPGM"]), true);
+  assert.equal(matchesEngineFilter({ engine: "RPGM" }, ["Ren'Py"], ["RPGM"]), false);
+});
+
+test("pinned tags list included A-Z, then excluded A-Z, and ignore the search", () => {
+  const options = [
+    { label: "3dcg", count: 1 },
+    { label: "Netorare", count: 1 },
+    { label: "rpg", count: 2 },
+    { label: "sandbox", count: 3 },
+    { label: "vn", count: 1 },
+  ];
+  const keys = pinnedTagKeysFor(["vn", "3dcg"], ["Netorare"]);
+  assert.deepEqual(keys, ["3dcg", "vn", "netorare"]);
+  const ordered = orderTagOptions(options, keys, "");
+  assert.deepEqual(ordered.pinned.map((option) => option.label), ["3dcg", "vn", "Netorare"]);
+  assert.deepEqual(ordered.rest.map((option) => option.label), ["rpg", "sandbox"]);
+
+  const searched = orderTagOptions(options, keys, " SAN ");
+  assert.deepEqual(searched.pinned.map((option) => option.label), ["3dcg", "vn", "Netorare"]);
+  assert.deepEqual(searched.rest.map((option) => option.label), ["sandbox"]);
+
+  const plain = orderTagOptions(options, pinnedTagKeysFor([], []), "");
+  assert.deepEqual(plain.pinned, []);
+  assert.deepEqual(plain.rest.map((option) => option.label), ["3dcg", "Netorare", "rpg", "sandbox", "vn"]);
+  // A pinned key no game has any more is skipped.
+  assert.deepEqual(orderTagOptions(options, ["gone"], "").pinned, []);
 });
