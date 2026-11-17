@@ -916,6 +916,34 @@ def _extract_tool_via_local_scratch(
     return True
 
 
+def _zip_raw_name(info: zipfile.ZipInfo) -> bytes | None:
+    """Stored name bytes of an entry whose name zipfile read as cp437.
+
+    None when the name needs no second decoding: the UTF-8 flag (bit 11) is
+    set, or a valid Info-ZIP Unicode Path extra field (0x7075) gave zipfile
+    the real name already. That name can hold letters cp437 does not have,
+    so it must never be encoded back to cp437.
+    """
+    if info.flag_bits & 0x800:
+        return None
+    raw = info.orig_filename.encode("cp437")
+    extra = info.extra
+    while len(extra) >= 4:
+        kind = int.from_bytes(extra[0:2], "little")
+        size = int.from_bytes(extra[2:4], "little")
+        data = extra[4 : 4 + size]
+        if (
+            kind == 0x7075
+            and len(data) >= 5
+            and data[0] == 1
+            and int.from_bytes(data[1:5], "little") == zlib.crc32(raw)
+        ):
+            return None
+        extra = extra[4 + size :]
+    # zipfile also ends the name at the first null byte.
+    return raw.split(b"\0", 1)[0]
+
+
 def _zip_name_encoding(infos: list[zipfile.ZipInfo]) -> str:
     """Encoding of the names stored without the UTF-8 flag (bit 11).
 
@@ -924,9 +952,9 @@ def _zip_name_encoding(infos: list[zipfile.ZipInfo]) -> str:
     is chosen for the whole archive so a cp437 name is never half-converted.
     """
     raw = [
-        info.filename.encode("cp437")
+        name
         for info in infos
-        if not info.flag_bits & 0x800 and not info.filename.isascii()
+        if (name := _zip_raw_name(info)) is not None and not name.isascii()
     ]
     for encoding in ("utf-8", "cp932"):
         try:
@@ -941,9 +969,10 @@ def _zip_name_encoding(infos: list[zipfile.ZipInfo]) -> str:
 def _zip_entry_name(info: zipfile.ZipInfo, encoding: str = "utf-8") -> str:
     """Entry name, decoding names stored without the UTF-8 flag with `encoding`."""
     name = info.filename
-    if not info.flag_bits & 0x800 and encoding != "cp437":
+    raw = _zip_raw_name(info) if encoding != "cp437" else None
+    if raw is not None:
         try:
-            name = name.encode("cp437").decode(encoding)
+            name = raw.decode(encoding)
         except UnicodeError:
             pass
     return name.replace("\\", "/")

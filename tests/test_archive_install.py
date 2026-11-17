@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import zipfile
+import zlib
 from pathlib import Path
 from typing import cast
 
@@ -3217,3 +3218,40 @@ def test_failed_game_row_update_restores_the_launch_target(tmp_path, monkeypatch
     targets = db.list_game_launch_targets(gid)
     assert [t["exe_path"] for t in targets] == [str(old / "Old.exe")]
     assert (old / "Old.exe").read_bytes() == b"old alt"
+
+
+def _zip_with_unicode_path_field(archive, name: str, stored: bytes) -> None:
+    """Write one entry stored as `stored` bytes without the UTF-8 flag, plus an
+    Info-ZIP Unicode Path extra field (0x7075) that holds the real `name`."""
+    import struct
+
+    placeholder = "p" * len(stored)
+    field = struct.pack("<BL", 1, zlib.crc32(stored)) + name.encode("utf-8")
+    info = zipfile.ZipInfo(placeholder)
+    info.extra = struct.pack("<HH", 0x7075, len(field)) + field
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(info, b"data")
+    archive.write_bytes(archive.read_bytes().replace(placeholder.encode(), stored))
+
+
+def test_extract_zip_uses_unicode_path_field_with_non_cp437_letters(tmp_path):
+    # A Turkish letter (ı) is not in cp437. zipfile returns it from the
+    # Unicode Path field; encoding that name back to cp437 used to fail with
+    # "'charmap' codec can't encode character 'ı'".
+    archive = tmp_path / "tr.zip"
+    name = "Game/www/img/Kılıç.png"
+    _zip_with_unicode_path_field(archive, name, name.encode("utf-8"))
+    staging = tmp_path / "out"
+    assert extract_zip(str(archive), str(staging)) == 1
+    assert (staging / "Game" / "www" / "img" / "Kılıç.png").read_bytes() == b"data"
+
+
+def test_extract_zip_does_not_decode_unicode_path_name_again(tmp_path):
+    # "é" is in cp437. The name from the Unicode Path field is already right
+    # and must not be decoded a second time as cp932.
+    archive = tmp_path / "fr.zip"
+    name = "Caféine/save.txt"
+    _zip_with_unicode_path_field(archive, name, name.encode("cp1252"))
+    staging = tmp_path / "out"
+    assert extract_zip(str(archive), str(staging)) == 1
+    assert (staging / "Caféine" / "save.txt").read_bytes() == b"data"
