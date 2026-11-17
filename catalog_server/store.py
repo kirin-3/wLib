@@ -111,6 +111,19 @@ CREATE TABLE IF NOT EXISTS f95_prefix_names (
     name TEXT NOT NULL,
     category TEXT
 );
+-- First-post details of F95 threads; `thread_ts` is the feed `ts` when the
+-- page was read, so a newer `ts` in f95_threads means the thread changed.
+CREATE TABLE IF NOT EXISTS f95_thread_details (
+    thread_id INTEGER PRIMARY KEY,
+    thread_ts INTEGER,
+    fetched_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    overview TEXT,
+    original_title TEXT,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    language TEXT,
+    external_ids TEXT NOT NULL DEFAULT '{{}}'
+);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -291,7 +304,58 @@ class CatalogStore:
                 ).rowcount
         return marked
 
+    def f95_newest_ts(self) -> int | None:
+        row = cast(tuple[int | None], self.conn.execute("SELECT MAX(ts) FROM f95_threads").fetchone())
+        return row[0]
+
+    def f95_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
+        """Threads to read: changed ones newest first, then never-read ones most viewed first.
+
+        Changed means a feed `ts` newer than the stored details, or a thread
+        never read whose `ts` is newer than `since_ts`.
+        """
+        changed = "(d.thread_id IS NOT NULL OR t.ts > :since)"
+        rows = self.conn.execute(
+            "SELECT t.thread_id, t.ts FROM f95_threads t "
+            + "LEFT JOIN f95_thread_details d ON d.thread_id = t.thread_id "
+            + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
+            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts) "
+            + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
+            + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
+            + "t.thread_id LIMIT :limit",
+            {"since": since_ts, "limit": limit},
+        )
+        return cast(list[tuple[int, int]], rows.fetchall())
+
+    def upsert_f95_details(
+        self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
+    ) -> int:
+        with self.conn:
+            _ = self.conn.execute(
+                "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
+                + "status, overview, original_title, aliases, language, external_ids) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    thread_ts,
+                    now,
+                    details["status"],
+                    details.get("overview"),
+                    details.get("original_title"),
+                    json.dumps(details.get("aliases") or [], ensure_ascii=False),
+                    details.get("language"),
+                    json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                ),
+            )
+        return 1
+
     def count(self, source: str) -> int:
+        if source == "f95_threads":
+            row = cast(
+                tuple[int],
+                self.conn.execute("SELECT COUNT(*) FROM f95_thread_details").fetchone(),
+            )
+            return row[0]
         table, _key = SOURCE_TABLES[source][0]
         row = cast(
             tuple[int],

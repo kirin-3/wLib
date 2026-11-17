@@ -24,6 +24,8 @@ class SiteLimits:
 # One entry per pacer key. F95's anonymous limit is about 100 per hour.
 SITE_LIMITS: dict[str, SiteLimits] = {
     "f95": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
+    # Thread pages, outside the feed's limit. About 80 threads change per day.
+    "f95_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
     "dlsite": SiteLimits(min_delay=3.0),
     "ryuugames": SiteLimits(min_delay=3.0),
     "vndb": SiteLimits(min_delay=1.0, budget=150, window=300.0, wait=True),

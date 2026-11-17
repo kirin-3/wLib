@@ -12,8 +12,6 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from typing import IO
 
-from core.catalog_format import SOURCES
-
 from .browser import BrowserTransport, f95_login_cookies
 from .config import (
     BROWSER_SITES_ENV,
@@ -26,7 +24,7 @@ from .config import (
 from .net import Pacer, Request, Transport, urllib_transport
 from .publish import R2Storage, Storage
 from .runner import run
-from .sources import get_sources
+from .sources import STEPS, get_sources
 from .store import open_stores
 
 log = logging.getLogger("catalog_server")
@@ -34,14 +32,14 @@ log = logging.getLogger("catalog_server")
 
 def _source_list(value: str) -> list[str]:
     if value == "all":
-        return list(SOURCES)
+        return list(STEPS)
     if value == "none":
         return []
     names = [part.strip() for part in value.split(",") if part.strip()]
-    unknown = [name for name in names if name not in SOURCES]
+    unknown = [name for name in names if name not in STEPS]
     if unknown:
         raise argparse.ArgumentTypeError(
-            f"unknown source(s): {', '.join(unknown)}; choose from {', '.join(SOURCES)}"
+            f"unknown source(s): {', '.join(unknown)}; choose from {', '.join(STEPS)}"
         )
     return names
 
@@ -78,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = run_parser.add_argument(
         "--sources",
         type=_source_list,
-        default=list(SOURCES),
+        default=list(STEPS),
         help="comma-separated sources to collect, 'all' (default) or 'none' to only publish",
     )
     _ = run_parser.add_argument(
@@ -142,7 +140,7 @@ def _status(folder: str) -> int:
                     "state": state.items(name),
                     "requests_last_hour": len(state.request_times(name, time.time() - 3600)),
                 }
-                for name in SOURCES
+                for name in STEPS
             },
         }
     finally:
@@ -164,7 +162,9 @@ class NetworkSettings:
 
     def __init__(self) -> None:
         self.proxies: dict[str, str] = site_proxies_from_env()
-        self.browser_sites: frozenset[str] = browser_sites_from_env()
+        sites = browser_sites_from_env()
+        # Thread pages go the same way as the feed.
+        self.browser_sites: frozenset[str] = sites | {"f95_threads"} if "f95" in sites else sites
         self.f95_cookie: str | None = f95_cookie_from_env()
         if self.f95_cookie is not None and "f95" not in self.browser_sites:
             # Only the browser keeps the cookie to f95zone.to.
@@ -258,6 +258,10 @@ def main(
     for name in until:
         if name not in selected:
             selected.append(name)
+    if "f95_threads" in selected and settings.f95_cookie is None:
+        # F95 hides links from guests, so thread pages are read only when logged in.
+        log.info("f95_threads: skipped, it needs the F95 login cookie")
+        selected.remove("f95_threads")
     with _run_lock(folder) as acquired:
         if not acquired:
             log.info("another catalog run is in progress; skipping this one")
@@ -280,7 +284,7 @@ def main(
                 state,
                 pacer,
                 get_sources(),
-                [name for name in SOURCES if name in selected],
+                [name for name in STEPS if name in selected],
                 storage=storage,
                 work_dir=folder,
                 force_publish=args.force_publish,
