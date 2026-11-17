@@ -2,6 +2,7 @@
 import type { GameRecord, LaunchTarget } from "../services/api.ts";
 import type { SortDir, SortField } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
+import { automaticTags } from "./threadDetails.ts";
 
 export const LIBRARY_SOURCES = [
   { key: "f95", label: "F95Zone" },
@@ -112,12 +113,26 @@ export const toggleTagFilter = (
   return checked ? [...remaining, tag] : remaining;
 };
 
+type FilterTagFields = Pick<GameRecord, "tags" | "developer" | "language">;
+
+// The game's own tags plus the automatic "Developer:" and "Language:" tags,
+// which the filter and search use but the game's tag list never stores.
+export const gameFilterTags = (game: FilterTagFields): string[] => {
+  const seen = new Set<string>();
+  return [...gameTags(game), ...automaticTags(game)].filter((tag) => {
+    const key = tagFilterKey(tag);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 export const matchesTagFilter = (
-  game: Pick<GameRecord, "tags">,
+  game: FilterTagFields,
   selectedTags: readonly string[],
 ): boolean => {
   if (!selectedTags.length) return true;
-  const keys = new Set(gameTags(game).map(tagFilterKey));
+  const keys = new Set(gameFilterTags(game).map(tagFilterKey));
   return selectedTags.every((tag) => keys.has(tagFilterKey(tag)));
 };
 
@@ -128,12 +143,12 @@ export interface TagFilterOption {
 
 // One option per logical tag, with the first spelling seen as the label.
 export const buildTagFilterOptions = (
-  games: readonly Pick<GameRecord, "tags">[],
+  games: readonly FilterTagFields[],
 ): TagFilterOption[] => {
   const byKey = new Map<string, TagFilterOption>();
   games.forEach((game) => {
     const seenInGame = new Set<string>();
-    gameTags(game).forEach((tag) => {
+    gameFilterTags(game).forEach((tag) => {
       const key = tagFilterKey(tag);
       // A game carrying both "Sandbox" and "sandbox" is still one game.
       if (seenInGame.has(key)) return;
@@ -157,7 +172,14 @@ const normalizeSearchText = (text: unknown): string =>
 export const matchesGameSearch = (game: GameRecord, query: string): boolean => {
   const cleanQuery = normalizeSearchText(query.trim());
   if (!cleanQuery) return true;
-  return [game.title, game.developer, game.engine, ...gameTags(game)].some((value) =>
+  return [
+    game.title,
+    game.original_title,
+    ...(game.aliases ?? []),
+    game.developer,
+    game.engine,
+    ...gameFilterTags(game),
+  ].some((value) =>
     normalizeSearchText(value).includes(cleanQuery),
   );
 };

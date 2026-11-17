@@ -1110,6 +1110,13 @@ export interface GameRecord {
   // When the F95 rating was read (UTC ISO); "" when unknown.
   rating_updated_at?: string;
   developer?: string;
+  // F95 first-post details, filled from the catalog and editable in the Info tab.
+  overview?: string;
+  original_title?: string;
+  aliases?: string[];
+  // The Language text as written, e.g. "English (MTL), Japanese".
+  language?: string;
+  external_links?: string[];
   engine?: string;
   status?: string;
   play_status?: string;

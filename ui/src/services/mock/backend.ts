@@ -360,7 +360,14 @@ export class MockBackend {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false };
+          gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false,
+          // Simulates the catalog's F95 thread details for a thread URL.
+          ...(args[2] ? {
+            overview: "A preview overview from the thread's first post.\nIt can span lines.",
+            original_title: "プレビューのゲーム", aliases: ["Preview Game"],
+            language: "English (MTL), Japanese",
+            external_links: ["https://www.patreon.com/preview", "https://preview.itch.io/game", "https://discord.gg/preview"],
+          } : { overview: "", original_title: "", aliases: [], language: "", external_links: [] }) };
         localStorage.setItem("wlib-mock-games", JSON.stringify([...games, game]));
         const metadataPending = !!game.f95_url;
         if (metadataPending) {
@@ -381,6 +388,10 @@ export class MockBackend {
         const nextGames = games.map((game) => {
           if (game.id !== Number(args[0])) return game;
           const merged: Record<string, unknown> = { ...game, ...fields };
+          if (typeof fields.aliases === "string") {
+            // Mirrors the backend: the Info tab sends aliases as one comma list.
+            merged.aliases = [...new Set(fields.aliases.split(",").map((alias) => alias.trim()).filter(Boolean))];
+          }
           if (fields.version != null && normalizeVersion(String(fields.version)) !== normalizeVersion(game.version)) {
             merged.skipped_version = "";
           }

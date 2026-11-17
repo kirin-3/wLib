@@ -12,6 +12,7 @@ import {
   gameFolder,
   gameSources,
   matchesSourceFilter,
+  gameFilterTags,
   gameTags,
   hasAvailableUpdate,
   hasTagFilter,
@@ -400,4 +401,33 @@ test("getEffectiveLaunchTargets names the default entry", () => {
   });
   assert.equal(targets[0]?.label, "Season 1");
   assert.equal(targets[0]?.isDefault, true);
+});
+
+test("automatic developer and language tags filter and search without being stored", () => {
+  const game: GameRecord = {
+    id: 1,
+    title: "A Game",
+    exe_path: "",
+    developer: "Studio",
+    language: "English (Sonnet 5.5 & Opus 5.5), Japanese",
+    original_title: "原題のゲーム",
+    aliases: ["Other Name"],
+    tags: "fantasy, Language: English",
+  };
+  assert.deepEqual(gameFilterTags(game), [
+    "fantasy",
+    "Language: English",
+    "Developer: Studio",
+    "Language: Japanese",
+  ]);
+  assert.deepEqual(gameTags(game), ["fantasy", "Language: English"]);
+  assert.equal(matchesTagFilter(game, ["developer: studio", "Language: Japanese"]), true);
+  assert.equal(matchesTagFilter(game, ["Language: German"]), false);
+  for (const query of ["原題", "other name", "language: japanese"])
+    assert.equal(matchesGameSearch(game, query), true, query);
+  const options = buildTagFilterOptions([game, { ...game, id: 2, developer: "Other" }]);
+  assert.deepEqual(
+    options.map(({ label, count }) => `${label}=${count}`),
+    ["Developer: Other=1", "Developer: Studio=1", "fantasy=2", "Language: English=2", "Language: Japanese=2"],
+  );
 });

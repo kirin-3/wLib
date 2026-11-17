@@ -2334,7 +2334,7 @@ onUnmounted(() => {
             v-model="searchQuery"
             type="text"
             aria-label="Search games"
-            placeholder="Search title, developer, tags or engine..."
+            placeholder="Search titles, aliases, developer, tags or engine..."
             class="library-search-input w-full rounded-lg pl-10 pr-10 py-2 text-sm focus:outline-none"
           />
           <button

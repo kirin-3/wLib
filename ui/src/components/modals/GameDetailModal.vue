@@ -51,6 +51,7 @@ import { useModalKeyboard } from "../../utils/modalKeyboard";
 import ScreenshotLightbox from "../ScreenshotLightbox.vue";
 import { screenshotUrls, type ScreenshotUrls } from "../../utils/screenshots";
 import { defaultTargetLabel, hasAvailableUpdate, isUpdateSkipped, isWishlisted, normalizeVersion } from "../../utils/libraryGames";
+import { LANGUAGE_TAG_PREFIX, languageNames, linkLabel, parseLinkLines } from "../../utils/threadDetails";
 import type {
   GameAttachment,
   NoteLink,
@@ -174,6 +175,12 @@ const savingDefaultLabel = ref(false);
 const f95Url = ref("");
 const version = ref("");
 const developer = ref("");
+// F95 first-post details; aliases edit as one comma list, links one URL per line.
+const overview = ref("");
+const originalTitle = ref("");
+const aliasesText = ref("");
+const language = ref("");
+const linksText = ref("");
 const finishedVersion = ref("");
 const commandLineArgs = ref("");
 const coverImage = ref("");
@@ -637,6 +644,11 @@ const formSnapshot = (): string =>
     f95_url: f95Url.value,
     version: version.value,
     developer: developer.value,
+    overview: overview.value,
+    original_title: originalTitle.value,
+    aliases: aliasesText.value,
+    language: language.value,
+    external_links: linksText.value,
     finished_version: finishedVersion.value,
     command_line_args: commandLineArgs.value,
     cover_image: coverImage.value,
@@ -714,6 +726,9 @@ const parseGameTags = (raw: GameRecord["tags"]): string[] => {
   return [];
 };
 
+const detailLinks = computed(() => parseLinkLines(linksText.value));
+const languageTags = computed(() => languageNames(language.value).map((name) => LANGUAGE_TAG_PREFIX + name));
+
 // F95 backfill must stop refilling tags once the user changed them. Saving an
 // untouched tag list must not set that mark.
 const userEditedTagFields = (): Record<string, unknown> =>
@@ -738,6 +753,11 @@ const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   f95_url: g.f95_url || "",
   version: g.version || "",
   developer: g.developer || "",
+  overview: g.overview || "",
+  original_title: g.original_title || "",
+  aliases: (g.aliases || []).join(", "),
+  language: g.language || "",
+  external_links: (g.external_links || []).join("\n"),
   finished_version: g.finished_version || "",
   command_line_args: g.command_line_args || "",
   cover_image: g.cover_image_path || g.cover_image || "",
@@ -770,6 +790,11 @@ const formSetters: Record<string, (value: unknown) => void> = {
   f95_url: (v) => { f95Url.value = String(v); },
   version: (v) => { version.value = String(v); },
   developer: (v) => { developer.value = String(v); },
+  overview: (v) => { overview.value = String(v); },
+  original_title: (v) => { originalTitle.value = String(v); },
+  aliases: (v) => { aliasesText.value = String(v); },
+  language: (v) => { language.value = String(v); },
+  external_links: (v) => { linksText.value = String(v); },
   finished_version: (v) => { finishedVersion.value = String(v); },
   command_line_args: (v) => { commandLineArgs.value = String(v); },
   cover_image: (v) => { coverImage.value = String(v); },
@@ -855,6 +880,11 @@ watch(
         f95Url.value = g.f95_url || "";
         version.value = g.version || "";
         developer.value = g.developer || "";
+        overview.value = g.overview || "";
+        originalTitle.value = g.original_title || "";
+        aliasesText.value = (g.aliases || []).join(", ");
+        language.value = g.language || "";
+        linksText.value = (g.external_links || []).join("\n");
         finishedVersion.value = g.finished_version || "";
         commandLineArgs.value = g.command_line_args || "";
         coverImage.value = g.cover_image_path || g.cover_image || "";
@@ -1709,6 +1739,11 @@ const save = async () => {
       f95_url: f95Url.value.trim(),
       version: version.value,
       developer: developer.value.trim(),
+      overview: overview.value.trim(),
+      original_title: originalTitle.value.trim(),
+      aliases: aliasesText.value,
+      language: language.value.trim(),
+      external_links: parseLinkLines(linksText.value),
       finished_version: finishedVersion.value,
       command_line_args: commandLineArgs.value,
       cover_image_path: coverImage.value,
@@ -3044,6 +3079,39 @@ const removeAttachment = async (name: string) => {
             <div class="col-span-2">
               <label for="detail-developer" class="modal-label">Developer</label>
               <input v-model="developer" id="detail-developer" type="text" placeholder="Creator or studio" class="modal-input w-full" />
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-original-title" class="modal-label">Original title</label>
+              <input v-model="originalTitle" id="detail-original-title" type="text" placeholder="Title in the original language" class="modal-input w-full" />
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-aliases" class="modal-label">Aliases</label>
+              <input v-model="aliasesText" id="detail-aliases" type="text" placeholder="Other titles, separated by commas" class="modal-input w-full" />
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-language" class="modal-label">Language</label>
+              <input v-model="language" id="detail-language" type="text" placeholder="English, Japanese" class="modal-input w-full" />
+              <p v-if="languageTags.length" class="text-xs mt-1" style="color: var(--text-muted)">
+                Filter tags: {{ languageTags.join(", ") }}
+              </p>
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-overview" class="modal-label">Overview</label>
+              <textarea v-model="overview" id="detail-overview" rows="6" placeholder="What the game is about" class="modal-input w-full" />
+            </div>
+
+            <div class="col-span-2">
+              <label for="detail-links" class="modal-label">Developer links</label>
+              <textarea v-model="linksText" id="detail-links" rows="3" placeholder="One URL per line: Patreon, itch.io, Discord…" class="modal-input w-full font-mono" />
+              <div v-if="detailLinks.length" class="flex flex-wrap gap-2 mt-2">
+                <button v-for="url in detailLinks" :key="url" type="button" class="modal-toolbar-action ui-action-btn" :title="url" @click="api.openInBrowser(url)">
+                  <IconExternalLinkFilled class="ui-action-icon" />{{ linkLabel(url) }}
+                </button>
+              </div>
             </div>
 
             <div>
