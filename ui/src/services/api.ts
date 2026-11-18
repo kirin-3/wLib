@@ -602,6 +602,7 @@ export interface DownloadQueueJob {
   job_id: string;
   kind: "host" | "torrent";
   game_id: number;
+  game_wishlisted?: boolean;
   title: string;
   version: string;
   state: DownloadQueueState;

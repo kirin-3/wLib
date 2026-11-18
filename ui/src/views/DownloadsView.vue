@@ -14,9 +14,10 @@ import DownloadRow from '../components/downloads/DownloadRow.vue';
 import DownloadSpeedSummary from '../components/downloads/DownloadSpeedSummary.vue';
 import DownloadQuickSettings from '../components/downloads/DownloadQuickSettings.vue';
 import {
-  forecastText, groupDownloads, holdText, moveOrder, pauseNeedsConfirm, removeNeedsConfirm, sectionHeading,
+  forecastText, groupDownloads, holdText, installLabel, moveOrder, pauseNeedsConfirm, removeNeedsConfirm, sectionHeading,
   stateChangeAnnouncement, type RowAction,
 } from '../utils/downloadQueue';
+import {isWishlisted} from '../utils/libraryGames';
 import {formatSpeed} from '../utils/torrentDownloads';
 import {confirmAction} from '../utils/confirm';
 import {openInstallArchive} from '../utils/installArchive';
@@ -154,6 +155,10 @@ async function onDrop(index: number) {
 }
 function onDragEnd() { draggedId.value = null; dropIndex.value = null; }
 
+function offerInstallLabel(offer: DownloadOffer): string {
+  const game = gameFor(offer.game_id);
+  return installLabel({game_wishlisted: !!game && isWishlisted(game)});
+}
 const offerRunning = (offer: DownloadOffer) => runningGames.value.includes(offer.game_id);
 function installOffer(offer: DownloadOffer) {
   if (offerRunning(offer)) return;
@@ -265,7 +270,7 @@ onBeforeUnmount(() => {
               <p v-if="offerRunning(offer)" class="text-xs mt-1" style="color: var(--text-muted)">Close the game to install the update.</p>
             </div>
             <div class="flex flex-wrap gap-2 mt-3">
-              <button type="button" class="tool-btn primary" :disabled="offerRunning(offer)" :title="offerRunning(offer) ? 'Close the game to install the update' : 'Install update'" @click="installOffer(offer)"><IconPackage class="w-4 h-4" />Install update</button>
+              <button type="button" class="tool-btn primary" :disabled="offerRunning(offer)" :title="offerRunning(offer) ? 'Close the game to install the update' : offerInstallLabel(offer)" @click="installOffer(offer)"><IconPackage class="w-4 h-4" />{{ offerInstallLabel(offer) }}</button>
               <button type="button" class="tool-btn" title="Hide this archive; the file stays" @click="dismissOffer(offer)"><IconX class="w-4 h-4" />Dismiss</button>
             </div>
           </li>

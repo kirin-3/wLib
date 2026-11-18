@@ -16,6 +16,7 @@ import {confirmChoice} from '../utils/confirm';
 import {
   awaitsSeedAnswer,
   downloadPollMs,
+  installLabel,
   installSource,
   jobForGame,
   runQueueCommand,
@@ -50,7 +51,7 @@ const badge = computed(() => sidebarBadge(jobs.value));
 const reportError = (message: string) => { notify(message, 'error'); };
 
 function toastActions(job: DownloadQueueJob) {
-  return {label: 'Install update', run: () => { void install(job); }};
+  return {label: installLabel(job), run: () => { void install(job); }};
 }
 
 /** Opens the install dialog for a finished download, or says why it cannot. */
@@ -146,7 +147,10 @@ export function useUpdateDownloads() {
         const job = offered;
         offered = null;
         if (jobs.value.some((item) => item.job_id === job.job_id)) {
-          notify('The downloaded update was not installed. It stays in Downloads.', 'info', '', toastActions(job));
+          const message = job.game_wishlisted
+            ? 'The downloaded game is still in Downloads.'
+            : 'The downloaded update was not installed. It stays in Downloads.';
+          notify(message, 'info', '', toastActions(job));
         }
       }
     },

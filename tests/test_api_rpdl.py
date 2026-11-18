@@ -2,7 +2,7 @@
 import pytest
 
 from core.api import Api
-from core.database import add_game, init_db
+from core.database import add_game, get_game, init_db, update_game
 from core.downloads import credentials, torrents
 from core.downloads.hosts import rpdl
 
@@ -95,8 +95,10 @@ def test_start_refused_while_game_runs(api, store, monkeypatch):
     assert result["success"] is False and "Close the game" in str(result["error"])
 
 
-def test_start_runs_a_torrent_job(api, store, monkeypatch):
-    gid = game()
+@pytest.mark.parametrize(("exe", "expected"), [("", "0.8"), ("x.exe", "0.7")])
+def test_start_runs_a_torrent_job(api, store, monkeypatch, exe, expected):
+    gid = add_game(title="Eternum", exe_path=exe)
+    update_game(gid, {"latest_version": "0.7"})
     store[credentials.RPDL_TOKEN] = "tok"
     started = {}
 
@@ -115,6 +117,7 @@ def test_start_runs_a_torrent_job(api, store, monkeypatch):
     # Added to the queue, and prepared paused until it gets a slot.
     assert started == {"game_id": gid, "title": "Eternum", "version": "0.8", "rpdl_id": 5,
                        "paused": True, "job_id": result["job_id"]}
+    assert get_game(gid)["latest_version"] == expected
     queued = api.get_download_queue()["jobs"]
     assert [(job["job_id"], job["kind"], job["source"]) for job in queued] == [
         (result["job_id"], "torrent", {"rpdl_id": 5})]

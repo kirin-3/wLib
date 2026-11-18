@@ -8,7 +8,7 @@ import {
 } from '@tabler/icons-vue';
 import type {DownloadQueueJob} from '../../services/api';
 import {
-  FAILURE_ACTION_LABELS, awaitsSeedAnswer, failureInfo, percentOf, progressText, rowActions,
+  FAILURE_ACTION_LABELS, awaitsSeedAnswer, failureInfo, installLabel, percentOf, progressText, rowActions,
   sourceLabel, stateText, type RowAction,
 } from '../../utils/downloadQueue';
 
@@ -16,7 +16,7 @@ const props = defineProps<{
   job: DownloadQueueJob;
   /** Free bytes on the downloads drive, for the disk failure sentence. */
   freeBytes: number | null;
-  /** The game runs, so "Install update" waits. */
+  /** A running game blocks installation. */
   gameRunning: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
@@ -50,10 +50,9 @@ const sourceLine = computed(() => {
 const indeterminate = computed(() => props.job.state === 'running' && (percent.value === null || !!props.job.details.hint));
 const barShown = computed(() => ['running', 'paused', 'queued', 'held', 'retry_wait'].includes(props.job.state) && (props.job.bytes_done > 0 || props.job.state === 'running'));
 
-const LABELS: Record<RowAction, string> = {
+const LABELS: Record<Exclude<RowAction, "install">, string> = {
   ...FAILURE_ACTION_LABELS,
   pause: 'Pause', resume: 'Resume', now: 'Download now', up: 'Move up', down: 'Move down', top: 'To the top',
-  install: 'Install update',
 };
 const ICONS = {
   pause: IconPlayerPause, resume: IconPlayerPlay, now: IconBolt, up: IconArrowUp, down: IconArrowDown,
@@ -62,7 +61,9 @@ const ICONS = {
 } satisfies Record<RowAction, unknown>;
 // The move buttons show only their icon; the label is for assistive technology.
 const iconOnly = (action: RowAction) => action === 'up' || action === 'down' || action === 'top';
-const label = (action: RowAction) => `${LABELS[action]}${iconOnly(action) ? `: ${props.job.title}` : ''}`;
+const actionLabel = (action: RowAction) => action === 'install'
+  ? installLabel(props.job)
+  : LABELS[action];
 // One filled button per row: the step that moves the download forward.
 const isPrimary = (action: RowAction) => action === 'install' || action === 'resume' || (action === 'now' && props.job.state !== 'paused');
 const disabled = (action: RowAction) => action === 'install' && props.gameRunning;
@@ -118,13 +119,13 @@ const disabled = (action: RowAction) => action === 'install' && props.gameRunnin
         class="row-btn"
         :class="{ 'icon-only': iconOnly(action), primary: isPrimary(action) }"
         :data-action="action"
-        :aria-label="label(action)"
-        :title="disabled(action) ? 'Close the game to install the update' : LABELS[action]"
+        :aria-label="iconOnly(action) ? `${actionLabel(action)}: ${job.title}` : actionLabel(action)"
+        :title="disabled(action) ? 'Close the game to install the update' : actionLabel(action)"
         :disabled="disabled(action)"
         @click="emit('action', action)"
       >
         <component :is="ICONS[action]" class="w-4 h-4" aria-hidden="true" />
-        <span v-if="!iconOnly(action)">{{ LABELS[action] }}</span>
+        <span v-if="!iconOnly(action)">{{ actionLabel(action) }}</span>
       </button>
     </div>
   </li>

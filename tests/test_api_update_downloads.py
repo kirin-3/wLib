@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-from core import update_downloads
+import pytest
+
+from core import database, update_downloads
 from core.api import Api
 from core.downloads.manager import DownloadManager
 from core.update_downloads import UpdateDownloads
@@ -247,3 +249,54 @@ def test_closed_picker_does_not_fail_a_background_read(monkeypatch):
     monkeypatch.setattr(update_downloads.scraper, 'fetch_thread_download_links', fetch)
     assert service.get_links(1, picker=False)['success']
     assert service.get_links(1) == {'success': False, 'error': 'Download picker was closed'}
+
+@pytest.mark.parametrize(("exe", "latest", "thread_version", "expected"), [
+    ("", "", "v2", "v2"),
+    ("  ", "v1", "v2", "v2"),
+    ("", "v1", "", "v1"),
+    ("game.exe", "v1", "v2", "v1"),
+])
+def test_start_update_download_records_wishlist_version(monkeypatch, exe, latest, thread_version, expected):
+    api, queue, _ = _api_with_fake_queue(monkeypatch)
+    game_id = database.add_game("Game", exe, "https://f95zone.to/threads/1/")
+    database.update_game(game_id, {"latest_version": latest})
+    thread = _thread([
+        {"url": "https://pixeldrain.com/u/a", "host": "pixeldrain", "label": "PD", "part": "", "split": False},
+    ])
+    monkeypatch.setattr(update_downloads.scraper, "fetch_thread_download_links",
+                        lambda _: {**thread, "version": thread_version})
+    mirror = api.get_update_download_links(game_id)["builds"][0]["mirrors"][0]
+
+    result = api.start_update_download(game_id, mirror["link_id"])
+
+    assert result["success"] is True
+    assert queue.get(result["job_id"]).version == thread_version
+    assert database.get_game(game_id)["latest_version"] == expected
+
+
+def test_queue_reads_live_wishlist_status_once_per_game(monkeypatch):
+    api, queue, worker = _api_with_fake_queue(monkeypatch)
+    wishlist = database.add_game("Wishlist", "")
+    installed = database.add_game("Installed", "game.exe")
+    deleted = database.add_game("Deleted", "")
+    first = queue.add("host", wishlist, "Wishlist", "1", {})
+    queue.tick()
+    worker.finish(first.id)
+    queue.tick()
+    for game_id in (wishlist, installed, deleted):
+        queue.add("host", game_id, "Game", "2", {})
+    database.delete_game(deleted)
+    get_game = database.get_game
+    reads = []
+
+    def record_read(game_id):
+        reads.append(game_id)
+        return get_game(game_id)
+
+    monkeypatch.setattr(database, "get_game", record_read)
+    jobs = api.get_download_queue()["jobs"]
+    assert [job["game_wishlisted"] for job in jobs] == [True, True, False, False]
+    assert reads == [wishlist, installed, deleted]
+
+    database.update_game(wishlist, {"exe_path": "game.exe"})
+    assert not any(job["game_wishlisted"] for job in api.get_download_queue()["jobs"])

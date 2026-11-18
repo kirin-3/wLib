@@ -31,6 +31,9 @@ export const awaitsSeedAnswer = (job: DownloadQueueJob): boolean =>
 
 export const isUnfinished = (job: DownloadQueueJob): boolean => job.state !== "ready";
 
+export const installLabel = (job: Pick<DownloadQueueJob, "game_wishlisted">): string =>
+  job.game_wishlisted ? "Install game" : "Install update";
+
 export function sectionOf(job: DownloadQueueJob): Exclude<SectionId, "seeding"> {
   switch (job.state) {
     case "attention":

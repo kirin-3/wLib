@@ -335,6 +335,17 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   filter: brightness(1.15);
 }
 
+.ui-setup-btn {
+  background: var(--bg-raised);
+  box-shadow: inset 0 0 0 1px var(--border-hover);
+  color: var(--text-secondary);
+}
+
+.ui-setup-btn:hover:not(:disabled) {
+  background: var(--bg-overlay);
+  color: var(--text-primary);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;

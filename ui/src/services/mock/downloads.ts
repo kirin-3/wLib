@@ -10,6 +10,7 @@ import type {
   DownloadQueueStatus,
   UpdateDownloadJob,
 } from "../api";
+import { isWishlisted } from "../../utils/libraryGames";
 import { readMockGames } from "./games";
 
 const MIB = 1024 ** 2;
@@ -177,6 +178,7 @@ export class MockDownloads {
   status(includeHistory: boolean): DownloadQueueStatus {
     this.demo();
     this.advance();
+    const wishlistedIds = new Set(readMockGames().filter(isWishlisted).map((game) => game.id));
     const unfinished = this.jobs.filter((job) => job.state !== "ready");
     const needed = unfinished.reduce((sum, job) => sum + (job.bytes_total ? Math.max(0, job.bytes_total - job.bytes_done) : 0), 0);
     const free = 212 * 1024 ** 3;
@@ -186,6 +188,7 @@ export class MockDownloads {
       success: true,
       jobs: this.jobs.map((job) => ({
         ...job,
+        game_wishlisted: wishlistedIds.has(job.game_id),
         bytes_done: Math.round(job.bytes_done),
         retry_in: job.state === "retry_wait" && job.retry_at !== null ? Math.max(0, Math.round(job.retry_at - now())) : null,
         details: { ...job.details },
@@ -222,6 +225,12 @@ export class MockDownloads {
     if (replaced) this.jobs[this.jobs.indexOf(replaced)] = job;
     else this.jobs.push(job);
     this.renumber();
+    const games = readMockGames();
+    const game = games.find((entry) => entry.id === gameId);
+    if (job.version.trim() && game && isWishlisted(game)) {
+      game.latest_version = job.version;
+      localStorage.setItem("wlib-mock-games", JSON.stringify(games));
+    }
     return { success: true, job_id: job.job_id };
   }
 

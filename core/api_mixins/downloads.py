@@ -8,10 +8,21 @@ import threading
 from collections.abc import Callable, Mapping
 from typing import cast
 
+from core import database
 from core.api_mixins.base import ApiBase, normalize_thread_url
+from core.downloads.queue import QueueJob
 
 
 _NOT_FOUND = "The download was not found"
+
+
+def _is_wishlisted(game: dict[str, object] | None) -> bool:
+    return game is not None and not str(game.get("exe_path") or "").strip()
+
+
+def _save_wishlist_download_version(job: QueueJob) -> None:
+    if job.version.strip() and _is_wishlisted(database.get_game(job.game_id)):
+        _ = database.update_game(job.game_id, {"latest_version": job.version})
 
 
 class DownloadsMixin(ApiBase):
@@ -86,10 +97,11 @@ class DownloadsMixin(ApiBase):
             return {"success": False, "error": "Close the game before downloading an update"}
         replaced = replaces if isinstance(replaces, str) and replaces else None
         try:
-            job_id = self._update_downloads.start(game_id, link_id, replaced)
+            job = self._update_downloads.start(game_id, link_id, replaced)
         except (DownloadError, QueueError) as exc:
             return {"success": False, "error": str(exc)}
-        return {"success": True, "job_id": job_id}
+        _save_wishlist_download_version(job)
+        return {"success": True, "job_id": job.id}
 
     # --- download queue -----------------------------------------------------
 
@@ -103,6 +115,12 @@ class DownloadsMixin(ApiBase):
         from core.downloads.torrents import supervisor
 
         status = self._download_queue.status(include_history is True)
+        wishlisted: dict[int, bool] = {}
+        for job in cast(list[dict[str, object]], status["jobs"]):
+            game_id = cast(int, job["game_id"])
+            if game_id not in wishlisted:
+                wishlisted[game_id] = _is_wishlisted(database.get_game(game_id))
+            job["game_wishlisted"] = wishlisted[game_id]
         seeding = [
             job for job in supervisor.status()
             if job.get("stage") == "done" and job.get("seed_state") == "seeding"
@@ -271,7 +289,6 @@ class DownloadsMixin(ApiBase):
         self, game_id: object = None, version: object = None, refresh: object = None
     ) -> dict[str, object]:
         """Search RPDL for a game and score the results; works without an account."""
-        from core import database
         from core.downloads import accounts, rpdl_match
         from core.downloads.hosts import rpdl
         from core.downloads.transfer import DownloadError
@@ -303,7 +320,6 @@ class DownloadsMixin(ApiBase):
         replaces: object = None,
     ) -> dict[str, object]:
         """Add an RPDL torrent to the download queue (`replaces`: a failed job's id)."""
-        from core import database
         from core.downloads import credentials
         from core.downloads.hosts import rpdl
         from core.downloads.queue import QueueError
@@ -336,6 +352,7 @@ class DownloadsMixin(ApiBase):
             )
         except QueueError as exc:
             return {"success": False, "error": str(exc)}
+        _save_wishlist_download_version(job)
         return {"success": True, "job_id": job.id}
 
     def _export_rpdl_torrent(

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DownloadFailureCode, DownloadQueueJob, DownloadQueueState, UpdateDownloadJob } from "../services/api";
 import {
+  installLabel,
   addedNotice,
   chartPoints,
   clampLimitKib,
@@ -277,4 +278,10 @@ test("a queue command refreshes the list and reports a refusal", async () => {
   assert.deepEqual(reports, ["Not found"]);
   assert.equal(await runQueueCommand(async () => ({ success: true }), () => { refreshed++; }, (m) => reports.push(m)), true);
   assert.equal(refreshed, 2);
+});
+
+test("install wording follows the current wishlist flag", () => {
+  assert.equal(installLabel(job({ game_wishlisted: true })), "Install game");
+  assert.equal(installLabel(job({ game_wishlisted: false })), "Install update");
+  assert.equal(installLabel(job()), "Install update");
 });

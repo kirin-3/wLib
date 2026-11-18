@@ -8,6 +8,7 @@ import {
   IconArrowUp,
   IconHeartFilled,
   IconLoader2,
+  IconDownload,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
 } from "@tabler/icons-vue";
@@ -158,12 +159,16 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
             @click.stop="emit('toggle-game', game)"
             :disabled="!!moveState"
             :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
-            class="play-btn ui-play-btn rounded-md p-1.5"
+            class="play-btn rounded-md p-1.5"
+            :class="wishlisted ? 'ui-setup-btn' : 'ui-play-btn'"
+            :aria-label="wishlisted ? `Set up ${game.title}` : undefined"
           >
             <IconPlayerStopFilled
               v-if="!wishlisted && running"
               class="w-4 h-4"
-            /><span v-else-if="wishlisted" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-4 h-4" />
+            />
+            <IconDownload v-else-if="wishlisted" class="w-4 h-4" aria-hidden="true" />
+            <IconPlayerPlayFilled v-else class="w-4 h-4" />
           </button>
           <select
             v-if="additionalTargets"

@@ -5,7 +5,8 @@ import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCop
 import {useRouter} from 'vue-router';
 import {api, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
-import {downloadFailureMessage, inAppMirror, orderBuilds, preselect, suitable, type HostPlatform} from '../../utils/updateDownloads';
+import {downloadFailureMessage, inAppMirror, orderBuilds, pickerTargetVersion, preselect, selectableBuild, suitable, type HostPlatform} from '../../utils/updateDownloads';
+import {isWishlisted} from '../../utils/libraryGames';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
 import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
 import {addedNotice} from '../../utils/downloadQueue';
@@ -42,9 +43,13 @@ const primaryAction = computed(()=>chosenTorrent.value ? rpdlPrimaryAction(watch
 const platform = ref<HostPlatform>('linux');
 const modal = useTemplateRef<HTMLElement>("modal");
 let generation = 0;
-const updateVersion = computed(() => (game.value?.latest_version || '').trim());
+const wishlisted = computed(() => !!game.value && isWishlisted(game.value));
+const updateVersion = computed(() => game.value ? pickerTargetVersion(game.value) : '');
+const canSelect = (build: UpdateBuild) => selectableBuild(build, wishlisted.value);
 const rpdlNoteText = computed(() => rpdlNote(rpdl.value));
 const ordered = computed(()=>orderBuilds(builds.value,platform.value));
+const onlySuitablePatches = computed(() => wishlisted.value && ordered.value.suitable.length > 0
+  && ordered.value.suitable.every(build => !canSelect(build)));
 const close = () => { generation++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
 useModalKeyboard(modal,()=>!!game.value,close);
 async function load() {
@@ -64,7 +69,17 @@ async function load() {
     const choice = preselect(builds.value,platform.value);
     if (!userChose && !chosenTorrent.value) { chosenBuild.value = choice?.build || null; chosenMirror.value = choice?.mirror || null; }
   } catch (e) { if (current === generation) error.value = String(e instanceof Error ? e.message : e); }
-  finally { if (current === generation) loading.value = false; }
+  finally {
+    if (current === generation) {
+      loading.value = false;
+      if (wishlisted.value) preselectTorrent();
+    }
+  }
+}
+function preselectTorrent() {
+  if (userChose || (wishlisted.value && (loading.value || onlySuitablePatches.value))) return;
+  const clear = rpdlPreselected(rpdl.value);
+  if (clear) { chosenTorrent.value = clear; chosenMirror.value = null; chosenBuild.value = null; }
 }
 // RPDL loads on its own, so a failure here never hides the thread's builds and the reverse.
 async function loadRpdl(refresh: boolean) {
@@ -76,8 +91,7 @@ async function loadRpdl(refresh: boolean) {
     if (current !== rpdlGeneration) return;
     if (!response.success) throw new Error(response.error || 'Could not search RPDL');
     rpdl.value = response;
-    const clear = rpdlPreselected(response);
-    if (clear && !userChose) { chosenTorrent.value = clear; chosenMirror.value = null; chosenBuild.value = null; }
+    preselectTorrent();
   } catch (e) { if (current === rpdlGeneration) rpdlError.value = String(e instanceof Error ? e.message : e); }
   finally { if (current === rpdlGeneration) rpdlLoading.value = false; }
 }
@@ -89,7 +103,10 @@ async function loadExportSettings() {
   } catch { watchFolder.value = ''; exportWarningAccepted.value = false; }
 }
 watch(game, current => { if (current) void load(); });
-function choose(build: UpdateBuild, mirror: UpdateMirror) { userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; exportNotice.value=''; exportError.value=''; sentMessage.value=''; }
+function choose(build: UpdateBuild, mirror: UpdateMirror) {
+  if (!canSelect(build)) return;
+  userChose=true; chosenTorrent.value=null; chosenBuild.value=build; chosenMirror.value=mirror; exportNotice.value=''; exportError.value=''; sentMessage.value='';
+}
 function chooseTorrent(torrent: RpdlTorrent) { userChose=true; chosenTorrent.value=torrent; chosenBuild.value=null; chosenMirror.value=null; exportNotice.value=''; exportError.value=''; sentMessage.value=''; }
 // The one-time passkey warning. True when the export may run.
 async function passkeyWarningAccepted(): Promise<boolean> {
@@ -134,7 +151,7 @@ const sendToClient = () => runExport(async torrentId => {
   sentMessage.value = torrentSentMessage(response.folder || watchFolder.value);
 });
 async function start(inApp = false) {
-  if (!game.value || busy.value || exporting.value || (!chosenMirror.value && !chosenTorrent.value)) return;
+  if (!game.value || busy.value || exporting.value || !canDownload.value) return;
   if (chosenTorrent.value && !inApp && primaryAction.value === 'send') { await sendToClient(); return; }
   busy.value=true; error.value=''; exportError.value=''; exportNotice.value=''; sentMessage.value='';
   const current = game.value;
@@ -154,14 +171,17 @@ async function start(inApp = false) {
   finally { busy.value=false; }
 }
 async function openBrowser() {
-  if (!game.value || !chosenMirror.value) return;
+  const current = game.value;
+  if (!current || (!chosenMirror.value && !onlySuitablePatches.value)) return;
   error.value='';
   try {
-    const response = await api.openUpdateDownloadInBrowser(game.value.id,chosenMirror.value.link_id);
+    const response = chosenMirror.value
+      ? await api.openUpdateDownloadInBrowser(current.id,chosenMirror.value.link_id)
+      : await api.openInBrowser(current.f95_url || '');
     if (!response.success) error.value=response.error || 'Could not open browser';
   } catch (e) { error.value=String(e instanceof Error ? e.message : e) || 'Could not open browser'; }
 }
-const canDownloadMirror = computed(()=>!!chosenMirror.value && !!chosenBuild.value && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
+const canDownloadMirror = computed(()=>!!chosenMirror.value && !!chosenBuild.value && canSelect(chosenBuild.value) && suitable(chosenBuild.value,platform.value) && inAppMirror(chosenMirror.value));
 const canDownloadTorrent = computed(()=>!!chosenTorrent.value && !!rpdl.value?.signed_in);
 const canDownload = computed(()=>canDownloadMirror.value || canDownloadTorrent.value);
 const buildTitle = (build: UpdateBuild) => (build.section ? build.section + ' · ' : '') + build.label;
@@ -181,7 +201,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
     >
       <header class="px-6 py-5 flex items-start justify-between gap-4" style="border-bottom: 1px solid var(--border)">
         <div class="min-w-0">
-          <h3 id="download-title" class="text-xl font-bold" style="color: var(--text-primary)">Download update</h3>
+          <h3 id="download-title" class="text-xl font-bold" style="color: var(--text-primary)">{{ wishlisted ? 'Download game' : 'Download update' }}</h3>
           <p class="text-sm mt-1 flex items-center gap-2 min-w-0" style="color: var(--text-secondary)">
             <span class="truncate">{{ game.title }}</span>
             <span v-if="version" class="chip font-mono shrink-0">{{ version }}</span>
@@ -209,11 +229,12 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
         <template v-else>
           <p v-if="!builds.length" class="text-sm py-6 text-center" style="color: var(--text-muted)">No download links found on the game's page.</p>
 
-          <div v-for="build in ordered.suitable" :key="build.label + build.section" class="space-y-2">
+          <div v-for="build in ordered.suitable" :key="build.label + build.section" class="space-y-2" :aria-disabled="!canSelect(build) || undefined">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-sm font-semibold" style="color: var(--text-primary)">{{ buildTitle(build) }}</span>
               <span v-if="showPlatform(build)" class="chip">{{ platformLabel(build.platform) }}</span>
               <span v-if="build.kind === 'patch'" class="chip chip-warn">Patch</span>
+              <span v-if="!canSelect(build)" class="text-xs" style="color: var(--text-secondary)">Needs an installed copy</span>
             </div>
             <div class="mirror-grid">
               <button
@@ -222,6 +243,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
                 type="button"
                 class="mirror"
                 :class="{ selected: chosenMirror?.link_id === mirror.link_id }"
+                :disabled="!canSelect(build)"
                 :aria-pressed="chosenMirror?.link_id === mirror.link_id"
                 @click="choose(build, mirror)"
               >
@@ -244,10 +266,12 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
               Other platforms ({{ ordered.other.length }})
             </summary>
             <div class="space-y-4 mt-3">
-              <div v-for="build in ordered.other" :key="build.label + build.section" class="space-y-2">
+              <div v-for="build in ordered.other" :key="build.label + build.section" class="space-y-2" :aria-disabled="!canSelect(build) || undefined">
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="text-sm font-semibold" style="color: var(--text-primary)">{{ buildTitle(build) }}</span>
                   <span v-if="showPlatform(build)" class="chip">{{ platformLabel(build.platform) }}</span>
+                  <span v-if="build.kind === 'patch'" class="chip chip-warn">Patch</span>
+                  <span v-if="!canSelect(build)" class="text-xs" style="color: var(--text-secondary)">Needs an installed copy</span>
                 </div>
                 <div class="mirror-grid">
                   <button
@@ -256,6 +280,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
                     type="button"
                     class="mirror"
                     :class="{ selected: chosenMirror?.link_id === mirror.link_id }"
+                    :disabled="!canSelect(build)"
                     :aria-pressed="chosenMirror?.link_id === mirror.link_id"
                     @click="choose(build, mirror)"
                   >
@@ -351,7 +376,7 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
       <footer class="px-6 py-4 flex items-center justify-end gap-3" style="border-top: 1px solid var(--border); background: var(--bg-inset)">
         <button @click="close" class="px-5 py-2.5 rounded-lg text-sm font-medium" style="color: var(--text-secondary)">Close</button>
         <template v-if="!loading">
-          <button v-if="chosenMirror" class="modal-btn" @click="openBrowser"><IconExternalLink class="w-4 h-4" />Open in browser</button>
+          <button v-if="chosenMirror || onlySuitablePatches" class="modal-btn" @click="openBrowser"><IconExternalLink class="w-4 h-4" />Open in browser</button>
           <button
             v-if="canDownloadTorrent && primaryAction === 'send'"
             type="button"
@@ -360,8 +385,8 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
             @click="start(true)"
           >Download in wLib instead</button>
           <button
-            v-if="canDownload"
-            :disabled="busy || exporting"
+            v-if="canDownload || onlySuitablePatches"
+            :disabled="!canDownload || busy || exporting"
             @click="start()"
             class="primary-btn ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold inline-flex items-center gap-2 disabled:cursor-not-allowed"
           >
@@ -424,7 +449,8 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
   color: var(--text-primary);
   transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
 }
-.mirror:hover { background: var(--bg-overlay); border-color: var(--border-hover); }
+.mirror:disabled { opacity: 0.6; cursor: not-allowed; }
+.mirror:hover:not(:disabled) { background: var(--bg-overlay); border-color: var(--border-hover); }
 .mirror.selected {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-glow);

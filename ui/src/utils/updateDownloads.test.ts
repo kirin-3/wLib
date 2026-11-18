@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,downloadFailureMessage,bulkDownloadDecision} from './updateDownloads.ts';
+import {orderBuilds,preselect,downloadFailureMessage,bulkDownloadDecision,pickerTargetVersion,selectableBuild} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -34,4 +34,20 @@ test('bulk download asks for a choice and names the reason',()=>{
   const browserOnly: UpdateBuild = {...build('linux'),mirrors:[{link_id:'x',host:'gofile',label:'GoFile',part:'',split:false}]};
   assert.match(reason({success:true,builds:[browserOnly]}),/in-app mirror/);
   assert.match(reason({success:false,error:'Thread not found'}),/Links did not load: Thread not found/);
+});
+
+test('first installs can choose full builds but cannot select patches', () => {
+  const patches = [build('linux', 'patch'), build('windows', 'patch')];
+  assert.ok(selectableBuild(build('linux'), true));
+  assert.ok(patches.every(patch => selectableBuild(patch, false)));
+  assert.ok(patches.every(patch => !selectableBuild(patch, true)));
+  assert.equal(preselect(patches, 'linux'), null);
+});
+
+test('only a first install falls back to the stored version for RPDL', () => {
+  const game = { exe_path: '  ', version: ' 0.5 ', latest_version: '' };
+  assert.equal(pickerTargetVersion(game), '0.5');
+  assert.equal(pickerTargetVersion({ ...game, latest_version: ' 0.9 ' }), '0.9');
+  assert.equal(pickerTargetVersion({ ...game, exe_path: 'game.exe' }), '');
+  assert.equal(pickerTargetVersion({ ...game, exe_path: 'game.exe', latest_version: '0.9' }), '0.9');
 });

@@ -139,7 +139,7 @@ class UpdateDownloads:
             return {'ok':True, 'url':url, 'host':host}
         return resolve
 
-    def start(self, game_id: int, link_id: str, replaces: str | None = None) -> str:
+    def start(self, game_id: int, link_id: str, replaces: str | None = None) -> QueueJob:
         """Add the chosen mirror to the download queue; it resolves at once."""
         from core.downloads.workers import HostContext
 
@@ -153,11 +153,10 @@ class UpdateDownloads:
             raise DownloadError('This Buzzheavier link cannot be downloaded in-app; open in browser')
         game = database.get_game(game_id) or {}
         source: dict[str, object] = dict(zip(KEY_FIELDS, link.key, strict=True))
-        job = self.queue.add(
+        return self.queue.add(
             'host', game_id, str(game.get('title') or ''), link.version, source,
             HostContext(self._resolver(url, host)), replaces=replaces,
         )
-        return job.id
 
     def relink(self, job: QueueJob) -> Resolve:
         """A resolve for a saved job: the held link when it is fresh, else the thread read again.

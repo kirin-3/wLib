@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { UpdateBuild, UpdateMirror } from "../services/api";
+import type { GameRecord, UpdateBuild, UpdateMirror } from "../services/api";
+import { isWishlisted } from "./libraryGames.ts";
+
+export const selectableBuild = (build: UpdateBuild, wishlisted: boolean): boolean =>
+  !wishlisted || build.kind !== "patch";
+
+export function pickerTargetVersion(game: Pick<GameRecord, "latest_version" | "version" | "exe_path">): string {
+  return game.latest_version?.trim() || (isWishlisted(game) ? game.version?.trim() || "" : "");
+}
 
 export type HostPlatform = "linux" | "windows";
 export const inAppMirror = (mirror: UpdateMirror): boolean =>

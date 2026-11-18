@@ -1300,7 +1300,17 @@ const statusMenuItems = computed<MenuButtonItem[]>(() => statuses.value.map(s =>
 
 // Header update split button: Download update when the game has an F95 thread, otherwise Install update.
 const canDownloadUpdate = computed(() => !!props.game?.f95_url);
-const downloadUpdateDisabled = computed(() => !!props.isRunning || (!!downloadJob.value && isUnfinished(downloadJob.value)));
+const hasUnfinishedDownload = computed(() => !!downloadJob.value && isUnfinished(downloadJob.value));
+const downloadUpdateDisabled = computed(() => !!props.isRunning || hasUnfinishedDownload.value);
+const setupMenuItems: MenuButtonItem[] = [
+  { id: "install", label: "Install from archive", icon: IconDownload },
+  { id: "exe", label: "Choose executable" },
+];
+const chooseSetupMenuItem = (id: string) => {
+  if (!props.game) return;
+  if (id === "install") openInstallArchive({ gameId: props.game.id });
+  else if (id === "exe") selectTab("Launch");
+};
 const updateMenuItems = computed<MenuButtonItem[]>(() => [
   ...(canDownloadUpdate.value ? [{ id: "install", label: "Install update", icon: IconDownload }] : []),
   { id: "skip", label: `Skip version ${latestVersion.value}`, disabled: savingSkip.value },
@@ -2297,7 +2307,23 @@ const removeAttachment = async (name: string) => {
                 <span>{{ currentStatusOption.label }}</span>
               </MenuButton>
               <MenuButton
-                v-if="hasUpdate && props.game"
+                v-if="isCurrentlyWishlisted && canDownloadUpdate"
+                split
+                class="update-menu"
+                :items="setupMenuItems"
+                menu-label="More setup actions"
+                button-label="More setup actions"
+                :main-disabled="hasUnfinishedDownload"
+                @main="runUpdateMain"
+                @select="chooseSetupMenuItem"
+              >
+                <template #main>
+                  <IconDownload class="ui-action-icon" aria-hidden="true" />
+                  Download game
+                </template>
+              </MenuButton>
+              <MenuButton
+                v-else-if="hasUpdate && props.game"
                 ref="updateMenu"
                 split
                 class="update-menu"
@@ -2347,7 +2373,7 @@ const removeAttachment = async (name: string) => {
                 {{ downloadStatusText }}
               </button>
               <button
-                v-if="!hasUpdate && props.game && isWishlisted(props.game)"
+                v-if="isCurrentlyWishlisted && props.game && !canDownloadUpdate"
                 @click="openInstallArchive({ gameId: props.game.id })"
                 class="modal-toolbar-action ui-action-btn"
                 style="color: var(--text-primary)"
@@ -3378,10 +3404,12 @@ const removeAttachment = async (name: string) => {
             <button
               @click="game && isCurrentlyWishlisted ? selectTab('Launch') : isRunning && game ? emit('stop', game.id) : launchGame()"
               :title="game && isCurrentlyWishlisted ? 'Choose an executable in the Launch tab' : isRunning ? 'Stop the game and all processes in its Wine prefix.' : 'Play game'"
-              class="launch-btn footer-launch-btn ui-play-btn ui-action-btn"
+              class="launch-btn footer-launch-btn ui-action-btn"
+              :class="isCurrentlyWishlisted ? 'ui-setup-btn' : 'ui-play-btn'"
             >
-              <IconPlayerStopFilled v-if="isRunning && game && !isCurrentlyWishlisted" class="ui-action-icon" />
-              <IconPlayerPlayFilled v-else-if="game && !isCurrentlyWishlisted" class="ui-action-icon" />
+              <IconDownload v-if="isCurrentlyWishlisted" class="ui-action-icon" aria-hidden="true" />
+              <IconPlayerStopFilled v-else-if="isRunning" class="ui-action-icon" />
+              <IconPlayerPlayFilled v-else class="ui-action-icon" />
               {{ game && isCurrentlyWishlisted ? 'Set up' : isRunning ? 'Stop' : 'Play' }}
             </button>
           </div>
@@ -4107,7 +4135,7 @@ const removeAttachment = async (name: string) => {
   transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.launch-btn {
+.launch-btn.ui-play-btn {
   border: 1px solid var(--play);
 }
 

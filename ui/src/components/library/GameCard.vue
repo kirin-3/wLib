@@ -9,6 +9,7 @@ import {
   IconChevronDown,
   IconHeartFilled,
   IconLoader2,
+  IconDownload,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
   IconRefresh,
@@ -211,13 +212,17 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
           <button
             @click.stop="emit('toggle-game', game)"
             :disabled="!!moveState"
-            class="compact-play-btn ui-play-btn rounded-md p-2"
+            class="compact-play-btn rounded-md p-2"
+            :class="wishlisted ? 'ui-setup-btn' : 'ui-play-btn'"
+            :aria-label="wishlisted ? `Set up ${game.title}` : undefined"
             :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
           >
             <IconPlayerStopFilled
               v-if="!wishlisted && running"
               class="w-3.5 h-3.5"
-            /><span v-else-if="wishlisted" class="text-xs font-semibold">Set up</span><IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
+            />
+            <IconDownload v-else-if="wishlisted" class="w-3.5 h-3.5" aria-hidden="true" />
+            <IconPlayerPlayFilled v-else class="w-3.5 h-3.5" />
           </button>
           <button
             v-if="additionalTargets"
@@ -302,12 +307,15 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
             @click.stop="emit('toggle-game', game)"
             :disabled="!!moveState"
             :title="moveState ? 'This game is being moved. Wait for the move to finish.' : `${wishlisted ? 'Set up' : running ? 'Stop' : 'Play'} ${game.title}`"
-            class="play-btn ui-play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
+            class="play-btn ui-action-btn px-2.5 py-1.5 rounded-lg text-xs font-bold"
+            :class="wishlisted ? 'ui-setup-btn' : 'ui-play-btn'"
           >
             <IconPlayerStopFilled
               v-if="!wishlisted && running"
               class="ui-action-icon"
-            /><IconPlayerPlayFilled v-else-if="!wishlisted" class="ui-action-icon" />{{
+            />
+            <IconDownload v-else-if="wishlisted" class="ui-action-icon" aria-hidden="true" />
+            <IconPlayerPlayFilled v-else class="ui-action-icon" />{{
               wishlisted ? "Set up" : running ? "Stop" : "Play"
             }}
           </button>
@@ -505,14 +513,31 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
 
 .compact-target-toggle {
   margin-left: 0.25rem;
-  background: rgba(17, 24, 39, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.compact-play-btn.ui-setup-btn {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.compact-target-toggle,
+.compact-play-btn.ui-setup-btn {
+  background: rgba(17, 24, 39, 0.62);
+  color: #f8fafc;
+}
+
+.compact-target-toggle:hover,
+.compact-play-btn.ui-setup-btn:hover:not(:disabled) {
+  background: rgba(17, 24, 39, 0.78);
   color: #f8fafc;
 }
 
 .compact-target-toggle:hover {
-  background: rgba(17, 24, 39, 0.78);
   border-color: rgba(255, 255, 255, 0.42);
+}
+
+.compact-play-btn.ui-setup-btn:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
 }
 
 /* Sits on cover art in both themes, so it keeps dark-on-image colors. */
