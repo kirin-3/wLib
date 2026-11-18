@@ -1798,6 +1798,10 @@ class ApiService {
     return this.invoke("set_window_focused", focused);
   }
 
+  async getControllerPresence(): Promise<ApiBasicResponse & { present: boolean | null }> {
+    return this.invoke("get_controller_presence");
+  }
+
   async setAutoCheckSetting(frequency: string): Promise<ApiBasicResponse> {
     return this.invoke<ApiBasicResponse>("set_auto_check_setting", frequency);
   }

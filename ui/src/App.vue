@@ -62,12 +62,33 @@ import { convertSteamCovers } from "./utils/steamCovers";
 
 const router = useRouter();
 const route = useRoute();
-let stopControllerInput: (() => void) | undefined;
+let controllerInput: ReturnType<typeof startControllerInput> | undefined;
 let stopPointer: (() => void) | undefined;
 const openControllerKeyboard = () => { if (gamingMode.value) void api.openSteamKeyboard(); };
 useEventListener(window, "wlib-controller-text", openControllerKeyboard);
-onMounted(() => { stopPointer = listenForPointer(); stopControllerInput = startControllerInput(action => { setInputModality("controller"); dispatchController(action, () => router.back()); window.dispatchEvent(new Event("wlib-controller-action")); }); });
-onUnmounted(() => { stopControllerInput?.(); stopPointer?.(); });
+let controllerPresenceEvents = 0;
+const handleControllerPresence = (event: Event) => {
+  const present = (event as CustomEvent<{ present: boolean | null }>).detail?.present;
+  if (present === null || typeof present === "boolean") {
+    controllerPresenceEvents++;
+    controllerInput?.setPresence(present);
+  }
+};
+onMounted(() => {
+  stopPointer = listenForPointer();
+  controllerInput = startControllerInput(action => {
+    setInputModality("controller");
+    dispatchController(action, () => router.back());
+    window.dispatchEvent(new Event("wlib-controller-action"));
+  });
+  window.addEventListener("wlib-controller-presence", handleControllerPresence);
+});
+onUnmounted(() => {
+  window.removeEventListener("wlib-controller-presence", handleControllerPresence);
+  controllerInput?.stop();
+  controllerInput = undefined;
+  stopPointer?.();
+});
 const mainRef = useTemplateRef<HTMLElement>("mainRef");
 // Give controller users the full Undo window without requiring them to cross
 // the whole page first. Focusing the button holds the timer until focus leaves.
@@ -408,6 +429,12 @@ const handleLaunchError = (event: Event) => {
 onMounted(() => {
   // Check for App Updates on Startup
   onWebviewReady(async () => {
+    const presenceEventsAtRequest = controllerPresenceEvents;
+    void api.getControllerPresence().then(({ success, present }) => {
+      if (success && presenceEventsAtRequest === controllerPresenceEvents) {
+        controllerInput?.setPresence(present);
+      }
+    }).catch((error) => console.error("Controller presence check failed", error));
     void refreshUpdateCount();
     handleSteamCovers();
     // Requests that arrived before the window could show a question.

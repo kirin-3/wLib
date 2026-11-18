@@ -329,6 +329,8 @@ This module handles native host launching and Linux compatibility runtimes.
 
 ### Supporting modules
 
+`core/controllers.py` detects whether a controller is connected. On Linux, a device counts when udev marks it `ID_INPUT_JOYSTICK` (the mark Chromium uses). When udev has no record of the device, it counts when its key capabilities have joystick or gamepad buttons and no left mouse button, so gaming mice and headsets with a `js*` node do not count. The watcher blocks on input device changes with inotify. When inotify is unavailable, it checks on focus gain and every 30 seconds while focused. On Windows, it checks Raw Input and XInput on focus gain and every 15 seconds while focused. The watcher starts after the WebView loads and stops on exit. `get_controller_presence()` returns the latest result, and `wlib-controller-presence` carries changes in `detail.present`. An unavailable check or Steam Gaming Mode yields `null`.
+
 - `core/game_scan.py`: `inspect_game_path` and `scan_games_folder` guess titles, versions, engines, and launch files from install folders for Add Game and Import Folder.
 - `core/store_links.py`: normalizes store URLs, validates source/ID pairs, and supplies the exact store identities used by link storage, extension checks, and backup matching.
 - `core/game_lookup.py`: resolves a page's supplied IDs through the read-only catalog, expands one hop of catalog links, and returns matching local game IDs.

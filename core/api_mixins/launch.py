@@ -650,7 +650,11 @@ class LaunchMixin(ApiBase):
 
     def set_window_focused(self, focused: bool) -> dict[str, bool]:
         self._window_focused: bool = bool(focused)
+        self.controller_watcher.on_focus(self._window_focused)
         return {"success": True}
+
+    def get_controller_presence(self) -> dict[str, bool | None]:
+        return {"success": True, "present": self.controller_watcher.present}
 
     def stop_game(self, game_id: int) -> dict[str, object]:
         if game_id in self.launcher.get_running_games():

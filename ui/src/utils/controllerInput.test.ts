@@ -65,7 +65,7 @@ test("listens for gamepads only while focused and ignores controls held across f
   const frames = new Map<number, () => void>(); let nextFrame = 1;
   const define = (key: string, value: unknown) => Object.defineProperty(g, key, { value, configurable: true, writable: true });
   define("window", win);
-  define("document", Object.assign(doc, { hasFocus: () => focused }));
+  define("document", Object.assign(doc, { hasFocus: () => focused, visibilityState: "visible" }));
   define("navigator", { getGamepads: () => pads });
   define("requestAnimationFrame", (fn: () => void) => { const id = nextFrame++; frames.set(id, fn); return id; });
   define("cancelAnimationFrame", (id: number) => frames.delete(id));
@@ -73,7 +73,7 @@ test("listens for gamepads only while focused and ignores controls held across f
   const runFrames = () => { const due = [...frames.values()]; frames.clear(); due.forEach(fn => fn()); };
   const actions: string[] = [];
   try {
-    const stop = startControllerInput(action => actions.push(action.type));
+    const input = startControllerInput(action => actions.push(action.type));
     assert.equal(frames.size, 1, "starts a short settle poll on startup");
     now = CONTROLLER_SETTLE_MS; runFrames();
     assert.equal(frames.size, 0, "no pads: polling stops after settling");
@@ -87,7 +87,22 @@ test("listens for gamepads only while focused and ignores controls held across f
     pads = [pad()]; now += 16; runFrames();
     pads = [pad([0])]; now += 16; runFrames();
     assert.deepEqual(actions, ["activate"]);
-    stop();
+    input.setPresence(false);
+    assert.equal(frames.size, 0, "no controller: cancels the active frame");
+    win.dispatchEvent(new Event("gamepadconnected"));
+    assert.equal(frames.size, 0, "no controller: removes the listener");
+    pads = [pad()];
+    input.setPresence(true);
+    assert.equal(frames.size, 1, "hot-plug resumes listening while focused");
+    runFrames();
+    pads = [pad([12])];
+    runFrames();
+    assert.deepEqual(actions, ["activate", "move"], "the first D-pad press after hot-plug moves focus");
+    focused = false; win.dispatchEvent(new Event("blur"));
+    input.setPresence(true);
+    win.dispatchEvent(new Event("gamepadconnected"));
+    assert.equal(frames.size, 0, "known controller: stays stopped while unfocused");
+    input.stop();
     win.dispatchEvent(new Event("gamepadconnected"));
     assert.equal(frames.size, 0, "stopped: nothing polls and nothing listens");
   } finally {

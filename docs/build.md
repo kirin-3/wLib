@@ -224,6 +224,10 @@ nFPM reads `packaging/nfpm.yaml` and receives these environment variables from t
 
 The Flatpak bundle repackages the same staged PyInstaller release folder used by the tar.gz, deb and rpm. It needs `flatpak` and either Flathub's `org.flatpak.Builder` or a `flatpak-builder` on `PATH`, plus the Flathub remote for the `org.freedesktop.Platform`/`Sdk` 26.08 runtime. The matching runtime is fetched on first install if needed.
 
+Controller navigation uses the `input` device permission introduced in [Flatpak 1.15.6](https://github.com/flatpak/flatpak/releases/tag/1.15.6). Older clients ignore the unknown permission in the installed app's metadata, so the permission itself does not block installation or launch. Controller access through `/dev/input` requires a client that supports the permission. See the [Flatpak permission documentation](https://docs.flatpak.org/en/latest/sandbox-permissions.html#device-access) and the [Flatpak 1.14 metadata loader](https://github.com/flatpak/flatpak/blob/1.14.10/common/flatpak-context.c#L1548-L1568).
+
+QtWebEngine identifies controllers using udev’s device database. The manifest mounts `/run/udev/data` read-only alongside the input device nodes. In the Flatpak test, a controller connected before launch moved library focus. QtWebEngine did not recognize a controller connected after launch in the sandbox.
+
 The manifest also builds 7-Zip 26.05 from pinned upstream sources verified by SHA-256. It installs `/app/bin/7zz` with RAR decoding support and `/app/share/licenses/7zip/License.txt`, so `.7z` and `.rar` installs need no host extractor. This module is exclusive to Flatpak; other release formats keep using system archive tools.
 
 The source archive has no enclosing directory, so extraction uses `strip-components: 0`. The SDK's GCC emits an array-bounds diagnostic in upstream COM progress code; the build keeps that diagnostic as a warning while retaining errors for other warnings.

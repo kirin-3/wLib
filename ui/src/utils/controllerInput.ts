@@ -46,27 +46,27 @@ export function actionForKey(event: KeyboardEvent): ControllerAction | null {
   return event.key === "Escape" ? { type: "back" } : null;
 }
 export const CONTROLLER_SETTLE_MS = 500;
-export function startControllerInput(dispatch: (action: ControllerAction) => void): () => void {
+export function startControllerInput(dispatch: (action: ControllerAction) => void) {
   let frame = 0, state: RepeatState = {};
   let listening = false, settleUntil = 0;
+  let focused = false;
+  let presence: boolean | null = null;
   const poll = () => {
     frame = 0;
     const pads = Array.from(navigator.getGamepads?.() ?? []);
     const now = performance.now();
     // Right after focus returns, controls count as held while away: the first
     // samples can lag, and a button still held from a game must not fire.
-    const result = readController(pads, document.hasFocus() && now >= settleUntil, now, state);
+    const result = readController(pads, focused && now >= settleUntil, now, state);
     state = result.state;
     result.actions.forEach(dispatch);
     if (listening && (pads.some(Boolean) || now < settleUntil)) frame = requestAnimationFrame(poll);
   };
   const connected = () => { if (!frame) frame = requestAnimationFrame(poll); };
-  // Chromium samples gamepads on a background thread (about 150 wake-ups a
-  // second) while the page listens for them, so listen only while focused.
+  // Chromium starts its background gamepad polling when the listener is added.
   const listen = () => {
     if (listening) return;
     listening = true;
-    settleUntil = performance.now() + CONTROLLER_SETTLE_MS;
     window.addEventListener("gamepadconnected", connected);
     connected();
   };
@@ -77,18 +77,35 @@ export function startControllerInput(dispatch: (action: ControllerAction) => voi
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
   };
-  const syncFocus = () => { if (document.hasFocus()) listen(); else stopListening(); };
+  const syncListening = () => {
+    if (focused && presence !== false) listen();
+    else stopListening();
+  };
+  const syncFocus = () => {
+    const hasFocus = document.visibilityState === "visible" && document.hasFocus();
+    if (hasFocus && !focused) settleUntil = performance.now() + CONTROLLER_SETTLE_MS;
+    focused = hasFocus;
+    syncListening();
+  };
   const keydown = (event: KeyboardEvent) => { const action = actionForKey(event); if (action) { event.preventDefault(); dispatch(action); } };
   window.addEventListener("keydown", keydown);
   window.addEventListener("focus", syncFocus);
   window.addEventListener("blur", syncFocus);
   document.addEventListener("visibilitychange", syncFocus);
   syncFocus();
-  return () => {
-    stopListening();
-    window.removeEventListener("keydown", keydown);
-    window.removeEventListener("focus", syncFocus);
-    window.removeEventListener("blur", syncFocus);
-    document.removeEventListener("visibilitychange", syncFocus);
+  return {
+    setPresence(present: boolean | null) {
+      presence = present;
+      if (present === false) state = {};
+      syncListening();
+    },
+    stop() {
+      focused = false;
+      stopListening();
+      window.removeEventListener("keydown", keydown);
+      window.removeEventListener("focus", syncFocus);
+      window.removeEventListener("blur", syncFocus);
+      document.removeEventListener("visibilitychange", syncFocus);
+    },
   };
 }

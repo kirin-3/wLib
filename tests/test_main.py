@@ -491,6 +491,7 @@ def test_main_runs_webview_cache_cleanup_before_importing_webview(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -553,11 +554,15 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
     server.serve_forever.side_effect = lambda **_kwargs: order.append("serve")
     fake_webview = MagicMock()
     fake_webview.create_window.return_value = MagicMock()
+    fake_webview.create_window.return_value.events.loaded.wait.side_effect = (
+        lambda _timeout: order.append("window loaded") or True
+    )
 
     class FakeApi:
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -570,6 +575,9 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
 
         def set_window(self, _window):
             return None
+
+    FakeApi.controller_watcher.start.side_effect = lambda: order.append("watcher started")
+    FakeApi.controller_watcher.stop.side_effect = lambda: order.append("watcher stopped")
 
     class FakeThread:
         def __init__(self, *, target, daemon):
@@ -609,6 +617,8 @@ def test_extension_server_starts_before_slow_webview_startup(monkeypatch):
     # otherwise both copies open windows and share the database.
     assert "serve" in order
     assert order.index("serve") < order.index("load")
+    assert order.index("window loaded") < order.index("watcher started")
+    assert order.index("watcher started") < order.index("watcher stopped")
 
 
 def test_get_webview_storage_path_creates_directory(monkeypatch, tmp_path):
@@ -904,6 +914,7 @@ def test_main_terminates_vite_when_webview_fails(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -950,6 +961,7 @@ def test_main_flushes_playtime_before_the_final_sync(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1008,6 +1020,7 @@ def test_main_gives_the_extension_server_the_api_and_the_window(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()
@@ -1076,6 +1089,7 @@ def test_main_terminates_vite_when_window_creation_fails(monkeypatch):
         steam_sync = None
         _start_steam_sync = MagicMock()
         cover_cache = MagicMock()
+        controller_watcher = MagicMock()
         cover_cards = MagicMock()
         library_sync = MagicMock()
         launcher = MagicMock()

@@ -170,6 +170,7 @@
   "get_available_runners": [],
   "get_catalog_status": [],
   "get_collections": [],
+  "get_controller_presence": [],
   "get_cover_cache_status": [],
   "get_diagnostics": [],
   "get_diagnostics_report": [],

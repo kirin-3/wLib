@@ -13,6 +13,7 @@ from contextlib import closing, contextmanager, suppress
 from typing import TYPE_CHECKING, cast
 
 from core import database
+from core.controllers import ControllerWatcher
 from core.database import (
     init_db,
     normalize_launch_mode,
@@ -112,6 +113,9 @@ class ApiBase:
         )
         self.cover_cache: CoverCacheService = hide_from_js(
             CoverCacheService(on_change=self._cover_cache_changed)
+        )
+        self.controller_watcher: ControllerWatcher = hide_from_js(
+            ControllerWatcher(on_change=self._controller_presence_changed)
         )
         from core.downloads.manager import manager as download_manager
         from core.update_downloads import UpdateDownloads
@@ -853,6 +857,19 @@ class ApiBase:
     def _cover_cache_changed(self) -> None:
         self._schedule_steam_sync()
         self.cover_cards.wake()
+
+    def _controller_presence_changed(self, present: bool | None) -> None:
+        import json
+
+        if self.window is not None:
+            with suppress(Exception):
+                detail = json.dumps({"present": present})
+                _ = cast(
+                    object,
+                    self.window.evaluate_js(
+                        f"window.dispatchEvent(new CustomEvent('wlib-controller-presence', {{detail: {detail}}}));"
+                    ),
+                )
 
     def _notify_card_copies_ready(self) -> None:
         # Device-local copies only: no sync or dirty marking, just a reload.

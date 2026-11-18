@@ -1324,12 +1324,13 @@ def main() -> None:
             cast(ExtensionServer, extension_server).sync_api = api
             api.library_sync.server_available = True
 
-        def start_cover_cache() -> None:
+        def start_loaded_services() -> None:
             if cast(RendererDiagnosticsWindow, cast(object, window)).events.loaded.wait(60):
+                api.controller_watcher.start()
                 api.cover_cache.start()
                 api.cover_cards.start()
 
-        threading.Thread(target=start_cover_cache, daemon=True).start()
+        threading.Thread(target=start_loaded_services, daemon=True).start()
         threading.Thread(target=track_screen_size, daemon=True).start()
         api.library_sync.start()
         library_sync_started = True
@@ -1345,6 +1346,7 @@ def main() -> None:
     finally:
         if api.steam_sync is not None:
             api.steam_sync.stop()
+        api.controller_watcher.stop()
         api.cover_cache.stop()
         api.cover_cards.stop()
         # Release the port before the final sync can take up to 10 seconds:

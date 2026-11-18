@@ -590,6 +590,8 @@ export class MockBackend {
         return { success: true };
       case "set_window_focused":
         return { success: true, mock: true };
+      case "get_controller_presence":
+        return { success: true, present: null, mock: true };
       case "get_game_play_sessions": {
         const sessions: PlaySession[] = JSON.parse(localStorage.getItem("wlib-mock-play-sessions") || "[]");
         return { success: true, mock: true, sessions: sessions

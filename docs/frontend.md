@@ -521,6 +521,8 @@ Below them, the Gamescope row (`wine-proton-static-6`, found by "gamescope" and 
 
 ### Controller navigation and TV mode
 
+While the wLib window has focus, the UI listens for controllers when the backend reports one present or returns `null` (unknown). This fail-open behavior covers unavailable checks, Steam Gaming Mode, and browser mocks. A confirmed absence removes the listener and stops gamepad polling. The UI reads the current presence when the bridge is ready and updates it on `wlib-controller-presence` events.
+
 Standard Gamepad API controllers work while the wLib window is focused. The D-pad and left stick move focus; A selects, B goes back or closes the top dialog, X plays, Y focuses library search, Menu/Start opens a game's actions, LB/RB switch collections or detail tabs, LT/RT page, and the right stick scrolls. Arrow keys and Escape use the same movement and back actions while native text and menu controls retain their keyboard behavior. In Linux Gaming Mode, controller activation of a text field requests Steam's on-screen keyboard. A select opened with A uses a controller-friendly option list; mouse interaction retains the native select.
 
 The focused screen supplies button hints; pointer input hides the controller focus treatment and hints. Settings → Appearance → TV mode stores Auto, On or Off locally. Auto follows Gaming Mode. TV mode temporarily uses 150% interface scale, collapses the sidebar, strengthens the controller focus ring, and keeps hints visible. The saved interface scale and sidebar preference return when TV mode ends; TV mode is not included in library backup or sync.
