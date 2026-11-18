@@ -252,6 +252,9 @@
   "get_web_media_conversion_status": [
     "game_id"
   ],
+  "get_web_player_exports": [
+    "game_id"
+  ],
   "import_external_library": [
     "source",
     "path",
@@ -368,6 +371,9 @@
   "open_update_download_in_browser": [
     "game_id",
     "link_id"
+  ],
+  "open_web_player_exports_folder": [
+    "game_id"
   ],
   "open_wine_prefix_tool": [
     "tool",

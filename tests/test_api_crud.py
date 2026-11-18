@@ -821,6 +821,36 @@ def test_cancel_archive_install_only_before_the_move(monkeypatch):
     assert api.cancel_archive_install()["error_code"] == "not_cancellable"
 
 
+def test_web_player_exports_reject_unknown_game():
+    api = Api()
+    for game_id in (True, -1, 1024):
+        assert api.get_web_player_exports(game_id)["error_code"] == "game_not_found"
+        assert api.open_web_player_exports_folder(game_id)["error_code"] == "game_not_found"
+
+
+def test_web_player_exports_count_and_open(tmp_path, monkeypatch):
+    monkeypatch.setenv("WLIB_DATA_DIR", str(tmp_path))
+    api = Api()
+    game_id = add_game("Web", "index.html")
+    assert game_id is not None
+    folder = tmp_path / "web-player" / str(game_id) / "exports"
+    opened = []
+    monkeypatch.setattr(api, "_open_path_with_system_handler", lambda path: opened.append(path) or {"success": True})
+
+    assert api.get_web_player_exports(game_id) == {"success": True, "count": 0}
+    assert api.open_web_player_exports_folder(game_id)["success"] is False
+    assert not folder.exists() and not opened
+
+    folder.mkdir(parents=True)
+    for name in ("game.save", "game (1).save", ".hidden", "unfinished.crdownload"):
+        (folder / name).touch()
+    (folder / "nested").mkdir()
+    (folder / "nested" / "ignored.save").touch()
+    assert api.get_web_player_exports(game_id) == {"success": True, "count": 2}
+    assert api.open_web_player_exports_folder(game_id) == {"success": True}
+    assert opened == [str(folder)]
+
+
 def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monkeypatch):
     import os
 
@@ -833,10 +863,14 @@ def test_delete_game_moves_web_player_storage_aside_and_prunes_it(tmp_path, monk
     os.makedirs(storage)
     with open(os.path.join(storage, "save.dat"), "w") as handle:
         handle.write("x")
+    exports = tmp_path / "data" / "web-player" / str(game_id) / "exports"
+    exports.mkdir()
+    (exports / "game.save").write_text("export")
     assert api.delete_game(game_id)["success"] is True
     assert not os.path.exists(storage)
     (kept,) = (tmp_path / "data" / "web-player" / "removed").iterdir()
     assert kept.name.startswith(f"{game_id}_") and (kept / "save.dat").read_text() == "x"
+    assert (kept / "exports" / "game.save").read_text() == "export"
     assert game_sandbox.prune_removed_sandboxes() == 0
     later = kept.stat().st_mtime + game_sandbox.REMOVED_SANDBOX_KEEP_SECONDS + 1
     assert game_sandbox.prune_removed_sandboxes(now=later) == 1

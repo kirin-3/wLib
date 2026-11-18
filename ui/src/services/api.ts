@@ -2059,6 +2059,14 @@ class ApiService {
     return this.invoke<ApiBasicResponse>("open_game_sandbox_folder", gameId);
   }
 
+  async getWebPlayerExports(gameId: number): Promise<ApiBasicResponse & { count?: number }> {
+    return this.invoke("get_web_player_exports", gameId);
+  }
+
+  async openWebPlayerExportsFolder(gameId: number): Promise<ApiBasicResponse> {
+    return this.invoke("open_web_player_exports_folder", gameId);
+  }
+
   async openSteamKeyboard(): Promise<{ success: boolean; code?: string; error?: string }> {
     return this.invoke("open_steam_keyboard");
   }

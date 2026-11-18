@@ -646,6 +646,12 @@ def web_player_folder(game_id: int) -> str:
     return os.path.join(get_data_dir(), "web-player", str(game_id))
 
 
+def web_player_exports_folder(game_id: int) -> str:
+    from core.web_player import EXPORTS_DIR
+
+    return os.path.join(web_player_folder(game_id), EXPORTS_DIR)
+
+
 def _retire_folder(folder: str, game_id: int) -> str | None:
     from datetime import datetime
 

@@ -9,22 +9,27 @@ from __future__ import annotations
 
 import html
 import mimetypes
+import ntpath
 import os
 import sys
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Iterable, Set
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal, override
 from urllib.parse import quote, unquote, urlsplit
 
+from core.host_platform import is_windows
+
 SCHEME = "wlib-game"
 GAME_HOST = "game"
 RUFFLE_HOST = "ruffle"
 FLASH_PAGE = "__wlib_flash__.html"
+EXPORTS_DIR = "exports"
 USAGE = (
     "Usage: wlib --play-web --root <game dir> --entry <relative path> "
     "--profile <storage dir> --title <title> [--flash] [--offline] "
-    "[--links open|ignore] [--devtools]"
+    "[--links open|ignore] [--devtools] [--sandboxed]"
 )
 
 EXTRA_CONTENT_TYPES = {
@@ -67,6 +72,7 @@ class PlayerArgs:
     offline: bool = False
     links: LinkMode = "open"
     devtools: bool = False
+    sandboxed: bool = False
 
 
 def parse_args(argv: list[str]) -> PlayerArgs:
@@ -76,7 +82,7 @@ def parse_args(argv: list[str]) -> PlayerArgs:
     index = 0
     while index < len(argv):
         arg = argv[index]
-        if arg in ("--flash", "--offline", "--devtools"):
+        if arg in ("--flash", "--offline", "--devtools", "--sandboxed"):
             flags.add(arg)
             index += 1
         elif arg in ("--root", "--entry", "--profile", "--title", "--links"):
@@ -106,7 +112,45 @@ def parse_args(argv: list[str]) -> PlayerArgs:
         offline="--offline" in flags,
         links=links,  # type: ignore[arg-type]
         devtools="--devtools" in flags,
+        sandboxed="--sandboxed" in flags,
     )
+
+
+def safe_export_name(suggested: str) -> str:
+    name = ntpath.basename(suggested)
+    name = "".join(char for char in name if unicodedata.category(char) != "Cc").strip()
+    # A leading dot hides the file, and the detail modal does not count hidden files.
+    name = name.lstrip(". ")
+    if is_windows():
+        # Windows also treats colons as stream separators and trims trailing dots.
+        name = "".join(char for char in name if char not in '<>:"|?*').rstrip(". ")
+        device = name.split(".", 1)[0].rstrip().upper()
+        if device in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} or (
+            device[:3] in ("COM", "LPT") and len(device) == 4 and device[-1] in "123456789¹²³"
+        ):
+            name = "_" + name
+    return name if name not in ("", ".", "..") else "download"
+
+
+def unique_export_path(folder: str, name: str, taken: Set[str]) -> str:
+    """Choose a free basename, including names reserved by active downloads."""
+    stem, ext = os.path.splitext(name)
+    pending = {os.path.normcase(filename) for filename in taken}
+    index = 0
+    while os.path.normcase(name) in pending or os.path.lexists(os.path.join(folder, name)):
+        index += 1
+        name = f"{stem} ({index}){ext}"
+    return os.path.join(folder, name)
+
+
+def file_picker_filter(accepted: Iterable[str | None]) -> str:
+    patterns = [
+        f"*{entry}" for entry in accepted
+        if entry and entry.startswith(".") and len(entry) > 1
+        and all(char.isalnum() or char in ".-_" for char in entry)
+    ]
+    all_files = "All files (*)"
+    return f"Accepted files ({' '.join(patterns)});;{all_files}" if patterns else all_files
 
 
 def content_type(path: str) -> str:
@@ -300,18 +344,25 @@ def open_url_on_host(url: str) -> bool:
     """Hand an http(s) URL to the system browser; return whether an opener started."""
     if urlsplit(url).scheme.lower() not in ("http", "https"):
         return False
+    return _open_system_target(url)
+
+
+def open_folder_on_host(path: str) -> bool:
+    """Hand a local folder to the system file manager."""
+    return _open_system_target(os.path.abspath(path))
+
+
+def _open_system_target(target: str) -> bool:
     import shutil
     import subprocess
-
-    from core.host_platform import is_windows
 
     if is_windows():
         from core.host_platform import open_windows_system_target
 
-        opened, _error = open_windows_system_target(url)
+        opened, _error = open_windows_system_target(target)
         return bool(opened)
     env = host_open_env(dict(os.environ))
-    for command in (["xdg-open", url], ["gio", "open", url], ["kde-open", url]):
+    for command in (["xdg-open", target], ["gio", "open", target], ["kde-open", target]):
         if not shutil.which(command[0], path=env.get("PATH")):
             continue
         try:
@@ -341,6 +392,7 @@ def run(args: PlayerArgs) -> int:
     from PyQt6.QtCore import QByteArray, QBuffer, QCoreApplication, QEvent, QFile, QIODevice, QObject, Qt, QUrl
     from PyQt6.QtGui import QAction, QContextMenuEvent, QKeySequence, QShortcut
     from PyQt6.QtWebEngineCore import (
+        QWebEngineDownloadRequest,
         QWebEngineProfile,
         QWebEngineScript,
         QWebEngineSettings,
@@ -353,7 +405,7 @@ def run(args: PlayerArgs) -> int:
         QWebEnginePage,
     )
     from PyQt6.QtWebEngineWidgets import QWebEngineView
-    from PyQt6.QtWidgets import QApplication, QSplitter
+    from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QSplitter
 
     scheme = QWebEngineUrlScheme(QByteArray(SCHEME.encode()))
     scheme.setSyntax(QWebEngineUrlScheme.Syntax.Host)
@@ -369,6 +421,15 @@ def run(args: PlayerArgs) -> int:
     app.setApplicationName("wLib Web Player")
 
     ruffle_dir = ruffle_root()
+    exports = os.path.join(args.profile, EXPORTS_DIR)
+    picker_options = QFileDialog.Option(0)
+    if args.sandboxed:
+        picker_options |= QFileDialog.Option.DontUseNativeDialog
+
+    def ensure_exports_folder() -> None:
+        if os.path.islink(exports):
+            raise OSError("The exports folder is a symbolic link.")
+        os.makedirs(exports, exist_ok=True)
 
     class SchemeHandler(QWebEngineUrlSchemeHandler):
         def __init__(self, parent: QObject) -> None:
@@ -420,6 +481,45 @@ def run(args: PlayerArgs) -> int:
         _ = open_url_on_host(url)
 
     class GamePage(QWebEnginePage):
+        last_pick_folder: str | None = None
+
+        @override
+        def chooseFiles(  # noqa: N802
+            self,
+            mode: QWebEnginePage.FileSelectionMode,
+            oldFiles: Iterable[str | None],  # noqa: N803
+            acceptedMimeTypes: Iterable[str | None],  # noqa: N803
+        ) -> list[str]:
+            try:
+                ensure_exports_folder()
+            except OSError as exc:
+                show_export_message("Could not open exports folder", str(exc))
+                return []
+
+            start = self.last_pick_folder or exports
+            name_filter = file_picker_filter(acceptedMimeTypes)
+            selection = QWebEnginePage.FileSelectionMode
+            if mode == selection.FileSelectUploadFolder:
+                folder = QFileDialog.getExistingDirectory(
+                    window, "Choose folder", start,
+                    options=picker_options | QFileDialog.Option.ShowDirsOnly,
+                )
+                files = [folder] if folder else []
+            elif mode == selection.FileSelectOpenMultiple:
+                files, _ = QFileDialog.getOpenFileNames(
+                    window, "Choose files", start, name_filter, options=picker_options,
+                )
+            elif mode == selection.FileSelectOpen:
+                path, _ = QFileDialog.getOpenFileName(
+                    window, "Choose file", start, name_filter, options=picker_options,
+                )
+                files = [path] if path else []
+            else:
+                return []
+            if files and not args.sandboxed:
+                self.last_pick_folder = files[0] if mode == selection.FileSelectUploadFolder else os.path.dirname(files[0])
+            return files
+
         @override
         def acceptNavigationRequest(  # noqa: N802
             self, url: QUrl, type: QWebEnginePage.NavigationType, isMainFrame: bool  # noqa: A002, N803
@@ -545,6 +645,72 @@ def run(args: PlayerArgs) -> int:
     window.addWidget(view)
     window.setWindowTitle(args.title)
     window.resize(1280, 800)
+
+    def show_export_message(title: str, text: str, saved_path: str | None = None) -> None:
+        message = QMessageBox(window)
+        message.setWindowTitle(title)
+        message.setIcon(QMessageBox.Icon.Information if saved_path else QMessageBox.Icon.Warning)
+        message.setTextFormat(Qt.TextFormat.PlainText)
+        message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        message.setText(text)
+        message.setStandardButtons(QMessageBox.StandardButton.Ok)
+        message.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        if saved_path is not None:
+            def use_saved_path() -> None:
+                if args.sandboxed:
+                    clipboard = app.clipboard()
+                    if clipboard is not None:
+                        clipboard.setText(saved_path)
+                elif not open_folder_on_host(os.path.dirname(saved_path)):
+                    show_export_message("Could not open exports folder", os.path.dirname(saved_path))
+
+            action = message.addButton(
+                "Copy path" if args.sandboxed else "Open folder", QMessageBox.ButtonRole.ActionRole,
+            )
+            if action is not None:
+                _ = action.clicked.connect(use_saved_path)  # pyright: ignore[reportUnknownMemberType]
+        message.setWindowModality(Qt.WindowModality.NonModal)
+        message.show()
+
+    taken: set[str] = set()
+
+    def on_download(request: QWebEngineDownloadRequest) -> None:
+        name = safe_export_name(request.suggestedFileName())
+        try:
+            ensure_exports_folder()
+        except OSError as exc:
+            request.cancel()
+            show_export_message("Download failed", str(exc))
+            return
+        if args.sandboxed:
+            path = unique_export_path(exports, name, taken)
+            taken.add(os.path.basename(path))
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                window, "Save as", os.path.join(exports, name), options=picker_options,
+            )
+            if not path:
+                request.cancel()
+                return
+        folder, filename = os.path.split(path)
+        request.setDownloadDirectory(folder)
+        request.setDownloadFileName(filename)
+
+        def on_finished() -> None:
+            if not request.isFinished():
+                return
+            if args.sandboxed:
+                taken.discard(filename)
+            if request.state() == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+                saved_path = os.path.join(request.downloadDirectory(), request.downloadFileName())
+                show_export_message("Download saved", saved_path, saved_path)
+            else:
+                show_export_message("Download failed", request.interruptReasonString() or "The download did not finish.")
+
+        _ = request.isFinishedChanged.connect(on_finished)  # pyright: ignore[reportUnknownMemberType]
+        request.accept()
+
+    _ = profile.downloadRequested.connect(on_download)  # pyright: ignore[reportUnknownMemberType]
 
     if not args.flash:
         # On the game page only, so the bootstrap never runs in DevTools.

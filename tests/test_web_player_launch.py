@@ -87,6 +87,7 @@ def test_builtin_player_is_a_tracked_process_with_first_use_note(game_dir):
     assert argv[argv.index("--profile") + 1] == game_sandbox.web_player_folder(7)
     assert os.path.isdir(game_sandbox.web_player_folder(7))
     assert "--flash" not in argv and "--offline" not in argv
+    assert "--sandboxed" not in argv
     assert argv[argv.index("--links") + 1] == "open"
     assert "QTWEBENGINE_DISABLE_SANDBOX" not in popen.call_args.kwargs["env"]
     assert 7 in launcher._running
@@ -125,6 +126,7 @@ def test_no_internet_and_sandbox_flags(game_dir, monkeypatch):
     assert argv[0] == "/usr/bin/bwrap" and "--unshare-net" in argv
     player = argv[argv.index("--play-web") - 2 :]
     assert "--offline" in player and player[player.index("--links") + 1] == "ignore"
+    assert "--sandboxed" in player
     assert popen.call_args.kwargs["env"]["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
     profile = game_sandbox.web_player_folder(7)
     assert ["--bind", profile, profile] in [argv[i : i + 3] for i in range(len(argv) - 2)]
@@ -198,6 +200,41 @@ def test_sandboxie_box_opens_profile_folder(monkeypatch, tmp_path):
     assert ["append", "wLib_3", "OpenFilePath", "C:\\data\\web-player\\3\\"] in calls
 
 
+def test_sandboxie_launch_passes_sandboxed_flag(game_dir, monkeypatch):
+    monkeypatch.setattr("core.launcher.is_windows", lambda: True)
+    os.makedirs(game_sandbox.web_player_folder(7))
+    monkeypatch.setattr("core.launcher.web_player_runtime_paths", lambda: ())
+    with (
+        patch("os.path.exists", return_value=True),
+        patch(
+            "core.launcher.game_sandbox.get_sandbox_status",
+            return_value={"status": "ready", "path": r"C:\Sandboxie\Start.exe"},
+        ),
+        patch("core.launcher.game_sandbox.configure_sandboxie_box", return_value="wLib_7") as configure,
+        patch("core.launcher.game_sandbox.check_writable_mounts"),
+        patch("core.launcher.get_setting", return_value=None),
+        patch("core.launcher.web_player_devtools_enabled", return_value=False),
+        patch("subprocess.Popen") as popen,
+        patch("threading.Thread"),
+    ):
+        result = Launcher().launch(r"C:\Games\index.html", game_id=7, sandbox_enabled=True, html_player="builtin")
+    assert result["success"]
+    argv = popen.call_args.args[0]
+    assert argv[1] == "/box:wLib_7"
+    assert "--sandboxed" in argv[argv.index("--play-web") :]
+    assert configure.call_args.kwargs["extra_write_paths"] == (game_sandbox.web_player_folder(7),)
+
+
+@pytest.mark.parametrize("game_id", [0, -1, True])
+def test_web_player_exports_folder_rejects_invalid_id(game_id):
+    with pytest.raises(ValueError):
+        game_sandbox.web_player_exports_folder(game_id)
+
+
+def test_web_player_exports_folder_is_inside_profile(game_dir):
+    assert game_sandbox.web_player_exports_folder(7) == str(game_dir.parent / "data" / "web-player" / "7" / "exports")
+
+
 def test_flatpak_player_argv_sandboxed():
     argv = game_sandbox.flatpak_player_argv(
         ["/app/bin/wlib", "--play-web", "--root", "/g"],
@@ -239,6 +276,7 @@ def test_flatpak_sandboxed_uses_sub_sandbox_and_reports_early_exit(game_dir, mon
     argv = popen.call_args.args[0]
     assert argv[:2] == ["flatpak-spawn", "--sandbox"] and "--no-network" in argv
     assert "--devtools" in argv
+    assert "--sandboxed" in argv[argv.index("--play-web") :]
     assert not result["success"] and "exited before its window opened" in result["error"]
     assert 5 not in Launcher()._running
 
@@ -257,6 +295,13 @@ def test_flatpak_no_internet_without_sandbox_still_blocks_network(game_dir, monk
     argv = popen.call_args.args[0]
     assert argv[:2] == ["flatpak-spawn", "--watch-bus"] and "--no-network" in argv
     assert "--offline" in argv
+    assert "--sandboxed" not in argv
+
+
+def test_no_internet_without_sandbox_uses_save_dialog(game_dir):
+    result, popen, *_ = _launch(game_dir, block_network=True)
+    argv = popen.call_args.args[0]
+    assert result["success"] and "--offline" in argv and "--sandboxed" not in argv
 
 
 def test_flatpak_sub_sandbox_keeps_session_bus_for_the_portal(game_dir, monkeypatch):

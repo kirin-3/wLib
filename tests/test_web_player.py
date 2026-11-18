@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -135,11 +136,11 @@ def test_parse_args_good(game: Path, tmp_path: Path) -> None:
     )
     assert args.entry == "index.html" and args.offline and not args.flash
     assert args.links == "ignore" and args.title == "T"
-    assert not args.devtools
+    assert not args.devtools and not args.sandboxed
     args = web_player.parse_args(
-        ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p"), "--devtools"]
+        ["--root", str(game), "--entry", "index.html", "--profile", str(tmp_path / "p"), "--devtools", "--sandboxed"]
     )
-    assert args.devtools and args.links == "open"
+    assert args.devtools and args.sandboxed and args.links == "open"
 
 
 @pytest.mark.parametrize(
@@ -201,7 +202,63 @@ def test_host_open_env_drops_bundled_libs() -> None:
 
 
 def test_open_url_on_host_rejects_other_schemes() -> None:
-    assert web_player.open_url_on_host("file:///etc/passwd") is False
+    with patch("subprocess.Popen") as popen:
+        assert web_player.open_url_on_host("file:///x") is False
+    popen.assert_not_called()
+
+
+def test_open_folder_on_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APPDIR", "/bundle")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/host/lib")
+    with (
+        patch("core.web_player.is_windows", return_value=False),
+        patch("shutil.which", side_effect=[None, "/usr/bin/gio"]),
+        patch("subprocess.Popen") as popen,
+    ):
+        assert web_player.open_folder_on_host(str(tmp_path))
+    assert popen.call_args.args[0] == ["gio", "open", str(tmp_path)]
+    assert popen.call_args.kwargs["env"]["LD_LIBRARY_PATH"] == "/host/lib"
+    assert "APPDIR" not in popen.call_args.kwargs["env"]
+
+
+def test_open_folder_on_windows(tmp_path: Path) -> None:
+    with (
+        patch("core.web_player.is_windows", return_value=True),
+        patch("core.host_platform.open_windows_system_target", return_value=(True, "")) as opener,
+    ):
+        assert web_player.open_folder_on_host(str(tmp_path))
+    opener.assert_called_once_with(str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("suggested", "expected"),
+    [
+        ("save.save", "save.save"),
+        (r"C:\\games\\save.save", "save.save"),
+        ("../../evil.sh", "evil.sh"),
+        ("sa\x00ve\n\x7f.save", "save.save"),
+        (".save", "save"),
+        ("...", "download"),
+        ("", "download"),
+        ("..", "download"),
+    ],
+)
+def test_safe_export_name(suggested: str, expected: str) -> None:
+    assert web_player.safe_export_name(suggested) == expected
+
+
+@pytest.mark.parametrize(("name", "stem", "extension"), [("save.save", "save", ".save"), ("save", "save", "")])
+def test_unique_export_path(tmp_path: Path, name: str, stem: str, extension: str) -> None:
+    folder = str(tmp_path)
+    first_copy = f"{stem} (1){extension}"
+    (tmp_path / name).touch()
+    assert web_player.unique_export_path(folder, name, set()) == str(tmp_path / first_copy)
+    assert web_player.unique_export_path(folder, name, {first_copy}) == str(tmp_path / f"{stem} (2){extension}")
+
+
+def test_file_picker_filter_uses_extensions_only() -> None:
+    assert web_player.file_picker_filter([None, "image/*", ".save", ".json"]) == "Accepted files (*.save *.json);;All files (*)"
+    assert web_player.file_picker_filter(["text/plain"]) == "All files (*)"
 
 
 def test_literal_percent_names_decode_once(game: Path, tmp_path: Path) -> None:

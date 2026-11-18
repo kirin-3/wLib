@@ -276,6 +276,21 @@ const loadScreenshots = async () => {
   } catch { /* Stored screenshots remain available. */ }
 };
 watch(() => [isOpen.value, props.game?.id] as const, () => { void loadScreenshots(); }, { immediate: true });
+const webPlayerExportCount = ref(0);
+let webPlayerExportsRequestId = 0;
+watch(() => [isOpen.value, props.game?.id] as const, async ([open, gameId]) => {
+  const requestId = ++webPlayerExportsRequestId;
+  webPlayerExportCount.value = 0;
+  if (!open || gameId == null) return;
+  try {
+    const result = await api.getWebPlayerExports(gameId);
+    if (requestId === webPlayerExportsRequestId && result.success) {
+      webPlayerExportCount.value = result.count ?? 0;
+    }
+  } catch (error) {
+    console.error("Could not load web player exports", error);
+  }
+}, { immediate: true });
 watch(() => props.updateCheckState.running, (running, previous) => {
   if (previous && !running && isOpen.value) void loadScreenshots();
 });
@@ -1119,12 +1134,23 @@ useEventListener(window, "wlib-playtime-tick", handleJournalTick);
 
 onBeforeUnmount(() => {
   journalRequestId++;
+  webPlayerExportsRequestId++;
 });
 
 const openSandboxFolder = async () => {
   if (!props.game) return;
   const result = await api.openGameSandboxFolder(props.game.id);
   if (!result.success) notifyError(result.error || "Could not open sandbox folder.");
+};
+
+const openWebPlayerExportsFolder = async () => {
+  if (!props.game) return;
+  try {
+    const result = await api.openWebPlayerExportsFolder(props.game.id);
+    if (!result.success) notifyError(result.error || "Could not open exports folder.");
+  } catch {
+    notifyError("Could not open exports folder.");
+  }
 };
 
 const close = () => {
@@ -2569,6 +2595,9 @@ const removeAttachment = async (name: string) => {
               <option v-for="option in HTML_PLAYER_OPTIONS" :key="option.value" :value="option.value">{{ option.value === '' ? `Use Settings default (${htmlBuiltinDefault ? 'Built-in player' : 'System browser'})` : option.label }}</option>
             </select>
             <p class="text-xs" style="color:var(--text-secondary)">{{ resolvedHtmlPlayer === 'builtin' ? "The built-in player runs the game in a wLib window with playtime, Stop, sandbox and No internet. Its saves are kept by wLib." : resolvedHtmlPlayer === 'browser' ? "Opens your default browser. Playtime, Stop, sandbox and No internet do not apply, and saves stay in that browser." : "This launch mode runs the file as a program, not in a player." }}</p>
+          </div>
+          <div v-if="webPlayerExportCount > 0" class="flex flex-wrap gap-2">
+            <button class="modal-btn" @click="openWebPlayerExportsFolder">Open exports folder</button>
           </div>
           <div class="space-y-2">
             <label class="flex items-center justify-between text-sm">

@@ -2200,6 +2200,8 @@ class Launcher:
                 player.append("--flash")
             if block:
                 player.append("--offline")
+            if sandboxed:
+                player.append("--sandboxed")
             # Links cannot leave a sandboxed or offline player.
             player += ["--links", "ignore" if (sandboxed or block) else "open"]
             if web_player_devtools_enabled():

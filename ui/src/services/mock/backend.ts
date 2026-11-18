@@ -54,6 +54,7 @@ export class MockBackend {
   _mockArchiveStatus: ArchiveInstallStatus = { running: false, stage: "", done: 0, total: 0 };
   _mockGameFiles = new MockGameFiles((id) => this._mockRunningGames.has(id));
   _mockWebMedia = new MockWebMedia();
+  _mockWebPlayerExports = new Map<number, number>();
   _mockDownloads = new MockDownloads(() => this._mockRunningGames.size > 0, () => {
     const settings = readMockSettings();
     return {
@@ -1462,6 +1463,13 @@ export class MockBackend {
         return { success: false, error: "Sandbox installation requires the desktop app." };
       case "open_game_sandbox_folder":
         return { success: false, error: "Opening sandbox folders requires the desktop app." };
+      case "get_web_player_exports": {
+        const game = readMockGames().find((entry) => entry.id === args[0]);
+        if (!game) return { success: false, error: "Game was not found", error_code: "game_not_found" };
+        return { success: true, count: this._mockWebPlayerExports.get(game.id) ?? 0 };
+      }
+      case "open_web_player_exports_folder":
+        return { success: false, error: "Opening exports folders requires the desktop app." };
       case "set_sandbox_for_all_games": {
         let changed = 0;
         const games = readMockGames().map((game) => {

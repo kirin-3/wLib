@@ -141,6 +141,44 @@ class LaunchMixin(ApiBase):
         except OSError as exc:
             return {"success": False, "error": str(exc)}
 
+    def _web_player_exports_path(self, game_id: int) -> str | None:
+        from core.game_sandbox import web_player_exports_folder
+
+        coerced_id = self._coerce_db_id(game_id)
+        if coerced_id is None or database.get_game(coerced_id) is None:
+            return None
+        return web_player_exports_folder(coerced_id)
+
+    def get_web_player_exports(self, game_id: int) -> dict[str, object]:
+        folder = self._web_player_exports_path(game_id)
+        if folder is None:
+            return {"success": False, "error": "Game was not found", "error_code": "game_not_found"}
+        try:
+            if os.path.islink(folder):
+                return {"success": True, "count": 0}
+            with os.scandir(folder) as entries:
+                count = sum(
+                    1 for entry in entries
+                    if not entry.name.startswith(".") and not entry.name.endswith(".crdownload")
+                    and entry.is_file(follow_symlinks=False)
+                )
+        except FileNotFoundError:
+            count = 0
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "count": count}
+
+    def open_web_player_exports_folder(self, game_id: int) -> dict[str, object]:
+        folder = self._web_player_exports_path(game_id)
+        if folder is None:
+            return {"success": False, "error": "Game was not found", "error_code": "game_not_found"}
+        if os.path.islink(folder) or not os.path.isdir(folder):
+            return {"success": False, "error": "The game's exports folder does not exist."}
+        try:
+            return dict(self._open_path_with_system_handler(folder))
+        except OSError as exc:
+            return {"success": False, "error": str(exc)}
+
     def list_companion_tools(self) -> dict[str, object]:
         return {"success": True, "tools": database.list_companion_tools()}
 
