@@ -28,7 +28,7 @@ from core.store_links import (
     StoreLink,
     normalize_store_links,
 )
-from core import gamescope
+from core import gamescope, lewdcorner
 from core.versions import normalize_version
 from core.thread_details import (
     BASELINE_COLUMN,
@@ -57,6 +57,7 @@ RPGMAKER_LINUX_LAUNCH_MODE = "rpgmaker_linux"
 RPGMAKER_LINUX_RUNNER_SETTING = "rpgmaker_linux_runner_path"
 DEFAULT_LIBRARY_FOLDER_PATTERN = "{creator}/{title}/{version}"
 GENERAL_SETTINGS_KEYS = (
+    *lewdcorner.LC_SETTINGS,
     "enable_logging",
     "auto_update_check",
     "update_notifications",
@@ -103,6 +104,9 @@ SYNC_GAME_COLUMNS = (
     "tags_user_edited",
     "f95_tags",
     "f95_url",
+    "lc_url",
+    "lc_mode",
+    "lc_dismissed",
     "version",
     "latest_version",
     "thread_completed",
@@ -419,6 +423,84 @@ def find_game_by_f95_url(
     if row is None:
         return None
     return {str(key): cast(object, row[key]) for key in row.keys()}
+
+
+def _find_lc_game_row(
+    conn: sqlite3.Connection, url: str, exclude_id: int | None = None
+) -> sqlite3.Row | None:
+    return cast(sqlite3.Row | None, conn.execute(
+        "SELECT id, title, f95_url, lc_url, play_status, exe_path FROM games "
+        + "WHERE lc_url = ? AND lc_url != '' AND (? IS NULL OR id != ?) ORDER BY id LIMIT 1",
+        (url, exclude_id, exclude_id),
+    ).fetchone())
+
+
+def find_game_by_lc_url(url: object, exclude_id: int | None = None) -> dict[str, object] | None:
+    normalized = lewdcorner.normalize_thread_url(url)
+    if not normalized:
+        return None
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        row = _find_lc_game_row(conn, normalized, exclude_id)
+    return {str(key): cast(object, row[key]) for key in row.keys()} if row else None
+
+
+def fill_lc_threads(partners: Mapping[str, tuple[str, str]]) -> int:
+    """Attach catalog partners atomically without replacing or reviving a thread."""
+    from core.f95zone import extract_thread_id
+
+    if not partners:
+        return 0
+    count = 0
+    with closing(get_connection()) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        settings = dict(cast(list[tuple[str, str]], conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('lc_enabled', 'lc_plus')"
+        ).fetchall()))
+        if not lewdcorner.setting_enabled(settings.get("lc_enabled")):
+            return 0
+        has_plus = lewdcorner.setting_enabled(settings.get("lc_plus"))
+        rows = cast(list[tuple[int, str, str]], conn.execute(
+            "SELECT id, f95_url, lc_dismissed FROM games "
+            + "WHERE f95_url != '' AND COALESCE(lc_url, '') = '' ORDER BY id"
+        ).fetchall())
+        claimed = {url for (url,) in cast(list[tuple[str]], conn.execute(
+            "SELECT lc_url FROM games WHERE lc_url != ''"
+        ).fetchall())}
+        for game_id, f95_url, dismissed in rows:
+            partner = partners.get(extract_thread_id(f95_url))
+            if partner is None:
+                continue
+            thread_id, tier = partner
+            if thread_id == dismissed or (tier.casefold() == "premium" and not has_plus):
+                continue
+            url = f"https://lewdcorner.com/threads/{thread_id}/"
+            if url not in claimed:
+                _ = conn.execute("UPDATE games SET lc_url = ? WHERE id = ?", (url, game_id))
+                claimed.add(url)
+                count += 1
+        conn.commit()
+    return count
+
+
+def attach_lc_thread(game_id: int, url: str, f95_url: str) -> bool:
+    """Attach to a still-matching, empty row. A concurrent edit wins."""
+    normalized = lewdcorner.validated_thread_url(url)
+    if not normalized:
+        return False
+    with closing(get_connection()) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        conn.row_factory = sqlite3.Row
+        row = cast(sqlite3.Row | None, conn.execute(
+            "SELECT f95_url, lc_url FROM games WHERE id = ?", (game_id,)
+        ).fetchone())
+        if (row is None or row["lc_url"]
+            or not thread_urls_match(cast(object, row["f95_url"]), f95_url)
+            or _find_lc_game_row(conn, normalized)):
+            return False
+        _ = conn.execute("UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id))
+        conn.commit()
+    return True
 
 
 def get_connection() -> sqlite3.Connection:
@@ -777,6 +859,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ = cursor.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('sandbox_new_games', 'false')"
     )
+    for key in lewdcorner.LC_SETTINGS:
+        _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, '0')", (key,))
     for key in ("gamemode_enabled", "mangohud_enabled"):
         _ = cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'false')", (key,))
     for key, value in gamescope.SETTINGS_DEFAULTS.items():
@@ -833,6 +917,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     }
 
     new_columns = [
+        ("lc_url", "TEXT DEFAULT ''"),
+        ("lc_mode", "TEXT DEFAULT ''"),
+        ("lc_dismissed", "TEXT DEFAULT ''"),
         ("steam_shortcut", "BOOLEAN DEFAULT 0"),
         ("cover_local", "TEXT"),
         ("cover_cache", "TEXT"),
@@ -923,6 +1010,24 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "[wLib] Warning: duplicate f95_url values exist; unique index not applied"
         )
 
+    try:
+        _ = cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_games_lc_url_unique "
+            + "ON games(lc_url) WHERE lc_url IS NOT NULL AND lc_url != ''"
+        )
+    except sqlite3.IntegrityError:
+        print("[wLib] Warning: duplicate lc_url values exist; unique index not applied")
+    rows = cast(list[tuple[int, str]], cursor.execute(
+        "SELECT id, lc_url FROM games WHERE lc_url IS NOT NULL AND lc_url != '' ORDER BY id"
+    ).fetchall())
+    for game_id, stored_url in rows:
+        normalized = lewdcorner.normalize_thread_url(stored_url)
+        if normalized and normalized != stored_url:
+            try:
+                _ = cursor.execute("UPDATE games SET lc_url = ? WHERE id = ?", (normalized, game_id))
+            except sqlite3.IntegrityError:
+                continue
+
     _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
     _normalize_game_f95_urls(cursor)
     launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
@@ -1001,12 +1106,18 @@ def add_game(
     command_line_args: str = "",
     sandbox_enabled: bool | None = None,
     block_network: bool = False,
+    *,
+    lc_url: str = "",
+    lc_mode: str = "",
+    lc_dismissed: str = "",
 ) -> int | None:
     # tags might be a list, so convert to comma-separated string if needed
     if isinstance(tags, list):
         tags = ", ".join(str(tag) for tag in tags)
 
     normalized_url = normalize_thread_url(f95_url)
+    normalized_lc = lewdcorner.validated_thread_url(lc_url)
+    mode = lewdcorner.normalize_mode(lc_mode)
     if sandbox_enabled is None:
         sandbox_enabled = bool(_coerce_bool_int(get_setting("sandbox_new_games")))
 
@@ -1015,6 +1126,9 @@ def add_game(
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        _ = conn.execute("BEGIN IMMEDIATE")
+        if normalized_lc and _find_lc_game_row(conn, normalized_lc):
+            raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {normalized_lc}")
         if (
             normalized_url
             and find_matching_game_row(cursor, normalized_url) is not None
@@ -1022,11 +1136,14 @@ def add_game(
             raise sqlite3.IntegrityError("duplicate f95_url")
 
         _ = cursor.execute(
-            "INSERT INTO games (title, exe_path, f95_url, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO games (title, exe_path, f95_url, lc_url, lc_mode, lc_dismissed, version, cover_image_path, tags, rating, developer, engine, run_japanese_locale, run_wayland, auto_inject_ce, custom_prefix, proton_version, launch_mode, date_added, play_status, command_line_args, sandbox_enabled, block_network) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 title,
                 exe_path,
                 normalized_url,
+                normalized_lc,
+                mode,
+                lc_dismissed,
                 version,
                 cover_image,
                 tags,
@@ -1601,6 +1718,8 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "steam_shortcut",
         "exe_path",
         "f95_url",
+        "lc_url",
+        "lc_mode",
         "version",
         "progress",
         "note_links",
@@ -1676,6 +1795,11 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
 
+    if "lc_url" in safe_fields:
+        safe_fields["lc_url"] = lewdcorner.validated_thread_url(safe_fields["lc_url"])
+    if "lc_mode" in safe_fields:
+        safe_fields["lc_mode"] = lewdcorner.normalize_mode(safe_fields["lc_mode"])
+
     for field in THREAD_DETAIL_FIELDS:
         if field in safe_fields:
             safe_fields[field] = thread_detail_column_value(field, safe_fields[field])
@@ -1700,6 +1824,18 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     with closing(get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        _ = conn.execute("BEGIN IMMEDIATE")
+        if "lc_url" in safe_fields:
+            lc_url = str(safe_fields["lc_url"])
+            if lc_url and _find_lc_game_row(conn, lc_url, game_id):
+                raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {lc_url}")
+            row = cast(sqlite3.Row | None, conn.execute(
+                "SELECT lc_url FROM games WHERE id = ?", (game_id,)
+            ).fetchone())
+            old_id = lewdcorner.extract_thread_id(cast(object, row[0])) if row else ""
+            if old_id and old_id != lewdcorner.extract_thread_id(lc_url):
+                safe_fields["lc_dismissed"] = old_id
+
         updated_url = safe_fields.get("f95_url")
         if updated_url and find_matching_game_row(
             cursor,

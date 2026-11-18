@@ -753,6 +753,8 @@ class DownloadsMixin(ApiBase):
         """Blocking install from an archive; the dialog polls status meanwhile."""
         import sqlite3
 
+        from core import lewdcorner
+
         from core.archive_install import (
             ArchiveInstallError,
             InstallCancelled,
@@ -763,6 +765,7 @@ class DownloadsMixin(ApiBase):
         from core.database import (
             DEFAULT_LIBRARY_FOLDER_PATTERN,
             find_game_by_f95_url,
+            find_game_by_lc_url,
             get_setting,
         )
 
@@ -821,6 +824,19 @@ class DownloadsMixin(ApiBase):
                     "error_code": "duplicate_url",
                     "game_id": existing.get("id"),
                 }
+
+        try:
+            lc_url = lewdcorner.validated_thread_url(payload.get("lc_url"))
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        if lc_url and (existing := find_game_by_lc_url(lc_url, exclude_id=game_id)):
+            return {
+                "success": False,
+                "error": "That LewdCorner thread is already in your library.",
+                "error_code": "duplicate_url",
+                "game_id": existing["id"],
+            }
+        lc_dismissed = str(payload.get("lc_dismissed") or "")
 
         title = str(payload.get("title") or "").strip()
         version = str(payload.get("version") or "").strip()
@@ -922,6 +938,8 @@ class DownloadsMixin(ApiBase):
                 cover_image=str(payload.get("cover_image") or ""),
                 tags=self._normalize_tags_csv(payload.get("tags")),
                 rating=str(payload.get("rating") or ""),
+                lc_url=lc_url,
+                lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
                 game_id=game_id,
                 target_id=target_id,
                 remove_old=remove_old,
@@ -969,6 +987,14 @@ class DownloadsMixin(ApiBase):
             replace_game_links(
                 installed_id, "f95_post" if f95_url else "page", incoming_links
             )
+
+        if game_id is None and lc_url and isinstance(installed_id, int):
+            from core.database import update_game as update_game_row
+
+            completed = payload.get("thread_completed")
+            if isinstance(completed, bool):
+                _ = update_game_row(installed_id, {"thread_completed": completed})
+            _ = self._fill_thread_details_from_catalog([installed_id])
 
         # New installs with a thread URL get the same metadata fetch as add_game.
         if game_id is None and f95_url and isinstance(installed_id, int):

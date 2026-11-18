@@ -2,7 +2,7 @@
 """TypedDicts and Protocols for the ``Api`` mixins."""
 from __future__ import annotations
 
-from typing import NotRequired, Protocol, TypedDict
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 
 class ProgressStatus(TypedDict):
@@ -81,6 +81,8 @@ class GameRecord(TypedDict):
     title: str
     version: str
     f95_url: str
+    lc_url: NotRequired[str]
+    lc_mode: NotRequired[Literal["", "on", "off"]]
     exe_path: NotRequired[str]
     latest_version: NotRequired[str]
     skipped_version: NotRequired[str]

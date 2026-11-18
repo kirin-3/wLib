@@ -30,3 +30,15 @@ test("links reject unsafe URLs, invalid values and duplicates", () => {
   assert.equal(gamePageUrl({f95_url:"https://f95zone.to/threads/1/", links:[link]}), "https://f95zone.to/threads/1/");
   assert.equal(gamePageUrl({}), "");
 });
+
+test("LC thread identity survives extension add and takes priority over store links", () => {
+  const lc = "https://lewdcorner.com/threads/123/";
+  const f95 = "https://f95zone.to/threads/456/";
+  const query = extensionAddQuery({ lc_url: lc, lc_suggested: lc, title: "Game", thread_completed: false });
+  assert.equal(query.lcurl, lc);
+  assert.equal(query.lcSuggested, lc);
+  assert.equal(query.threadCompleted, "false");
+  assert.equal(gamePageUrl({ f95_url: f95, lc_url: lc, links: [link] }), f95);
+  assert.equal(gamePageUrl({ lc_url: lc, links: [link] }), lc);
+  assert.deepEqual(readStoreLinks([{ source: "other", id: lc, url: lc }]), []);
+});

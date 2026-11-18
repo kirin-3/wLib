@@ -14,6 +14,8 @@ import threading
 from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Protocol, cast, override
+
+from core import lewdcorner
 from collections.abc import Callable
 
 from core.api import APP_VERSION
@@ -180,10 +182,10 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(url, str) or not url.strip():
             return None
 
-        from core.database import find_game_by_f95_url, get_game
+        from core.database import find_game_by_f95_url, find_game_by_lc_url, get_game
         from core.game_lookup import resolve_page
 
-        thread_game = find_game_by_f95_url(url)
+        thread_game = find_game_by_lc_url(url) if lewdcorner.extract_thread_id(url) else find_game_by_f95_url(url)
         if thread_game:
             return thread_game
         matches = resolve_page(url, ids)["matches"]
@@ -209,6 +211,11 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
                 if len(resolve_page(str(url), ids)["matches"]) == 1:
                     payload["canAttachThread"] = True
+            if lewdcorner.extract_thread_id(url) and not matching_game.get("lc_url"):
+                from core.game_lookup import resolve_page
+
+                if resolve_page(str(url), ids)["attach_lc_available"]:
+                    payload["attach_lc_available"] = True
             payload["wishlisted"] = not str(matching_game.get("exe_path") or "").strip()
             play_status = matching_game.get("play_status")
             if isinstance(play_status, str) and play_status.strip():
@@ -217,33 +224,86 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         return payload
 
     def _prepare_game_payload(self, raw: object) -> dict[str, object]:
-        from core.game_lookup import resolve_page
+        from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries, lookup_lc_partner, resolve_page
         from core.store_links import coerce_store_links
 
         if not isinstance(raw, dict):
             raise ValueError("Request body must be a JSON object")
         payload = dict(cast(dict[str, object], raw))
-        page_url = str(payload.get("pageUrl") or payload.get("url") or "")
+        source_url = payload.get("url")
+        page_url = str(payload.get("pageUrl") or source_url or "")
+        lc_url = lewdcorner.normalize_thread_url(source_url)
+        f95_url = normalize_thread_url(source_url) if extract_thread_id(source_url) else ""
         links = coerce_store_links(payload.get("links"))
-        if not extract_thread_id(payload.get("url")) and not links:
-            raise ValueError("An F95 thread URL or store link is required")
-        resolved = resolve_page(
-            page_url, [f"{link['source']}:{link['id']}" for link in links]
-        )
-        links = coerce_store_links([*links, *resolved["ids"]])
-        for key, value in resolved["catalog_entry"].items():
-            if value:
+        if not (lc_url or f95_url or links):
+            raise ValueError("An F95 or LewdCorner thread URL or store link is required")
+
+        partner = lookup_lc_partner(lc_url or f95_url) if lc_url or f95_url else {}
+        payload["url"] = f95_url or partner.get("f95_url", "")
+        payload["lc_url"] = lc_url or partner.get("lc_url", "")
+        if partner.get("lc_url"):
+            payload["lc_suggested"] = partner["lc_url"]
+        resolved = resolve_page(page_url, [f"{link['source']}:{link['id']}" for link in links])
+        expanded = resolved["ids"]
+        if lc_url:
+            raw_prefixes = payload.get("prefixes")
+            if isinstance(raw_prefixes, list):
+                engine, completed = lewdcorner.prefix_details(cast(list[object], raw_prefixes))
+                payload["engine"] = engine
+                payload["thread_completed"] = completed
+            f95_id = extract_thread_id(payload["url"])
+            entry = combined_thread_entry(
+                f95_thread_entries([f95_id]).get(f95_id, {}), resolved["catalog_entry"]
+            )
+            expanded = coerce_store_links(entry.get("links"))
+        elif payload["lc_url"]:
+            lc_id = lewdcorner.extract_thread_id(payload["lc_url"])
+            f95_id = extract_thread_id(f95_url)
+            fallback = combined_thread_entry(
+                f95_thread_entries([f95_id]).get(f95_id, {}),
+                lc_thread_entries([lc_id]).get(lc_id, {}),
+            )
+            for key, value in fallback.items():
+                if key != "links" and payload.get(key) in (None, "", []) and value is not None:
+                    payload[key] = value
+            entry = resolved["catalog_entry"]
+            if not links:
+                links = coerce_store_links(fallback.get("links"))
+        else:
+            entry = resolved["catalog_entry"]
+        for key, value in entry.items():
+            if key != "links" and (value or (key == "thread_completed" and value is False)):
                 payload[key] = value
-        payload["url"] = (
-            normalize_thread_url(payload.get("url"))
-            if extract_thread_id(payload.get("url"))
-            else ""
-        )
         payload["pageUrl"] = page_url
-        payload["links"] = links
-        if not str(payload.get("title") or "").strip() or not (payload["url"] or links):
-            raise ValueError("A title and an F95 thread URL or store link are required")
+        payload["links"] = coerce_store_links([*links, *expanded])
+        if not str(payload.get("title") or "").strip():
+            raise ValueError("A title and an F95 or LewdCorner thread URL or store link are required")
         return payload
+
+    def _attach_lc(self, url: object) -> dict[str, object]:
+        from core.database import attach_lc_thread, find_game_by_f95_url, find_game_by_lc_url
+        from core.game_lookup import f95_for_lc
+
+        thread_id = lewdcorner.extract_thread_id(url)
+        if not thread_id:
+            raise ValueError("A LewdCorner thread URL is required")
+        normalized = lewdcorner.normalize_thread_url(url)
+        if find_game_by_lc_url(normalized):
+            return {"success": False, "error": "LewdCorner thread is already in wLib", "error_code": "duplicate_url"}
+        partner = f95_for_lc(thread_id)
+        f95 = f"https://f95zone.to/threads/{partner}/" if partner else ""
+        game = find_game_by_f95_url(f95) if f95 else None
+        if game and attach_lc_thread(int(str(game["id"])), normalized, f95):
+            return {"success": True, "attached": True, "id": game["id"]}
+        return {"success": False, "error": "No matching game can accept this thread"}
+
+    def _open_add_dialog(self, payload: dict[str, object]) -> None:
+        import base64
+
+        active_window = cast(ExtensionWindow, window_ref)
+        encoded = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+        js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-add', {{ detail: JSON.parse(decodeURIComponent(escape(atob('{encoded}')))) }}));"
+        _ = active_window.evaluate_js(js_code)
 
     def _get_allowed_origin(self) -> str | None:
         origin = (self.headers.get("Origin") or "").strip()
@@ -441,6 +501,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
 
             query = parse_qs(urlparse(self.path).query)
             check_url = query.get("url", [""])[0]
+            batch = query.get("batch") == ["1"]
 
             check_payload: dict[str, object] = {"exists": False}
             # An unpaired caller still gets 200 with the versions, so an old
@@ -464,9 +525,15 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 return
             if check_url:
                 try:
-                    check_payload = self._build_check_payload(
-                        check_url, query.get("id", [])
-                    )
+                    if batch:
+                        from core.database import find_game_by_lc_url
+
+                        check_payload["matches"] = {
+                            url: game["id"] for url in dict.fromkeys(query.get("url", [])[:250])
+                            if (game := find_game_by_lc_url(url)) is not None
+                        }
+                    else:
+                        check_payload = self._build_check_payload(check_url, query.get("id", []))
                 except Exception as e:
                     print(f"[wLib] Database error during extension check: {e}")
                     check_payload = {"exists": False}
@@ -516,7 +583,7 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 allowed_origin
             ):
                 return
-            resolved_url = normalize_thread_url(game_url) or game_url
+            resolved_url = lewdcorner.normalize_thread_url(game_url) or normalize_thread_url(game_url) or game_url
             resolved_game_id: int | None = None
 
             success = True
@@ -710,26 +777,32 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                     status = 503
                     wishlist_response = {"success": False, "error": "Application is not ready"}
                 else:
-                    payload = self._prepare_game_payload(
-                        cast(dict[str, object], raw_payload)
-                    )
-                    wishlist_response = api_ref.add_game(
-                        title=str(payload.get("title") or ""),
-                        exe_path="",
-                        f95_url=str(payload.get("url") or ""),
-                        version=str(payload.get("version") or ""),
-                        cover_image=str(payload.get("coverImage") or ""),
-                        tags=", ".join(
-                            str(item) for item in cast(list[object], payload["tags"])
+                    body = cast(dict[str, object], raw_payload)
+                    if body.get("action") == "attach_lc":
+                        wishlist_response = self._attach_lc(body.get("url"))
+                    else:
+                        payload = self._prepare_game_payload(body)
+                        wishlist_response = api_ref.add_game(
+                            title=str(payload.get("title") or ""),
+                            exe_path="",
+                            f95_url=str(payload.get("url") or ""),
+                            version=str(payload.get("version") or ""),
+                            cover_image=str(payload.get("coverImage") or ""),
+                            tags=", ".join(
+                                str(item) for item in cast(list[object], payload["tags"])
+                            )
+                            if isinstance(payload.get("tags"), list)
+                            else str(payload.get("tags") or ""),
+                            rating=str(payload.get("rating") or ""),
+                            developer=str(payload.get("developer") or ""),
+                            engine=str(payload.get("engine") or ""),
+                            links=payload.get("links"),
+                            lc_url=str(payload.get("lc_url") or ""),
+                            thread_completed=cast(bool | None, payload.get("thread_completed")),
                         )
-                        if isinstance(payload.get("tags"), list)
-                        else str(payload.get("tags") or ""),
-                        rating=str(payload.get("rating") or ""),
-                        developer=str(payload.get("developer") or ""),
-                        engine=str(payload.get("engine") or ""),
-                        links=payload.get("links"),
-                    )
-                    if wishlist_response.get("attached") is True:
+                    if wishlist_response.get("attached") is True and not (
+                        body.get("action") == "attach_lc" or wishlist_response.get("attached_lc")
+                    ):
                         wishlist_response = {
                             **wishlist_response,
                             "success": False,
@@ -768,17 +841,18 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                 payload = cast(object, json.loads(post_data.decode("utf-8")))
 
                 # We have the payload. Send it to the Vue frontend via PyWebView javascript evaluation
-                if window_ref:
-                    payload = self._prepare_game_payload(payload)
-                    import base64
+                if window_ref and self._wait_for_database():
+                    from core.database import find_game_by_lc_url
 
-                    active_window = cast(ExtensionWindow, window_ref)
-
-                    b64_json = base64.b64encode(
-                        json.dumps(payload).encode("utf-8")
-                    ).decode("utf-8")
-                    js_code = f"window.dispatchEvent(new CustomEvent('wlib-extension-add', {{ detail: JSON.parse(decodeURIComponent(escape(atob('{b64_json}')))) }}));"
-                    _ = active_window.evaluate_js(js_code)
+                    incoming_lc = lewdcorner.normalize_thread_url(
+                        cast(dict[str, object], payload).get("url") if isinstance(payload, dict) else None
+                    )
+                    if incoming_lc and find_game_by_lc_url(incoming_lc):
+                        status = 409
+                        response = {"success": False, "error": "LewdCorner thread is already in wLib",
+                                    "error_code": "duplicate_url"}
+                    else:
+                        self._open_add_dialog(self._prepare_game_payload(cast(object, payload)))
                 else:
                     status = 503
                     response = {"success": False, "error": "Application window is not ready"}

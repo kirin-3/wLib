@@ -225,3 +225,214 @@ def test_f95_thread_ratings_reads_built_at_and_chunks(catalog, tmp_path):
     (tmp_path / "catalog.db").unlink()
     assert f95_thread_ratings([3]) == ("", {})
     assert not (tmp_path / "catalog.db").exists()
+
+
+@pytest.fixture
+def lc_catalog(catalog):
+    catalog.executemany(
+        "INSERT INTO f95_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'F95', '', '', '')",
+        [(101,), (102,), (103,)],
+    )
+    catalog.executemany(
+        "INSERT INTO lc_threads(thread_id,title,creator,version,tier,prefixes,tags,cover_url,rating,url,first_seen,last_seen) "
+        "VALUES (?, ?, 'Creator', '1.1', ?, '[1,2,3]', '[\"Tag\"]', 'https://example.org/cover.webp', ?, '', '', '')",
+        [(21, "Free game", "Free", 0), (22, "Plus game", "Premium", 4.1), (23, "Atlas game", "Free", 3.8)],
+    )
+    catalog.executemany("INSERT INTO lc_prefix_names VALUES (?,?)", [(1, "DAZ"), (2, "Ren'Py"), (3, "Completed")])
+    catalog.execute(
+        "INSERT INTO lc_thread_details(thread_id,fetched_at,status,overview,language,external_ids,origin) "
+        """VALUES (23,'today','ok','Atlas overview','English','{"steam":[{"id":"987"}]}','import')"""
+    )
+    catalog.executemany("INSERT INTO links VALUES (?,?,?,?,?)", [
+        ("lc", "21", "f95", "101", "title"), ("f95", "102", "lc", "22", "title"),
+        ("lc", "23", "f95", "103", "import"),
+    ])
+    catalog.commit()
+    return catalog
+
+
+def test_lc_partner_cardinality_and_availability(lc_catalog, tmp_path):
+    from core.game_lookup import f95_for_lc, lc_for_f95
+
+    assert lc_for_f95("101") == ("21", "Free")
+    assert lc_for_f95("102") == ("22", "Premium")
+    assert f95_for_lc("22") == "102"
+    assert f95_for_lc("23") is None
+    lc_catalog.execute("INSERT INTO links VALUES ('lc','21','f95','102','title')")
+    lc_catalog.commit()
+    assert lc_for_f95("101") is None
+    assert lc_for_f95("102") is None
+    assert f95_for_lc("22") is None
+    lc_catalog.execute("DELETE FROM links WHERE src_a='lc' AND id_a='21' AND id_b='102'")
+    lc_catalog.execute("UPDATE lc_threads SET removed_at = 'yesterday' WHERE thread_id = 21")
+    lc_catalog.execute("UPDATE f95_threads SET removed_at = 'yesterday' WHERE thread_id = 102")
+    lc_catalog.commit()
+    assert lc_for_f95("101") is None
+    assert f95_for_lc("22") is None
+    database.update_setting("catalog_enabled", "0")
+    assert f95_for_lc("22") is None
+    database.update_setting("catalog_enabled", "1")
+    lc_catalog.close()
+    (tmp_path / "catalog.db").unlink()
+    assert lc_for_f95("101") is None
+
+
+def test_lc_metadata_and_matching(lc_catalog):
+    from core.game_lookup import lc_thread_entries
+
+    result = lc_thread_entries(["21", "22", "23"])
+    assert result["21"]["engine"] == "Ren'Py"
+    assert result["21"]["thread_completed"] is True
+    assert result["21"]["rating"] == ""
+    assert result["22"]["rating"] == 4.1
+    assert result["22"]["coverImage"] == "https://example.org/cover.webp"
+    assert result["23"]["overview"] == "Atlas overview"
+    assert result["23"]["language"] == "English"
+    assert result["23"]["links"] == [
+        {"source": "steam", "id": "987", "url": "https://store.steampowered.com/app/987/"}
+    ]
+
+    lc_url = "https://lewdcorner.com/threads/21/"
+    f95_game = database.add_game("F95 game", "", "https://f95zone.to/threads/101/")
+    by_partner = resolve_page(lc_url)
+    assert by_partner["matches"] == [f95_game]
+    assert by_partner["attach_lc_available"]
+    exact = database.add_game("Exact thread", "", lc_url=lc_url, lc_mode="off")
+    by_thread = resolve_page(lc_url)
+    assert by_thread["matches"] == [exact]
+    assert not by_thread["attach_lc_available"]
+    assert exact is not None
+    database.replace_game_links(exact, "user", [{"url": "https://store.steampowered.com/app/987/"}])
+    by_store = resolve_page("https://lewdcorner.com/threads/23/")
+    assert by_store["matches"] == [exact]
+    assert not by_store["attach_lc_available"]
+
+
+def test_lc_prefill(lc_catalog):
+    from core.game_lookup import lookup_lc_partner
+
+    f95 = "https://f95zone.to/threads/101/"
+    lc = "https://lewdcorner.com/threads/21/"
+    premium_f95 = "https://f95zone.to/threads/102/"
+    assert lookup_lc_partner(lc) == {"f95_url": f95}
+    assert lookup_lc_partner(f95) == {}
+    database.update_setting("lc_enabled", "1")
+    assert lookup_lc_partner(f95) == {"lc_url": lc}
+    assert lookup_lc_partner(premium_f95) == {}
+    database.update_setting("lc_plus", "1")
+    assert lookup_lc_partner(premium_f95) == {"lc_url": "https://lewdcorner.com/threads/22/"}
+    database.add_game("F95", "", f95)
+    database.add_game("LC", "", lc_url=lc)
+    assert lookup_lc_partner(lc) == lookup_lc_partner(f95) == {}
+    database.update_setting("catalog_enabled", "0")
+    assert lookup_lc_partner(premium_f95) == {}
+
+
+def test_lc_automatic_fill_and_dismissal(lc_catalog, monkeypatch):
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    free = database.add_game("Free", "", "https://f95zone.to/threads/101/")
+    plus = database.add_game("Plus", "", "https://f95zone.to/threads/102/")
+    existing = database.add_game("Existing", "", "https://f95zone.to/threads/103/",
+                                 lc_url="https://lewdcorner.com/threads/99/")
+    claimed = database.add_game("Claimed", "", lc_url="https://lewdcorner.com/threads/21/")
+    assert api._fill_lc_threads_from_catalog() == 0
+    database.update_setting("lc_enabled", "1")
+    assert api._fill_lc_threads_from_catalog() == 0
+    database.delete_game(claimed)
+    assert api._fill_lc_threads_from_catalog() == 1
+    assert database.get_game(free)["lc_url"].endswith("/21/")
+    assert database.get_game(existing)["lc_url"].endswith("/99/")
+    assert database.get_game(plus)["lc_url"] == ""
+    database.update_game(free, {"lc_url": ""})
+    database.update_setting("lc_plus", "1")
+    assert api._fill_lc_threads_from_catalog() == 1
+    assert database.get_game(plus)["lc_url"].endswith("/22/")
+    assert database.get_game(free)["lc_url"] == ""
+
+
+def test_lc_catalog_fill_keeps_f95_and_edits(lc_catalog, monkeypatch):
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    sha = ["first"]
+    monkeypatch.setattr(api.catalog, "installed_sha256", lambda: sha[0])
+    database.update_setting("lc_enabled", "1")
+    lc_catalog.execute("UPDATE f95_threads SET tags = '[\"F95 tag\"]' WHERE thread_id = 101")
+    lc_catalog.commit()
+    both = database.add_game("My library title", "", "https://f95zone.to/threads/101/",
+                             lc_url="https://lewdcorner.com/threads/21/")
+    lc_only = database.add_game("LC only", "", lc_url="https://lewdcorner.com/threads/23/")
+    off = database.add_game("Off", "", lc_url="https://lewdcorner.com/threads/22/", lc_mode="off")
+
+    assert api._fill_thread_details_from_catalog() == 2
+    assert database.get_game(both)["tags"] == "F95 tag"
+    assert database.get_game(both)["title"] == "My library title"
+    assert database.get_game(lc_only)["overview"] == "Atlas overview"
+    assert database.get_game(lc_only)["thread_completed"] == 1
+    assert database.get_game(lc_only)["engine"] == "Ren'Py"
+    assert database.get_game_links(lc_only)[0]["id"] == "987"
+    assert database.get_game(off)["tags"] == ""
+    database.update_game(lc_only, {"overview": "My own text"})
+    lc_catalog.execute("UPDATE lc_thread_details SET overview = 'New overview', language = 'French'")
+    lc_catalog.commit()
+    sha[0] = "second"
+    assert api._fill_thread_details_from_catalog() == 1
+    assert database.get_game(lc_only)["overview"] == "My own text"
+    assert database.get_game(lc_only)["language"] == "French"
+
+
+def test_add_lc_game_uses_catalog_and_attaches(lc_catalog, monkeypatch):
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: None)
+    atlas_url = "https://www.lewdcorner.com/threads/atlas.23/post-2"
+    result = api.add_game(exe_path="", lc_url=atlas_url)
+    assert result["success"]
+    assert not result["metadata_pending"]
+    game = database.get_game(result["id"])
+    assert game["title"] == "Atlas game"
+    assert game["developer"] == "Creator"
+    assert game["overview"] == "Atlas overview"
+    assert game["version"] == "1.1"
+    assert game["thread_completed"] == 1
+    assert api.add_game("Duplicate", "", lc_url=atlas_url)["error_code"] == "duplicate_url"
+
+    partner = database.add_game("Existing", "", "https://f95zone.to/threads/101/")
+    result = api.add_game("Page name", "", lc_url="https://lewdcorner.com/threads/21/")
+    assert result["attached_lc"]
+    assert result["id"] == partner
+    assert database.get_game(partner)["title"] == "Existing"
+    assert database.get_game(partner)["lc_url"].endswith("/21/")
+
+
+def test_lc_settings_trigger_catalog_fill(lc_catalog, monkeypatch):
+    from core.api import Api
+
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+    monkeypatch.setattr("core.api_mixins.settings.threading.Thread", lambda target, **_kw: type(
+        "ImmediateThread", (), {"start": staticmethod(target)}
+    )())
+    monkeypatch.setattr(api.catalog, "installed_sha256", lambda: "installed")
+    free = database.add_game("Free", "", "https://f95zone.to/threads/101/")
+    premium = database.add_game("Premium", "", "https://f95zone.to/threads/102/")
+    # Default mode with an F95 thread: LC only becomes active with the setting.
+    both = database.add_game("Both", "", "https://f95zone.to/threads/103/",
+                             lc_url="https://lewdcorner.com/threads/23/")
+    assert api._fill_thread_details_from_catalog() == 0
+    assert database.get_game(both)["overview"] == ""
+    assert api.save_settings({"lc_enabled": True})["success"]
+    assert api.get_settings()["lc_enabled"] is True
+    assert database.get_game(free)["lc_url"].endswith("/21/")
+    # The same change fills LC data now, not at the next catalog install.
+    assert database.get_game(both)["overview"] == "Atlas overview"
+    assert database.get_game(premium)["lc_url"] == ""
+    assert api.save_settings({"lc_plus": True})["success"]
+    assert api.get_settings()["lc_plus"] is True
+    assert database.get_game(premium)["lc_url"].endswith("/22/")

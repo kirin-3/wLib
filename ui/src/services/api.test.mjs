@@ -197,6 +197,13 @@ test("browser mock payloads keep the desktop contract for every bridge method", 
 
     // Adding from the browser preview stores the same launch and metadata fields
     // the desktop database writes.
+    assert.equal((await api.getSettings()).lc_enabled, false);
+    assert.equal((await api.getSettings()).lc_plus, false);
+    assert.equal((await api.saveSettings({ lc_enabled: true, lc_plus: true })).success, true);
+    assert.equal((await api.getSettings()).lc_enabled, true);
+    assert.equal((await api.getSettings()).lc_plus, true);
+    assert.deepEqual(await api.lookupLcPartner("https://lewdcorner.com/threads/123/"), {});
+
     const detailed = await api.addGame(
       "Detailed", "/tmp/detailed/game.exe", "", "1.2", "", "one, two", "4.5", "Dev", "Ren'Py",
       true, true, true, "/tmp/prefix", "GE-Proton9-1", "wine_proton", "--flag", [],

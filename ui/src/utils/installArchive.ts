@@ -9,6 +9,9 @@ export interface InstallArchiveSeed {
   creator: string;
   engine: string;
   f95Url: string;
+  lcUrl?: string;
+  lcDismissed?: string;
+  threadCompleted?: boolean;
   coverImage: string;
   tags: string | string[];
   rating: string;

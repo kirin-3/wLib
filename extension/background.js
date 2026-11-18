@@ -114,6 +114,8 @@ function wlibFailure(action, error) {
 // Minimum wLib app version this extension works with. Raise by hand only when
 // the extension starts depending on app behavior older apps lack.
 const MIN_APP_VERSION = "0.4.6";
+// LewdCorner pages need the first app release with LC thread identity (after 0.4.7).
+const MIN_LC_APP_VERSION = "0.4.8";
 
 // Compare dot-separated numeric release components, treating missing parts as
 // zero. A leading `v` and any `-suffix` (e.g. `-rc1`) are ignored, so
@@ -140,10 +142,11 @@ function compareVersions(a, b) {
     return 0;
 }
 
-function normalizeCheckPayload(data) {
+function normalizeCheckPayload(data, minimumVersion = MIN_APP_VERSION) {
     const payload = {
         ...(Number.isSafeInteger(data?.gameId) ? { gameId: data.gameId } : {}),
         ...(data?.canAttachThread ? { canAttachThread: true } : {}),
+        ...(data?.attach_lc_available ? { attach_lc_available: true } : {}),
         exists: Boolean(data && data.exists),
         reachable: true,
     };
@@ -158,7 +161,7 @@ function normalizeCheckPayload(data) {
     const appVersion = data && typeof data.app_version === 'string'
         ? data.app_version.trim()
         : '';
-    payload.appOutdated = !appVersion || compareVersions(appVersion, MIN_APP_VERSION) < 0;
+    payload.appOutdated = !appVersion || compareVersions(appVersion, minimumVersion) < 0;
     const pairingNote = data && PAIRING_NOTES[data.error_code];
     if (pairingNote) {
         payload.pairingNote = pairingNote;
@@ -266,7 +269,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         fetchWLibJson(`http://localhost:8183/api/check?${pageQuery(message)}`)
             .then(readWLibResponse)
             .then(data => {
-                sendResponse({ success: true, data: normalizeCheckPayload(data) });
+                const minimum = /^https:\/\/(?:www\.)?lewdcorner\.com\//i.test(message.url)
+                    ? MIN_LC_APP_VERSION : MIN_APP_VERSION;
+                sendResponse({ success: true, data: normalizeCheckPayload(data, minimum) });
+                maybeReloadForNewExtensionVersion(data);
+            })
+            .catch(error => sendResponse(wlibFailure(message.action, error)));
+        return true;
+    }
+
+    if (message.action === "checkLewdCornerThreads") {
+        const threadIds = Array.isArray(message.threadIds) ? message.threadIds.slice(0, 250) : [];
+        const query = new URLSearchParams({ batch: "1" });
+        for (const id of new Set(threadIds)) {
+            if (typeof id === "string" && /^[1-9][0-9]*$/.test(id)) {
+                query.append("url", `https://lewdcorner.com/threads/${id}/`);
+            }
+        }
+        fetchWLibJson(`http://localhost:8183/api/check?${query}`)
+            .then(readWLibResponse)
+            .then(data => {
+                sendResponse({ success: true, matches: data.matches || {} });
                 maybeReloadForNewExtensionVersion(data);
             })
             .catch(error => sendResponse(wlibFailure(message.action, error)));
@@ -852,6 +875,7 @@ const WLIB_OPTIONAL_SITES = {
     dlsite: 'https://www.dlsite.com/*',
     vndb: 'https://vndb.org/*',
     ryuugames: 'https://www.ryuugames.com/*',
+    lewdcorner: 'https://lewdcorner.com/*',
 };
 let siteRegistrationQueue = Promise.resolve();
 async function syncSiteScripts() {

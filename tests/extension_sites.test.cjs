@@ -32,6 +32,12 @@ test('optional sites register, inject into existing tabs, and unregister on perm
     listeners.added.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
     assert.equal(registered.get('wlib-dlsite'),current);
+    assert.equal(registered.has('wlib-lewdcorner'),false);
+    granted.add('https://lewdcorner.com/*');
+    listeners.added.forEach(fn=>fn());
+    await vm.runInContext('siteRegistrationQueue',context);
+    assert.deepEqual(Array.from(registered.get('wlib-lewdcorner').matches),['https://lewdcorner.com/*']);
+    assert.equal(registered.get('wlib-lewdcorner').js.at(-1),'sites/lewdcorner.js');
     for (const origin of ['https://bzzhr.to/*','https://www.bzzhr.to/*','https://buzzheavier.com/*','https://www.buzzheavier.com/*']) granted.add(origin);
     listeners.added.forEach(fn=>fn());
     await vm.runInContext('siteRegistrationQueue',context);
@@ -60,11 +66,57 @@ test('optional site settings reset a declined request and revoke granted permiss
 test('new sites remain optional and F95 scripts load the shared URL rules first', () => {
     const manifest = JSON.parse(readFileSync(path.join(__dirname,'../extension/manifest.json'),'utf8'));
     assert.ok(manifest.permissions.includes('scripting'));
-    assert.equal(manifest.optional_host_permissions.length,7);
+    assert.equal(manifest.optional_host_permissions.length,8);
     for (const origin of manifest.optional_host_permissions) {
         assert.ok(!manifest.host_permissions.includes(origin));
         assert.ok(!manifest.content_scripts.some(script=>script.matches.includes(origin)));
     }
     assert.deepEqual(manifest.content_scripts[0].js,['store-links.js','widget-placement.js','content.js']);
     assert.ok(manifest.web_accessible_resources[0].resources.includes('arrow-right.svg'));
+});
+
+test('LewdCorner latest-updates badges sit on the card image, once, and follow page changes', async () => {
+    const makeNode = (extra = {}) => {
+        const node = {children:[], classList:{names:new Set(),add(name){this.names.add(name);}}, isConnected:true,
+            append(child){child.parent = node; node.children.push(child);},
+            remove(){if (node.parent) node.parent.children = node.parent.children.filter(child=>child!==node);},
+            querySelector(selector){
+                if (selector === '.lcCardMedia') return node.media || null;
+                if (selector === '.wlib-library-badge') return [node, ...(node.media ? [node.media] : [])]
+                    .flatMap(owner=>owner.children).find(child=>child.className === 'wlib-library-badge') || null;
+                return null;
+            }, ...extra};
+        return node;
+    };
+    const tile = id => { const media = makeNode(); const card = makeNode({dataset:{cardId:id}, media}); card.append(media); return card; };
+    let tiles = [tile('25455'), tile('25456'), tile('not-a-number')];
+    let observerCallback = null; const calls = [];
+    const timers = [];
+    const context = vm.createContext({
+        location:{pathname:'/latest-updates/'},
+        setTimeout:fn=>timers.push(fn),
+        MutationObserver:class { constructor(fn){observerCallback = fn;} observe(){} },
+        document:{querySelectorAll:()=>tiles, createElement:()=>makeNode()},
+        chrome:{runtime:{lastError:null, sendMessage(message, reply){
+            calls.push(Array.from(message.threadIds));
+            reply({success:true, matches:{'https://lewdcorner.com/threads/25455/':{}, 'https://lewdcorner.com/threads/7/':{}}});
+        }}},
+        globalThis:{},
+    });
+    vm.runInContext(readFileSync(path.join(__dirname,'../extension/sites/lewdcorner.js'),'utf8'),context);
+    assert.deepEqual(calls,[['25455','25456']]);
+    const badges = card => card.media.children.filter(child=>child.className === 'wlib-library-badge');
+    assert.equal(badges(tiles[0]).length,1);
+    assert.equal(tiles[0].children.filter(child=>child.className === 'wlib-library-badge').length,0);
+    assert.equal(tiles[0].classList.names.has('wlib-badge-host'),false);
+    assert.equal(badges(tiles[1]).length,0);
+    // A mutation with no new cards checks nothing again and adds no second badge.
+    observerCallback(); timers.shift()();
+    assert.equal(calls.length,1);
+    assert.equal(badges(tiles[0]).length,1);
+    // The page swaps in the next page's cards: one batched check for them.
+    tiles = [tile('7'), tile('8')];
+    observerCallback(); timers.shift()();
+    assert.deepEqual(calls[1],['7','8']);
+    assert.equal(badges(tiles[0]).length,1);
 });

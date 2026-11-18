@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from http.client import HTTPConnection
 from io import BytesIO
 from email.message import Message
@@ -1126,3 +1127,80 @@ def test_unpaired_bridge_is_refused(extension_server):
         extension_server, origin="chrome-extension://other", token="b" * 64
     )
     assert status == 403
+
+
+def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, extension_server):
+    import base64
+    import re
+    import sqlite3
+    from urllib.parse import urlencode
+
+    from catalog_server.store import CATALOG_SCHEMA
+    from core import database
+
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "lc-library.db"))
+    api = Api()
+    monkeypatch.setattr(api.cover_cache, "wake", lambda: None)
+    monkeypatch.setattr(server_module, "api_ref", api)
+    window = MagicMock()
+    monkeypatch.setattr(server_module, "window_ref", window)
+    lc = "https://lewdcorner.com/threads/21/"
+    partner_lc = "https://lewdcorner.com/threads/22/"
+    other_lc = "https://lewdcorner.com/threads/23/"
+    for f95 in (101, 102, 103):
+        with sqlite3.connect(tmp_path / "catalog.db") as conn:
+            conn.executescript(CATALOG_SCHEMA)
+            conn.execute(
+                "INSERT INTO f95_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'F95', '', '', '')", (f95,),
+            )
+            conn.execute(
+                "INSERT INTO lc_threads(thread_id,title,url,first_seen,last_seen) VALUES (?, 'Catalog title', '', '', '')", (f95 - 80,),
+            )
+            conn.execute("INSERT INTO links VALUES ('lc', ?, 'f95', ?, 'title')", (str(f95 - 80), str(f95)))
+    monkeypatch.setattr(api.scraper, "get_thread_metadata", lambda *_args: {"success": False})
+
+    def send(method, path, body=None):
+        with closing(HTTPConnection(*extension_server.server_address, timeout=3)) as connection:
+            connection.request(method, path, None if body is None else json.dumps(body), headers={
+                "Host": "localhost:8183", "Origin": "chrome-extension://wlib",
+                "X-wLib-Extension": PAIRED_EXTENSION_TOKEN,
+            })
+            reply = connection.getresponse()
+            return reply.status, json.loads(reply.read())
+
+    status, _ = send("POST", "/api/add", {"url": lc, "title": "Page title", "prefixes": ["DAZ", "Ren'Py"]})
+    assert status == 200
+    js = window.evaluate_js.call_args.args[0]
+    add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
+    assert add_payload["lc_url"] == lc
+    assert add_payload["url"] == "https://f95zone.to/threads/101/"
+    assert add_payload["title"] == "F95"
+    assert add_payload["engine"] == "Ren'Py"
+
+    status, wishlisted = send("POST", "/api/wishlist", {"url": lc, "title": "Page title"})
+    assert status == 200 and wishlisted["success"]
+    game_id = wishlisted["id"]
+    assert database.get_game(game_id)["lc_url"] == lc
+    assert database.get_game(game_id)["f95_url"] == "https://f95zone.to/threads/101/"
+    status, checked = send("GET", "/api/check?" + urlencode({"url": "https://www.lewdcorner.com/threads/example.21/page-2"}))
+    assert status == 200 and checked["gameId"] == game_id and checked["wishlisted"]
+    status, opened = send("GET", "/api/open?" + urlencode({"url": lc}))
+    assert status == 200 and opened["gameId"] == game_id
+    for route in ("/api/add", "/api/wishlist"):
+        status, duplicate = send("POST", route, {"url": lc, "title": "Page title"})
+        assert status == 409 and duplicate["error_code"] == "duplicate_url"
+
+    partner = database.add_game("Existing game", "", "https://f95zone.to/threads/102/")
+    status, available = send("GET", "/api/check?" + urlencode({"url": partner_lc}))
+    assert status == 200 and available["gameId"] == partner and available["attach_lc_available"]
+    status, batch = send("GET", "/api/check?" + urlencode({"batch": "1", "url": [lc, partner_lc]}, doseq=True))
+    assert status == 200 and batch["matches"] == {lc: game_id}
+    assert database.get_game(partner)["lc_url"] == ""
+
+    status, attached = send("POST", "/api/wishlist", {"url": partner_lc, "action": "attach_lc"})
+    assert status == 200 and attached == {"success": True, "attached": True, "id": partner}
+    assert database.get_game(partner)["lc_url"] == partner_lc
+
+    other = database.add_game("Other partner", "", "https://f95zone.to/threads/103/")
+    status, auto_attach = send("POST", "/api/wishlist", {"url": other_lc, "title": "LC"})
+    assert status == 200 and auto_attach["attached"] and auto_attach["id"] == other

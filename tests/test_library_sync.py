@@ -2055,3 +2055,43 @@ def test_pending_push_marker_from_another_device_still_asks():
     status = sync.run()
     assert status["state"] == "needs_choice"
     assert status["choice_reason"] == "conflict"
+
+
+def test_folder_sync_matches_lc_thread_between_devices(tmp_path, monkeypatch):
+    lc = "https://lewdcorner.com/threads/21/"
+    local_db = database.DB_PATH
+    local_id = database.add_game("Local title", "/local.sh", lc_url=lc)
+    local_uid = database.get_game(local_id)["sync_uid"]
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-device.db"))
+    database.init_db()
+    remote_id = database.add_game("Other title", "", lc_url=lc, lc_mode="off")
+    remote_uid = database.get_game(remote_id)["sync_uid"]
+    assert remote_uid != local_uid
+    backup = build_sync_backup(utc_now(), "other-device")
+    monkeypatch.setattr(database, "DB_PATH", local_db)
+    sync = manager(MemoryLocation(backup))
+    assert sync.run()["state"] == "needs_choice"
+    assert sync.run("merge-once")["state"] == "idle"
+    assert len(database.get_all_games()) == 1
+    assert database.get_game(local_id)["lc_mode"] == "off"
+    assert database.get_game(local_id)["exe_path"] == "/local.sh"
+
+
+def test_synced_lc_dismissal_prevents_automatic_fill(tmp_path, monkeypatch):
+    f95_url, lc = "https://f95zone.to/threads/101/", "https://lewdcorner.com/threads/21/"
+    local_db = database.DB_PATH
+    local_id = database.add_game("Existing", "", f95_url, lc_url=lc)
+    snapshot = build_sync_backup(utc_now(), "original")
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "lc-peer.db"))
+    database.init_db()
+    sync = manager(MemoryLocation(snapshot))
+    assert sync.run()["state"] == "idle"
+    remote_id = database.get_all_games()[0]["id"]
+    database.update_game(remote_id, {"lc_url": ""})
+    database.update_setting("lc_enabled", "1")
+    remote = build_sync_backup(utc_now(), "peer")
+    monkeypatch.setattr(database, "DB_PATH", local_db)
+    assert manager(MemoryLocation(remote)).run("merge-once")["state"] == "idle"
+    assert database.get_game(local_id)["lc_dismissed"] == "21"
+    assert database.get_game(local_id)["lc_url"] == ""
+    assert database.fill_lc_threads({"101": ("21", "Free")}) == 0

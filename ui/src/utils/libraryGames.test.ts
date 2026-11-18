@@ -555,3 +555,11 @@ test("pinned tags list included A-Z, then excluded A-Z, and ignore the search", 
   // A pinned key no game has any more is skipped.
   assert.deepEqual(orderTagOptions(options, ["gone"], "").pinned, []);
 });
+
+test("LC source is independent of mode and supports inclusion and exclusion", () => {
+  const game = { f95_url: "F95", lc_url: "https://lewdcorner.com/threads/123/", lc_mode: "off" };
+  assert.deepEqual([...gameSources(game)], ["f95", "lc"]);
+  assert.equal(matchesSourceFilter(game, ["lc"]), true);
+  assert.equal(matchesSourceFilter(game, [], ["lc"]), false);
+  assert.equal(matchesSourceFilter({ f95_url: "F95" }, ["lc"]), false);
+});

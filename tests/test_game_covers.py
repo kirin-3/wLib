@@ -616,3 +616,15 @@ def test_file_helpers_need_a_regular_file_inside(helper, folder_of):
     for name in ("3", "4", "5", "6"):
         assert helper(name * 32 + ".png") is None
     assert helper("../wlib.db") is None
+
+
+def test_cache_does_not_request_lewdcorner_media(monkeypatch):
+    from core import scraper
+
+    url = "https://attachments.lewdcorner.com/cover.webp"
+    game_id = database.add_game("LC", "", lc_url="https://lewdcorner.com/threads/21/", cover_image=url)
+    fetched = []
+    monkeypatch.setattr(scraper, "f95_get_bytes", lambda url, _limit: fetched.append(url))
+    game_covers.CoverCacheService()._fill()
+    assert fetched == []
+    assert database.get_game(game_id)["cover_image_path"] == url

@@ -671,6 +671,9 @@ export interface ArchiveInstallOptions {
   creator?: string | undefined;
   engine?: string | undefined;
   f95_url?: string | undefined;
+  lc_url?: string | undefined;
+  lc_dismissed?: string | undefined;
+  thread_completed?: boolean | undefined;
   cover_image?: string | undefined;
   tags?: string | string[] | undefined;
   rating?: string | undefined;
@@ -1073,6 +1076,22 @@ export interface NoteLink {
   label: string;
 }
 
+export interface LewdCornerPartner {
+  lc_url?: string;
+  f95_url?: string;
+  catalog_entry?: {
+    title?: string;
+    developer?: string;
+    version?: string;
+    coverImage?: string;
+    tags?: string;
+    rating?: number | string;
+    engine?: string;
+    thread_completed?: boolean | null;
+    links?: StoreLink[];
+  };
+}
+
 export interface GameRecord {
   note_links?: NoteLink[];
   links?: StoreLink[];
@@ -1096,6 +1115,8 @@ export interface GameRecord {
   title: string;
   exe_path: string;
   f95_url?: string;
+  lc_url?: string;
+  lc_mode?: "" | "on" | "off";
   version?: string;
   latest_version?: string;
   cover_image_path?: string;
@@ -1296,6 +1317,8 @@ export interface SettingsPayload extends Partial<GamescopeSettings> {
   download_detection_enabled?: boolean;
   save_backup_keep?: SaveBackupKeep;
   catalog_enabled?: boolean;
+  lc_enabled?: boolean;
+  lc_plus?: boolean;
 }
 
 export interface UrmStatusResponse extends ApiBasicResponse {
@@ -1433,6 +1456,8 @@ export interface SettingsResponse extends GamescopeSettings {
   download_detection_enabled: boolean;
   save_backup_keep: SaveBackupKeep;
   catalog_enabled: boolean;
+  lc_enabled: boolean;
+  lc_plus: boolean;
 }
 
 export interface CatalogSourceStatus {
@@ -1644,6 +1669,10 @@ class ApiService {
     launch_mode: LaunchMode = "auto",
     command_line_args = "",
     links: StoreLink[] = [],
+    lc_url = "",
+    lc_mode: GameRecord["lc_mode"] = "",
+    lc_dismissed = "",
+    thread_completed?: boolean,
   ): Promise<AddGameResponse> {
     return this.invokeLibraryChange(
       "add_game",
@@ -1664,6 +1693,10 @@ class ApiService {
       launch_mode,
       command_line_args,
       links,
+      lc_url,
+      lc_mode,
+      lc_dismissed,
+      thread_completed ?? null,
     );
   }
 
@@ -2216,6 +2249,10 @@ class ApiService {
 
   async browseArchiveFile(startPath = ""): Promise<string> {
     return this.invoke<string>("browse_archive_file", startPath);
+  }
+
+  async lookupLcPartner(url: string): Promise<LewdCornerPartner> {
+    return this.invoke<LewdCornerPartner>("lookup_lc_partner", url);
   }
 
   async lookupThreadDetails(url: string): Promise<ThreadDetailsResponse> {

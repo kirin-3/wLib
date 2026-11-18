@@ -413,6 +413,14 @@
     overflow: hidden;
 }
 
+/* LewdCorner latest-updates cards: above LC's media layers (up to z-index 12),
+   top left, where the prefix labels and the card menu are not. */
+.lcCardMedia > .wlib-library-badge {
+    z-index: 13;
+    left: 8px;
+    right: auto;
+}
+
 .wlib-library-badge {
     position: absolute;
     top: 8px;

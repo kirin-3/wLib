@@ -56,6 +56,8 @@ export const DEFAULT_MOCK_SETTINGS: SettingsResponse = {
   download_detection_enabled: true,
   save_backup_keep: "all",
   catalog_enabled: true,
+  lc_enabled: false,
+  lc_plus: false,
 };
 
 const stringList = (value: unknown): string[] =>
@@ -188,6 +190,8 @@ export const normalizeMockSettings = (value: unknown): SettingsResponse => {
         : DEFAULT_MOCK_SETTINGS.download_detection_enabled,
     save_backup_keep: isSaveBackupKeep(source.save_backup_keep) ? source.save_backup_keep : "all",
     catalog_enabled: source.catalog_enabled !== false,
+    lc_enabled: source.lc_enabled === true,
+    lc_plus: source.lc_plus === true,
   };
 };
 

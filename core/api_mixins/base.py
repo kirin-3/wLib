@@ -1191,22 +1191,42 @@ class ApiBase:
 
     def _on_catalog_installed(self) -> None:
         """Runs on the catalog thread after a snapshot installs and once at startup."""
+        _ = self._fill_lc_threads_from_catalog()
         _ = self._fill_ratings_from_catalog()
         _ = self._fill_thread_details_from_catalog()
 
-    def _fill_thread_details_from_catalog(self, game_ids: Sequence[int] = ()) -> int:
-        """Apply the catalog's F95 thread details to games (``core.thread_details``).
+    def _apply_lc_setting_change(self) -> None:
+        """Runs in the background after "Use LewdCorner" or "I have LC Plus" turns on.
 
-        With a new snapshot every F95 game is checked; otherwise only games
-        never filled, or the given ``game_ids`` (a game just added). A field
-        the user edited keeps their value. Returns the number of games changed.
+        New LC threads, and games that the setting made LC-active, get their
+        catalog data now instead of after the next catalog install.
         """
+        _ = self._fill_lc_threads_from_catalog()
+        _ = self._fill_thread_details_from_catalog()
+
+    def _fill_lc_threads_from_catalog(self) -> int:
+        from core import lewdcorner
+        from core.game_lookup import lc_partners
+
+        if not self._catalog_enabled() or not lewdcorner.setting_enabled(database.get_setting("lc_enabled")):
+            return 0
+        partners = {f95: (lc, tier) for f95, lc, tier in lc_partners()}
+        count = database.fill_lc_threads(partners)
+        print(f"[wLib] Filled {count} LewdCorner threads from the catalog")
+        if count:
+            self._refresh_synced_library()
+        return count
+
+    def _fill_thread_details_from_catalog(self, game_ids: Sequence[int] = ()) -> int:
+        """Apply catalog details while preserving values the user changed."""
         import sqlite3
 
+        from core import lewdcorner
         from core.database import get_connection, get_setting, update_setting
         from core.f95zone import extract_thread_id
-        from core.game_lookup import f95_thread_details
-        from core.thread_details import BASELINE_COLUMN, THREAD_DETAIL_FIELDS, merge_thread_details
+        from core.game_lookup import combined_thread_entry, f95_thread_details, f95_thread_entries, lc_thread_entries
+        from core.store_links import coerce_store_links, parse_store_link
+        from core.thread_details import BASELINE_COLUMN, LC_FILL_FIELDS, THREAD_DETAIL_FIELDS, merge_thread_details
 
         if not self._catalog_enabled():
             return 0
@@ -1214,44 +1234,75 @@ class ApiBase:
         if not snapshot_sha:
             return 0
         new_snapshot = get_setting(CATALOG_DETAILS_FILL_SETTING) != snapshot_sha
-        columns = ", ".join(("id", "f95_url", BASELINE_COLUMN, *THREAD_DETAIL_FIELDS))
-        where = "f95_url IS NOT NULL AND f95_url != ''"
+        lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
+        columns = ", ".join(("id", "f95_url", "lc_url", "lc_mode", "tags_user_edited",
+                             BASELINE_COLUMN, *THREAD_DETAIL_FIELDS, *LC_FILL_FIELDS))
+        where = "(f95_url != '' OR lc_url != '')"
         params: list[object] = []
         if not new_snapshot:
             wanted = sorted({int(game_id) for game_id in game_ids})
             marks = ",".join("?" for _ in wanted)
-            where += f" AND ({BASELINE_COLUMN} IS NULL" + (f" OR id IN ({marks}))" if wanted else ")")
+            where += f" AND (lc_url != '' OR {BASELINE_COLUMN} IS NULL" + (f" OR id IN ({marks}))" if wanted else ")")
             params.extend(wanted)
+
         changed = 0
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
+            _ = conn.execute("BEGIN IMMEDIATE")
             rows = cast(
                 list[sqlite3.Row],
                 conn.execute(f"SELECT {columns} FROM games WHERE {where}", params).fetchall(),
             )
-            by_thread: dict[int, list[dict[str, object]]] = {}
-            for row in rows:
-                thread_id = extract_thread_id(cast(object, row["f95_url"]))
-                if thread_id.isdigit():
-                    by_thread.setdefault(int(thread_id), []).append(
-                        {str(key): cast(object, row[key]) for key in row.keys()}
-                    )
-            details = f95_thread_details(list(by_thread)) if by_thread else {}
-            for thread_id, games in by_thread.items():
-                catalog = details.get(thread_id)
-                if catalog is None:
-                    continue
-                for game in games:
-                    updates = merge_thread_details(game, catalog)
-                    if not updates:
-                        continue
+            games = [{str(key): cast(object, row[key]) for key in row.keys()} for row in rows]
+            f95_ids = [extract_thread_id(game.get("f95_url")) for game in games]
+            lc_ids = [
+                lewdcorner.extract_thread_id(game.get("lc_url")) if lewdcorner.lc_active(game, lc_enabled) else ""
+                for game in games
+            ]
+            details = f95_thread_details([int(thread_id) for thread_id in f95_ids if thread_id.isdigit()])
+            lc_entries = lc_thread_entries(lc_ids)
+            f95_entries = f95_thread_entries([
+                f95 for f95, lc in zip(f95_ids, lc_ids, strict=True) if lc in lc_entries
+            ])
+            for game, f95_id, lc_id in zip(games, f95_ids, lc_ids, strict=True):
+                f95 = details.get(int(f95_id)) if f95_id.isdigit() else None
+                combined = dict(f95 or {})
+                game_changed = False
+                lc_entry = lc_entries.get(lc_id)
+                game_id = int(str(game["id"]))
+                if lc_entry:
+                    entry = combined_thread_entry(f95_entries.get(f95_id, {}), lc_entry)
+                    for key in THREAD_DETAIL_FIELDS:
+                        if not combined.get(key) and entry.get(key):
+                            combined[key] = entry[key]
+                    for field in LC_FILL_FIELDS:
+                        key = "coverImage" if field == "cover_image_path" else field
+                        value = entry.get(key)
+                        if value is not None and (value != "" or field == "thread_completed"):
+                            combined[field] = int(bool(value)) if field == "thread_completed" else value
+                    links = coerce_store_links(entry.get("links"))
+                    if links:
+                        existing = cast(list[tuple[str, str, str, str]], conn.execute(
+                            "SELECT source, external_id, url, origin FROM game_links WHERE game_id = ?",
+                            (game_id,),
+                        ).fetchall())
+                        known = {(source, identity) for source, identity, _url, _origin in existing}
+                        if any((link["source"], link["id"]) not in known for link in links):
+                            page_links = [
+                                link for _source, _identity, url, origin in existing
+                                if origin == "page" and (link := parse_store_link(url))
+                            ]
+                            database.replace_game_links(game_id, "page", [*page_links, *links], connection=conn)
+                            game_changed = True
+
+                updates = merge_thread_details(game, combined) if combined else {}
+                if updates:
                     assignments = ", ".join(f"{column} = ?" for column in updates)
                     _ = conn.execute(
-                        f"UPDATE games SET {assignments} WHERE id = ?",
-                        (*updates.values(), game["id"]),
+                        f"UPDATE games SET {assignments} WHERE id = ?", (*updates.values(), game_id)
                     )
-                    if set(updates) != {BASELINE_COLUMN}:
-                        changed += 1
+                if game_changed or (updates and set(updates) != {BASELINE_COLUMN}):
+                    changed += 1
             conn.commit()
         if new_snapshot:
             update_setting(CATALOG_DETAILS_FILL_SETTING, snapshot_sha)

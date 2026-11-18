@@ -12,16 +12,18 @@ export const naturalCompare = (a: string, b: string): number => naturalCollator.
 
 export const LIBRARY_SOURCES = [
   { key: "f95", label: "F95Zone" },
+  { key: "lc", label: "LewdCorner" },
   { key: "dlsite", label: "DLsite" },
   { key: "vndb", label: "VNDB" },
   { key: "ryuugames", label: "Ryuugames" },
 ] as const;
 
-export const gameSources = (game: Pick<GameRecord, "f95_url" | "links">): Set<string> => {
+export const gameSources = (game: Pick<GameRecord, "f95_url" | "lc_url" | "links">): Set<string> => {
   const sources = new Set<string>();
   if (game.f95_url?.trim()) sources.add("f95");
+  if (game.lc_url?.trim()) sources.add("lc");
   for (const link of game.links || []) {
-    if (LIBRARY_SOURCES.some(({ key }) => key !== "f95" && key === link.source)) {
+    if (LIBRARY_SOURCES.some(({ key }) => key !== "f95" && key !== "lc" && key === link.source)) {
       sources.add(link.source);
     }
   }
@@ -29,7 +31,7 @@ export const gameSources = (game: Pick<GameRecord, "f95_url" | "links">): Set<st
 };
 
 export const matchesSourceFilter = (
-  game: Pick<GameRecord, "f95_url" | "links">,
+  game: Pick<GameRecord, "f95_url" | "lc_url" | "links">,
   selected: readonly string[],
   excluded: readonly string[] = [],
 ): boolean => {

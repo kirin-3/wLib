@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Store-page widget for DLsite, VNDB and Ryuugames. Builds the same markup as
+// Optional-site widget. Builds the same markup as
 // the F95 widget in content.js so both share content.css.
 (() => {
     const send = message => new Promise(resolve => {
@@ -25,11 +25,12 @@
     const toneClasses = {'plan to play':'plan-to-play',playing:'playing','waiting for update':'waiting','on hold':'on-hold',completed:'completed',abandoned:'abandoned'};
     const playStatusClass = status => `wlib-play-status--${toneClasses[String(status || '').trim().toLowerCase()] || 'not-started'}`;
     async function show(page, extra = [], metadata = {}) {
-        if (!page || showing || document.getElementById('wlib-store-widget')) return;
+        if ((!page && !metadata.url) || showing || document.getElementById('wlib-store-widget')) return;
         showing = true;
         const links = [...new Map([page,...extra].filter(Boolean).map(link => [`${link.source}:${link.id}`,link])).values()];
         const payload = {url:'',pageUrl:location.href,links,title:document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.textContent?.trim() || document.title,coverImage:document.querySelector('meta[property="og:image"]')?.content || '',tags:[]};
         Object.assign(payload, metadata);
+        const pageUrl = payload.url || location.href;
         const ids = links.map(link => `${link.source}:${link.id}`);
         const root = document.createElement('section'); root.id = 'wlib-store-widget'; root.className = 'wlib-add-container wlib-site-widget'; root.setAttribute('aria-label','wLib');
         const header = document.createElement('div'); header.className = 'wlib-header-row';
@@ -87,7 +88,7 @@
         }
         function failure(response) {
             status.textContent = response
-                ? response.error || 'The wLib extension did not return an answer. Try again.'
+                ? response.error || 'Open wLib and try again.'
                 : 'wLib extension updated. Refresh this page.';
             library.replaceChildren();
             actions.replaceChildren();
@@ -95,7 +96,7 @@
         }
         async function check() {
             status.textContent = 'Checking wLib…';
-            const response = await send({action:'checkGameInWLib',url:location.href,ids});
+            const response = await send({action:'checkGameInWLib',url:pageUrl,ids});
             if (!response?.success || !response.data) { failure(response); return; }
             const state = response.data;
             warning.hidden = !state.appOutdated;
@@ -103,10 +104,17 @@
             status.textContent = '';
             showLibraryStatus(state);
             if (state.exists) button('Open in wLib',async () => {
-                const reply = await send({action:'openWLib',url:location.href,ids});
+                const reply = await send({action:'openWLib',url:pageUrl,ids});
                 if (!reply?.success) failure(reply); else status.textContent = 'Brought wLib to front.';
             },{iconName:'externalLink',variant:'open'});
-            else {
+            if (state.attach_lc_available) button('Attach LC thread', async () => {
+                const reply = await send({action:'wishlistGameInWLib',payload:{action:'attach_lc',url:pageUrl}});
+                if (reply?.data?.attached) {
+                    await check();
+                    status.textContent = 'Thread attached';
+                } else failure(reply);
+            },{variant:'secondary'});
+            if (!state.exists) {
                 button('Add to wLib',async () => {
                     const reply = await send({action:'addGameToWLib',payload});
                     if (!reply?.success) failure(reply); else status.textContent = 'Game sent to wLib successfully.';

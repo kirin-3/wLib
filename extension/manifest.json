@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "wLib",
     "version": "1.2.7",
-    "description": "Recognise, add and wishlist games in wLib from F95Zone, DLsite, VNDB and Ryuugames.",
+    "description": "Recognise, add and wishlist games in wLib from F95Zone, LewdCorner, DLsite, VNDB and Ryuugames.",
     "permissions": [
         "storage",
         "alarms",
@@ -75,7 +75,8 @@
                 "*://f95zone.to/*",
                 "https://www.dlsite.com/*",
                 "https://vndb.org/*",
-                "https://www.ryuugames.com/*"
+                "https://www.ryuugames.com/*",
+                "https://lewdcorner.com/*"
             ]
         }
     ],
@@ -91,6 +92,7 @@
         "https://www.dlsite.com/*",
         "https://vndb.org/*",
         "https://www.ryuugames.com/*",
+        "https://lewdcorner.com/*",
         "https://bzzhr.to/*",
         "https://www.bzzhr.to/*",
         "https://buzzheavier.com/*",

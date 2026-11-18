@@ -2599,6 +2599,8 @@ def install_archive(
     cover_image: str = "",
     tags: str | list[str] = "",
     rating: str = "",
+    lc_url: str = "",
+    lc_dismissed: str = "",
     game_id: int | None = None,
     target_id: int | None = None,
     remove_old: bool = True,
@@ -3161,6 +3163,8 @@ def install_archive(
                 cover_image=cover_image,
                 tags=tags,
                 rating=rating,
+                lc_url=lc_url,
+                lc_dismissed=lc_dismissed,
             )
             game_id = int(str(new_id)) if new_id is not None else None
             library_updated = game_id is not None

@@ -60,3 +60,9 @@ test("animated cover without card copies draws a still frame and keeps the anima
   assert.equal(coverCardSources({ cover_animated: true }).frame, false);
   assert.equal(coverCardSources({ ...game, cover_card_still_url: "ca.still.webp" }).frame, false);
 });
+
+test("LC-hosted cover URLs stay in metadata without being loaded", () => {
+  const cover_image_path = "https://attachments.lewdcorner.com/cover.webp";
+  assert.equal(gameCoverSrc({ cover_image_path }), "");
+  assert.equal(gameCoverSrc({ cover_image_path, cover_local_url: "local-cover.png" }), "local-cover.png");
+});

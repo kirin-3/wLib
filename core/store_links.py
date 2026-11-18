@@ -7,6 +7,9 @@ from typing import TypedDict, cast
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 
+from core import lewdcorner
+
+
 class StoreLink(TypedDict):
     source: str
     id: str
@@ -44,6 +47,8 @@ def parse_store_link(url: str) -> StoreLink | None:
     Ryuugames numeric shortlinks identify WordPress posts. Slug URLs need a
     page-provided post ID or a catalog URL lookup; a slug alone is not an ID.
     """
+    if lewdcorner.extract_thread_id(url):
+        return None
     try:
         parts = urlsplit(url.strip())
         if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:

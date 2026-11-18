@@ -2371,3 +2371,41 @@ def test_init_db_reports_a_damaged_database(tmp_path, monkeypatch):
         init_db()
     assert "newest: wlib-20260101-120000.db" in str(error.value)
     assert damaged.read_bytes().startswith(b"this is not"), "the file is left as it is"
+
+
+def test_lc_migration_and_identity():
+    from core.database import find_game_by_lc_url
+
+    first = add_game("Existing", "")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP INDEX idx_games_lc_url_unique")
+        conn.execute("DROP TRIGGER sync_games_update")
+        for column in ("lc_url", "lc_mode", "lc_dismissed"):
+            conn.execute(f"ALTER TABLE games DROP COLUMN {column}")
+        conn.commit()
+    init_db()
+    assert get_setting("lc_enabled") == get_setting("lc_plus") == "0"
+    assert get_game(first)["lc_mode"] == ""
+    assert get_game(first)["lc_url"] == get_game(first)["lc_dismissed"] == ""
+
+    old = "https://www.lewdcorner.com/threads/game.123/post-4"
+    with closing(get_connection()) as conn:
+        conn.execute("UPDATE games SET lc_url = ? WHERE id = ?", (old, first))
+        conn.commit()
+    init_db()
+    assert find_game_by_lc_url(old)["id"] == first
+    assert get_game(first)["lc_url"] == "https://lewdcorner.com/threads/123/"
+    with pytest.raises(sqlite3.IntegrityError, match="LewdCorner thread"):
+        add_game("Duplicate", "", lc_url=old)
+    other = add_game("Other", "")
+    with pytest.raises(sqlite3.IntegrityError, match="LewdCorner thread"):
+        update_game(other, {"lc_url": old})
+    update_game(first, {"lc_url": "https://lewdcorner.com/threads/456/", "lc_mode": " OFF "})
+    assert get_game(first)["lc_dismissed"] == "123"
+    assert get_game(first)["lc_mode"] == "off"
+    update_game(first, {"lc_url": ""})
+    assert get_game(first)["lc_dismissed"] == "456"
+    with pytest.raises(ValueError, match="not a LewdCorner thread"):
+        update_game(first, {"lc_url": "https://lewdcorner.com/forums/"})
+    with pytest.raises(ValueError, match="Invalid LewdCorner mode"):
+        add_game("Bad mode", "", lc_mode="invalid")

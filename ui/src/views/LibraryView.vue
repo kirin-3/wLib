@@ -148,6 +148,7 @@ interface ModalUpdateState extends UpdateNotice {
   running: boolean;
 }
 
+import { normalizeLcThreadUrl } from "../utils/lewdcorner";
 import { extensionGameId, readStoreLinks, gamePageUrl } from "../utils/storeLinks";
 import { launchNoticeMessage } from "../utils/webPlayer";
 import { updateCheckRunning } from "../composables/useUpdateCheckState";
@@ -157,6 +158,9 @@ interface AddGamePayload {
   title: string;
   exe_path: string;
   f95_url?: string;
+  lc_url?: string;
+  lc_dismissed?: string;
+  thread_completed?: boolean;
   version?: string;
   cover_image?: string;
   tags?: string;
@@ -1638,8 +1642,13 @@ watch(
     if (!q) return;
     const action = readQueryValue(q.action);
     const queryUrl = readQueryValue(q.f95url);
-    if (action === "import" && (queryUrl || readStoreLinks(readQueryValue(q.links)).length)) {
+    if (action === "import" && (queryUrl || readQueryValue(q.lcurl) || readStoreLinks(readQueryValue(q.links)).length)) {
       await loadGames();
+      if (route.query !== q) return;
+      if (showDetailModal.value && detailModal.value && !(await detailModal.value.requestClose())) {
+        void router.replace({ path: "/", query: {} });
+        return;
+      }
       // Keep the import query until the dialog closes so its archive hand-off
       // can identify the extension entry point and retain all seed metadata.
       showAddModal.value = true;
@@ -1653,8 +1662,10 @@ watch(
       // Fetch directly: on mount, the view's own loadGames() supersedes one awaited here.
       try {
         await gamesStore.refresh();
+        const lcUrl = normalizeLcThreadUrl(queryUrl);
+        const gameId = extensionGameId(q.gameId);
         const match = games.value.find((g) =>
-          extensionGameId(q.gameId) ? g.id === extensionGameId(q.gameId) : urlsMatchByThreadIdentity(g.f95_url, queryUrl),
+          gameId ? g.id === gameId : lcUrl ? normalizeLcThreadUrl(g.lc_url) === lcUrl : urlsMatchByThreadIdentity(g.f95_url, queryUrl),
         );
         if (match && showDetailModal.value && selectedGame.value && selectedGame.value.id !== match.id) {
           // Switch games through the modal's own close so unsaved edits get the
@@ -1701,6 +1712,10 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       gameData.launch_mode || "auto",
       gameData.command_line_args || "",
       gameData.links || [],
+      gameData.lc_url || "",
+      "",
+      gameData.lc_dismissed || "",
+      gameData.thread_completed,
     );
     if (result && result.success === false) {
       notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);
@@ -2873,7 +2888,7 @@ onUnmounted(() => {
               v-if="gamePageUrl(contextMenu.game)"
               @click="runContextAction('thread')"
             >
-              {{ contextMenu.game.f95_url ? "Open F95 thread" : "Open store page" }}
+              {{ contextMenu.game.f95_url ? "Open F95 thread" : contextMenu.game.lc_url ? "Open LC thread" : "Open store page" }}
             </button>
             <button
               @click="runContextAction('check')"

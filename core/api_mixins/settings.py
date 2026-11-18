@@ -22,6 +22,7 @@ from core.bridge_exposure import hide_from_js, python_only
 from core.app_log import UiErrorLimiter, format_ui_error
 from core.app_version import APP_VERSION
 from core.api_mixins.base import ApiBase
+from core import lewdcorner
 from core.api_mixins.types import (
     OpenPathResult,
     URLResponseContext,
@@ -124,6 +125,7 @@ class SettingsMixin(ApiBase):
             )
             == "true",
             "catalog_enabled": get_setting_fn("catalog_enabled") != "0",
+            **{key: lewdcorner.setting_enabled(get_setting_fn(key)) for key in lewdcorner.LC_SETTINGS},
         }
 
     def get_diagnostics(self) -> dict[str, object]:
@@ -492,6 +494,12 @@ class SettingsMixin(ApiBase):
                     catalog_change = catalog_enabled
             if save_backup_keep is not None:
                 update_setting_fn("save_backup_keep", save_backup_keep)
+            fill_lc = False
+            for key in lewdcorner.LC_SETTINGS:
+                if key in settings_map:
+                    enabled = lewdcorner.setting_enabled(settings_map[key])
+                    fill_lc |= enabled and not lewdcorner.setting_enabled(get_setting_fn(key))
+                    pending[key] = "1" if enabled else "0"
             pending.update(torrent_values)
             pending.update(queue_values)
             pending.update(gamescope_values)
@@ -501,6 +509,8 @@ class SettingsMixin(ApiBase):
                 if "custom_play_statuses" in settings_map
                 else None,
             )
+            if fill_lc:
+                threading.Thread(target=self._apply_lc_setting_change, daemon=True).start()
             if catalog_change is False:
                 self.catalog.remove()
             elif catalog_change is True:

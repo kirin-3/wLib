@@ -858,6 +858,7 @@ def _translate_atlas_game(
     record: Mapping[str, object],
     versions: list[dict[str, object]],
     f95_id: str,
+    lc_id: str,
     ratings: Mapping[str, object],
 ) -> tuple[dict[str, object] | None, int]:
     dropped = 0
@@ -865,6 +866,7 @@ def _translate_atlas_game(
     developer = _as_str(record.get("creator"))
     engine = _as_str(record.get("engine"))
     f95_url = build_thread_url_from_id(f95_id) if f95_id else ""
+    lc_url = f"https://lewdcorner.com/threads/{lc_id}/" if lc_id else ""
 
     selected_id: int | None = None
     try:
@@ -897,10 +899,12 @@ def _translate_atlas_game(
             )[0]
         )
 
-    metadata = _title_metadata(title, f95_url)
+    metadata = _title_metadata(title, f95_url or lc_url)
     # Omitted when empty so an overwrite never clears a local thread URL.
     if f95_url:
         metadata["f95_url"] = f95_url
+    if lc_url:
+        metadata["lc_url"] = lc_url
     if developer:
         metadata["developer"] = developer
     if engine:
@@ -1007,7 +1011,7 @@ def _translate_atlas_game(
         targets.append({"label": f"v{version_text}", "exe_path": kept})
 
     if not _has_import_identity(
-        f95_url, coerce_store_links(metadata.get("links")), exe_path
+        f95_url or lc_url, coerce_store_links(metadata.get("links")), exe_path
     ):
         return None, dropped
     game: dict[str, object] = {"metadata": metadata}
@@ -1071,6 +1075,28 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
                             mappings[record_id] = str(f95_id)
                 except sqlite3.Error:
                     mappings = {}
+            lc_mappings: dict[int, str] = {}
+            if (
+                table_exists(conn, "atlas_mappings")
+                and table_columns(conn, "atlas_mappings") >= {"record_id", "atlas_id"}
+                and table_exists(conn, "lewdcorner_data")
+                and table_columns(conn, "lewdcorner_data") >= {"atlas_id", "lc_id"}
+            ):
+                try:
+                    candidates: dict[int, set[int]] = {}
+                    for row in _fetch_rows(conn,
+                        "SELECT a.record_id, l.lc_id FROM atlas_mappings a "
+                        + "JOIN lewdcorner_data l ON l.atlas_id = a.atlas_id"):
+                        record_id = _safe_int(cast(object, row[0]))
+                        lc_id = _safe_int(cast(object, row[1]))
+                        if record_id > 0 and lc_id > 0:
+                            candidates.setdefault(record_id, set()).add(lc_id)
+                    lc_mappings = {
+                        record_id: str(next(iter(thread_ids)))
+                        for record_id, thread_ids in candidates.items() if len(thread_ids) == 1
+                    }
+                except sqlite3.Error:
+                    pass
             ratings_by_game: dict[int, dict[str, object]] = {}
             if table_exists(conn, "game_personal_ratings"):
                 try:
@@ -1107,6 +1133,7 @@ def read_atlas_library(path: str) -> tuple[dict[str, object], dict[str, object]]
                     record,
                     versions_by_game.get(record_id, []),
                     mappings.get(record_id, ""),
+                    lc_mappings.get(record_id, ""),
                     ratings_by_game.get(record_id, {}),
                 )
                 dropped += game_dropped

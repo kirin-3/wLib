@@ -16,7 +16,7 @@ from typing import BinaryIO
 from collections.abc import Callable
 from uuid import uuid4
 
-from core import database
+from core import database, lewdcorner
 
 MAX_COVER_SIZE = 20 * 1024 * 1024
 MAX_TYPE_BOX_SIZE = 64 * 1024
@@ -357,7 +357,7 @@ class CoverCacheService:
                     continue
                 delete_cached_cover(game.get("cover_cache"))
                 database.clear_game_cover_cache(game_id)
-            if not url:
+            if not url or lewdcorner.hosts_url(url):
                 continue
             failure = self._failed.get(url)
             if failure is not None and time.monotonic() < failure[1]:

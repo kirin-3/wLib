@@ -16,7 +16,11 @@
     "proton_version",
     "launch_mode",
     "command_line_args",
-    "links"
+    "links",
+    "lc_url",
+    "lc_mode",
+    "lc_dismissed",
+    "thread_completed"
   ],
   "add_game_attachment": [
     "game_id",
@@ -342,6 +346,9 @@
   ],
   "log_ui_error": [
     "report"
+  ],
+  "lookup_lc_partner": [
+    "url"
   ],
   "lookup_thread_details": [
     "url"

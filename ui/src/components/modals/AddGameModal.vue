@@ -15,6 +15,7 @@ import { useModalKeyboard } from "../../utils/modalKeyboard";
 import { openInstallArchive } from "../../utils/installArchive";
 import PathStatus from "../PathStatus.vue";
 
+import { normalizeLcThreadUrl } from "../../utils/lewdcorner";
 import { queryText, readStoreLinks, storeLabel } from "../../utils/storeLinks";
 
 interface AddGamePayload {
@@ -22,6 +23,9 @@ interface AddGamePayload {
   title: string;
   exe_path: string;
   f95_url: string;
+  lc_url: string;
+  lc_dismissed: string;
+  thread_completed?: boolean;
   version: string;
   cover_image: string;
   tags: string;
@@ -46,6 +50,17 @@ const links = ref<StoreLink[]>([]);
 const title = ref("");
 const exePath = ref("");
 const f95Url = ref("");
+const lcUrl = ref("");
+const lcEnabled = ref(false);
+const showLc = computed(() => lcEnabled.value || !!lcUrl.value || !!readQueryValue(route.query.lcurl));
+const lcError = computed(() =>
+  lcUrl.value.trim() && !normalizeLcThreadUrl(lcUrl.value) ? "Enter a LewdCorner thread URL." : "",
+);
+const lcSuggested = ref("");
+const lcSuggestedFor = ref("");
+const threadCompleted = ref<boolean>();
+const findingPartner = ref(false);
+let partnerRequest = 0;
 const version = ref("");
 const coverImage = ref("");
 const tags = ref("");
@@ -102,6 +117,47 @@ const readQueryValue = (value: unknown): string => {
   return typeof value === "string" ? value : "";
 };
 
+const lookupPartner = async (source: "f95" | "lc") => {
+  const pastedLc = normalizeLcThreadUrl(f95Url.value);
+  if (source === "f95" && pastedLc && !lcUrl.value) {
+    f95Url.value = "";
+    lcUrl.value = pastedLc;
+    source = "lc";
+  }
+  const request = ++partnerRequest;
+  const f95 = f95Url.value.trim();
+  const lc = lcUrl.value.trim();
+  const url = source === "f95" ? f95 : normalizeLcThreadUrl(lc);
+  findingPartner.value = false;
+  if (!url || (source === "f95" && (!lcEnabled.value || lc))) return;
+  findingPartner.value = true;
+  try {
+    const result = await api.lookupLcPartner(url);
+    if (request !== partnerRequest || !isOpen.value || f95 !== f95Url.value.trim() || lc !== lcUrl.value.trim()) return;
+    if (source === "lc" && !f95) f95Url.value = result.f95_url || "";
+    if (source === "f95" && result.lc_url) {
+      lcUrl.value = result.lc_url;
+      lcSuggested.value = result.lc_url;
+      lcSuggestedFor.value = f95;
+    }
+    const entry = result.catalog_entry;
+    if (!entry) return;
+    title.value ||= entry.title || "";
+    version.value ||= entry.version || "";
+    coverImage.value ||= entry.coverImage || "";
+    tags.value ||= entry.tags || "";
+    rating.value ||= String(entry.rating || "");
+    developer.value ||= entry.developer || "";
+    engine.value ||= entry.engine || "";
+    if (!links.value.length) links.value = readStoreLinks(entry.links);
+    if (typeof entry.thread_completed === "boolean") threadCompleted.value = entry.thread_completed;
+  } catch (error) {
+    console.error("Could not look up the LewdCorner partner", error);
+  } finally {
+    if (request === partnerRequest) findingPartner.value = false;
+  }
+};
+
 const parseImportedTags = (rawTags: string): string => {
   if (!rawTags) return "";
   try {
@@ -132,7 +188,14 @@ watch(
     if (readQueryValue(query.action) === "import") {
       links.value = readStoreLinks(queryText(query.links));
       title.value = readQueryValue(query.title);
+      partnerRequest++;
+      findingPartner.value = false;
       f95Url.value = readQueryValue(query.f95url);
+      lcUrl.value = readQueryValue(query.lcurl);
+      lcSuggested.value = readQueryValue(query.lcSuggested);
+      lcSuggestedFor.value = f95Url.value;
+      const completed = readQueryValue(query.threadCompleted);
+      threadCompleted.value = completed ? completed === "true" : undefined;
       version.value = readQueryValue(query.version);
       coverImage.value = readQueryValue(query.coverImage);
       tags.value = parseImportedTags(readQueryValue(query.tags));
@@ -148,6 +211,7 @@ watch(
   () => isOpen.value,
   (isOpen) => {
     if (isOpen) {
+      void api.getSettings().then(settings => { lcEnabled.value = !!settings.lc_enabled; }).catch(console.error);
       void loadRpgmakerLinuxRunnerStatus();
       return;
     }
@@ -157,6 +221,12 @@ watch(
     title.value = "";
     exePath.value = "";
     f95Url.value = "";
+    lcUrl.value = "";
+    lcSuggested.value = "";
+    lcSuggestedFor.value = "";
+    threadCompleted.value = undefined;
+    findingPartner.value = false;
+    partnerRequest++;
     version.value = "";
     coverImage.value = "";
     tags.value = "";
@@ -178,12 +248,14 @@ const close = () => {
 };
 
 const installFromArchive = async () => {
-  if (props.saving || isSubmitting.value) return;
+  if (props.saving || isSubmitting.value || lcError.value || findingPartner.value) return;
   const seed = {
     links: links.value,
     title: title.value, version: version.value, creator: developer.value,
     engine: engine.value, f95Url: f95Url.value, coverImage: coverImage.value,
     tags: tags.value, rating: rating.value,
+    lcUrl: normalizeLcThreadUrl(lcUrl.value), lcDismissed: dismissedLc.value,
+    ...(threadCompleted.value !== undefined ? { threadCompleted: threadCompleted.value } : {}),
   };
   isOpen.value = false;
   await router.replace({ query: {} });
@@ -225,14 +297,27 @@ const browseExe = async () => {
   }
 };
 
+const canSave = computed(() => !!title.value.trim()
+  && (!!exePath.value.trim() || !!links.value.length || !!normalizeLcThreadUrl(lcUrl.value))
+  && !lcError.value && !findingPartner.value && !props.saving && !isSubmitting.value);
+
+const dismissedLc = computed(() => {
+  const suggested = lcSuggested.value;
+  if (!suggested || lcSuggestedFor.value !== f95Url.value.trim() || normalizeLcThreadUrl(lcUrl.value) === suggested) return "";
+  return suggested.match(/[0-9]+(?=\/$)/)?.[0] || "";
+});
+
 const save = () => {
-  if (!title.value.trim() || (!exePath.value.trim() && !links.value.length) || props.saving || isSubmitting.value) return;
+  if (!canSave.value) return;
   isSubmitting.value = true;
   emit("save", {
     links: links.value,
     title: title.value.trim(),
     exe_path: exePath.value.trim(),
     f95_url: f95Url.value.trim(),
+    lc_url: normalizeLcThreadUrl(lcUrl.value),
+    lc_dismissed: dismissedLc.value,
+    ...(threadCompleted.value !== undefined ? { thread_completed: threadCompleted.value } : {}),
     version: version.value,
     cover_image: coverImage.value,
     tags: tags.value,
@@ -343,7 +428,7 @@ const save = () => {
             <template v-if="engine || version">
               Detected:
               <span style="color: var(--text-secondary)">{{
-                [engine, version && `v${version}`].filter(Boolean).join(", ")
+                [engine, version && (/^[0-9]/.test(version) ? `v${version}` : version)].filter(Boolean).join(", ")
               }}</span>
             </template>
           </p>
@@ -353,10 +438,13 @@ const save = () => {
           <label
             class="block text-sm font-medium mb-1.5"
             style="color: var(--text-secondary)"
+            for="add-game-f95-url"
             >F95Zone thread URL</label
           >
           <input
+            id="add-game-f95-url"
             v-model="f95Url"
+            @change="lookupPartner('f95')"
             type="text"
             placeholder="https://f95zone.to/threads/..."
             class="modal-input w-full !py-3 text-sm"
@@ -366,6 +454,22 @@ const save = () => {
           <p class="text-xs mt-2" style="color: var(--text-muted)">
             Optional. Enables update checks from the F95 thread.
           </p>
+        </div>
+
+        <div v-if="showLc">
+          <label for="add-game-lc-url" class="block text-sm font-medium mb-1.5" style="color: var(--text-secondary)">LewdCorner thread URL</label>
+          <input
+            id="add-game-lc-url"
+            v-model="lcUrl"
+            type="text"
+            placeholder="https://lewdcorner.com/threads/..."
+            class="modal-input w-full !py-3 text-sm"
+            style="color: var(--brand)"
+            :aria-invalid="!!lcError"
+            :aria-describedby="lcError ? 'add-game-lc-error' : undefined"
+            @change="lookupPartner('lc')"
+          />
+          <p v-if="lcError" id="add-game-lc-error" class="text-xs mt-2" style="color: var(--danger-text)" role="alert">{{ lcError }}</p>
         </div>
 
         <div v-if="links.length" class="space-y-2">
@@ -441,7 +545,7 @@ const save = () => {
         <button
           v-if="readQueryValue(route.query.action) === 'import'"
           @click="installFromArchive"
-          :disabled="saving || isSubmitting"
+          :disabled="saving || isSubmitting || !!lcError || findingPartner"
           class="px-5 py-2.5 rounded-lg text-sm font-medium mr-auto disabled:opacity-50"
           style="color: var(--brand)"
         >
@@ -456,7 +560,7 @@ const save = () => {
         </button>
         <button
           @click="save"
-          :disabled="!title.trim() || (!exePath.trim() && !links.length) || saving || isSubmitting"
+          :disabled="!canSave"
           class="ui-btn-solid px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:cursor-not-allowed"
           style="background: var(--brand); color: var(--on-brand); box-shadow: var(--shadow-brand)"
         >

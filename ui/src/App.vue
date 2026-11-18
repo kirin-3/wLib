@@ -402,7 +402,7 @@ const toggleNavCollapse = () => {
 
 const handleExtensionAdd = (event: Event) => {
   const data = (event as CustomEvent<ExtensionGameDetail>).detail;
-  if (data && (data.url || data.links?.length)) {
+  if (data && (data.url || data.lc_url || data.links?.length)) {
     router.push({ path: "/", query: extensionAddQuery(data) }).catch((err) => console.error("Router error:", err));
   }
 };

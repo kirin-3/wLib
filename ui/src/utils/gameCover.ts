@@ -14,9 +14,18 @@ interface CoverGame {
 // all cover views, and a newly chosen cover is always eligible again.
 const failedSources = reactive(new Set<string>());
 
+function isLewdCornerMedia(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "lewdcorner.com" || host.endsWith(".lewdcorner.com");
+  } catch {
+    return false;
+  }
+}
+
 export function gameCoverSrc(game: CoverGame | null | undefined): string {
   return [game?.cover_local_url, game?.cover_cache_url, game?.cover_image_path]
-    .find((url): url is string => !!url && !failedSources.has(url)) || "";
+    .find((url): url is string => !!url && !failedSources.has(url) && !isLewdCornerMedia(url)) || "";
 }
 
 export function gameCoverError(event: Event, game: CoverGame): boolean {

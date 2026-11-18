@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { normalizeLcThreadUrl } from "../../utils/lewdcorner.ts";
 import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
@@ -338,6 +339,11 @@ export class MockBackend {
       case "add_game": {
         const games = readMockGames();
         const links = Array.isArray(args[16]) ? args[16] as StoreLink[] : [];
+        const lcUrl = normalizeLcThreadUrl(args[17]);
+        if (args[17] && !lcUrl) return { success: false, error: "The URL is not a LewdCorner thread" };
+        if (lcUrl && games.some(game => normalizeLcThreadUrl(game.lc_url) === lcUrl)) {
+          return { success: false, error_code: "duplicate_url", error: "LewdCorner thread is already in your library" };
+        }
         const matches = games.filter((game) => (game.f95_url && game.f95_url === args[2]) ||
           (game.links || []).some((stored) => !["other", "patreon", "subscribestar", "gumroad"].includes(stored.source) &&
             links.some((link) => link.source === stored.source && link.id === stored.id)));
@@ -345,6 +351,7 @@ export class MockBackend {
           const game = matches[0]!;
           if (matches.length === 1 && args[2] && !game.f95_url) {
             game.f95_url = String(args[2]);
+            if (lcUrl && !game.lc_url) game.lc_url = lcUrl;
             game.links = [...(game.links || []), ...links.filter((link) => !(game.links || []).some((stored) => stored.source === link.source && stored.id === link.id))];
             localStorage.setItem("wlib-mock-games", JSON.stringify(games));
             return { success: true, id: game.id, attached: true };
@@ -353,7 +360,9 @@ export class MockBackend {
         }
         const id = games.reduce((max, game) => Math.max(max, game.id), 0) + 1;
         const game: GameRecord = { id, title: String(args[0]), exe_path: String(args[1]),
-          f95_url: String(args[2] || ""), version: String(args[3] || ""), links,
+          f95_url: String(args[2] || ""), lc_url: lcUrl,
+          lc_mode: args[18] === "on" || args[18] === "off" ? args[18] : "",
+          version: String(args[3] || ""), links,
           cover_image_path: String(args[4] || ""), tags: String(args[5] || ""),
           rating: String(args[6] || ""), developer: String(args[7] || ""),
           engine: String(args[8] || ""),
@@ -361,7 +370,7 @@ export class MockBackend {
           custom_prefix: String(args[12] || ""), proton_version: String(args[13] || ""),
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
-          gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: false,
+          gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: args[20] === true,
           // Simulates the catalog's F95 thread details for a thread URL.
           ...(args[2] ? {
             overview: "A preview overview from the thread's first post.\nIt can span lines.",
@@ -385,6 +394,14 @@ export class MockBackend {
       case "update_game": {
         const games = readMockGames();
         const fields = isRecord(args[1]) ? args[1] : {};
+        if ("lc_url" in fields) {
+          const url = normalizeLcThreadUrl(fields.lc_url);
+          if (fields.lc_url && !url) return { success: false, error: "The URL is not a LewdCorner thread" };
+          if (url && games.some(game => game.id !== Number(args[0]) && normalizeLcThreadUrl(game.lc_url) === url)) {
+            return { success: false, error_code: "duplicate_url", error: "LewdCorner thread is already in your library" };
+          }
+          fields.lc_url = url;
+        }
         let filledFinishedVersion: string | undefined;
         const nextGames = games.map((game) => {
           if (game.id !== Number(args[0])) return game;
@@ -1133,6 +1150,8 @@ export class MockBackend {
           schema_version: "",
         };
       }
+      case "lookup_lc_partner":
+        return {};
       case "lookup_thread_details": {
         if (!/^https?:\/\/(?:www\.)?f95zone\.to\/threads\/(?:[^/]+\.)?\d+(?:\/|$)/i.test(String(args[0] || ""))) {
           return { success: false, error: "A valid F95Zone thread URL is required." };

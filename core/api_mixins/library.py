@@ -11,6 +11,7 @@ from contextlib import closing
 from typing import TYPE_CHECKING, cast
 
 from core import database
+from core.f95zone import extract_thread_id, thread_urls_match
 from core.database import (
     normalize_launch_mode,
 )
@@ -64,7 +65,6 @@ class LibraryMixin(ApiBase):
 
     def get_game_screenshots(self, game_id: int) -> dict[str, object]:
         from core.database import get_game
-        from core.f95zone import extract_thread_id
         from core.game_lookup import f95_thread_screenshots, screenshot_urls
 
         game = get_game(game_id)
@@ -426,6 +426,22 @@ class LibraryMixin(ApiBase):
             return {"success": False, "error": str(e) or "Could not scan folder"}
         return {"success": True, "games": games}
 
+    def lookup_lc_partner(self, url: object = "") -> dict[str, object]:
+        from core import lewdcorner
+        from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries, lookup_lc_partner
+
+        partner = lookup_lc_partner(url)
+        lc_id = lewdcorner.extract_thread_id(url)
+        result: dict[str, object] = dict(partner)
+        if lc_id:
+            entry = lc_thread_entries([lc_id]).get(lc_id, {})
+            f95_id = extract_thread_id(partner.get("f95_url"))
+            if entry:
+                result["catalog_entry"] = combined_thread_entry(
+                    f95_thread_entries([f95_id]).get(f95_id, {}), entry
+                )
+        return result
+
     def add_game(
         self,
         title: object = "",
@@ -445,26 +461,75 @@ class LibraryMixin(ApiBase):
         launch_mode: str = "auto",
         command_line_args: str = "",
         links: object = None,
+        lc_url: str = "",
+        lc_mode: str = "",
+        lc_dismissed: str = "",
+        thread_completed: bool | None = None,
     ) -> dict[str, object]:
         import sqlite3
 
+        from core import lewdcorner
         from core.database import (
             add_game,
+            attach_lc_thread,
+            find_game_by_lc_url,
             find_game_by_f95_url,
             find_games_by_links,
             get_game,
             replace_game_links,
             update_game,
         )
+        from core.game_lookup import combined_thread_entry, f95_for_lc, f95_thread_entries, lc_thread_entries
         from core.store_links import coerce_store_links
+        from core.thread_details import THREAD_DETAIL_FIELDS
 
-        if not isinstance(title, str) or not title.strip():
+        try:
+            normalized_lc = lewdcorner.validated_thread_url(lc_url)
+            lc_mode = lewdcorner.normalize_mode(lc_mode)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        lc_id = lewdcorner.extract_thread_id(normalized_lc)
+        if normalized_lc and find_game_by_lc_url(normalized_lc):
+            return self._integrity_error_response(sqlite3.IntegrityError(
+                f"LewdCorner thread already in the library: {normalized_lc}"
+            ))
+        partner_id = f95_for_lc(lc_id) if lc_id else None
+        partner_url = f"https://f95zone.to/threads/{partner_id}/" if partner_id else ""
+        partner_game = find_game_by_f95_url(partner_url) if partner_url else None
+        normalized_url = normalize_thread_url(f95_url)
+        attach_lc_id: int | None = None
+        if partner_game and (not normalized_url or thread_urls_match(normalized_url, partner_url)):
+            candidate_id = int(str(partner_game["id"]))
+            candidate = get_game(candidate_id)
+            if candidate and not candidate.get("lc_url"):
+                attach_lc_id = candidate_id
+            elif candidate:
+                return self._integrity_error_response(sqlite3.IntegrityError(
+                    f"LewdCorner partner is already in the library: {normalized_lc}"
+                ))
+
+        lc_entry = lc_thread_entries([lc_id]).get(lc_id, {}) if attach_lc_id is None else {}
+        f95_id = extract_thread_id(normalized_url)
+        entry = combined_thread_entry(f95_thread_entries([f95_id]).get(f95_id, {}), lc_entry) if lc_entry else {}
+        if entry:
+            if isinstance(title, str) and not title.strip():
+                title = str(entry.get("title") or "")
+            version = version or str(entry.get("version") or "")
+            cover_image = cover_image or str(entry.get("coverImage") or "")
+            tags = tags or str(entry.get("tags") or "")
+            rating = rating or str(entry.get("rating") or "")
+            developer = developer or str(entry.get("developer") or "")
+            engine = engine or str(entry.get("engine") or "")
+            if thread_completed is None and entry.get("thread_completed") is not None:
+                thread_completed = bool(entry["thread_completed"])
+
+        if attach_lc_id is None and (not isinstance(title, str) or not title.strip()):
             return {
                 "success": False,
                 "error": "Game title is required",
                 "error_code": "invalid_title",
             }
-        title = title.strip()
+        title = str(title or "").strip()
 
         if not isinstance(exe_path, str):
             return {
@@ -478,16 +543,17 @@ class LibraryMixin(ApiBase):
             add_game,
         )
 
-        normalized_url = normalize_thread_url(f95_url)
         normalized_launch_mode = normalize_launch_mode(launch_mode)
         incoming_links = coerce_store_links(links)
+        if not incoming_links and entry:
+            incoming_links = coerce_store_links(entry.get("links"))
         linked_ids = find_games_by_links(incoming_links)
         existing_thread = (
             find_game_by_f95_url(normalized_url) if normalized_url else None
         )
         attach_id: int | None = None
         attach_fields: dict[str, object] = {"f95_url": normalized_url}
-        if existing_thread or linked_ids:
+        if attach_lc_id is None and (existing_thread or linked_ids):
             if not existing_thread and len(linked_ids) == 1 and normalized_url:
                 linked_game = get_game(linked_ids[0])
                 if linked_game and not linked_game.get("f95_url"):
@@ -509,7 +575,21 @@ class LibraryMixin(ApiBase):
                 }
 
         try:
+            if attach_lc_id is not None:
+                if not attach_lc_thread(attach_lc_id, normalized_lc, partner_url):
+                    return self._integrity_error_response(sqlite3.IntegrityError(
+                        f"LewdCorner thread could not be attached: {normalized_lc}"
+                    ))
+                self._refresh_synced_library()
+                return {"success": True, "id": attach_lc_id, "attached": True, "attached_lc": True}
             if attach_id is not None:
+                if normalized_lc:
+                    linked = get_game(attach_id)
+                    if linked and linked.get("lc_url"):
+                        return self._integrity_error_response(sqlite3.IntegrityError(
+                            f"LewdCorner thread already in the library: {normalized_lc}"
+                        ))
+                    attach_fields["lc_url"] = normalized_lc
                 _ = update_game(attach_id, attach_fields)
                 game_id = attach_id
             else:
@@ -530,10 +610,19 @@ class LibraryMixin(ApiBase):
                     proton_version=proton_version,
                     launch_mode=normalized_launch_mode,
                     command_line_args=command_line_args,
+                    lc_url=normalized_lc,
+                    lc_mode=lc_mode,
+                    lc_dismissed=lc_dismissed if lc_dismissed.isascii() and lc_dismissed.isdigit() else "",
                 )
+            if game_id is not None and attach_id is None and normalized_lc:
+                details = {field: entry[field] for field in THREAD_DETAIL_FIELDS if entry.get(field)}
+                if thread_completed is not None:
+                    details["thread_completed"] = thread_completed
+                if details:
+                    _ = update_game(game_id, details)
             if game_id is not None and incoming_links:
                 replace_game_links(
-                    game_id, "f95_post" if normalized_url else "page", incoming_links
+                    game_id, "f95_post" if normalized_url and not normalized_lc else "page", incoming_links
                 )
         except sqlite3.IntegrityError as exc:
             return self._integrity_error_response(exc)
@@ -574,6 +663,8 @@ class LibraryMixin(ApiBase):
     def _integrity_error_response(exc: Exception) -> dict[str, object]:
         # Both the app-level guard ("duplicate f95_url") and the unique index
         # ("UNIQUE constraint failed: games.f95_url") name the column.
+        if "LewdCorner" in str(exc) or "games.lc_url" in str(exc):
+            return {"success": False, "error": str(exc), "error_code": "duplicate_url"}
         if "f95_url" in str(exc):
             return {
                 "success": False,

@@ -43,7 +43,7 @@ Because of that restriction, the extension does not call `GET /api/check` direct
 
 ### 1. Check if Game Exists 
 **`GET /api/check?url={page_url}&id={source:id}`**
-Allows the extension to decorate an F95Zone page based on ownership.
+Allows the extension to decorate a supported page based on library ownership.
 - **Request:** `http://localhost:8183/api/check?url=https://f95zone.to/threads/example.123/`
 - **IDs:** `id=source:value` can be repeated. DLsite, VNDB and Ryuugames page URLs resolve through `core/game_lookup.py`, including one hop of installed catalog links. Exact work IDs match; creator links and titles never do. Checks have no side effects.
 - **Matching Behavior:** wLib compares F95Zone threads by thread identity, not only by raw URL text. Equivalent URL variants such as slug changes, `page-*` paths, query strings, and fragments still resolve to the same game when the thread ID matches.
@@ -247,3 +247,28 @@ Extensions implementing download resolution send `can_resolve: true` in their
 `needs_permission`. Buzzheavier results also include `share_url` for the file request's Referer. The app sends `{ "type": "resolve_cancel", "id": "..." }` to cancel a pending resolve. Addresses retain their fragments. Resolve requests are
 serialized and time out after 30 seconds, extended to five minutes when user
 interaction is needed.
+
+## LewdCorner
+
+Enable LewdCorner in the extension options to grant the optional site permission. The extension reads the current thread page and sends page data to the paired local wLib server. The latest-updates page checks its tiles in batches as they appear.
+
+The paired `/api/check` and `/api/open` routes accept a canonical LC thread URL or a slug URL with a page, post, query, or fragment suffix. For example:
+
+```http
+GET /api/check?url=https%3A%2F%2Flewdcorner.com%2Fthreads%2Fgame.5583%2Fpost-123%23post-123
+GET /api/open?url=https%3A%2F%2Flewdcorner.com%2Fthreads%2F5583%2F
+```
+
+Send the same URL in the JSON body for `POST /api/add` or `POST /api/wishlist`:
+
+```json
+{"url":"https://lewdcorner.com/threads/5583/","title":"Game","prefixes":["Ren'Py"],"version":"0.5"}
+```
+
+A check can return `attach_lc_available: true` for an existing F95 partner. To attach the thread, send this body to `POST /api/wishlist`:
+
+```json
+{"action":"attach_lc","url":"https://lewdcorner.com/threads/5583/"}
+```
+
+A successful attach returns `{"success":true,"attached":true,"id":42}`. An already-owned LC thread returns HTTP 409 with `error_code: "duplicate_url"`. For badges, use `/api/check?batch=1` with repeated `url` parameters. Its `matches` object maps the submitted LC URLs that are already stored in the library to game IDs.

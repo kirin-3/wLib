@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from core import database
+from core import database, f95zone, lewdcorner
 from core.catalog import CATALOG_FILE
 from core.catalog_format import META_BUILT_AT
 from core.store_links import StoreLink, link_from_id, parse_store_link
@@ -20,6 +20,7 @@ class PageResolution(TypedDict):
     ids: list[StoreLink]
     catalog_entry: dict[str, object]
     matches: list[int]
+    attach_lc_available: bool
 
 
 def _strings(value: object) -> list[str]:
@@ -131,23 +132,216 @@ def _catalog_page(
     return entry, extra
 
 
+# Normalize link orientation, deduplicate rows, and reject ambiguity at either end.
+_LC_PARTNERS_SQL = """
+WITH pairs(f95_id, lc_id) AS (
+    SELECT id_b, id_a FROM links WHERE src_a = 'lc' AND src_b = 'f95' AND origin = 'title'
+    UNION
+    SELECT id_a, id_b FROM links WHERE src_a = 'f95' AND src_b = 'lc' AND origin = 'title'
+), counted AS (
+    SELECT *, count(*) OVER (PARTITION BY f95_id) AS f95_count,
+              count(*) OVER (PARTITION BY lc_id) AS lc_count
+    FROM pairs
+)
+SELECT counted.f95_id, counted.lc_id, lc.tier
+FROM counted
+JOIN f95_threads f95 ON f95.thread_id = counted.f95_id AND f95.removed_at IS NULL
+JOIN lc_threads lc ON lc.thread_id = counted.lc_id AND lc.removed_at IS NULL
+WHERE f95_count = 1 AND lc_count = 1
+"""
+
+
+def lc_partners() -> list[tuple[str, str, str]]:
+    """Read all strict (F95 ID, LC ID, tier) partners in one catalog pass."""
+    if database.get_setting("catalog_enabled") == "0":
+        return []
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            return cast(list[tuple[str, str, str]], conn.execute(_LC_PARTNERS_SQL).fetchall())
+    except (sqlite3.Error, OSError, ValueError):
+        return []
+
+
+def lc_for_f95(thread_id: str) -> tuple[str, str] | None:
+    return next(((lc, tier) for f95, lc, tier in lc_partners() if f95 == thread_id), None)
+
+
+def f95_for_lc(thread_id: str) -> str | None:
+    return next((f95 for f95, lc, _tier in lc_partners() if lc == thread_id), None)
+
+
+def lookup_lc_partner(url: object) -> dict[str, str]:
+    """Prefill only an unclaimed catalog partner."""
+    lc_id = lewdcorner.extract_thread_id(url)
+    if lc_id:
+        f95 = f95_for_lc(lc_id)
+        if f95:
+            f95_url = f"https://f95zone.to/threads/{f95}/"
+            if not database.find_game_by_f95_url(f95_url):
+                return {"f95_url": f95_url}
+        return {}
+    f95_id = f95zone.extract_thread_id(url)
+    if f95_id and lewdcorner.setting_enabled(database.get_setting("lc_enabled")):
+        partner = lc_for_f95(f95_id)
+        if partner:
+            lc, tier = partner
+            lc_url = f"https://lewdcorner.com/threads/{lc}/"
+            if (
+                (tier.casefold() != "premium" or lewdcorner.setting_enabled(database.get_setting("lc_plus")))
+                and not database.find_game_by_lc_url(lc_url)
+            ):
+                return {"lc_url": lc_url}
+    return {}
+
+
+def _catalog_thread_entries(
+    source: str, thread_ids: Sequence[str]
+) -> dict[str, dict[str, object]]:
+    ids = sorted({value for value in thread_ids if value.isascii() and value.isdigit()})
+    if not ids or database.get_setting("catalog_enabled") == "0":
+        return {}
+    path = Path(database.DB_PATH).parent / CATALOG_FILE
+    results: dict[str, dict[str, object]] = {}
+    try:
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            tables = {name for (name,) in cast(
+                list[tuple[str]], conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+            )}
+            prefix_table = f"{source}_prefix_names"
+            names = dict(cast(
+                list[tuple[int, str]], conn.execute(f"SELECT id, name FROM {prefix_table}").fetchall()
+            )) if prefix_table in tables else {}
+            tag_names = dict(cast(
+                list[tuple[int, str]], conn.execute("SELECT id, name FROM f95_tag_names").fetchall()
+            )) if source == "f95" and "f95_tag_names" in tables else {}
+            detail_table = f"{source}_thread_details"
+            details = detail_table in tables
+            join = f"LEFT JOIN {detail_table} d ON d.thread_id = t.thread_id AND d.status = 'ok'" if details else ""
+            fields = ", d.overview, d.language, d.external_ids" if details else ""
+            if details and source == "lc":
+                fields += ", d.developer"
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset:offset + 500]
+                marks = ",".join("?" for _ in chunk)
+                rows = cast(list[sqlite3.Row], conn.execute(
+                    f"SELECT t.*{fields} FROM {source}_threads t {join} "
+                    + f"WHERE t.removed_at IS NULL AND t.thread_id IN ({marks})", chunk
+                ).fetchall())
+                for row in rows:
+                    data = {str(key): cast(object, row[key]) for key in row.keys()}
+                    prefixes = _named_values(data.get("prefixes"), names)
+                    if source == "lc":
+                        engine, completed = lewdcorner.prefix_details(prefixes)
+                    else:
+                        labels = [f95zone.normalize_prefix_label(prefix) for prefix in prefixes]
+                        engine = next((prefix for prefix, label in zip(prefixes, labels, strict=True)
+                                       if label not in f95zone.NON_ENGINE_PREFIXES), "")
+                        completed = "completed" in labels
+                    rating = data.get("rating")
+                    entry = {
+                        "title": data.get("title") or "",
+                        "developer": data.get("developer") or data.get("creator") or "",
+                        "version": data.get("version") or "",
+                        "coverImage": data.get("cover_url") or "",
+                        "tags": ", ".join(_named_values(data.get("tags"), tag_names)),
+                        "rating": rating if isinstance(rating, (int, float)) and 0 < rating <= 5 else "",
+                        "engine": engine,
+                        "thread_completed": completed if prefixes else None,
+                        "overview": data.get("overview") or "",
+                        "language": data.get("language") or "",
+                        "external_links": _detail_links(data.get("external_ids")),
+                        "links": _detail_store_links(data.get("external_ids")),
+                    }
+                    results[str(data["thread_id"])] = entry
+    except (sqlite3.Error, OSError, ValueError):
+        return {}
+    return results
+
+
+def _named_values(raw: object, names: dict[int, str]) -> list[str]:
+    try:
+        items = cast(object, json.loads(str(raw or "[]")))
+    except ValueError:
+        return []
+    if not isinstance(items, list):
+        return []
+    values: list[str] = []
+    for item in cast(list[object], items):
+        if isinstance(item, int) or (isinstance(item, str) and item.isascii() and item.isdigit()):
+            name = names.get(int(item), "")
+        else:
+            name = item if isinstance(item, str) else ""
+        if name:
+            values.append(name)
+    return values
+
+
+def lc_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]:
+    return _catalog_thread_entries("lc", thread_ids)
+
+
+def f95_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]:
+    return _catalog_thread_entries("f95", thread_ids)
+
+
+def combined_thread_entry(f95: dict[str, object], lc: dict[str, object]) -> dict[str, object]:
+    entry = {**lc, **{key: value for key, value in f95.items() if value}}
+    if f95.get("thread_completed") is not None:
+        entry["thread_completed"] = f95["thread_completed"]
+    return entry
+
+
+def _detail_store_links(raw: object) -> list[StoreLink]:
+    links = [link for url in _detail_links(raw) if (link := parse_store_link(url))]
+    try:
+        ids = cast(object, json.loads(str(raw or "{}")))
+    except ValueError:
+        return links
+    if isinstance(ids, dict):
+        for source, entries in cast(dict[str, object], ids).items():
+            if not isinstance(entries, list):
+                continue
+            for entry in cast(list[object], entries):
+                identity = cast(dict[str, object], entry).get("id") if isinstance(entry, dict) else entry
+                if identity and (link := link_from_id(source, str(identity))):
+                    if not any((link["source"], link["id"]) == (old["source"], old["id"]) for old in links):
+                        links.append(link)
+    return links
+
+
 def resolve_page(url: str, ids: Sequence[str] = ()) -> PageResolution:
     supplied: list[StoreLink] = []
     for value in ids:
         source, separator, identity = value.partition(":")
         if separator and (link := link_from_id(source, identity)):
             supplied.append(link)
-    page = parse_store_link(url)
-    if page is not None:
-        supplied.insert(0, page)
-    entry, expanded = _catalog_page(url, page, supplied)
+    lc_id = lewdcorner.extract_thread_id(url)
+    attach_lc = False
+    if lc_id:
+        partner = f95_for_lc(lc_id)
+        entry = lc_thread_entries([lc_id]).get(lc_id, {})
+        expanded = cast(list[StoreLink], entry.get("links", []))
+        thread_game = database.find_game_by_lc_url(url)
+        if thread_game is None and partner:
+            thread_game = database.find_game_by_f95_url(f"https://f95zone.to/threads/{partner}/")
+            if thread_game:
+                matched = database.get_game(int(str(thread_game["id"])))
+                attach_lc = matched is not None and not matched.get("lc_url")
+    else:
+        page = parse_store_link(url)
+        if page is not None:
+            supplied.insert(0, page)
+        entry, expanded = _catalog_page(url, page, supplied)
+        thread_game = database.find_game_by_f95_url(url)
+
     unique = {(link["source"], link["id"]): link for link in supplied + expanded}
     links = list(unique.values())
-    f95_game = database.find_game_by_f95_url(url)
     matches = (
-        [int(str(f95_game["id"]))] if f95_game else database.find_games_by_links(links)
+        [int(str(thread_game["id"]))] if thread_game else database.find_games_by_links(links)
     )
-    return {"ids": links, "catalog_entry": entry, "matches": matches}
+    return {"ids": links, "catalog_entry": entry, "matches": matches, "attach_lc_available": attach_lc}
 
 
 def f95_thread_cover(thread_id: str) -> str:

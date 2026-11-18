@@ -1802,3 +1802,24 @@ def test_open_snapshot_reads_files_with_uri_characters_in_the_name(tmp_path, nam
         assert [row["title"] for row in snapshot.execute("SELECT title FROM games")] == ["Demo"]
         with pytest.raises(sqlite3.OperationalError):
             snapshot.execute("INSERT INTO games VALUES ('x')")
+
+
+def test_atlas_import_keeps_lc_and_matches_lc_only(tmp_path):
+    source = tmp_path / "data.db"
+    _write_atlas_db(source)
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE atlas_mappings (record_id INTEGER, atlas_id INTEGER)")
+        conn.execute("CREATE TABLE lewdcorner_data (lc_id INTEGER, atlas_id INTEGER)")
+        conn.executemany("INSERT INTO atlas_mappings VALUES (?,?)", [(1, 10), (2, 20)])
+        conn.executemany("INSERT INTO lewdcorner_data VALUES (?,?)", [(5583, 10), (99, 20)])
+        conn.execute("DELETE FROM versions WHERE record_id = 2")
+    backup, stats = read_external_library("atlas", str(source))
+    assert stats["skipped_no_identity"] == 0
+    both, lc_only = [game["metadata"] for game in backup["games"]]
+    assert both["f95_url"] == "https://f95zone.to/threads/800/"
+    assert both["lc_url"] == "https://lewdcorner.com/threads/5583/"
+    assert lc_only["lc_url"] == "https://lewdcorner.com/threads/99/"
+    assert "f95_url" not in lc_only
+    add_game("Different name", "", lc_url=lc_only["lc_url"])
+    preview = inspect_external_library("atlas", str(source))
+    assert preview["counts"]["matched_games"] == 1

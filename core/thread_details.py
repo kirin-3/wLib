@@ -19,6 +19,7 @@ THREAD_DETAIL_FIELDS: tuple[str, ...] = (
     "language",
     "external_links",
 )
+LC_FILL_FIELDS = ("title", "developer", "version", "cover_image_path", "tags", "rating", "engine", "thread_completed")
 LIST_FIELDS: frozenset[str] = frozenset({"aliases", "external_links"})
 BASELINE_COLUMN = "thread_details_baseline"
 _MAX_LIST_ITEMS = 50
@@ -37,7 +38,9 @@ def _decoded(value: object) -> object:
 def normalize_detail(field: str, value: object) -> str | list[str]:
     """The clean value of one field; lists come as Python lists or JSON text."""
     if field not in LIST_FIELDS:
-        text = value if isinstance(value, str) else ""
+        text = str(value) if field in LC_FILL_FIELDS and value is not None else (
+            value if isinstance(value, str) else ""
+        )
         return text.strip()[:_MAX_TEXT_CHARS]
     items = _decoded(value)
     if field == "aliases" and isinstance(value, str) and not isinstance(items, list):
@@ -73,7 +76,7 @@ def normalize_baseline(value: object) -> str | None:
         return None
     source = cast(dict[str, object], decoded)
     return json.dumps(
-        {field: normalize_detail(field, source.get(field)) for field in THREAD_DETAIL_FIELDS},
+        {field: normalize_detail(field, source.get(field)) for field in (*THREAD_DETAIL_FIELDS, *(field for field in LC_FILL_FIELDS if field in source))},
         ensure_ascii=False,
     )
 
@@ -87,15 +90,20 @@ def merge_thread_details(
         cast(dict[str, object], raw_baseline) if isinstance(raw_baseline, dict) else None
     )
     updates: dict[str, object] = {}
-    new_baseline: dict[str, object] = {}
-    for field in THREAD_DETAIL_FIELDS:
+    new_baseline: dict[str, object] = {
+        field: baseline[field] for field in LC_FILL_FIELDS if baseline is not None and field in baseline
+    }
+    for field in (*THREAD_DETAIL_FIELDS, *(field for field in LC_FILL_FIELDS if field in catalog)):
+        if field == "tags" and current.get("tags_user_edited"):
+            continue
         new = normalize_detail(field, catalog.get(field))
         new_baseline[field] = new
         stored = normalize_detail(field, current.get(field))
         untouched = baseline is not None and stored == normalize_detail(
             field, baseline.get(field)
         )
-        if (not stored or untouched) and stored != new:
+        empty = not stored or (field == "thread_completed" and stored == "0" and not (baseline and field in baseline))
+        if (empty or untouched) and stored != new:
             updates[field] = column_value(field, new)
     encoded = json.dumps(new_baseline, ensure_ascii=False)
     if updates or current.get(BASELINE_COLUMN) != encoded:

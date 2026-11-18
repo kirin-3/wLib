@@ -11,7 +11,7 @@ import { confirmAction } from "../utils/confirm";
 import { gamingMode, setTvPreference, tvModeActive, tvPreference } from "../utils/tvMode";
 import { formatLibraryFreeSpace } from "../utils/installArchive";
 import type { LibraryFolder } from "../services/api";
-import { computed, ref, useTemplateRef, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
+import { computed, reactive, ref, useTemplateRef, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
 import { onBeforeRouteLeave, useRoute } from "vue-router";
 import { settingsVisibleRows } from "../utils/settingsVisibility";
 import { matchSettings, type SettingsSearchSection } from "../utils/settingsSearch";
@@ -116,6 +116,26 @@ const removeLibraryFolder = (path: string) => {
   libraryFolders.value = libraryFolders.value.filter((entry) => entry !== path);
   if (!libraryFolders.value.length) libraryFolder.value = "";
   void foldersSave.commit();
+};
+const lcSettings = [
+  { key: "lc_enabled", label: "Use LewdCorner", description: "Show LewdCorner thread fields and fill in LewdCorner threads for your games from the catalog." },
+  { key: "lc_plus", label: "I have LC Plus", description: "Also fill in LewdCorner Plus (Premium) threads." },
+] as const;
+const lcValues = reactive({ lc_enabled: false, lc_plus: false });
+const lcSaving = reactive({ lc_enabled: false, lc_plus: false });
+const saveLcSetting = async (key: typeof lcSettings[number]["key"], event: Event) => {
+  const previous = lcValues[key];
+  lcValues[key] = (event.target as HTMLInputElement).checked;
+  lcSaving[key] = true;
+  try {
+    const result = await api.saveSettings({ [key]: lcValues[key] });
+    if (!result.success) throw new Error(result.error || "Unknown error");
+  } catch (error) {
+    lcValues[key] = previous;
+    notifyError(`Failed to save the LewdCorner setting: ${String(error)}`);
+  } finally {
+    lcSaving[key] = false;
+  }
 };
 const libraryFolderPattern = ref("{creator}/{title}/{version}");
 const downloadsFolder = ref("");
@@ -304,6 +324,7 @@ const onKeepCustom = (event: Event) => {
 };
 
 const applySettings = (data: SettingsResponse) => {
+  for (const { key } of lcSettings) if (!lcSaving[key]) lcValues[key] = !!data[key];
   customStatuses.value = [...(data.custom_play_statuses || [])];
   collectionList.value = [...(data.collections || [])];
   urmPath.value = data.urm_rpa_path || "";
@@ -1608,6 +1629,27 @@ const browseUrm = async () => {
               :disabled="!!settingsLoadError || settingsLoading"
               class="sr-only peer"
               aria-label="Detect downloaded updates"
+            />
+            <div class="ui-toggle"></div>
+          </label>
+        </div>
+
+        <div v-for="{ key, label, description } in lcSettings" :key="key"
+          :data-settings-row="key" data-settings-bound data-keywords="lewdcorner thread lc plus premium"
+          v-show="settingsRowVisible(key)" class="ui-card-row flex items-center justify-between gap-4">
+          <div>
+            <h4 :id="`settings-${key}-label`" class="text-sm font-medium" style="color: var(--text-primary)">{{ label }}</h4>
+            <p class="text-xs mt-1" style="color: var(--text-muted)">{{ description }}</p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              role="switch"
+              :aria-labelledby="`settings-${key}-label`"
+              :checked="lcValues[key]"
+              :disabled="settingsLoading || !!settingsLoadError || lcSaving[key]"
+              class="sr-only peer"
+              @change="saveLcSetting(key, $event)"
             />
             <div class="ui-toggle"></div>
           </label>

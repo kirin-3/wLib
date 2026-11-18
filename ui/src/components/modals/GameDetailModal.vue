@@ -36,7 +36,8 @@ import {
   IconX,
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
-import { storeLabel } from "../../utils/storeLinks";
+import { gamePageUrl, storeLabel } from "../../utils/storeLinks";
+import { normalizeLcThreadUrl, type LewdCornerMode } from "../../utils/lewdcorner";
 import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
@@ -173,6 +174,18 @@ const editingDefaultLabel = ref(false);
 const defaultLabelDraft = ref("");
 const savingDefaultLabel = ref(false);
 const f95Url = ref("");
+const lcUrl = ref("");
+const lcMode = ref<LewdCornerMode>("");
+const lcEnabled = ref(false);
+const showLc = computed(() => lcEnabled.value || !!props.game?.lc_url || !!props.game?.lc_mode);
+const lcError = computed(() =>
+  lcUrl.value.trim() && !normalizeLcThreadUrl(lcUrl.value) ? "Enter a LewdCorner thread URL." : "",
+);
+const primaryPage = computed(() => gamePageUrl({
+  f95_url: f95Url.value.trim(),
+  lc_url: normalizeLcThreadUrl(lcUrl.value),
+  ...(props.game?.links ? { links: props.game.links } : {}),
+}));
 const version = ref("");
 const developer = ref("");
 // F95 first-post details; aliases edit as one comma list, links one URL per line.
@@ -392,7 +405,7 @@ function togglePopover(kind: "actions" | "collections") {
 let collectionRequestId = 0;
 
 // F95Zone rating (read-only, from scraper)
-const f95Rating = ref("");
+const pageRating = ref("");
 
 // Personal ratings (0-5 scale)
 const ratingGraphics = ref(0);
@@ -557,7 +570,7 @@ watch(() => [isOpen.value, props.game?.id, activeTab.value, props.isRunning] as 
 const syncReadonlyMetadata = (game: GameRecord | null) => {
   latestVersion.value = game?.latest_version || "";
   skippedVersion.value = game?.skipped_version || "";
-  f95Rating.value = game?.rating || "";
+  pageRating.value = game?.rating || "";
 };
 
 const sortLaunchTargets = (targets: LaunchTarget[]): LaunchTarget[] => {
@@ -607,10 +620,10 @@ const selectedEngineStyle = computed(() => getEngineBadgeStyle(engine.value));
 
 const summaryItems = computed(() => [
   {
-    label: "F95 Rating",
-    value: f95Rating.value || "Unavailable",
-    accent: f95Rating.value ? "color: var(--rating-accent)" : "",
-    showStar: !!f95Rating.value,
+    label: props.game?.lc_url ? (props.game.f95_url ? "Thread rating" : "LC rating") : "F95 Rating",
+    value: pageRating.value || "Unavailable",
+    accent: pageRating.value ? "color: var(--rating-accent)" : "",
+    showStar: !!pageRating.value,
   },
   {
     label: "Your rating",
@@ -657,6 +670,8 @@ const formSnapshot = (): string =>
     title: title.value,
     exe_path: exePath.value,
     f95_url: f95Url.value,
+    lc_url: lcUrl.value,
+    lc_mode: lcMode.value,
     version: version.value,
     developer: developer.value,
     overview: overview.value,
@@ -766,6 +781,8 @@ const gameFormValues = (g: GameRecord): Record<string, unknown> => ({
   title: g.title || "",
   exe_path: g.exe_path || "",
   f95_url: g.f95_url || "",
+  lc_url: g.lc_url || "",
+  lc_mode: g.lc_mode || "",
   version: g.version || "",
   developer: g.developer || "",
   overview: g.overview || "",
@@ -803,6 +820,8 @@ const formSetters: Record<string, (value: unknown) => void> = {
   title: (v) => { title.value = String(v); },
   exe_path: (v) => { exePath.value = String(v); },
   f95_url: (v) => { f95Url.value = String(v); },
+  lc_url: (v) => { lcUrl.value = String(v); },
+  lc_mode: (v) => { lcMode.value = v === "on" || v === "off" ? v : ""; },
   version: (v) => { version.value = String(v); },
   developer: (v) => { developer.value = String(v); },
   overview: (v) => { overview.value = String(v); },
@@ -893,6 +912,8 @@ watch(
         defaultLabel.value = g.default_target_label || "";
         editingDefaultLabel.value = false;
         f95Url.value = g.f95_url || "";
+        lcUrl.value = g.lc_url || "";
+        lcMode.value = g.lc_mode || "";
         version.value = g.version || "";
         developer.value = g.developer || "";
         overview.value = g.overview || "";
@@ -1007,6 +1028,7 @@ watch(
       // The HTML player default applies on every platform; GameMode/MangoHud only on Linux.
       void api.getSettings().then(value => {
         htmlBuiltinDefault.value = value.html_builtin_player !== false;
+        lcEnabled.value = !!value.lc_enabled;
         performanceDefaults.value = { gamemode: !!value.gamemode_enabled, mangohud: !!value.mangohud_enabled, gamescope: !!value.gamescope_enabled };
       }).catch(console.error);
       if (capabilities.platform === "linux") {
@@ -1753,6 +1775,7 @@ const save = async () => {
     notifyError("Game title is required.");
     return;
   }
+  if (lcError.value) return;
   if (gamescopeResolutionError.value || gamescopeArgsError.value) {
     notifyError(`Gamescope: ${gamescopeResolutionError.value || gamescopeArgsError.value}`);
     return;
@@ -1773,6 +1796,7 @@ const save = async () => {
       title: title.value.trim(),
       exe_path: exePath.value.trim(),
       f95_url: f95Url.value.trim(),
+      ...(showLc.value ? { lc_url: normalizeLcThreadUrl(lcUrl.value), lc_mode: lcMode.value } : {}),
       version: version.value,
       developer: developer.value.trim(),
       overview: overview.value.trim(),
@@ -2044,8 +2068,7 @@ const threadMainPostEditedDisplay = computed(() => {
   return "Unknown";
 });
 
-const openInBrowser = async () => {
-  const url = f95Url.value.trim() || props.game?.links?.[0]?.url || "";
+const openInBrowser = async (url: string) => {
   if (url) {
     try {
       const res = await api.openInBrowser(url);
@@ -2375,13 +2398,22 @@ const removeAttachment = async (name: string) => {
                 </button>
               </template>
               <button
-                v-if="f95Url.trim() || game.links?.length"
-                @click="openInBrowser"
+                v-if="primaryPage"
+                @click="openInBrowser(primaryPage)"
                 class="modal-toolbar-action ui-action-btn"
                 style="color: var(--text-primary)"
               >
                 <IconExternalLinkFilled class="ui-action-icon" />
-                Open in browser
+                {{ f95Url.trim() ? "Open F95 thread" : normalizeLcThreadUrl(lcUrl) ? "Open LC thread" : "Open in browser" }}
+              </button>
+              <button
+                v-if="f95Url.trim() && normalizeLcThreadUrl(lcUrl)"
+                @click="openInBrowser(normalizeLcThreadUrl(lcUrl))"
+                class="modal-toolbar-action ui-action-btn"
+                style="color: var(--text-primary)"
+              >
+                <IconExternalLinkFilled class="ui-action-icon" />
+                Open LC thread
               </button>
               <button
                 v-if="game.f95_url"
@@ -3242,6 +3274,31 @@ const removeAttachment = async (name: string) => {
                 style="color: var(--brand)"
               />
             </div>
+
+            <template v-if="showLc">
+              <div class="col-span-2">
+                <label for="detail-lc-url" class="modal-label">LewdCorner thread URL</label>
+                <input
+                  id="detail-lc-url"
+                  v-model="lcUrl"
+                  type="text"
+                  placeholder="https://lewdcorner.com/threads/..."
+                  class="modal-input w-full"
+                  style="color: var(--brand)"
+                  :aria-invalid="!!lcError"
+                  :aria-describedby="lcError ? 'detail-lc-error' : undefined"
+                />
+                <p v-if="lcError" id="detail-lc-error" class="text-xs mt-2" style="color: var(--danger-text)" role="alert">{{ lcError }}</p>
+              </div>
+              <div>
+                <label for="detail-lc-mode" class="modal-label">LewdCorner mode</label>
+                <select id="detail-lc-mode" v-model="lcMode" class="modal-input w-full">
+                  <option value="">Default</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+            </template>
 
             <div class="col-span-2">
               <label for="detail-cover" class="modal-label">Cover image URL</label>

@@ -3819,3 +3819,48 @@ def test_blank_setting_in_a_sync_mirror_restores_the_default():
 
     assert get_setting("html_builtin_player") == ""
     assert html_builtin_player_enabled()
+
+
+def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
+    lc = "https://lewdcorner.com/threads/21/"
+    dismissed = "https://lewdcorner.com/threads/22/"
+    game_id = add_game("LC source", "", lc_url=dismissed, lc_mode="off")
+    update_game(game_id, {"lc_url": lc})
+    update_setting("lc_enabled", "1")
+    update_setting("lc_plus", "1")
+    backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
+    assert backup["games"][0]["metadata"]["lc_dismissed"] == "22"
+    assert backup["settings"]["general"]["lc_plus"] == "1"
+
+    monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "restored.db"))
+    init_db()
+    result = apply_library_backup(backup, {"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
+    assert result["created"] == 1
+    restored = get_all_games()[0]
+    assert restored["lc_url"] == lc
+    assert restored["lc_mode"] == "off"
+    assert restored["lc_dismissed"] == "22"
+    assert get_setting("lc_enabled") == get_setting("lc_plus") == "1"
+
+    incoming = base_backup([{"metadata": {
+        "title": "Renamed", "lc_url": "https://www.lewdcorner.com/threads/example.21/post-3",
+    }}])
+    result = apply_library_backup(incoming, {"sections": [SECTION_METADATA]})
+    assert result["updated"] == 1
+    assert get_all_games()[0]["title"] == "Renamed"
+    assert get_all_games()[0]["lc_mode"] == "off"
+
+    old = base_backup([{"metadata": {"title": "Old backup game"}}])
+    assert apply_library_backup(old, {"sections": [SECTION_METADATA]})["created"] == 1
+    assert next(game for game in get_all_games() if game["title"] == "Old backup game")["lc_url"] == ""
+
+
+def test_conflicting_lc_and_f95_matches_are_ambiguous():
+    lc_url = "https://lewdcorner.com/threads/21/"
+    f95_url = "https://f95zone.to/threads/101/"
+    add_game("LC", "", lc_url=lc_url)
+    add_game("F95", "", f95_url=f95_url)
+    backup = base_backup([{"metadata": {"title": "Conflicting", "f95_url": f95_url, "lc_url": lc_url}}])
+    result = apply_library_backup(backup, {"sections": [SECTION_METADATA]})
+    assert result["ambiguous"] == result["skipped"] == 1
+    assert {game["title"] for game in get_all_games()} == {"LC", "F95"}

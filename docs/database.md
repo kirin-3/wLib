@@ -318,3 +318,10 @@ fill): with a new snapshot (`catalog_details_fill_sha` setting differs) it check
 every F95 game, otherwise only games never filled. A newly added F95 game is
 filled right after its metadata fetch. The five fields and the baseline are
 exported and imported in the metadata section and are in `SYNC_GAME_COLUMNS`.
+
+## LewdCorner identity
+
+- `games.lc_url` stores a canonical `https://lewdcorner.com/threads/<id>/` URL or an empty string. A partial unique index reserves each thread for one game.
+- `games.lc_mode` stores `''` (Default), `on`, or `off`.
+- `games.lc_dismissed` stores the numeric ID of the last LC thread the user cleared or replaced, or an empty string.
+- `lc_enabled` and `lc_plus` are library settings stored as `0` (off, the default) or `1` (on).
