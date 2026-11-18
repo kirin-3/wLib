@@ -133,6 +133,17 @@ def test_listing_urls():
     )
 
 
+def test_bracketed_engine_labels_map_to_the_feed_name(tmp_path):
+    # Live LC shows some engines as "[Unity]"; the feed names them "Unity".
+    page = _one_page("lc_plus_119_page1.html").replace(
+        '<span class="label label--skyBlue" dir="auto">Other</span>',
+        '<span class="label label--orange" dir="auto">[Unity]</span>',
+    )
+    ctx, _ = _context(tmp_path, FakeTransport())
+    LcPlusSource()._store(ctx, 119, parse_listing(page).cards)
+    assert _stored(ctx.catalog)[24724][6] == "[14, 7, 30]"
+
+
 def test_a_new_plus_thread_is_added_without_a_version(tmp_path):
     transport = FakeTransport()
     transport.route("/forums/119/", Response(200, _one_page("lc_plus_119_page1.html").encode()))

@@ -80,8 +80,12 @@ class ListingPage:
 
 
 def _label_key(label: str) -> str:
-    """A card label as the casefolded prefix name the feed uses."""
+    """A card label as the casefolded prefix name the feed uses. Some engine
+    labels are shown in brackets ("[Unity]") where the feed names them
+    without ("Unity")."""
     name = label.casefold()
+    if len(name) > 2 and name.startswith("[") and name.endswith("]"):
+        name = name[1:-1].strip()
     return _LABEL_NAMES.get(name, name)
 
 
