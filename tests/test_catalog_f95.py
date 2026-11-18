@@ -261,3 +261,41 @@ def test_first_page_without_total_fails_instead_of_completing(tmp_path):
     ctx, _ = make_context(tmp_path / "b", lambda request: pages[_page_number(request)])
     assert F95Source().sweep_step(ctx) is False
     assert F95Source().sweep_step(ctx) is True
+
+
+NEW_ACCOUNT = "Latest Updates opens for new accounts a few days after they join F95zone."
+
+
+def test_a_refused_feed_reports_f95s_reason(tmp_path):
+    payload = {"status": "error", "msg": NEW_ACCOUNT}
+    ctx, _ = make_context(tmp_path, lambda request: json_response(payload, status=403))
+    result = run_source(F95Source(), ctx)
+    assert result.status == "error" and not result.sweep_completed
+    assert result.detail == f"F95FeedRefused: F95 refused the feed (HTTP 403): {NEW_ACCOUNT}"
+    assert rows(ctx.catalog, "SELECT COUNT(*) FROM f95_threads") == [(0,)]
+
+
+def test_a_logged_out_feed_reports_f95s_reason(tmp_path):
+    payload = {"status": "error", "msg": "You have to be logged in to see Latest Updates."}
+    ctx, _ = make_context(tmp_path, lambda request: json_response(payload, status=403))
+    result = run_source(F95Source(), ctx)
+    assert result.detail == (
+        "F95FeedRefused: F95 refused the feed (HTTP 403): "
+        "You have to be logged in to see Latest Updates."
+    )
+
+
+def test_an_error_answer_with_200_reports_f95s_reason(tmp_path):
+    payload = {"status": "error", "msg": NEW_ACCOUNT}
+    ctx, _ = make_context(tmp_path, lambda request: json_response(payload))
+    result = run_source(F95Source(), ctx)
+    assert result.detail == f"F95FeedRefused: F95 refused the feed (HTTP 200): {NEW_ACCOUNT}"
+
+
+def test_a_refusal_without_json_says_so(tmp_path):
+    page = b"<html><head><title>Just a moment...</title></head></html>"
+    ctx, _ = make_context(tmp_path, lambda request: Response(403, page))
+    result = run_source(F95Source(), ctx)
+    assert result.detail == (
+        "F95FeedRefused: F95 refused the feed (HTTP 403) without its JSON answer"
+    )

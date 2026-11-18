@@ -20,6 +20,45 @@ TAGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "f9
 
 # Even a 200 can carry the anonymous-limit message.
 _LIMIT_MARKER = "limited amount of requests"
+# Answers F95 gives when it refuses the feed to this account, with its reason
+# in the JSON `msg` (for example "You have to be logged in to see Latest
+# Updates." or "Latest Updates opens for new accounts a few days after they
+# join F95zone."). Checked here instead of failing as plain HTTP errors.
+_REFUSED_STATUSES = (401, 403)
+_MSG_MAX_CHARS = 200
+
+
+class F95FeedRefused(ValueError):
+    """F95 answered the feed with an error instead of the list."""
+
+
+def _error_msg(payload: object) -> str | None:
+    """F95's error text from a `{"status": "error", "msg": "..."}` answer."""
+    if not isinstance(payload, dict):
+        return None
+    body = cast(dict[str, object], payload)
+    msg = body.get("msg")
+    if body.get("status") == "ok" or not isinstance(msg, str) or not msg.strip():
+        return None
+    return " ".join(msg.split())[:_MSG_MAX_CHARS]
+
+
+def _payload(response: Response) -> object:
+    """The feed's JSON; raises F95FeedRefused with F95's reason when it refuses."""
+    try:
+        payload = response.json()
+    except ValueError:
+        if response.status in _REFUSED_STATUSES:
+            raise F95FeedRefused(
+                f"F95 refused the feed (HTTP {response.status}) without its JSON answer"
+            ) from None
+        raise
+    msg = _error_msg(payload)
+    if msg is not None:
+        raise F95FeedRefused(f"F95 refused the feed (HTTP {response.status}): {msg}")
+    if response.status in _REFUSED_STATUSES:
+        raise F95FeedRefused(f"F95 refused the feed (HTTP {response.status})")
+    return payload
 
 
 def _is_rate_limited(response: Response) -> bool:
@@ -128,8 +167,9 @@ class F95Source:
             self.name,
             LATEST_DATA_URL.format(page=page),
             is_rate_limited=_is_rate_limited,
+            ok_statuses=_REFUSED_STATUSES,
         )
-        rows, total = parse_page(response.json())
+        rows, total = parse_page(_payload(response))
         ctx.upsert("f95_threads", "thread_id", rows)
         return rows, total
 
