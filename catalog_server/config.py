@@ -26,6 +26,9 @@ SITE_LIMITS: dict[str, SiteLimits] = {
     "f95": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
     # Thread pages, outside the feed's limit. About 80 threads change per day.
     "f95_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
+    # LewdCorner's login-gated feed, and its thread pages on their own budget.
+    "lc": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
+    "lc_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
     "dlsite": SiteLimits(min_delay=3.0),
     "ryuugames": SiteLimits(min_delay=3.0),
     "vndb": SiteLimits(min_delay=1.0, budget=150, window=300.0, wait=True),
@@ -75,6 +78,7 @@ def site_proxies_from_env() -> dict[str, str]:
 
 BROWSER_SITES_ENV = "WLIB_CATALOG_BROWSER_SITES"
 F95_COOKIE_ENV = "WLIB_CATALOG_F95_COOKIE"
+LC_COOKIE_ENV = "WLIB_CATALOG_LC_COOKIE"
 
 
 def browser_sites_from_env() -> frozenset[str]:
@@ -93,9 +97,8 @@ def browser_sites_from_env() -> frozenset[str]:
     return sites
 
 
-def f95_cookie_from_env() -> str | None:
-    """The value of F95's `xf_user` login cookie, from /etc/wlib-catalog/f95.env."""
-    value = os.environ.get(F95_COOKIE_ENV, "").strip()
+def _xf_user_cookie_from_env(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
     if not value:
         return None
     value = value.removeprefix("xf_user=")
@@ -104,8 +107,18 @@ def f95_cookie_from_env() -> str | None:
     value = value.replace(",", "%2C")
     if any(char in value for char in ' ;"\\') or not value.isprintable():
         # The message never shows the value: it is a login secret.
-        raise ValueError(f"{F95_COOKIE_ENV} must be only the value of the xf_user cookie")
+        raise ValueError(f"{name} must be only the value of the xf_user cookie")
     return value
+
+
+def f95_cookie_from_env() -> str | None:
+    """The value of F95's `xf_user` login cookie, from /etc/wlib-catalog/f95.env."""
+    return _xf_user_cookie_from_env(F95_COOKIE_ENV)
+
+
+def lc_cookie_from_env() -> str | None:
+    """The value of LewdCorner's `xf_user` login cookie, from /etc/wlib-catalog/lc.env."""
+    return _xf_user_cookie_from_env(LC_COOKIE_ENV)
 
 
 def data_dir() -> str:

@@ -19,6 +19,8 @@ def test_expected_fixtures_exist():
         "ryuugames_posts.json",
         "vndb_vn.json",
         "vndb_release.json",
+        "lc_latest_page.json",
+        "lc_feed_logged_out.json",
     }
 
 

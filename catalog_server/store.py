@@ -125,6 +125,50 @@ CREATE TABLE IF NOT EXISTS f95_thread_details (
     languages TEXT NOT NULL DEFAULT '[]',
     external_ids TEXT NOT NULL DEFAULT '{{}}'
 );
+-- LewdCorner threads from the latest-updates feed (or an Atlas import).
+-- `tier` is 'Premium' for a LewdCorner Plus thread and 'Free' otherwise.
+CREATE TABLE IF NOT EXISTS lc_threads (
+    thread_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    creator TEXT,
+    version TEXT,
+    updated_at TEXT,
+    ts INTEGER,
+    node_id INTEGER,
+    tier TEXT NOT NULL DEFAULT 'Free',
+    prefixes TEXT NOT NULL DEFAULT '[]',
+    tags TEXT NOT NULL DEFAULT '[]',
+    platforms TEXT NOT NULL DEFAULT '[]',
+    cover_url TEXT,
+    screens TEXT NOT NULL DEFAULT '[]',
+    views INTEGER,
+    likes INTEGER,
+    rating REAL,
+    url TEXT NOT NULL,
+    {_SEEN_COLUMNS}
+);
+-- LC prefix names by ID. Never cleared: the feed names prefixes inline, and
+-- LC uses some names on two IDs.
+CREATE TABLE IF NOT EXISTS lc_prefix_names (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
+-- First-post details of LC threads, like f95_thread_details. `release_text`
+-- is the release date as shown; `released_at` is its ISO date when it parses.
+CREATE TABLE IF NOT EXISTS lc_thread_details (
+    thread_id INTEGER PRIMARY KEY,
+    thread_ts INTEGER,
+    fetched_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    overview TEXT,
+    developer TEXT,
+    release_text TEXT,
+    released_at TEXT,
+    language TEXT,
+    languages TEXT NOT NULL DEFAULT '[]',
+    os TEXT NOT NULL DEFAULT '[]',
+    external_ids TEXT NOT NULL DEFAULT '{{}}'
+);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -174,9 +218,16 @@ CREATE TABLE IF NOT EXISTS source_status (
 );
 """
 
+# Builder-only detail steps, counted by their details table.
+DETAIL_TABLES: dict[str, str] = {
+    "f95_threads": "f95_thread_details",
+    "lc_threads": "lc_thread_details",
+}
+
 # Tables each source owns, for removal marking and manifest counts.
 SOURCE_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
     "f95": (("f95_threads", "thread_id"),),
+    "lc": (("lc_threads", "thread_id"),),
     "dlsite": (("dlsite_works", "product_id"),),
     "ryuugames": (("ryuu_posts", "post_id"),),
     "vndb": (("vndb_vns", "vn_id"), ("vndb_releases", "release_id")),
@@ -361,11 +412,75 @@ class CatalogStore:
             )
         return 1
 
+    def lc_newest_ts(self) -> int | None:
+        row = cast(tuple[int | None], self.conn.execute("SELECT MAX(ts) FROM lc_threads").fetchone())
+        return row[0]
+
+    def lc_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
+        """Like `f95_details_queue`: changed threads newest first, then never-read ones."""
+        changed = "(d.thread_id IS NOT NULL OR t.ts > :since)"
+        rows = self.conn.execute(
+            "SELECT t.thread_id, t.ts FROM lc_threads t "
+            + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id "
+            + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
+            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts) "
+            + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
+            + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
+            + "t.thread_id LIMIT :limit",
+            {"since": since_ts, "limit": limit},
+        )
+        return cast(list[tuple[int, int]], rows.fetchall())
+
+    def upsert_lc_details(
+        self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
+    ) -> int:
+        with self.conn:
+            _ = self.conn.execute(
+                "INSERT OR REPLACE INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
+                + "status, overview, developer, release_text, released_at, language, "
+                + "languages, os, external_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    thread_ts,
+                    now,
+                    details["status"],
+                    details.get("overview"),
+                    details.get("developer"),
+                    details.get("release_text"),
+                    details.get("released_at"),
+                    details.get("language"),
+                    json.dumps(details.get("languages") or [], ensure_ascii=False),
+                    json.dumps(details.get("os") or [], ensure_ascii=False),
+                    json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                ),
+            )
+        return 1
+
+    def upsert_lc_prefix_names(self, names: Mapping[int, str]) -> None:
+        """Add or rename LC prefixes; IDs the feed no longer shows keep their name."""
+        if not names:
+            return
+        with self.conn:
+            _ = self.conn.executemany(
+                "INSERT INTO lc_prefix_names (id, name) VALUES (?, ?) "
+                + "ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                names.items(),
+            )
+
+    def lc_prefix_ids_by_name(self) -> dict[str, list[int]]:
+        """Casefolded prefix name to every ID that has it; LC reuses some names."""
+        found: dict[str, list[int]] = {}
+        for prefix_id, name in _rows(
+            self.conn.execute("SELECT id, name FROM lc_prefix_names ORDER BY id")
+        ):
+            found.setdefault(str(name).casefold(), []).append(cast(int, prefix_id))
+        return found
+
     def count(self, source: str) -> int:
-        if source == "f95_threads":
+        if source in DETAIL_TABLES:
             row = cast(
                 tuple[int],
-                self.conn.execute("SELECT COUNT(*) FROM f95_thread_details").fetchone(),
+                self.conn.execute(f"SELECT COUNT(*) FROM {DETAIL_TABLES[source]}").fetchone(),
             )
             return row[0]
         table, _key = SOURCE_TABLES[source][0]

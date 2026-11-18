@@ -16,6 +16,8 @@ EnvironmentFile=/etc/wlib-catalog/r2.env
 EnvironmentFile=-/etc/wlib-catalog/catalog.env
 # Optional F95 login: WLIB_CATALOG_F95_COOKIE (root 0600).
 EnvironmentFile=-/etc/wlib-catalog/f95.env
+# Optional LewdCorner login: WLIB_CATALOG_LC_COOKIE (root 0600); needs lc in WLIB_CATALOG_BROWSER_SITES.
+EnvironmentFile=-/etc/wlib-catalog/lc.env
 ExecStart=/opt/wlib-catalog/.venv/bin/python -m catalog_server run
 TimeoutStartSec=3h
 # Headroom for the headless Chromium of WLIB_CATALOG_BROWSER_SITES.

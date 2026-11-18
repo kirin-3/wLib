@@ -3,6 +3,7 @@ import type { CatalogStatusResponse } from "../services/api";
 
 export const CATALOG_SOURCE_LABELS: Record<string, string> = {
   f95: "F95Zone",
+  lc: "LewdCorner",
   dlsite: "DLsite",
   ryuugames: "Ryuugames",
   vndb: "VNDB",

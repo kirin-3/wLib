@@ -239,3 +239,87 @@ def test_failed_link_rebuild_still_finishes_the_run(tmp_path, monkeypatch):
         run(ctx.catalog, ctx.state, ctx.pacer, {}, [], storage=None, work_dir=str(tmp_path), now=clock.iso)
     latest = ctx.state.recent_runs()[0]
     assert latest["finished_at"] and latest["published"] is None
+
+
+def _lc_run(tmp_path, monkeypatch, lc_answer):
+    """A CLI run of lc, lc_threads and ryuugames, publishing to memory."""
+    from test_catalog_browser import FakeBrowser, FakePage
+    from test_catalog_publish import MemoryStorage
+
+    from catalog_server.browser import BrowserTransport
+
+    monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", "1%2Ckey")
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "lc")
+    transport = FakeTransport()
+    transport.route(
+        "/wp-json/wp/v2/posts",
+        Response(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"}),
+    )
+
+    def answer(url):
+        if "/latest-updates/api" in url:
+            return lc_answer
+        return FakePage(200, fixture_bytes("lc_thread_6.html"))
+
+    browser = FakeBrowser(answer)
+    storage = MemoryStorage()
+    clock = FakeClock()
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--sources", "lc,lc_threads,ryuugames"],
+        transport=transport,
+        browser=BrowserTransport(session_factory=browser),
+        sleep=clock.sleep,
+        storage_factory=lambda: storage,
+    )
+    manifest = json.loads(storage.objects["v1/manifest.json"]["data"])
+    return code, manifest, browser
+
+
+def test_a_failing_lc_feed_still_publishes_the_other_sources(tmp_path, monkeypatch):
+    from test_catalog_browser import FakePage
+
+    code, manifest, browser = _lc_run(
+        tmp_path, monkeypatch, FakePage(200, fixture_bytes("lc_feed_logged_out.json"))
+    )
+    assert code == 1
+    assert manifest["sources"]["ryuugames"]["count"] == 3
+    assert manifest["sources"]["lc"] == {"count": 0, "updated_at": None}
+    # lc_threads does not run once the feed lost its login.
+    assert all("/latest-updates/api" in url for _, url in browser.fetched)
+
+
+def test_manifest_lists_lc_with_its_count(tmp_path, monkeypatch):
+    from test_catalog_browser import FakePage
+
+    payload = json.loads(fixture_bytes("lc_latest_page.json"))
+    payload["result"]["total"] = 90
+    payload["result"]["hasMore"] = False
+    code, manifest, browser = _lc_run(
+        tmp_path, monkeypatch, FakePage(200, json.dumps(payload).encode())
+    )
+    assert code == 0
+    assert manifest["sources"]["lc"]["count"] == 90
+    assert manifest["sources"]["lc"]["updated_at"]
+    assert any("/threads/" in url for _, url in browser.fetched)
+
+
+def test_lc_steps_are_skipped_without_the_lc_cookie(tmp_path, monkeypatch, caplog):
+    monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE", raising=False)
+    monkeypatch.delenv("WLIB_CATALOG_BROWSER_SITES", raising=False)
+    transport = FakeTransport()
+    transport.route(
+        "/wp-json/wp/v2/posts",
+        Response(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"}),
+    )
+    clock = FakeClock()
+    with caplog.at_level("INFO"):
+        code = main(
+            ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "lc,lc_threads,ryuugames"],
+            transport=transport,
+            sleep=clock.sleep,
+        )
+    assert code == 0
+    assert all("lewdcorner" not in request.url for request in transport.requests)
+    assert "lc: skipped, it needs the LC login cookie" in caplog.text
+    assert "lc_threads: skipped, it needs the LC login cookie" in caplog.text

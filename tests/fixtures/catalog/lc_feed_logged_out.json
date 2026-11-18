@@ -1,0 +1,16 @@
+{
+    "status": "ok",
+    "html": {
+        "content": ""
+    },
+    "filters": [],
+    "result": {
+        "items": [],
+        "total": 0,
+        "page": 1,
+        "perPage": 30,
+        "hasMore": false,
+        "queryMs": 0
+    },
+    "error": "You do not have permission to view Latest Updates."
+}

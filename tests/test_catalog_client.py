@@ -512,3 +512,76 @@ def test_first_background_run_without_a_catalog_does_not_call_back(tmp_path):
     client.on_installed = lambda: calls.append(1)
     client._run_check(False)
     assert calls == []
+
+
+def test_snapshot_with_lc_data_installs_and_old_lookups_still_work(tmp_path, server, monkeypatch):
+    """A snapshot with LC tables and title links keeps schema 1 and the F95/DLsite reads."""
+    from catalog_fakes import fixture_json
+
+    from catalog_server.links import rebuild_links
+    from catalog_server.runner import manifest_sources
+    from catalog_server.sources.lc import parse_page
+    from catalog_server.store import StateStore
+    from core import database
+    from core.game_lookup import f95_thread_cover, resolve_page
+
+    stamp = "2026-11-18T05:00:00Z"
+    folder = tmp_path / "build"
+    folder.mkdir()
+    store = CatalogStore(str(folder / "catalog.sqlite"))
+    state = StateStore(str(folder / "state.sqlite"))
+    lc_rows, names, *_ = parse_page(fixture_json("lc_latest_page.json"))
+    store.upsert("lc_threads", "thread_id", lc_rows, stamp)
+    store.upsert_lc_prefix_names(names)
+    store.upsert("f95_threads", "thread_id", [{
+        "thread_id": 100, "title": "Dirty Fame", "creator": "Vixwood Games",
+        "cover_url": "https://attachments.f95zone.to/cover.png",
+        "url": "https://f95zone.to/threads/100/",
+    }], stamp)
+    store.upsert("dlsite_works", "product_id", [{
+        "product_id": "RJ123", "title": "Work", "circle": "Circle",
+        "url": "https://www.dlsite.com/maniax/work/=/product_id/RJ123.html",
+    }], stamp)
+    assert rebuild_links(store) == 1
+    for name in ("f95", "lc", "dlsite"):
+        state.record_source(state.start_run(stamp), name, "ok", 1, 1, None, stamp)
+    sources = manifest_sources(store, state)
+    snapshot = build_snapshot(store, str(folder / "out"), stamp)
+    store.close()
+    state.close()
+    data = open(snapshot.path, "rb").read()
+    path = f"v1/snapshots/{snapshot.name}"
+    server.files["/" + path] = data
+    server.files["/v1/manifest.json"] = json.dumps({
+        "schema_version": 1,
+        "generated_at": stamp,
+        "snapshot": {
+            "path": path,
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "uncompressed_size": snapshot.uncompressed_size,
+        },
+        "sources": sources,
+    }).encode()
+
+    client = _client(tmp_path)
+    assert client.check() == {"success": True, "updated": True}
+    status = client.status()
+    assert status["sources"]["lc"] == {"count": 90, "updated_at": stamp}
+    assert list(status["sources"])[:2] == ["f95", "lc"]
+    conn = sqlite3.connect(f"file:{client.catalog_path}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone() == ("1",)
+        assert conn.execute("SELECT * FROM links").fetchall() == [("lc", "25050", "f95", "100", "title")]
+    finally:
+        conn.close()
+
+    # The app's existing reads ignore LC tables and LC links.
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "data" / "wlib.db"))
+    database.init_db()
+    assert f95_thread_cover("100") == "https://attachments.f95zone.to/cover.png"
+    dlsite = resolve_page("https://www.dlsite.com/maniax/work/=/product_id/RJ123.html")
+    assert dlsite["catalog_entry"]["title"] == "Work"
+    # The title link gives an F95 page no LC identity: the app has no LC links yet.
+    f95 = resolve_page("https://f95zone.to/threads/100/")
+    assert all(link["source"] != "lc" for link in f95["ids"])

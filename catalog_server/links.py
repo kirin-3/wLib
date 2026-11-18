@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Rebuild `links` from links the sources state. No title matching."""
+"""Rebuild `links` from links the sources state, plus strict LewdCorner↔F95
+title matches (`origin = 'title'`, see `title_match`). No other title matching."""
 
 from typing import cast
 
 from .store import CatalogStore
+from .title_match import match_lc_f95
 
 # Each statement inserts (src_a, id_a, src_b, id_b, origin). Targets that are
 # catalog sources must exist in the catalog; Steam is not a source, so its
@@ -44,5 +46,10 @@ def rebuild_links(catalog: CatalogStore) -> int:
             _ = catalog.conn.execute(
                 "INSERT OR IGNORE INTO links (src_a, id_a, src_b, id_b, origin) " + query
             )
+        _ = catalog.conn.executemany(
+            "INSERT OR IGNORE INTO links (src_a, id_a, src_b, id_b, origin) "
+            + "VALUES ('lc', ?, 'f95', ?, 'title')",
+            [(str(lc_id), str(f95_id)) for lc_id, f95_id in match_lc_f95(catalog)],
+        )
     row = cast(tuple[int], catalog.conn.execute("SELECT COUNT(*) FROM links").fetchone())
     return row[0]

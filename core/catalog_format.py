@@ -12,7 +12,7 @@ SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({1})
 MANIFEST_KEY = "v1/manifest.json"
 SNAPSHOT_PREFIX = "v1/snapshots/"
 
-SOURCES: tuple[str, ...] = ("f95", "dlsite", "ryuugames", "vndb")
+SOURCES: tuple[str, ...] = ("f95", "lc", "dlsite", "ryuugames", "vndb")
 
 # Manifest fields.
 MANIFEST_SCHEMA_VERSION = "schema_version"

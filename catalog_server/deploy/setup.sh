@@ -47,6 +47,10 @@ if [ ! -f "$ETC_DIR/f95.env" ]; then
     # Optional: WLIB_CATALOG_F95_COOKIE=<value of F95's xf_user cookie>.
     install -o root -g root -m 0600 /dev/null "$ETC_DIR/f95.env"
 fi
+if [ ! -f "$ETC_DIR/lc.env" ]; then
+    # Optional: WLIB_CATALOG_LC_COOKIE=<value of LewdCorner's xf_user cookie>.
+    install -o root -g root -m 0600 /dev/null "$ETC_DIR/lc.env"
+fi
 
 if [ -d "$APP_DIR/.git" ]; then
     git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"

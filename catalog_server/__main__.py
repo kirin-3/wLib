@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Command line: `python -m catalog_server run|status|check-f95-login`."""
+"""Command line: `python -m catalog_server run|status|check-f95-login|check-lc-login`."""
 
 import argparse
 import json
@@ -14,12 +14,13 @@ from typing import IO
 
 from core.catalog_format import SOURCES
 
-from .browser import BrowserTransport, f95_login_cookies
+from .browser import BrowserTransport, f95_login_cookies, lc_login_cookies
 from .config import (
     BROWSER_SITES_ENV,
     browser_sites_from_env,
     data_dir,
     f95_cookie_from_env,
+    lc_cookie_from_env,
     r2_config_from_env,
     site_proxies_from_env,
 )
@@ -107,6 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     _ = commands.add_parser(
         "check-f95-login", help="open F95 in the browser with the login cookie and report the account"
     )
+    _ = commands.add_parser(
+        "check-lc-login",
+        help="open LewdCorner in the browser with the login cookie and report the account",
+    )
     return parser
 
 
@@ -160,6 +165,7 @@ def _status(folder: str) -> int:
 
 
 F95_HOME_URL = "https://f95zone.to/"
+LC_HOME_URL = "https://lewdcorner.com/"
 _LOGGED_IN_RE = re.compile(r'<html[^>]*\sdata-logged-in="true"')
 _ACCOUNT_NAME_RE = re.compile(
     r'<a href="/account/"[^>]*>.*?<span class="p-navgroup-linkText">([^<]+)</span>', re.S
@@ -167,57 +173,101 @@ _ACCOUNT_NAME_RE = re.compile(
 
 
 class NetworkSettings:
-    """Proxies, browser sites and the F95 login, read from the environment."""
+    """Proxies, browser sites and the F95 and LC logins, read from the environment."""
 
     def __init__(self) -> None:
         self.proxies: dict[str, str] = site_proxies_from_env()
-        sites = browser_sites_from_env()
-        # Thread pages go the same way as the feed.
-        self.browser_sites: frozenset[str] = sites | {"f95_threads"} if "f95" in sites else sites
+        sites = set(browser_sites_from_env())
+        # Thread pages go the same way as their feed.
+        for feed, threads in (("f95", "f95_threads"), ("lc", "lc_threads")):
+            if feed in sites:
+                sites.add(threads)
+        self.browser_sites: frozenset[str] = frozenset(sites)
         self.f95_cookie: str | None = f95_cookie_from_env()
         if self.f95_cookie is not None and "f95" not in self.browser_sites:
             # Only the browser keeps the cookie to f95zone.to.
             raise ValueError(f"the F95 login cookie needs f95 in {BROWSER_SITES_ENV}")
+        self.lc_cookie: str | None = lc_cookie_from_env()
+        if self.lc_cookie is not None and "lc" not in self.browser_sites:
+            # Only the browser keeps the cookie to lewdcorner.com.
+            raise ValueError(f"the LC login cookie needs lc in {BROWSER_SITES_ENV}")
+
+    def cookies(self) -> list[dict[str, object]]:
+        """Each login cookie is scoped to its own site's domain."""
+        cookies: list[dict[str, object]] = []
+        if self.f95_cookie:
+            cookies.extend(f95_login_cookies(self.f95_cookie))
+        if self.lc_cookie:
+            cookies.extend(lc_login_cookies(self.lc_cookie))
+        return cookies
 
     def browser(self, given: BrowserTransport | None) -> BrowserTransport | None:
         if not self.browser_sites:
             return None
         if given is not None:
             return given
-        cookies = f95_login_cookies(self.f95_cookie) if self.f95_cookie else []
-        return BrowserTransport(cookies=cookies)
+        return BrowserTransport(cookies=self.cookies())
 
 
-def _check_f95_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
-    if settings.f95_cookie is None:
-        log.error("no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env")
-        return 2
-    browser = settings.browser(given)
-    if browser is None:  # NetworkSettings needs f95 in the browser sites for a cookie.
+def _check_login(
+    folder: str,
+    browser: BrowserTransport | None,
+    *,
+    site: str,
+    home_url: str,
+    cookie_hint: str,
+) -> int:
+    if browser is None:  # NetworkSettings needs the site in the browser sites for a cookie.
         return 2
     with _run_lock(folder) as acquired:
         if not acquired:
             log.error("a catalog run is in progress; try again when it ends")
             return 1
         # One request to the home page, outside the Pacer: its budget is for
-        # F95's rate-limited latest_data feed, which this does not use.
+        # the site's rate-limited feed, which this does not use.
         try:
-            response = browser(Request("GET", F95_HOME_URL))
+            response = browser(Request("GET", home_url))
         except ConnectionError as exc:
-            log.error("could not open F95: %s", exc)
+            log.error("could not open %s: %s", site, exc)
             return 1
         finally:
             browser.close()
     if response.status != 200:
-        log.error("F95 answered HTTP %s", response.status)
+        log.error("%s answered HTTP %s", site, response.status)
         return 1
     html = response.text()
     if not _LOGGED_IN_RE.search(html):
-        log.error("F95 does not see a login; the xf_user cookie is wrong or expired")
+        log.error("%s does not see a login; %s", site, cookie_hint)
         return 1
     name = _ACCOUNT_NAME_RE.search(html)
-    print(f"Logged in to F95 as {name.group(1).strip() if name else '(unknown name)'}")
+    print(f"Logged in to {site} as {name.group(1).strip() if name else '(unknown name)'}")
     return 0
+
+
+def _check_f95_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
+    if settings.f95_cookie is None:
+        log.error("no F95 login: set WLIB_CATALOG_F95_COOKIE in /etc/wlib-catalog/f95.env")
+        return 2
+    return _check_login(
+        folder,
+        settings.browser(given),
+        site="F95",
+        home_url=F95_HOME_URL,
+        cookie_hint="the xf_user cookie is wrong or expired",
+    )
+
+
+def _check_lc_login(folder: str, settings: NetworkSettings, given: BrowserTransport | None) -> int:
+    if settings.lc_cookie is None:
+        log.error("no LC login: set WLIB_CATALOG_LC_COOKIE in /etc/wlib-catalog/lc.env")
+        return 2
+    return _check_login(
+        folder,
+        settings.browser(given),
+        site="LewdCorner",
+        home_url=LC_HOME_URL,
+        cookie_hint="the LC xf_user cookie is wrong or expired",
+    )
 
 
 def main(
@@ -240,6 +290,8 @@ def main(
         return 2
     if args.command == "check-f95-login":
         return _check_f95_login(folder, settings, browser)
+    if args.command == "check-lc-login":
+        return _check_lc_login(folder, settings, browser)
 
     storage: Storage | None = None
     if not args.no_publish:
@@ -261,6 +313,8 @@ def main(
         log.info("%s requests go through the browser", ", ".join(sorted(settings.browser_sites)))
     if settings.f95_cookie is not None:
         log.info("f95 requests send the login cookie")
+    if settings.lc_cookie is not None:
+        log.info("lc requests send the login cookie")
 
     selected = list(args.sources)
     until = list(args.until_swept)
@@ -271,6 +325,12 @@ def main(
         # F95 hides links from guests, so thread pages are read only when logged in.
         log.info("f95_threads: skipped, it needs the F95 login cookie")
         selected.remove("f95_threads")
+    if settings.lc_cookie is None:
+        # Without the login LC shows no feed; it is never read as a guest.
+        for name in ("lc", "lc_threads"):
+            if name in selected:
+                log.info("%s: skipped, it needs the LC login cookie", name)
+                selected.remove(name)
     with _run_lock(folder) as acquired:
         if not acquired:
             log.info("another catalog run is in progress; skipping this one")

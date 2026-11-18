@@ -44,19 +44,28 @@ def _scrapling_session(**kwargs: object) -> BrowserSession:
     return make(**kwargs)
 
 
-def f95_login_cookies(value: str) -> list[dict[str, object]]:
-    """The browser cookie for F95's `xf_user` value; it is sent only to f95zone.to."""
+def _xf_user_cookies(value: str, domain: str) -> list[dict[str, object]]:
     return [
         {
             "name": "xf_user",
             "value": value,
-            "domain": ".f95zone.to",
+            "domain": domain,
             "path": "/",
             "secure": True,
             "httpOnly": True,
             "sameSite": "Lax",
         }
     ]
+
+
+def f95_login_cookies(value: str) -> list[dict[str, object]]:
+    """The browser cookie for F95's `xf_user` value; it is sent only to f95zone.to."""
+    return _xf_user_cookies(value, ".f95zone.to")
+
+
+def lc_login_cookies(value: str) -> list[dict[str, object]]:
+    """The browser cookie for LewdCorner's `xf_user` value; it is sent only to lewdcorner.com."""
+    return _xf_user_cookies(value, ".lewdcorner.com")
 
 
 class BrowserTransport:

@@ -26,11 +26,13 @@ test('source lines keep a fixed order and readable labels', () => {
     sources: {
       vndb: { count: 31902, updated_at: null },
       extra: { count: null, updated_at: null },
+      lc: { count: 9445, updated_at: null },
       f95: { count: 27990, updated_at: '2026-10-27T05:00:00Z' },
     },
   });
-  assert.deepEqual(lines.map((line) => line.label), ['F95Zone', 'VNDB', 'extra']);
-  assert.equal(lines[1].updated, 'never');
-  assert.equal(lines[2].count, '—');
+  assert.deepEqual(lines.map((line) => line.label), ['F95Zone', 'LewdCorner', 'VNDB', 'extra']);
+  assert.equal(lines[1].count, (9445).toLocaleString());
+  assert.equal(lines[2].updated, 'never');
+  assert.equal(lines[3].count, '—');
   assert.equal(formatCatalogTime('not a date'), 'not a date');
 });

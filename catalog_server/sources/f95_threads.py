@@ -10,12 +10,12 @@ viewed first. Only logged-in pages are used: F95 hides links from guests.
 
 import logging
 import re
-from collections.abc import Callable
 from html.parser import HTMLParser
 from typing import override
 
 from ..net import RateLimited
 from .base import SourceContext
+from .post_ids import SECTION_LABELS, external_ids, parse_languages
 
 log = logging.getLogger(__name__)
 
@@ -29,17 +29,6 @@ _LOGGED_IN_RE = re.compile(r'<html[^>]*\sdata-logged-in="(true|false)"')
 _FIRST_POST_RE = re.compile(r'<article\b[^>]*\bmessage--post\b[^>]*>', re.S)
 _LABEL_RE = re.compile(r"^([A-Za-z][A-Za-z ]{0,30}?)\s*:\s*(.*)$")
 
-# Labels that end the overview; a colon inside the overview text is not one.
-_SECTION_LABELS = frozenset(
-    {
-        "thread updated", "release date", "developer", "developers", "publisher",
-        "original title", "original name", "aliases", "alias", "also known as", "aka",
-        "translator", "translators", "censored", "censorship", "version", "os",
-        "platform", "platforms", "language", "languages", "store", "stores", "genre",
-        "genres", "installation", "changelog", "download", "downloads", "trailer",
-        "developer notes", "translator notes", "other games",
-    }
-)
 _ORIGINAL_TITLE_LABELS = frozenset(
     {"original title", "original name", "japanese title", "native title"}
 )
@@ -49,61 +38,11 @@ _ALIAS_LABELS = frozenset(
 _LANGUAGE_LABELS = frozenset({"language", "languages"})
 # Lines whose links belong to the game or its developer, not to a translator.
 _ID_LINK_LABELS = frozenset({"developer", "developers", "publisher", "store", "stores"})
-_LANGUAGE_SPLIT_RE = re.compile(r",|;|/|&|\+|\band\b|\|", re.I)
-_LANGUAGE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z -]{1,24}")
-_NOT_LANGUAGES = frozenset({"MTL", "AI", "LLM", "TL", "OTHER", "OTHERS", "NONE", "UNKNOWN"})
 _ALIAS_SPLIT_RE = re.compile(r"\s*(?:,|;|\||\s/\s)\s*")
 
 _SKIP_TAGS = frozenset({"noscript", "script", "style", "button", "iframe", "template"})
 _BLOCK_TAGS = frozenset({"div", "p", "li", "ul", "ol", "blockquote", "table", "tr", "h1",
                          "h2", "h3", "h4"})
-
-_ID_PATTERNS: tuple[tuple[str, re.Pattern[str], Callable[[re.Match[str]], str | None]], ...] = (
-    (
-        "patreon",
-        re.compile(r"^https?://(?:www\.)?patreon\.com/(?:c/|cw/|join/)?([A-Za-z0-9_-]+)/?(?:[?#/].*)?$"),
-        lambda m: None
-        if m.group(1).lower() in {"posts", "user", "home", "login", "checkout", "bepatron"}
-        else m.group(1).lower(),
-    ),
-    (
-        "patreon",
-        re.compile(r"^https?://(?:www\.)?patreon\.com/user\?u=(\d+)"),
-        lambda m: f"u:{m.group(1)}",
-    ),
-    (
-        "itch",
-        re.compile(r"^https?://([a-z0-9-]+)\.itch\.io(?:/([A-Za-z0-9_-]+))?/?(?:[?#].*)?$", re.I),
-        lambda m: m.group(1).lower() + (f"/{m.group(2).lower()}" if m.group(2) else ""),
-    ),
-    (
-        "itch",
-        re.compile(r"^https?://(?:www\.)?itch\.io/profile/([A-Za-z0-9_-]+)", re.I),
-        lambda m: m.group(1).lower(),
-    ),
-    (
-        "subscribestar",
-        re.compile(r"^https?://(?:www\.)?subscribestar\.(?:com|adult)/([A-Za-z0-9_-]+)", re.I),
-        lambda m: None if m.group(1).lower() == "posts" else m.group(1).lower(),
-    ),
-    (
-        "kofi",
-        re.compile(r"^https?://(?:www\.)?ko-fi\.com/([A-Za-z0-9_]+)", re.I),
-        lambda m: None
-        if m.group(1).lower() in {"s", "i", "post", "home", "album", "shop"}
-        else m.group(1).lower(),
-    ),
-    (
-        "discord",
-        re.compile(r"^https?://(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)", re.I),
-        lambda m: m.group(1),
-    ),
-    (
-        "steam",
-        re.compile(r"^https?://(?:store\.steampowered\.com|steamcommunity\.com)/app/(\d+)", re.I),
-        lambda m: m.group(1),
-    ),
-)
 
 
 class _PostText(HTMLParser):
@@ -171,46 +110,6 @@ def _label(line: str) -> tuple[str, str] | None:
     return match.group(1).strip().lower(), match.group(2).strip()
 
 
-def _external_ids(urls: list[str]) -> dict[str, list[dict[str, str]]]:
-    """`{kind: [{"id": ..., "url": ...}]}`; the URL is the link as the post has it."""
-    found: dict[str, list[dict[str, str]]] = {}
-    for raw in urls:
-        url = raw.strip()
-        for kind, pattern, pick in _ID_PATTERNS:
-            match = pattern.match(url)
-            if match is None:
-                continue
-            value = pick(match)
-            if value is None:
-                # Not an ID form of this pattern (e.g. patreon.com/user?u=); try the next.
-                continue
-            entries = found.setdefault(kind, [])
-            if all(entry["id"] != value for entry in entries):
-                entries.append({"id": value, "url": url})
-            break
-    return found
-
-
-def parse_languages(text: str | None) -> list[str]:
-    """Language names from the free text: `English (Sonnet 5.5 & Opus 5.5), Japanese`
-    gives `["English", "Japanese"]`. Notes in brackets are not languages."""
-    if not text:
-        return []
-    plain = re.sub(r"\([^)]*\)|\[[^\]]*\]", ",", text)
-    names: list[str] = []
-    for part in _LANGUAGE_SPLIT_RE.split(plain):
-        # "English MTL": a note word after the name is not part of it.
-        words = [word for word in part.split() if word.upper() not in _NOT_LANGUAGES]
-        name = " ".join(words).strip(" .-:")
-        # Words only: version numbers and long phrases are not names.
-        if not _LANGUAGE_NAME_RE.fullmatch(name):
-            continue
-        name = " ".join(word[:1].upper() + word[1:].lower() for word in name.split())
-        if name not in names:
-            names.append(name)
-    return names
-
-
 def _tidy(lines: list[str]) -> str:
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if len(text) > OVERVIEW_MAX_CHARS:
@@ -238,7 +137,7 @@ def parse_first_post(post_html: str) -> dict[str, object]:
         labelled = _label(line)
         name, value = labelled if labelled else ("", "")
         if in_overview:
-            if name not in _SECTION_LABELS:
+            if name not in SECTION_LABELS:
                 overview.append(line)
                 continue
             in_overview = False
@@ -264,7 +163,7 @@ def parse_first_post(post_html: str) -> dict[str, object]:
         "aliases": aliases,
         "language": language,
         "languages": parse_languages(language),
-        "external_ids": _external_ids(id_urls),
+        "external_ids": external_ids(id_urls),
     }
 
 

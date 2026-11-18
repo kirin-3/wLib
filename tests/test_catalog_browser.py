@@ -7,8 +7,8 @@ import pytest
 
 from catalog_fakes import FakeClock, FakeTransport, fixture_bytes, json_response
 from catalog_server.__main__ import main
-from catalog_server.browser import BrowserTransport, f95_login_cookies
-from catalog_server.config import browser_sites_from_env, f95_cookie_from_env
+from catalog_server.browser import BrowserTransport, f95_login_cookies, lc_login_cookies
+from catalog_server.config import browser_sites_from_env, f95_cookie_from_env, lc_cookie_from_env
 from catalog_server.net import Pacer, Request
 from catalog_server.store import StateStore
 
@@ -140,6 +140,24 @@ def test_f95_cookie_error_never_shows_the_value(monkeypatch):
     assert "secret-part" not in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [COOKIE, f"xf_user={COOKIE}", " 12345,abcdefghijklmnop "],
+)
+def test_lc_cookie_accepts_the_value_as_copied(monkeypatch, value):
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", value)
+    assert lc_cookie_from_env() == COOKIE
+    monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE")
+    assert lc_cookie_from_env() is None
+
+
+def test_lc_cookie_error_never_shows_the_value(monkeypatch):
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", "xf_user=secret-part; xf_session=other")
+    with pytest.raises(ValueError, match="WLIB_CATALOG_LC_COOKIE") as error:
+        lc_cookie_from_env()
+    assert "secret-part" not in str(error.value)
+
+
 def test_browser_sites_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", " f95, dlsite ,")
     assert browser_sites_from_env() == {"f95", "dlsite"}
@@ -230,3 +248,82 @@ def test_check_f95_login_works_while_the_feed_budget_is_used_up(tmp_path, monkey
     )
     assert result == 0
     assert "Logged in to F95 as SomeUser" in capsys.readouterr().out
+
+
+def test_each_login_cookie_goes_only_to_its_site(monkeypatch):
+    from catalog_server.__main__ import NetworkSettings
+
+    (lc_cookie,) = lc_login_cookies(COOKIE)
+    assert (lc_cookie["name"], lc_cookie["domain"]) == ("xf_user", ".lewdcorner.com")
+    assert lc_cookie["secure"] is True
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95,lc")
+    monkeypatch.setenv("WLIB_CATALOG_F95_COOKIE", COOKIE)
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", "999%2Clcsecret")
+    settings = NetworkSettings()
+    assert {"f95_threads", "lc_threads"} <= settings.browser_sites
+    assert [(cookie["domain"], cookie["value"]) for cookie in settings.cookies()] == [
+        (".f95zone.to", COOKIE),
+        (".lewdcorner.com", "999%2Clcsecret"),
+    ]
+
+
+def test_cli_refuses_an_lc_cookie_without_the_lc_browser(tmp_path, monkeypatch):
+    monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", COOKIE)
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "f95")
+    code = main(["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "none"])
+    assert code == 2
+
+
+def _lc_home(logged_in: bool) -> bytes:
+    flag = "true" if logged_in else "false"
+    return (
+        f'<html id="XF" data-template="forum_list" data-logged-in="{flag}"><body>'
+        + '<a href="/account/" class="p-navgroup-link">'
+        + '<span class="p-navgroup-linkText">LcUser</span></a></body></html>'
+    ).encode()
+
+
+def _lc_env(monkeypatch):
+    monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", COOKIE)
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "lc")
+
+
+@pytest.mark.parametrize(("logged_in", "code"), [(True, 0), (False, 1)])
+def test_check_lc_login_reports_the_account(tmp_path, monkeypatch, capsys, caplog, logged_in, code):
+    _lc_env(monkeypatch)
+    browser = FakeBrowser(lambda url: FakePage(200, _lc_home(logged_in)))
+    result = main(
+        ["--data-dir", str(tmp_path), "check-lc-login"],
+        browser=BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser),
+    )
+    assert result == code
+    assert browser.fetched == [(None, "https://lewdcorner.com/")]
+    assert browser.sessions[0].closed
+    out = capsys.readouterr().out
+    assert ("Logged in to LewdCorner as LcUser" in out) == logged_in
+    assert COOKIE not in out and COOKIE not in caplog.text
+    if not logged_in:
+        assert "does not see a login" in caplog.text
+
+
+def test_check_lc_login_refuses_while_a_run_holds_the_lock(tmp_path, monkeypatch):
+    import fcntl
+
+    _lc_env(monkeypatch)
+    browser = FakeBrowser(lambda url: FakePage(200, _lc_home(True)))
+    with open(tmp_path / "run.lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = main(
+            ["--data-dir", str(tmp_path), "check-lc-login"],
+            browser=BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser),
+        )
+    assert result == 1
+    assert browser.fetched == []
+
+
+def test_check_lc_login_needs_a_cookie(tmp_path, monkeypatch):
+    monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE", raising=False)
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "lc")
+    assert main(["--data-dir", str(tmp_path), "check-lc-login"]) == 2
