@@ -4,6 +4,12 @@ import type { SortDir, SortField } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 import { automaticTags } from "./threadDetails.ts";
 
+// One shared collator: `localeCompare` with options builds a new one on every
+// call, which made sorting a 2000-game library take tens of milliseconds.
+// Same order as `a.localeCompare(b, undefined, { numeric: true })`.
+const naturalCollator = new Intl.Collator(undefined, { numeric: true });
+export const naturalCompare = (a: string, b: string): number => naturalCollator.compare(a, b);
+
 export const LIBRARY_SOURCES = [
   { key: "f95", label: "F95Zone" },
   { key: "dlsite", label: "DLsite" },
@@ -217,12 +223,12 @@ export const buildTagFilterOptions = (
     });
   });
   return [...byKey.values()].sort((a, b) =>
-    a.label.localeCompare(b.label, undefined, { numeric: true }),
+    naturalCompare(a.label, b.label),
   );
 };
 
 const compareTagLabels = (a: string, b: string): number =>
-  a.localeCompare(b, undefined, { numeric: true });
+  naturalCompare(a, b);
 
 // The pinned group of the tag list: included tag keys A-Z, then excluded A-Z.
 export const pinnedTagKeysFor = (
@@ -332,7 +338,7 @@ export const compareLibraryGames = (
   if (leftEmpty !== rightEmpty) return leftEmpty ? 1 : -1;
   const order =
     typeof left === "string" && typeof right === "string"
-      ? left.localeCompare(right, undefined, { numeric: true })
+      ? naturalCompare(left, right)
       : left < right
         ? -1
         : left > right
@@ -350,7 +356,7 @@ export const compareLibraryGames = (
     const titleAEmpty = !titleA;
     const titleBEmpty = !titleB;
     if (titleAEmpty !== titleBEmpty) return titleAEmpty ? 1 : -1;
-    const titleOrder = titleA.localeCompare(titleB, undefined, { numeric: true });
+    const titleOrder = naturalCompare(titleA, titleB);
     if (titleOrder !== 0) return titleOrder;
   }
 

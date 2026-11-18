@@ -84,9 +84,3 @@ export const createGamesStore = <T extends Identified>(
   return { games, loaded, refresh, patch };
 };
 
-/** How many library cards are in the page at first, and per later step. */
-export const RENDER_BATCH = 120;
-
-/** Grow the rendered count when the user is near the end of what is rendered. */
-export const nextRenderLimit = (limit: number, total: number, distanceToEnd: number, viewport: number): number =>
-  limit < total && distanceToEnd < viewport * 2 ? Math.min(total, limit + RENDER_BATCH) : limit;

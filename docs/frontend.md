@@ -140,7 +140,7 @@ State is mostly local to components and composables; the app intentionally avoid
 - `refresh()` calls made in the same tick share one load. A call made during a load gets one more load after it. It resolves `false` on failure and keeps the old list.
 - A game whose data did not change keeps its object across loads, and an identical reload keeps the same array, so its card does not render again.
 - `games` is a `shallowRef`. Change a game locally with `gamesStore.patch(id, fields)`; an edit of the object in place does not update the page.
-- The Library puts the first 120 cards or rows in the page (`RENDER_BATCH`) and adds 120 more when the user scrolls near the end. A filter, sort, search or layout change starts again from 120. Counts, selection and bulk actions use the full filtered list.
+- The Library keeps only the cards or rows near the visible area in the page: the visible rows plus one screen height (at least two rows) above and below. `utils/libraryWindow.ts` computes the range from the measured column count and row pitch; `LibraryView.vue` measures them on scroll, on resize (`ResizeObserver`) and after the shown cards change, and pads the grid (or adds spacer rows to the list `tbody`) so the scroll height stays the same. Bounding rectangles are in viewport pixels, so the view converts them with `toCssPx` before it mixes them with scroll offsets and padding; without this, the window breaks under the interface scale's `zoom` (and in TV mode). The grid scrolls in the view's main area; the list scrolls inside `.library-table-wrap`. `data-controller-primary` goes on the first card on screen. Counts, selection, Shift-ranges and bulk actions use the full filtered list.
 
 ## Undo and bulk actions
 

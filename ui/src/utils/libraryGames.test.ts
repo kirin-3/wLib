@@ -9,6 +9,7 @@ import {
   getEffectiveLaunchTargets,
   hasAdditionalLaunchTargets,
   compareLibraryGames,
+  naturalCompare,
   gameFolder,
   gameSources,
   matchesSourceFilter,
@@ -238,6 +239,14 @@ test("table sorts versions naturally, statuses through normalization, and recent
       compareLibraryGames({ ...a, title: "Z" }, a, "engine", direction) > 0,
     );
   }
+});
+
+test("natural compare keeps the localeCompare order with numeric collation", () => {
+  const values = ["game 10", "Game 2", "game 2", "Émile", "emile", "Zeta", "alpha 1.10", "alpha 1.9", "", " space", "2nd", "10th", "ß", "ss", "Ärger", "arger"];
+  for (const a of values)
+    for (const b of values)
+      assert.equal(Math.sign(naturalCompare(a, b)), Math.sign(a.localeCompare(b, undefined, { numeric: true })), `${a} vs ${b}`);
+  assert.ok(naturalCompare("game 2", "game 10") < 0);
 });
 
 test("version sorting treats a leading v as the same version", () => {

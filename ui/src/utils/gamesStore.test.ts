@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGamesStore, nextRenderLimit, reconcileGames, RENDER_BATCH } from "./gamesStore.ts";
+import { createGamesStore, reconcileGames } from "./gamesStore.ts";
 
 interface Game { id: number; title: string; tags?: string[] }
 
@@ -91,11 +91,4 @@ test("the loaded callback gets the current list", async () => {
   const store = createGamesStore<Game>(async () => library(), (games) => seen.push(games.map((game) => game.id)));
   await store.refresh();
   assert.deepEqual(seen, [[1, 2]]);
-});
-
-test("the render limit grows only near the end and never passes the total", () => {
-  assert.equal(nextRenderLimit(RENDER_BATCH, 1000, 5000, 800), RENDER_BATCH);
-  assert.equal(nextRenderLimit(RENDER_BATCH, 1000, 1000, 800), RENDER_BATCH * 2);
-  assert.equal(nextRenderLimit(RENDER_BATCH, RENDER_BATCH + 5, 0, 800), RENDER_BATCH + 5);
-  assert.equal(nextRenderLimit(50, 50, 0, 800), 50);
 });

@@ -34,6 +34,8 @@ const props = defineProps<{
   moveState?: "" | "moving" | "waiting";
   movePercent?: number;
   primary: boolean;
+  /** Position in the table for assistive technology (the header row is 1). */
+  rowIndex: number;
 }>();
 const emit = defineEmits<{
   activate: [game: GameRecord, event: MouseEvent | KeyboardEvent];
@@ -58,6 +60,7 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
       :data-controller-primary="primary ? '' : undefined"
       tabindex="0"
       role="row"
+      :aria-rowindex="rowIndex"
       @keydown.enter.self.prevent="emit('activate', game, $event)"
       @keydown.space.self.prevent="emit('activate', game, $event)"
       class="game-row"

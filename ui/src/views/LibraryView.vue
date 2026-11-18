@@ -11,10 +11,20 @@ import {
 import GameCard from "../components/library/GameCard.vue";
 import GameRow from "../components/library/GameRow.vue";
 import { runningGameIds, refreshRunningGames } from "../composables/useRunningGames";
-import { ref, useTemplateRef, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from "vue";
+import { ref, shallowRef, useTemplateRef, computed, nextTick, onMounted, onUnmounted, toRaw, watch } from "vue";
 import { useEventListener } from "../composables/useEventListener";
 import { gamesStore } from "../composables/useGamesStore";
-import { nextRenderLimit, RENDER_BATCH } from "../utils/gamesStore";
+import {
+  FOCUS_HOLD_MS,
+  gridColumnCount,
+  measuredPitch,
+  renderWindow,
+  sameWindow,
+  steadyMetrics,
+  type RenderWindow,
+  type WindowMetrics,
+  type WindowView,
+} from "../utils/libraryWindow";
 import { toCssPx } from "../utils/interfaceScalePreference";
 import TagColorPicker from "../components/TagColorPicker.vue";
 import FilterPill from "../components/FilterPill.vue";
@@ -740,33 +750,88 @@ const filteredGames = computed(() => {
 
 watch(() => filteredGames.value.map((game) => game.id), (ids) => selection.prune(ids));
 
-// Only the first cards are in the page; more are added as the user scrolls
-// near the end. A large library would otherwise build every card at once.
-const renderLimit = ref(RENDER_BATCH);
-const renderedGames = computed(() =>
-  filteredGames.value.length > renderLimit.value
-    ? filteredGames.value.slice(0, renderLimit.value)
-    : filteredGames.value,
-);
-const growRenderedGames = (scroller: EventTarget | null) => {
-  const element = scroller instanceof Document ? scroller.scrollingElement : scroller;
-  if (!(element instanceof HTMLElement) || !element.querySelector(".library-cards, .library-table")) return;
-  renderLimit.value = nextRenderLimit(
-    renderLimit.value,
-    filteredGames.value.length,
-    element.scrollHeight - element.scrollTop - element.clientHeight,
-    element.clientHeight,
-  );
+// Only the cards near the visible area are in the page (see utils/libraryWindow.ts).
+// Empty space above and below them keeps the full scroll height.
+const libraryScroller = useTemplateRef<HTMLElement>("libraryScroller");
+// The list scrolls inside its own wrapper (it also scrolls sideways).
+const listScroller = useTemplateRef<HTMLElement>("listScroller");
+const windowScroller = () => (layoutMode.value === "list" ? listScroller.value : libraryScroller.value);
+// The grid div or the list tbody, whichever layout is shown.
+const windowContainer = ref<HTMLElement | null>(null);
+let windowMetrics: WindowMetrics | null = null;
+const shownWindow = shallowRef<RenderWindow>(renderWindow(0, null, { top: 0, height: 0 }));
+let windowView: WindowView = { top: 0, height: 0 };
+// The focused card's game: its rows stay in the page while focus is near the screen.
+let focusedGameId: number | null = null;
+let focusMovedAt = -Infinity;
+let focusHoldTimer: ReturnType<typeof setTimeout> | undefined;
+const updateWindow = () => {
+  const focus = focusedGameId === null ? -1 : filteredGames.value.findIndex((game) => game.id === focusedGameId);
+  const moving = performance.now() - focusMovedAt < FOCUS_HOLD_MS;
+  const next = renderWindow(filteredGames.value.length, windowMetrics, windowView, focus < 0 ? null : focus, moving);
+  if (!sameWindow(next, shownWindow.value)) shownWindow.value = next;
 };
-// A tall window may show every rendered card with no scrollbar, so no scroll
-// event would ever add more: add cards until the page is filled.
-const fillRenderedGames = async () => {
-  await nextTick();
-  let scroller = document.querySelector(".library-cards, .library-table")?.parentElement ?? null;
-  while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
-  growRenderedGames(scroller ?? document);
+const measureWindow = () => {
+  const scroller = windowScroller();
+  const container = windowContainer.value;
+  if (!scroller || !container || !container.isConnected) {
+    updateWindow();
+    return;
+  }
+  const style = getComputedStyle(container);
+  const columns = layoutMode.value === "list" ? 1 : gridColumnCount(style.gridTemplateColumns);
+  const items = container.querySelectorAll<HTMLElement>(":scope > [data-game-id]");
+  // Rectangles are in viewport pixels; scroll offsets, the row gap and the
+  // padding are in CSS pixels. They differ under the interface scale's zoom.
+  const firstItem = items[0];
+  if (firstItem) {
+    const first = firstItem.getBoundingClientRect();
+    const rows = Math.ceil(items.length / columns);
+    const lastRowTop = items[(rows - 1) * columns]?.getBoundingClientRect().top ?? first.top;
+    const pitch = measuredPitch(toCssPx(first.top), toCssPx(lastRowTop), rows, toCssPx(first.height), Number.parseFloat(style.rowGap) || 0);
+    if (pitch > 0) windowMetrics = steadyMetrics(windowMetrics, { columns, pitch });
+  }
+  const origin = toCssPx(container.getBoundingClientRect().top - scroller.getBoundingClientRect().top) - scroller.clientTop + scroller.scrollTop;
+  windowView = { top: scroller.scrollTop - origin, height: scroller.clientHeight };
+  updateWindow();
 };
-watch([() => filteredGames.value.length, renderLimit, layoutMode, cardSize], () => void fillRenderedGames(), { flush: "post" });
+const renderedGames = computed(() => {
+  const { start, end } = shownWindow.value;
+  const list = filteredGames.value;
+  return start === 0 && end >= list.length ? list : list.slice(start, end);
+});
+// Measure again after the shown cards change: the pitch and the columns come from them.
+watch([filteredGames, layoutMode, cardSize, shownWindow], measureWindow, { flush: "post" });
+let windowResize: ResizeObserver | null = null;
+watch([libraryScroller, listScroller, windowContainer], (elements) => {
+  windowResize?.disconnect();
+  if (typeof ResizeObserver === "undefined") return;
+  windowResize ??= new ResizeObserver(() => measureWindow());
+  for (const element of elements) if (element) windowResize.observe(element);
+}, { flush: "post" });
+onUnmounted(() => {
+  windowResize?.disconnect();
+  clearTimeout(focusHoldTimer);
+});
+const trackWindowFocus = (event: FocusEvent) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const card = windowContainer.value && target && windowContainer.value.contains(target) ? target.closest<HTMLElement>("[data-game-id]") : null;
+  const id = card ? Number(card.dataset.gameId) : null;
+  if (id === focusedGameId) return;
+  focusedGameId = id;
+  if (id === null) return;
+  // Keep the focused card while the smooth scroll catches up, then let the
+  // distance limit apply again.
+  focusMovedAt = performance.now();
+  clearTimeout(focusHoldTimer);
+  focusHoldTimer = setTimeout(updateWindow, FOCUS_HOLD_MS + 50);
+  measureWindow();
+};
+const libraryGridStyle = computed(() => ({
+  "--card-scale": cardScales[cardSize.value],
+  paddingTop: `${shownWindow.value.padTop}px`,
+  paddingBottom: `calc(3rem + ${shownWindow.value.padBottom}px)`,
+}));
 const handleCardClick = (game: GameRecord, event: MouseEvent | KeyboardEvent) => {
   const ids = filteredGames.value.map((item) => item.id);
   if (event.shiftKey) selection.selectRange(ids, game.id);
@@ -1805,7 +1870,7 @@ const handleDocumentClick = () => {
   closeContextMenu(false);
 };
 const handleLibraryScroll = (event: Event) => {
-  growRenderedGames(event.target);
+  if (event.target === windowScroller()) measureWindow();
   if (!contextMenuElement.value?.contains(event.target as Node))
     closeContextMenu(false);
   if (!collectionTabMenuElement.value?.contains(event.target as Node))
@@ -1918,15 +1983,6 @@ watch(
   { deep: true },
 );
 
-// A new filter, sort or layout starts again from the first cards.
-watch(
-  [layoutMode, sortBy, sortDir, filterCollection, filterStatuses, filterInstallState, filterSources, filterEngines, filterTags, filterExcludedSources, filterExcludedEngines, filterExcludedTags, activeCollection, searchQuery],
-  () => {
-    renderLimit.value = RENDER_BATCH;
-  },
-  { deep: true },
-);
-
 // A saved tab naming a deleted or renamed collection falls back to "All".
 watch(userCollections, (collections) => {
   const normalized = normalizeActiveCollection(activeCollection.value, collections);
@@ -2012,8 +2068,8 @@ useEventListener(window, "wlib-playtime-tick", handlePlaytimeTick);
 useEventListener(document, "click", handleDocumentClick);
 useEventListener(document, "keydown", handleLibraryKeyboard);
 useEventListener(document, "scroll", handleLibraryScroll, true);
+useEventListener(document, "focusin", trackWindowFocus);
 useEventListener(window, "resize", handleDocumentClick);
-useEventListener(window, "resize", fillRenderedGames);
 
 onUnmounted(() => {
   libraryFiltersPaneOpen.value = false;
@@ -2316,7 +2372,7 @@ onUnmounted(() => {
     </aside>
 
     <!-- Main Content Area -->
-    <div class="flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
+    <div ref="libraryScroller" class="flex-1 min-w-0 p-5 overflow-y-auto flex flex-col relative">
       <header class="library-header mb-4 shrink-0">
         <div class="library-header-row">
           <h2
@@ -2681,13 +2737,13 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-else-if="layoutMode === 'list'" class="library-table-wrap pb-12">
-        <table class="library-table" role="grid" aria-label="Games" aria-multiselectable="true">
+      <div v-else-if="layoutMode === 'list'" ref="listScroller" class="library-table-wrap pb-12">
+        <table class="library-table library-window" role="grid" aria-label="Games" aria-multiselectable="true" :aria-rowcount="filteredGames.length + 1">
           <caption class="sr-only">
             Games in your library. Select a column header to sort.
           </caption>
           <thead>
-            <tr>
+            <tr aria-rowindex="1">
               <th
                 v-for="column in tableColumns"
                 :key="column.key"
@@ -2714,29 +2770,37 @@ onUnmounted(() => {
               <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody ref="windowContainer">
+            <tr v-if="shownWindow.padTop > 0" class="library-table-spacer" aria-hidden="true">
+              <td :colspan="tableColumns.length + 1" :style="{ height: `${shownWindow.padTop}px` }"></td>
+            </tr>
             <GameRow
               v-for="(game, index) in renderedGames"
               :key="game.id"
               :game="game"
+              :row-index="shownWindow.start + index + 2"
               :move-state="gameMoves.moveStateFor(game.id).state"
               :move-percent="gameMoves.moveStateFor(game.id).percent"
               :selected="selectedIds.has(game.id)"
               :running="runningGameIds.has(game.id)"
-              :primary="index === 0"
+              :primary="shownWindow.start + index === shownWindow.primary"
               @activate="handleCardClick"
               @contextmenu="openContextMenu"
               @toggle-game="toggleGame"
               @target-select="launchTargetFromSelect"
             />
+            <tr v-if="shownWindow.padBottom > 0" class="library-table-spacer" aria-hidden="true">
+              <td :colspan="tableColumns.length + 1" :style="{ height: `${shownWindow.padBottom}px` }"></td>
+            </tr>
           </tbody>
         </table>
       </div>
 
       <div
         v-else
-        class="library-cards grid gap-4 pb-12"
-        :style="{ '--card-scale': cardScales[cardSize] }"
+        ref="windowContainer"
+        class="library-cards library-window grid gap-4 pb-12"
+        :style="libraryGridStyle"
         :class="
           layoutMode === 'compact'
             ? 'library-cards--compact'
@@ -2758,7 +2822,7 @@ onUnmounted(() => {
           :updating="updatingId === game.id"
           :update-busy="updatingId !== null"
           :selection-mode="selecting || selectedIds.size > 0"
-          :primary="index === 0"
+          :primary="shownWindow.start + index === shownWindow.primary"
           @activate="handleCardClick"
           @contextmenu="openContextMenu"
           @toggle-game="toggleGame"
@@ -3106,6 +3170,14 @@ onUnmounted(() => {
 .collection-tab[aria-selected="true"] .collection-count {
   background: var(--brand);
   color: var(--on-brand);
+}
+/* The cards move with the render window; scroll anchoring would fight it. */
+.library-window {
+  overflow-anchor: none;
+}
+.library-table-spacer td {
+  padding: 0;
+  border: 0;
 }
 .library-table-wrap {
   overflow-x: auto;
