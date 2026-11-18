@@ -35,14 +35,59 @@ def covers_dir() -> Path:
     return Path(database.DATA_DIR, "covers")
 
 
-def cover_path(name: object) -> Path | None:
-    if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
-        return None
-    folder = covers_dir().resolve()
+def _child_entry(folder: Path, name: str) -> tuple[Path, os.stat_result | None] | None:
+    """``folder / name`` and its stat (links followed; None when missing).
+
+    None when the path leaves ``folder``. ``folder`` must be resolved, and
+    ``name`` must already match a strict name pattern (no separators, no
+    ``..``). Then only the last part can be a link, so one ``lstat`` decides;
+    the full ``resolve()`` check runs only for links. A missing file gives its
+    path, as a non-strict ``resolve()`` would."""
     path = folder / name
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return path, None
+    except OSError:
+        pass
+    else:
+        if not stat.S_ISLNK(info.st_mode):
+            return path, info
     if path.resolve().parent != folder:
         return None
-    return path
+    try:
+        return path, os.stat(path)
+    except OSError:
+        return path, None
+
+
+def child_in_folder(folder: Path, name: str) -> Path | None:
+    """``folder / name`` when it stays in ``folder``, else None (see ``_child_entry``)."""
+    entry = _child_entry(folder, name)
+    return None if entry is None else entry[0]
+
+
+def child_file(folder: Path, name: str) -> tuple[Path, os.stat_result] | None:
+    """``folder / name`` and its stat when it is a regular file that stays in
+    ``folder``; same rules as ``child_in_folder``."""
+    entry = _child_entry(folder, name)
+    if entry is None or entry[1] is None or not stat.S_ISREG(entry[1].st_mode):
+        return None
+    return entry[0], entry[1]
+
+
+def cover_path(name: object, *, folder: Path | None = None) -> Path | None:
+    """A local cover file path; ``folder`` is the resolved covers folder, if known."""
+    if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
+        return None
+    return child_in_folder(folder or covers_dir().resolve(), name)
+
+
+def cover_file(name: object, *, folder: Path | None = None) -> tuple[Path, os.stat_result] | None:
+    """A local cover that exists as a regular file, with its stat."""
+    if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
+        return None
+    return child_file(folder or covers_dir().resolve(), name)
 
 
 def image_looks_complete(data: bytes) -> bool:
@@ -198,12 +243,18 @@ def cache_covers_dir() -> Path:
     return covers_dir() / "cache"
 
 
-def cached_cover_path(name: object) -> Path | None:
+def cached_cover_path(name: object, *, folder: Path | None = None) -> Path | None:
+    """A cached cover file path; ``folder`` is the resolved cache folder, if known."""
     if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
         return None
-    folder = cache_covers_dir().resolve()
-    path = folder / name
-    return path if path.resolve().parent == folder else None
+    return child_in_folder(folder or cache_covers_dir().resolve(), name)
+
+
+def cached_cover_file(name: object, *, folder: Path | None = None) -> tuple[Path, os.stat_result] | None:
+    """A cached cover that exists as a regular file, with its stat."""
+    if not isinstance(name, str) or not COVER_NAME_RE.fullmatch(name):
+        return None
+    return child_file(folder or cache_covers_dir().resolve(), name)
 
 
 def store_cached_cover(data: bytes) -> str:

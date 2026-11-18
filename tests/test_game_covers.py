@@ -540,3 +540,79 @@ def test_cache_drops_failures_for_covers_no_longer_wanted(monkeypatch):
     service._fill()
     # A stale failure whose retry time passed used to wake the loop every second.
     assert service._next_retry_in() is None
+
+
+COVER_HELPERS = [
+    (game_covers.cover_path, game_covers.covers_dir),
+    (game_covers.cached_cover_path, game_covers.cache_covers_dir),
+]
+
+
+@pytest.mark.parametrize("helper,folder_of", COVER_HELPERS)
+def test_strict_names_are_refused_without_file_checks(helper, folder_of, monkeypatch):
+    def no_lstat(*_args, **_kwargs):
+        raise AssertionError("a refused name must not touch the disk")
+
+    monkeypatch.setattr(game_covers.os, "lstat", no_lstat)
+    for name in ("../wlib.db", "a" * 32 + ".png/../x", "a" * 32 + ".svg", None, 5):
+        assert helper(name) is None
+
+
+@pytest.mark.parametrize("helper,folder_of", COVER_HELPERS)
+def test_missing_file_gives_its_path(helper, folder_of):
+    name = "b" * 32 + ".jpg"
+    assert helper(name) == folder_of().resolve() / name
+
+
+@pytest.mark.parametrize("helper,folder_of", COVER_HELPERS)
+def test_links_inside_folder_pass_and_outside_fail(helper, folder_of):
+    folder = folder_of()
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / ("c" * 32 + ".png")
+    target.write_bytes(b"x")
+    inside = "d" * 32 + ".png"
+    (folder / inside).symlink_to(target)
+    outside = "e" * 32 + ".png"
+    (folder / outside).symlink_to(database.DB_PATH)
+    assert helper(inside) == folder.resolve() / inside
+    assert helper(outside) is None
+    resolved = folder.resolve()
+    assert helper(inside, folder=resolved) == helper(inside)
+    assert helper(outside, folder=resolved) is None
+    assert helper(target.name, folder=resolved) == helper(target.name)
+
+
+def test_data_folder_reached_through_a_link(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    (real / "covers").mkdir(parents=True)
+    link = tmp_path / "data-link"
+    link.symlink_to(real)
+    monkeypatch.setattr(database, "DATA_DIR", str(link))
+    name = "f" * 32 + ".png"
+    (real / "covers" / name).write_bytes(b"x")
+    assert game_covers.cover_path(name) == real.resolve() / "covers" / name
+
+
+@pytest.mark.parametrize(
+    "helper,folder_of",
+    [
+        (game_covers.cover_file, game_covers.covers_dir),
+        (game_covers.cached_cover_file, game_covers.cache_covers_dir),
+    ],
+)
+def test_file_helpers_need_a_regular_file_inside(helper, folder_of):
+    folder = folder_of()
+    folder.mkdir(parents=True, exist_ok=True)
+    real = folder / ("1" * 32 + ".png")
+    real.write_bytes(b"xy")
+    (folder / ("2" * 32 + ".png")).symlink_to(real)
+    (folder / ("3" * 32 + ".png")).symlink_to(database.DB_PATH)
+    (folder / ("4" * 32 + ".png")).symlink_to(folder / "missing")
+    (folder / ("5" * 32 + ".png")).mkdir()
+    found = helper(real.name)
+    assert found is not None and found[0] == folder.resolve() / real.name and found[1].st_size == 2
+    linked = helper("2" * 32 + ".png", folder=folder.resolve())
+    assert linked is not None and linked[1].st_size == 2
+    for name in ("3", "4", "5", "6"):
+        assert helper(name * 32 + ".png") is None
+    assert helper("../wlib.db") is None

@@ -15,11 +15,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, NamedTuple
 from collections.abc import Callable
 
 from core import database
-from core.game_covers import cache_covers_dir, covers_dir
+from core.game_covers import cache_covers_dir, child_file, child_in_folder, covers_dir
 from core.webp_anim import mux_animated_webp
 
 if TYPE_CHECKING:
@@ -41,21 +41,42 @@ def cards_dir() -> Path:
     return covers_dir() / "cards"
 
 
-def card_path(name: object) -> Path | None:
+class CoverFolders(NamedTuple):
+    """The resolved covers, cover cache and card-copy folders."""
+
+    covers: Path
+    cache: Path
+    cards: Path
+
+
+def resolve_cover_folders() -> CoverFolders:
+    """Resolve the three cover folders once, for a pass over many games."""
+    return CoverFolders(covers_dir().resolve(), cache_covers_dir().resolve(), cards_dir().resolve())
+
+
+def card_path(name: object, *, folder: Path | None = None) -> Path | None:
+    """A card copy file path; ``folder`` is the resolved cards folder, if known."""
     if not isinstance(name, str) or not CARD_NAME_RE.fullmatch(name):
         return None
-    folder = cards_dir().resolve()
-    path = folder / name
-    return path if path.resolve().parent == folder else None
+    return child_in_folder(folder or cards_dir().resolve(), name)
 
 
-def card_paths(source_name: object) -> tuple[Path, Path] | None:
+def card_file(name: object, *, folder: Path | None = None) -> Path | None:
+    """A card copy path when the copy exists as a regular file."""
+    if not isinstance(name, str) or not CARD_NAME_RE.fullmatch(name):
+        return None
+    found = child_file(folder or cards_dir().resolve(), name)
+    return None if found is None else found[0]
+
+
+def card_paths(source_name: object, *, folder: Path | None = None) -> tuple[Path, Path] | None:
     """(still, animated) copy paths for a cover file name, or None if invalid."""
     if not isinstance(source_name, str) or not _SOURCE_RE.fullmatch(source_name):
         return None
     stem = source_name.split(".", 1)[0]
-    still = card_path(f"{stem}.still.webp")
-    anim = card_path(f"{stem}.anim.webp")
+    folder = folder or cards_dir().resolve()
+    still = card_path(f"{stem}.still.webp", folder=folder)
+    anim = card_path(f"{stem}.anim.webp", folder=folder)
     if still is None or anim is None:
         return None
     return still, anim
@@ -123,12 +144,15 @@ def _is_animated_uncached(path: Path) -> bool:
     return False
 
 
-def is_animated(path: Path) -> bool:
-    """Whether a cover file is animated (GIF, WebP or AVIF); False when unreadable."""
-    try:
-        info = path.stat()
-    except OSError:
-        return False
+def is_animated(path: Path, info: os.stat_result | None = None) -> bool:
+    """Whether a cover file is animated (GIF, WebP or AVIF); False when unreadable.
+
+    ``info`` is the file's stat when the caller already has it."""
+    if info is None:
+        try:
+            info = path.stat()
+        except OSError:
+            return False
     key = (str(path), info.st_mtime_ns, info.st_size)
     with _animated_lock:
         known = _animated_cache.get(key)

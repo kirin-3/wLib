@@ -389,3 +389,74 @@ def test_get_games_flags_an_animated_cover(tmp_path):
     static = put_cover(tmp_path, make_gif(frames=1))
     _game(tmp_path, local=static)
     assert [g.get("cover_animated", False) for g in api.get_games()] == [True, False]
+
+
+def test_card_paths_with_links_and_passed_folder(tmp_path):
+    folder = cover_cards.cards_dir()
+    folder.mkdir(parents=True)
+    stem = "a" * 32
+    (folder / f"{stem}.still.webp").symlink_to(database.DB_PATH)
+    assert cover_cards.card_path(f"{stem}.still.webp") is None
+    assert cover_cards.card_paths(f"{stem}.gif") is None
+    real = folder / ("b" * 32 + ".still.webp")
+    real.write_bytes(b"x")
+    (folder / ("c" * 32 + ".still.webp")).symlink_to(real)
+    resolved = cover_cards.resolve_cover_folders()
+    assert resolved.cards == folder.resolve()
+    for name in ("b" * 32 + ".gif", "c" * 32 + ".gif"):
+        assert cover_cards.card_paths(name, folder=resolved.cards) == cover_cards.card_paths(name)
+        assert cover_cards.card_paths(name) is not None
+
+
+def test_get_games_refuses_links_out_and_keeps_links_in(tmp_path):
+    escaped = put_cover(tmp_path, make_gif())
+    escaped.unlink()
+    escaped.symlink_to(database.DB_PATH)
+    _game(tmp_path, local=escaped)
+    target = put_cover(tmp_path, make_gif(), cache=True)
+    linked = target.with_name(uuid4().hex + ".gif")
+    linked.symlink_to(target)
+    _game(tmp_path, cached=linked)
+    first, second = _api().get_games()
+    assert "cover_local_url" not in first and "cover_animated" not in first
+    assert second["cover_cache_url"] == f"http://127.0.0.1:8183/covers/cache/{linked.name}"
+    assert second.get("cover_animated") is True
+
+
+def test_get_games_resolves_each_folder_once(tmp_path, monkeypatch):
+    for _ in range(5):
+        local = put_cover(tmp_path, make_gif())
+        cached = put_cover(tmp_path, make_gif(), cache=True)
+        _game(tmp_path, local=local, cached=cached)
+        cover_cards.make_card_copies(local)
+    api = _api()
+    calls = 0
+    original = Path.resolve
+
+    def counting(self, strict=False):
+        nonlocal calls
+        calls += 1
+        return original(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", counting)
+    games = api.get_games()
+    assert len(games) == 5 and all("cover_card_anim_url" in game for game in games)
+    assert calls == 3
+
+
+def test_card_file_needs_an_existing_copy_inside(tmp_path):
+    folder = cover_cards.cards_dir()
+    folder.mkdir(parents=True)
+    real = folder / ("a" * 32 + ".still.webp")
+    real.write_bytes(b"x")
+    (folder / ("b" * 32 + ".still.webp")).symlink_to(database.DB_PATH)
+    assert cover_cards.card_file(real.name) == folder.resolve() / real.name
+    assert cover_cards.card_file("b" * 32 + ".still.webp") is None
+    assert cover_cards.card_file("c" * 32 + ".still.webp") is None
+    assert cover_cards.card_file("../" + real.name) is None
+
+
+def test_is_animated_uses_a_given_stat(tmp_path):
+    path = put_cover(tmp_path, make_gif(frames=3))
+    assert cover_cards.is_animated(path, path.stat()) is True
+    assert cover_cards.is_animated(path, os.stat(path)) == cover_cards.is_animated(path)

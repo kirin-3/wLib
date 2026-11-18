@@ -8,7 +8,7 @@ import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from core import database
 from core.database import (
@@ -22,6 +22,9 @@ from core.api_mixins.base import ApiBase, normalize_thread_url
 from core.api_mixins.types import (
     ExecutableModifiedTimeResponse,
 )
+
+if TYPE_CHECKING:
+    from core.cover_cards import CoverFolders
 
 
 class LibraryMixin(ApiBase):
@@ -47,11 +50,14 @@ class LibraryMixin(ApiBase):
     def get_games(self) -> list[dict[str, object]]:
         from core.database import get_all_games
 
+        from core.cover_cards import resolve_cover_folders
+
         games = get_all_games()
         with self._metadata_lock:
             pending = set(self._metadata_pending)
+        folders = resolve_cover_folders()
         for game in games:
-            self._add_local_cover_url(game)
+            self._add_local_cover_url(game, folders)
             if game.get("id") in pending:
                 game["metadata_pending"] = True
         return games
@@ -74,38 +80,40 @@ class LibraryMixin(ApiBase):
         return {"success": True, "screenshots": [screenshot_urls(url) for url in (catalog or library)],
                 "source": "catalog" if catalog else "library", "in_catalog": catalog is not None}
 
-    def _add_local_cover_url(self, game: dict[str, object]) -> None:
-        from pathlib import Path
+    def _add_local_cover_url(
+        self, game: dict[str, object], folders: CoverFolders | None = None
+    ) -> None:
+        """Add cover URLs to one game; pass ``folders`` when doing many games."""
+        from core.cover_cards import card_file, is_animated, resolve_cover_folders
+        from core.game_covers import cached_cover_file, cover_file
 
-        from core.cover_cards import card_paths, is_animated
-        from core.game_covers import cover_path, cached_cover_path
-
+        folders = folders or resolve_cover_folders()
         cached_url = game.pop("cover_cache_url", None)
         name = game.pop("cover_cache", None)
-        cached = cached_cover_path(name)
-        shown: Path | None = None
-        if (
-            self.library_sync.server_available
-            and cached_url == game.get("cover_image_path")
-            and cached is not None
-            and cached.is_file()
-        ):
-            game["cover_cache_url"] = (
-                f"http://127.0.0.1:8183/covers/cache/{cached.name}"
-            )
-            shown = cached
-        path = cover_path(game.get("cover_local"))
-        if self.library_sync.server_available and path is not None and path.is_file():
-            game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{path.name}"
-            shown = path
+        serving = self.library_sync.server_available
+        shown = None
+        if serving and cached_url == game.get("cover_image_path"):
+            shown = cached_cover_file(name, folder=folders.cache)
+            if shown is not None:
+                game["cover_cache_url"] = (
+                    f"http://127.0.0.1:8183/covers/cache/{shown[0].name}"
+                )
+        local = cover_file(game.get("cover_local"), folder=folders.covers) if serving else None
+        if local is not None:
+            game["cover_local_url"] = f"http://127.0.0.1:8183/covers/{local[0].name}"
+            shown = local
+        if shown is None:
+            return
         # Card copies belong to the source that is shown: local over cached.
-        copies = card_paths(shown.name) if shown is not None else None
-        if copies is not None and copies[0].is_file():
+        stem = shown[0].name.split(".", 1)[0]
+        still = card_file(f"{stem}.still.webp", folder=folders.cards)
+        if still is not None:
             base = "http://127.0.0.1:8183/covers/cards/"
-            game["cover_card_still_url"] = base + copies[0].name
-            if copies[1].is_file():
-                game["cover_card_anim_url"] = base + copies[1].name
-        if shown is not None and is_animated(shown):
+            game["cover_card_still_url"] = base + still.name
+            anim = card_file(f"{stem}.anim.webp", folder=folders.cards)
+            if anim is not None:
+                game["cover_card_anim_url"] = base + anim.name
+        if is_animated(shown[0], shown[1]):
             # Without a usable still copy (not made yet, Qt cannot make one,
             # or it failed to load) a view draws its own still frame, so the
             # animation setting still applies.
