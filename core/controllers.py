@@ -314,7 +314,8 @@ class ControllerWatcher:
                 finally:
                     with self._condition:
                         self._stop_write = None
-        except (OSError, AttributeError, ValueError):
+        # ctypes.CDLL(None) raises TypeError where no C library loads by default (Windows).
+        except (OSError, AttributeError, ValueError, TypeError):
             return False
 
     def _watch_focused(self, interval: float) -> None:

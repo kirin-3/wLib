@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from catalog_fakes import FakeClock, FakeTransport, fixture_bytes, json_response
-from catalog_server.__main__ import main
+from catalog_server.__main__ import _try_lock, main
 from catalog_server.browser import BrowserTransport, f95_login_cookies, lc_login_cookies
 from catalog_server.config import browser_sites_from_env, f95_cookie_from_env, lc_cookie_from_env
 from catalog_server.net import Pacer, Request
@@ -307,14 +307,11 @@ def test_check_lc_login_reports_the_account(tmp_path, monkeypatch, capsys, caplo
     if not logged_in:
         assert "does not see a login" in caplog.text
 
-
 def test_check_lc_login_refuses_while_a_run_holds_the_lock(tmp_path, monkeypatch):
-    import fcntl
-
     _lc_env(monkeypatch)
     browser = FakeBrowser(lambda url: FakePage(200, _lc_home(True)))
     with open(tmp_path / "run.lock", "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert _try_lock(handle)
         result = main(
             ["--data-dir", str(tmp_path), "check-lc-login"],
             browser=BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser),

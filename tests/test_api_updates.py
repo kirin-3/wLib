@@ -1542,6 +1542,8 @@ def test_get_executable_modified_time_handles_missing_file(tmp_path):
 
 def test_add_game_rejects_duplicate_f95_url(monkeypatch):
     api = Api()
+    # The metadata thread must finish before teardown removes the database (Windows locks open files).
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
@@ -1567,6 +1569,8 @@ def test_add_game_rejects_duplicate_f95_url(monkeypatch):
 
 def test_add_game_rejects_duplicate_thread_url_variants(monkeypatch):
     api = Api()
+    # The metadata thread must finish before teardown removes the database (Windows locks open files).
+    monkeypatch.setattr("threading.Thread", _InlineThread)
 
     monkeypatch.setattr(
         api.scraper,
