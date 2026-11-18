@@ -125,6 +125,35 @@ The smoke test (`scripts/smoke_backend.py`) is a lightweight verification tool t
 
 Use it for quick CI checks or to verify backend changes before running the full app. See the [PowerShell smoke example](../CONTRIBUTING.md#smoke-backend-test) for Windows isolation. Linux contributors can run the same checks with `bash scripts/check-python.sh` inside an activated `.venv`, or use `bash scripts/check-python-clean.sh` to verify a fresh environment end-to-end.
 
+### Library scale benchmarks
+
+Two developer tools measure wLib with a large generated library (1000 games by default). They do not read or change your real library, and they are not part of CI. Compare two runs only on the same machine.
+
+**Backend** (`scripts/bench_library_scale.py`) builds N games with real cover files (JPEGs from 600 to 1920 pixels wide, and animated GIFs for 10 % of the games) in a temporary data folder. It then starts the cover server and measures:
+
+- the game list (`get_all_games` alone and `get_games` as the UI gets it): cold run, median and slowest of 10 runs, and the JSON size;
+- cover serving from `127.0.0.1:8183` with 6 parallel requests;
+- the card copies of animated covers, with the list timed again after they exist.
+
+```bash
+.venv/bin/python scripts/bench_library_scale.py
+.venv/bin/python scripts/bench_library_scale.py --games 2000 --json /tmp/bench-backend.json
+```
+
+Options: `--games N`, `--seed N` (the same seed builds the same library), `--animated-share 0.1`, `--json PATH` and `--keep`. The cover URLs only work on port 8183, so close wLib first; the script stops if the port is in use. The catalog download is turned off in the temporary library. With `--keep`, the script keeps the library and prints the command that opens it in the real app (after `npm run build`, without `DEV_MODE`, because Vue dev mode is several times slower). Delete the folder when you are done.
+
+**Frontend** (`tests/library_scale_bench.js`) loads N generated games into the browser mock app. Each game has its own real JPEG cover (600, 1280 or 1920 pixels wide), which the script serves through a Playwright route. It measures first render, scrolling to the end one screen height per step, search, clearing the search, reversing the sort, card size, Ctrl-click, Shift-click range, clearing the selection, library refresh and grid/list switches. Each action runs 3 times. The library keeps only the cards near the screen, so each run starts at a fixed place: the end of the library for search, sort, card size and layout, the top for selection and refresh. The Shift-click range goes from the 6th to the 401st game; the script scrolls that game into the page first and reads the selected count from the bulk bar. The script also reports rendered cards, DOM nodes, JS heap and long tasks, at the end of the scroll and the most seen during it. It restores the browser storage it changes.
+
+```bash
+(cd ui && npm run build && npm run preview -- --port 4173 --strictPort)   # in another terminal
+playwright-cli -s=bench open "http://localhost:4173/?benchGames=1000&benchCommit=$(git rev-parse --short HEAD)#/"
+playwright-cli -s=bench run-code --filename tests/library_scale_bench.js | sed -n '/^### Result/{n;p}' > /tmp/bench-frontend.json
+playwright-cli -s=bench console info   # the results table
+playwright-cli -s=bench close
+```
+
+The query options are `benchGames` (default 1000), `benchSeed` (default 1) and `benchCommit`. Use the production build: Vue dev mode (`npm run dev`) is several times slower. Each time includes the two frames after the change, so at 60 Hz no time is lower than about 17–33 ms. The search time also includes the 150 ms pause that the search box waits after typing. Headless Chromium is not the QtWebEngine that wLib uses, so use these numbers to compare runs. To check the real app, use the backend benchmark's `--keep` library.
+
 ## Linux Build Pipeline (`scripts/build.sh`)
 
 When the build script executes, it follows these precise steps:
