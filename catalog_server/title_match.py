@@ -12,6 +12,7 @@ LC rows imported from Atlas (`origin = 'import'`) carry Atlas's merged title
 and creator, often copied from F95, so matching them would publish Atlas's
 own links. They still make a title non-unique but are never linked; once the
 feed lists such a thread, LC's own values replace Atlas's and it can match.
+For the same reason, developer IDs in details imported from Atlas never count.
 """
 
 import json
@@ -92,7 +93,8 @@ def match_lc_f95(catalog: CatalogStore | sqlite3.Connection) -> list[tuple[int, 
     lc = _by_title(
         conn.execute(
             "SELECT t.thread_id, t.title, t.creator, d.external_ids, t.origin FROM lc_threads t "
-            + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id "
+            # Developer IDs imported from Atlas are not LC's own; never match on them.
+            + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id AND d.origin IS NULL "
             + "WHERE t.removed_at IS NULL"
         )
     )

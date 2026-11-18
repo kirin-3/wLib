@@ -12,6 +12,8 @@ from core.catalog_format import META_SCHEMA_VERSION, SCHEMA_VERSION
 
 CATALOG_FILE = "catalog.sqlite"
 STATE_FILE = "state.sqlite"
+# `origin` of rows and details copied from an Atlas database.
+IMPORT_ORIGIN = "import"
 
 # `origin` is set on rows imported from elsewhere (NULL when the source
 # itself listed it). Imported rows are never marked removed; the first time
@@ -155,6 +157,8 @@ CREATE TABLE IF NOT EXISTS lc_prefix_names (
 );
 -- First-post details of LC threads, like f95_thread_details. `release_text`
 -- is the release date as shown; `released_at` is its ISO date when it parses.
+-- `origin = 'import'` marks values copied from Atlas, which the crawler
+-- replaces; `thread_ts` NULL means LC's own page was never read.
 CREATE TABLE IF NOT EXISTS lc_thread_details (
     thread_id INTEGER PRIMARY KEY,
     thread_ts INTEGER,
@@ -167,7 +171,8 @@ CREATE TABLE IF NOT EXISTS lc_thread_details (
     language TEXT,
     languages TEXT NOT NULL DEFAULT '[]',
     os TEXT NOT NULL DEFAULT '[]',
-    external_ids TEXT NOT NULL DEFAULT '{{}}'
+    external_ids TEXT NOT NULL DEFAULT '{{}}',
+    origin TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -267,6 +272,12 @@ class CatalogStore:
                 )
                 # Rows from before the column have the older external_ids form; read them again.
                 _ = self.conn.execute("DELETE FROM f95_thread_details")
+        lc_details = {
+            str(row[1]) for row in _rows(self.conn.execute("PRAGMA table_info(lc_thread_details)"))
+        }
+        if "origin" not in lc_details:
+            with self.conn:
+                _ = self.conn.execute("ALTER TABLE lc_thread_details ADD COLUMN origin TEXT")
         self.set_meta(META_SCHEMA_VERSION, str(SCHEMA_VERSION))
 
     def _add_origin_columns(self) -> None:
@@ -417,13 +428,17 @@ class CatalogStore:
         return row[0]
 
     def lc_details_queue(self, since_ts: int, limit: int) -> list[tuple[int, int]]:
-        """Like `f95_details_queue`: changed threads newest first, then never-read ones."""
-        changed = "(d.thread_id IS NOT NULL OR t.ts > :since)"
+        """Like `f95_details_queue`: changed threads newest first, then never-read ones.
+
+        Details imported from Atlas and never checked on LC (`thread_ts` NULL)
+        count as never read."""
+        read = "d.thread_ts IS NOT NULL"
+        changed = f"({read} OR t.ts > :since)"
         rows = self.conn.execute(
             "SELECT t.thread_id, t.ts FROM lc_threads t "
             + "LEFT JOIN lc_thread_details d ON d.thread_id = t.thread_id "
             + "WHERE t.removed_at IS NULL AND t.ts IS NOT NULL "
-            + "AND (d.thread_id IS NULL OR t.ts > d.thread_ts) "
+            + f"AND (NOT ({read}) OR t.ts > d.thread_ts) "
             + f"ORDER BY CASE WHEN {changed} THEN 0 ELSE 1 END, "
             + f"CASE WHEN {changed} THEN t.ts ELSE COALESCE(t.views, 0) END DESC, "
             + "t.thread_id LIMIT :limit",
@@ -434,11 +449,22 @@ class CatalogStore:
     def upsert_lc_details(
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
     ) -> int:
+        """Store what LC's page gave. A page without details (`missing`,
+        `unreadable`) keeps imported Atlas values and only records the read."""
         with self.conn:
+            if details["status"] != "ok":
+                kept = self.conn.execute(
+                    "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ? "
+                    + "WHERE thread_id = ? AND origin = ?",
+                    (thread_ts, now, thread_id, IMPORT_ORIGIN),
+                )
+                if kept.rowcount:
+                    return 1
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
                 + "status, overview, developer, release_text, released_at, language, "
-                + "languages, os, external_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                + "languages, os, external_ids, origin) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
                 (
                     thread_id,
                     thread_ts,
@@ -455,6 +481,63 @@ class CatalogStore:
                 ),
             )
         return 1
+
+    def import_lc_details(
+        self, rows: Mapping[int, Mapping[str, object]], now: str
+    ) -> tuple[int, int]:
+        """Add Atlas details for LC threads whose page was never stored, with
+        `origin = 'import'`. Details LC's page gave are never replaced, and an
+        imported row keeps its `thread_ts`, so a page read once (for example a
+        Plus thread LC refused) is not read again until the thread changes.
+        Returns (added, refreshed)."""
+        existing = dict(
+            cast(
+                list[tuple[int, str | None]],
+                self.conn.execute("SELECT thread_id, origin FROM lc_thread_details").fetchall(),
+            )
+        )
+        threads = {
+            row[0]
+            for row in cast(
+                list[tuple[int]], self.conn.execute("SELECT thread_id FROM lc_threads").fetchall()
+            )
+        }
+        added = refreshed = 0
+        with self.conn:
+            for thread_id, details in rows.items():
+                if thread_id not in threads:
+                    continue
+                if thread_id in existing and existing[thread_id] != IMPORT_ORIGIN:
+                    continue
+                values = (
+                    now,
+                    details.get("overview"),
+                    details.get("developer"),
+                    details.get("released_at"),
+                    details.get("language"),
+                    json.dumps(details.get("languages") or [], ensure_ascii=False),
+                    json.dumps(details.get("os") or [], ensure_ascii=False),
+                    json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+                )
+                if thread_id in existing:
+                    _ = self.conn.execute(
+                        "UPDATE lc_thread_details SET fetched_at = ?, status = 'ok', "
+                        + "overview = ?, developer = ?, release_text = NULL, released_at = ?, "
+                        + "language = ?, languages = ?, os = ?, external_ids = ? "
+                        + "WHERE thread_id = ?",
+                        (*values, thread_id),
+                    )
+                    refreshed += 1
+                else:
+                    _ = self.conn.execute(
+                        "INSERT INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
+                        + "status, overview, developer, release_text, released_at, language, "
+                        + "languages, os, external_ids, origin) "
+                        + "VALUES (?, NULL, ?, 'ok', ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+                        (thread_id, *values, IMPORT_ORIGIN),
+                    )
+                    added += 1
+        return added, refreshed
 
     def upsert_lc_prefix_names(self, names: Mapping[int, str]) -> None:
         """Add or rename LC prefixes; IDs the feed no longer shows keep their name."""

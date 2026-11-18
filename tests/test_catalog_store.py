@@ -185,6 +185,75 @@ def test_lc_details_queue_reads_changed_threads_before_never_read_ones(tmp_path)
     assert catalog.count("lc_threads") == 2
 
 
+def _lc_details(catalog, thread_id):
+    return catalog.conn.execute(
+        "SELECT thread_ts, status, overview, origin FROM lc_thread_details WHERE thread_id = ?",
+        (thread_id,),
+    ).fetchone()
+
+
+def test_imported_lc_details_are_read_as_never_read(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert(
+        "lc_threads", "thread_id", [_lc_row(1, 100, views=5), _lc_row(2, 200, views=9)], now
+    )
+    assert catalog.import_lc_details(
+        {1: {"overview": "Atlas text"}, 2: {"overview": "Atlas two"}, 99: {"overview": "x"}}, now
+    ) == (2, 0)
+    assert _lc_details(catalog, 1) == (None, "ok", "Atlas text", "import")
+    # since=250: neither is new; both count as never read, most viewed first.
+    assert catalog.lc_details_queue(250, 10) == [(2, 200), (1, 100)]
+
+
+def test_lc_page_details_replace_imported_ones_and_are_never_replaced(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 100)], now)
+    catalog.import_lc_details({1: {"overview": "Atlas text"}}, now)
+    catalog.upsert_lc_details(1, 100, now, {"status": "ok", "overview": "LC text"})
+    assert _lc_details(catalog, 1) == (100, "ok", "LC text", None)
+    assert catalog.import_lc_details({1: {"overview": "Atlas again"}}, now) == (0, 0)
+    assert _lc_details(catalog, 1) == (100, "ok", "LC text", None)
+    assert catalog.lc_details_queue(0, 10) == []
+
+
+def test_a_refused_lc_page_keeps_imported_details(tmp_path):
+    # A Plus thread a Standard account cannot open keeps Atlas's values.
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 100)], now)
+    catalog.import_lc_details({1: {"overview": "Atlas text"}}, now)
+    catalog.upsert_lc_details(1, 100, now, {"status": "missing"})
+    assert _lc_details(catalog, 1) == (100, "ok", "Atlas text", "import")
+    assert catalog.lc_details_queue(0, 10) == []
+    # Importing again refreshes the values but keeps the read, so LC is not asked again.
+    assert catalog.import_lc_details({1: {"overview": "Atlas new"}}, now) == (0, 1)
+    assert _lc_details(catalog, 1) == (100, "ok", "Atlas new", "import")
+    assert catalog.lc_details_queue(0, 10) == []
+    # A change in the feed reads the page again.
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 150)], now)
+    assert catalog.lc_details_queue(0, 10) == [(1, 150)]
+
+
+def test_old_catalogs_get_the_lc_details_origin_column(tmp_path):
+    path = str(tmp_path / "catalog.sqlite")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE lc_thread_details (thread_id INTEGER PRIMARY KEY, thread_ts INTEGER, "
+        "fetched_at TEXT NOT NULL, status TEXT NOT NULL, overview TEXT, developer TEXT, "
+        "release_text TEXT, released_at TEXT, language TEXT, "
+        "languages TEXT NOT NULL DEFAULT '[]', os TEXT NOT NULL DEFAULT '[]', "
+        "external_ids TEXT NOT NULL DEFAULT '{}')"
+    )
+    conn.execute("INSERT INTO lc_thread_details (thread_id, thread_ts, fetched_at, status) "
+                 "VALUES (1, 5, 'x', 'ok')")
+    conn.commit()
+    conn.close()
+    catalog = CatalogStore(path)
+    assert _lc_details(catalog, 1) == (5, "ok", None, None)
+
+
 def test_lc_prefix_names_are_kept_by_id(tmp_path):
     catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
     catalog.upsert_lc_prefix_names({22: "Other", 29: "Other", 8: "RPGM"})

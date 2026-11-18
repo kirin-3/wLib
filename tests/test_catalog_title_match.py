@@ -132,3 +132,13 @@ def test_an_imported_thread_matches_once_the_feed_lists_it(tmp_path):
     _f95(catalog, 2, "Plus Game", "Dev")
     _lc(catalog, 1, "Plus Game", "Dev")  # a feed upsert clears the import origin
     assert match_lc_f95(catalog) == [(1, 2)]
+
+
+def test_developer_ids_imported_from_atlas_do_not_link(tmp_path):
+    catalog = _catalog(tmp_path)
+    _lc(catalog, 1, "Game", "Dev A")
+    _f95(catalog, 2, "Game", "Dev B", _patreon("same"))
+    catalog.import_lc_details({1: {"external_ids": _patreon("same")}}, NOW)
+    assert match_lc_f95(catalog) == []
+    catalog.upsert_lc_details(1, 1, NOW, {"status": "ok", "external_ids": _patreon("same")})
+    assert match_lc_f95(catalog) == [(1, 2)]
