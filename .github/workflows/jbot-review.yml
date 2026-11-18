@@ -64,7 +64,8 @@ jobs:
     # always(): command is skipped on pull_request events and must not skip this job.
     if: >-
       always() && (
-        (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+        (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+          github.event.pull_request.user.login != 'dependabot[bot]') ||
         (github.event_name == 'issue_comment' && needs.command.result == 'success')
       )
     strategy:

@@ -1,0 +1,51 @@
+# Low-noise Dependabot setup: at most one npm PR and one Actions PR a month.
+#
+# Python is not listed on purpose. The hashed `requirements*.lock` files come
+# from `uv pip compile` (see docs/build.md), and Dependabot cannot regenerate
+# them. Its PRs would bump `requirements*.txt` alone, break the lock check in
+# tests/test_release_version.py, and could split the four PyQt6 pins that must
+# move together. Refresh the Python locks by hand instead.
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "monthly"
+    # Wait before taking a new release, so broken or hijacked versions are
+    # usually pulled first.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+      npm-major:
+        applies-to: version-updates
+        update-types: ["major"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Exact nightly pin; each update needs a manual .swf check (docs/build.md).
+      - dependency-name: "@ruffle-rs/ruffle"
+      # Node is pinned to 22 (.nvmrc); keep the types on the same major.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
