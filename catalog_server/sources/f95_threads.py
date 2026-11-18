@@ -19,6 +19,9 @@ from .post_ids import SECTION_LABELS, external_ids, parse_languages
 
 log = logging.getLogger(__name__)
 
+# Run reports look for this text to flag a lost F95 login.
+NO_LOGIN = "F95 sees no login; check the cookie with check-f95-login"
+
 THREAD_URL = "https://f95zone.to/threads/{thread_id}/"
 # Statuses kept for a thread page that does not exist (any more) or is closed to us.
 MISSING_STATUSES = (403, 404)
@@ -191,7 +194,7 @@ class F95ThreadsSource:
             raise ValueError(f"F95 answered HTTP {response.status} without its own page")
         if login.group(1) != "true":
             # Without the login F95 hides the links; never store such a page.
-            raise ValueError("F95 sees no login; check the cookie with check-f95-login")
+            raise ValueError(NO_LOGIN)
         if response.status in MISSING_STATUSES:
             # F95's own "not found" or "no permission" page.
             details: dict[str, object] = {"status": "missing"}

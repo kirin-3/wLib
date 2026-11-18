@@ -121,6 +121,28 @@ def lc_cookie_from_env() -> str | None:
     return _xf_user_cookie_from_env(LC_COOKIE_ENV)
 
 
+DISCORD_WEBHOOK_ENV = "WLIB_CATALOG_DISCORD_WEBHOOK"
+_DISCORD_HOSTS = frozenset(
+    {"discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com"}
+)
+
+
+def discord_webhook_from_env() -> str | None:
+    """The Discord webhook for run reports, from /etc/wlib-catalog/discord.env."""
+    value = os.environ.get(DISCORD_WEBHOOK_ENV, "").strip()
+    if not value:
+        return None
+    parts = urlsplit(value)
+    if (
+        parts.scheme != "https"
+        or parts.hostname not in _DISCORD_HOSTS
+        or not parts.path.startswith("/api/webhooks/")
+    ):
+        # The message never shows the value: the URL is a secret.
+        raise ValueError(f"{DISCORD_WEBHOOK_ENV} must be a https://discord.com/api/webhooks/ URL")
+    return value
+
+
 def data_dir() -> str:
     return os.environ.get("WLIB_CATALOG_DATA_DIR") or DEFAULT_DATA_DIR
 

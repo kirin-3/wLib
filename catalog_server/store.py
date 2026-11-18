@@ -575,6 +575,19 @@ class CatalogStore:
         )
         return row[0]
 
+    def changes_since(self, source: str, since: str) -> tuple[int, int]:
+        """Rows first seen and rows marked removed at or after `since`, in the
+        source's main table (the one `count` uses)."""
+        table, _key = SOURCE_TABLES[source][0]
+        row = cast(
+            tuple[int | None, int | None],
+            self.conn.execute(
+                f"SELECT SUM(first_seen >= ?), SUM(removed_at >= ?) FROM {table}",
+                (since, since),
+            ).fetchone(),
+        )
+        return row[0] or 0, row[1] or 0
+
     def replace_names(
         self,
         tags: Mapping[int, str],

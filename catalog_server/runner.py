@@ -15,7 +15,7 @@ from .publish import Storage, publish, publish_refusal, published_sources
 from .snapshot import build_snapshot
 from .sources import Source, SourceContext
 from .sources.f95 import load_names
-from .store import CatalogStore, StateStore, utc_now
+from .store import SOURCE_TABLES, CatalogStore, StateStore, utc_now
 
 log = logging.getLogger("catalog_server.run")
 
@@ -27,6 +27,10 @@ class SourceResult:
     requests: int = 0
     detail: str | None = None
     sweep_completed: bool = False
+    # Rows first seen and rows marked removed in this run; sources only, not detail steps.
+    added: int = 0
+    removed: int = 0
+    total: int = 0
 
 
 @dataclass
@@ -36,6 +40,11 @@ class RunResult:
     manifest: dict[str, object] | None = None
     # Why the snapshot was not published, when the safety check refused it.
     publish_refused: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    links: int | None = None
+    # The error that ended the run after the sources, e.g. a failed upload.
+    error: str = ""
 
 
 def _run_sweep(source: Source, ctx: SourceContext) -> bool:
@@ -112,8 +121,11 @@ def run(
     work_dir: str,
     now: Callable[[], str] = utc_now,
     force_publish: bool = False,
+    report: Callable[[RunResult], None] | None = None,
 ) -> RunResult:
-    result = RunResult(run_id=state.start_run(now()))
+    """`report` gets the result when the run ends, also when it ends with an error."""
+    started_at = now()
+    result = RunResult(run_id=state.start_run(started_at), started_at=started_at)
     load_names(catalog)
     for name in selected:
         source = sources[name]
@@ -136,10 +148,14 @@ def run(
             outcome.requests,
             f" ({outcome.detail})" if outcome.detail else "",
         )
+        if name in SOURCE_TABLES:
+            outcome.added, outcome.removed = catalog.changes_since(name, started_at)
+        outcome.total = catalog.count(name)
         result.sources[name] = outcome
     published: str | None = None
     try:
         links = rebuild_links(catalog)
+        result.links = links
         log.info("links: %d", links)
         if storage is not None:
             counts = manifest_sources(catalog, state)
@@ -159,7 +175,16 @@ def run(
                     published = snapshot.name
                 finally:
                     os.remove(snapshot.path)
+    except Exception as exc:
+        result.error = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
         # A failed link rebuild or publish still closes the run, with nothing marked published.
-        state.finish_run(result.run_id, now(), published)
+        result.finished_at = now()
+        state.finish_run(result.run_id, result.finished_at, published)
+        if report is not None:
+            try:
+                report(result)
+            except Exception:  # noqa: BLE001 - a failed report must not fail the run
+                log.exception("sending the run report failed")
     return result

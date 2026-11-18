@@ -8,7 +8,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import IO
 
@@ -19,16 +19,18 @@ from .config import (
     BROWSER_SITES_ENV,
     browser_sites_from_env,
     data_dir,
+    discord_webhook_from_env,
     f95_cookie_from_env,
     lc_cookie_from_env,
     r2_config_from_env,
     site_proxies_from_env,
 )
 from .net import Pacer, Request, Transport, urllib_transport
+from .notify import build_report, send_report
 from .publish import R2Storage, Storage
-from .runner import run
+from .runner import RunResult, run
 from .sources import STEPS, get_sources
-from .store import open_stores
+from .store import SOURCE_TABLES, open_stores
 
 log = logging.getLogger("catalog_server")
 
@@ -270,6 +272,16 @@ def _check_lc_login(folder: str, settings: NetworkSettings, given: BrowserTransp
     )
 
 
+def _discord_report(
+    webhook: str, skipped: Mapping[str, str], transport: Transport
+) -> Callable[[RunResult], None]:
+    def report(result: RunResult) -> None:
+        payload = build_report(result, sources=frozenset(SOURCE_TABLES), skipped=skipped)
+        _ = send_report(webhook, payload, transport)
+
+    return report
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -277,6 +289,7 @@ def main(
     browser: BrowserTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
     storage_factory: Callable[[], Storage | None] | None = None,
+    webhook_transport: Transport = urllib_transport,
 ) -> int:
     args = build_parser().parse_args(argv, namespace=Args())
     folder = args.data_dir or data_dir()
@@ -285,6 +298,7 @@ def main(
 
     try:
         settings = NetworkSettings()
+        webhook = discord_webhook_from_env() if args.command == "run" else None
     except ValueError as exc:
         log.error("%s", exc)
         return 2
@@ -321,16 +335,25 @@ def main(
     for name in until:
         if name not in selected:
             selected.append(name)
+    skipped: dict[str, str] = {}
     if "f95_threads" in selected and settings.f95_cookie is None:
         # F95 hides links from guests, so thread pages are read only when logged in.
-        log.info("f95_threads: skipped, it needs the F95 login cookie")
-        selected.remove("f95_threads")
+        skipped["f95_threads"] = "it needs the F95 login cookie"
     if settings.lc_cookie is None:
         # Without the login LC shows no feed; it is never read as a guest.
         for name in ("lc", "lc_threads"):
             if name in selected:
-                log.info("%s: skipped, it needs the LC login cookie", name)
-                selected.remove(name)
+                skipped[name] = "it needs the LC login cookie"
+    for name, reason in skipped.items():
+        log.info("%s: skipped, %s", name, reason)
+        selected.remove(name)
+
+    # Only runs that publish (or try to) send a report.
+    report = (
+        _discord_report(webhook, skipped, webhook_transport)
+        if webhook is not None and storage is not None
+        else None
+    )
     with _run_lock(folder) as acquired:
         if not acquired:
             log.info("another catalog run is in progress; skipping this one")
@@ -357,6 +380,7 @@ def main(
                 storage=storage,
                 work_dir=folder,
                 force_publish=args.force_publish,
+                report=report,
             )
         finally:
             if browser is not None:
