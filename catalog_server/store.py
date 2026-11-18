@@ -233,10 +233,26 @@ DETAIL_TABLES: dict[str, str] = {
 SOURCE_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
     "f95": (("f95_threads", "thread_id"),),
     "lc": (("lc_threads", "thread_id"),),
+    # The guest Plus listings share lc_threads with the feed; see SOURCE_ROWS.
+    "lc_plus": (("lc_threads", "thread_id"),),
     "dlsite": (("dlsite_works", "product_id"),),
     "ryuugames": (("ryuu_posts", "post_id"),),
     "vndb": (("vndb_vns", "vn_id"), ("vndb_releases", "release_id")),
 }
+
+# The rows of a shared table that each source owns. A Standard feed never
+# lists Plus threads and the Plus listings never list Free ones, so each
+# sweep marks, counts and reports only its own tier.
+SOURCE_ROWS: dict[str, str] = {
+    "lc": "tier = 'Free'",
+    "lc_plus": "tier = 'Premium'",
+}
+
+
+def _owned(source: str) -> str:
+    """An SQL condition (starting with AND) for the rows `source` owns, or ''."""
+    condition = SOURCE_ROWS.get(source)
+    return f" AND {condition}" if condition else ""
 
 
 def utc_now() -> str:
@@ -372,7 +388,8 @@ class CatalogStore:
             for table, _key in SOURCE_TABLES[source]:
                 marked += self.conn.execute(
                     f"UPDATE {table} SET removed_at = ? "
-                    + "WHERE removed_at IS NULL AND origin IS NULL AND last_seen < ?",
+                    + "WHERE removed_at IS NULL AND origin IS NULL AND last_seen < ?"
+                    + _owned(source),
                     (now, sweep_started_at),
                 ).rowcount
         return marked
@@ -452,35 +469,105 @@ class CatalogStore:
         """Store what LC's page gave. A page without details (`missing`,
         `unreadable`) keeps imported Atlas values and only records the read."""
         with self.conn:
-            if details["status"] != "ok":
-                kept = self.conn.execute(
-                    "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ? "
-                    + "WHERE thread_id = ? AND origin = ?",
-                    (thread_ts, now, thread_id, IMPORT_ORIGIN),
-                )
-                if kept.rowcount:
-                    return 1
-            _ = self.conn.execute(
-                "INSERT OR REPLACE INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
-                + "status, overview, developer, release_text, released_at, language, "
-                + "languages, os, external_ids, origin) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-                (
-                    thread_id,
-                    thread_ts,
-                    now,
-                    details["status"],
-                    details.get("overview"),
-                    details.get("developer"),
-                    details.get("release_text"),
-                    details.get("released_at"),
-                    details.get("language"),
-                    json.dumps(details.get("languages") or [], ensure_ascii=False),
-                    json.dumps(details.get("os") or [], ensure_ascii=False),
-                    json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
-                ),
-            )
+            self._write_lc_details(thread_id, thread_ts, now, details)
         return 1
+
+    def upsert_lc_premium_details(
+        self,
+        thread_id: int,
+        thread_ts: int,
+        now: str,
+        details: Mapping[str, object],
+        version: str | None,
+        tags: Sequence[str],
+    ) -> int:
+        """Like `upsert_lc_details`, and in the same transaction the page's
+        version and tags for a Premium thread, whose feed is not readable.
+
+        The version is written only while the thread still has the `ts` the
+        page was read for, so a version always belongs to its update date.
+        Free threads keep the feed's version and tags."""
+        with self.conn:
+            self._write_lc_details(thread_id, thread_ts, now, details)
+            if details["status"] == "ok":
+                _ = self.conn.execute(
+                    "UPDATE lc_threads SET version = ?, tags = ? "
+                    + "WHERE thread_id = ? AND tier = 'Premium' AND ts = ?",
+                    (version, json.dumps(list(tags), ensure_ascii=False), thread_id, thread_ts),
+                )
+        return 1
+
+    def mark_lc_pages_unread(self, thread_ids: Iterable[int], *, any_status: bool = False) -> int:
+        """Make the details step read these threads again as never read, when
+        their details are imported from Atlas or LC refused the page before
+        (or always, with `any_status`)."""
+        wanted = list(thread_ids)
+        if not wanted:
+            return 0
+        marks = ", ".join(["?"] * len(wanted))
+        condition = "" if any_status else " AND (origin = ? OR status != 'ok')"
+        with self.conn:
+            return self.conn.execute(
+                f"UPDATE lc_thread_details SET thread_ts = NULL WHERE thread_id IN ({marks})"
+                + condition,
+                wanted if any_status else [*wanted, IMPORT_ORIGIN],
+            ).rowcount
+
+    def lc_listing_state(self, thread_ids: Iterable[int]) -> dict[int, tuple[int | None, str, str | None]]:
+        """`ts`, tier and origin of the stored LC threads among `thread_ids`."""
+        wanted = list(thread_ids)
+        if not wanted:
+            return {}
+        marks = ", ".join(["?"] * len(wanted))
+        found = cast(
+            list[tuple[int, int | None, str, str | None]],
+            self.conn.execute(
+                f"SELECT thread_id, ts, tier, origin FROM lc_threads WHERE thread_id IN ({marks})",
+                wanted,
+            ).fetchall(),
+        )
+        return {thread_id: (ts, tier, origin) for thread_id, ts, tier, origin in found}
+
+    def lc_premium_ids(self, thread_ids: Iterable[int]) -> set[int]:
+        """The `Premium` threads among `thread_ids`."""
+        return {
+            thread_id
+            for thread_id, (_ts, tier, _origin) in self.lc_listing_state(thread_ids).items()
+            if tier == "Premium"
+        }
+
+    def _write_lc_details(
+        self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
+    ) -> None:
+        """The writes of `upsert_lc_details`; the caller holds the transaction."""
+        if details["status"] != "ok":
+            kept = self.conn.execute(
+                "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ? "
+                + "WHERE thread_id = ? AND origin = ?",
+                (thread_ts, now, thread_id, IMPORT_ORIGIN),
+            )
+            if kept.rowcount:
+                return
+        _ = self.conn.execute(
+            "INSERT OR REPLACE INTO lc_thread_details (thread_id, thread_ts, fetched_at, "
+            + "status, overview, developer, release_text, released_at, language, "
+            + "languages, os, external_ids, origin) "
+            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (
+                thread_id,
+                thread_ts,
+                now,
+                details["status"],
+                details.get("overview"),
+                details.get("developer"),
+                details.get("release_text"),
+                details.get("released_at"),
+                details.get("language"),
+                json.dumps(details.get("languages") or [], ensure_ascii=False),
+                json.dumps(details.get("os") or [], ensure_ascii=False),
+                json.dumps(details.get("external_ids") or {}, ensure_ascii=False),
+            ),
+        )
 
     def import_lc_details(
         self, rows: Mapping[int, Mapping[str, object]], now: str
@@ -559,7 +646,9 @@ class CatalogStore:
             found.setdefault(str(name).casefold(), []).append(cast(int, prefix_id))
         return found
 
-    def count(self, source: str) -> int:
+    def count(self, source: str, *, whole_table: bool = False) -> int:
+        """Current rows the source owns; `whole_table` counts every current row
+        of its main table, e.g. all LC threads for the manifest."""
         if source in DETAIL_TABLES:
             row = cast(
                 tuple[int],
@@ -567,22 +656,24 @@ class CatalogStore:
             )
             return row[0]
         table, _key = SOURCE_TABLES[source][0]
+        owned = "" if whole_table else _owned(source)
         row = cast(
             tuple[int],
             self.conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE removed_at IS NULL"
+                f"SELECT COUNT(*) FROM {table} WHERE removed_at IS NULL{owned}"
             ).fetchone(),
         )
         return row[0]
 
     def changes_since(self, source: str, since: str) -> tuple[int, int]:
         """Rows first seen and rows marked removed at or after `since`, in the
-        source's main table (the one `count` uses)."""
+        source's main table and of its own rows (the ones `count` uses)."""
         table, _key = SOURCE_TABLES[source][0]
         row = cast(
             tuple[int | None, int | None],
             self.conn.execute(
-                f"SELECT SUM(first_seen >= ?), SUM(removed_at >= ?) FROM {table}",
+                f"SELECT SUM(first_seen >= ?), SUM(removed_at >= ?) FROM {table} "
+                + f"WHERE 1{_owned(source)}",
                 (since, since),
             ).fetchone(),
         )

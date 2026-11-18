@@ -200,3 +200,16 @@ def test_switching_thread_or_mode_recomputes_the_winning_version():
     database.update_game(game_id, {"lc_url": "https://lewdcorner.com/threads/1234/"})
     assert database.get_game(game_id)["latest_version"] == "0.5"
     assert database.get_game(game_id)["lc_latest_version"] == ""
+
+
+@pytest.mark.parametrize(("entry", "usable"), [
+    ({"version": "0.5", "tier": "Free"}, True),
+    ({"version": "1.20", "tier": "Premium"}, True),
+    ({"version": "", "tier": "Premium"}, False),
+    ({"tier": "Premium"}, False),
+    ({"version": "v0.86a", "tier": "Premium", "origin": "import"}, False),
+    ({"version": "0.2", "tier": "Free", "origin": "import"}, False),
+    ({}, False),
+])
+def test_usable_catalog_entry_needs_a_version_and_no_import(entry, usable):
+    assert lewdcorner.usable_catalog_entry(entry) is usable

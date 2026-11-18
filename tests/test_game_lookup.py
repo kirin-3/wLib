@@ -450,7 +450,10 @@ def test_version_lookups_distinguish_live_catalog_rows(lc_catalog):
     assert (entries["21"]["version"], entries["21"]["ts"], entries["21"]["tier"]) == ("1.1", 123, "Free")
     assert entries["21"]["thread_completed"] is True
     assert lewdcorner.usable_catalog_entry(entries["21"])
-    assert not lewdcorner.usable_catalog_entry(entries["22"])
+    # A Plus row the builder listed is usable while it has a version.
+    assert entries["22"]["tier"] == "Premium"
+    assert lewdcorner.usable_catalog_entry(entries["22"])
+    assert not lewdcorner.usable_catalog_entry({**entries["22"], "version": ""})
     assert entries["23"]["origin"] == "import"
     assert not lewdcorner.usable_catalog_entry(entries["23"])
     f95 = f95_thread_entries(["101"])["101"]

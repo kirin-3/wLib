@@ -285,7 +285,7 @@ def test_a_failing_lc_feed_still_publishes_the_other_sources(tmp_path, monkeypat
     assert code == 1
     assert manifest["sources"]["ryuugames"]["count"] == 3
     assert manifest["sources"]["lc"] == {"count": 0, "updated_at": None}
-    # lc_threads does not run once the feed lost its login.
+    # lc_threads still runs after a lost feed login; no thread is queued.
     assert all("/latest-updates/api" in url for _, url in browser.fetched)
 
 
@@ -304,7 +304,15 @@ def test_manifest_lists_lc_with_its_count(tmp_path, monkeypatch):
     assert any("/threads/" in url for _, url in browser.fetched)
 
 
-def test_lc_steps_are_skipped_without_the_lc_cookie(tmp_path, monkeypatch, caplog):
+def _plus_listing():
+    """The AI Games+ fixture as a one-page listing."""
+    import re
+
+    page = fixture_bytes("lc_plus_213_page1.html").decode()
+    return re.sub(r'<div class="pageNav">.*?</div>', "", page, flags=re.S).encode()
+
+
+def test_only_the_lc_feed_is_skipped_without_the_lc_cookie(tmp_path, monkeypatch, caplog):
     monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE", raising=False)
     monkeypatch.delenv("WLIB_CATALOG_BROWSER_SITES", raising=False)
     transport = FakeTransport()
@@ -312,14 +320,57 @@ def test_lc_steps_are_skipped_without_the_lc_cookie(tmp_path, monkeypatch, caplo
         "/wp-json/wp/v2/posts",
         Response(200, fixture_bytes("ryuugames_posts.json"), {"X-WP-TotalPages": "1"}),
     )
+    transport.route("lewdcorner.com/forums/", Response(200, _plus_listing()))
+    transport.route("lewdcorner.com/threads/", Response(200, fixture_bytes("lc_thread_24724.html")))
     clock = FakeClock()
     with caplog.at_level("INFO"):
         code = main(
-            ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "lc,lc_threads,ryuugames"],
+            ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources",
+             "lc,lc_plus,lc_threads,ryuugames"],
             transport=transport,
             sleep=clock.sleep,
         )
     assert code == 0
-    assert all("lewdcorner" not in request.url for request in transport.requests)
+    lc_urls = [request.url for request in transport.requests if "lewdcorner" in request.url]
+    assert not any("/latest-updates/api" in url for url in lc_urls)
+    assert any("/forums/119/" in url for url in lc_urls)
+    assert any("/forums/213/" in url for url in lc_urls)
+    assert any("/threads/" in url for url in lc_urls)
+    assert all("Cookie" not in request.headers for request in transport.requests)
     assert "lc: skipped, it needs the LC login cookie" in caplog.text
-    assert "lc_threads: skipped, it needs the LC login cookie" in caplog.text
+    assert "lc_threads: skipped" not in caplog.text and "lc_plus: skipped" not in caplog.text
+
+
+def test_guest_lc_steps_send_no_login_cookie_through_the_browser(tmp_path, monkeypatch):
+    from test_catalog_browser import FakeBrowser, FakePage
+
+    from catalog_server.browser import BrowserTransport, lc_login_cookies
+
+    monkeypatch.delenv("WLIB_CATALOG_F95_COOKIE", raising=False)
+    monkeypatch.setenv("WLIB_CATALOG_LC_COOKIE", "1%2Ckey")
+    monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "lc")
+    listing = _plus_listing()
+
+    def answer(url):
+        if "/latest-updates/api" in url:
+            return FakePage(200, fixture_bytes("lc_feed_logged_out.json"))
+        if "/forums/" in url:
+            return FakePage(200, listing)
+        return FakePage(200, fixture_bytes("lc_thread_24724.html"))
+
+    browser = FakeBrowser(answer)
+    clock = FakeClock()
+    code = main(
+        ["--data-dir", str(tmp_path), "run", "--no-publish", "--sources", "lc,lc_plus,lc_threads"],
+        transport=FakeTransport(),
+        browser=BrowserTransport(cookies=lc_login_cookies("1%2Ckey"), session_factory=browser),
+        sleep=clock.sleep,
+    )
+    # The feed lost its login; the guest steps still ran.
+    assert code == 1
+    assert [url for _, url in browser.fetched][0].endswith("sort=date")
+    feed, guest = browser.sessions
+    assert feed.options["cookies"][0]["name"] == "xf_user"
+    assert guest.options["cookies"] == []
+    assert any("/forums/" in url for _, url in browser.fetched)
+    assert any("/threads/" in url for _, url in browser.fetched)

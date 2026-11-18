@@ -56,7 +56,7 @@ def _until_swept(value: str) -> list[str]:
         # Only the sources have a sweep; builder steps such as f95_threads do not.
         return list(SOURCES)
     names = _source_list(value)
-    unswept = [name for name in names if name not in SOURCES]
+    unswept = [name for name in names if name not in SOURCE_TABLES]
     if unswept:
         raise argparse.ArgumentTypeError(f"{', '.join(unswept)} has no sweep")
     return names
@@ -174,16 +174,21 @@ _ACCOUNT_NAME_RE = re.compile(
 )
 
 
+# Pacer keys whose requests carry the site's login cookie. LC's thread pages
+# and Plus listings are read as a guest.
+LOGIN_SITES = frozenset({"f95", "f95_threads", "lc"})
+
+
 class NetworkSettings:
     """Proxies, browser sites and the F95 and LC logins, read from the environment."""
 
     def __init__(self) -> None:
         self.proxies: dict[str, str] = site_proxies_from_env()
         sites = set(browser_sites_from_env())
-        # Thread pages go the same way as their feed.
-        for feed, threads in (("f95", "f95_threads"), ("lc", "lc_threads")):
+        # Thread pages and the Plus listings go the same way as their feed.
+        for feed, steps in (("f95", ("f95_threads",)), ("lc", ("lc_plus", "lc_threads"))):
             if feed in sites:
-                sites.add(threads)
+                sites.update(steps)
         self.browser_sites: frozenset[str] = frozenset(sites)
         self.f95_cookie: str | None = f95_cookie_from_env()
         if self.f95_cookie is not None and "f95" not in self.browser_sites:
@@ -202,6 +207,16 @@ class NetworkSettings:
         if self.lc_cookie:
             cookies.extend(lc_login_cookies(self.lc_cookie))
         return cookies
+
+    def transports(self, browser: BrowserTransport | None) -> dict[str, Transport] | None:
+        """The browser view per browser site: the login view for the feeds
+        that need it, the guest view (no cookies) for everything else."""
+        if browser is None:
+            return None
+        guest = browser.guest()
+        return {
+            site: browser if site in LOGIN_SITES else guest for site in self.browser_sites
+        }
 
     def browser(self, given: BrowserTransport | None) -> BrowserTransport | None:
         if not self.browser_sites:
@@ -328,7 +343,8 @@ def main(
     if settings.f95_cookie is not None:
         log.info("f95 requests send the login cookie")
     if settings.lc_cookie is not None:
-        log.info("lc requests send the login cookie")
+        log.info("lc feed requests send the login cookie")
+    log.info("lc_plus and lc_threads requests are guest requests and send no cookie")
 
     selected = list(args.sources)
     until = list(args.until_swept)
@@ -339,11 +355,10 @@ def main(
     if "f95_threads" in selected and settings.f95_cookie is None:
         # F95 hides links from guests, so thread pages are read only when logged in.
         skipped["f95_threads"] = "it needs the F95 login cookie"
-    if settings.lc_cookie is None:
-        # Without the login LC shows no feed; it is never read as a guest.
-        for name in ("lc", "lc_threads"):
-            if name in selected:
-                skipped[name] = "it needs the LC login cookie"
+    if settings.lc_cookie is None and "lc" in selected:
+        # Without the login LC shows no feed. The Plus listings and the thread
+        # pages are read as a guest, so they still run.
+        skipped["lc"] = "it needs the LC login cookie"
     for name, reason in skipped.items():
         log.info("%s: skipped, %s", name, reason)
         selected.remove(name)
@@ -367,9 +382,7 @@ def main(
                 sleep=sleep,
                 wait_for_budget=until,
                 proxies=settings.proxies,
-                transports=dict.fromkeys(settings.browser_sites, browser)
-                if browser is not None
-                else None,
+                transports=settings.transports(browser),
             )
             result = run(
                 catalog,

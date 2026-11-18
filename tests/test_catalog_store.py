@@ -156,10 +156,12 @@ def test_lc_count_ignores_removed_and_mark_removed_skips_imports(tmp_path):
         origin="import",
     )
     catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 10)], "2026-02-01T00:00:00Z")
-    assert catalog.count("lc") == 3
+    # The feed owns the Free threads; the manifest counts the whole table.
+    assert catalog.count("lc") == 2
+    assert catalog.count("lc", whole_table=True) == 3
     # Thread 2 was not seen after the sweep start; thread 3 is imported.
     assert catalog.mark_removed("lc", "2026-01-15T00:00:00Z", "2026-02-01T00:00:00Z") == 1
-    assert catalog.count("lc") == 2
+    assert catalog.count("lc") == 1
     removed = catalog.conn.execute(
         "SELECT thread_id FROM lc_threads WHERE removed_at IS NOT NULL"
     ).fetchall()
@@ -259,3 +261,92 @@ def test_lc_prefix_names_are_kept_by_id(tmp_path):
     catalog.upsert_lc_prefix_names({22: "Other", 29: "Other", 8: "RPGM"})
     catalog.upsert_lc_prefix_names({8: "RPGM"})
     assert catalog.lc_prefix_ids_by_name() == {"other": [22, 29], "rpgm": [8]}
+
+
+def _removed(catalog):
+    return [
+        row[0]
+        for row in catalog.conn.execute(
+            "SELECT thread_id FROM lc_threads WHERE removed_at IS NOT NULL ORDER BY thread_id"
+        )
+    ]
+
+
+def test_each_lc_sweep_marks_only_its_own_tier(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    jan, feb, mar = "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"
+    catalog.upsert(
+        "lc_threads", "thread_id",
+        [_lc_row(1, 10, tier="Free"), _lc_row(24724, 20, tier="Premium"),
+         _lc_row(900, 30, tier="Premium")],
+        jan,
+    )
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(5, 50, tier="Premium")], jan, origin="import")
+    # The Standard feed never lists the Plus threads; its sweep leaves them alone.
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 10)], mar)
+    assert catalog.mark_removed("lc", feb, mar) == 0
+    # The Plus listing never lists Free threads; it marks Plus thread 900,
+    # which two sweeps did not see, and never the imported one.
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(24724, 20, tier="Premium")], mar)
+    assert catalog.mark_removed("lc_plus", feb, mar) == 1
+    assert _removed(catalog) == [900]
+    # The imported Plus thread still counts.
+    assert catalog.count("lc") == 1 and catalog.count("lc_plus") == 2
+    assert catalog.changes_since("lc_plus", mar) == (0, 1)
+    assert catalog.changes_since("lc", mar) == (0, 0)
+
+
+def test_premium_page_values_replace_the_version_and_tags(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert(
+        "lc_threads", "thread_id",
+        [
+            _lc_row(24724, 100, tier="Premium", version=None, tags=["old"]),
+            _lc_row(6, 100, tier="Free", version="0.5", tags=["3dcg"]),
+        ],
+        now,
+    )
+    catalog.upsert_lc_premium_details(24724, 100, now, {"status": "ok"}, "1.20", ["2dcg", "rpg"])
+    catalog.upsert_lc_premium_details(6, 100, now, {"status": "ok"}, "9.9", ["other"])
+    found = dict(
+        (row[0], row[1:])
+        for row in catalog.conn.execute("SELECT thread_id, version, tags FROM lc_threads")
+    )
+    assert found[24724] == ("1.20", '["2dcg", "rpg"]')
+    # A Free thread keeps the feed's version and tags.
+    assert found[6] == ("0.5", '["3dcg"]')
+    status = catalog.conn.execute(
+        "SELECT status FROM lc_thread_details WHERE thread_id = 24724"
+    ).fetchone()
+    assert status == ("ok",)
+
+
+def test_a_premium_page_read_for_an_older_date_keeps_the_version_empty(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(24724, 200, tier="Premium")], now)
+    catalog.upsert_lc_premium_details(24724, 100, now, {"status": "ok"}, "1.20", [])
+    assert catalog.conn.execute(
+        "SELECT version FROM lc_threads WHERE thread_id = 24724"
+    ).fetchone() == (None,)
+
+
+def test_imported_or_refused_reads_are_marked_unread(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert(
+        "lc_threads", "thread_id",
+        [_lc_row(1, 100, tier="Premium"), _lc_row(2, 100, tier="Premium"),
+         _lc_row(3, 100, tier="Premium")],
+        now,
+    )
+    catalog.import_lc_details({1: {"overview": "Atlas"}}, now)
+    # Thread 1: imported details kept after a refused read. Thread 2: refused.
+    # Thread 3: read from LC's page.
+    catalog.upsert_lc_details(1, 100, now, {"status": "missing"})
+    catalog.upsert_lc_details(2, 100, now, {"status": "missing"})
+    catalog.upsert_lc_details(3, 100, now, {"status": "ok"})
+    assert catalog.lc_details_queue(0, 10) == []
+    assert catalog.mark_lc_pages_unread([1, 2, 3]) == 2
+    assert catalog.lc_details_queue(10_000, 10) == [(1, 100), (2, 100)]

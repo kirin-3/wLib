@@ -103,7 +103,8 @@ def manifest_sources(catalog: CatalogStore, state: StateStore) -> dict[str, dict
 
     return {
         name: {
-            SOURCE_COUNT: catalog.count(name),
+            # The whole table: the LC count includes the Plus threads.
+            SOURCE_COUNT: catalog.count(name, whole_table=True),
             SOURCE_UPDATED_AT: state.source_status(name)["last_success_at"],
         }
         for name in SOURCES

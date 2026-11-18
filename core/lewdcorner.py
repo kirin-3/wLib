@@ -124,8 +124,14 @@ def timestamp_iso(value: object) -> str:
 
 
 def usable_catalog_entry(entry: Mapping[str, object]) -> bool:
-    return bool(entry) and str(entry.get("tier") or "").casefold() != "premium" and (
-        entry.get("origin") != "import"
+    """Whether the catalog's version can stand in for a live LC read: the
+    builder listed the thread itself (not an Atlas import) and has a version
+    for it. The tier does not count; a Plus thread's version comes from its
+    page and is empty until the page for its current date is read."""
+    return (
+        bool(entry)
+        and entry.get("origin") != "import"
+        and bool(str(entry.get("version") or "").strip())
     )
 
 

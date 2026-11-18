@@ -26,9 +26,11 @@ SITE_LIMITS: dict[str, SiteLimits] = {
     "f95": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
     # Thread pages, outside the feed's limit. About 80 threads change per day.
     "f95_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
-    # LewdCorner's login-gated feed, and its thread pages on their own budget.
+    # LewdCorner's login-gated feed, and its guest thread pages on their own budget.
     "lc": SiteLimits(min_delay=3.0, budget=90, window=3600.0),
     "lc_threads": SiteLimits(min_delay=5.0, budget=60, window=3600.0),
+    # The guest listings of the Plus forums, 20 threads per page (about 35 pages).
+    "lc_plus": SiteLimits(min_delay=5.0, budget=40, window=3600.0),
     "dlsite": SiteLimits(min_delay=3.0),
     "ryuugames": SiteLimits(min_delay=3.0),
     "vndb": SiteLimits(min_delay=1.0, budget=150, window=300.0, wait=True),

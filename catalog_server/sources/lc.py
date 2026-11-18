@@ -5,7 +5,9 @@
 their Plus forums), sorted strictly by each item's `timestamp`, the time of
 its last update. Only items in the game forums are kept; other forums are
 skipped and counted in the log. The feed answers only a logged-in account: an
-answer without a login stores nothing and pauses LC for the rest of the run.
+answer without a login stores nothing and ends this step. The guest steps
+(`lc_plus`, `lc_threads`) still run; a rate limit or a challenge on any LC
+step stops all of them for the run (`lc_pause`).
 """
 
 import logging
@@ -14,7 +16,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import cast
 
-from ..net import Response
+from ..net import Pacer, Response
 from .base import SourceContext
 
 log = logging.getLogger(__name__)
@@ -32,8 +34,21 @@ _LOGIN_STATUSES = (401, 403)
 NO_LOGIN = "no LC login; check the cookie with check-lc-login"
 
 
+# Pacer keys of every LC step; a pause on one stops the guest steps.
+LC_STEPS = ("lc", "lc_plus", "lc_threads")
+
+
 class LcLoginError(ValueError):
     """The feed answered without a logged-in session."""
+
+
+def lc_pause(pacer: Pacer) -> str | None:
+    """Why LC is paused for this run (a rate limit or a challenge on any LC
+    step), or None. A lost feed login does not pause LC."""
+    for step in LC_STEPS:
+        if step in pacer.paused:
+            return f"{step} is paused: {pacer.paused[step]}"
+    return None
 
 
 def _iso(ts: object) -> str | None:
@@ -163,12 +178,9 @@ class LcSource:
         response = ctx.pacer.request(
             self.name, FEED_URL.format(page=page), ok_statuses=_LOGIN_STATUSES
         )
-        try:
-            payload = _payload(response)
-        except LcLoginError as exc:
-            # Stop LC (the feed and lc_threads) for this run; store nothing.
-            ctx.pacer.paused[self.name] = str(exc)
-            raise
+        # A lost login raises LcLoginError: this step stores nothing and ends,
+        # and the guest steps still run.
+        payload = _payload(response)
         rows, names, count, pages, has_more = parse_page(payload)
         ctx.catalog.upsert_lc_prefix_names(names)
         ctx.upsert("lc_threads", "thread_id", rows)

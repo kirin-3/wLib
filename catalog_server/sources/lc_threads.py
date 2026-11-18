@@ -6,9 +6,13 @@ and the overview.
 LC keeps most of these in XenForo custom fields (`dl[data-field]`) above the
 post body, so only the overview comes from free text. The queue is the same
 as F95's: threads changed since their details were read first, newest first,
-then threads never read, most viewed first. Thread pages are public, but a
-page must be LC's own (it carries `data-logged-in`); anything else, such as a
-Cloudflare challenge, stops the step and stores nothing.
+then threads never read, most viewed first. Pages are read as a guest, with no
+login cookie. A page must be LC's own guest page (`data-logged-in="false"`);
+anything else, such as a Cloudflare challenge or a page with a login, stops
+LC for the run and stores nothing.
+
+No feed gives a Plus (`Premium`) thread's version and tags to the builder, so
+for those threads this step also stores the page's Version field and tags.
 """
 
 import logging
@@ -19,6 +23,7 @@ from typing import cast, override
 
 from ..net import RateLimited
 from .base import SourceContext
+from .lc import lc_pause
 from .post_ids import SECTION_LABELS, external_ids, parse_languages
 
 log = logging.getLogger(__name__)
@@ -31,6 +36,9 @@ OVERVIEW_MAX_CHARS = 10_000
 QUEUE_CHUNK = 50
 
 _LC_PAGE_RE = re.compile(r'<html[^>]*\sdata-logged-in="(?:true|false)"')
+_GUEST_PAGE_RE = re.compile(r'<html[^>]*\sdata-logged-in="false"')
+_TAG_LIST_RE = re.compile(r'<dl\b[^>]*\bclass="tagList\b.*?</dl>', re.S)
+_TAG_SLUG_RE = re.compile(r'\bclass="tagItem tagItem--tag_([^"\s]+)')
 _FIRST_POST_RE = re.compile(r"<article\b[^>]*\bmessage--post\b[^>]*>", re.S)
 _FIELD_RE = re.compile(r'<dl\b[^>]*\bdata-field="([^"]+)"[^>]*>(.*?)</dl>', re.S)
 _DD_RE = re.compile(r"<dd\b[^>]*>(.*)</dd>", re.S)
@@ -163,6 +171,24 @@ def _overview(post: str) -> str | None:
     return text or None
 
 
+def page_tags(page: str) -> list[str]:
+    """The thread's tag slugs, the feed's spelling (`tagItem--tag_<slug>`)."""
+    found = _TAG_LIST_RE.search(page)
+    if found is None:
+        return []
+    tags: list[str] = []
+    for slug in cast(list[str], _TAG_SLUG_RE.findall(found.group(0))):
+        if slug not in tags:
+            tags.append(slug)
+    return tags
+
+
+def page_version(post: str) -> str | None:
+    """The first post's Version field."""
+    field = _fields(post).get("version")
+    return (_text(field) or None) if field is not None else None
+
+
 def parse_first_post(post: str) -> dict[str, object]:
     fields = _fields(post)
     developer = _text(fields["Developer"]) if "Developer" in fields else ""
@@ -199,36 +225,52 @@ class LcThreadsSource:
         ctx.state.put(self.name, "since_ts", newest)
         return newest
 
-    def _read(self, ctx: SourceContext, thread_id: int, thread_ts: int) -> None:
+    def _stop(self, ctx: SourceContext, reason: str) -> ValueError:
+        """Pause LC for the run (no guest step goes on) and return the error to raise."""
+        ctx.pacer.paused[self.name] = reason
+        return ValueError(reason)
+
+    def _read(self, ctx: SourceContext, thread_id: int, thread_ts: int, premium: bool) -> None:
         response = ctx.pacer.request(
             self.name, THREAD_URL.format(thread_id=thread_id), ok_statuses=MISSING_STATUSES
         )
         html = response.text()
+        post: str | None = None
         if response.status == 404:
             details: dict[str, object] = {"status": "missing"}
         elif _LC_PAGE_RE.search(html) is None:
             # Not an LC page, e.g. a Cloudflare challenge: stop, store nothing.
-            raise ValueError(f"LC answered HTTP {response.status} without its own page")
+            raise self._stop(ctx, f"LC answered HTTP {response.status} without its own page")
+        elif _GUEST_PAGE_RE.search(html) is None:
+            # A login on a guest request means a cookie was sent; store nothing.
+            raise self._stop(ctx, "LC answered a guest request with a logged-in page")
         elif response.status in MISSING_STATUSES:
             # LC's "no permission" page, e.g. a Plus thread for a Standard account.
             details = {"status": "missing"}
         else:
             try:
-                details = {"status": "ok", **parse_first_post(first_post_html(html))}
+                post = first_post_html(html)
+                details = {"status": "ok", **parse_first_post(post)}
             except ValueError:
                 # Kept so one odd page does not block the queue; read again when it changes.
                 log.warning("lc_threads: no first post on thread %s", thread_id)
                 details = {"status": "unreadable"}
-        ctx.rows += ctx.catalog.upsert_lc_details(thread_id, thread_ts, ctx.now(), details)
+        if premium and post is not None:
+            ctx.rows += ctx.catalog.upsert_lc_premium_details(
+                thread_id, thread_ts, ctx.now(), details, page_version(post), page_tags(html)
+            )
+        else:
+            ctx.rows += ctx.catalog.upsert_lc_details(thread_id, thread_ts, ctx.now(), details)
 
     def incremental(self, ctx: SourceContext) -> None:
-        if "lc" in ctx.pacer.paused:
-            # The feed was rate-limited or lost its login in this run; wait for the next.
-            raise RateLimited(self.name, f"lc is paused: {ctx.pacer.paused['lc']}")
+        if (paused := lc_pause(ctx.pacer)) is not None:
+            # An LC step was rate-limited or challenged in this run; wait for the next.
+            raise RateLimited(self.name, paused)
         since = self._since(ctx)
         while queue := ctx.catalog.lc_details_queue(since, QUEUE_CHUNK):
+            premium = ctx.catalog.lc_premium_ids(thread_id for thread_id, _ts in queue)
             for thread_id, thread_ts in queue:
-                self._read(ctx, thread_id, thread_ts)
+                self._read(ctx, thread_id, thread_ts, thread_id in premium)
 
     def sweep_due(self, ctx: SourceContext) -> bool:
         del ctx

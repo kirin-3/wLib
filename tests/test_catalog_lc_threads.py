@@ -67,7 +67,13 @@ def test_threads_are_read_and_stored(tmp_path):
 
 @pytest.mark.parametrize(
     ("status", "body"),
-    [(403, fixture_bytes("lc_no_permission.html")), (404, NGINX_404)],
+    # LC's "no permission" page as a guest sees it.
+    [
+        (403, fixture_bytes("lc_no_permission.html").replace(
+            b'data-logged-in="true"', b'data-logged-in="false"'
+        )),
+        (404, NGINX_404),
+    ],
 )
 def test_no_permission_and_not_found_are_missing(tmp_path, status, body):
     transport = FakeTransport()
@@ -114,4 +120,74 @@ def test_skipped_while_the_lc_feed_is_paused(tmp_path):
     ctx.pacer.paused["lc"] = "rate limited (HTTP 429)"
     with pytest.raises(RateLimited):
         LcThreadsSource().incremental(ctx)
+    assert transport.requests == []
+
+
+def _premium(thread_id, ts, **extra):
+    return {**_thread(thread_id, ts), "tier": "Premium", "version": None, "tags": [], **extra}
+
+
+def test_a_plus_page_read_as_a_guest_stores_its_version_and_tags(tmp_path):
+    transport = FakeTransport()
+    transport.route("/threads/24724/", Response(200, fixture_bytes("lc_thread_24724.html")))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert("lc_threads", "thread_id", [_premium(24724, 100)], NOW)
+    LcThreadsSource().incremental(ctx)
+    version, tags = rows(ctx.catalog, "SELECT version, tags FROM lc_threads")[0]
+    # The Version field, not the "[v1.2.0]" of the listing title.
+    assert version == "1.20"
+    assert json.loads(tags)[:3] == ["2dcg", "adventure", "censored"]
+    assert len(json.loads(tags)) == 18
+    assert _details(ctx.catalog)[24724][:2] == ("ok", "opopoworld (おぽぽわーるど)")
+
+
+def test_a_free_page_keeps_the_feed_version_and_tags(tmp_path):
+    transport = FakeTransport()
+    transport.route("/threads/6/", Response(200, fixture_bytes("lc_thread_6.html")))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert(
+        "lc_threads", "thread_id",
+        [{**_thread(6, 100), "tier": "Free", "version": "v1.0", "tags": ["3dcg"]}], NOW,
+    )
+    LcThreadsSource().incremental(ctx)
+    assert rows(ctx.catalog, "SELECT version, tags FROM lc_threads") == [("v1.0", '["3dcg"]')]
+
+
+def test_a_logged_in_page_stops_lc_and_stores_nothing(tmp_path):
+    page = fixture_bytes("lc_thread_24724.html").replace(
+        b'data-logged-in="false"', b'data-logged-in="true"'
+    )
+    transport = FakeTransport()
+    transport.route("/threads/", Response(200, page))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert("lc_threads", "thread_id", [_premium(24724, 100), _premium(2, 50)], NOW)
+    result = run_source(LcThreadsSource(), ctx)
+    assert result.status == "error" and "logged-in" in (result.detail or "")
+    assert len(transport.requests) == 1
+    assert _details(ctx.catalog) == {}
+    assert rows(ctx.catalog, "SELECT version FROM lc_threads WHERE thread_id = 24724") == [(None,)]
+    assert "lc_threads" in ctx.pacer.paused
+
+
+def test_a_lost_feed_login_does_not_stop_the_thread_pages(tmp_path):
+    from catalog_server.sources.lc import LcSource
+
+    transport = FakeTransport()
+    transport.route("/latest-updates/api", Response(200, fixture_bytes("lc_feed_logged_out.json")))
+    transport.route("/threads/6/", Response(200, fixture_bytes("lc_thread_6.html")))
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert("lc_threads", "thread_id", [_thread(6, 100)], NOW)
+    ctx.state.put("lc", "hwm_ts", 1)
+    assert run_source(LcSource(), ctx).status == "error"
+    assert run_source(LcThreadsSource(), ctx).status == "ok"
+    assert _details(ctx.catalog)[6][0] == "ok"
+
+
+def test_a_rate_limit_on_the_plus_listing_stops_the_thread_pages(tmp_path):
+    transport = FakeTransport()
+    ctx, _ = make_context(tmp_path, transport)
+    ctx.catalog.upsert("lc_threads", "thread_id", [_thread(1, 100)], NOW)
+    ctx.pacer.paused["lc_plus"] = "rate limited (HTTP 429)"
+    result = run_source(LcThreadsSource(), ctx)
+    assert result.status == "rate_limited" and "lc_plus" in (result.detail or "")
     assert transport.requests == []

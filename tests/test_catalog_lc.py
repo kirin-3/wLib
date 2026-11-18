@@ -143,12 +143,13 @@ def test_a_page_without_a_total_does_not_end_the_sweep(tmp_path):
     ],
     ids=["logged-out-json", "challenge-403", "html-200", "http-401"],
 )
-def test_no_login_stores_nothing_and_pauses_lc(tmp_path, response):
+def test_no_login_stores_nothing_and_ends_only_the_feed(tmp_path, response):
     ctx, _ = make_context(tmp_path, lambda request: response)
     result = run_source(LcSource(), ctx)
     assert result.status == "error" and "no LC login" in (result.detail or "")
     assert rows(ctx.catalog, "SELECT COUNT(*) FROM lc_threads") == [(0,)]
-    assert "lc" in ctx.pacer.paused
+    # The guest steps still run after a lost login.
+    assert "lc" not in ctx.pacer.paused
     # Imported rows and prefix names are not touched either.
     assert rows(ctx.catalog, "SELECT COUNT(*) FROM lc_prefix_names") == [(0,)]
 

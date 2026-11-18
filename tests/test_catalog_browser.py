@@ -324,3 +324,29 @@ def test_check_lc_login_needs_a_cookie(tmp_path, monkeypatch):
     monkeypatch.delenv("WLIB_CATALOG_LC_COOKIE", raising=False)
     monkeypatch.setenv("WLIB_CATALOG_BROWSER_SITES", "lc")
     assert main(["--data-dir", str(tmp_path), "check-lc-login"]) == 2
+
+
+def test_the_guest_view_shares_the_one_browser_without_cookies():
+    browser = FakeBrowser(lambda url: FakePage(200, b"<html></html>"))
+    transport = BrowserTransport(cookies=lc_login_cookies(COOKIE), session_factory=browser)
+    guest = transport.guest()
+    transport(Request("GET", "https://lewdcorner.com/latest-updates/api"))
+    guest(Request("GET", "https://lewdcorner.com/forums/119/"))
+    guest(Request("GET", "https://lewdcorner.com/threads/24724/"))
+    transport(Request("GET", "https://lewdcorner.com/latest-updates/api"))
+    login, guest_session, login_again = browser.sessions
+    assert login.options["cookies"][0]["name"] == "xf_user"
+    assert guest_session.options["cookies"] == []
+    assert login_again.options["cookies"] == login.options["cookies"]
+    # Only one session is live at a time.
+    assert login.closed and guest_session.closed and not login_again.closed
+    transport.close()
+    assert login_again.closed
+
+
+def test_without_cookies_the_guest_view_does_not_restart_the_browser():
+    browser = FakeBrowser(lambda url: FakePage(200, b"<html></html>"))
+    transport = BrowserTransport(session_factory=browser)
+    transport(Request("GET", "https://www.dlsite.com/a"))
+    transport.guest()(Request("GET", "https://lewdcorner.com/forums/119/"))
+    assert len(browser.sessions) == 1
