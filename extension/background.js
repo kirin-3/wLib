@@ -350,12 +350,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---- Extension fetch fallback (bridge client) ----
-// Fetch proxy: allowlisted F95 URLs, credentialed GET, 25-second abort,
+// Fetch proxy: allowlisted F95 and LC URLs, credentialed GET, 25-second abort,
 // 4 MiB streamed cap, off-site redirect guard. Tabs are only queried for an
 // open F95 tab to repeat a guest fetch in; no windows, offscreen, or cookies
 // API use.
 const F95_THREAD_FETCH_RE = /^https:\/\/f95zone\.to\/threads\/\d+\/$/;
 const F95_BATCH_FETCH_RE = /^https:\/\/f95zone\.to\/sam\/checker\.php\?threads=\d+(,\d+){0,99}$/;
+const LC_FETCH_RE = /^https:\/\/lewdcorner\.com\/(?:(?:threads\/\d+\/)|(?:latest-updates\/api\?page=(?:[1-9]|10)&per_page=90&cat=Games&sort=date))$/;
+const LC_ORIGIN = "https://lewdcorner.com/*";
 const BRIDGE_URL = "ws://localhost:8183/api/bridge";
 const BRIDGE_FETCH_TIMEOUT_MS = 25000;
 const BRIDGE_MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -368,8 +370,11 @@ function isBridgeUrlAllowed(url) {
     return F95_THREAD_FETCH_RE.test(url) || F95_BATCH_FETCH_RE.test(url);
 }
 
-async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
-    if (!isBridgeUrlAllowed(url)) {
+async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS, site = "f95") {
+    const allowed = site === "lc"
+        ? url === url.trim() && LC_FETCH_RE.test(url)
+        : site === "f95" && isBridgeUrlAllowed(url);
+    if (!allowed) {
         return { ok: false, error: "refused" };
     }
     const controller = new AbortController();
@@ -385,7 +390,7 @@ async function bridgeFetchUrl(url, timeoutMs = BRIDGE_FETCH_TIMEOUT_MS) {
         let finalUrl = url;
         try {
             finalUrl = response.url || url;
-            if (new URL(finalUrl).hostname !== "f95zone.to") {
+            if (new URL(finalUrl).hostname !== (site === "lc" ? "lewdcorner.com" : "f95zone.to")) {
                 return { ok: false, error: "offsite_redirect" };
             }
         } catch (_urlError) {
@@ -580,10 +585,10 @@ let bridgeBackoffMs = BRIDGE_BACKOFF_MIN_MS;
 let bridgePingTimer = null;
 let bridgeReconnectTimer = null;
 
-async function bridgeGetCanFetch() {
+async function bridgeGetCanFetch(origin = "https://f95zone.to/*") {
     try {
         if (typeof chrome !== "undefined" && chrome.permissions && chrome.permissions.contains) {
-            const origins = ["https://f95zone.to/*"];
+            const origins = [origin];
             const maybe = chrome.permissions.contains({ origins });
             const result = typeof maybe?.then === "function" ? await maybe : maybe;
             // Callback-style chrome.permissions.contains is handled by callers
@@ -599,12 +604,12 @@ async function bridgeGetCanFetch() {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.7");
+            return String(chrome.runtime.getManifest().version || "1.2.8");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.7";
+    return "1.2.8";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic
@@ -668,13 +673,14 @@ async function bridgeSendHello() {
         return;
     }
     try {
-        const canFetch = await bridgeGetCanFetch();
+        const [canFetch, canFetchLc] = await Promise.all([bridgeGetCanFetch(), bridgeGetCanFetch(LC_ORIGIN)]);
         bridgeSocket.send(JSON.stringify({
             type: "hello",
             protocol: 2,
             can_resolve: true,
             extension_version: bridgeGetVersion(),
             can_fetch: canFetch,
+            can_fetch_lc: canFetchLc,
         }));
     } catch (error) {
         console.warn("wLib extension: hello failed.", error);
@@ -686,8 +692,8 @@ async function bridgeSendStatus() {
         return;
     }
     try {
-        const canFetch = await bridgeGetCanFetch();
-        bridgeSocket.send(JSON.stringify({ type: "status", can_fetch: canFetch }));
+        const [canFetch, canFetchLc] = await Promise.all([bridgeGetCanFetch(), bridgeGetCanFetch(LC_ORIGIN)]);
+        bridgeSocket.send(JSON.stringify({ type: "status", can_fetch: canFetch, can_fetch_lc: canFetchLc }));
     } catch (error) {
         console.warn("wLib extension: status update failed.", error);
     }
@@ -701,7 +707,14 @@ async function bridgeHandleFetchMessage(message) {
     }
     let result;
     try {
-        const fetched = await bridgeFetchPreferringLogin(url);
+        let fetched;
+        if (message.site === "lc" && await bridgeGetCanFetch(LC_ORIGIN)) {
+            fetched = await bridgeFetchUrl(url, BRIDGE_FETCH_TIMEOUT_MS, "lc");
+        } else if (message.site === undefined || message.site === "f95") {
+            fetched = await bridgeFetchPreferringLogin(url);
+        } else {
+            fetched = { ok: false, error: "refused" };
+        }
         if (fetched.ok) {
             result = {
                 type: "fetch_result",

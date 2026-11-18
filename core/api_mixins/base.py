@@ -12,13 +12,13 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager, suppress
 from typing import TYPE_CHECKING, cast
 
-from core import database
+from core import database, lewdcorner, lewdcorner_updates
 from core.controllers import ControllerWatcher
 from core.database import (
     init_db,
     normalize_launch_mode,
 )
-from core.f95zone import NON_ENGINE_PREFIXES, normalize_prefix_label
+from core.f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
 from core.f95zone import normalize_thread_url as _normalize_thread_url
 from core.host_platform import (
     get_default_wine_prefix,
@@ -33,7 +33,7 @@ from core.game_tools import game_tool_folder
 from core.bridge_exposure import hide_from_js
 from core.launcher import Launcher, proton_compat_data_path
 from core.scraper import Scraper
-from core.versions import normalize_version
+from core.versions import actionable_remote_version, normalize_version
 from core.app_version import APP_VERSION
 from core.api_mixins.types import (
     ProgressStatus,
@@ -947,10 +947,7 @@ class ApiBase:
         )
 
     def _is_actionable_remote_version(self, version: object | None) -> bool:
-        if version is None:
-            return False
-        value = str(version).strip().lower()
-        return value not in ("", "unknown", "n/a", "na", "none", "null")
+        return actionable_remote_version(version)
 
     def _build_scraper_error_payload(
         self, payload: object, fallback_message: str
@@ -1516,7 +1513,9 @@ class ApiBase:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             _ = cursor.execute(
-                "SELECT id, thread_main_post_last_edit_at, thread_main_post_checked_at, thread_completed, screenshots FROM games WHERE f95_url = ?",
+                """SELECT id, f95_url, lc_url, lc_mode, thread_main_post_last_edit_at,
+                          thread_main_post_checked_at, thread_completed, screenshots
+                   FROM games WHERE f95_url = ?""",
                 (normalized_url,),
             )
             games = cast(list[sqlite3.Row], cursor.fetchall())
@@ -1540,6 +1539,12 @@ class ApiBase:
                 if has_completion:
                     completed = bool(metadata["thread_completed"])
                     was_completed = bool(cast(object, game["thread_completed"]))
+                    if was_completed and not completed and game["lc_url"]:
+                        # Either active site can mark this game complete.
+                        completed = lewdcorner.lc_active(
+                            {key: cast(object, game[key]) for key in ("lc_url", "f95_url", "lc_mode")},
+                            lewdcorner.setting_enabled(database.get_setting("lc_enabled")),
+                        )
                     if completed != was_completed:
                         fields["thread_completed"] = int(completed)
                         if completed:
@@ -1592,6 +1597,20 @@ class ApiBase:
 
         return self._open_with_system_handler(normalized_url, "No browser opener found")
 
+    def _version_check_fields(
+        self, game: Mapping[str, object], version: str
+    ) -> dict[str, object]:
+        skipped = normalize_version(game.get("skipped_version"))
+        return {
+            "current_version": str(game.get("version") or ""),
+            "latest_version": version,
+            "latest_site": str(game.get("latest_site") or ""),
+            "has_update": bool(str(game.get("exe_path") or "").strip()) and self._has_update(
+                game.get("version"), version, game.get("skipped_version")
+            ),
+            "skipped": bool(skipped) and skipped == normalize_version(version),
+        }
+
     def check_all_updates(
         self,
         game_ids: Sequence[int] | None = None,
@@ -1608,7 +1627,9 @@ class ApiBase:
         fields) for one Undo. Catalog-only (Ryuu) games are left out of such
         a pass.
         """
-        from core.database import get_all_games
+        from core.database import get_all_games, get_setting
+        from core.game_lookup import f95_thread_entries, lc_thread_entries
+        from core import extension_bridge
 
         wanted_ids: set[int] | None = None
         if game_ids is not None:
@@ -1631,10 +1652,14 @@ class ApiBase:
         from core.store_links import coerce_store_links
 
         ryuu_games: list[tuple[dict[str, object], str]] = []
+        lc_games: dict[int, dict[str, object]] = {}
+        lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
         for game in all_games_raw:
             game_id = game.get("id")
             url = game.get("f95_url")
-            if isinstance(game_id, int) and not url and self._catalog_enabled():
+            if not refresh_info and isinstance(game_id, int) and lewdcorner.lc_active(game, lc_enabled):
+                lc_games[game_id] = game
+            elif isinstance(game_id, int) and not url and self._catalog_enabled():
                 ryuu_link = next(
                     (
                         link
@@ -1659,10 +1684,17 @@ class ApiBase:
                     "f95_url": url.strip(),
                     "exe_path": str(game.get("exe_path") or ""),
                     "latest_version": str(game.get("latest_version") or ""),
+                    "f95_latest_version": str(
+                        game.get("f95_latest_version")
+                        or (game.get("latest_version") if not game.get("latest_site") else "")
+                        or ""
+                    ),
                     "skipped_version": str(game.get("skipped_version") or ""),
                     "thread_completed": bool(game.get("thread_completed")),
                 }
             )
+
+        lc_only = {game_id for game_id, game in lc_games.items() if not game.get("f95_url")}
 
         # Check-and-set in one critical section. _update_running stays True
         # until the worker exits (even after cancel), so runs never overlap.
@@ -1673,10 +1705,12 @@ class ApiBase:
             self._update_cancelled = False
             self._update_outcome = "running"
             self._update_error = ""
-            self._update_total = len(games_with_url) + len(ryuu_games)
+            self._update_total = len(games_with_url) + len(lc_only) + len(ryuu_games)
             self._update_checked = 0
             # The callback fires after a game finishes, so show the game being checked now.
-            self._update_current = games_with_url[0]["title"] if games_with_url else ""
+            self._update_current = (
+                "Reading LewdCorner" if lc_games else games_with_url[0]["title"] if games_with_url else ""
+            )
             self._update_results = []
             self._update_refresh_info = bool(refresh_info)
             self._update_delay_seconds = self._get_bulk_check_delay_seconds()
@@ -1686,24 +1720,71 @@ class ApiBase:
             g["f95_url"]: nxt["title"]
             for g, nxt in zip(games_with_url, games_with_url[1:], strict=False)
         }
-        current_versions_by_url = {g["f95_url"]: g["version"] for g in games_with_url}
         previous_latest_versions = {
-            g["id"]: g.get("latest_version", "") for g in games_with_url
+            int(str(game["id"])): str(game.get("latest_version") or "")
+            for game in all_games_raw if isinstance(game.get("id"), int)
         }
-        previous_latest_versions.update(
-            {
-                int(str(game["id"])): str(game.get("latest_version") or "")
-                for game, _ in ryuu_games
-            }
-        )
 
         def run_checks() -> None:
             outcome = "failed"
             error = "Update check interrupted before completion"
             try:
+                lc_results: dict[int, lewdcorner_updates.CheckResult] = {}
+                if lc_games:
+                    lc_urls = {
+                        game_id: lewdcorner.normalize_thread_url(game.get("lc_url"))
+                        for game_id, game in lc_games.items()
+                    }
+                    lc_catalog = lc_thread_entries([
+                        lewdcorner.extract_thread_id(url) for url in lc_urls.values()
+                    ])
+                    feed: dict[str, lewdcorner.LcVersion] = {}
+                    feed_error: lewdcorner.LcUpdateError | None = None
+                    if extension_bridge.is_available(site="lc"):
+                        try:
+                            feed = lewdcorner_updates.read_feed(self._update_cancelled_now)
+                        except lewdcorner.LcUpdateError as exc:
+                            feed_error = exc
+                    for game_id, game in lc_games.items():
+                        if self._update_cancelled_now():
+                            return
+                        url = lc_urls[game_id]
+                        thread_id = lewdcorner.extract_thread_id(url)
+                        result = lewdcorner_updates.check_thread(
+                            game_id, url, game.get("lc_latest_version"),
+                            lc_catalog.get(thread_id, {}),
+                            feed_item=feed.get(thread_id), feed_error=feed_error,
+                        )
+                        lc_results[game_id] = result
+                        if game_id in lc_only:
+                            error_code = result.error.code if result.error else ""
+                            current = result.game or game
+                            version = str(current.get("latest_version") or "") if not result.error else ""
+                            entry: dict[str, object] = {
+                                "id": game_id,
+                                "title": str(game.get("title") or ""),
+                                **self._version_check_fields(current, version),
+                                "newly_finished": result.newly_finished,
+                                "error": str(result.error) if result.error else "",
+                                "error_code": error_code,
+                            }
+                            with self._update_lock:
+                                if (result.version_checked or result.newly_finished or result.error) and not (
+                                    automatic and error_code == "lc_extension_unavailable"
+                                ):
+                                    self._update_results.append(entry)
+                                self._update_checked += 1
+                if self._update_cancelled_now():
+                    return
+
                 urls = [game["f95_url"] for game in games_with_url]
+                f95_catalog = f95_thread_entries([extract_thread_id(url) for url in urls])
+                f95_checked = 0
+                with self._update_lock:
+                    self._update_current = games_with_url[0]["title"] if games_with_url else ""
 
                 def check_callback(url: str, result: object) -> bool:
+                    nonlocal f95_checked
                     game = games_by_url.get(url)
                     if not game:
                         return True
@@ -1716,9 +1797,10 @@ class ApiBase:
                     if result_dict is None:
                         result_dict = {}
 
-                    has_update = False
-                    skipped = False
-                    newly_finished = False
+                    current: Mapping[str, object] = game
+                    winner = ""
+                    lc_result = lc_results.get(game["id"])
+                    newly_finished = bool(lc_result and lc_result.newly_finished)
                     thread_metadata: dict[str, object] | None = None
                     # Previous rating of each game whose rating a page read changed.
                     rating_previous: dict[int, dict[str, object]] = {}
@@ -1746,49 +1828,18 @@ class ApiBase:
                         result_dict.get("version")
                     ):
                         remote_version = str(result_dict.get("version") or "").strip()
-                        import sqlite3
-
-                        from core.database import get_connection
-
-                        get_connection_fn: Callable[[], sqlite3.Connection] = (
-                            get_connection
-                        )
-
-                        conn: sqlite3.Connection | None = None
                         try:
-                            conn = get_connection_fn()
-                            cursor = conn.cursor()
-                            _ = cursor.execute(
-                                "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                                (remote_version, url),
+                            saved = lewdcorner_updates.store_f95_version(
+                                game["id"], url, remote_version,
+                                f95_catalog.get(extract_thread_id(url), {}),
                             )
-                            row = cast(
-                                tuple[object, ...] | None,
-                                cursor.execute(
-                                    "SELECT version, skipped_version, exe_path FROM games WHERE id = ?",
-                                    (game["id"],),
-                                ).fetchone(),
-                            )
-                            current_version = current_versions_by_url.get(url, "")
-                            skipped_version = game.get("skipped_version", "")
-                            if row is not None:
-                                current_version = str(row[0] or "")
-                                skipped_version = str(row[1] or "")
-                                wishlisted = not str(row[2] or "").strip()
-                            conn.commit()
-                            skipped = bool(normalize_version(skipped_version)) and (
-                                normalize_version(skipped_version)
-                                == normalize_version(remote_version)
-                            )
-                            has_update = not wishlisted and self._has_update(
-                                current_version, remote_version, skipped_version
-                            )
-                        except Exception as e:
-                            callback_error = f"Failed to save update data: {e}"
+                            if saved is not None:
+                                current = saved
+                                winner = str(saved.get("latest_version") or "")
+                                wishlisted = not str(saved.get("exe_path") or "").strip()
+                        except Exception as exc:
+                            callback_error = f"Failed to save update data: {exc}"
                             callback_error_code = "db_write_failed"
-                        finally:
-                            if conn is not None:
-                                conn.close()
                         # A page fallback already read the thread; store what it
                         # found for this game too, not only wishlist prefixes.
                         page_metadata = any(
@@ -1803,9 +1854,9 @@ class ApiBase:
                             not callback_error
                             and not page_metadata
                             and wishlisted
-                            and str(game.get("latest_version") or "").strip()
-                            and str(game.get("latest_version") or "").strip()
-                            != remote_version
+                            and str(game.get("f95_latest_version") or "").strip()
+                            and normalize_version(game.get("f95_latest_version"))
+                            != normalize_version(remote_version)
                         ):
                             try:
                                 metadata = self._coerce_string_key_dict(
@@ -1813,11 +1864,8 @@ class ApiBase:
                                 )
                                 thread_metadata = metadata
                                 if metadata and metadata.get("success"):
-                                    newly_finished = game["id"] in (
-                                        self._update_thread_edit_metadata_for_url(
-                                            url, metadata
-                                        )
-                                    )
+                                    finished_ids = self._update_thread_edit_metadata_for_url(url, metadata)
+                                    newly_finished = newly_finished or game["id"] in finished_ids
                                     rating_previous.update(
                                         self._store_f95_rating_for_url(url, metadata)
                                     )
@@ -1838,7 +1886,7 @@ class ApiBase:
                             finished_ids = self._update_thread_edit_metadata_for_url(
                                 url, result_dict
                             )
-                            newly_finished = wishlisted and game["id"] in finished_ids
+                            newly_finished = newly_finished or (wishlisted and game["id"] in finished_ids)
                         except Exception:
                             pass
                         try:
@@ -1876,18 +1924,29 @@ class ApiBase:
                             pass  # A failed thread read keeps the current info.
                         info_previous.update(rating_previous.get(game["id"], {}))
 
+                    note = ""
+                    if lc_result:
+                        if callback_error and lc_result.version_checked and lc_result.game:
+                            note = callback_error
+                            current = lc_result.game
+                            winner = str(current.get("latest_version") or "")
+                            callback_error = callback_error_code = callback_browser_fallback = ""
+                        elif lc_result.error and not (
+                            automatic and lc_result.error.code == "lc_extension_unavailable"
+                        ):
+                            note = str(lc_result.error)
+
                     with self._update_lock:
                         result_entry: dict[str, object] = {
                             "id": game["id"],
                             "title": game["title"],
-                            "current_version": game["version"],
-                            "latest_version": str(result_dict.get("version") or ""),
-                            "has_update": has_update,
-                            "skipped": skipped,
+                            **self._version_check_fields(current, winner),
                             "newly_finished": newly_finished,
                             "error": callback_error,
                             "error_code": callback_error_code,
                         }
+                        if note:
+                            result_entry["note"] = note
                         if callback_browser_fallback:
                             result_entry["browser_fallback"] = callback_browser_fallback
                         if refresh_info:
@@ -1900,6 +1959,7 @@ class ApiBase:
                             result_entry["previous"] = info_previous
                         self._update_results.append(result_entry)
                         self._update_checked += 1
+                        f95_checked += 1
                         self._update_current = next_title_by_url.get(url, "")
                     return True
 
@@ -1920,7 +1980,7 @@ class ApiBase:
                 with self._update_lock:
                     should_append_batch_error = (
                         batch_error
-                        and self._update_checked == 0
+                        and f95_checked == 0
                         and bool(games_with_url)
                     )
 

@@ -31,6 +31,7 @@ import { openInstallArchive } from "../utils/installArchive";
 import {useUpdateDownloads} from "../composables/useUpdateDownloads";
 import { gameDownloadStatus, isUnfinished } from "../utils/downloadQueue";
 const updateDownloads = useUpdateDownloads();
+import { latestSiteLabel, updateCheckUrl } from "../utils/lewdcorner";
 import { hasAvailableUpdate } from "../utils/libraryGames";
 import { getSafeNotesLinkUrl, renderedLinkHref } from "../utils/notesLinks";
 import { libraryOpenQuery } from "../utils/storeLinks";
@@ -93,11 +94,13 @@ const openGame = (game: GameRecord) => {
 };
 
 const recheck = async (game: GameRecord) => {
-  if (!game.f95_url || recheckingIds.value.has(game.id) || status.value.running) return;
+  const url = updateCheckUrl(game);
+  if (!url || recheckingIds.value.has(game.id) || status.value.running) return;
   recheckingIds.value.add(game.id);
   try {
-    const result = await api.checkForUpdates(game.f95_url);
+    const result = await api.checkForUpdates(url);
     if (!result?.success) throw new Error(result?.error || "Update check failed");
+    if (result.note) notify(result.note, "info");
     if (result.newly_finished) {
       notify(`${game.title} is finished`, "success");
       return;
@@ -153,10 +156,12 @@ const notificationsAvailable = ref(false);
 const savingNotifications = ref(false);
 const notificationSettingLoaded = ref(false);
 const notificationSettingError = ref("");
-const loadNotificationSetting = async () => {
+const lcEnabled = ref(false);
+const loadUpdateSettings = async () => {
   notificationSettingError.value = "";
   try {
     const settings = await api.getSettings();
+    lcEnabled.value = !!settings.lc_enabled;
     desktopNotifications.value = settings.update_notifications !== false;
     notificationSettingLoaded.value = true;
   } catch (error) {
@@ -387,6 +392,8 @@ const gamesWithErrors = computed(() => {
   return status.value.results.filter((r) => r.error);
 });
 
+const gamesWithNotes = computed(() => status.value.results.filter((result) => result.note));
+
 const persistedUpdates = computed(() => {
   return games.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game));
 });
@@ -463,7 +470,7 @@ watch([() => persistedUpdates.value.map((game) => game.id), () => updateDownload
 const bulkUpdate = async (action: "updated" | "skip" | "check") => {
   if (status.value.running || startingCheck.value || bulkBusy.value || bulkDownloading.value) return;
   const selected = persistedUpdates.value.filter((game) => selectedUpdateIds.value.has(game.id));
-  if (action === "check") { await startCheck(selected.filter((game) => game.f95_url).map((game) => game.id)); return; }
+  if (action === "check") { await startCheck(selected.filter(updateCheckUrl).map((game) => game.id)); return; }
   bulkBusy.value = true;
   const result = await runBulk(selected, (game) => action === "updated" ? api.markGameUpdated(game) : api.updateGame(game.id, { skipped_version: game.latest_version || "" }), (game) => {
     if (action === "updated") return versionSnapshot(game, (id, fields) => api.updateGame(id, fields));
@@ -522,7 +529,7 @@ const updateMenuItems = (game: GameRecord): MenuButtonItem[] => {
   });
   items.push({ id: "skip", label: `Skip version ${game.latest_version ?? ""}`.trim(), icon: IconPlayerSkipForward, disabled: running, disabledReason: CHECK_RUNNING_REASON });
   let recheckReason = "";
-  if (!game.f95_url) recheckReason = "Only games with an F95Zone thread can be re-checked";
+  if (!updateCheckUrl(game)) recheckReason = "This game has no active update thread";
   else if (running) recheckReason = CHECK_RUNNING_REASON;
   else if (recheckingIds.value.has(game.id)) recheckReason = "Checking this game now";
   items.push({ id: "recheck", label: "Re-check", icon: IconReload, disabled: !!recheckReason, disabledReason: recheckReason });
@@ -663,7 +670,7 @@ onMounted(() => {
     const capabilities = await loadPlatformCapabilities();
     if (disposed) return;
     notificationsAvailable.value = capabilities.platform === "linux";
-    if (notificationsAvailable.value) void loadNotificationSetting();
+    void loadUpdateSettings();
     void loadAppUpdate();
     await loadGames();
     await loadAutoCheckSetting();
@@ -719,7 +726,7 @@ onUnmounted(() => {
             border-left: 2px solid var(--brand);
           "
         >
-          Check F95Zone for new game versions.
+          Check F95Zone and active LewdCorner threads for new game versions.
         </p>
         <p class="mt-2 text-xs" style="color: var(--text-secondary)" data-testid="updates-last-checked">
           Last checked: {{ formatLastCheck }} · {{ frequencyLabel }}
@@ -772,7 +779,7 @@ onUnmounted(() => {
       :notifications-error="notificationSettingError"
       @set-frequency="setFrequency"
       @set-notifications="setDesktopNotifications"
-      @retry-notifications="loadNotificationSetting"
+      @retry-notifications="loadUpdateSettings"
     />
 
     <!-- Check status: progress, outcome, errors and the first-run hint -->
@@ -840,9 +847,10 @@ onUnmounted(() => {
           class="text-sm"
           style="color: var(--text-secondary)"
         >
-          Choose "Check All Games" to scan F95Zone for new versions. Games are
-          checked one-by-one with a {{ statusDelaySeconds }}-second delay to
-          avoid rate limiting.
+          Choose "Check All Games" to scan F95Zone and LewdCorner for new
+          versions. Games are checked one-by-one with a {{ statusDelaySeconds }}-second
+          delay to avoid rate limiting. LewdCorner Plus games need a LewdCorner
+          login in the browser with the wLib extension.
         </p>
       </div>
     </div>
@@ -934,7 +942,7 @@ onUnmounted(() => {
             <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" :title="status.running || startingCheck ? CHECK_RUNNING_REASON : undefined" @click="bulkDownload">Download selected</button>
             <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('updated')">Mark updated</button>
             <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading" @click="bulkUpdate('skip')">Skip version</button>
-            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && game.f95_url)" @click="bulkUpdate('check')">Re-check</button>
+            <button class="ui-action-btn px-2 py-1" :disabled="status.running || startingCheck || bulkBusy || bulkDownloading || !persistedUpdates.some(game => selectedUpdateIds.has(game.id) && updateCheckUrl(game))" @click="bulkUpdate('check')">Re-check</button>
           </template>
         </div>
         <TransitionGroup name="list" tag="div" class="space-y-2">
@@ -964,6 +972,7 @@ onUnmounted(() => {
                   <span class="mx-1" aria-hidden="true">→</span>
                   <span class="sr-only">to</span>
                   <span class="font-bold" style="color: var(--success-text)">{{ game.latest_version }}</span>
+                  <span v-if="latestSiteLabel(game, lcEnabled)" class="ml-1 text-xs" style="color: var(--text-muted)">{{ latestSiteLabel(game, lcEnabled) }}</span>
                 </span>
               </p>
               <p class="flex flex-wrap items-center gap-x-2 text-xs" style="color: var(--text-secondary)">
@@ -1071,6 +1080,11 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <ul v-if="gamesWithNotes.length" class="mb-3 space-y-1 text-xs" style="color: var(--text-muted)">
+          <li v-for="result in gamesWithNotes" :key="result.id">
+            <span class="font-medium">{{ result.title }}</span> · {{ result.note }}
+          </li>
+        </ul>
         <div v-if="gamesWithErrors.length" class="space-y-1">
           <p class="text-xs mb-1" style="color: var(--text-muted)">
             Failed checks:

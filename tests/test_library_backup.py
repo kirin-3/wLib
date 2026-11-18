@@ -3825,18 +3825,31 @@ def test_lc_backup_round_trip_merge_and_restore(tmp_path, monkeypatch):
     lc = "https://lewdcorner.com/threads/21/"
     dismissed = "https://lewdcorner.com/threads/22/"
     game_id = add_game("LC source", "", lc_url=dismissed, lc_mode="off")
+    versions = {
+        "latest_version": "0.6",
+        "f95_latest_version": "0.5",
+        "f95_latest_at": "2026-11-01T00:00:00Z",
+        "lc_latest_version": "0.6",
+        "lc_latest_at": "2026-11-10T00:00:00Z",
+        "latest_site": "lc",
+    }
     update_game(game_id, {"lc_url": lc})
+    update_game(game_id, versions)
+    update_setting("lc_feed_read_at", versions["lc_latest_at"])
     update_setting("lc_enabled", "1")
     update_setting("lc_plus", "1")
     backup = build_library_backup({"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
     assert backup["games"][0]["metadata"]["lc_dismissed"] == "22"
     assert backup["settings"]["general"]["lc_plus"] == "1"
+    assert "lc_feed_read_at" not in backup["settings"]["general"]
 
     monkeypatch.setattr("core.database.DB_PATH", str(tmp_path / "restored.db"))
     init_db()
     result = apply_library_backup(backup, {"sections": [SECTION_METADATA, SECTION_SETTINGS_GENERAL]})
     assert result["created"] == 1
     restored = get_all_games()[0]
+    assert {key: restored[key] for key in versions} == versions
+    assert get_setting("lc_feed_read_at") is None
     assert restored["lc_url"] == lc
     assert restored["lc_mode"] == "off"
     assert restored["lc_dismissed"] == "22"
@@ -3864,3 +3877,17 @@ def test_conflicting_lc_and_f95_matches_are_ambiguous():
     result = apply_library_backup(backup, {"sections": [SECTION_METADATA]})
     assert result["ambiguous"] == result["skipped"] == 1
     assert {game["title"] for game in get_all_games()} == {"LC", "F95"}
+
+
+def test_legacy_backup_restores_f95_latest_as_an_undated_version():
+    backup = base_backup([{"metadata": {
+        "title": "Legacy F95 game",
+        "f95_url": "https://f95zone.to/threads/42/",
+        "latest_version": "0.5",
+    }}])
+    result = apply_library_backup(backup, {"sections": [SECTION_METADATA]})
+    assert result["created"] == 1
+    restored, = get_all_games()
+    assert restored["f95_latest_version"] == restored["latest_version"] == "0.5"
+    assert restored["latest_site"] == "f95"
+    assert restored["f95_latest_at"] == ""

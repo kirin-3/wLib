@@ -244,6 +244,7 @@ def _catalog_thread_entries(
                         "title": data.get("title") or "",
                         "developer": data.get("developer") or data.get("creator") or "",
                         "version": data.get("version") or "",
+                        "ts": data.get("ts"),
                         "coverImage": data.get("cover_url") or "",
                         "tags": ", ".join(_named_values(data.get("tags"), tag_names)),
                         "rating": rating if isinstance(rating, (int, float)) and 0 < rating <= 5 else "",
@@ -254,6 +255,8 @@ def _catalog_thread_entries(
                         "external_links": _detail_links(data.get("external_ids")),
                         "links": _detail_store_links(data.get("external_ids")),
                     }
+                    if source == "lc":
+                        entry.update(tier=data.get("tier"), origin=data.get("origin"))
                     results[str(data["thread_id"])] = entry
     except (sqlite3.Error, OSError, ValueError):
         return {}

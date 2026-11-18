@@ -21,6 +21,7 @@ from typing import BinaryIO, cast, final
 from collections.abc import Callable
 
 from core import extension_ws
+from core.lewdcorner import Site
 
 logger = logging.getLogger("wlib.bridge")
 
@@ -61,6 +62,7 @@ class BridgeConnection:
         self._send_lock = threading.Lock()
         self._hello_ok = False
         self.can_fetch = False
+        self.can_fetch_lc = False
         self.can_resolve = False
         self.eligible = False
         self.closed = False
@@ -81,24 +83,29 @@ class BridgeConnection:
 
     def note_hello(
         self, protocol: object, can_fetch: object, extension_version: object = "",
-        can_resolve: object = False
+        can_resolve: object = False, *, can_fetch_lc: object = False,
     ) -> None:
         self._hello_ok = protocol in (1, 2)
         self.can_fetch = bool(can_fetch) if isinstance(can_fetch, bool) else False
+        self.can_fetch_lc = self._hello_ok and can_fetch_lc is True
         self.can_resolve = can_resolve is True
         self.eligible = self._hello_ok and self.can_fetch
         if isinstance(extension_version, str):
             self.extension_version = extension_version.strip()[:32]
 
-    def note_status(self, can_fetch: object) -> None:
+    def note_status(self, can_fetch: object, can_fetch_lc: object = None) -> None:
         if isinstance(can_fetch, bool):
             self.can_fetch = can_fetch
             self.eligible = self._hello_ok and self.can_fetch
+        if isinstance(can_fetch_lc, bool):
+            self.can_fetch_lc = self._hello_ok and can_fetch_lc
 
 
 _lock = threading.Lock()
 _connections: list[BridgeConnection] = []
 _pending: dict[str, _Pending] = {}
+_lc_request_lock = threading.Lock()
+_last_lc_request: float | None = None
 
 
 @final
@@ -124,7 +131,7 @@ _last_fetch: dict[str, object] | None = None
 
 def reset_for_tests() -> None:
     """Clear registry and pending (tests only)."""
-    global _disconnects, _last_disconnect_at, _last_connection_seconds, _last_fetch
+    global _disconnects, _last_disconnect_at, _last_connection_seconds, _last_fetch, _last_lc_request
     with _lock:
         _connections.clear()
         _pending.clear()
@@ -133,6 +140,7 @@ def reset_for_tests() -> None:
         _last_disconnect_at = None
         _last_connection_seconds = None
         _last_fetch = None
+        _last_lc_request = None
 
 
 def close_paired_connections(pairing_id: str) -> None:
@@ -182,17 +190,17 @@ def _remove_connection(conn: BridgeConnection) -> None:
         logger.info("Browser extension disconnected after %.0f s", duration)
 
 
-def _newest_eligible() -> BridgeConnection | None:
+def _newest_eligible(site: Site = "f95") -> BridgeConnection | None:
     with _lock:
         for conn in _connections:
-            if conn.eligible and not conn.closed:
+            if not conn.closed and (conn.can_fetch_lc if site == "lc" else conn.eligible):
                 return conn
     return None
 
 
-def is_available() -> bool:
+def is_available(*, site: Site = "f95") -> bool:
     """True when at least one eligible extension is connected."""
-    return _newest_eligible() is not None
+    return _newest_eligible(site) is not None
 
 
 def record_fetch_outcome(
@@ -236,6 +244,7 @@ def status_snapshot() -> dict[str, object]:
             "eligible": any(conn.eligible for conn in open_connections),
             "extension_version": newest.extension_version if newest else "",
             "can_fetch": newest.can_fetch if newest else None,
+            "can_fetch_lc": any(conn.can_fetch_lc for conn in open_connections),
             "connected_seconds": (
                 round(now - newest.opened_at) if newest else None
             ),
@@ -272,16 +281,18 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
             message.get("can_fetch"),
             message.get("extension_version"),
             message.get("can_resolve"),
+            can_fetch_lc=message.get("can_fetch_lc"),
         )
         logger.info(
-            "Browser extension connected (version %s, protocol %s, can fetch: %s)",
+            "Browser extension connected (version %s, protocol %s, can fetch F95Zone: %s, LewdCorner: %s)",
             conn.extension_version or "unknown",
             message.get("protocol"),
             conn.can_fetch,
+            conn.can_fetch_lc,
         )
     elif raw_type == "status":
         could_fetch = conn.can_fetch
-        conn.note_status(message.get("can_fetch"))
+        conn.note_status(message.get("can_fetch"), message.get("can_fetch_lc"))
         if conn.can_fetch != could_fetch:
             logger.info("Browser extension can fetch: %s", conn.can_fetch)
     elif raw_type == "ping":
@@ -349,9 +360,21 @@ def _handle_message(conn: BridgeConnection, message: object) -> None:
         return
 
 
-def fetch(url: str, timeout: float = 30) -> BridgeResponse:
+def fetch(url: str, timeout: float = 30, *, site: Site = "f95") -> BridgeResponse:
     """Send one fetch to the newest eligible extension and wait for its body."""
-    conn = _newest_eligible()
+    if site == "lc":
+        with _lc_request_lock:
+            if _last_lc_request is not None and is_available(site="lc"):
+                delay = 2.0 - (time.monotonic() - _last_lc_request)
+                if delay > 0:
+                    time.sleep(delay)
+            return _fetch(url, timeout, site)
+    return _fetch(url, timeout, site)
+
+
+def _fetch(url: str, timeout: float, site: Site) -> BridgeResponse:
+    global _last_lc_request
+    conn = _newest_eligible(site)
     if conn is None:
         raise BridgeUnavailable("no eligible extension connected")
     request_id = uuid.uuid4().hex
@@ -363,7 +386,11 @@ def fetch(url: str, timeout: float = 30) -> BridgeResponse:
         if conn.closed:
             raise BridgeUnavailable("extension disconnected")
         _pending[request_id] = item
-    payload = json.dumps({"type": "fetch", "id": request_id, "url": url})
+    request = {"type": "fetch", "id": request_id, "url": url}
+    if site == "lc":
+        request["site"] = site
+        _last_lc_request = time.monotonic()
+    payload = json.dumps(request)
     try:
         conn.send_text(payload)
     except (BridgeFailed, OSError, ValueError) as exc:

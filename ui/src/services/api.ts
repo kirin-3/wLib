@@ -275,6 +275,8 @@ export interface WebMediaStatus extends ApiBasicResponse {
 }
 
 export interface UpdateCheckResponse extends ApiBasicResponse {
+  latest_site?: GameRecord["latest_site"];
+  note?: string;
   skipped?: boolean;
   success: boolean;
   version?: string;
@@ -291,6 +293,8 @@ export interface BulkUpdateStartResponse extends ApiBasicResponse {
 }
 
 export interface BulkUpdateResultItem {
+  latest_site?: GameRecord["latest_site"];
+  note?: string;
   id: number;
   title: string;
   current_version: string;
@@ -1119,6 +1123,11 @@ export interface GameRecord {
   lc_mode?: "" | "on" | "off";
   version?: string;
   latest_version?: string;
+  f95_latest_version?: string;
+  f95_latest_at?: string;
+  lc_latest_version?: string;
+  lc_latest_at?: string;
+  latest_site?: "" | "f95" | "lc" | "both";
   cover_image_path?: string;
   cover_local?: string | null;
   cover_local_url?: string;

@@ -19,6 +19,7 @@ import CoverPlaceholder from "../CoverPlaceholder.vue";
 import type { GameRecord } from "../../services/api";
 import type { LayoutMode } from "../../utils/libraryViewState";
 import { gameCoverSrc } from "../../utils/gameCover";
+import { updateCheckUrl } from "../../utils/lewdcorner";
 import {
   formatPlaytime,
   getEffectiveLaunchTargets,
@@ -165,7 +166,7 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
         <span v-if="isImageTileLayout && unplayed" class="unplayed-label unplayed-on-art">Unplayed</span>
       </div>
       <button
-        v-if="!isImageTileLayout && game.f95_url"
+        v-if="!isImageTileLayout && updateCheckUrl(game)"
         @click.stop="emit('check-update', game)"
         :disabled="updateBusy"
         :title="`Check updates for ${game.title}`"

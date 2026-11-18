@@ -488,7 +488,7 @@ test('timeout also covers a response body that never finishes', async () => {
 
 test('manifest 1.1.x grants f95 host and alarms without tabs or cookies', () => {
   const manifest = JSON.parse(readFileSync(path.join(__dirname, '..', 'extension', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '1.2.7');
+  assert.equal(manifest.version, '1.2.8');
   assert.ok((manifest.permissions || []).includes('storage'));
   assert.ok((manifest.permissions || []).includes('alarms'));
   assert.ok(!(manifest.permissions || []).includes('tabs'));
@@ -967,7 +967,7 @@ function makePairingContext(stored = {}) {
   const sockets = [];
   const context = {
     chrome: {
-      runtime: { onMessage: { addListener: () => {} }, getManifest: () => ({ version: '1.2.7' }) },
+      runtime: { onMessage: { addListener: () => {} }, getManifest: () => ({ version: '1.2.8' }) },
       storage: {
         local: {
           get: async (key) => ({ [key]: stored[key] }),
@@ -1015,4 +1015,51 @@ test('a refused check tells the widget to ask for approval in wLib', () => {
   const payload = vm.runInContext('normalizeCheckPayload({exists:false, app_version:"9.9.9", error_code:"pairing_required"})', context);
   assert.match(payload.pairingNote, /Allow this browser extension/);
   assert.equal(vm.runInContext('normalizeCheckPayload({exists:false, app_version:"9.9.9"})', context).pairingNote, undefined);
+});
+
+test('LC bridge uses only allowlisted background fetches and its own permission', async () => {
+  const { context, sent, instances } = makeBridgeHarness({ canFetch: true });
+  let lcAllowed = false;
+  const requests = [];
+  context.chrome.permissions.contains = async ({ origins }) => (
+    origins[0] === 'https://f95zone.to/*' || lcAllowed
+  );
+  context.chrome.tabs = { query: async () => { assert.fail('LC should not use tabs'); } };
+  context.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return {
+      status: 200,
+      url: url.endsWith('/99/') ? 'https://f95zone.to/' : url,
+      text: async () => 'response',
+    };
+  };
+  vm.runInContext('ensureBridge()', context);
+  instances[0].readyState = 1;
+  await vm.runInContext('bridgeSendHello()', context);
+  assert.equal(JSON.parse(sent.at(-1)).can_fetch, true);
+  assert.equal(JSON.parse(sent.at(-1)).can_fetch_lc, false);
+
+  const fetchThroughBridge = async (url, site) => {
+    await vm.runInContext(
+      `bridgeHandleFetchMessage(${JSON.stringify({ id: 'lc-check', url, site })})`,
+      context,
+    );
+    return JSON.parse(sent.at(-1));
+  };
+  const base = 'https://lewdcorner.com';
+  const feed = `${base}/latest-updates/api?page=1&per_page=90&cat=Games&sort=date`;
+  assert.equal((await fetchThroughBridge(feed, 'lc')).error, 'refused');
+  lcAllowed = true;
+  await vm.runInContext('bridgeSendStatus()', context);
+  assert.deepEqual(JSON.parse(sent.at(-1)), { type: 'status', can_fetch: true, can_fetch_lc: true });
+
+  assert.equal((await fetchThroughBridge(feed, 'lc')).body, 'response');
+  assert.equal(requests[0].options.credentials, 'include');
+  assert.equal((await fetchThroughBridge(`${base}/members/1/`, 'lc')).error, 'refused');
+  assert.equal((await fetchThroughBridge(feed.replace('page=1', 'page=11'), 'lc')).error, 'refused');
+  assert.equal((await fetchThroughBridge(`${base}/threads/1/`, 'f95')).error, 'refused');
+  const redirected = await fetchThroughBridge(`${base}/threads/99/`, 'lc');
+  assert.equal(redirected.error, 'offsite_redirect');
+  assert.equal(redirected.body, undefined);
+  assert.equal(requests.length, 2);
 });

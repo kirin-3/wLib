@@ -148,7 +148,7 @@ interface ModalUpdateState extends UpdateNotice {
   running: boolean;
 }
 
-import { normalizeLcThreadUrl } from "../utils/lewdcorner";
+import { normalizeLcThreadUrl, updateCheckUrl } from "../utils/lewdcorner";
 import { extensionGameId, readStoreLinks, gamePageUrl } from "../utils/storeLinks";
 import { launchNoticeMessage } from "../utils/webPlayer";
 import { updateCheckRunning } from "../composables/useUpdateCheckState";
@@ -884,7 +884,8 @@ const moveStarted = (queued: number) => {
 const bulkShowRuntime = ref(false);
 const bulkTagSuggestions = computed(() => [...new Set(games.value.flatMap((game) => gameTags(game)))].sort((a, b) => a.localeCompare(b)));
 const eligibleUpdates = computed(() => selectedGames.value.filter((game) => hasAvailableUpdate(game)));
-const eligibleChecks = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
+const eligibleChecks = computed(() => selectedGames.value.filter(updateCheckUrl));
+const eligibleF95Refreshes = computed(() => selectedGames.value.filter((game) => !!game.f95_url));
 onMounted(() => {
   void loadPlatformCapabilities().then((capabilities) => { bulkShowRuntime.value = capabilities.platform === "linux"; });
 });
@@ -972,7 +973,7 @@ const bulkAction = async (action: string, value = "") => {
     return;
   }
   if (action === "check") {
-    const ids = games.filter((game) => !!game.f95_url).map((game) => game.id);
+    const ids = games.filter(updateCheckUrl).map((game) => game.id);
     if (!ids.length || bulkChecking.value) return;
     bulkBusy.value = true;
     try {
@@ -1460,18 +1461,20 @@ const handleLaunchTargetsChanged = async () => {
 };
 
 const runSingleGameUpdateCheck = async (game: GameRecord) => {
-  if (!game.f95_url) {
+  const url = updateCheckUrl(game);
+  if (!url) {
     return {
       type: "error" as const,
-      message: `${game.title}: missing F95 URL.`,
+      message: `${game.title} has no active update thread.`,
     };
   }
 
   updatingId.value = game.id;
   try {
-    const result = await api.checkForUpdates(game.f95_url);
+    const result = await api.checkForUpdates(url);
     if (result && result.success) {
       await loadGames();
+      if (result.note) notify(result.note, "info");
       if (result.newly_finished) {
         notify(`${game.title} is finished`, "success");
         return { type: "" as const, message: "" };
@@ -2892,7 +2895,7 @@ onUnmounted(() => {
             </button>
             <button
               @click="runContextAction('check')"
-              :disabled="!contextMenu.game.f95_url || updatingId !== null"
+              :disabled="!updateCheckUrl(contextMenu.game) || updatingId !== null"
             >
               Check update
             </button>
@@ -3062,6 +3065,7 @@ onUnmounted(() => {
         :checking="bulkChecking"
         :saves-busy="bulkSavesBusy"
         :eligible-checks="eligibleChecks.length"
+        :eligible-f95-refreshes="eligibleF95Refreshes.length"
         :eligible-updates="eligibleUpdates.length"
         @select-all="selection.selectAll(filteredGames.map(game => game.id))"
         @done="clearSelection"

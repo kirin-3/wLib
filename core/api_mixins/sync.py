@@ -235,7 +235,10 @@ class SyncMixin(ApiBase):
         return {"success": True, **payload}
 
     def _game_ids_with_url(self, game_ids: Sequence[int]) -> list[int]:
-        from core.database import get_all_games
+        from core import lewdcorner
+        from core.database import get_all_games, get_setting
+
+        lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
 
         wanted: set[int] = set()
         for raw_id in game_ids:
@@ -250,8 +253,7 @@ class SyncMixin(ApiBase):
             if (
                 isinstance(game_id, int)
                 and game_id in wanted
-                and isinstance(url, str)
-                and url.strip()
+                and ((isinstance(url, str) and url.strip()) or lewdcorner.lc_active(game, lc_enabled))
             ):
                 ids_with_url.append(game_id)
         return ids_with_url

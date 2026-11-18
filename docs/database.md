@@ -75,7 +75,12 @@ Stores the library records and their associated configuration flags.
 | `f95_tags` | `TEXT` (nullable) | The last F95 tag list that wLib saw for the game (comma list, same format as `tags`). Written by F95 metadata backfill when it writes tags and by Refresh F95 info; user tag edits never change it. NULL means no baseline yet; an empty text is a real empty list. Refresh F95 info uses it to tell user-added and user-removed tags from F95 tags (`core/f95_tags.py`). Exported and synced with `tags`; an older backup without the field imports as NULL for a new game and keeps the local value for an existing one. |
 | `f95_url` | `TEXT` | F95Zone thread URL. Unique index protects against exact duplicates; the app also rejects equivalent F95 thread URL variants by thread identity. |
 | `version` | `TEXT` | The local downloaded version string. |
-| `latest_version` | `TEXT` | The remote version identified by the scraper. |
+| `latest_version` | `TEXT` | The winning remote version used for updates, skips, and notifications. |
+| `f95_latest_version` | `TEXT` | The latest F95Zone version. The migration seeds it from `latest_version` for existing F95Zone games. |
+| `f95_latest_at` | `TEXT` | The F95Zone version timestamp in ISO UTC, or empty if unknown. |
+| `lc_latest_version` | `TEXT` | The latest LewdCorner version. |
+| `lc_latest_at` | `TEXT` | The LewdCorner version timestamp in ISO UTC, or empty if unknown. |
+| `latest_site` | `TEXT` | The winning site (`f95` or `lc`), `both` for equal versions, or empty when unset. |
 | `last_played_version` | `TEXT DEFAULT ''` | Launch-time version whose normalized session durations reached 300 seconds. Empty for existing games until played. Written by play ticks and user-state import. |
 | `skipped_version` | `TEXT DEFAULT ''` | Latest release the user chose to skip. `update_game` accepts it and clears it when the installed version changes after normalization. |
 | `exe_path` | `TEXT` | Absolute path to the executable binary. |
@@ -263,6 +268,8 @@ sync. Missing sandbox fields in older backups preserve a matched game's local
 value.
 
 Other persisted keys: `auto_update_check` (`weekly` by default), `last_update_check`, `update_notifications` (`on` by default), `library_folder` (default), `library_folders` (JSON array of paths, seeded from the existing default), `library_folder_pattern` (`{creator}/{title}/{version}`), `downloads_folder` (XDG Downloads with a `~/Downloads` fallback), `download_detection_enabled` (`true`), `dismissed_download_archives` (`[]`, local-only), `catalog_enabled` (`"1"`/`"0"`, missing means on, local-only), and `urm_rpa_path` (empty by default).
+
+`lc_feed_read_at` stores the newest LewdCorner feed item timestamp from a successful feed read. It is device-local and excluded from backups and sync. The per-game version fields travel with library metadata.
 
 Download queue settings (`core/downloads/queue_settings.py`) are device-local and not in `GENERAL_SETTINGS_KEYS`: `download_limit_kib` (shared download speed limit for file hosts and torrents in KiB/s, `0` = unlimited), `download_max_active` (downloads at once, `1`–`5`, default `2`), `download_pause_while_playing` (`true` by default) and `download_pause_on_battery` (`false` by default). A missing or invalid value reads as the default. When `download_limit_kib` was never saved, startup copies `torrent_download_limit_kib` into it once; the old key stays in place for older versions and is no longer read.
 

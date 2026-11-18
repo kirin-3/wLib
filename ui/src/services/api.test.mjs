@@ -570,6 +570,41 @@ test("browser mock update checks reject non-actionable versions", async () => {
   }
 });
 
+test("browser mock checks an LC-only game", async () => {
+  const url = "https://lewdcorner.com/threads/42/";
+  const storage = new Map([
+    ["wlib-mock-games", JSON.stringify([
+      { id: 1, title: "LC game", exe_path: "/tmp/game", lc_url: url, version: "0.5", lc_latest_version: "0.6" },
+    ])],
+  ]);
+  const mockStorage = {
+    getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.localStorage = mockStorage;
+  globalThis.window = {
+    localStorage: mockStorage,
+    dispatchEvent() {},
+    addEventListener() {},
+    navigator: { userAgent: "node" },
+  };
+  const server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  try {
+    const { api } = await server.ssrLoadModule("/src/services/api.ts");
+    const result = await api.checkForUpdates(url);
+    assert.equal(result.success, true);
+    assert.equal(result.version, "0.6");
+    assert.equal(result.latest_site, "lc");
+    assert.equal(result.has_update, true);
+    assert.equal((await api.checkAllUpdates()).total, 1);
+  } finally {
+    await server.close();
+    delete globalThis.window;
+    delete globalThis.localStorage;
+  }
+});
+
 test("onWebviewReady waits for the injected bridge API", async () => {
   const listeners = new Map();
   const storage = new Map();

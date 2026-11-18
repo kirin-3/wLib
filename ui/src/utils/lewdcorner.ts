@@ -28,3 +28,19 @@ export function lcActive(
   if (!game.lc_url || game.lc_mode === "off") return false;
   return game.lc_mode === "on" || enabled || !game.f95_url;
 }
+
+type UpdateThread = Pick<GameRecord, "f95_url" | "lc_url" | "lc_mode">;
+
+export function updateCheckUrl(game: UpdateThread): string {
+  return game.f95_url || (lcActive(game, false) ? game.lc_url || "" : "");
+}
+
+export function latestSiteLabel(
+  game: UpdateThread & Pick<GameRecord, "latest_site">,
+  lcEnabled: boolean,
+): string {
+  if (!game.f95_url || !lcActive(game, lcEnabled)) return "";
+  if (game.latest_site === "lc") return "on LewdCorner";
+  if (game.latest_site === "f95") return "on F95Zone";
+  return "";
+}

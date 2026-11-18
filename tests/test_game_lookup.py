@@ -436,3 +436,22 @@ def test_lc_settings_trigger_catalog_fill(lc_catalog, monkeypatch):
     assert api.save_settings({"lc_plus": True})["success"]
     assert api.get_settings()["lc_plus"] is True
     assert database.get_game(premium)["lc_url"].endswith("/22/")
+
+
+def test_version_lookups_distinguish_live_catalog_rows(lc_catalog):
+    from core import lewdcorner
+    from core.game_lookup import f95_thread_entries, lc_thread_entries
+
+    lc_catalog.execute("UPDATE lc_threads SET origin = 'import' WHERE thread_id = 23")
+    lc_catalog.execute("UPDATE lc_threads SET ts = 123 WHERE thread_id = 21")
+    lc_catalog.execute("UPDATE f95_threads SET version = '1.2', ts = 456 WHERE thread_id = 101")
+    lc_catalog.commit()
+    entries = lc_thread_entries(["21", "22", "23"])
+    assert (entries["21"]["version"], entries["21"]["ts"], entries["21"]["tier"]) == ("1.1", 123, "Free")
+    assert entries["21"]["thread_completed"] is True
+    assert lewdcorner.usable_catalog_entry(entries["21"])
+    assert not lewdcorner.usable_catalog_entry(entries["22"])
+    assert entries["23"]["origin"] == "import"
+    assert not lewdcorner.usable_catalog_entry(entries["23"])
+    f95 = f95_thread_entries(["101"])["101"]
+    assert (f95["version"], f95["ts"]) == ("1.2", 456)

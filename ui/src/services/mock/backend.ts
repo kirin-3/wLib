@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { normalizeLcThreadUrl } from "../../utils/lewdcorner.ts";
+import { lcActive, normalizeLcThreadUrl, updateCheckUrl } from "../../utils/lewdcorner.ts";
 import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, BulkUpdateResultItem, CompanionTool, CompanionToolInput, GameRecord, GameToolEngine, GameToolsResponse, LaunchMode, LaunchTarget, LibraryBackupSection, LibrarySyncStatus, PlaySession, RenpyConsoleState, RenpyExtractOptions, StoreLink, UpdateStatusResponse } from "../api";
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
@@ -1010,9 +1010,12 @@ export class MockBackend {
         }
         if (method === "open_dev_tools") return undefined;
         if (method === "check_all_updates") {
-          const total = readMockGames().filter((game) => (game.f95_url || "").trim() && (!Array.isArray(args[0]) || args[0].includes(game.id))).length;
+          const refreshInfo = args[1] === true;
+          const total = readMockGames().filter((game) =>
+            (refreshInfo ? game.f95_url : updateCheckUrl(game)) &&
+            (!Array.isArray(args[0]) || args[0].includes(game.id)),
+          ).length;
           if (Array.isArray(args[0]) && total) {
-            const refreshInfo = args[1] === true;
             this._mockUpdateStatus = { running: true, cancelling: false, outcome: "running", error: "", total, checked: 0, current: "", results: [], delay_seconds: 2, refresh_info: refreshInfo };
             setTimeout(() => {
               if (!this._mockUpdateStatus?.running) return;
@@ -1388,12 +1391,19 @@ export class MockBackend {
           };
         }
         const games = readMockGames();
-        const game = games.find((entry) => entry.f95_url === url);
+        const lcUrl = normalizeLcThreadUrl(url);
+        const game = games.find((entry) => lcUrl ? normalizeLcThreadUrl(entry.lc_url) === lcUrl : entry.f95_url === url);
+        if (lcUrl && !game) {
+          return { success: false, mock: true, error: "LewdCorner thread is not in the library" };
+        }
         // The backend scrapes the thread for every URL it is given; with no
         // matching game the installed version is unknown, which counts as an
         // update. The mock cannot scrape, so it reports a placeholder version.
         if (!game) {
           return { success: true, mock: true, version: "1.0", has_update: true, newly_finished: false, metadata_updated: 0 };
+        }
+        if (!updateCheckUrl(game)) {
+          return { success: false, mock: true, error: "LewdCorner update checks are off for this game" };
         }
         const completedIds = JSON.parse(localStorage.getItem("wlib-mock-completed-threads") || "[]") as unknown;
         const completed = Array.isArray(completedIds) && completedIds.includes(game.id);
@@ -1404,7 +1414,10 @@ export class MockBackend {
             entry.id === game.id ? { ...entry, thread_completed: completed, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
           )));
         }
-        const version = String(game.latest_version || "").trim() || String(game.version || "").trim();
+        const activeLc = lcActive(game, readMockSettings().lc_enabled);
+        const version = String(
+          game.latest_version || (activeLc ? game.lc_latest_version : game.f95_latest_version) || game.version || "",
+        ).trim();
         if (!isActionableVersion(version)) {
           // check_for_updates treats an empty or placeholder scraped version as
           // an extraction failure; the mock has nothing better to report.
@@ -1419,8 +1432,9 @@ export class MockBackend {
           success: true,
           mock: true,
           version,
-          has_update: hasAvailableUpdate(game),
-          skipped: isUpdateSkipped(game),
+          latest_site: activeLc ? game.latest_site || (game.f95_url ? "f95" : "lc") : "f95",
+          has_update: hasAvailableUpdate({ ...game, latest_version: version }),
+          skipped: isUpdateSkipped({ ...game, latest_version: version }),
           newly_finished: newlyFinished,
           metadata_updated: 0,
         };

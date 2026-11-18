@@ -93,6 +93,11 @@ METADATA_FIELDS = (
     "lc_dismissed",
     "version",
     "latest_version",
+    "f95_latest_version",
+    "f95_latest_at",
+    "lc_latest_version",
+    "lc_latest_at",
+    "latest_site",
     "thread_completed",
     "cover_image_path",
     "screenshots",
@@ -1620,6 +1625,14 @@ def _import_fields_for_game(
 
 def _insert_game(cursor: sqlite3.Cursor, fields: Mapping[str, object]) -> int:
     insert_fields = dict(fields)
+    if (
+        "f95_latest_version" not in fields
+        and "latest_site" not in fields
+        and normalize_thread_url(fields.get("f95_url"))
+        and str(fields.get("latest_version") or "").strip()
+    ):
+        insert_fields["f95_latest_version"] = fields["latest_version"]
+        insert_fields["latest_site"] = "f95"
     _ = insert_fields.setdefault("title", "Imported Game")
     _ = insert_fields.setdefault("exe_path", "")
     for column in ("f95_url", "lc_url", "lc_mode", "lc_dismissed"):

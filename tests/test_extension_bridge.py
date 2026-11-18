@@ -463,7 +463,7 @@ def test_fetch_on_connection_closed_before_register_fails_fast(monkeypatch):
     bridge._handle_message(conn, {"type": "hello", "protocol": 1, "can_fetch": True})
     # The disconnect lands after the connection is picked but before the
     # request is registered, so its cleanup never sees this request.
-    monkeypatch.setattr(bridge, "_newest_eligible", lambda: conn)
+    monkeypatch.setattr(bridge, "_newest_eligible", lambda _site: conn)
     bridge._remove_connection(conn)
     started = time.monotonic()
     with pytest.raises(bridge.BridgeUnavailable):
@@ -487,3 +487,47 @@ def test_removed_pairing_cuts_only_its_own_sockets():
         assert cut == ["AAAA-1111"]
     finally:
         extension_bridge.reset_for_tests()
+
+
+def test_lc_bridge_capability_is_independent_and_paced(monkeypatch):
+    now = 100.0
+    requests = []
+
+    def sleep(delay):
+        nonlocal now
+        now += delay
+
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: now)
+    monkeypatch.setattr(bridge.time, "sleep", sleep)
+
+    def connection(**hello):
+        def send(raw):
+            message = json.loads(raw)
+            requests.append((now, conn, message.get("site", "f95")))
+            bridge._handle_message(conn, {
+                "type": "fetch_result", "id": message["id"], "ok": True, "body": "ok",
+            })
+
+        conn = BridgeConnection(send)
+        bridge._register_connection(conn)
+        bridge._handle_message(conn, {"type": "hello", "protocol": 2, **hello})
+        return conn
+
+    old = connection(can_fetch=True)
+    url = "https://lewdcorner.com/threads/123/"
+    assert not old.can_fetch_lc
+    with pytest.raises(BridgeUnavailable):
+        bridge.fetch(url, site="lc")
+    lc = connection(can_fetch=False, can_fetch_lc=True)
+    newest = connection(can_fetch=True, can_fetch_lc=False)
+    assert bridge.fetch(url, site="lc").body == "ok"
+    assert bridge.fetch("https://f95zone.to/threads/123/").body == "ok"
+    assert bridge.fetch(url, site="lc").body == "ok"
+    assert requests == [(100, lc, "lc"), (100, newest, "f95"), (102, lc, "lc")]
+    bridge._handle_message(newest, {"type": "status", "can_fetch_lc": True})
+    assert bridge.fetch(url, site="lc").body == "ok"
+    assert requests[-1] == (104, newest, "lc")
+    for conn in (lc, newest):
+        bridge._handle_message(conn, {"type": "status", "can_fetch_lc": False})
+    assert not bridge.is_available(site="lc")
+    assert bridge.is_available()

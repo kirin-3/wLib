@@ -2062,9 +2062,20 @@ def test_folder_sync_matches_lc_thread_between_devices(tmp_path, monkeypatch):
     local_db = database.DB_PATH
     local_id = database.add_game("Local title", "/local.sh", lc_url=lc)
     local_uid = database.get_game(local_id)["sync_uid"]
+    database.update_setting("lc_feed_read_at", "2026-11-01T00:00:00Z")
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "other-device.db"))
     database.init_db()
     remote_id = database.add_game("Other title", "", lc_url=lc, lc_mode="off")
+    versions = {
+        "latest_version": "0.6",
+        "f95_latest_version": "0.5",
+        "f95_latest_at": "2026-11-01T00:00:00Z",
+        "lc_latest_version": "0.6",
+        "lc_latest_at": "2026-11-10T00:00:00Z",
+        "latest_site": "lc",
+    }
+    database.update_game(remote_id, versions)
+    database.update_setting("lc_feed_read_at", versions["lc_latest_at"])
     remote_uid = database.get_game(remote_id)["sync_uid"]
     assert remote_uid != local_uid
     backup = build_sync_backup(utc_now(), "other-device")
@@ -2073,6 +2084,9 @@ def test_folder_sync_matches_lc_thread_between_devices(tmp_path, monkeypatch):
     assert sync.run()["state"] == "needs_choice"
     assert sync.run("merge-once")["state"] == "idle"
     assert len(database.get_all_games()) == 1
+    assert "lc_feed_read_at" not in backup["settings"]["general"]
+    assert database.get_setting("lc_feed_read_at") == "2026-11-01T00:00:00Z"
+    assert {key: database.get_game(local_id)[key] for key in versions} == versions
     assert database.get_game(local_id)["lc_mode"] == "off"
     assert database.get_game(local_id)["exe_path"] == "/local.sh"
 
@@ -2095,3 +2109,4 @@ def test_synced_lc_dismissal_prevents_automatic_fill(tmp_path, monkeypatch):
     assert database.get_game(local_id)["lc_dismissed"] == "21"
     assert database.get_game(local_id)["lc_url"] == ""
     assert database.fill_lc_threads({"101": ("21", "Free")}) == 0
+

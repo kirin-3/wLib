@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lcActive, normalizeLcThreadUrl, type LewdCornerMode } from "./lewdcorner.ts";
+import { latestSiteLabel, lcActive, normalizeLcThreadUrl, updateCheckUrl, type LewdCornerMode } from "./lewdcorner.ts";
 
 const url = "https://lewdcorner.com/threads/123/";
 
@@ -25,4 +25,23 @@ test("activation requires an LC thread and respects the game override", () => {
     assert.equal(lcActive(game, enabled), expected);
     assert.equal(lcActive({ ...game, lc_url: "" }, enabled), false);
   }
+});
+
+
+test("checks an active LC-only game and prefers the F95 URL for a linked game", () => {
+  const f95 = "https://f95zone.to/threads/456/";
+  assert.equal(updateCheckUrl({ lc_url: url }), url);
+  assert.equal(updateCheckUrl({ lc_url: url, lc_mode: "off" }), "");
+  assert.equal(updateCheckUrl({ lc_url: url, f95_url: f95 }), f95);
+});
+
+test("labels a sole winning site only for games with both sites active", () => {
+  const game = { lc_url: url, f95_url: "https://f95zone.to/threads/456/" };
+  assert.equal(latestSiteLabel({ ...game, latest_site: "lc" }, true), "on LewdCorner");
+  assert.equal(latestSiteLabel({ ...game, latest_site: "f95", lc_mode: "on" }, false), "on F95Zone");
+  assert.equal(latestSiteLabel({ ...game, latest_site: "both" }, true), "");
+  assert.equal(latestSiteLabel({ ...game, latest_site: "lc", lc_mode: "off" }, true), "");
+  assert.equal(latestSiteLabel({ ...game, latest_site: "lc" }, false), "");
+  assert.equal(latestSiteLabel({ lc_url: url, latest_site: "lc" }, true), "");
+  assert.equal(latestSiteLabel({ f95_url: game.f95_url, latest_site: "f95" }, true), "");
 });

@@ -109,6 +109,11 @@ SYNC_GAME_COLUMNS = (
     "lc_dismissed",
     "version",
     "latest_version",
+    "f95_latest_version",
+    "f95_latest_at",
+    "lc_latest_version",
+    "lc_latest_at",
+    "latest_site",
     "thread_completed",
     "cover_image_path",
     "play_status",
@@ -937,6 +942,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("rating_gameplay", "REAL DEFAULT 0"),
         ("engine", "TEXT DEFAULT ''"),
         ("latest_version", "TEXT DEFAULT ''"),
+        ("f95_latest_version", "TEXT DEFAULT ''"),
+        ("f95_latest_at", "TEXT DEFAULT ''"),
+        ("lc_latest_version", "TEXT DEFAULT ''"),
+        ("lc_latest_at", "TEXT DEFAULT ''"),
+        ("latest_site", "TEXT DEFAULT ''"),
         ("run_japanese_locale", "BOOLEAN DEFAULT 0"),
         ("run_wayland", "BOOLEAN DEFAULT 0"),
         ("auto_inject_ce", "BOOLEAN DEFAULT 0"),
@@ -985,6 +995,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             _ = cursor.execute(
                 f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
             )
+
+    if "f95_latest_version" not in existing_columns:
+        _ = cursor.execute(
+            """UPDATE games SET f95_latest_version = latest_version, latest_site = 'f95'
+            WHERE TRIM(COALESCE(latest_version, '')) != ''
+              AND TRIM(COALESCE(f95_url, '')) != ''"""
+        )
 
     # A stable per-game identity lets sync follow a game whose title or
     # thread URL changed on another device instead of replacing it.
@@ -1485,6 +1502,79 @@ def get_game(game_id: int) -> dict[str, object] | None:
     return {str(key): cast(object, row[key]) for key in row.keys()}
 
 
+def _latest_for_game(
+    game: Mapping[str, object], lc_enabled: bool
+) -> tuple[str, lewdcorner.LatestSite]:
+    f95 = (
+        (str(game.get("f95_latest_version") or ""), str(game.get("f95_latest_at") or ""))
+        if game.get("f95_url") else None
+    )
+    lc = (
+        (str(game.get("lc_latest_version") or ""), str(game.get("lc_latest_at") or ""))
+        if lewdcorner.lc_active(game, lc_enabled) else None
+    )
+    return lewdcorner.pick_latest(f95, lc)
+
+
+def _lc_enabled_in(connection: sqlite3.Connection) -> bool:
+    row = cast(tuple[object, ...] | sqlite3.Row | None, connection.execute(
+        "SELECT value FROM settings WHERE key = 'lc_enabled'"
+    ).fetchone())
+    return row is not None and lewdcorner.setting_enabled(cast(object, row[0]))
+
+
+def store_thread_update(
+    game_id: int,
+    site: lewdcorner.Site,
+    url: str,
+    observation: lewdcorner.SiteVersion | None,
+    *,
+    completed: bool = False,
+    keep_newer: bool = False,
+) -> tuple[dict[str, object], bool] | None:
+    """Write the observation and winner together, if the thread still matches."""
+    with closing(get_connection()) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        _ = conn.execute("BEGIN IMMEDIATE")
+        row = cast(sqlite3.Row | None, conn.execute(
+            "SELECT * FROM games WHERE id = ?", (game_id,)
+        ).fetchone())
+        if row is None:
+            return None
+        game = {str(key): cast(object, row[key]) for key in row.keys()}
+        matches = lewdcorner.thread_urls_match if site == "lc" else thread_urls_match
+        if not matches(game.get(f"{site}_url"), url):
+            return None
+        lc_enabled = _lc_enabled_in(conn)
+        if site == "lc" and not lewdcorner.lc_active(game, lc_enabled):
+            return None
+
+        fields: dict[str, object] = {}
+        if observation is not None:
+            version, at = observation
+            version_key, time_key = f"{site}_latest_version", f"{site}_latest_at"
+            stored_at = str(game.get(time_key) or "")
+            same = normalize_version(version) == normalize_version(game.get(version_key))
+            if not (keep_newer and at and stored_at > at and not same):
+                fields[version_key] = version
+                fields[time_key] = stored_at if same else at
+            fields["latest_version"], fields["latest_site"] = _latest_for_game(
+                {**game, **fields}, lc_enabled
+            )
+
+        newly_finished = completed and not game.get("thread_completed") and not str(
+            game.get("exe_path") or ""
+        ).strip()
+        if completed:
+            fields["thread_completed"] = 1
+        if fields:
+            assignments = ", ".join(f"{field} = ?" for field in fields)
+            _ = conn.execute(
+                f"UPDATE games SET {assignments} WHERE id = ?", (*fields.values(), game_id)
+            )
+        return {**game, **fields}, newly_finished
+
+
 def delete_game(game_id: int) -> None:
     with closing(get_connection()) as conn:
         cursor = conn.cursor()
@@ -1737,6 +1827,11 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "rating_gameplay",
         "engine",
         "latest_version",
+        "f95_latest_version",
+        "f95_latest_at",
+        "lc_latest_version",
+        "lc_latest_at",
+        "latest_site",
         "run_japanese_locale",
         "run_wayland",
         "auto_inject_ce",
@@ -1825,6 +1920,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         _ = conn.execute("BEGIN IMMEDIATE")
+        refresh_winner = False
         if "lc_url" in safe_fields:
             lc_url = str(safe_fields["lc_url"])
             if lc_url and _find_lc_game_row(conn, lc_url, game_id):
@@ -1835,6 +1931,9 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             old_id = lewdcorner.extract_thread_id(cast(object, row[0])) if row else ""
             if old_id and old_id != lewdcorner.extract_thread_id(lc_url):
                 safe_fields["lc_dismissed"] = old_id
+                safe_fields["lc_latest_version"] = ""
+                safe_fields["lc_latest_at"] = ""
+                refresh_winner = True
 
         updated_url = safe_fields.get("f95_url")
         if updated_url and find_matching_game_row(
@@ -1858,6 +1957,10 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 stored_url, safe_fields["f95_url"]
             ):
                 safe_fields["latest_version"] = ""
+                safe_fields["f95_latest_version"] = ""
+                safe_fields["f95_latest_at"] = ""
+                safe_fields["latest_site"] = ""
+                refresh_winner = True
                 safe_fields["skipped_version"] = ""
                 safe_fields["thread_main_post_last_edit_at"] = None
                 safe_fields["thread_main_post_checked_at"] = None
@@ -1867,6 +1970,16 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 for field in THREAD_DETAIL_FIELDS:
                     safe_fields[field] = thread_detail_column_value(field, "")
                 safe_fields[BASELINE_COLUMN] = None
+
+        if refresh_winner or "lc_mode" in safe_fields:
+            stored = cast(sqlite3.Row | None, conn.execute(
+                "SELECT * FROM games WHERE id = ?", (game_id,)
+            ).fetchone())
+            if stored:
+                game = {str(key): cast(object, stored[key]) for key in stored.keys()}
+                latest, site = _latest_for_game({**game, **safe_fields}, _lc_enabled_in(conn))
+                if refresh_winner or site or game.get("latest_site"):
+                    safe_fields["latest_version"], safe_fields["latest_site"] = latest, site
 
         if "version" in safe_fields:
             _ = cursor.execute("SELECT version FROM games WHERE id = ?", (game_id,))

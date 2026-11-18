@@ -4995,3 +4995,226 @@ def test_urm_refuses_running_moving_or_uninstalling_game(monkeypatch, tmp_path):
     assert not installed.exists()
     monkeypatch.setattr(api, "_game_files_busy_reason", lambda _gid: "")
     assert api.set_urm_installed(game_id, True)["installed"] is True
+
+
+def _mock_lc_checks(monkeypatch, *, feed=(), pages=None, available=True, catalog=None):
+    from core import extension_bridge
+
+    urls = []
+
+    def fetch(url, *, site):
+        assert site == "lc"
+        urls.append(url)
+        if "/latest-updates/api?" in url:
+            body = json.dumps({"status": "ok", "result": {"items": list(feed), "hasMore": False}})
+        else:
+            assert pages is not None and url in pages
+            body = pages[url]
+        return extension_bridge.BridgeResponse(200, url, body)
+
+    monkeypatch.setattr(extension_bridge, "is_available", lambda *, site="f95": site == "lc" and available)
+    monkeypatch.setattr(extension_bridge, "fetch", fetch)
+    monkeypatch.setattr("core.game_lookup.lc_thread_entries", lambda ids: catalog or {})
+    monkeypatch.setattr("core.api_mixins.updates.lc_thread_entries", lambda ids: catalog or {})
+    return urls
+
+
+def _lc_test_item(thread_id, version, timestamp=1794268800, *prefixes):
+    return {
+        "id": thread_id, "node_id": 6, "version": version, "timestamp": timestamp,
+        "badges": [{"name": name} for name in prefixes],
+    }
+
+
+def test_bulk_lc_feed_and_catalog_respect_activation(monkeypatch):
+    api = Api()
+    feed_game = add_game("LC feed", "", lc_url="https://lewdcorner.com/threads/1/", version="0.5")
+    catalog_game = add_game("LC catalog", "/game", lc_url="https://lewdcorner.com/threads/2/", version="0.5")
+    f95_url = "https://f95zone.to/threads/30/"
+    off = add_game("LC off", "/off", f95_url, lc_url="https://lewdcorner.com/threads/3/", lc_mode="off")
+    calls = _mock_lc_checks(monkeypatch, feed=[
+        _lc_test_item(1, "0.6", 1794268800, "Completed"),
+        _lc_test_item(3, "9.9"),
+    ], catalog={"2": {"version": "0.5", "ts": 1794096000, "tier": "Free"}})
+    f95 = MagicMock(side_effect=lambda urls, callback: callback(urls[0], {"success": True, "version": "0.6"}) and {})
+    monkeypatch.setattr(api.scraper, "check_versions", f95)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+
+    assert api.check_all_updates()["total"] == 3
+    status = api.get_update_status()
+    assert (status["total"], status["checked"], status["outcome"]) == (3, 3, "completed")
+    assert len(calls) == 1 and "/latest-updates/api?" in calls[0]
+    assert f95.call_args.args[0] == [f95_url]
+    results = {result["id"]: result for result in status["results"]}
+    assert results[feed_game]["latest_site"] == "lc"
+    assert results[feed_game]["latest_version"] == "0.6"
+    assert results[feed_game]["newly_finished"]
+    assert results[catalog_game]["latest_version"] == "0.5"
+    assert results[off]["latest_site"] == "f95"
+    stored = {game["id"]: game for game in get_all_games()}
+    assert stored[feed_game]["thread_completed"]
+    assert stored[catalog_game]["lc_latest_version"] == "0.5"
+    assert stored[off]["lc_latest_version"] == ""
+
+
+def test_bulk_lc_missing_extension_errors_and_automatic_postpone(monkeypatch):
+    api = Api()
+    fresh = add_game("Free", "/game", lc_url="https://lewdcorner.com/threads/1/", version="0.5")
+    premium = add_game("Plus", "", lc_url="https://lewdcorner.com/threads/2/")
+    atlas = add_game("Atlas", "", lc_url="https://lewdcorner.com/threads/3/")
+    calls = _mock_lc_checks(monkeypatch, available=False, catalog={
+        "1": {"version": "0.6", "ts": 1794096000, "tier": "Free"},
+        "2": {"version": "0.1", "tier": "Premium"},
+        "3": {"version": "0.2", "tier": "Free", "origin": "import"},
+    })
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.maybe_auto_check()["triggered"]
+    automatic = api.get_update_status()
+    assert automatic["outcome"] == "completed"
+    assert [result["id"] for result in automatic["results"]] == [fresh]
+    assert get_setting("last_update_check")
+    assert not api.maybe_auto_check()["triggered"]
+    assert api.check_all_updates()["success"]
+    results = {result["id"]: result for result in api.get_update_status()["results"]}
+    assert results[fresh]["latest_version"] == "0.6"
+    for game_id in (premium, atlas):
+        assert results[game_id]["error_code"] == "lc_extension_unavailable"
+        assert results[game_id]["error"] == "Connect the browser extension to check LewdCorner Plus games"
+        assert next(game for game in get_all_games() if game["id"] == game_id)["lc_latest_version"] == ""
+    assert calls == []
+
+
+def test_bulk_lc_plus_baseline_read_once(monkeypatch):
+    api = Api()
+    url = "https://lewdcorner.com/threads/900/"
+    add_game("Plus", "/game", lc_url=url, version="0.4")
+    calls = _mock_lc_checks(monkeypatch, pages={url: '<dl data-field="Version"><dd>0.5</dd></dl>'},
+                            catalog={"900": {"version": "0.1", "tier": "Premium"}})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    for _ in range(2):
+        assert api.check_all_updates()["success"]
+        assert api.get_update_status()["results"][0]["latest_version"] == "0.5"
+    assert calls.count(url) == 1
+    assert sum("/latest-updates/api?" in url for url in calls) == 2
+    assert get_all_games()[0]["lc_latest_at"] == ""
+
+
+@pytest.mark.parametrize(("f95", "lc", "available", "winner", "has_update"), [
+    ("0.5", "0.6", True, "lc", True),
+    ("0.6", "0.5", True, "f95", False),
+    ("0.6", "0.5", False, "f95", False),
+])
+def test_bulk_lc_and_f95_emit_one_winning_result(monkeypatch, f95, lc, available, winner, has_update):
+    api = Api()
+    url = "https://f95zone.to/threads/9/"
+    add_game("Both sites", "/game", url, version=f95 if winner == "f95" else "0.5",
+             lc_url="https://lewdcorner.com/threads/1/", lc_mode="on")
+    lc_time = 1794268800 if winner == "lc" else 1794096000
+    _mock_lc_checks(monkeypatch, available=available, feed=[_lc_test_item(1, lc, lc_time)])
+    f95_catalog = {"9": {"version": f95, "ts": 1794182400}}
+    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: f95_catalog)
+    monkeypatch.setattr(api.scraper, "check_versions",
+                        lambda urls, callback: callback(url, {"success": True, "version": f95}) and {})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    sender = MagicMock()
+    monkeypatch.setattr("core.desktop_notify.send_notification", sender)
+    api.set_window_focused(False)
+    assert api.check_all_updates()["success"]
+    result, = api.get_update_status()["results"]
+    assert result["latest_site"] == winner
+    assert result["latest_version"] == (lc if winner == "lc" else f95)
+    assert result["has_update"] == has_update and not result["error"]
+    assert bool(result.get("note")) is (not available)
+    if has_update:
+        sender.assert_called_once_with("1 game update", "Both sites")
+    else:
+        sender.assert_not_called()
+
+
+def test_bulk_lc_completion_survives_f95_page_without_completed_prefix(monkeypatch):
+    api = Api()
+    f95_url = "https://f95zone.to/threads/9/"
+    game_id = add_game("Wishlist", "", f95_url, lc_url="https://lewdcorner.com/threads/1/", lc_mode="on")
+    _mock_lc_checks(monkeypatch, feed=[_lc_test_item(1, "1.1", 1794268800, "Completed")])
+    monkeypatch.setattr(api.scraper, "check_versions", lambda urls, callback: callback(
+        f95_url, {"success": True, "version": "1.1", "thread_completed": False}
+    ) and {})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.check_all_updates()["success"]
+    result, = api.get_update_status()["results"]
+    assert result["id"] == game_id and result["newly_finished"]
+    assert get_all_games()[0]["thread_completed"]
+
+
+@pytest.mark.parametrize("has_f95", [False, True])
+def test_single_check_uses_lc_thread_page_from_either_url(monkeypatch, has_f95):
+    api = Api()
+    lc_url = "https://lewdcorner.com/threads/1/"
+    f95_url = "https://f95zone.to/threads/9/" if has_f95 else ""
+    add_game("Game", "", f95_url, lc_url=lc_url, lc_mode="on", version="0.5")
+    calls = _mock_lc_checks(monkeypatch, pages={lc_url: """
+        <h1 class="p-title-value"><span class="label">Completed</span>Game</h1>
+        <dl data-field="version"><dd>0.6</dd></dl>
+    """}, catalog={"1": {"version": "0.6", "ts": 1794268800, "tier": "Free"}})
+    f95 = MagicMock(return_value={"success": True, "version": "0.5", "thread_completed": False})
+    monkeypatch.setattr(api.scraper, "get_thread_version", f95)
+    monkeypatch.setattr("core.api_mixins.updates.f95_thread_entries", lambda ids: {"9": {"version": "0.5", "ts": 1794096000}})
+    result = api.check_for_updates(f95_url or "https://lewdcorner.com/threads/game.1/")
+    assert result["success"], result
+    assert (result["version"], result["latest_site"], result["newly_finished"]) == ("0.6", "lc", True)
+    assert get_all_games()[0]["thread_completed"]
+    assert calls == [lc_url]
+    if has_f95:
+        f95.assert_called_once_with(f95_url, include_metadata=True)
+        assert api.check_for_updates(lc_url)["latest_site"] == "lc"
+    else:
+        f95.assert_not_called()
+
+
+@pytest.mark.parametrize("tier", ["Free", "Premium"])
+def test_single_lc_without_extension_uses_free_catalog_only(monkeypatch, tier):
+    api = Api()
+    url = "https://lewdcorner.com/threads/1/"
+    add_game("Game", "/game", lc_url=url, version="0.5")
+    calls = _mock_lc_checks(monkeypatch, available=False, catalog={"1": {"version": "0.6", "tier": tier}})
+    result = api.check_for_updates(url)
+    if tier == "Free":
+        assert result["success"] and result["has_update"] and result["latest_site"] == "lc"
+    else:
+        assert not result["success"] and result["error_code"] == "lc_extension_unavailable"
+    assert calls == []
+
+
+def test_single_lc_page_login_error_falls_back_to_free_catalog(monkeypatch):
+    api = Api()
+    url = "https://lewdcorner.com/threads/1/"
+    add_game("Game", "/game", lc_url=url, version="0.5")
+    calls = _mock_lc_checks(monkeypatch, pages={url: '<html data-template="login"></html>'},
+                            catalog={"1": {"version": "0.6", "ts": 1794268800, "tier": "Free"}})
+    result = api.check_for_updates(url)
+    assert result["success"] and result["version"] == "0.6" and result["has_update"], result
+    assert "Sign in to LewdCorner" in str(result["note"])
+    assert calls == [url]
+    assert get_all_games()[0]["lc_latest_version"] == "0.6"
+
+
+def test_automatic_lc_only_plus_without_extension_still_postpones(monkeypatch):
+    api = Api()
+    add_game("Plus game", "", lc_url="https://lewdcorner.com/threads/5/")
+    fetches = _mock_lc_checks(monkeypatch, available=False, catalog={"5": {"tier": "Premium"}})
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.maybe_auto_check()["triggered"]
+    status = api.get_update_status()
+    assert (status["checked"], status["outcome"], status["results"]) == (1, "completed", [])
+    assert get_setting("last_update_check")
+    assert not api.maybe_auto_check()["triggered"]
+    assert fetches == []
+
+
+def test_import_check_includes_active_lc_only_games():
+    api = Api()
+    f95 = add_game("F95", "", "https://f95zone.to/threads/1/")
+    lc_only = add_game("LC", "", lc_url="https://lewdcorner.com/threads/2/")
+    lc_off = add_game("LC off", "", lc_url="https://lewdcorner.com/threads/3/", lc_mode="off")
+    local = add_game("Local", "/local.sh")
+    assert api._game_ids_with_url([f95, lc_only, lc_off, local]) == [f95, lc_only]

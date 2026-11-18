@@ -2409,3 +2409,23 @@ def test_lc_migration_and_identity():
         update_game(first, {"lc_url": "https://lewdcorner.com/forums/"})
     with pytest.raises(ValueError, match="Invalid LewdCorner mode"):
         add_game("Bad mode", "", lc_mode="invalid")
+
+
+
+def test_site_versions_migrate_legacy_f95_games_once():
+    f95 = add_game("F95", "", "https://f95zone.to/threads/123/")
+    lc = add_game("LC", "", lc_url="https://lewdcorner.com/threads/456/")
+    columns = ("f95_latest_version", "f95_latest_at", "lc_latest_version", "lc_latest_at", "latest_site")
+    with closing(get_connection()) as conn:
+        conn.execute("DROP TRIGGER sync_games_update")
+        for column in columns:
+            conn.execute(f"ALTER TABLE games DROP COLUMN {column}")
+        conn.execute("UPDATE games SET latest_version = '0.5'")
+        conn.commit()
+    init_db()
+    init_db()
+    assert get_game(f95)["latest_version"] == get_game(f95)["f95_latest_version"] == "0.5"
+    assert get_game(f95)["latest_site"] == "f95"
+    assert all(get_game(f95)[column] == "" for column in columns[1:-1])
+    assert get_game(lc)["latest_version"] == "0.5"
+    assert all(get_game(lc)[column] == "" for column in columns)

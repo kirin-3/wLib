@@ -132,12 +132,13 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.7", "can_fetch": true, "can_resolve": true}
-  {"type": "status", "can_fetch": false}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.8", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true}
+  {"type": "status", "can_fetch": false, "can_fetch_lc": true}
   {"type": "ping"}
   // app -> ext
   {"type": "pong"}
   {"type": "fetch", "id": "<uuid4>", "url": "https://f95zone.to/threads/123/"}
+  {"type": "fetch", "id": "<uuid4>", "site": "lc", "url": "https://lewdcorner.com/threads/123/"}
   // ext -> app
   {"type": "fetch_result", "id": "...", "ok": true, "status": 200,
    "final_url": "https://f95zone.to/threads/slug.123/", "body": "<html>..."}
@@ -145,6 +146,11 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
   ```
   A connection is eligible for fetches only after `hello` with protocol 1 or 2 and `can_fetch == true` (from `permissions.contains({origins: ["https://f95zone.to/*"]})`). Download resolution also requires `can_resolve == true`. Unknown message types are ignored. A JSON `{"type":"ping"}` is answered with JSON `{"type":"pong"}`; WebSocket ping frames are answered with pong frames, and close frames are answered with a close frame.
 - **Login:** Firefox sends no site cookies with background-page fetches, so F95 answers them as a guest. Cloudflare likewise challenges them without the browser's clearance cookie. When a background fetch returns a guest page (`data-logged-in="false"`) or a managed challenge page, the extension repeats it once from an open, non-discarded `f95zone.to` tab via `scripting.executeScript` (Firefox `content.fetch`, page cookies) and, if that works, uses a tab first for later fetches while one is open. Without an F95 tab it keeps the background result.
+- **LewdCorner fetches:** `can_fetch_lc` in `hello` and `status` reports the optional `https://lewdcorner.com/*` permission. A missing flag means LC is unavailable. F95 eligibility still uses `can_fetch`. The app sends `site: "lc"` to the newest LC-capable connection and spaces requests at least two seconds apart. The browser extension uses its own session from its background context and accepts only these URLs:
+  - `https://lewdcorner.com/threads/<thread id>/`
+  - `https://lewdcorner.com/latest-updates/api?page=<1 to 10>&per_page=90&cat=Games&sort=date`
+
+  The extension rejects responses that redirect outside `lewdcorner.com`.
 - **Firefox lifetime:** Firefox suspends an idle event page after 30 seconds and does not count WebSocket traffic as activity. In Firefox, each 20-second ping also writes `wlibBridgeKeepalive` to `storage.local`; the resulting `storage.onChanged` event keeps the page alive while the bridge is connected.
 - **Handshake:** the 101 reply uses an `HTTP/1.1` status line. Firefox drops WebSocket handshakes answered with `BaseHTTPRequestHandler`'s default `HTTP/1.0`.
 - **CSP:** the manifest sets `extension_pages` to `script-src 'self'; object-src 'self'`. Firefox's MV3 default adds `upgrade-insecure-requests`, which rewrites `ws://localhost:8183` to `wss://` and stops the bridge connecting.

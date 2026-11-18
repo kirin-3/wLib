@@ -37,7 +37,7 @@ import {
   IconDeviceGamepad2Filled,
 } from "@tabler/icons-vue";
 import { gamePageUrl, storeLabel } from "../../utils/storeLinks";
-import { normalizeLcThreadUrl, type LewdCornerMode } from "../../utils/lewdcorner";
+import { latestSiteLabel, normalizeLcThreadUrl, updateCheckUrl, type LewdCornerMode } from "../../utils/lewdcorner";
 import { api, onWebviewReady } from "../../services/api";
 import { notify, notifyError } from "../../utils/toast";
 import { marked } from "marked";
@@ -1962,7 +1962,7 @@ const launchTarget = (target: LaunchTarget) => {
 };
 
 const requestUpdateCheck = () => {
-  if (props.game?.f95_url) {
+  if (props.game && updateCheckUrl(props.game)) {
     emit("check-updates", props.game.id);
   }
 };
@@ -2326,7 +2326,10 @@ const removeAttachment = async (name: string) => {
             <div class="game-badges">
               <span class="identity-badge" :style="selectedEngineStyle">{{ engine }}</span>
               <span v-if="version" class="identity-badge version-badge">{{ version }}</span>
-              <span v-if="hasUpdate" class="identity-badge update-badge">Update: {{ latestVersion }}</span>
+              <span v-if="hasUpdate" class="identity-badge update-badge">
+                Update: {{ latestVersion }}
+                <span v-if="latestSiteLabel(game, lcEnabled)" style="color: var(--text-muted)">{{ latestSiteLabel(game, lcEnabled) }}</span>
+              </span>
               <span v-for="name in collectionMembership" :key="name" class="collection-chip collection-chip-active">{{ name }}</span>
               <div ref="collectionsContainer" class="header-popover-anchor" @keydown="popoverKeydown($event, 'collections')">
                 <button ref="collectionsButton" type="button" class="collection-chip" aria-haspopup="menu" :aria-expanded="collectionsOpen" @click="togglePopover('collections')">+ Collection</button>
@@ -2416,7 +2419,7 @@ const removeAttachment = async (name: string) => {
                 Open LC thread
               </button>
               <button
-                v-if="game.f95_url"
+                v-if="updateCheckUrl(game)"
                 @click="requestUpdateCheck"
                 :disabled="updateCheckState.running"
                 class="modal-toolbar-action ui-action-btn"

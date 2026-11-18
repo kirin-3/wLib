@@ -6,114 +6,100 @@ from collections.abc import Mapping, Sequence
 from contextlib import closing
 from typing import cast
 
-from core.versions import normalize_version
+from core import database, lewdcorner, lewdcorner_updates
+from core.f95zone import extract_thread_id
+from core.game_lookup import f95_thread_entries, lc_thread_entries
 from core.api_mixins.base import ApiBase, normalize_thread_url
 
 
 class UpdatesMixin(ApiBase):
     def check_for_updates(self, url: str) -> Mapping[str, object]:
-        """
-        Reads the version from F95Zone's checker endpoint and refreshes thread metadata.
-        Stores it in latest_version for comparison with the current version.
-        """
+        """Check the linked threads and return the winning version."""
         if not url.strip():
             return {"success": False, "error": "A valid thread URL is required"}
 
-        # Stored f95_url values are normalized; exact-match lookups below need the same form.
-        url = normalize_thread_url(url) or url.strip()
-        print(f"Checking for updates for {url}")
         try:
-            version_info = self._coerce_string_key_dict(
-                cast(
-                    object,
-                    self.scraper.get_thread_version(
-                        url,
-                        include_metadata=True,
-                    ),
-                )
+            lc_url = lewdcorner.normalize_thread_url(url)
+            match = (
+                database.find_game_by_lc_url(lc_url) if lc_url
+                else database.find_game_by_f95_url(url)
             )
-            if version_info is None:
-                version_info = {}
+            game_id = match.get("id") if match else None
+            game = database.get_game(game_id) if isinstance(game_id, int) else None
+            if lc_url and game is None:
+                return {"success": False, "error": "LewdCorner thread is not in the library"}
 
-            # A thread page can be read successfully even when no version is
-            # extractable; its Completed flag, screenshots, links and edit
-            # metadata are still valid and must be stored either way.
-            newly_finished_ids = self._update_thread_edit_metadata_for_url(
-                url, version_info
-            )
-            # Only a parsed thread page carries a rating.
-            _ = self._store_f95_rating_for_url(url, version_info)
-
-            if not version_info.get("success"):
-                return self._build_scraper_error_payload(
-                    version_info, "Failed to check for updates"
+            current: Mapping[str, object] = game or {}
+            lc_result = lewdcorner_updates.CheckResult()
+            lc_enabled = lewdcorner.setting_enabled(database.get_setting("lc_enabled"))
+            if isinstance(game_id, int) and lewdcorner.lc_active(current, lc_enabled):
+                active_url = lewdcorner.normalize_thread_url(current.get("lc_url"))
+                thread_id = lewdcorner.extract_thread_id(active_url)
+                catalog = lc_thread_entries([thread_id]).get(thread_id, {})
+                lc_result = lewdcorner_updates.check_thread(
+                    game_id, active_url, current.get("lc_latest_version"), catalog, single=True,
                 )
+                current = lc_result.game or current
 
-            remote_version = version_info.get("version")
-            if not self._is_actionable_remote_version(remote_version):
-                return {
-                    "success": False,
-                    "error": "Could not extract a version from thread",
-                    "error_code": "extract_failed",
-                }
+            f95_url = str(current.get("f95_url") or "") if game else normalize_thread_url(url) or url.strip()
+            if not f95_url and not lc_result.game and not lc_result.error:
+                return {"success": False, "error": "LewdCorner update checks are off for this game"}
 
-            # Store in latest_version field
-            import sqlite3
+            f95_error: Mapping[str, object] | None = None
+            f95_finished = False
+            metadata_updated = 0
+            version = str(current.get("latest_version") or "")
+            if f95_url:
+                version_info = self._coerce_string_key_dict(
+                    self.scraper.get_thread_version(f95_url, include_metadata=True)
+                ) or {}
+                finished_ids = self._update_thread_edit_metadata_for_url(f95_url, version_info)
+                f95_finished = isinstance(game_id, int) and game_id in finished_ids and not str(
+                    current.get("exe_path") or ""
+                ).strip()
+                _ = self._store_f95_rating_for_url(f95_url, version_info)
+                remote = version_info.get("version")
+                if not version_info.get("success"):
+                    f95_error = self._build_scraper_error_payload(version_info, "Failed to check for updates")
+                elif not self._is_actionable_remote_version(remote):
+                    f95_error = {
+                        "success": False,
+                        "error": "Could not extract a version from thread",
+                        "error_code": "extract_failed",
+                    }
+                else:
+                    version = str(remote).strip()
+                    if isinstance(game_id, int):
+                        f95_id = extract_thread_id(f95_url)
+                        catalog = f95_thread_entries([f95_id]).get(f95_id, {})
+                        stored = lewdcorner_updates.store_f95_version(game_id, f95_url, version, catalog)
+                        if stored is not None:
+                            current = stored
+                            version = str(stored.get("latest_version") or "")
+                    else:
+                        current = {"latest_site": "f95"}
+                    metadata_updated = self._backfill_missing_metadata_for_url(f95_url, version_info)
 
-            from core.database import get_connection
+            if f95_error and not lc_result.version_checked:
+                return f95_error
+            if not f95_url and lc_result.error:
+                return {"success": False, "error": str(lc_result.error), "error_code": lc_result.error.code}
 
-            get_connection_fn = get_connection
-
-            conn: sqlite3.Connection | None = None
-            try:
-                conn = get_connection_fn()
-                cursor = conn.cursor()
-                _ = cursor.execute(
-                    "UPDATE games SET latest_version = ? WHERE f95_url = ?",
-                    (str(remote_version).strip(), url),
-                )
-                # Check if it differs from current version
-                _ = cursor.execute(
-                    "SELECT id, version, exe_path, skipped_version FROM games WHERE f95_url = ?",
-                    (url,),
-                )
-                row = cast(object, cursor.fetchone())
-                current_version = ""
-                wishlisted = False
-                newly_finished = False
-                skipped_version = ""
-                if isinstance(row, Sequence) and len(row) >= 3:
-                    current_version = str(row[1] or "").strip()
-                    wishlisted = not str(row[2] or "").strip()
-                    newly_finished = wishlisted and row[0] in newly_finished_ids
-                    skipped_version = str(row[3] or "") if len(row) > 3 else ""
-                conn.commit()
-            finally:
-                if conn is not None:
-                    conn.close()
-
-            has_update = not wishlisted and self._has_update(
-                current_version, remote_version, skipped_version
-            )
-            metadata_updated = self._backfill_missing_metadata_for_url(
-                url, version_info
-            )
+            fields = self._version_check_fields(current, version)
+            lc_note = lc_result.error or lc_result.note
+            note = str(lc_note) if lc_note else str(f95_error["error"]) if f95_error else ""
             return {
                 "success": True,
-                "version": str(remote_version).strip(),
-                "has_update": has_update,
-                "skipped": bool(normalize_version(skipped_version))
-                and normalize_version(skipped_version)
-                == normalize_version(remote_version),
-                "newly_finished": newly_finished,
+                "version": version,
+                "latest_site": fields["latest_site"],
+                "has_update": fields["has_update"] if game else self._has_update("", version),
+                "skipped": fields["skipped"],
+                "newly_finished": lc_result.newly_finished or f95_finished,
                 "metadata_updated": metadata_updated,
+                **({"note": note} if note else {}),
             }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "error_code": "check_failed",
-            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc), "error_code": "check_failed"}
 
     def get_update_status(self) -> dict[str, object]:
         """Get the current status of the bulk update check."""

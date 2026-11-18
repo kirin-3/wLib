@@ -23,6 +23,7 @@ const props = defineProps<{
   checking: boolean;
   savesBusy: boolean;
   eligibleChecks: number;
+  eligibleF95Refreshes: number;
   eligibleUpdates: number;
 }>();
 
@@ -163,7 +164,7 @@ const sandboxOnCount = computed(() => props.games.filter((game) => !game.sandbox
 const sandboxOffCount = computed(() => props.games.filter((game) => game.sandbox_enabled).length);
 const savesDisabledReason = computed(() => (props.savesBusy ? "A save backup is running" : ""));
 const infoReason = computed(() => {
-  if (!props.eligibleChecks) return "Selected games have no F95 thread";
+  if (!props.eligibleF95Refreshes) return "Selected games have no F95 thread";
   if (props.checking) return "An update check is running";
   return "";
 });
@@ -208,7 +209,7 @@ const infoReason = computed(() => {
 
         <!-- Updates -->
         <template v-else-if="menu.id === 'updates'">
-          <button role="menuitem" :disabled="busy || checking || !eligibleChecks" :title="!eligibleChecks ? 'Selected games have no F95 thread' : checking ? 'An update check is running' : 'Check selected games'" @click="run('check')">Check for updates</button>
+          <button role="menuitem" :disabled="busy || checking || !eligibleChecks" :title="!eligibleChecks ? 'Selected games have no active update thread' : checking ? 'An update check is running' : 'Check selected games'" @click="run('check')">Check for updates</button>
           <button role="menuitem" :disabled="busy || !eligibleUpdates" title="Requires an available update" @click="run('updated')">Mark as updated</button>
           <button role="menuitem" :disabled="busy || !eligibleUpdates" title="Requires an available update" @click="run('skip')">Skip version</button>
         </template>
