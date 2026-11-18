@@ -498,9 +498,55 @@ def _prepare_failure(returncode: int, output: str) -> str:
     return "other"
 
 
-def _is_benign_createprefix_exit(returncode: int, output: str) -> bool:
-    """umu-run createprefix exits 1 with this Wine error even when it succeeds."""
-    return returncode == 1 and "shellexecuteex failed: file not found" in output.lower()
+_OUTPUT_TAIL = 8192
+
+
+def _runtime_stamp(root: str) -> int | None:
+    """Modification time of the marker that a finished runtime install writes."""
+    for name in (".installed.ok", "_v2-entry-point"):
+        try:
+            return os.stat(os.path.join(root, name)).st_mtime_ns
+        except OSError:
+            pass
+    return None
+
+
+def _prefix_built(wineprefix: str) -> bool:
+    # umu links pfx to the prefix itself; plain Proton keeps it under pfx/.
+    return any(
+        os.path.isfile(os.path.join(wineprefix, *parts))
+        for parts in (("system.reg",), ("pfx", "system.reg"))
+    )
+
+
+def _createprefix_succeeded(
+    returncode: int,
+    output: str,
+    runner: str,
+    wineprefix: str,
+    stamp_before: int | None,
+) -> bool:
+    """Judge a non-zero createprefix exit by what the run left on disk.
+
+    umu-run createprefix can exit non-zero after it installed the runtime and
+    built the prefix, because Wine has no executable to start
+    ("ShellExecuteEx failed: File not found.").
+    """
+    if returncode < 0 or returncode > 128:  # killed by a signal
+        return False
+    if _prepare_failure(returncode, output[-_OUTPUT_TAIL:]) != "other":
+        return False
+    status = runtime_status(runner)
+    if not status["ready"] or not _prefix_built(wineprefix):
+        return False
+    if _runtime_stamp(str(status["path"])) != stamp_before:
+        return True  # this run installed or updated the runtime
+    # Nothing new on disk: accept only umu's known Wine exit, and only when no
+    # earlier output (for example a failed runtime update) shows a problem.
+    return (
+        "shellexecuteex failed" in output.lower()
+        and _prepare_failure(returncode, output) == "other"
+    )
 
 
 @final
@@ -569,6 +615,7 @@ class UmuRuntimePrepare:
         else:
             _ = environment.pop("PROTONPATH", None)
         runtime_path = str(runtime_status(runner)["path"])
+        stamp_before = _runtime_stamp(runtime_path)
         try:
             with tempfile.TemporaryFile() as output:
                 process = subprocess.Popen(
@@ -597,19 +644,24 @@ class UmuRuntimePrepare:
                     with self._lock:
                         self._status["done"] = _folder_size(runtime_path)
                     time.sleep(0.5)
-                _ = output.seek(0, os.SEEK_END)
-                size = output.tell()
-                _ = output.seek(max(0, size - 8192))
-                tail = output.read().decode("utf-8", "replace")
+                _ = output.seek(0)
+                text = output.read().decode("utf-8", "replace")
+                tail = text[-_OUTPUT_TAIL:]
                 if self._cancel.is_set():
                     with self._lock:
                         self._status["cancelled"] = True
                 elif process.returncode:
-                    benign = _is_benign_createprefix_exit(process.returncode, tail)
-                    if benign and runtime_status(runner)["ready"]:
+                    if _createprefix_succeeded(
+                        process.returncode,
+                        text,
+                        runner,
+                        environment["WINEPREFIX"],
+                        stamp_before,
+                    ):
                         _log.info(
-                            "umu createprefix exited %s after installing the runtime",
+                            "umu createprefix exited %s after preparing the runtime and prefix:\n%s",
                             process.returncode,
+                            "\n".join(tail.strip().splitlines()[-5:]),
                         )
                     else:
                         with self._lock:
