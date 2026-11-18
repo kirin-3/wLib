@@ -250,15 +250,20 @@ def test_codename_runtime_follows_installed_build(tmp_path, monkeypatch):
     }
 
 
+CREATEPREFIX_NO_EXECUTABLE = b"ShellExecuteEx failed: File not found."
+
+PREPARE_FAILURES = [
+    (1, b"No space left on device", "disk"),
+    (1, b"network connection failed", "network"),
+    (127, b"python3: not found", "python"),
+    (1, b"unknown problem", "other"),
+]
+
+
 def test_prepare_reports_failure_classes_and_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(umu, "host_command", lambda cmd, **kwargs: cmd)
     monkeypatch.setattr(umu, "umu_data_dir", lambda: str(tmp_path / "umu"))
-    cases = [
-        (1, b"No space left on device", "disk"),
-        (1, b"network connection failed", "network"),
-        (127, b"python3: not found", "python"),
-        (1, b"unknown problem", "other"),
-    ]
+    cases = [*PREPARE_FAILURES, (1, CREATEPREFIX_NO_EXECUTABLE, "other")]
     for returncode, output, expected in cases:
 
         class FakeProcess:
@@ -279,6 +284,54 @@ def test_prepare_reports_failure_classes_and_environment(tmp_path, monkeypatch):
         job._run("/host/umu-run", str(tmp_path / "prefix"), "GE-Proton")
         assert job.status()["error_class"] == expected
         assert not job.status()["running"]
+
+
+def _prepare_with_installed_runtime(tmp_path, monkeypatch, returncode, output):
+    monkeypatch.setattr(umu, "host_command", lambda cmd, **kwargs: cmd)
+    monkeypatch.setattr(umu, "umu_data_dir", lambda: str(tmp_path / "umu"))
+    proton = tmp_path / "GE-Proton11"
+    proton.mkdir()
+    (proton / "toolmanifest.vdf").write_text('"require_tool_appid" "4183110"')
+    runtime = tmp_path / "umu" / "steamrt4"
+    runtime.mkdir(parents=True)
+    (runtime / ".installed.ok").write_text("")
+
+    class FakeProcess:
+        pid = 123
+
+        def __init__(self, command, **kwargs):
+            kwargs["stdout"].write(output)
+            self.returncode = returncode
+
+        def poll(self):
+            return returncode
+
+    monkeypatch.setattr(umu.subprocess, "Popen", FakeProcess)
+    job = umu.UmuRuntimePrepare()
+    job._run("/host/umu-run", str(tmp_path / "prefix"), str(proton / "proton"))
+    return job.status()
+
+
+def test_prepare_succeeds_when_createprefix_exits_nonzero_after_installing(
+    tmp_path, monkeypatch
+):
+    status = _prepare_with_installed_runtime(
+        tmp_path, monkeypatch, 1, CREATEPREFIX_NO_EXECUTABLE
+    )
+    assert status["error"] == ""
+    assert status["error_class"] == ""
+
+
+@pytest.mark.parametrize(
+    ("returncode", "output", "expected"),
+    [*PREPARE_FAILURES, (137, CREATEPREFIX_NO_EXECUTABLE, "other")],
+)
+def test_prepare_reports_failures_even_when_an_older_runtime_is_installed(
+    tmp_path, monkeypatch, returncode, output, expected
+):
+    status = _prepare_with_installed_runtime(tmp_path, monkeypatch, returncode, output)
+    assert status["error"] == output.decode()
+    assert status["error_class"] == expected
 
 
 def test_prepare_with_plain_wine_runner_uses_umu_proton(tmp_path, monkeypatch):

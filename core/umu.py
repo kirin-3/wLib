@@ -7,6 +7,7 @@ import os
 import hashlib
 import glob
 import json
+import logging
 import re
 import signal
 import ssl
@@ -22,6 +23,8 @@ from pathlib import PurePosixPath
 from typing import TypedDict, cast, final
 
 from core.host_platform import get_data_dir, host_command, host_which, proton_compat_data_path
+
+_log = logging.getLogger("wlib.umu")
 
 
 class UmuStatus(TypedDict):
@@ -495,6 +498,11 @@ def _prepare_failure(returncode: int, output: str) -> str:
     return "other"
 
 
+def _is_benign_createprefix_exit(returncode: int, output: str) -> bool:
+    """umu-run createprefix exits 1 with this Wine error even when it succeeds."""
+    return returncode == 1 and "shellexecuteex failed: file not found" in output.lower()
+
+
 @final
 class UmuRuntimePrepare:
     def __init__(self) -> None:
@@ -597,11 +605,18 @@ class UmuRuntimePrepare:
                     with self._lock:
                         self._status["cancelled"] = True
                 elif process.returncode:
-                    with self._lock:
-                        self._status.update(
-                            error=tail.strip() or "Runtime preparation failed.",
-                            error_class=_prepare_failure(process.returncode, tail),
+                    benign = _is_benign_createprefix_exit(process.returncode, tail)
+                    if benign and runtime_status(runner)["ready"]:
+                        _log.info(
+                            "umu createprefix exited %s after installing the runtime",
+                            process.returncode,
                         )
+                    else:
+                        with self._lock:
+                            self._status.update(
+                                error=tail.strip() or "Runtime preparation failed.",
+                                error_class=_prepare_failure(process.returncode, tail),
+                            )
         except OSError as exc:
             with self._lock:
                 self._status.update(
