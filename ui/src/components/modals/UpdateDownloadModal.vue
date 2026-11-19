@@ -1,15 +1,16 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
 import {computed, ref, useTemplateRef, watch} from 'vue';
-import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
+import {IconAlertTriangle, IconCheck, IconChevronRight, IconCircleCheck, IconCopy, IconDeviceFloppy, IconDownload, IconExternalLink, IconInfoCircle, IconLoader2, IconPuzzle, IconRefresh, IconSend, IconX} from '@tabler/icons-vue';
 import {useRouter} from 'vue-router';
 import {api, type DownloadSite, type DownloadSiteOption, type RpdlSearchResponse, type RpdlTorrent, type UpdateBuild, type UpdateMirror} from '../../services/api';
 import {useUpdateDownloads} from '../../composables/useUpdateDownloads';
-import {downloadFailureMessage, inAppMirror, orderBuilds, pickerTargetVersion, preselect, selectableBuild, siteUnavailable, suitable, type HostPlatform} from '../../utils/updateDownloads';
+import {downloadFailureMessage, inAppMirror, needsExtensionSwitch, orderBuilds, pickerTargetVersion, preselect, selectableBuild, siteUnavailable, suitable, type HostPlatform} from '../../utils/updateDownloads';
 import {isWishlisted} from '../../utils/libraryGames';
 import {loadPlatformCapabilities} from '../../utils/platformCapabilities';
 import {formatSize, formatUploadDate, rpdlMarks, rpdlNote, rpdlPreselected, rpdlPrimaryAction, rpdlPrimaryLabel, torrentSentMessage} from '../../utils/torrentDownloads';
-import {addedNotice} from '../../utils/downloadQueue';
+import {addedNotice, FAILURE_ACTION_LABELS} from '../../utils/downloadQueue';
+import {SITE_SETTINGS_ROUTE} from '../../utils/extensionSiteSettings';
 import {notify} from '../../utils/toast';
 import {confirmAction} from '../../utils/confirm';
 import {copyText} from '../../utils/copyText';
@@ -54,6 +55,11 @@ const ordered = computed(()=>orderBuilds(builds.value,platform.value));
 const onlySuitablePatches = computed(() => wishlisted.value && ordered.value.suitable.length > 0
   && ordered.value.suitable.every(build => !canSelect(build)));
 const close = () => { generation++; rpdlGeneration++; if (game.value) void api.closeUpdateDownloadLinks(game.value.id); downloads.close(); };
+const openSiteSettings = () => {
+  close();
+  void router.push(SITE_SETTINGS_ROUTE);
+};
+const showExtensionHelp = computed(() => needsExtensionSwitch(error.value, undefined, activeSite.value || undefined));
 useModalKeyboard(modal,()=>!!game.value,close);
 async function loadLinks(site: DownloadSite | '' = activeSite.value) {
   if (!game.value) return;
@@ -259,7 +265,12 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
           <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
           <div class="flex-1 min-w-0">
             <p>{{ downloadFailureMessage(error, activeSite || undefined) }}</p>
-            <button class="modal-btn mt-3" @click="loadLinks()"><IconRefresh class="w-4 h-4" />Retry</button>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <button v-if="showExtensionHelp" type="button" class="modal-btn" @click="openSiteSettings">
+                <IconPuzzle class="w-4 h-4" />{{ FAILURE_ACTION_LABELS.extension }}
+              </button>
+              <button class="modal-btn" @click="loadLinks()"><IconRefresh class="w-4 h-4" />Retry</button>
+            </div>
           </div>
         </div>
 
@@ -380,11 +391,21 @@ const showPlatform = (build: UpdateBuild) => platformLabel(build.platform).repla
           </div>
           <div v-if="chosenMirror?.host === 'buzzheavier'" class="callout">
             <IconInfoCircle class="w-4 h-4 shrink-0 mt-0.5" />
-            <p>Enable Buzzheavier downloads in the extension settings.</p>
+            <div class="flex-1 min-w-0">
+              <p>Enable Buzzheavier downloads in the extension settings.</p>
+              <button type="button" class="modal-btn mt-2" @click="openSiteSettings">
+                <IconPuzzle class="w-4 h-4" />{{ FAILURE_ACTION_LABELS.extension }}
+              </button>
+            </div>
           </div>
           <div v-if="error" role="alert" class="callout callout-danger">
             <IconAlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
-            <p>{{ downloadFailureMessage(error, activeSite || undefined) }}</p>
+            <div class="flex-1 min-w-0">
+              <p>{{ downloadFailureMessage(error, activeSite || undefined) }}</p>
+              <button v-if="showExtensionHelp" type="button" class="modal-btn mt-2" @click="openSiteSettings">
+                <IconPuzzle class="w-4 h-4" />{{ FAILURE_ACTION_LABELS.extension }}
+              </button>
+            </div>
           </div>
 
         </template>

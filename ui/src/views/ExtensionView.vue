@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, nextTick, ref, onMounted, onUnmounted, useTemplateRef, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   IconActivityHeartbeat,
   IconFolderOpen,
@@ -17,6 +18,7 @@ import {
   type PlatformCapabilities,
 } from "../services/api";
 import { confirmAction } from "../utils/confirm";
+import { EXTENSION_SITE_SWITCHES, SITE_SETTINGS_HASH, SITE_SETTINGS_ID } from "../utils/extensionSiteSettings";
 import { loadPlatformCapabilities } from "../utils/platformCapabilities";
 import { notifyError } from "../utils/toast";
 
@@ -57,12 +59,53 @@ const checkConnection = async () => {
 };
 
 const pairedExtensions = ref<ExtensionPairingEntry[]>([]);
+const route = useRoute();
+const siteSettings = useTemplateRef<HTMLElement>("siteSettings");
+let pairedListLoaded = false;
+let pendingGuideScroll: { main: HTMLElement; top: number } | undefined;
+
+const stopTrackingGuideScroll = () => {
+  pendingGuideScroll?.main.removeEventListener("scroll", trackGuideScroll);
+  pendingGuideScroll = undefined;
+};
+function trackGuideScroll() {
+  if (pendingGuideScroll && Math.abs(pendingGuideScroll.main.scrollTop - pendingGuideScroll.top) > 1) {
+    stopTrackingGuideScroll();
+  }
+}
+const scrollToGuide = () => siteSettings.value?.scrollIntoView({ block: "start", behavior: "instant" });
+
+const followSiteSettingsHash = async () => {
+  stopTrackingGuideScroll();
+  await nextTick();
+  const main = siteSettings.value?.closest("main");
+  if (!main || route.path !== "/extension") return;
+  if (route.hash !== SITE_SETTINGS_HASH) {
+    if (!route.hash) main.scrollTo({ top: 0, behavior: "instant" });
+    return;
+  }
+  scrollToGuide();
+  if (!pairedListLoaded) {
+    pendingGuideScroll = { main, top: main.scrollTop };
+    main.addEventListener("scroll", trackGuideScroll, { passive: true });
+  }
+};
+watch(() => route.hash, followSiteSettingsHash);
 
 const loadPairedExtensions = async () => {
   try {
     pairedExtensions.value = (await api.getExtensionPairing()).paired || [];
   } catch (error) {
     console.error("Could not load allowed extensions", error);
+  }
+  if (pairedListLoaded) return;
+  pairedListLoaded = true;
+  trackGuideScroll();
+  const shouldRealign = !!pendingGuideScroll;
+  stopTrackingGuideScroll();
+  if (shouldRealign) {
+    await nextTick();
+    if (route.hash === SITE_SETTINGS_HASH) scrollToGuide();
   }
 };
 
@@ -100,6 +143,7 @@ const openExtensionFolder = async () => {
 let unmounted = false;
 
 onMounted(() => {
+  void followSiteSettingsHash();
   onWebviewReady(async () => {
     if (unmounted) return;
     platformCapabilities.value = await loadPlatformCapabilities();
@@ -111,6 +155,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   unmounted = true;
+  stopTrackingGuideScroll();
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = null;
 });
@@ -133,11 +178,11 @@ onUnmounted(() => {
           border-left: 2px solid var(--brand);
         "
       >
-        Connect your browser to add games directly from F95Zone.
+        Add games to wLib from F95Zone, LewdCorner, DLsite, VNDB and Ryuugames.
       </p>
     </header>
 
-    <div class="space-y-8 pb-12">
+    <div class="space-y-8 mb-8">
       <!-- Local Service Status -->
       <section class="ext-card rounded-xl p-6">
         <h3
@@ -366,6 +411,43 @@ onUnmounted(() => {
             existed, install the XPI once more. Release builds include a
             signed XPI for normal Firefox installation.
           </p>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Leave enough room below the anchor to align it on tall windows. -->
+    <div class="space-y-8 pb-12" :class="{ 'min-h-[var(--app-vh)]': route.hash === SITE_SETTINGS_HASH }">
+      <section :id="SITE_SETTINGS_ID" ref="siteSettings" class="ext-card rounded-xl p-6">
+        <h3
+          class="ui-section-heading text-lg font-semibold mb-4"
+          style="color: var(--text-primary)"
+        >
+          <IconPuzzle class="ui-section-icon" />
+          Turn on more sites
+        </h3>
+        <div class="space-y-4 text-sm" style="color: var(--text-secondary)">
+          <p>
+            F95Zone works right away. Other sites stay off until you turn them on in the extension settings.
+            Your browser asks for permission once for each site.
+          </p>
+          <ol class="list-decimal pl-5 space-y-2">
+            <li>
+              Click the wLib icon in your browser toolbar to open the extension settings.
+              You can also right-click the icon and choose <code class="ext-code">Options</code>
+              in Chrome or <code class="ext-code">Manage Extension</code> then
+              <code class="ext-code">Preferences</code> in Firefox.
+            </li>
+            <li>Turn on the switches for the sites and downloads you use.</li>
+            <li>Click <code class="ext-code">Allow</code> when your browser asks for permission.</li>
+          </ol>
+          <dl class="space-y-2">
+            <div v-for="site in EXTENSION_SITE_SWITCHES" :key="site.name" class="grid gap-1 sm:grid-cols-[11rem_1fr] sm:gap-4">
+              <dt><code class="ext-code">{{ site.name }}</code></dt>
+              <dd>{{ site.description }}</dd>
+            </div>
+          </dl>
+          <p>The pairing code is on the same settings page.</p>
         </div>
       </section>
 

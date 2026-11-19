@@ -112,6 +112,18 @@ test("every failure code has a sentence and fitting actions", () => {
   assert.match(failureInfo(job({ state: "attention", error_code: "sign_in", error_text: "Sign in to F95Zone in your browser" })).sentence, /F95Zone/);
 });
 
+test("download switch failures offer the extension guide first", () => {
+  const buzzheavier = job({ state: "attention", error_code: "permission", source: { host: "buzzheavier" } });
+  const lewdCorner = job({
+    state: "attention", error_code: "unknown", source: { site: "lc" },
+    error_text: "Turn on LewdCorner downloads in the wLib extension settings",
+  });
+  const removed = job({ state: "attention", error_code: "removed", source: { host: "buzzheavier" } });
+  assert.deepEqual(rowActions(buzzheavier), ["extension", "retry", "another", "remove"]);
+  assert.deepEqual(rowActions(lewdCorner), ["extension", "retry", "another", "remove"]);
+  assert.deepEqual(rowActions(removed), ["another", "remove"]);
+});
+
 test("a failure says how far the download got", () => {
   const stopped = failureInfo(job({ state: "attention", error_code: "network", bytes_done: 43, bytes_total: 100 }));
   assert.equal(stopped.sentence, "The host stopped responding. It stopped at 43%.");

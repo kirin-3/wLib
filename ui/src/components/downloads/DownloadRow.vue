@@ -4,7 +4,7 @@
 import {computed, ref} from 'vue';
 import {
   IconAlertTriangle, IconArrowBarToUp, IconArrowDown, IconArrowUp, IconGripVertical, IconPackage,
-  IconPlayerPause, IconPlayerPlay, IconRefresh, IconSettings, IconSwitchHorizontal, IconTrash, IconBolt,
+  IconPlayerPause, IconPlayerPlay, IconPuzzle, IconRefresh, IconSettings, IconSwitchHorizontal, IconTrash, IconBolt,
 } from '@tabler/icons-vue';
 import type {DownloadQueueJob} from '../../services/api';
 import {
@@ -57,7 +57,7 @@ const LABELS: Record<Exclude<RowAction, "install">, string> = {
 const ICONS = {
   pause: IconPlayerPause, resume: IconPlayerPlay, now: IconBolt, up: IconArrowUp, down: IconArrowDown,
   top: IconArrowBarToUp, remove: IconTrash, install: IconPackage, retry: IconRefresh,
-  another: IconSwitchHorizontal, settings: IconSettings,
+  another: IconSwitchHorizontal, settings: IconSettings, extension: IconPuzzle,
 } satisfies Record<RowAction, unknown>;
 // The move buttons show only their icon; the label is for assistive technology.
 const iconOnly = (action: RowAction) => action === 'up' || action === 'down' || action === 'top';

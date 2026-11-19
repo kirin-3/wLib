@@ -2,7 +2,7 @@
 // Pure helpers for the Downloads page, the sidebar entry and the download
 // status on a game. The backend reports states and failure codes; the words
 // and the actions live here.
-import { lcDownloadFailureMessage } from "./updateDownloads.ts";
+import { lcDownloadFailureMessage, needsExtensionSwitch } from "./updateDownloads.ts";
 import type {
   DownloadFailureCode,
   DownloadForecast,
@@ -169,7 +169,7 @@ export function progressText(job: DownloadQueueJob): string {
   return parts.join(" · ");
 }
 
-export type FailureAction = "retry" | "another" | "settings" | "remove";
+export type FailureAction = "retry" | "another" | "settings" | "extension" | "remove";
 
 export interface FailureInfo {
   sentence: string;
@@ -195,7 +195,11 @@ export function failureInfo(job: DownloadQueueJob, freeBytes: number | null = nu
     return { sentence: `${stateText(job)}. The download continues after it.`, actions: ["remove"] };
   }
   const lcMessage = lcDownloadFailureMessage(job.error_text, job.source.site);
-  if (lcMessage) return { sentence: lcMessage, actions: ["retry", another, "remove"] };
+  if (lcMessage || code === "permission") {
+    const actions: FailureAction[] = ["retry", another, "remove"];
+    if (needsExtensionSwitch(job.error_text, code, job.source.site)) actions.unshift("extension");
+    return { sentence: lcMessage || "Allow Buzzheavier downloads in the wLib extension settings, then retry.", actions };
+  }
   switch (code) {
     case "network":
       return {
@@ -236,8 +240,6 @@ export function failureInfo(job: DownloadQueueJob, freeBytes: number | null = nu
       return { sentence: "Open a browser with the wLib extension, then retry.", actions: ["retry", another, "remove"] };
     case "check_timeout":
       return { sentence: "The check in the browser was not finished. Finish it in the browser window, then retry, or choose another mirror.", actions: ["retry", another, "remove"] };
-    case "permission":
-      return { sentence: "Allow Buzzheavier downloads in the wLib extension settings, then retry.", actions: ["retry", another, "remove"] };
     case "mirror_gone":
       return { sentence: "The thread no longer offers this mirror. Choose another one.", actions: [another, "remove"] };
     case "engine":
@@ -251,6 +253,7 @@ export const FAILURE_ACTION_LABELS: Record<FailureAction, string> = {
   retry: "Retry",
   another: "Choose another",
   settings: "Open Settings",
+  extension: "How to turn it on",
   remove: "Remove",
 };
 

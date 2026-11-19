@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {orderBuilds,preselect,downloadFailureMessage,bulkDownloadDecision,pickerTargetVersion,selectableBuild,siteUnavailable} from './updateDownloads.ts';
+import {orderBuilds,preselect,downloadFailureMessage,needsExtensionSwitch,bulkDownloadDecision,pickerTargetVersion,selectableBuild,siteUnavailable} from './updateDownloads.ts';
 import type {UpdateBuild} from '../services/api.ts';
 const build = (platform: string, kind = 'full'): UpdateBuild => ({label:platform,section:'',platform,kind,mirrors:[{link_id:platform,host:'mega',label:'MEGA',part:'',split:false}]});
 test('prefers native full builds and separates unsuitable platforms',()=>{
@@ -17,6 +17,15 @@ test('failure messages pick the most specific next step',()=>{
   assert.match(downloadFailureMessage('Enable Buzzheavier downloads in the wLib extension settings'),/Turn on Buzzheavier/);
   assert.match(downloadFailureMessage('unsupported host; open in browser'),/Open in browser/);
   assert.match(downloadFailureMessage('Open a browser with the wLib extension'),/Open a browser with the wLib extension and retry/);
+});
+test('the guide is offered for Buzzheavier and LewdCorner download switches', () => {
+  assert.equal(needsExtensionSwitch('', 'permission'), true);
+  assert.equal(needsExtensionSwitch('Permission denied'), true);
+  assert.equal(needsExtensionSwitch('Enable Buzzheavier downloads in the wLib extension settings'), true);
+  assert.equal(needsExtensionSwitch('Turn on LewdCorner downloads in the wLib extension settings'), true);
+  assert.equal(needsExtensionSwitch('The file was removed', 'removed'), false);
+  assert.equal(needsExtensionSwitch('Buzzheavier downloads quota reached'), false);
+  assert.equal(needsExtensionSwitch('Sign in to LewdCorner to use LewdCorner downloads'), false);
 });
 test('bulk download starts the preselected build',()=>{
   const decision = bulkDownloadDecision({success:true,builds:[build('windows'),build('linux')]},'linux');

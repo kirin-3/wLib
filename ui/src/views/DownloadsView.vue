@@ -22,6 +22,7 @@ import {formatSpeed} from '../utils/torrentDownloads';
 import {confirmAction} from '../utils/confirm';
 import {openInstallArchive} from '../utils/installArchive';
 import {notify} from '../utils/toast';
+import {SITE_SETTINGS_ROUTE} from '../utils/extensionSiteSettings';
 
 const router = useRouter();
 const downloads = useUpdateDownloads();
@@ -111,6 +112,7 @@ async function onAction(job: DownloadQueueJob, action: RowAction) {
     case 'top': await move(job, 0, 'top'); return;
     case 'install': await downloads.install(job); return;
     case 'settings': void router.push('/settings'); return;
+    case 'extension': void router.push(SITE_SETTINGS_ROUTE); return;
     case 'another': {
       const game = gameFor(job.game_id);
       if (!game) { notify('The game is no longer in the library.', 'error'); return; }

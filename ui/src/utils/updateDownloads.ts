@@ -56,11 +56,14 @@ export function bulkDownloadDecision(
   if (!usable.some(build => build.kind === "full")) return { kind: "needs-choice", reason: "Only patch builds were found" };
   return { kind: "needs-choice", reason: "No full build has an in-app mirror" };
 }
+const LC_DOWNLOAD_SWITCH_HINT = "Turn on LewdCorner downloads in the wLib extension settings";
+const BUZZHEAVIER_DOWNLOAD_SWITCH_HINT = "Turn on Buzzheavier downloads in the wLib extension settings.";
+
 export function lcDownloadFailureMessage(error: string, site?: DownloadSite): string | undefined {
   const lower = error.toLowerCase();
   if (lower.includes("lewdcorner check") || (site === "lc" && lower.includes("timed out"))) return "Finish the LewdCorner check in your browser";
   if (lower.includes("lc_login_required") || lower.includes("sign in to lewdcorner")) return "Sign in to LewdCorner in your browser";
-  if (lower.includes("lewdcorner downloads")) return "Turn on LewdCorner downloads in the wLib extension settings";
+  if (lower.includes("lewdcorner downloads")) return LC_DOWNLOAD_SWITCH_HINT;
   if (lower.includes("lc_plus_required") || lower.includes("lc plus thread")) return "This is an LC Plus thread. Use F95Zone or an LC Plus account.";
   if (lower.includes("lewdcorner switch")) return error;
 }
@@ -73,10 +76,16 @@ export function downloadFailureMessage(error: string, site?: DownloadSite): stri
   if (lower.includes("disk space")) return `${error}. Free up space and retry.`;
   if (lower.includes("could not save the download")) return `${error}. Check the wLib data folder and retry.`;
   if (lower.includes("quota")) return `${error}. Wait for the host's quota to reset or try another mirror.`;
-  if (lower.includes("permission") || lower.includes("buzzheavier downloads")) return `${error}. Turn on Buzzheavier downloads in the wLib extension settings.`;
+  if (lower.includes("permission") || lower.includes("buzzheavier downloads")) return `${error}. ${BUZZHEAVIER_DOWNLOAD_SWITCH_HINT}`;
   if (lower.includes("sign in") || lower.includes("login")) return `${error}. Sign in to F95Zone in your browser and retry.`;
   if (lower.includes("challenge") || lower.includes("timed out")) return `${error}.`;
   if (lower.includes("unsupported") || lower.includes("open in browser") || lower.includes("split archive")) return `${error}. Use Open in browser for this mirror.`;
   if (lower.includes("extension") || lower.includes("open a browser")) return `${error}. Open a browser with the wLib extension and retry.`;
   return `${error}. Try another mirror or open this one in your browser.`;
+}
+
+export function needsExtensionSwitch(error: string, code?: string, site?: DownloadSite): boolean {
+  if (code === "permission") return true;
+  const message = downloadFailureMessage(error, site);
+  return message === LC_DOWNLOAD_SWITCH_HINT || message.endsWith(`. ${BUZZHEAVIER_DOWNLOAD_SWITCH_HINT}`);
 }
