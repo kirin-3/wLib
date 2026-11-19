@@ -119,7 +119,7 @@ test('LewdCorner latest-updates badges sit on the card image, once, and follow p
         location:{pathname:'/latest-updates/'},
         setTimeout:fn=>timers.push(fn),
         MutationObserver:class { constructor(fn){observerCallback = fn;} observe(){} },
-        document:{querySelectorAll:()=>tiles, createElement:()=>makeNode()},
+        document:{querySelectorAll:()=>tiles, createElement:()=>makeNode({dataset:{}})},
         chrome:{runtime:{lastError:null, sendMessage(message, reply){
             calls.push(Array.from(message.threadIds));
             reply({success:true, matches:{'https://lewdcorner.com/threads/25455/':{}, 'https://lewdcorner.com/threads/7/':{}}});
