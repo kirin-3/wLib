@@ -16,7 +16,7 @@ async page => {
     const proton = page.locator('#settings-proton-path');
     const prefix = page.locator('#settings-prefix-path');
     await proton.waitFor(); await page.waitForFunction(() => !document.querySelector('#settings-proton-path').disabled);
-    if (await page.getByRole('button', {name:'Save Changes'}).count() || await page.getByRole('button', {name:'Discard', exact:true}).count()) throw Error('Shared save actions remain');
+    if (await page.getByRole('button', {name:'Save changes'}).count() || await page.getByRole('button', {name:'Discard', exact:true}).count()) throw Error('Shared save actions remain');
     await page.evaluate(() => {
       window.__data = { ...JSON.parse(localStorage.getItem('wlib-mock-settings') || '{}'), library_folders: ['/existing'], library_folder: '/existing' };
       window.__calls = []; window.__fail = false;

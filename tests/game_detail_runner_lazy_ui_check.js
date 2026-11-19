@@ -59,7 +59,7 @@ async (page) => {
       "Opening the game detail modal must not call getAvailableRunners",
     );
     await dialog.getByRole("tab", { name: "Launch", exact: true }).click();
-    await dialog.getByLabel("Runtime Mode").waitFor();
+    await dialog.getByLabel("Runtime mode").waitFor();
     await page.waitForTimeout(400);
     check(
       await page.evaluate(() => window.__runnerCalls) === 0,
@@ -71,7 +71,7 @@ async (page) => {
     );
 
     // 2. Enabling the Custom Prefix toggle loads the list once.
-    const customPrefix = dialog.getByLabel("Use Custom Wine Prefix", { exact: true });
+    const customPrefix = dialog.getByLabel("Use custom Wine prefix", { exact: true });
     await customPrefix.evaluate(element => element.click());
     await page.waitForFunction(() => window.__runnerCalls === 1);
     await dialog
@@ -116,7 +116,7 @@ async (page) => {
     await reloadedCard.click();
     await dialog.getByRole("heading", { name: "Aurora", exact: true }).waitFor();
     await dialog.getByRole("tab", { name: "Launch", exact: true }).click();
-    await dialog.getByLabel("Runtime Mode").waitFor();
+    await dialog.getByLabel("Runtime mode").waitFor();
     await page.waitForTimeout(400);
     check(
       await page.evaluate(() => window.__runnerCalls) === 0,

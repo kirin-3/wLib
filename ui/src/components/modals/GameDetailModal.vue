@@ -3002,7 +3002,7 @@ const removeAttachment = async (name: string) => {
                     data-testid="japanese-locale-note"
                   >
                     {{ japaneseLocale.note }}
-                    <button v-if="japaneseLocale.needsSettings" class="underline" style="color:var(--brand)" @click="closeAndNavigate(WINDOWS_TOOLS_ROUTE)">Set up</button>
+                    <button v-if="japaneseLocale.needsSettings" type="button" aria-label="Set up Locale Emulator" class="underline" style="color:var(--brand)" @click="closeAndNavigate(WINDOWS_TOOLS_ROUTE)">Set up</button>
                   </p>
                 </div>
 
@@ -3397,7 +3397,7 @@ const removeAttachment = async (name: string) => {
                 class="modal-input w-full font-mono notes-editor"
               ></textarea>
               <p class="text-xs mt-2" style="color: var(--text-muted)">
-                Markdown is supported. Changes save with Save Changes.
+                Markdown is supported. Changes save with Save changes.
               </p>
             </div>
           </div>

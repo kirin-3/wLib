@@ -78,7 +78,7 @@ async (page) => {
   await page.getByRole("checkbox", { name: "Use Custom Wine Prefix" }).locator("..").click();
   check(await page.getByRole("button", { name: "Winecfg" }).count() === 0, "Prefix tools visible without a custom prefix");
   await page.getByRole("checkbox", { name: "Use Custom Wine Prefix" }).locator("..").click();
-  await page.getByRole("button", { name: "Save Changes" }).click();
+  await page.getByRole("button", { name: "Save changes" }).click();
   const gameCalls = await page.evaluate(() => window.__performanceCalls);
   check(gameCalls.some((c) => c[0] === "prefix" && c[1] === "winecfg" && c[2] === game.custom_prefix && c[3] === game.proton_version), "Game prefix tool used the wrong target");
   check(gameCalls.some((c) => c[0] === "prefix" && c[1] === "winetricks" && c[2] === game.custom_prefix && c[3] === game.proton_version), "Game Winetricks used the wrong target");

@@ -48,7 +48,7 @@ async (page) => {
     // 1. An explicit save must not absorb edits typed while it is in flight.
     let dialog = await openAurora();
     const tab = name => dialog.getByRole("tab", { name, exact: true });
-    const save = () => dialog.getByRole("button", { name: "Save Changes", exact: true });
+    const save = () => dialog.getByRole("button", { name: "Save changes", exact: true });
     await tab("Info").click();
     const title = () => dialog.getByLabel("Title", { exact: true });
     await title().fill("Aurora first edit");
@@ -76,7 +76,7 @@ async (page) => {
     });
     await page.waitForFunction(() => {
       const button = document.querySelector(".save-btn");
-      return !!button && button.textContent.includes("Save Changes");
+      return !!button && button.textContent.includes("Save changes");
     });
     check(await dialog.isVisible(), "A save that finishes while the form changed must not close the modal");
     check(await save().isVisible(), "Edits made during the save must stay available to save");
@@ -149,17 +149,17 @@ async (page) => {
     const chip = dialog.getByRole("menuitemcheckbox", { name: "Race Collection", exact: true });
     await chip.waitFor();
     await chip.click();
-    await dialog.getByRole("button", { name: "Save Changes", exact: true }).waitFor();
-    await dialog.getByRole("button", { name: "Save Changes", exact: true }).click();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await page.getByText("Failed to save collections: Simulated collection failure", { exact: true }).waitFor();
     check(await dialog.isVisible(), "A failed collection save must keep the modal open");
     check(
-      await dialog.getByRole("button", { name: "Save Changes", exact: true }).isVisible(),
+      await dialog.getByRole("button", { name: "Save changes", exact: true }).isVisible(),
       "A failed collection save must leave Save available for a retry",
     );
     check(await dialog.getByText("Unsaved changes", { exact: true }).isVisible(), "The failed collection change must stay unsaved");
     await page.evaluate(() => { delete window.pywebview; });
-    await dialog.getByRole("button", { name: "Save Changes", exact: true }).click();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
     check(
       await page.evaluate(() => {

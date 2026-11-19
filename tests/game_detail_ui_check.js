@@ -49,7 +49,7 @@ async (page) => {
     const open = title => page.getByRole("checkbox", { name: `${title}. Press Enter for details.`, exact: true }).press("Enter");
     await open("Aurora");
     const dialog = page.getByRole("dialog");
-    const save = dialog.getByRole("button", { name: "Save Changes", exact: true });
+    const save = dialog.getByRole("button", { name: "Save changes", exact: true });
     const tab = name => dialog.getByRole("tab", { name, exact: true });
     const dismissError = async message => {
       const alert = page.getByRole("alert").filter({ hasText: message });
@@ -64,7 +64,7 @@ async (page) => {
     check(await dialog.locator(".summary-card").count() === 4, "Timestamps must not occupy stat tiles");
     check(await dialog.getByRole("button", { name: "Remove tag Fantasy" }).isVisible(), "Tags must be expanded by default");
     check(await save.count() === 0, "Save must be hidden without edits");
-    check(!await dialog.getByLabel("Executable Path", { exact: true }).isVisible(), "Overview must hide launch settings");
+    check(!await dialog.getByLabel("Executable path", { exact: true }).isVisible(), "Overview must hide launch settings");
 
     await dialog.getByRole("button", { name: "Rate Graphics 4 of 5" }).click();
     await dialog.getByLabel("New tag").fill("Test tag");
@@ -133,20 +133,20 @@ async (page) => {
     await tab("Notes").click();
     check((await dialog.boundingBox()).height === stableTabHeight, "Modal height must remain stable across tabs");
     await tab("Launch").click();
-    await dialog.getByLabel("Runtime Mode").waitFor();
+    await dialog.getByLabel("Runtime mode").waitFor();
     await dialog.getByText("Enable this if the game has unreadable text", { exact: false }).waitFor();
     check(await dialog.getByRole("button", { name: "Move Part 2 up" }).isDisabled(), "The first target cannot move up");
     await dialog.getByRole("button", { name: "Move Extras up" }).click();
     await page.waitForFunction(() => JSON.parse(localStorage.getItem("wlib-mock-launch-targets")).find(target => target.label === "Extras").sort_order === 0);
-    await dialog.getByLabel("Command Line Arguments").fill("--fullscreen");
+    await dialog.getByLabel("Command-line arguments").fill("--fullscreen");
     await save.waitFor();
     await tab("Info").click();
     check(await dialog.getByLabel("Title", { exact: true }).inputValue() === "Aurora", "Info must contain title editing");
-    check(!await dialog.getByLabel("Runtime Mode").isVisible(), "Info must hide launch settings");
+    check(!await dialog.getByLabel("Runtime mode").isVisible(), "Info must hide launch settings");
     await dialog.getByLabel("Title", { exact: true }).fill("Aurora edited");
     await tab("Launch").click();
-    check(await dialog.getByLabel("Command Line Arguments").inputValue() === "--fullscreen", "Edits must survive tab switches");
-    await dialog.getByLabel("Command Line Arguments").fill("");
+    check(await dialog.getByLabel("Command-line arguments").inputValue() === "--fullscreen", "Edits must survive tab switches");
+    await dialog.getByLabel("Command-line arguments").fill("");
     await tab("Info").click();
     await dialog.getByLabel("Title", { exact: true }).fill("Aurora");
     check(await save.count() === 0, "Reverting all edits must hide Save");
@@ -214,7 +214,7 @@ async (page) => {
     check(await dialog.getByText("This thread has no screenshots.", { exact: true }).isVisible(), "Catalog threads without screenshots must show the empty-state hint");
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await open("No Cover");
-    check(await dialog.getByRole("img", { name: "No cover image" }).isVisible(), "Missing covers must have a fallback");
+    check(await dialog.locator(".game-cover .cover-placeholder").isVisible(), "Missing covers must have a fallback");
     check(await dialog.getByText("Update: 3.0").isVisible(), "Updates must be shown when the installed version is unknown");
     await page.setViewportSize({ width: 375, height: 812 });
     await page.evaluate(() => document.documentElement.classList.add("light"));

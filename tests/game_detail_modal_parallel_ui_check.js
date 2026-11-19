@@ -79,7 +79,7 @@ async (page) => {
     // The modal still settles normally once the capability read returns.
     await page.waitForFunction(() => window.__platformResolved, null, { timeout: 3000 });
     await dialog.getByRole("tab", { name: "Launch", exact: true }).click();
-    await dialog.getByLabel("Runtime Mode").waitFor({ timeout: 3000 });
+    await dialog.getByLabel("Runtime mode").waitFor({ timeout: 3000 });
     return "PASS: the Cheat Engine check starts on modal open without waiting for platform capabilities";
   } finally {
     await page.evaluate(previous => {
