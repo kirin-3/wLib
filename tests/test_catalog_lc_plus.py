@@ -377,3 +377,29 @@ def test_lc_plus_runs_between_the_feed_and_the_thread_pages():
     assert "lc_plus" in get_sources()
     args = build_parser().parse_args(["run", "--sources", "lc_plus", "--until-swept", "lc_plus"])
     assert args.sources == ["lc_plus"] and args.until_swept == ["lc_plus"]
+
+
+def _cards_page(name, count):
+    """`name` without page links, its first card repeated `count` times."""
+    head, first, *_rest = _one_page(name).split('<div class="lcForumCard">')
+    return head + ('<div class="lcForumCard">' + first) * count
+
+
+@pytest.mark.parametrize("count", [0, 20])
+def test_a_full_or_empty_first_page_without_page_links_is_an_error(tmp_path, count):
+    page = _cards_page("lc_plus_119_page1.html", count) if count else re.sub(
+        r'<div class="lcForumCards">.*</div>\s*</body>',
+        '<div class="lcForumCards"></div></body>',
+        _one_page("lc_plus_119_page1.html"), flags=re.S,
+    )
+    transport = _listing_transport({(119, 1): page})
+    ctx, _ = _context(tmp_path, transport)
+    ctx.catalog.upsert(
+        "lc_threads", "thread_id",
+        [{"thread_id": 900, "title": "Kept", "ts": 1, "tier": "Premium", "url": "u"}],
+        "2020-01-01T00:00:00Z",
+    )
+    result = run_source(LcPlusSource(), ctx)
+    assert result.status == "error" and "without page links" in (result.detail or "")
+    assert not result.sweep_completed
+    assert rows(ctx.catalog, "SELECT thread_id FROM lc_threads WHERE removed_at IS NOT NULL") == []

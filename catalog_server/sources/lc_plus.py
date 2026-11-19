@@ -36,6 +36,8 @@ LISTING_URL = (
     "https://lewdcorner.com/forums/{node}/{page}?order=latest_update_date&direction=desc"
 )
 TIER = "Premium"
+# Threads per listing page.
+PER_PAGE = 20
 # The card label for the prefix the feed names "Completed".
 _LABEL_NAMES = {"complete": "completed"}
 
@@ -282,9 +284,17 @@ class LcPlusSource:
         listing = self._fetch(ctx, node, page)
         total = listing.last_page
         if total is None:
-            # One page has no page links; a later page without them uses the stored total.
+            # A forum with one page has no page links; a later page without
+            # them uses the stored total. A page 1 that is full or empty may
+            # only have lost its page links (a markup change, a bad answer):
+            # ending the sweep there would mark every later Premium row removed.
             stored = ctx.state.get(self.name, "sweep_total_pages")
-            total = stored if page > 1 and isinstance(stored, int) and stored > 0 else page
+            if page > 1 and isinstance(stored, int) and stored > 0:
+                total = stored
+            elif page == 1 and 0 < len(listing.cards) + listing.skipped < PER_PAGE:
+                total = 1
+            else:
+                raise ValueError(f"LC forum {node} returned page {page} without page links")
         total = max(total, page)
         ctx.state.put(self.name, "sweep_total_pages", total)
         if not listing.cards and page < total:
