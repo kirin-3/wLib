@@ -3922,6 +3922,27 @@ def test_conflicting_lc_and_f95_matches_are_ambiguous():
     assert {game["title"] for game in get_all_games()} == {"LC", "F95"}
 
 
+def test_sync_uid_match_wins_over_thread_conflict():
+    lc_url = "https://lewdcorner.com/threads/21/"
+    f95_url = "https://f95zone.to/threads/101/"
+    lc_id = add_game("LC", "", lc_url=lc_url)
+    add_game("F95", "", f95_url=f95_url)
+    uid = next(game for game in get_all_games() if game["id"] == lc_id)["sync_uid"]
+    backup = base_backup([{
+        "uid": uid,
+        "metadata": {"title": "Synced", "f95_url": f95_url, "lc_url": lc_url},
+    }])
+    result = apply_library_backup(backup, {"sections": [SECTION_METADATA]}, sync=True)
+    assert result["updated"] == 1
+    assert result["ambiguous"] == result["skipped"] == 0
+    games = {game["id"]: game for game in get_all_games()}
+    assert len(games) == 2
+    assert games[lc_id]["title"] == "Synced"
+    assert games[lc_id]["lc_url"] == lc_url
+    # The F95 thread stays with the game that already owns it.
+    assert games[lc_id]["f95_url"] == ""
+
+
 def test_legacy_backup_restores_f95_latest_as_an_undated_version():
     backup = base_backup([{"metadata": {
         "title": "Legacy F95 game",

@@ -982,15 +982,9 @@ def _match_imported_game(
     f95_matches = index.by_thread.get(thread_match_key(f95_url), [])
     lc_matches = index.by_lc_thread.get(lc_id, [])
     thread_matches = {int(str(game["id"])) for game in (*f95_matches, *lc_matches)}
-    if f95_matches and lc_matches and len(thread_matches) > 1:
-        return {
-            "status": "ambiguous", "game": imported_game, "title": title,
-            "reason": "The F95 and LewdCorner threads match different local games.",
-            "candidate_count": len(thread_matches), "candidate_ids": sorted(thread_matches),
-            "thread_conflict": True,
-        }
     # The sync identity survives title and thread changes made on another
-    # device, so it decides before any metadata-based match.
+    # device, so it decides before any metadata-based match, thread
+    # conflicts included.
     sync_uid = _sync_uid(imported_game.get("uid"))
     if sync_uid:
         # Stored values are already lowercase hex (generated or validated).
@@ -1002,6 +996,13 @@ def _match_imported_game(
                 "local_id": int(str(uid_matches[0].get("id", 0))),
                 "match_type": "sync_uid",
             }
+    if f95_matches and lc_matches and len(thread_matches) > 1:
+        return {
+            "status": "ambiguous", "game": imported_game, "title": title,
+            "reason": "The F95 and LewdCorner threads match different local games.",
+            "candidate_count": len(thread_matches), "candidate_ids": sorted(thread_matches),
+            "thread_conflict": True,
+        }
     if len(thread_matches) == 1:
         return {
             "status": "matched", "game": imported_game,
