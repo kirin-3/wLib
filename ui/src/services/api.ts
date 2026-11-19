@@ -278,10 +278,14 @@ export interface UpdateCheckResponse extends ApiBasicResponse {
   latest_site?: GameRecord["latest_site"];
   note?: string;
   skipped?: boolean;
+  // The game has the Archived play status, so its update is not offered.
+  archived?: boolean;
   success: boolean;
   version?: string;
   has_update?: boolean;
   newly_finished?: boolean;
+  // The thread went from not Abandoned to Abandoned during this check.
+  newly_abandoned?: boolean;
   metadata_updated?: number;
   browser_fallback?: "unavailable" | "failed" | "logged_out";
 }
@@ -301,7 +305,10 @@ export interface BulkUpdateResultItem {
   latest_version: string;
   has_update: boolean;
   skipped?: boolean;
+  // The game has the Archived play status, so its update is not offered.
+  archived?: boolean;
   newly_finished?: boolean;
+  newly_abandoned?: boolean;
   error: string;
   error_code: string;
   browser_fallback?: "unavailable" | "failed" | "logged_out";
@@ -685,6 +692,9 @@ export interface ArchiveInstallOptions {
   lc_url?: string | undefined;
   lc_dismissed?: string | undefined;
   thread_completed?: boolean | undefined;
+  thread_onhold?: boolean | undefined;
+  thread_abandoned?: boolean | undefined;
+  thread_states_seen_at?: string | undefined;
   cover_image?: string | undefined;
   tags?: string | string[] | undefined;
   rating?: string | undefined;
@@ -1173,6 +1183,9 @@ export interface LewdCornerPartner {
     rating?: number | string;
     engine?: string;
     thread_completed?: boolean | null;
+    thread_onhold?: boolean | null;
+    thread_abandoned?: boolean | null;
+    thread_states_seen_at?: string | null;
     links?: StoreLink[];
   };
 }
@@ -1259,6 +1272,9 @@ export interface GameRecord {
   thread_main_post_last_edit_at?: string | null;
   thread_main_post_checked_at?: string | null;
   thread_completed?: boolean | number;
+  // The thread's On Hold and Abandoned prefixes: null is unknown, 0 not set, 1 set.
+  thread_onhold?: number | null;
+  thread_abandoned?: number | null;
   launch_targets?: LaunchTarget[];
   // Decoded collection membership; names always match the collection list.
   collections?: string[];
@@ -1765,6 +1781,9 @@ class ApiService {
     lc_dismissed = "",
     thread_completed?: boolean,
     screenshots: string[] = [],
+    thread_onhold?: boolean,
+    thread_abandoned?: boolean,
+    thread_states_seen_at = "",
   ): Promise<AddGameResponse> {
     return this.invokeLibraryChange(
       "add_game",
@@ -1790,6 +1809,9 @@ class ApiService {
       lc_dismissed,
       thread_completed ?? null,
       screenshots,
+      thread_onhold ?? null,
+      thread_abandoned ?? null,
+      thread_states_seen_at,
     );
   }
 
@@ -1907,6 +1929,16 @@ class ApiService {
 
   async getUpdateStatus(): Promise<UpdateStatusResponse> {
     return this.invoke<UpdateStatusResponse>("get_update_status");
+  }
+
+  /** Games a catalog update found newly abandoned since the last call, once each. */
+  async takeAbandonedNotices(): Promise<{ id: number; title: string }[]> {
+    const notices = await this.invoke<unknown>("take_abandoned_notices");
+    return Array.isArray(notices)
+      ? notices.filter((notice): notice is { id: number; title: string } =>
+        !!notice && typeof notice === "object" && typeof (notice as { id?: unknown }).id === "number"
+        && typeof (notice as { title?: unknown }).title === "string")
+      : [];
   }
 
   async cancelUpdateCheck(): Promise<ApiBasicResponse> {

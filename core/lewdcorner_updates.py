@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from core import database, extension_bridge, lewdcorner as lc
 from core.versions import actionable_remote_version, normalize_version
@@ -50,10 +49,6 @@ def read_feed(cancelled: Callable[[], bool]) -> dict[str, lc.LcVersion]:
     return items
 
 
-def _checked_at() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def matching_catalog_time(version: str, entry: Mapping[str, object]) -> str:
     if normalize_version(version) == normalize_version(entry.get("version")):
         return lc.timestamp_iso(entry.get("ts"))
@@ -61,11 +56,30 @@ def matching_catalog_time(version: str, entry: Mapping[str, object]) -> str:
 
 
 def store_f95_version(
-    game_id: int, url: str, version: str, entry: Mapping[str, object]
-) -> dict[str, object] | None:
-    at = matching_catalog_time(version, entry) or _checked_at()
-    stored = database.store_thread_update(game_id, "f95", url, (version, at))
-    return stored[0] if stored is not None else None
+    game_id: int,
+    url: str,
+    version: str,
+    entry: Mapping[str, object],
+    *,
+    fallback_states: database.ThreadStates | None = None,
+    page_read: bool = False,
+) -> tuple[dict[str, object], bool] | None:
+    """Store an F95 version and the thread states of its catalog entry.
+
+    F95 prefix data decides; without it, `fallback_states` (the LC read of
+    the same game) applies only while the game's states are unknown. Returns the stored game and whether it is newly
+    abandoned. With `page_read` the states stay as the page read left them.
+    """
+    at = matching_catalog_time(version, entry) or database.utc_now_iso()
+    # A thread page read is newer than the catalog and already stored its states.
+    if page_read:
+        states, lc_states = None, None
+    else:
+        states, lc_states = database.thread_states_from(entry), fallback_states
+    stored = database.store_thread_update(
+        game_id, "f95", url, (version, at), states=states, lc_states=lc_states
+    )
+    return (stored[0], stored[2]) if stored is not None else None
 
 
 @dataclass(frozen=True)
@@ -75,6 +89,9 @@ class CheckResult:
     error: lc.LcUpdateError | None = None
     # A failed live read whose catalog fallback still gave a version.
     note: lc.LcUpdateError | None = None
+    newly_abandoned: bool = False
+    # The On Hold and Abandoned prefixes this read found; None without prefix data.
+    states: database.ThreadStates | None = None
 
     @property
     def version_checked(self) -> bool:
@@ -96,13 +113,14 @@ def check_thread(
         return CheckResult(error=lc.LcUpdateError("lc_extract_failed"))
     available = extension_bridge.is_available(site="lc")
     catalog_usable = lc.usable_catalog_entry(catalog)
-    completed = bool(feed_item and lc.prefix_details(feed_item.prefixes)[1])
+    flags = lc.prefix_details(feed_item.prefixes)[1] if feed_item and feed_item.prefixes else None
+    completed = bool(flags and flags.completed)
     version = ""
     at = ""
     error: lc.LcUpdateError | None = None
     note: lc.LcUpdateError | None = None
     if feed_item and actionable_remote_version(feed_item.version):
-        version, at = feed_item.version, feed_item.at or _checked_at()
+        version, at = feed_item.version, feed_item.at or database.utc_now_iso()
     elif (single or not catalog_usable and not stored_version) and available:
         try:
             response = _fetch(url)
@@ -111,14 +129,17 @@ def check_thread(
             )
             page = lc.parse_thread_page(response.body, response.status, premium=premium)
             version = page.version
-            completed = completed or lc.prefix_details(page.prefixes)[1]
+            if page.prefixes:
+                page_flags = lc.prefix_details(page.prefixes)[1]
+                completed = completed or page_flags.completed
+                flags = flags or page_flags
             if not actionable_remote_version(version):
                 raise lc.LcUpdateError("lc_extract_failed")
             if single:
                 # A Premium/unknown first read is an undated baseline.
                 at = matching_catalog_time(version, catalog) if catalog_usable else ""
                 if not at and (catalog_usable or stored_version):
-                    at = _checked_at()
+                    at = database.utc_now_iso()
         except lc.LcUpdateError as exc:
             if catalog_usable:
                 note = exc
@@ -136,15 +157,21 @@ def check_thread(
     elif feed_error:
         error = feed_error
 
+    states = (
+        database.ThreadStates(flags.onhold, flags.abandoned)
+        if flags is not None
+        else database.thread_states_from(catalog)
+    )
     observation = (version, at) if actionable_remote_version(version) else None
     if observation is None and error is None and (single or not stored_version):
         error = feed_error
         if error is None and single:
             error = lc.LcUpdateError("lc_extract_failed")
     saved = database.store_thread_update(
-        game_id, "lc", url, observation, completed=completed, keep_newer=True
+        game_id, "lc", url, observation, completed=completed, keep_newer=True,
+        states=states,
     )
     if saved is None:
         return CheckResult(error=error or lc.LcUpdateError("lc_extract_failed"))
-    current, newly_finished = saved
-    return CheckResult(current, newly_finished, error, note)
+    current, newly_finished, newly_abandoned = saved
+    return CheckResult(current, newly_finished, error, note, newly_abandoned, states)

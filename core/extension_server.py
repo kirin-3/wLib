@@ -75,6 +75,26 @@ class _ShowableWindow(Protocol):
     def restore(self) -> None: ...
 
 
+_THREAD_STATE_KEYS = ("thread_onhold", "thread_abandoned", "thread_states_seen_at")
+
+
+def _page_lc_prefixes(raw: list[object], raw_ids: object) -> list[lewdcorner.LcPrefix]:
+    """LC page prefixes from the extension: name strings, with their prefix ids
+    in a parallel `prefix_ids` list (extension 1.2.13 and later).
+
+    The names stay plain strings so an older wLib still reads them; a missing
+    or mismatched id list leaves every id unknown.
+    """
+    ids = cast(list[object], raw_ids) if isinstance(raw_ids, list) else []
+    if len(ids) != len(raw):
+        ids = []
+    prefixes: list[lewdcorner.LcPrefix] = []
+    for index, item in enumerate(raw):
+        if prefix := lewdcorner.lc_prefix(item, ids[index] if ids else None):
+            prefixes.append(prefix)
+    return prefixes
+
+
 class ExtensionRequestHandler(BaseHTTPRequestHandler):
     # Idle or stalled clients would otherwise hold a server thread forever.
     timeout = 10  # pyright: ignore[reportUnannotatedClassAttribute]
@@ -251,9 +271,12 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
             payload["screenshots"] = lewdcorner.page_screenshots(payload.get("screenshots"))
             raw_prefixes = payload.get("prefixes")
             if isinstance(raw_prefixes, list):
-                engine, completed = lewdcorner.prefix_details(cast(list[object], raw_prefixes))
+                prefixes = _page_lc_prefixes(cast(list[object], raw_prefixes), payload.get("prefix_ids"))
+                engine, flags = lewdcorner.prefix_details(prefixes)
                 payload["engine"] = engine
-                payload["thread_completed"] = completed
+                payload["thread_completed"] = flags.completed
+                payload["thread_onhold"] = flags.onhold
+                payload["thread_abandoned"] = flags.abandoned
             f95_id = extract_thread_id(payload["url"])
             entry = combined_thread_entry(
                 f95_thread_entries([f95_id]).get(f95_id, {}), resolved["catalog_entry"]
@@ -277,9 +300,17 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
         if not lc_url:
             # Only LC page adds send screenshots; F95 adds get them from the thread scrape.
             _ = payload.pop("screenshots", None)
+        # The On Hold and Abandoned states come from one source: the page the
+        # extension read, else the catalog entry, both values and their time together.
+        has_states = payload.get("thread_onhold") is not None and payload.get("thread_abandoned") is not None
         for key, value in entry.items():
-            if key != "links" and (value or (key == "thread_completed" and value is False)):
+            if key == "links" or key in _THREAD_STATE_KEYS:
+                continue
+            if value or (key == "thread_completed" and value is False):
                 payload[key] = value
+        if not has_states and entry.get("thread_onhold") is not None and entry.get("thread_abandoned") is not None:
+            for key in _THREAD_STATE_KEYS:
+                payload[key] = entry.get(key)
         payload["pageUrl"] = page_url
         payload["links"] = coerce_store_links([*links, *expanded])
         if not str(payload.get("title") or "").strip():

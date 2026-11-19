@@ -478,3 +478,74 @@ def test_version_lookups_distinguish_live_catalog_rows(lc_catalog):
     assert not lewdcorner.usable_catalog_entry(entries["23"])
     f95 = f95_thread_entries(["101"])["101"]
     assert (f95["version"], f95["ts"]) == ("1.2", 456)
+
+
+@pytest.fixture
+def state_catalog(lc_catalog):
+    lc_catalog.executemany(
+        "INSERT INTO f95_prefix_names VALUES (?,?,?)",
+        [(7, "Ren'Py", "Engine"), (18, "Completed", "Status"), (20, "Onhold", "Status"), (22, "Abandoned", "Status")],
+    )
+    lc_catalog.executemany(
+        "UPDATE f95_threads SET prefixes = ? WHERE thread_id = ?",
+        [("[7]", 101), ("[7, 22]", 102), ("[999]", 103)],
+    )
+    lc_catalog.executemany(
+        "INSERT INTO lc_prefix_names VALUES (?,?)",
+        [(15, "On Hold"), (17, "Abandoned"), (22, "Other"), (29, "Other"), (9, "Ren'Py")],
+    )
+    lc_catalog.executemany(
+        "UPDATE lc_threads SET prefixes = ? WHERE thread_id = ?",
+        [("[17, 2]", 21), ("[15]", 22), ("[]", 23)],
+    )
+    lc_catalog.executemany(
+        "INSERT INTO lc_threads(thread_id,title,creator,version,tier,prefixes,tags,url,first_seen,last_seen) "
+        "VALUES (?, 'Render', 'Creator', '1.0', 'Free', ?, '[]', '', '', '')",
+        [(13588, "[29]"), (623, "[29, 9]"), (624, "[22]")],
+    )
+    lc_catalog.commit()
+    return lc_catalog
+
+
+def test_catalog_thread_states(state_catalog):
+    from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries
+
+    f95 = f95_thread_entries(["101", "102", "103"])
+    assert (f95["101"]["thread_onhold"], f95["101"]["thread_abandoned"]) == (False, False)
+    assert (f95["102"]["thread_onhold"], f95["102"]["thread_abandoned"]) == (False, True)
+    # Unknown prefix ids give no prefix data.
+    assert (f95["103"]["thread_onhold"], f95["103"]["thread_abandoned"]) == (None, None)
+
+    lc = lc_thread_entries(["21", "22", "23"])
+    assert (lc["21"]["thread_onhold"], lc["21"]["thread_abandoned"]) == (False, True)
+    assert (lc["22"]["thread_onhold"], lc["22"]["thread_abandoned"]) == (True, False)
+    assert (lc["23"]["thread_onhold"], lc["23"]["thread_abandoned"]) == (None, None)
+
+    # F95 decides: not Abandoned on F95 wins over Abandoned on LC.
+    assert combined_thread_entry(f95["101"], lc["21"])["thread_abandoned"] is False
+    # Without F95 prefix data the LC states apply.
+    assert combined_thread_entry(f95["103"], lc["21"])["thread_abandoned"] is True
+
+
+def test_catalog_states_carry_the_time_of_their_source(state_catalog):
+    from core.game_lookup import combined_thread_entry, f95_thread_entries, lc_thread_entries
+
+    state_catalog.execute("UPDATE f95_threads SET last_seen = '2026-11-18T05:00:00Z'")
+    state_catalog.execute("UPDATE lc_threads SET last_seen = '2026-11-19T05:00:00Z'")
+    state_catalog.commit()
+    f95 = f95_thread_entries(["101", "103"])
+    lc = lc_thread_entries(["21"])
+    assert f95["101"]["thread_states_seen_at"] == "2026-11-18T05:00:00Z"
+    assert f95["103"]["thread_states_seen_at"] is None
+    # F95 states come with F95's time; LC states with LC's.
+    assert combined_thread_entry(f95["101"], lc["21"])["thread_states_seen_at"] == "2026-11-18T05:00:00Z"
+    assert combined_thread_entry(f95["103"], lc["21"])["thread_states_seen_at"] == "2026-11-19T05:00:00Z"
+
+
+def test_catalog_render_other_prefix_sets_no_engine(state_catalog):
+    from core.game_lookup import lc_thread_entries
+
+    entries = lc_thread_entries(["13588", "623", "624"])
+    assert entries["13588"]["engine"] == ""
+    assert entries["623"]["engine"] == "Ren'Py"
+    assert entries["624"]["engine"] == "Other"

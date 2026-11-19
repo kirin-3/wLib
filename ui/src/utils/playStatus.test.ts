@@ -23,3 +23,16 @@ test("custom statuses survive legacy fallback and share a presentation", () => {
   assert.doesNotThrow(() => getPlayStatusOptions(undefined as unknown as string[]));
   assert.equal(validateCustomPlayStatuses([null as unknown as string, 123 as unknown as string]), "Play status names must contain 1–40 characters.");
 });
+
+test("the former Abandoned status reads as Archived with the archive icon", async () => {
+  const { IconArchive } = await import("@tabler/icons-vue");
+  assert.equal(normalizePlayStatus("abandoned"), "Archived");
+  assert.equal(normalizePlayStatus("Abandoned"), "Archived");
+  assert.equal(normalizePlayStatus("archived"), "Archived");
+  assert.equal(normalizePlayStatus("On Hold", "abandoned"), "Archived");
+  const meta = getPlayStatusMeta("Abandoned");
+  assert.equal(meta.value, "Archived");
+  assert.equal(meta.icon, IconArchive);
+  assert.equal(meta.toneClass, "ui-status-tone-archived");
+  assert.equal(validateCustomPlayStatuses(["abandoned"]), "Play status 'abandoned' is reserved.");
+});

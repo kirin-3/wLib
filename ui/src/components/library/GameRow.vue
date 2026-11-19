@@ -86,7 +86,9 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
             {{ game.title }}
           </button>
           <span v-if="wishlisted" class="wishlist-pill shrink-0">Wishlist</span>
-          <span v-if="wishlisted && game.thread_completed" class="finished-pill shrink-0">Finished</span>
+          <span v-if="game.thread_completed" class="finished-pill shrink-0">Finished</span>
+          <span v-if="game.thread_onhold === 1" class="onhold-pill shrink-0">On hold</span>
+          <span v-if="game.thread_abandoned === 1" class="abandoned-pill shrink-0">Abandoned</span>
           <IconHeartFilled
             v-if="game.is_favorite"
             class="w-3.5 h-3.5 shrink-0"
@@ -202,7 +204,9 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
   font-weight: 700;
 }
 .wishlist-pill,
-.finished-pill {
+.finished-pill,
+.onhold-pill,
+.abandoned-pill {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
@@ -216,6 +220,12 @@ const effectiveTargets = computed(() => (additionalTargets.value ? getEffectiveL
 }
 .finished-pill {
   color: var(--success-text);
+}
+.onhold-pill {
+  color: var(--warning-text);
+}
+.abandoned-pill {
+  color: var(--danger-text);
 }
 td {
   padding: 0.4rem 0.5rem;

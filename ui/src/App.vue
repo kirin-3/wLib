@@ -146,6 +146,8 @@ let pollingUpdates = false;
 let wasUpdateRunning = false;
 let lastInfoRefreshToast = "";
 const notifiedFinishedIds = new Set<number>();
+// One abandoned toast per game and check run.
+const notifiedAbandonedIds = new Set<number>();
 
 // Sync problems are shown on the Sync nav item and once as a toast, so they
 // are not missed while another view is open.
@@ -324,12 +326,23 @@ const pollLibraryUpdates = async () => {
   try {
     const status = await api.getUpdateStatus();
     if (status.success === false) return;
-    if (status.running && !wasUpdateRunning) notifiedFinishedIds.clear();
+    if (status.running && !wasUpdateRunning) {
+      notifiedFinishedIds.clear();
+      notifiedAbandonedIds.clear();
+    }
     for (const result of status.results) {
       if (result.newly_finished && !notifiedFinishedIds.has(result.id)) {
         notifiedFinishedIds.add(result.id);
         notify(`${result.title} is finished`, "success");
       }
+      if (result.newly_abandoned && !notifiedAbandonedIds.has(result.id)) {
+        notifiedAbandonedIds.add(result.id);
+        notify(`${result.title} was abandoned by its developer`, "info");
+      }
+    }
+    // A catalog update can find an abandoned thread before any check does.
+    for (const notice of await api.takeAbandonedNotices().catch(() => [])) {
+      notify(`${notice.title} was abandoned by its developer`, "info");
     }
     const progress = JSON.stringify([status.running, status.checked, status.total, status.results]);
     const progressChanged = progress !== lastUpdateProgress;

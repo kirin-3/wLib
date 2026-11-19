@@ -476,6 +476,7 @@ const hasUpdate = computed(() => hasAvailableUpdate({
   version: version.value,
   latest_version: latestVersion.value,
   skipped_version: skippedVersion.value,
+  play_status: playStatus.value,
 }));
 const updateSkipped = computed(() => isUpdateSkipped({
   exe_path: exePath.value,

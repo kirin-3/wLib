@@ -223,7 +223,7 @@ class SyncMixin(ApiBase):
         ]
         ids_with_url = self._game_ids_with_url(game_ids) if game_ids else []
         if ids_with_url:
-            check_result = self.check_all_updates(ids_with_url)
+            check_result = self.check_all_updates(ids_with_url, skip_archived=True)
             if check_result.get("success"):
                 payload["metadata_check"] = "started"
             else:
@@ -271,7 +271,7 @@ class SyncMixin(ApiBase):
         added_ids = cast(list[int], result["added_ids"])
         metadata_check = "none"
         if added_ids:
-            metadata_check = "started" if self.check_all_updates(added_ids).get("success") else "busy"
+            metadata_check = "started" if self.check_all_updates(added_ids, skip_archived=True).get("success") else "busy"
         self._refresh_synced_library()
         return {
             "success": True,

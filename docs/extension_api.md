@@ -132,7 +132,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.12", "can_fetch": true, "can_fetch_lists": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.13", "can_fetch": true, "can_fetch_lists": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
   {"type": "status", "can_fetch": false, "can_fetch_lc": true, "can_resolve_lc": false, "can_fetch_lc_images": true}
   {"type": "ping"}
   // app -> ext
@@ -185,7 +185,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is `1.2.12` and targets wLib `0.4.8`.
+The bundled manifest is `1.2.13` and targets wLib `0.4.8`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
@@ -300,8 +300,10 @@ GET /api/open?url=https%3A%2F%2Flewdcorner.com%2Fthreads%2F5583%2F
 Send the same URL in the JSON body for `POST /api/add` or `POST /api/wishlist`:
 
 ```json
-{"url":"https://lewdcorner.com/threads/5583/","title":"Game","prefixes":["Ren'Py"],"version":"0.5"}
+{"url":"https://lewdcorner.com/threads/5583/","title":"Game","prefixes":[{"name":"Other","id":29},{"name":"Ren'Py","id":9}],"version":"0.5"}
 ```
+
+The extension sends title prefixes as plain name strings in `prefixes`. Extension 1.2.13 and later also sends `prefix_ids`, a parallel list with each id read from the label link's `?prefix_id=<id>` (or `null`). The names stay strings so an older wLib still reads them; wLib ignores an id list whose length does not match. LC has two prefixes named "Other": id 22 is the engine and id 29 is the render prefix, which never sets the engine. A prefix without an id is matched by name only. The `wlib-extension-add` payload carries `engine`, `thread_completed`, `thread_onhold` and `thread_abandoned` from these prefixes. Without page prefixes, `thread_onhold`, `thread_abandoned` and `thread_states_seen_at` come together from the catalog entry.
 
 A check can return `attach_lc_available: true` for an existing F95 partner. To attach the thread, send this body to `POST /api/wishlist`:
 

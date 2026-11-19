@@ -1176,6 +1176,45 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     assert add_payload["url"] == "https://f95zone.to/threads/101/"
     assert add_payload["title"] == "F95"
     assert add_payload["engine"] == "Ren'Py"
+    assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (False, False)
+
+    # Extension 1.2.13 sends the ids beside the names: the render "Other" (29) is no engine.
+    status, _ = send("POST", "/api/add", {
+        "url": lc, "title": "Page title", "prefixes": ["Other", "Abandoned"], "prefix_ids": [29, 17],
+    })
+    assert status == 200
+    js = window.evaluate_js.call_args.args[0]
+    add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
+    assert add_payload["engine"] == ""
+    assert add_payload["thread_abandoned"] is True
+    status, _ = send("POST", "/api/add", {
+        "url": lc, "title": "Page title", "prefixes": ["Other", "On Hold"], "prefix_ids": [22, None],
+    })
+    js = window.evaluate_js.call_args.args[0]
+    add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
+    assert add_payload["engine"] == "Other"
+    assert add_payload["thread_onhold"] is True
+    # A mismatched id list leaves every id unknown, as from an older extension.
+    status, _ = send("POST", "/api/add", {
+        "url": lc, "title": "Page title", "prefixes": ["Other"], "prefix_ids": [29, 9],
+    })
+    js = window.evaluate_js.call_args.args[0]
+    add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", js)[1]))
+    assert add_payload["engine"] == "Other"
+
+    # The states come from one source: the page read, else the catalog with its time.
+    from core import game_lookup
+    stale = {"thread_onhold": True, "thread_abandoned": False, "thread_states_seen_at": "2025-01-01T00:00:00Z"}
+    with monkeypatch.context() as patched:
+        patched.setattr(game_lookup, "combined_thread_entry", lambda *_args: dict(stale))
+        _ = send("POST", "/api/add", {"url": lc, "title": "Page title", "prefixes": ["Ren'Py"]})
+        add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]))
+        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (False, False)
+        assert "thread_states_seen_at" not in add_payload
+        _ = send("POST", "/api/add", {"url": lc, "title": "Page title"})
+        add_payload = json.loads(base64.b64decode(re.search(r"atob\('([^']+)'\)", window.evaluate_js.call_args.args[0])[1]))
+        assert (add_payload["thread_onhold"], add_payload["thread_abandoned"]) == (True, False)
+        assert add_payload["thread_states_seen_at"] == "2025-01-01T00:00:00Z"
 
     status, wishlisted = send("POST", "/api/wishlist", {"url": lc, "title": "Page title"})
     assert status == 200 and wishlisted["success"]

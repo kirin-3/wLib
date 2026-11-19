@@ -2110,3 +2110,37 @@ def test_synced_lc_dismissal_prevents_automatic_fill(tmp_path, monkeypatch):
     assert database.get_game(local_id)["lc_url"] == ""
     assert database.fill_lc_threads({"101": ("21", "Free")}) == 0
 
+
+
+def test_thread_states_sync_between_data_directories(tmp_path, monkeypatch):
+    folder = tmp_path / "shared-states"
+    folder.mkdir()
+    db_a, db_b = tmp_path / "a" / "wlib.db", tmp_path / "b" / "wlib.db"
+    db_a.parent.mkdir()
+    db_b.parent.mkdir()
+    monkeypatch.setattr(database, "DB_PATH", str(db_a))
+    database.init_db()
+    alpha = database.add_game("Alpha", "", f95_url="https://f95zone.to/threads/alpha.61/")
+    database.add_game("Beta", "", f95_url="https://f95zone.to/threads/beta.62/")
+    database.update_game(alpha, {"thread_onhold": 0, "thread_abandoned": 1})
+    a = SyncManager()
+    a.set_folder(str(folder))
+    a.run()
+
+    monkeypatch.setattr(database, "DB_PATH", str(db_b))
+    database.init_db()
+    b = SyncManager()
+    b.set_folder(str(folder))
+    b.run()
+    states = {
+        g["title"]: (g["thread_onhold"], g["thread_abandoned"]) for g in database.get_all_games()
+    }
+    assert states == {"Alpha": (0, 1), "Beta": (None, None)}
+
+    # The developer revives the thread on B; A picks up the change.
+    alpha_b = next(g for g in database.get_all_games() if g["title"] == "Alpha")
+    database.update_game(int(str(alpha_b["id"])), {"thread_abandoned": 0})
+    b.run()
+    monkeypatch.setattr(database, "DB_PATH", str(db_a))
+    a.run()
+    assert database.get_game(alpha)["thread_abandoned"] == 0

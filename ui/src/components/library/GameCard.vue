@@ -274,7 +274,9 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
           game.version || "Unknown"
         }}</span>
         <span v-if="wishlisted" class="wishlist-pill">Wishlist</span>
-        <span v-if="wishlisted && game.thread_completed" class="finished-pill">Finished</span>
+        <span v-if="game.thread_completed" class="finished-pill">Finished</span>
+        <span v-if="game.thread_onhold === 1" class="onhold-pill">On hold</span>
+        <span v-if="game.thread_abandoned === 1" class="abandoned-pill">Abandoned</span>
         <span
           v-if="updateAvailable"
           class="update-pill"
@@ -406,7 +408,9 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
   font-weight: 700;
 }
 .wishlist-pill,
-.finished-pill {
+.finished-pill,
+.onhold-pill,
+.abandoned-pill {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
@@ -420,6 +424,12 @@ const effectiveTargets = computed(() => (props.menuOpen ? getEffectiveLaunchTarg
 }
 .finished-pill {
   color: var(--success-text);
+}
+.onhold-pill {
+  color: var(--warning-text);
+}
+.abandoned-pill {
+  color: var(--danger-text);
 }
 .card-indicator {
   background: var(--overlay-scrim-strong);

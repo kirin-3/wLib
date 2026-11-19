@@ -16,6 +16,7 @@ from core import database, lewdcorner, lewdcorner_updates
 from core.controllers import ControllerWatcher
 from core.database import (
     init_db,
+    is_archived,
     normalize_launch_mode,
 )
 from core.f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
@@ -164,6 +165,9 @@ class ApiBase:
         self._update_delay_seconds: int = self._get_bulk_check_delay_seconds()
         self._update_refresh_info: bool = False
         self._update_lock: threading.Lock = threading.Lock()
+        # Games the catalog fill found newly abandoned; App.vue takes them for a toast.
+        self._abandoned_notices: list[dict[str, object]] = []
+        self._abandoned_notices_lock: threading.Lock = threading.Lock()
         self._window_focused: bool = True
         self._status_lock: threading.Lock = threading.Lock()
         self._performance_tools: dict[str, bool] | None = None
@@ -1307,8 +1311,9 @@ class ApiBase:
             return 0
         new_snapshot = get_setting(CATALOG_DETAILS_FILL_SETTING) != snapshot_sha
         lc_enabled = lewdcorner.setting_enabled(get_setting("lc_enabled"))
-        columns = ", ".join(("id", "f95_url", "lc_url", "lc_mode", "tags_user_edited",
-                             BASELINE_COLUMN, *THREAD_DETAIL_FIELDS, *LC_FILL_FIELDS))
+        columns = ", ".join(("id", "title", "play_status", "f95_url", "lc_url", "lc_mode", "tags_user_edited",
+                             BASELINE_COLUMN, *THREAD_DETAIL_FIELDS, *LC_FILL_FIELDS,
+                             *database.THREAD_STATE_COLUMNS, database.THREAD_STATES_AT_COLUMN))
         where = "(f95_url != '' OR lc_url != '')"
         params: list[object] = []
         if not new_snapshot:
@@ -1318,6 +1323,7 @@ class ApiBase:
             params.extend(wanted)
 
         changed = 0
+        abandoned: list[dict[str, object]] = []
         with closing(get_connection()) as conn:
             conn.row_factory = sqlite3.Row
             _ = conn.execute("BEGIN IMMEDIATE")
@@ -1333,9 +1339,8 @@ class ApiBase:
             ]
             details = f95_thread_details([int(thread_id) for thread_id in f95_ids if thread_id.isdigit()])
             lc_entries = lc_thread_entries(lc_ids)
-            f95_entries = f95_thread_entries([
-                f95 for f95, lc in zip(f95_ids, lc_ids, strict=True) if lc in lc_entries
-            ])
+            # Every F95 game: its catalog prefixes give the thread states.
+            f95_entries = f95_thread_entries([f95 for f95 in f95_ids if f95])
             for game, f95_id, lc_id in zip(games, f95_ids, lc_ids, strict=True):
                 f95 = details.get(int(f95_id)) if f95_id.isdigit() else None
                 combined = dict(f95 or {})
@@ -1368,6 +1373,17 @@ class ApiBase:
                             game_changed = True
 
                 updates = merge_thread_details(game, combined) if combined else {}
+                # F95 data decides for a game on both sites. A game that becomes
+                # newly abandoned here is reported once, as a toast.
+                states = database.site_thread_states(
+                    game,
+                    database.thread_states_from(f95_entries.get(f95_id, {})),
+                    database.thread_states_from(lc_entry) if lc_entry else None,
+                )
+                state_fields, newly_abandoned = database.thread_state_fields(game, states)
+                if newly_abandoned:
+                    abandoned.append({"id": game_id, "title": str(game.get("title") or "")})
+                updates = {**updates, **state_fields}
                 if updates:
                     assignments = ", ".join(f"{column} = ?" for column in updates)
                     _ = conn.execute(
@@ -1378,6 +1394,9 @@ class ApiBase:
             conn.commit()
         if new_snapshot:
             update_setting(CATALOG_DETAILS_FILL_SETTING, snapshot_sha)
+        if abandoned:
+            with self._abandoned_notices_lock:
+                self._abandoned_notices.extend(abandoned)
         if changed:
             self._refresh_synced_library()
         return changed
@@ -1547,8 +1566,16 @@ class ApiBase:
         return changes
 
     def _update_thread_edit_metadata_for_url(
-        self, url: str, metadata: Mapping[str, object]
+        self,
+        url: str,
+        metadata: Mapping[str, object],
+        abandoned_ids: list[int] | None = None,
     ) -> list[int]:
+        """Store what an F95 thread page read found; return newly finished ids.
+
+        The ids of games that became newly abandoned are added to
+        `abandoned_ids` when the caller passes a list.
+        """
         normalized_url = normalize_thread_url(url)
         if not normalized_url:
             return []
@@ -1558,6 +1585,7 @@ class ApiBase:
         ).strip()
         has_edit_metadata = bool(checked_at_value)
         has_completion = "thread_completed" in metadata
+        thread_states = database.thread_states_from(metadata)
         raw_screenshots = metadata.get("screenshots")
         incoming_screenshots: list[str] = []
         if isinstance(raw_screenshots, list):
@@ -1569,7 +1597,11 @@ class ApiBase:
 
         incoming_links = coerce_store_links(metadata.get("store_links"))
         if not (
-            has_edit_metadata or has_completion or has_screenshots or incoming_links
+            has_edit_metadata
+            or has_completion
+            or thread_states
+            or has_screenshots
+            or incoming_links
         ):
             return []
 
@@ -1589,7 +1621,8 @@ class ApiBase:
             cursor = conn.cursor()
             _ = cursor.execute(
                 """SELECT id, f95_url, lc_url, lc_mode, thread_main_post_last_edit_at,
-                          thread_main_post_checked_at, thread_completed, screenshots
+                          thread_main_post_checked_at, thread_completed, screenshots,
+                          thread_onhold, thread_abandoned, thread_states_at, play_status
                    FROM games WHERE f95_url = ?""",
                 (normalized_url,),
             )
@@ -1624,6 +1657,12 @@ class ApiBase:
                         fields["thread_completed"] = int(completed)
                         if completed:
                             newly_finished_ids.append(game_id)
+                state_fields, newly_abandoned = database.thread_state_fields(
+                    {key: cast(object, game[key]) for key in game.keys()}, thread_states
+                )
+                fields.update(state_fields)
+                if newly_abandoned and abandoned_ids is not None:
+                    abandoned_ids.append(game_id)
                 if has_screenshots:
                     try:
                         stored_raw = cast(object, game["screenshots"])
@@ -1676,14 +1715,19 @@ class ApiBase:
         self, game: Mapping[str, object], version: str
     ) -> dict[str, object]:
         skipped = normalize_version(game.get("skipped_version"))
+        archived = is_archived(game)
         return {
             "current_version": str(game.get("version") or ""),
             "latest_version": version,
             "latest_site": str(game.get("latest_site") or ""),
-            "has_update": bool(str(game.get("exe_path") or "").strip()) and self._has_update(
+            # An Archived game never has an available update, like a skipped one.
+            "has_update": not archived
+            and bool(str(game.get("exe_path") or "").strip())
+            and self._has_update(
                 game.get("version"), version, game.get("skipped_version")
             ),
             "skipped": bool(skipped) and skipped == normalize_version(version),
+            "archived": archived,
         }
 
     def check_all_updates(
@@ -1692,8 +1736,13 @@ class ApiBase:
         refresh_info: bool = False,
         *,
         automatic: bool = False,
+        skip_archived: bool = False,
     ) -> dict[str, object]:
         """Start a background thread to check all games for updates.
+
+        A library-wide check (no ``game_ids``), an ``automatic`` check and a
+        check with ``skip_archived`` (sync) leave out Archived games. A check
+        for games the user chose checks them too.
 
         With ``refresh_info`` the pass also reads each F95 thread and
         refreshes the remote cover URL, the F95 rating and the F95 tags
@@ -1722,6 +1771,10 @@ class ApiBase:
                 for game in all_games_raw
                 if isinstance(game.get("id"), int)
                 and int(str(game.get("id"))) in wanted_ids
+            ]
+        if game_ids is None or automatic or skip_archived:
+            all_games_raw = [
+                game for game in all_games_raw if not is_archived(game)
             ]
         games_with_url: list[GameRecord] = []
         from core.store_links import coerce_store_links
@@ -1766,6 +1819,7 @@ class ApiBase:
                     ),
                     "skipped_version": str(game.get("skipped_version") or ""),
                     "thread_completed": bool(game.get("thread_completed")),
+                    "play_status": str(game.get("play_status") or ""),
                 }
             )
 
@@ -1840,6 +1894,7 @@ class ApiBase:
                                 "title": str(game.get("title") or ""),
                                 **self._version_check_fields(current, version),
                                 "newly_finished": result.newly_finished,
+                                "newly_abandoned": result.newly_abandoned,
                                 "error": str(result.error) if result.error else "",
                                 "error_code": error_code,
                             }
@@ -1876,6 +1931,8 @@ class ApiBase:
                     winner = ""
                     lc_result = lc_results.get(game["id"])
                     newly_finished = bool(lc_result and lc_result.newly_finished)
+                    newly_abandoned = bool(lc_result and lc_result.newly_abandoned)
+                    abandoned_ids: list[int] = []
                     thread_metadata: dict[str, object] | None = None
                     # Previous rating of each game whose rating a page read changed.
                     rating_previous: dict[int, dict[str, object]] = {}
@@ -1904,11 +1961,15 @@ class ApiBase:
                     ):
                         remote_version = str(result_dict.get("version") or "").strip()
                         try:
-                            saved = lewdcorner_updates.store_f95_version(
+                            stored = lewdcorner_updates.store_f95_version(
                                 game["id"], url, remote_version,
                                 f95_catalog.get(extract_thread_id(url), {}),
+                                fallback_states=lc_result.states if lc_result else None,
+                                page_read=database.thread_states_from(result_dict) is not None,
                             )
-                            if saved is not None:
+                            if stored is not None:
+                                saved, stored_abandoned = stored
+                                newly_abandoned = newly_abandoned or stored_abandoned
                                 current = saved
                                 winner = str(saved.get("latest_version") or "")
                                 wishlisted = not str(saved.get("exe_path") or "").strip()
@@ -1939,7 +2000,9 @@ class ApiBase:
                                 )
                                 thread_metadata = metadata
                                 if metadata and metadata.get("success"):
-                                    finished_ids = self._update_thread_edit_metadata_for_url(url, metadata)
+                                    finished_ids = self._update_thread_edit_metadata_for_url(
+                                        url, metadata, abandoned_ids
+                                    )
                                     newly_finished = newly_finished or game["id"] in finished_ids
                                     rating_previous.update(
                                         self._store_f95_rating_for_url(url, metadata)
@@ -1959,7 +2022,7 @@ class ApiBase:
                     ):
                         try:
                             finished_ids = self._update_thread_edit_metadata_for_url(
-                                url, result_dict
+                                url, result_dict, abandoned_ids
                             )
                             newly_finished = newly_finished or (wishlisted and game["id"] in finished_ids)
                         except Exception:
@@ -2017,6 +2080,8 @@ class ApiBase:
                             "title": game["title"],
                             **self._version_check_fields(current, winner),
                             "newly_finished": newly_finished,
+                            "newly_abandoned": newly_abandoned
+                            or game["id"] in abandoned_ids,
                             "error": callback_error,
                             "error_code": callback_error_code,
                         }
@@ -2096,27 +2161,12 @@ class ApiBase:
                             if current is not None and not current.get("f95_url"):
                                 version = str(remote).strip()
                                 _ = update_game(game_id, {"latest_version": version})
-                                skipped = bool(
-                                    normalize_version(current.get("skipped_version"))
-                                ) and normalize_version(
-                                    current.get("skipped_version")
-                                ) == normalize_version(version)
                                 catalog_result: dict[str, object] = {
                                     "id": game_id,
                                     "title": str(current.get("title") or ""),
-                                    "current_version": str(
-                                        current.get("version") or ""
+                                    **self._version_check_fields(
+                                        {**current, "latest_site": ""}, version
                                     ),
-                                    "latest_version": version,
-                                    "has_update": bool(
-                                        str(current.get("exe_path") or "").strip()
-                                    )
-                                    and self._has_update(
-                                        current.get("version"),
-                                        version,
-                                        current.get("skipped_version"),
-                                    ),
-                                    "skipped": skipped,
                                     "newly_finished": False,
                                     "error": "",
                                     "error_code": "",
@@ -2185,7 +2235,14 @@ class ApiBase:
                         for result in self._update_results
                         if result.get("newly_finished") and not result.get("error")
                     ]
-                    summary = build_update_summary(updated_titles, completed_titles)
+                    abandoned_titles = [
+                        str(result["title"])
+                        for result in self._update_results
+                        if result.get("newly_abandoned") and not result.get("error")
+                    ]
+                    summary = build_update_summary(
+                        updated_titles, completed_titles, abandoned_titles
+                    )
                     with self._update_lock:
                         notify = not self._update_cancelled and (
                             automatic or not self._window_focused

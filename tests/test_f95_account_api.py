@@ -167,7 +167,7 @@ def test_wrong_read_id_and_database_error(api: Api, monkeypatch: pytest.MonkeyPa
 
     # The library did not change, so the same preview can be imported again.
     monkeypatch.setattr("core.f95_lists.apply_import", real_apply)
-    monkeypatch.setattr(api, "check_all_updates", lambda _ids: {"success": True})
+    monkeypatch.setattr(api, "check_all_updates", lambda _ids, **_kwargs: {"success": True})
     monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
     retried = api.import_f95_account_lists(str(started["read_id"]))
     assert retried["success"] is True and retried["added"] == 2

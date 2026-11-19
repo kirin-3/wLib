@@ -7,10 +7,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
-from typing import Literal, cast, final, override
+from typing import Literal, NamedTuple, cast, final, override
 from urllib.parse import urlsplit
 
-from core.f95zone import normalize_prefix_label
+from core.f95zone import ThreadPrefixFlags, normalize_prefix_label, thread_prefix_flags
 from core.versions import normalize_version
 
 LC_HOSTS = frozenset({"lewdcorner.com", "www.lewdcorner.com"})
@@ -20,6 +20,28 @@ LC_ENGINE_PREFIXES = (
     "Unreal Engine", "WebGL", "Wolf RPG", "Godot", "Other",
 )
 _ENGINES = {normalize_prefix_label(name): name for name in LC_ENGINE_PREFIXES}
+# LC prefix ids that share an engine's name but are not an engine: 29 is the
+# render prefix "Other Render Engine", which LC labels "Other" like engine 22.
+LC_NON_ENGINE_PREFIX_IDS = frozenset({29})
+
+
+class LcPrefix(NamedTuple):
+    """An LC thread prefix; `id` is None when the source gave only the name."""
+
+    name: str
+    id: int | None = None
+
+
+def lc_prefix(name: object, prefix_id: object = None) -> LcPrefix | None:
+    """Build an LcPrefix from untrusted values; None without a usable name."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    number: int | None = None
+    if isinstance(prefix_id, int) and not isinstance(prefix_id, bool):
+        number = prefix_id
+    elif isinstance(prefix_id, str) and prefix_id.strip().isascii() and prefix_id.strip().isdigit():
+        number = int(prefix_id.strip())
+    return LcPrefix(name.strip(), number)
 LC_SETTINGS = ("lc_enabled", "lc_plus")
 GAME_NODES = {"6", "212", "119", "213"}
 
@@ -133,11 +155,24 @@ def page_screenshots(raw: object) -> list[str]:
     return urls
 
 
-def prefix_details(prefixes: Iterable[object]) -> tuple[str, bool]:
-    labels = [normalize_prefix_label(prefix) for prefix in prefixes]
-    engine = next((_ENGINES[label] for label in labels if label in _ENGINES), "")
+def prefix_details(prefixes: Iterable[LcPrefix | str]) -> tuple[str, ThreadPrefixFlags]:
+    """The engine and the status flags of LC prefixes.
+
+    A prefix with a known non-engine id (the render "Other") never sets the
+    engine; a prefix without an id is matched by its name alone.
+    """
+    items = [prefix if isinstance(prefix, LcPrefix) else LcPrefix(str(prefix or "")) for prefix in prefixes]
+    engine = next(
+        (
+            _ENGINES[label]
+            for prefix in items
+            if prefix.id not in LC_NON_ENGINE_PREFIX_IDS
+            and (label := normalize_prefix_label(prefix.name)) in _ENGINES
+        ),
+        "",
+    )
     # The feed badge says "Completed"; the thread page title label says "Complete".
-    return engine, any(label in ("completed", "complete") for label in labels)
+    return engine, thread_prefix_flags(prefix.name for prefix in items)
 
 
 type Site = Literal["f95", "lc"]
@@ -202,7 +237,7 @@ class LcVersion:
     version: str
     at: str = ""
     premium: bool = False
-    prefixes: tuple[str, ...] = ()
+    prefixes: tuple[LcPrefix, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -248,13 +283,13 @@ def parse_feed_page(body: str) -> FeedPage:
         if str(item.get("node_id")) not in GAME_NODES or not re.fullmatch(r"[0-9]+", thread_id):
             continue
         badges = item.get("badges")
-        prefixes: list[str] = []
+        prefixes: list[LcPrefix] = []
         if isinstance(badges, list):
             for badge in cast(list[object], badges):
                 if isinstance(badge, dict):
-                    name = cast(dict[str, object], badge).get("name")
-                    if isinstance(name, str) and name.strip():
-                        prefixes.append(name.strip())
+                    entry = cast(dict[str, object], badge)
+                    if prefix := lc_prefix(entry.get("name"), entry.get("id")):
+                        prefixes.append(prefix)
         _ = versions.setdefault(thread_id, LcVersion(
             version=str(item.get("version") or "").strip(),
             at=at,
@@ -275,8 +310,9 @@ class _ThreadPage(HTMLParser):
         self.in_version = False
         self.version: list[str] = []
         self.version_read = False
-        self.prefixes: list[str] = []
+        self.prefixes: list[LcPrefix] = []
         self._prefix_tag = ""
+        self._prefix_id: int | None = None
         self._prefix_depth = 0
         self._prefix_text: list[str] = []
         self.challenge = False
@@ -304,6 +340,11 @@ class _ThreadPage(HTMLParser):
             elif not self._prefix_tag and "label" in classes:
                 self._prefix_tag = tag
                 self._prefix_depth = 1
+            if tag == "a" and "labelLink" in classes:
+                # The label link ends in "?prefix_id=<id>".
+                match = re.search(r"[?&]prefix_id=([0-9]+)", attr.get("href") or "")
+                if match:
+                    self._prefix_id = int(match.group(1))
         if tag == "dl" and (attr.get("data-field") or "").casefold() == "version":
             self.in_version_field = not self.version_read
         if tag == "dd" and self.in_version_field:
@@ -314,8 +355,10 @@ class _ThreadPage(HTMLParser):
         if tag == self._prefix_tag:
             self._prefix_depth -= 1
             if not self._prefix_depth:
-                self.prefixes.append("".join(self._prefix_text).strip())
+                name = "".join(self._prefix_text).strip()
+                self.prefixes.append(LcPrefix(name, self._prefix_id))
                 self._prefix_tag = ""
+                self._prefix_id = None
                 self._prefix_text.clear()
         if tag == "h1":
             self.in_title = False

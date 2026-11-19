@@ -24,7 +24,7 @@ const makeContext = () => {
     chrome: {
       runtime: {
         onMessage: { addListener: () => {} },
-        getManifest: () => ({ version: '1.2.12' }),
+        getManifest: () => ({ version: '1.2.13' }),
         onStartup: { addListener: () => {} },
         onInstalled: { addListener: () => {} },
       },
@@ -127,5 +127,5 @@ test('bridge hello reports list-fetch support', async () => {
   assert.ok(hello);
   assert.equal(hello.can_fetch_lists, true);
   assert.equal(hello.can_fetch, true);
-  assert.equal(hello.extension_version, '1.2.12');
+  assert.equal(hello.extension_version, '1.2.13');
 });

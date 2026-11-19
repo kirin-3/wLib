@@ -99,6 +99,8 @@ METADATA_FIELDS = (
     "lc_latest_at",
     "latest_site",
     "thread_completed",
+    *database.THREAD_STATE_COLUMNS,
+    database.THREAD_STATES_AT_COLUMN,
     "cover_image_path",
     "screenshots",
     *THREAD_DETAIL_FIELDS,
@@ -1545,6 +1547,11 @@ def _normalize_game_field(field: str, value: object) -> object:
     if field == BASELINE_COLUMN:
         # NULL means "never filled from the catalog".
         return normalize_baseline(value)
+    if field in database.THREAD_STATE_COLUMNS:
+        # NULL keeps the "not known yet" state.
+        return database.coerce_thread_state(value)
+    if field == database.THREAD_STATES_AT_COLUMN:
+        return database.coerce_thread_states_at(value)
     if field in BOOLEAN_GAME_FIELDS:
         return 1 if _coerce_bool(value) else 0
     if field in INTEGER_GAME_FIELDS:
@@ -2156,6 +2163,8 @@ def _is_fill_missing_empty(field: str, local_value: object) -> bool:
         return database.normalize_tool_override(local_value) == "default"
     if field == "html_player":
         return database.normalize_html_player(local_value) == ""
+    if field in database.THREAD_STATE_COLUMNS or field == database.THREAD_STATES_AT_COLUMN:
+        return local_value is None
     if field == "play_status":
         if local_value is None:
             return True

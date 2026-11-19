@@ -425,6 +425,7 @@ def test_library_filter_presets_round_trip_through_backup(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterThreadStates": [],
             "filterSources": ["dlsite"],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
@@ -2212,6 +2213,7 @@ def test_import_settings_preserves_json_types(tmp_path):
             "filterCollection": "Favorites",
             "filterStatuses": ["Playing"],
             "filterInstallState": "installed",
+            "filterThreadStates": [],
             "filterSources": [],
             "filterEngines": ["Ren'Py"],
             "filterTags": ["dating-sim"],
@@ -3891,3 +3893,44 @@ def test_legacy_backup_restores_f95_latest_as_an_undated_version():
     assert restored["f95_latest_version"] == restored["latest_version"] == "0.5"
     assert restored["latest_site"] == "f95"
     assert restored["f95_latest_at"] == ""
+
+
+def test_thread_states_backup_round_trip_and_older_backup(tmp_path):
+    ids = [
+        add_game(f"State {i}", "", f95_url=f"https://f95zone.to/threads/state.{500 + i}/")
+        for i in range(3)
+    ]
+    from core.database import get_game, update_game
+
+    update_game(ids[1], {"thread_onhold": 1, "thread_abandoned": 0})
+    update_game(ids[2], {"thread_onhold": 0, "thread_abandoned": 1})
+    api = Api()
+    exported = api.export_library_backup(destination_path=str(tmp_path / "states.json"))
+    path = Path(str(exported["path"]))
+    backup = json.loads(path.read_text(encoding="utf-8"))
+    by_title = {game["metadata"]["title"]: game["metadata"] for game in backup["games"]}
+    assert (by_title["State 0"]["thread_onhold"], by_title["State 0"]["thread_abandoned"]) == (None, None)
+    assert (by_title["State 1"]["thread_onhold"], by_title["State 1"]["thread_abandoned"]) == (1, 0)
+    assert (by_title["State 2"]["thread_onhold"], by_title["State 2"]["thread_abandoned"]) == (0, 1)
+
+    # Overwrite import restores every value, including unknown.
+    update_game(ids[0], {"thread_onhold": 1, "thread_abandoned": 1})
+    update_game(ids[1], {"thread_onhold": None, "thread_abandoned": None})
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    states = [(get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids]
+    assert states == [(None, None), (1, 0), (0, 1)]
+
+    # A backup made before these states existed keeps the stored values.
+    for game in backup["games"]:
+        del game["metadata"]["thread_onhold"]
+        del game["metadata"]["thread_abandoned"]
+    path.write_text(json.dumps(backup), encoding="utf-8")
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert [(get_game(i)["thread_onhold"], get_game(i)["thread_abandoned"]) for i in ids] == states
+
+    # The same older backup gives unknown states to new games.
+    with closing(get_connection()) as conn:
+        conn.execute("DELETE FROM games")
+        conn.commit()
+    assert api.import_library_backup(str(path), {"sections": [SECTION_METADATA]})["success"]
+    assert {(g["thread_onhold"], g["thread_abandoned"]) for g in get_all_games()} == {(None, None)}

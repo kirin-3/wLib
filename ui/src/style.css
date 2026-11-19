@@ -141,9 +141,9 @@ html { zoom: var(--ui-scale, 1); }
   --status-completed-bg: rgba(34, 197, 94, 0.14);
   --status-completed-border: rgba(74, 222, 128, 0.28);
   --status-completed-text: #86efac;
-  --status-abandoned-bg: rgba(239, 68, 68, 0.14);
-  --status-abandoned-border: rgba(248, 113, 113, 0.3);
-  --status-abandoned-text: #fca5a5;
+  --status-archived-bg: rgba(239, 68, 68, 0.14);
+  --status-archived-border: rgba(248, 113, 113, 0.3);
+  --status-archived-text: #fca5a5;
 }
 
 /* ========== LIGHT THEME ========== */
@@ -249,9 +249,9 @@ html { zoom: var(--ui-scale, 1); }
   --status-completed-bg: rgba(34, 197, 94, 0.12);
   --status-completed-border: rgba(22, 163, 74, 0.24);
   --status-completed-text: #166534;
-  --status-abandoned-bg: rgba(239, 68, 68, 0.12);
-  --status-abandoned-border: rgba(220, 38, 38, 0.24);
-  --status-abandoned-text: #b91c1c;
+  --status-archived-bg: rgba(239, 68, 68, 0.12);
+  --status-archived-border: rgba(220, 38, 38, 0.24);
+  --status-archived-text: #b91c1c;
 }
 
 /* ========== ACCENT PRESETS ========== */
@@ -666,10 +666,10 @@ html[data-cover-animation="hover"] .update-entry:focus-visible .cover-anim {
   --ui-status-text: var(--status-completed-text);
 }
 
-.ui-status-tone-abandoned {
-  --ui-status-bg: var(--status-abandoned-bg);
-  --ui-status-border: var(--status-abandoned-border);
-  --ui-status-text: var(--status-abandoned-text);
+.ui-status-tone-archived {
+  --ui-status-bg: var(--status-archived-bg);
+  --ui-status-border: var(--status-archived-border);
+  --ui-status-text: var(--status-archived-text);
 }
 
 .ui-status-tone-custom {

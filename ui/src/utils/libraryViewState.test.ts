@@ -142,6 +142,7 @@ test("readLibraryViewState migrates legacy keys when no blob exists", () => {
     presets: true,
     collections: false,
     status: true,
+    threadStates: true,
     sources: true,
     engines: true,
     tags: false,
@@ -238,6 +239,7 @@ test("readLibraryViewState prefers current blob and prunes unsupported engines a
     presets: true,
     collections: true,
     status: false,
+    threadStates: true,
     sources: true,
     engines: false,
     tags: true,
@@ -286,6 +288,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterCollection: "Favorites",
     filterStatuses: ["Playing"],
     filterInstallState: "installed",
+    filterThreadStates: [],
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
     filterExcludedSources: [],
@@ -315,6 +318,7 @@ test("normalizeFilterPreset keeps a valid preset and drops unknown values", () =
     filterCollection: "All",
     filterStatuses: ["Playing", "Ghost"],
     filterInstallState: "",
+    filterThreadStates: [],
     filterEngines: ["Ren'Py"],
     filterTags: ["dating-sim"],
     filterExcludedSources: [],
@@ -480,6 +484,7 @@ test("saving presets reloads the stored list when settings have not loaded", asy
       filterCollection: "All",
       filterStatuses: [],
       filterInstallState: "",
+      filterThreadStates: [],
       filterSources: [],
       filterEngines: [],
       filterTags: [],
@@ -530,7 +535,7 @@ test("source filters validate fixed keys and default for older state and presets
   assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterSources, []);
   assert.deepEqual(normalizeFilterPreset({ name: "New", filterSources: ["dlsite", "unknown"] })?.filterSources, ["dlsite"]);
   assert.deepEqual(normalizeLibraryViewState({ filterSections: { presets: false, collections: false, status: true, engines: false, tags: true } }).filterSections,
-    { presets: false, collections: false, status: true, sources: true, engines: false, tags: true });
+    { presets: false, collections: false, status: true, threadStates: true, sources: true, engines: false, tags: true });
 });
 
 test("sort menu choice uses the field's default direction and keeps the active field", () => {
@@ -596,4 +601,31 @@ test("excluded filters round-trip, default for older data, and lose to included 
   // Without lists (before games load) the casing rule still applies.
   const unloaded = normalizeFilterAndSort({ filterTags: ["Sandbox"], filterExcludedTags: ["sandbox", "rpg"] });
   assert.deepEqual(unloaded.filterExcludedTags, ["rpg"]);
+});
+
+test("a saved Abandoned status filter selects Archived", () => {
+  assert.deepEqual(
+    normalizeFilterAndSort({ filterStatuses: ["abandoned", "Playing", "Archived"] }).filterStatuses,
+    ["Archived", "Playing"],
+  );
+  assert.deepEqual(
+    normalizeFilterAndSort({ filterStatuses: ["Abandoned"] }, { validStatuses: LIBRARY_PLAY_STATUSES }).filterStatuses,
+    ["Archived"],
+  );
+});
+
+test("thread state filters are remembered and kept in presets", () => {
+  const storage = new MemoryStorage();
+  saveLibraryViewState(storage, normalizeLibraryViewState({ filterThreadStates: ["finished", "abandoned"] }));
+  const restored = readLibraryViewState(storage).state;
+  assert.deepEqual(restored.filterThreadStates, ["finished", "abandoned"]);
+  assert.equal(restored.filterSections.threadStates, true);
+  assert.deepEqual(
+    normalizeFilterPreset({ name: "Binge", filterThreadStates: ["finished", "finished", "bogus", 3] })?.filterThreadStates,
+    ["finished"],
+  );
+  // A preset or state saved before the section existed checks nothing.
+  assert.deepEqual(normalizeFilterPreset({ name: "Old" })?.filterThreadStates, []);
+  // The short-lived Quick filter collections are not valid collections.
+  assert.equal(normalizeFilterAndSort({ filterCollection: "Finished threads" }).filterCollection, "All");
 });

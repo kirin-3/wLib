@@ -12,6 +12,9 @@ export interface InstallArchiveSeed {
   lcUrl?: string;
   lcDismissed?: string;
   threadCompleted?: boolean;
+  threadOnhold?: boolean;
+  threadAbandoned?: boolean;
+  threadStatesSeenAt?: string;
   coverImage: string;
   tags: string | string[];
   rating: string;

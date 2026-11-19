@@ -23,11 +23,21 @@ export type FilterCollection =
   | "Unplayed update"
   | "Recently played";
 export type FilterInstallState = "" | "installed" | "wishlist";
+// The Thread state filter section: the developer's state of the game's thread.
+export const THREAD_STATE_FILTER_VALUES = ["finished", "onhold", "abandoned", "ongoing"] as const;
+export type ThreadStateFilter = (typeof THREAD_STATE_FILTER_VALUES)[number];
+export const THREAD_STATE_FILTER_LABELS: Record<ThreadStateFilter, string> = {
+  finished: "Finished",
+  onhold: "On hold",
+  abandoned: "Abandoned",
+  ongoing: "Ongoing",
+};
 
 export interface FilterSections {
   presets: boolean;
   collections: boolean;
   status: boolean;
+  threadStates: boolean;
   sources: boolean;
   engines: boolean;
   tags: boolean;
@@ -42,6 +52,7 @@ export interface LibraryViewState {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterThreadStates: ThreadStateFilter[];
   filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
@@ -62,6 +73,7 @@ export interface LibraryFilterPreset {
   filterCollection: FilterCollection;
   filterStatuses: string[];
   filterInstallState: FilterInstallState;
+  filterThreadStates: ThreadStateFilter[];
   filterSources: string[];
   filterEngines: string[];
   filterTags: string[];
@@ -77,6 +89,7 @@ export type NormalizedFilterAndSort = Pick<
   | "filterCollection"
   | "filterStatuses"
   | "filterInstallState"
+  | "filterThreadStates"
   | "filterSources"
   | "filterEngines"
   | "filterTags"
@@ -113,6 +126,7 @@ export const DEFAULT_FILTER_SECTIONS: FilterSections = {
   presets: true,
   collections: true,
   status: true,
+  threadStates: true,
   sources: true,
   engines: true,
   tags: true,
@@ -127,6 +141,7 @@ export const DEFAULT_LIBRARY_VIEW_STATE: LibraryViewState = {
   filterCollection: "All",
   filterStatuses: [],
   filterInstallState: "",
+  filterThreadStates: [],
   filterSources: [],
   filterEngines: [],
   filterTags: [],
@@ -230,7 +245,14 @@ export const normalizeFilterStatuses = (
   validStatuses?: Iterable<string>,
 ): string[] => {
   // Play statuses are capped at 40 characters, so a longer name can never match.
-  const statuses = normalizeStringArray(value).filter((status) => status.length <= 40);
+  // The play status "Abandoned" was renamed to "Archived".
+  const statuses = [
+    ...new Set(
+      normalizeStringArray(value)
+        .filter((status) => status.length <= 40)
+        .map((status) => (status.toLowerCase() === "abandoned" ? "Archived" : status)),
+    ),
+  ];
   if (!validStatuses) return statuses;
 
   let allowed: Set<string>;
@@ -352,6 +374,10 @@ export const normalizeFilterSections = (value: unknown): FilterSections => {
       typeof source?.status === "boolean"
         ? source.status
         : DEFAULT_FILTER_SECTIONS.status,
+    threadStates:
+      typeof source?.threadStates === "boolean"
+        ? source.threadStates
+        : DEFAULT_FILTER_SECTIONS.threadStates,
     sources:
       typeof source?.sources === "boolean"
         ? source.sources
@@ -396,6 +422,9 @@ export const normalizeFilterAndSort = (
     source.filterInstallState === "installed" || source.filterInstallState === "wishlist"
       ? source.filterInstallState
       : "";
+  const filterThreadStates = [...new Set(normalizeStringArray(source.filterThreadStates))].filter(
+    (value): value is ThreadStateFilter => (THREAD_STATE_FILTER_VALUES as readonly string[]).includes(value),
+  );
 
   const sourceKeys = LIBRARY_SOURCES.map(({ key }) => key);
   const filterSources = filterAllowedValues(normalizeStringArray(source.filterSources), sourceKeys);
@@ -435,6 +464,7 @@ export const normalizeFilterAndSort = (
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterThreadStates,
     filterSources,
     filterEngines,
     filterTags,

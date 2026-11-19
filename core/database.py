@@ -11,8 +11,8 @@ import os
 import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from datetime import datetime
-from typing import Protocol, TypedDict, cast
+from datetime import UTC, datetime
+from typing import NamedTuple, Protocol, TypedDict, cast
 from urllib.parse import urlsplit
 
 from core.f95zone import normalize_thread_url, thread_urls_match
@@ -117,6 +117,10 @@ SYNC_GAME_COLUMNS = (
     "lc_latest_at",
     "latest_site",
     "thread_completed",
+    "thread_onhold",
+    "thread_abandoned",
+    # Not `thread_states_at`: every live read writes it, so watching it would
+    # mark each checked game as changed for sync. It travels with the states.
     "cover_image_path",
     "play_status",
     "finished_version",
@@ -152,7 +156,7 @@ CANONICAL_PLAY_STATUSES = (
     "Waiting For Update",
     "On Hold",
     "Completed",
-    "Abandoned",
+    "Archived",
 )
 
 _CANONICAL_PLAY_STATUS_MAP = {
@@ -163,7 +167,8 @@ _LEGACY_PLAY_STATUS_MAP = {
     "in_progress": "Playing",
     "replaying": "Playing",
     "waiting_update": "Waiting For Update",
-    "abandoned": "Abandoned",
+    # The play status "Abandoned" was renamed to "Archived".
+    "abandoned": "Archived",
 }
 _LEGACY_RECOVERABLE_PLAY_STATUSES = {
     "",
@@ -297,6 +302,14 @@ def normalize_play_status(
     return DEFAULT_PLAY_STATUS
 
 
+ARCHIVED_PLAY_STATUS = "Archived"
+
+
+def is_archived(game: Mapping[str, object]) -> bool:
+    """Whether a game has the Archived play status (or the former "Abandoned")."""
+    return normalize_play_status(game.get("play_status")) == ARCHIVED_PLAY_STATUS
+
+
 def _normalize_game_play_statuses(
     cursor: sqlite3.Cursor, existing_columns: set[str]
 ) -> None:
@@ -324,6 +337,66 @@ def _normalize_game_play_statuses(
         # Recover once, then drop the legacy value so it can't override
         # statuses the user picks later.
         _ = cursor.execute("UPDATE games SET status = '' WHERE status != ''")
+
+
+_ARCHIVED_STATUS_ALIASES = {"archived", "abandoned"}
+
+
+def _migrate_archived_status_settings(cursor: sqlite3.Cursor) -> None:
+    """Move the settings that name the former "Abandoned" status to "Archived".
+
+    The game rows are already normalized by `_normalize_game_play_statuses`.
+    A custom status named "Archived" or "Abandoned" is dropped, because its
+    games now carry the built-in status, and saved filter presets select
+    "Archived" instead. Running it again changes nothing.
+    """
+    def read_list(key: str) -> list[object] | None:
+        row = cast(
+            sqlite3.Row | None,
+            cursor.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone(),
+        )
+        if row is None:
+            return None
+        try:
+            value = cast(object, json.loads(str(cast(object, row[0]) or "[]")))
+        except (ValueError, TypeError):
+            return None
+        return cast(list[object], value) if isinstance(value, list) else None
+
+    def write(key: str, value: list[object]) -> None:
+        _ = cursor.execute(
+            "UPDATE settings SET value = ? WHERE key = ?", (json.dumps(value), key)
+        )
+
+    statuses = read_list("custom_play_statuses")
+    if statuses is not None:
+        kept = [
+            status
+            for status in statuses
+            if not (
+                isinstance(status, str)
+                and status.strip().casefold() in _ARCHIVED_STATUS_ALIASES
+            )
+        ]
+        if len(kept) != len(statuses):
+            write("custom_play_statuses", kept)
+
+    presets = read_list("library_filter_presets")
+    if presets is not None:
+        changed = False
+        for preset in presets:
+            if not isinstance(preset, dict):
+                continue
+            entry = cast(dict[str, object], preset)
+            raw = entry.get("filterStatuses")
+            if not isinstance(raw, list):
+                continue
+            rewritten = _archived_filter_statuses(cast(list[object], raw))
+            if rewritten != raw:
+                entry["filterStatuses"] = rewritten
+                changed = True
+        if changed:
+            write("library_filter_presets", presets)
 
 
 def _normalize_game_f95_urls(cursor: sqlite3.Cursor) -> None:
@@ -410,6 +483,164 @@ def _coerce_sort_order(sort_order: object) -> int:
         return max(0, int(float(text)))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+# The thread On Hold and Abandoned states: NULL is unknown, 0 not set, 1 set.
+THREAD_STATE_COLUMNS = ("thread_onhold", "thread_abandoned")
+
+
+def coerce_thread_state(value: object) -> int | None:
+    """Keep the unknown state (None or an unreadable value) apart from 0 and 1."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int | float):
+        return 1 if value != 0 else 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return 1
+    if text in {"0", "false", "no", "off"}:
+        return 0
+    return None
+
+
+# When the stored thread states were read (UTC ISO time); NULL when unknown.
+THREAD_STATES_AT_COLUMN = "thread_states_at"
+
+
+class ThreadStates(NamedTuple):
+    """The On Hold and Abandoned prefixes of one thread read.
+
+    `seen_at` is when the catalog builder last read the thread; it is empty
+    for a live read (thread page or LC feed), which happens now.
+    """
+
+    onhold: bool
+    abandoned: bool
+    seen_at: str = ""
+
+
+def thread_states_from(source: Mapping[str, object]) -> ThreadStates | None:
+    """The states in a page result or catalog entry; None when it has none."""
+    onhold = source.get("thread_onhold")
+    abandoned = source.get("thread_abandoned")
+    if onhold is None or abandoned is None:
+        return None
+    seen_at = source.get("thread_states_seen_at")
+    return ThreadStates(bool(onhold), bool(abandoned), seen_at if isinstance(seen_at, str) else "")
+
+
+def _reset_thread_states(fields: dict[str, object], *, force: bool = False) -> None:
+    """Clear the On Hold and Abandoned states and their time after a thread change.
+
+    Without `force`, states the same update sets stay.
+    """
+    if not force and any(column in fields for column in THREAD_STATE_COLUMNS):
+        return
+    for column in (*THREAD_STATE_COLUMNS, THREAD_STATES_AT_COLUMN):
+        fields[column] = None
+
+
+def thread_states_unknown(game: Mapping[str, object]) -> bool:
+    """Whether no read has stored the game's On Hold and Abandoned states yet."""
+    return all(game.get(column) is None for column in THREAD_STATE_COLUMNS)
+
+
+def site_thread_states(
+    game: Mapping[str, object],
+    f95: ThreadStates | None,
+    lc: ThreadStates | None,
+) -> ThreadStates | None:
+    """The states to store from an F95 and an LC read of the same game.
+
+    F95 decides for a game with an F95 thread. LC states apply to such a game
+    only while its states are unknown: once an F95 read stored them, an LC
+    read that differs would undo it, and the next F95 read would flip it back
+    and repeat the abandoned alert.
+    """
+    if f95 is not None:
+        return f95
+    if lc is None:
+        return None
+    if not str(game.get("f95_url") or "").strip() or thread_states_unknown(game):
+        return lc
+    return None
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def caller_thread_states(
+    onhold: object, abandoned: object, seen_at: object, *, has_f95: bool
+) -> tuple[bool, bool, str] | None:
+    """The On Hold and Abandoned states an add or install got from its caller.
+
+    States with `seen_at` came from the catalog and keep that time. Without
+    it they came from an LC page read just now: they apply with the time now
+    to an LC-only game, and never to a game with an F95 thread, where F95
+    decides (its catalog entry or the thread scrape that follows fills them).
+    """
+    if not isinstance(onhold, bool) or not isinstance(abandoned, bool):
+        return None
+    seen = coerce_thread_states_at(seen_at)
+    if seen:
+        return onhold, abandoned, seen
+    if has_f95:
+        return None
+    return onhold, abandoned, utc_now_iso()
+
+
+def coerce_thread_states_at(value: object) -> str | None:
+    """A readable time of the stored thread states, or None (unknown)."""
+    return value.strip() if isinstance(value, str) and _utc_moment(value) else None
+
+
+def _utc_moment(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def thread_state_fields(
+    game: Mapping[str, object], states: ThreadStates | None
+) -> tuple[dict[str, object], bool]:
+    """The columns to write for `states`, and whether the game is newly abandoned.
+
+    Newly abandoned means the stored state goes from known not Abandoned (0)
+    to Abandoned, on a game that is not Archived. A change from unknown
+    (NULL) never counts, so the first fill after an update sends no alert.
+
+    Catalog states older than the stored read are ignored: the builder may not
+    have seen a thread since its prefix changed, and writing its old state
+    would undo a newer page or feed read and repeat the alert on the next one.
+    """
+    if states is None:
+        return {}, False
+    stored_at = _utc_moment(game.get(THREAD_STATES_AT_COLUMN))
+    seen_at = _utc_moment(states.seen_at)
+    if states.seen_at and (seen_at is None or (stored_at is not None and seen_at <= stored_at)):
+        return {}, False
+    fields: dict[str, object] = {}
+    for column, value in zip(THREAD_STATE_COLUMNS, (states.onhold, states.abandoned), strict=True):
+        if game.get(column) != int(value):
+            fields[column] = int(value)
+    read_at = states.seen_at or utc_now_iso()
+    if game.get(THREAD_STATES_AT_COLUMN) != read_at:
+        fields[THREAD_STATES_AT_COLUMN] = read_at
+    old_abandoned = game.get("thread_abandoned")
+    newly_abandoned = (
+        states.abandoned
+        and old_abandoned is not None
+        and not old_abandoned
+        and not is_archived(game)
+    )
+    return fields, bool(newly_abandoned)
 
 
 def _coerce_bool_int(value: object) -> int:
@@ -972,6 +1203,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         ("thread_main_post_last_edit_at", "TIMESTAMP"),
         ("thread_main_post_checked_at", "TIMESTAMP"),
         ("thread_completed", "BOOLEAN DEFAULT 0"),
+        # No default: NULL means the thread's state is not known yet.
+        ("thread_onhold", "INTEGER"),
+        ("thread_abandoned", "INTEGER"),
+        ("thread_states_at", "TEXT"),
         ("launch_mode", f"TEXT DEFAULT '{DEFAULT_LAUNCH_MODE}'"),
         ("finished_version", "TEXT DEFAULT ''"),
         ("last_played_version", "TEXT DEFAULT ''"),
@@ -1048,6 +1283,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
                 continue
 
     _normalize_game_play_statuses(cursor, existing_columns | {"play_status"})
+    _migrate_archived_status_settings(cursor)
     _normalize_game_f95_urls(cursor)
     launch_mode_placeholders = ", ".join("?" for _ in CANONICAL_LAUNCH_MODES)
     _ = cursor.execute(
@@ -1693,8 +1929,19 @@ def store_thread_update(
     *,
     completed: bool = False,
     keep_newer: bool = False,
-) -> tuple[dict[str, object], bool] | None:
-    """Write the observation and winner together, if the thread still matches."""
+    states: ThreadStates | None = None,
+    lc_states: ThreadStates | None = None,
+) -> tuple[dict[str, object], bool, bool] | None:
+    """Write the observation and winner together, if the thread still matches.
+
+    `lc_states` is the LC read of a game the F95 step stores; it applies by
+    the rule in `site_thread_states` when `states` (F95 data) is None.
+
+    `states` holds the thread's On Hold and Abandoned prefixes; None means
+    the read had no prefix data and leaves both stored states unchanged.
+    Returns the stored game, whether it is newly finished (wishlist only)
+    and whether it is newly abandoned (see `thread_state_fields`).
+    """
     with closing(get_connection()) as conn, conn:
         conn.row_factory = sqlite3.Row
         _ = conn.execute("BEGIN IMMEDIATE")
@@ -1729,12 +1976,20 @@ def store_thread_update(
         ).strip()
         if completed:
             fields["thread_completed"] = 1
+        if site == "lc" and str(game.get("f95_url") or "").strip():
+            # F95 decides for a game on both sites; the F95 check that follows
+            # uses these LC states only when it has no prefix data itself.
+            states = None
+        elif site == "f95":
+            states = site_thread_states(game, states, lc_states)
+        state_fields, newly_abandoned = thread_state_fields(game, states)
+        fields.update(state_fields)
         if fields:
             assignments = ", ".join(f"{field} = ?" for field in fields)
             _ = conn.execute(
                 f"UPDATE games SET {assignments} WHERE id = ?", (*fields.values(), game_id)
             )
-        return {**game, **fields}, newly_finished
+        return {**game, **fields}, newly_finished, newly_abandoned
 
 
 def delete_game(game_id: int) -> None:
@@ -2023,14 +2278,23 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
         "skipped_version",
         "is_favorite",
         "thread_completed",
+        *THREAD_STATE_COLUMNS,
+        THREAD_STATES_AT_COLUMN,
         *THREAD_DETAIL_FIELDS,
     }
     # Only allow known columns
-    # `f95_tags` may be set back to NULL ("no baseline yet"), as an undo does.
+    # `f95_tags` may be set back to NULL ("no baseline yet"), as an undo does,
+    # and the thread states back to unknown.
     safe_fields: dict[str, object] = {
         k: v
         for k, v in fields.items()
-        if k in allowed and (v is not None or k == "f95_tags")
+        if k in allowed
+        and (
+            v is not None
+            or k == "f95_tags"
+            or k in THREAD_STATE_COLUMNS
+            or k == THREAD_STATES_AT_COLUMN
+        )
     }
     if not safe_fields:
         return {}
@@ -2057,6 +2321,13 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
     ):
         if bool_column in safe_fields:
             safe_fields[bool_column] = _coerce_bool_int(safe_fields[bool_column])
+    for state_column in THREAD_STATE_COLUMNS:
+        if state_column in safe_fields:
+            safe_fields[state_column] = coerce_thread_state(safe_fields[state_column])
+    if THREAD_STATES_AT_COLUMN in safe_fields:
+        safe_fields[THREAD_STATES_AT_COLUMN] = coerce_thread_states_at(
+            safe_fields[THREAD_STATES_AT_COLUMN]
+        )
 
     if "f95_url" in safe_fields:
         safe_fields["f95_url"] = normalize_thread_url(safe_fields["f95_url"])
@@ -2097,7 +2368,7 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
             if lc_url and _find_lc_game_row(conn, lc_url, game_id):
                 raise sqlite3.IntegrityError(f"LewdCorner thread already in the library: {lc_url}")
             row = cast(sqlite3.Row | None, conn.execute(
-                "SELECT lc_url, screenshots FROM games WHERE id = ?", (game_id,)
+                "SELECT lc_url, screenshots, f95_url FROM games WHERE id = ?", (game_id,)
             ).fetchone())
             old_id = lewdcorner.extract_thread_id(cast(object, row[0])) if row else ""
             if old_id and old_id != lewdcorner.extract_thread_id(lc_url):
@@ -2105,6 +2376,10 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 safe_fields["lc_latest_version"] = ""
                 safe_fields["lc_latest_at"] = ""
                 refresh_winner = True
+                # Without an F95 thread the states came from the old LC thread.
+                f95_after = safe_fields.get("f95_url", row[2] if row else "")
+                if not str(f95_after or "").strip():
+                    _reset_thread_states(safe_fields)
                 # LC screenshots show the old thread; F95 and other ones stay.
                 if row is not None and "screenshots" not in safe_fields:
                     stored = _decode_game_screenshots(cast(object, row[1]))
@@ -2142,11 +2417,16 @@ def update_game(game_id: int, fields: Mapping[str, object]) -> dict[str, object]
                 safe_fields["thread_main_post_last_edit_at"] = None
                 safe_fields["thread_main_post_checked_at"] = None
                 safe_fields["thread_completed"] = 0
+                _reset_thread_states(safe_fields, force=True)
                 safe_fields["screenshots"] = "[]"
                 # The old thread's details too; the catalog fills the new ones.
                 for field in THREAD_DETAIL_FIELDS:
                     safe_fields[field] = thread_detail_column_value(field, "")
                 safe_fields[BASELINE_COLUMN] = None
+            elif not normalize_thread_url(stored_url) and normalize_thread_url(safe_fields["f95_url"]):
+                # A first F95 thread decides from now on; the stored states
+                # came from LC.
+                _reset_thread_states(safe_fields)
 
         if refresh_winner or "lc_mode" in safe_fields:
             stored = cast(sqlite3.Row | None, conn.execute(
@@ -2737,6 +3017,22 @@ def set_game_collections(game_id: int, names: Sequence[object]) -> list[str]:
 # Filter Preset Operations
 FILTER_PRESET_INSTALL_STATES = ("", "installed", "wishlist")
 FILTER_PRESET_SORT_DIRECTIONS = ("asc", "desc")
+FILTER_PRESET_THREAD_STATES = ("finished", "onhold", "abandoned", "ongoing")
+
+
+def _archived_filter_statuses[Status](statuses: Sequence[Status]) -> list[Status | str]:
+    """Select "Archived" where an older preset selected "Abandoned".
+
+    Other entries, strings or not, stay in order without repeats.
+    """
+    result: list[Status | str] = []
+    for status in statuses:
+        value: Status | str = status
+        if isinstance(status, str) and status.strip().casefold() in _ARCHIVED_STATUS_ALIASES:
+            value = "Archived"
+        if value not in result:
+            result.append(value)
+    return result
 
 
 def normalize_filter_preset(entry: object) -> dict[str, object] | None:
@@ -2760,10 +3056,15 @@ def normalize_filter_preset(entry: object) -> dict[str, object] | None:
     return {
         "name": name,
         "filterCollection": str(source.get("filterCollection") or ""),
-        "filterStatuses": string_list(source.get("filterStatuses")),
+        "filterStatuses": _archived_filter_statuses(string_list(source.get("filterStatuses"))),
         "filterInstallState": (
             install_state if install_state in FILTER_PRESET_INSTALL_STATES else ""
         ),
+        "filterThreadStates": [
+            state
+            for state in FILTER_PRESET_THREAD_STATES
+            if state in string_list(source.get("filterThreadStates"))
+        ],
         "filterSources": string_list(source.get("filterSources")),
         "filterEngines": string_list(source.get("filterEngines")),
         "filterTags": string_list(source.get("filterTags")),

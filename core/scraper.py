@@ -18,7 +18,12 @@ from urllib.request import Request, urlopen
 
 from core import extension_bridge, lewdcorner
 from core.store_links import StoreLink, parse_store_link
-from .f95zone import NON_ENGINE_PREFIXES, extract_thread_id, normalize_prefix_label
+from .f95zone import (
+    NON_ENGINE_PREFIXES,
+    extract_thread_id,
+    normalize_prefix_label,
+    thread_prefix_flags,
+)
 
 type ScraperResultValue = bool | float | str | list[str] | list[StoreLink]
 type ScraperResult = Mapping[str, ScraperResultValue]
@@ -858,10 +863,8 @@ class Scraper:
             ),
             "",
         )
-        thread_completed = any(
-            normalize_prefix_label(label) == "completed"
-            for label in (*labels, *appended_labels)
-        )
+        flags = thread_prefix_flags((*labels, *appended_labels))
+        thread_completed = flags.completed
         clean_h1 = re.sub(
             r'<a\b[^>]*class=["\'][^"\']*\blabelLink\b[^"\']*["\'][^>]*>.*?</a>',
             "",
@@ -923,6 +926,8 @@ class Scraper:
             "version": version,
             "engine": engine,
             "thread_completed": thread_completed,
+            "thread_onhold": flags.onhold,
+            "thread_abandoned": flags.abandoned,
             "tags": tags,
             "cover_image": normalized_cover,
             "screenshots": screenshots,

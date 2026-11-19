@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { GameRecord, LaunchTarget } from "../services/api.ts";
-import type { SortDir, SortField } from "./libraryViewState.ts";
+import type { SortDir, SortField, ThreadStateFilter } from "./libraryViewState.ts";
 import { getPlayStatusMeta, normalizePlayStatus } from "./playStatus.ts";
 import { automaticTags } from "./threadDetails.ts";
 
@@ -110,14 +110,20 @@ export const isWishlisted = (game: Pick<GameRecord, "exe_path">): boolean =>
 
 export const hasAvailableUpdate = (
   game: Pick<GameRecord, "version" | "latest_version"> &
-    { skipped_version?: GameRecord["skipped_version"] } &
+    { skipped_version?: GameRecord["skipped_version"]; play_status?: GameRecord["play_status"] } &
     Partial<Pick<GameRecord, "exe_path">>,
 ): boolean => {
   if ("exe_path" in game && isWishlisted(game as Pick<GameRecord, "exe_path">))
     return false;
+  // Archived games keep their found update hidden, like a skipped one.
+  if (isArchived(game)) return false;
   const remote = normalizeVersion(game.latest_version);
   return !!remote && remote !== normalizeVersion(game.version) && !isUpdateSkipped(game);
 };
+
+/** Whether a game has the Archived play status (or the former "Abandoned"). */
+export const isArchived = (game: { play_status?: GameRecord["play_status"] }): boolean =>
+  normalizePlayStatus(game.play_status) === "Archived";
 
 export const isUpdateSkipped = (
   game: Pick<GameRecord, "latest_version"> & { skipped_version?: string | undefined } & Partial<Pick<GameRecord, "exe_path">>,
@@ -143,6 +149,25 @@ export const hasNewSinceFinished = (
   const finished = normalizeVersion(game.finished_version);
   return !!finished && finished !== normalizeVersion(game.version);
 };
+
+type ThreadStateGame = Pick<GameRecord, "f95_url" | "lc_url" | "thread_completed" | "thread_onhold" | "thread_abandoned">;
+
+/** Whether a game matches one value of the Thread state filter section. */
+export const matchesThreadState = (game: ThreadStateGame, value: ThreadStateFilter): boolean => {
+  switch (value) {
+    case "finished": return !!game.thread_completed;
+    case "onhold": return game.thread_onhold === 1;
+    case "abandoned": return game.thread_abandoned === 1;
+    // A game with an F95 or LC thread that has none of the three recorded states.
+    case "ongoing":
+      return !!(game.f95_url?.trim() || game.lc_url?.trim()) &&
+        !game.thread_completed && game.thread_onhold !== 1 && game.thread_abandoned !== 1;
+  }
+};
+
+/** A game matches the section when it matches any checked value; none checked matches all. */
+export const matchesThreadStateFilter = (game: ThreadStateGame, values: readonly ThreadStateFilter[]): boolean =>
+  !values.length || values.some((value) => matchesThreadState(game, value));
 
 export const gameTags = (game: Pick<GameRecord, "tags">): string[] => [
   ...new Set(

@@ -233,12 +233,14 @@ def _catalog_thread_entries(
                     data = {str(key): cast(object, row[key]) for key in row.keys()}
                     prefixes = _named_values(data.get("prefixes"), names)
                     if source == "lc":
-                        engine, completed = lewdcorner.prefix_details(prefixes)
+                        engine, flags = lewdcorner.prefix_details(
+                            _named_lc_prefixes(data.get("prefixes"), names)
+                        )
                     else:
                         labels = [f95zone.normalize_prefix_label(prefix) for prefix in prefixes]
                         engine = next((prefix for prefix, label in zip(prefixes, labels, strict=True)
                                        if label not in f95zone.NON_ENGINE_PREFIXES), "")
-                        completed = "completed" in labels
+                        flags = f95zone.thread_prefix_flags(prefixes)
                     rating = data.get("rating")
                     entry = {
                         "title": data.get("title") or "",
@@ -249,7 +251,13 @@ def _catalog_thread_entries(
                         "tags": ", ".join(_named_values(data.get("tags"), tag_names)),
                         "rating": rating if isinstance(rating, (int, float)) and 0 < rating <= 5 else "",
                         "engine": engine,
-                        "thread_completed": completed if prefixes else None,
+                        # No named prefix means no prefix data: None keeps the stored states.
+                        "thread_completed": flags.completed if prefixes else None,
+                        "thread_onhold": flags.onhold if prefixes else None,
+                        "thread_abandoned": flags.abandoned if prefixes else None,
+                        # When the builder last read the thread, so older catalog
+                        # states never replace a newer page or feed read.
+                        "thread_states_seen_at": data.get("last_seen") if prefixes else None,
                         "overview": data.get("overview") or "",
                         "language": data.get("language") or "",
                         "external_links": _detail_links(data.get("external_ids")),
@@ -279,6 +287,25 @@ def _named_values(raw: object, names: dict[int, str]) -> list[str]:
         if name:
             values.append(name)
     return values
+
+
+def _named_lc_prefixes(raw: object, names: dict[int, str]) -> list[lewdcorner.LcPrefix]:
+    """Like `_named_values`, but keeps each LC prefix id next to its name."""
+    try:
+        items = cast(object, json.loads(str(raw or "[]")))
+    except ValueError:
+        return []
+    if not isinstance(items, list):
+        return []
+    prefixes: list[lewdcorner.LcPrefix] = []
+    for item in cast(list[object], items):
+        if isinstance(item, int) or (isinstance(item, str) and item.isascii() and item.isdigit()):
+            prefix = lewdcorner.lc_prefix(names.get(int(item), ""), int(item))
+        else:
+            prefix = lewdcorner.lc_prefix(item)
+        if prefix:
+            prefixes.append(prefix)
+    return prefixes
 
 
 def lc_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]]:
@@ -312,8 +339,13 @@ def f95_thread_entries(thread_ids: Sequence[str]) -> dict[str, dict[str, object]
 
 def combined_thread_entry(f95: dict[str, object], lc: dict[str, object]) -> dict[str, object]:
     entry = {**lc, **{key: value for key, value in f95.items() if value}}
-    if f95.get("thread_completed") is not None:
-        entry["thread_completed"] = f95["thread_completed"]
+    # F95 prefix data decides the thread states, also when it says "not set".
+    for key in ("thread_completed", "thread_onhold", "thread_abandoned"):
+        if f95.get(key) is not None:
+            entry[key] = f95[key]
+    # The time belongs to the source whose states the entry carries.
+    if f95.get("thread_abandoned") is not None:
+        entry["thread_states_seen_at"] = f95.get("thread_states_seen_at")
     return entry
 
 

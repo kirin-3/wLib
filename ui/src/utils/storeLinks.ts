@@ -37,6 +37,10 @@ export interface ExtensionGameDetail {
   lc_url?: string;
   lc_suggested?: string;
   thread_completed?: boolean;
+  thread_onhold?: boolean;
+  thread_abandoned?: boolean;
+  // The catalog builder's read time of the states; none for an LC page read.
+  thread_states_seen_at?: string | null;
   developer?: string;
   engine?: string;
   links?: StoreLink[];
@@ -48,6 +52,9 @@ export function extensionAddQuery(data: ExtensionGameDetail): Record<string, str
     ...(data.lc_url ? { lcurl: data.lc_url } : {}),
     ...(data.lc_suggested ? { lcSuggested: data.lc_suggested } : {}),
     ...(typeof data.thread_completed === "boolean" ? { threadCompleted: String(data.thread_completed) } : {}),
+    ...(typeof data.thread_onhold === "boolean" ? { threadOnhold: String(data.thread_onhold) } : {}),
+    ...(typeof data.thread_abandoned === "boolean" ? { threadAbandoned: String(data.thread_abandoned) } : {}),
+    ...(data.thread_states_seen_at ? { threadStatesSeenAt: data.thread_states_seen_at } : {}),
     ...(data.lc_url && Array.isArray(data.screenshots) && data.screenshots.length
       ? { screenshots: JSON.stringify(data.screenshots.filter((url): url is string => typeof url === "string")) }
       : {}),

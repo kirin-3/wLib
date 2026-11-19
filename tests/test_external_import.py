@@ -687,7 +687,7 @@ def test_f95checker_reader_mapping(tmp_path, monkeypatch):
     assert thread["executable_paths"]["exe_path"] == "/games/thread/Game.sh"
 
     archived = by_title["Archived Game"]
-    assert archived["user_state"]["play_status"] == "Abandoned"
+    assert archived["user_state"]["play_status"] == "Archived"
     assert "executable_paths" not in archived
 
 
@@ -963,7 +963,7 @@ def test_atlas_reader_mapping(tmp_path):
     assert game["metadata"]["f95_url"] == "https://f95zone.to/threads/800/"
     assert game["metadata"]["version"] == "0.2"
     assert "latest_version" not in game["metadata"]
-    assert game["user_state"]["play_status"] == "Abandoned"
+    assert game["user_state"]["play_status"] == "Archived"
     assert game["user_state"]["playtime_seconds"] == 5400
     assert game["user_state"]["rating_story"] == 8.0
     assert game["executable_paths"]["exe_path"] == "/games/atlas/Game-v2.sh"

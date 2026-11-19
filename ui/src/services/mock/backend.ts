@@ -4,7 +4,7 @@ import type { ApiErrorResult, ArchiveInstallStatus, BepInExInstalled, DownloadSi
 import { LAUNCH_MODE_OPTIONS } from "../../utils/launchMode";
 import { hasAvailableUpdate, isUpdateSkipped, normalizeVersion } from "../../utils/libraryGames";
 import { CONSERVATIVE_PLATFORM_CAPABILITIES } from "../../utils/platformPolicy";
-import { validateCustomPlayStatuses } from "../../utils/playStatus";
+import { normalizePlayStatus, validateCustomPlayStatuses } from "../../utils/playStatus";
 import { HTML_PLAYER_FIRST_USE_NOTICE, resolveWebPlayer } from "../../utils/webPlayer";
 import { argsError, fpsLimitError, resolutionError } from "../../utils/gamescope";
 import { mockAttachmentList, readMockAttachments, writeMockAttachments } from "./attachments";
@@ -391,6 +391,8 @@ export class MockBackend {
           launch_mode: args[14] as LaunchMode,
           command_line_args: String(args[15] || ""), date_added: new Date().toISOString(),
           gamemode: "default", mangohud: "default", gamescope: "default", gamescope_resolution: "", gamescope_scaler: "", gamescope_filter: "", gamescope_args: "", html_player: "", sandbox_enabled: readMockSettings().sandbox_new_games, block_network: false, play_status: "Not Started", thread_completed: args[20] === true,
+          thread_onhold: typeof args[22] === "boolean" ? Number(args[22]) : null,
+          thread_abandoned: typeof args[23] === "boolean" ? Number(args[23]) : null,
           // Simulates the catalog's F95 thread details for a thread URL.
           ...(args[2] ? {
             overview: "A preview overview from the thread's first post.\nIt can span lines.",
@@ -1445,10 +1447,16 @@ export class MockBackend {
         const completedIds = JSON.parse(localStorage.getItem("wlib-mock-completed-threads") || "[]") as unknown;
         const completed = Array.isArray(completedIds) && completedIds.includes(game.id);
         const newlyFinished = completed && !game.thread_completed && !game.exe_path.trim();
+        // Games listed in "wlib-mock-abandoned-threads" read as Abandoned, like the backend
+        // rule: only a known not Abandoned (0) state on a game that is not Archived reports.
+        const abandonedIds = JSON.parse(localStorage.getItem("wlib-mock-abandoned-threads") || "[]") as unknown;
+        const abandoned = Array.isArray(abandonedIds) && abandonedIds.includes(game.id);
+        const newlyAbandoned = abandoned && game.thread_abandoned === 0 && normalizePlayStatus(game.play_status) !== "Archived";
+        const abandonedState = abandoned ? 1 : game.thread_abandoned ?? null;
         const needsScreenshots = !(game.screenshots && game.screenshots.length);
-        if (completed !== Boolean(game.thread_completed) || needsScreenshots) {
+        if (completed !== Boolean(game.thread_completed) || needsScreenshots || abandonedState !== (game.thread_abandoned ?? null)) {
           localStorage.setItem("wlib-mock-games", JSON.stringify(games.map((entry) =>
-            entry.id === game.id ? { ...entry, thread_completed: completed, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
+            entry.id === game.id ? { ...entry, thread_completed: completed, thread_abandoned: abandonedState, screenshots: needsScreenshots ? [...MOCK_SCREENSHOT_SET_B] : entry.screenshots } : entry,
           )));
         }
         const activeLc = lcActive(game, readMockSettings().lc_enabled);
@@ -1472,10 +1480,14 @@ export class MockBackend {
           latest_site: activeLc ? game.latest_site || (game.f95_url ? "f95" : "lc") : "f95",
           has_update: hasAvailableUpdate({ ...game, latest_version: version }),
           skipped: isUpdateSkipped({ ...game, latest_version: version }),
+          archived: normalizePlayStatus(game.play_status) === "Archived",
           newly_finished: newlyFinished,
+          newly_abandoned: newlyAbandoned,
           metadata_updated: 0,
         };
       }
+      case "take_abandoned_notices":
+        return [];
       case "get_update_status":
         return this._mockUpdateStatus || {
           running: false,

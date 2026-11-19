@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import re
+from collections.abc import Iterable
+from typing import NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 
@@ -18,6 +20,28 @@ NON_ENGINE_PREFIXES = frozenset(
 
 def normalize_prefix_label(label: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(label or "").casefold())
+
+
+class ThreadPrefixFlags(NamedTuple):
+    """The developer states a thread's status prefixes name."""
+
+    completed: bool = False
+    onhold: bool = False
+    abandoned: bool = False
+
+
+def thread_prefix_flags(labels: Iterable[object]) -> ThreadPrefixFlags:
+    """Read Completed, On Hold and Abandoned from F95 or LC prefix labels.
+
+    Labels compare without case, spaces or punctuation, so F95 "Onhold" and
+    LC "On Hold" match, and the LC page label "Complete" counts as Completed.
+    """
+    normalized = {normalize_prefix_label(label) for label in labels}
+    return ThreadPrefixFlags(
+        completed=bool(normalized & {"completed", "complete"}),
+        onhold="onhold" in normalized,
+        abandoned="abandoned" in normalized,
+    )
 
 
 def _coerce_url(value: object) -> str:

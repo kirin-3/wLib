@@ -55,7 +55,9 @@ const WLIB_PLAY_STATUS_TONE_CLASS_MAP = {
     'waiting for update': 'wlib-play-status--waiting',
     'on hold': 'wlib-play-status--on-hold',
     completed: 'wlib-play-status--completed',
-    abandoned: 'wlib-play-status--abandoned',
+    archived: 'wlib-play-status--archived',
+    // The play status "Abandoned" was renamed to "Archived"; an older wLib still sends it.
+    abandoned: 'wlib-play-status--archived',
 };
 
 const wlibTileCheckCache = new Map();

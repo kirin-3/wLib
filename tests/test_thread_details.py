@@ -172,3 +172,35 @@ def test_a_bad_baseline_in_a_backup_means_never_filled(value):
     from core.library_backup import _normalize_game_field  # pyright: ignore[reportPrivateUsage]
 
     assert _normalize_game_field(BASELINE_COLUMN, value) is None
+
+
+def test_catalog_fill_reports_a_newly_abandoned_game_once(rating_catalog, tmp_path, monkeypatch):
+    _add_thread, sha = rating_catalog
+    _details_catalog(tmp_path, 1)
+    watched, archived, unknown = _game(1), _game(2), _game(3)
+    for game_id in (watched, archived):
+        _ = database.update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    _ = database.update_game(archived, {"play_status": "Archived"})
+    entry = {"thread_onhold": False, "thread_abandoned": True, "thread_states_seen_at": "2025-11-19T10:00:00Z"}
+    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: {thread: dict(entry) for thread in ids})
+    api = Api()
+    monkeypatch.setattr(api, "_refresh_synced_library", lambda: None)
+
+    _ = api._fill_thread_details_from_catalog()
+    assert [_row(game_id)["thread_abandoned"] for game_id in (watched, archived, unknown)] == [1, 1, 1]
+    # Only a known 0 -> 1 change of a game that is not Archived is reported.
+    assert api.take_abandoned_notices() == [{"id": watched, "title": "G"}]
+    assert api.take_abandoned_notices() == []
+    sha["value"] = "sha-2"
+    _ = api._fill_thread_details_from_catalog()
+    assert api.take_abandoned_notices() == []
+
+
+def test_a_read_that_changes_no_state_does_not_bump_the_sync_time():
+    game_id = _game(7)
+    _ = database.update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    before = database.get_setting("sync_local_modified_at")
+    _ = database.update_game(game_id, {"thread_states_at": "2025-11-19T10:00:00Z"})
+    assert database.get_setting("sync_local_modified_at") == before
+    _ = database.update_game(game_id, {"thread_abandoned": 1})
+    assert database.get_setting("sync_local_modified_at") != before

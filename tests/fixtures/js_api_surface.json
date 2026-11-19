@@ -21,7 +21,10 @@
     "lc_mode",
     "lc_dismissed",
     "thread_completed",
-    "screenshots"
+    "screenshots",
+    "thread_onhold",
+    "thread_abandoned",
+    "thread_states_seen_at"
   ],
   "add_game_attachment": [
     "game_id",
@@ -584,6 +587,7 @@
   ],
   "sync_now": [],
   "sync_steam_shortcuts": [],
+  "take_abandoned_notices": [],
   "uninstall_bepinex": [
     "game_id",
     "options"

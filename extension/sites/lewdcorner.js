@@ -18,12 +18,21 @@
             if (/^https:\/\/lewdcorner\.com\/attachments\/[^/?#]+\.\d+\/$/.test(link)) return link;
             return img.currentSrc || img.src || '';
         };
+        // A title label links to "?prefix_id=<id>". The id tells apart the two
+        // LC prefixes named "Other" (engine 22, render 29). Names stay plain
+        // strings so an older wLib still reads them; ids go in a parallel list.
+        const prefixLabels = Array.from(heading?.querySelectorAll('.label') || []).filter(label => text(label));
+        const prefixId = label => {
+            const id = /[?&]prefix_id=([1-9][0-9]*)/.exec(label.closest?.('a.labelLink')?.href || '')?.[1];
+            return id ? Number(id) : null;
+        };
         const images = [...new Set(Array.from(post?.querySelectorAll('.message-userContent img') || [], imageUrl)
             .filter(url => /^https:\/\//i.test(url)))];
         WLibSiteWidget.show(null, [], {
             url: threadUrl(threadId),
             title: text(cleanHeading) || document.title,
-            prefixes: Array.from(heading?.querySelectorAll('.label') || [], text).filter(Boolean),
+            prefixes: prefixLabels.map(text),
+            prefix_ids: prefixLabels.map(prefixId),
             developer: text(post?.querySelector('[data-field="Developer" i] dd')),
             version: text(post?.querySelector('[data-field="version" i] dd')),
             tags: Array.from(document.querySelectorAll('.tagList .tagItem'), text).filter(Boolean),

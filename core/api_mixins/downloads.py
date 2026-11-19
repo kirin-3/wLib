@@ -994,6 +994,21 @@ class DownloadsMixin(ApiBase):
             completed = payload.get("thread_completed")
             if isinstance(completed, bool):
                 _ = update_game_row(installed_id, {"thread_completed": completed})
+            from core.database import THREAD_STATES_AT_COLUMN, caller_thread_states
+
+            states = caller_thread_states(
+                payload.get("thread_onhold"), payload.get("thread_abandoned"),
+                payload.get("thread_states_seen_at"), has_f95=bool(f95_url),
+            )
+            if states is not None:
+                _ = update_game_row(
+                    installed_id,
+                    {
+                        "thread_onhold": states[0],
+                        "thread_abandoned": states[1],
+                        THREAD_STATES_AT_COLUMN: states[2],
+                    },
+                )
             _ = self._fill_thread_details_from_catalog([installed_id])
 
         # New installs with a thread URL get the same metadata fetch as add_game.

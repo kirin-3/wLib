@@ -32,7 +32,11 @@ import { colorForTag, loadTagColors } from "../utils/tagColors";
 import { useRoute, useRouter } from "vue-router";
 import {
   IconArchive,
+  IconBan,
   IconCheck,
+  IconCircleCheck,
+  IconPlayerPause,
+  IconProgress,
   IconArrowLeft,
   IconArrowUp,
   IconClock,
@@ -84,6 +88,9 @@ import {
   type FilterCollection,
   type FilterInstallState,
   type FilterSections,
+  type ThreadStateFilter,
+  THREAD_STATE_FILTER_LABELS,
+  THREAD_STATE_FILTER_VALUES,
   type LayoutMode,
   type CardSize,
   type LibraryFilterPreset,
@@ -126,6 +133,7 @@ import {
   hasUnplayedUpdate,
   isUpdateSkipped,
   hasNewSinceFinished,
+  matchesThreadStateFilter,
   isWishlisted,
   matchesGameSearch,
   matchesEngineFilter,
@@ -161,6 +169,9 @@ interface AddGamePayload {
   lc_url?: string;
   lc_dismissed?: string;
   thread_completed?: boolean;
+  thread_onhold?: boolean;
+  thread_states_seen_at?: string;
+  thread_abandoned?: boolean;
   version?: string;
   cover_image?: string;
   tags?: string;
@@ -346,6 +357,27 @@ function openTagColorPicker(event: MouseEvent | KeyboardEvent, tag: string) {
   tagColorPicker.value = { tag, anchor: event.currentTarget as HTMLElement };
 }
 const filterInstallState = ref<FilterInstallState>(DEFAULT_LIBRARY_VIEW_STATE.filterInstallState);
+const filterThreadStates = ref<ThreadStateFilter[]>([...DEFAULT_LIBRARY_VIEW_STATE.filterThreadStates]);
+// The Thread state section's options, in the order of the stored values.
+const threadStateIcons: Record<ThreadStateFilter, typeof IconCircleCheck> = {
+  finished: IconCircleCheck,
+  onhold: IconPlayerPause,
+  abandoned: IconBan,
+  ongoing: IconProgress,
+};
+const threadStateOptions = THREAD_STATE_FILTER_VALUES.map((value) => ({
+  value,
+  label: THREAD_STATE_FILTER_LABELS[value],
+  icon: threadStateIcons[value],
+}));
+const applyThreadStateFilter = (value: ThreadStateFilter, event: Event): void => {
+  const checked = (event.target as HTMLInputElement).checked;
+  const others = filterThreadStates.value.filter((entry) => entry !== value);
+  // Keep the section's order so the chips and saved presets read the same way.
+  filterThreadStates.value = THREAD_STATE_FILTER_VALUES.filter(
+    (entry) => others.includes(entry) || (checked && entry === value),
+  );
+};
 const cardSize = ref<CardSize>(DEFAULT_LIBRARY_VIEW_STATE.cardSize);
 const cardScales = [0.75, 0.875, 1, 1.25, 1.5] as const;
 const layoutMode = ref<LayoutMode>(DEFAULT_LIBRARY_VIEW_STATE.layoutMode);
@@ -580,12 +612,14 @@ const activeFilterCount = computed(
     (filterCollection.value !== "All" ? 1 : 0) +
     (filterStatuses.value.length > 0 ? 1 : 0) +
     (filterInstallState.value ? 1 : 0) +
+    (filterThreadStates.value.length > 0 ? 1 : 0) +
     (filterSources.value.length || filterExcludedSources.value.length ? 1 : 0) +
     (filterEngines.value.length || filterExcludedEngines.value.length ? 1 : 0) +
     (filterTags.value.length || filterExcludedTags.value.length ? 1 : 0),
 );
 const activeFilterChips = computed(() => buildFilterChips({
   statuses: filterStatuses.value, install: filterInstallState.value, sources: filterSources.value,
+  threadStates: filterThreadStates.value,
   engines: filterEngines.value, tags: filterTags.value, collection: filterCollection.value,
   excludedSources: filterExcludedSources.value, excludedEngines: filterExcludedEngines.value,
   excludedTags: filterExcludedTags.value,
@@ -596,6 +630,7 @@ const removeFilterChip = (chip: FilterChip) => {
   switch (chip.kind) {
     case "status": filterStatuses.value = removeFilterValue(filterStatuses.value, chip.value); break;
     case "install": filterInstallState.value = ""; break;
+    case "thread": filterThreadStates.value = filterThreadStates.value.filter((value) => value !== chip.value); break;
     case "source":
       if (chip.excluded) filterExcludedSources.value = removeFilterValue(filterExcludedSources.value, chip.value);
       else filterSources.value = removeFilterValue(filterSources.value, chip.value);
@@ -615,6 +650,7 @@ const clearFilters = () => {
   searchQuery.value = "";
   filterStatuses.value = [];
   filterInstallState.value = "";
+  filterThreadStates.value = [];
   clearSourceFilters();
   clearEngineFilters();
   clearTagFilters();
@@ -641,6 +677,7 @@ const applyLibraryViewState = (state: LibraryViewState) => {
   filterCollection.value = state.filterCollection;
   filterStatuses.value = [...state.filterStatuses];
   filterInstallState.value = state.filterInstallState;
+  filterThreadStates.value = [...state.filterThreadStates];
   filterSources.value = [...state.filterSources];
   filterEngines.value = [...state.filterEngines];
   filterTags.value = [...state.filterTags];
@@ -661,6 +698,7 @@ const buildLibraryViewState = (): LibraryViewState =>
     filterCollection: filterCollection.value,
     filterStatuses: filterStatuses.value,
     filterInstallState: filterInstallState.value,
+    filterThreadStates: filterThreadStates.value,
     filterSources: filterSources.value,
     filterEngines: filterEngines.value,
     filterTags: filterTags.value,
@@ -731,6 +769,8 @@ const filteredGames = computed(() => {
   if (filterCollection.value === "Recently played") {
     result = result.filter((game) => !!game.last_played);
   }
+  if (filterThreadStates.value.length)
+    result = result.filter((game) => matchesThreadStateFilter(game, filterThreadStates.value));
   if (filterStatuses.value.length) {
     result = result.filter((g) => {
       return filterStatuses.value.some(
@@ -1258,6 +1298,7 @@ const applyFilterPreset = (preset: LibraryFilterPreset) => {
   filterCollection.value = normalized.filterCollection;
   filterStatuses.value = [...normalized.filterStatuses];
   filterInstallState.value = normalized.filterInstallState;
+  filterThreadStates.value = [...normalized.filterThreadStates];
   filterSources.value = [...normalized.filterSources];
   filterEngines.value = [...normalized.filterEngines];
   filterTags.value = [...normalized.filterTags];
@@ -1297,6 +1338,7 @@ const saveFilterPreset = async () => {
     filterCollection: filterCollection.value,
     filterStatuses: [...filterStatuses.value],
     filterInstallState: filterInstallState.value,
+    filterThreadStates: [...filterThreadStates.value],
     filterSources: [...filterSources.value],
     filterEngines: [...filterEngines.value],
     filterTags: [...filterTags.value],
@@ -1476,6 +1518,7 @@ const runSingleGameUpdateCheck = async (game: GameRecord) => {
     if (result && result.success) {
       await loadGames();
       if (result.note) notify(result.note, "info");
+      if (result.newly_abandoned) notify(`${game.title} was abandoned by its developer`, "info");
       if (result.newly_finished) {
         notify(`${game.title} is finished`, "success");
         return { type: "" as const, message: "" };
@@ -1721,6 +1764,9 @@ const handleAddGame = async (gameData: AddGamePayload) => {
       gameData.lc_dismissed || "",
       gameData.thread_completed,
       gameData.screenshots || [],
+      gameData.thread_onhold,
+      gameData.thread_abandoned,
+      gameData.thread_states_seen_at || "",
     );
     if (result && result.success === false) {
       notifyError(`Failed to add game:\n\n${result.error || "Unknown error"}`);
@@ -1987,6 +2033,7 @@ watch(
     filterCollection,
     filterStatuses,
     filterInstallState,
+    filterThreadStates,
     filterSources,
     filterEngines,
     filterTags,
@@ -2232,6 +2279,36 @@ onUnmounted(() => {
               <option value="wishlist">Wishlist</option>
             </select>
           </label>
+        </div>
+
+        <div class="p-6 pb-2 pt-4">
+          <button
+            @click="toggleFilterSection('threadStates')"
+            class="w-full flex items-center justify-between text-xs uppercase tracking-widest font-bold px-2 py-1 rounded-md transition-colors ui-hover-surface"
+            style="color: var(--text-muted)"
+            :aria-expanded="filterSections.threadStates"
+          >
+            <span>Thread state</span>
+            <span class="text-sm">{{ filterSections.threadStates ? "▾" : "▸" }}</span>
+          </button>
+          <div v-show="filterSections.threadStates" class="space-y-1 mt-3">
+            <label
+              v-for="option in threadStateOptions"
+              :key="option.value"
+              class="flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm cursor-pointer transition-colors ui-hover-surface"
+            >
+              <input
+                type="checkbox"
+                :checked="filterThreadStates.includes(option.value)"
+                @change="applyThreadStateFilter(option.value, $event)"
+                class="filters-checkbox rounded"
+              />
+              <span class="ui-status-option">
+                <component :is="option.icon" class="ui-status-icon" />
+                <span>{{ option.label }}</span>
+              </span>
+            </label>
+          </div>
         </div>
 
         <p class="filter-legend mx-6 mt-4 px-2 text-[0.6875rem] leading-snug" style="color: var(--text-muted)">

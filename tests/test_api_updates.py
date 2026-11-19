@@ -5277,3 +5277,287 @@ def test_import_check_includes_active_lc_only_games():
     lc_off = add_game("LC off", "", lc_url="https://lewdcorner.com/threads/3/", lc_mode="off")
     local = add_game("Local", "/local.sh")
     assert api._game_ids_with_url([f95, lc_only, lc_off, local]) == [f95, lc_only]
+
+
+def _archived_library():
+    active = add_game("Active", "/a", f95_url="https://f95zone.to/threads/1/", version="0.7")
+    archived = add_game("Archived", "/b", f95_url="https://f95zone.to/threads/2/", version="0.7")
+    update_game(archived, {"play_status": "Archived"})
+    return active, archived
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda api, ids: api.check_all_updates(),
+        lambda api, ids: api.check_all_updates(automatic=True),
+        lambda api, ids: api.check_all_updates(ids, skip_archived=True),
+    ],
+    ids=["check-all", "automatic", "sync"],
+)
+def test_library_wide_checks_leave_out_archived_games(monkeypatch, call):
+    api = Api()
+    active, archived = _archived_library()
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    checked: list[str] = []
+
+    def check(urls, callback):
+        checked.extend(urls)
+        for url in urls:
+            callback(url, {"success": True, "version": "0.8"})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", check)
+    result = call(api, [active, archived])
+    assert result["success"] and result["total"] == 1
+    assert checked == ["https://f95zone.to/threads/1/"]
+    assert [entry["id"] for entry in api.get_update_status()["results"]] == [active]
+
+
+def test_check_for_chosen_games_includes_archived_and_hides_its_update(monkeypatch):
+    api = Api()
+    active, archived = _archived_library()
+    sender = MagicMock()
+    monkeypatch.setattr("core.desktop_notify.send_notification", sender)
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    api.set_window_focused(False)
+
+    def check(urls, callback):
+        for url in urls:
+            callback(url, {"success": True, "version": "0.8"})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", check)
+    result = api.check_all_updates([active, archived])
+    assert result["success"] and result["total"] == 2
+    by_id = {entry["id"]: entry for entry in api.get_update_status()["results"]}
+    assert by_id[archived]["latest_version"] == "0.8"
+    assert by_id[archived]["has_update"] is False
+    assert by_id[archived]["archived"] is True
+    assert by_id[active]["has_update"] is True
+    assert by_id[active]["archived"] is False
+    # Only the active game counts as a new update.
+    sender.assert_called_once_with("1 game update", "Active")
+
+
+def test_single_check_of_archived_game_reports_no_update(monkeypatch):
+    api = Api()
+    _, archived = _archived_library()
+    monkeypatch.setattr(
+        api.scraper,
+        "get_thread_version",
+        MagicMock(return_value={"success": True, "version": "0.7.1"}),
+    )
+    result = api.check_for_updates("https://f95zone.to/threads/2/")
+    assert result["version"] == "0.7.1"
+    assert result["has_update"] is False
+    assert result["archived"] is True
+    assert next(g for g in get_all_games() if g["id"] == archived)["latest_version"] == "0.7.1"
+
+
+def _bulk_page_result(monkeypatch, api, result):
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+
+    def check(urls, callback):
+        for url in urls:
+            callback(url, {"success": True, "version": "0.8", **result})
+        return {}
+
+    monkeypatch.setattr(api.scraper, "check_versions", check)
+
+
+@pytest.mark.parametrize(
+    ("stored", "play_status", "read", "expected_state", "newly"),
+    [
+        ((0, 0), "Playing", (False, True), (0, 1), True),
+        ((None, None), "Playing", (False, True), (0, 1), False),
+        ((0, 1), "Playing", (False, True), (0, 1), False),
+        ((0, 1), "Playing", (False, False), (0, 0), False),
+        ((0, 0), "Archived", (False, True), (0, 1), False),
+        ((0, 0), "Playing", (True, False), (1, 0), False),
+    ],
+    ids=["newly", "from-unknown", "stays", "revived", "archived", "on-hold"],
+)
+def test_bulk_page_read_stores_thread_states(monkeypatch, stored, play_status, read, expected_state, newly):
+    api = Api()
+    game_id = add_game("Thread", "/g", f95_url="https://f95zone.to/threads/40/", version="0.7")
+    update_game(
+        game_id,
+        {"thread_onhold": stored[0], "thread_abandoned": stored[1], "play_status": play_status},
+    )
+    _bulk_page_result(
+        monkeypatch, api,
+        {"thread_completed": False, "thread_onhold": read[0], "thread_abandoned": read[1]},
+    )
+    assert api.check_all_updates([game_id])["success"]
+    result = api.get_update_status()["results"][0]
+    assert result["newly_abandoned"] is newly
+    game = get_all_games()[0]
+    assert (game["thread_onhold"], game["thread_abandoned"]) == expected_state
+
+
+def test_version_only_check_keeps_thread_states(monkeypatch):
+    api = Api()
+    game_id = add_game("Thread", "/g", f95_url="https://f95zone.to/threads/41/", version="0.7")
+    update_game(game_id, {"thread_onhold": 1, "thread_abandoned": 0})
+    _bulk_page_result(monkeypatch, api, {})
+    assert api.check_all_updates()["success"]
+    game = get_all_games()[0]
+    assert game["latest_version"] == "0.8"
+    assert (game["thread_onhold"], game["thread_abandoned"]) == (1, 0)
+    assert api.get_update_status()["results"][0]["newly_abandoned"] is False
+
+
+def test_bulk_check_uses_f95_catalog_states(monkeypatch):
+    api = Api()
+    game_id = add_game("Catalog", "/g", f95_url="https://f95zone.to/threads/42/", version="0.7")
+    update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    monkeypatch.setattr(
+        "core.game_lookup.f95_thread_entries",
+        lambda ids: {"42": {"thread_onhold": False, "thread_abandoned": True}},
+    )
+    _bulk_page_result(monkeypatch, api, {})
+    assert api.check_all_updates()["success"]
+    assert api.get_update_status()["results"][0]["newly_abandoned"] is True
+    assert get_all_games()[0]["thread_abandoned"] == 1
+
+
+def test_older_catalog_states_do_not_undo_a_page_read(monkeypatch):
+    api = Api()
+    game_id = add_game("Stale", "/g", f95_url="https://f95zone.to/threads/44/", version="0.7")
+    # A page read found the Abandoned prefix after the catalog last read the thread.
+    update_game(
+        game_id,
+        {"thread_onhold": 0, "thread_abandoned": 1, "thread_states_at": "2026-11-19T10:00:00Z"},
+    )
+    entry = {"thread_onhold": False, "thread_abandoned": False,
+             "thread_states_seen_at": "2026-11-18T05:16:36Z"}
+    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: {"44": entry})
+    _bulk_page_result(monkeypatch, api, {})
+    assert api.check_all_updates()["success"]
+    assert get_all_games()[0]["thread_abandoned"] == 1
+    assert api.get_update_status()["results"][0]["newly_abandoned"] is False
+
+    # Once the builder reads the thread again, its state applies.
+    entry["thread_states_seen_at"] = "2026-11-20T05:00:00Z"
+    assert api.check_all_updates()["success"]
+    game = get_all_games()[0]
+    assert game["thread_abandoned"] == 0
+    assert game["thread_states_at"] == "2026-11-20T05:00:00Z"
+
+
+def test_single_check_reports_newly_abandoned(monkeypatch):
+    api = Api()
+    game_id = add_game("Single", "/g", f95_url="https://f95zone.to/threads/43/", version="0.7")
+    update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    monkeypatch.setattr(api.scraper, "get_thread_version", MagicMock(return_value={
+        "success": True, "version": "0.8", "thread_completed": False,
+        "thread_onhold": False, "thread_abandoned": True,
+    }))
+    # A stale catalog entry never overwrites the page read.
+    monkeypatch.setattr(
+        "core.api_mixins.updates.f95_thread_entries",
+        lambda ids: {"43": {"thread_onhold": False, "thread_abandoned": False}},
+    )
+    result = api.check_for_updates("https://f95zone.to/threads/43/")
+    assert result["newly_abandoned"] is True
+    assert get_all_games()[0]["thread_abandoned"] == 1
+
+
+def test_lc_feed_records_states_for_lc_only_games(monkeypatch):
+    update_setting("lc_enabled", "true")
+    api = Api()
+    lc_only = add_game("LC only", "/g", lc_url="https://lewdcorner.com/threads/5583/", version="0.5")
+    on_hold = add_game("LC hold", "/g", lc_url="https://lewdcorner.com/threads/5584/", version="0.5")
+    no_prefixes = add_game("LC none", "/g", lc_url="https://lewdcorner.com/threads/5585/", version="0.5")
+    for game_id in (lc_only, on_hold, no_prefixes):
+        update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    _mock_lc_checks(monkeypatch, feed=[
+        _lc_test_item(5583, "0.6", 1794268800, "Abandoned"),
+        _lc_test_item(5584, "0.6", 1794268800, "On Hold"),
+        _lc_test_item(5585, "0.6"),
+    ])
+    monkeypatch.setattr("threading.Thread", _InlineThread)
+    assert api.check_all_updates()["success"]
+    results = {r["id"]: r for r in api.get_update_status()["results"]}
+    stored = {g["id"]: (g["thread_onhold"], g["thread_abandoned"]) for g in get_all_games()}
+    assert results[lc_only]["newly_abandoned"] is True
+    assert stored[lc_only] == (0, 1)
+    assert results[on_hold]["newly_abandoned"] is False
+    assert stored[on_hold] == (1, 0)
+    assert stored[no_prefixes] == (0, 0)
+
+
+def test_f95_decides_for_games_on_both_sites(monkeypatch):
+    update_setting("lc_enabled", "true")
+    api = Api()
+    game_id = add_game(
+        "Both", "/g", "https://f95zone.to/threads/44/",
+        lc_url="https://lewdcorner.com/threads/5590/", version="0.5",
+    )
+    update_game(game_id, {"thread_onhold": 0, "thread_abandoned": 0})
+    _mock_lc_checks(monkeypatch, feed=[_lc_test_item(5590, "0.6", 1794268800, "Abandoned")])
+    monkeypatch.setattr(
+        "core.game_lookup.f95_thread_entries",
+        lambda ids: {"44": {"thread_onhold": False, "thread_abandoned": False}},
+    )
+    _bulk_page_result(monkeypatch, api, {})
+    assert api.check_all_updates()["success"]
+    result = api.get_update_status()["results"][0]
+    assert result["newly_abandoned"] is False
+    assert get_all_games()[0]["thread_abandoned"] == 0
+
+    # Without F95 prefix data the LC read never undoes stored states...
+    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: {})
+    assert api.check_all_updates()["success"]
+    assert api.get_update_status()["results"][0]["newly_abandoned"] is False
+    assert get_all_games()[0]["thread_abandoned"] == 0
+
+    # ...it only fills unknown ones, which never alerts.
+    update_game(game_id, {"thread_onhold": None, "thread_abandoned": None})
+    assert api.check_all_updates()["success"]
+    assert api.get_update_status()["results"][0]["newly_abandoned"] is False
+    assert get_all_games()[0]["thread_abandoned"] == 1
+
+
+def test_bulk_notification_counts_newly_abandoned_game(monkeypatch):
+    api = Api()
+    game_id = add_game("Echo", "/g", f95_url="https://f95zone.to/threads/45/", version="0.8")
+    update_game(game_id, {"latest_version": "0.8", "thread_onhold": 0, "thread_abandoned": 0})
+    sender = MagicMock()
+    monkeypatch.setattr("core.desktop_notify.send_notification", sender)
+    _bulk_page_result(
+        monkeypatch, api,
+        {"thread_completed": False, "thread_onhold": False, "thread_abandoned": True},
+    )
+    assert api.check_all_updates(automatic=True)["success"]
+    sender.assert_called_once_with("1 game abandoned", "Echo")
+
+
+def test_lc_page_states_never_decide_for_a_game_with_an_f95_thread(monkeypatch):
+    update_setting("lc_enabled", "true")
+    api = Api()
+    monkeypatch.setattr(api, "_fetch_metadata_after_add", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr("core.game_lookup.f95_for_lc", lambda _lc_id: None)
+    f95_entry = {"thread_onhold": False, "thread_abandoned": True, "thread_states_seen_at": "2025-11-18T05:00:00Z"}
+    monkeypatch.setattr("core.game_lookup.f95_thread_entries", lambda ids: {"61": dict(f95_entry)})
+    monkeypatch.setattr("core.game_lookup.lc_thread_entries", lambda ids: {i: {"title": "LC"} for i in ids})
+
+    def stored(game_id):
+        game = next(game for game in get_all_games() if game["id"] == game_id)
+        return game["thread_onhold"], game["thread_abandoned"], game["thread_states_at"]
+
+    # LC page states on a game with an F95 thread: F95's catalog entry decides.
+    both = api.add_game("Both", "", "https://f95zone.to/threads/61/", lc_url="https://lewdcorner.com/threads/71/",
+                        thread_onhold=False, thread_abandoned=False)
+    assert stored(both["id"]) == (0, 1, "2025-11-18T05:00:00Z")
+    # LC page states on an LC-only game are a read made now.
+    lc_only = api.add_game("LC only", "", lc_url="https://lewdcorner.com/threads/72/",
+                           thread_onhold=True, thread_abandoned=False)
+    onhold, abandoned, read_at = stored(lc_only["id"])
+    assert (onhold, abandoned) == (1, 0) and read_at > "2026-01-01"
+    # Catalog states the caller passes keep the catalog's time.
+    catalog = api.add_game("Catalog", "", lc_url="https://lewdcorner.com/threads/73/",
+                           thread_onhold=False, thread_abandoned=True,
+                           thread_states_seen_at="2025-10-01T00:00:00Z")
+    assert stored(catalog["id"]) == (0, 1, "2025-10-01T00:00:00Z")

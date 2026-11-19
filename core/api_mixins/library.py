@@ -487,6 +487,9 @@ class LibraryMixin(ApiBase):
         lc_dismissed: str = "",
         thread_completed: bool | None = None,
         screenshots: object = None,
+        thread_onhold: bool | None = None,
+        thread_abandoned: bool | None = None,
+        thread_states_seen_at: str = "",
     ) -> dict[str, object]:
         import sqlite3
 
@@ -533,6 +536,13 @@ class LibraryMixin(ApiBase):
         lc_entry = lc_thread_entries([lc_id]).get(lc_id, {}) if attach_lc_id is None else {}
         f95_id = extract_thread_id(normalized_url)
         entry = combined_thread_entry(f95_thread_entries([f95_id]).get(f95_id, {}), lc_entry) if lc_entry else {}
+        # LC page states apply only to an LC-only game; catalog ones keep the
+        # time the catalog builder read the thread.
+        caller_states = database.caller_thread_states(
+            thread_onhold, thread_abandoned, thread_states_seen_at,
+            has_f95=bool(normalized_url or partner_url),
+        )
+        thread_onhold, thread_abandoned, states_at = caller_states or (None, None, None)
         if entry:
             if isinstance(title, str) and not title.strip():
                 title = str(entry.get("title") or "")
@@ -544,6 +554,14 @@ class LibraryMixin(ApiBase):
             engine = engine or str(entry.get("engine") or "")
             if thread_completed is None and entry.get("thread_completed") is not None:
                 thread_completed = bool(entry["thread_completed"])
+            if (
+                states_at is None
+                and entry.get("thread_onhold") is not None
+                and entry.get("thread_abandoned") is not None
+            ):
+                thread_onhold = bool(entry["thread_onhold"])
+                thread_abandoned = bool(entry["thread_abandoned"])
+                states_at = entry.get("thread_states_seen_at")
 
         if attach_lc_id is None and (not isinstance(title, str) or not title.strip()):
             return {
@@ -642,6 +660,11 @@ class LibraryMixin(ApiBase):
                 details = {field: entry[field] for field in THREAD_DETAIL_FIELDS if entry.get(field)}
                 if thread_completed is not None:
                     details["thread_completed"] = thread_completed
+                # Both states come from one prefix read, so they are set together.
+                if thread_onhold is not None and thread_abandoned is not None:
+                    details["thread_onhold"] = thread_onhold
+                    details["thread_abandoned"] = thread_abandoned
+                    details[database.THREAD_STATES_AT_COLUMN] = states_at
                 if details:
                     _ = update_game(game_id, details)
             if game_id is not None and incoming_links:

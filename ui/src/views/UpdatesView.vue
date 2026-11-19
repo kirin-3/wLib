@@ -101,6 +101,7 @@ const recheck = async (game: GameRecord) => {
     const result = await api.checkForUpdates(url);
     if (!result?.success) throw new Error(result?.error || "Update check failed");
     if (result.note) notify(result.note, "info");
+    if (result.newly_abandoned) notify(`${game.title} was abandoned by its developer`, "info");
     if (result.newly_finished) {
       notify(`${game.title} is finished`, "success");
       return;
@@ -398,6 +399,8 @@ const gamesWithErrors = computed(() => {
 });
 
 const gamesWithNotes = computed(() => status.value.results.filter((result) => result.note));
+// Archived games are checked only when chosen; their update is not offered.
+const archivedResults = computed(() => status.value.results.filter((result) => result.archived && !result.error));
 
 const persistedUpdates = computed(() => {
   return games.value.filter((game) => !isPendingRemoval(game.id) && hasAvailableUpdate(game));
@@ -1085,6 +1088,11 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <ul v-if="archivedResults.length" class="mb-3 space-y-1 text-xs" style="color: var(--text-muted)">
+          <li v-for="result in archivedResults" :key="`archived-${result.id}`">
+            <span class="font-medium">{{ result.title }}</span> · Archived<template v-if="result.latest_version">, latest {{ result.latest_version }}</template>
+          </li>
+        </ul>
         <ul v-if="gamesWithNotes.length" class="mb-3 space-y-1 text-xs" style="color: var(--text-muted)">
           <li v-for="result in gamesWithNotes" :key="result.id">
             <span class="font-medium">{{ result.title }}</span> · {{ result.note }}

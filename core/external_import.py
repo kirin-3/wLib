@@ -116,13 +116,13 @@ XLIBRARY_COMPLETION_MAP = {
     "completed": "Completed",
     "in queue": "Plan to Play",
     "waiting for update": "Waiting For Update",
-    "abandoned": "Abandoned",
+    "abandoned": "Archived",
 }
 
 ATLAS_PLAYSTATE_MAP = {
     "finished": "Completed",
     "played": "Playing",
-    "dropped": "Abandoned",
+    "dropped": "Archived",
     "on_hold": "On Hold",
     "planned": "Plan to Play",
 }
@@ -133,7 +133,7 @@ F69_COMPLETION_MAP = {
     "replaying": "Playing",
     "completed": "Completed",
     "waiting_for_update": "Waiting For Update",
-    "abandoned": "Abandoned",
+    "abandoned": "Archived",
 }
 
 # f69 engine enum names mapped to the F95 thread prefix labels wLib stores.
@@ -550,7 +550,7 @@ def _translate_f95checker_game(
         "no",
     )
     if archived:
-        play_status = "Abandoned"
+        play_status = "Archived"
     elif finished:
         play_status = "Completed"
     elif installed:

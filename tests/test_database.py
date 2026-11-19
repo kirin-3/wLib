@@ -987,7 +987,7 @@ def test_init_db_recovers_legacy_statuses_and_preserves_existing_plan_to_play():
 
     games_by_id = {game["id"]: game for game in get_all_games()}
     assert games_by_id[waiting_game_id]["play_status"] == "Waiting For Update"
-    assert games_by_id[abandoned_game_id]["play_status"] == "Abandoned"
+    assert games_by_id[abandoned_game_id]["play_status"] == "Archived"
     assert games_by_id[planned_game_id]["play_status"] == "Plan to Play"
     assert games_by_id[missing_game_id]["play_status"] == DEFAULT_PLAY_STATUS
     assert games_by_id[waiting_game_id]["status"] == ""
@@ -2450,3 +2450,190 @@ def test_site_versions_migrate_legacy_f95_games_once():
     assert all(get_game(f95)[column] == "" for column in columns[1:-1])
     assert get_game(lc)["latest_version"] == "0.5"
     assert all(get_game(lc)[column] == "" for column in columns)
+
+
+@pytest.mark.parametrize("value", ["abandoned", "Abandoned", "ABANDONED", "archived", "Archived"])
+def test_normalize_play_status_maps_abandoned_and_archived_to_archived(value):
+    assert normalize_play_status(value) == "Archived"
+    assert normalize_play_status("On Hold", "abandoned") == "Archived"
+
+
+def test_settings_reject_abandoned_and_archived_as_custom_status_names():
+    from core.api import Api
+
+    api = Api()
+    for name in ("abandoned", "Archived"):
+        result = api.save_settings({"custom_play_statuses": [name]})
+        assert result["success"] is False
+        assert name in str(result["error"])
+    assert get_custom_play_statuses() == []
+
+
+def test_init_db_moves_abandoned_statuses_custom_list_and_presets_to_archived():
+    ids = [add_game(title=f"Game {i}", exe_path="") for i in range(4)]
+    with closing(get_connection()) as conn:
+        for game_id, status in zip(ids, ["Abandoned", "abandoned", "archived", "Playing"], strict=True):
+            conn.execute("UPDATE games SET play_status = ? WHERE id = ?", (status, game_id))
+        conn.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [
+                ("custom_play_statuses", json.dumps(["archived", "Backlog", "Abandoned"])),
+                (
+                    "library_filter_presets",
+                    json.dumps(
+                        [
+                            {"name": "Dropped", "filterStatuses": ["Abandoned", "Playing", "archived"]},
+                            {"name": "Other", "filterStatuses": ["Playing"]},
+                        ]
+                    ),
+                ),
+            ],
+        )
+        conn.commit()
+
+    init_db()
+
+    statuses = {game["id"]: game["play_status"] for game in get_all_games()}
+    assert [statuses[game_id] for game_id in ids] == ["Archived", "Archived", "Archived", "Playing"]
+    assert json.loads(get_setting("custom_play_statuses")) == ["Backlog"]
+    stored_presets = json.loads(get_setting("library_filter_presets"))
+    assert stored_presets[0]["filterStatuses"] == ["Archived", "Playing"]
+    assert stored_presets[1]["filterStatuses"] == ["Playing"]
+
+    before = (
+        get_setting("custom_play_statuses"),
+        get_setting("library_filter_presets"),
+        statuses,
+    )
+    init_db()
+    after = (
+        get_setting("custom_play_statuses"),
+        get_setting("library_filter_presets"),
+        {game["id"]: game["play_status"] for game in get_all_games()},
+    )
+    assert after == before
+
+
+def test_filter_presets_read_abandoned_as_archived():
+    update_setting(
+        "library_filter_presets",
+        json.dumps([{"name": "Old", "filterStatuses": ["abandoned", "Archived"]}]),
+    )
+    assert get_library_filter_presets()[0]["filterStatuses"] == ["Archived"]
+
+
+def test_thread_states_start_unknown_and_update_game_keeps_all_three_values():
+    game_id = add_game("Stateful", "", f95_url="https://f95zone.to/threads/state.9/")
+    game = get_game(game_id)
+    assert game["thread_onhold"] is None
+    assert game["thread_abandoned"] is None
+
+    for value, stored in ((1, 1), (False, 0), ("1", 1), (0, 0), (None, None)):
+        update_game(game_id, {"thread_onhold": value, "thread_abandoned": value})
+        game = get_game(game_id)
+        assert game["thread_onhold"] == stored
+        assert game["thread_abandoned"] == stored
+
+    # A new thread URL makes both states unknown again.
+    update_game(game_id, {"thread_onhold": 1, "thread_abandoned": 0})
+    update_game(game_id, {"f95_url": "https://f95zone.to/threads/other.10/"})
+    game = get_game(game_id)
+    assert game["thread_onhold"] is None
+    assert game["thread_abandoned"] is None
+    assert game["thread_states_at"] is None
+
+
+def test_older_catalog_states_never_replace_a_newer_read():
+    from core.database import ThreadStates, thread_state_fields
+
+    game = {"thread_onhold": 0, "thread_abandoned": 1, "thread_states_at": "2025-11-19T10:00:00Z",
+            "play_status": "Playing"}
+    # The builder read the thread before the page read: ignored.
+    stale = ThreadStates(False, False, "2025-11-18T05:16:36Z")
+    assert thread_state_fields(game, stale) == ({}, False)
+    # The builder read it after the page read: applied, with its time.
+    newer = ThreadStates(False, False, "2025-11-20T05:00:00Z")
+    assert thread_state_fields(game, newer) == (
+        {"thread_abandoned": 0, "thread_states_at": "2025-11-20T05:00:00Z"}, False
+    )
+    # A live read always applies and records when it happened.
+    fields, newly = thread_state_fields({**game, "thread_abandoned": 0}, ThreadStates(False, True))
+    assert fields["thread_abandoned"] == 1 and newly is True
+    assert fields["thread_states_at"] > "2025-11-19T10:00:00Z"
+    # Without a stored time any catalog read applies; an unreadable time never does.
+    assert thread_state_fields({**game, "thread_states_at": None}, stale)[0]["thread_abandoned"] == 0
+    assert thread_state_fields(game, ThreadStates(False, False, "yesterday")) == ({}, False)
+
+
+def test_update_game_keeps_only_readable_thread_state_times():
+    game_id = add_game("Timed", "", f95_url="https://f95zone.to/threads/state.11/")
+    update_game(game_id, {"thread_states_at": "2026-11-19T10:00:00Z"})
+    assert get_game(game_id)["thread_states_at"] == "2026-11-19T10:00:00Z"
+    update_game(game_id, {"thread_states_at": "not a time"})
+    assert get_game(game_id)["thread_states_at"] is None
+
+
+def test_thread_states_reset_when_the_thread_they_came_from_changes():
+    from core.database import ThreadStates, site_thread_states
+
+    read = {"thread_onhold": 0, "thread_abandoned": 0, "thread_states_at": "2025-11-19T10:00:00Z"}
+    unknown = {"thread_onhold": None, "thread_abandoned": None, "thread_states_at": None}
+    states = lambda game_id: {key: get_game(game_id)[key] for key in read}  # noqa: E731
+
+    lc_only = add_game("LC only", "", lc_url="https://lewdcorner.com/threads/1/")
+    update_game(lc_only, read)
+    update_game(lc_only, {"lc_url": "https://lewdcorner.com/threads/1/"})
+    assert states(lc_only) == read  # same thread
+    update_game(lc_only, {"lc_url": "https://lewdcorner.com/threads/2/"})
+    assert states(lc_only) == unknown
+    update_game(lc_only, read)
+    update_game(lc_only, {"lc_url": ""})
+    assert states(lc_only) == unknown
+    # States the same update sets stay.
+    update_game(lc_only, {"lc_url": "https://lewdcorner.com/threads/3/"})
+    update_game(lc_only, {**read, "lc_url": "https://lewdcorner.com/threads/4/"})
+    assert states(lc_only) == read
+
+    # A first F95 thread decides from now on.
+    update_game(lc_only, {"f95_url": "https://f95zone.to/threads/reset.12/"})
+    assert states(lc_only) == unknown
+
+    # With an F95 thread, an LC change keeps the F95 states.
+    both = add_game("Both", "", f95_url="https://f95zone.to/threads/reset.13/",
+                    lc_url="https://lewdcorner.com/threads/5/")
+    update_game(both, read)
+    update_game(both, {"lc_url": "https://lewdcorner.com/threads/6/"})
+    assert states(both) == read
+
+    # LC states fill a game on both sites only while its states are unknown.
+    f95, lc = ThreadStates(False, True), ThreadStates(True, False)
+    game = {"f95_url": "https://f95zone.to/threads/reset.13/", "thread_onhold": None, "thread_abandoned": None}
+    assert site_thread_states(game, None, lc) is lc
+    assert site_thread_states({**game, "thread_onhold": 0, "thread_abandoned": 1}, None, lc) is None
+    assert site_thread_states({**game, "thread_onhold": 0, "thread_abandoned": 1}, f95, lc) is f95
+    assert site_thread_states({**game, "f95_url": "", "thread_abandoned": 1}, None, lc) is lc
+
+
+def test_filter_presets_keep_known_thread_states():
+    from core.database import normalize_filter_preset
+
+    preset = normalize_filter_preset(
+        {"name": "Binge", "filterThreadStates": ["abandoned", "finished", "bogus", 3, "finished"]}
+    )
+    assert preset is not None
+    assert preset["filterThreadStates"] == ["finished", "abandoned"]
+    # A preset saved before the Thread state section existed checks nothing.
+    old = normalize_filter_preset({"name": "Old"})
+    assert old is not None and old["filterThreadStates"] == []
+
+
+def test_caller_thread_states_trust_page_reads_only_for_lc_only_games():
+    from core.database import caller_thread_states
+
+    assert caller_thread_states(True, False, "", has_f95=True) is None
+    page = caller_thread_states(True, False, "", has_f95=False)
+    assert page is not None and page[:2] == (True, False) and page[2] > "2026-01-01"
+    seen = "2025-11-18T05:00:00Z"
+    assert caller_thread_states(False, True, seen, has_f95=True) == (False, True, seen)
+    assert caller_thread_states(None, True, seen, has_f95=False) is None
+    assert caller_thread_states(False, True, "garbage", has_f95=True) is None

@@ -93,6 +93,10 @@ export const normalizeMockFilterPresets = (value: unknown): LibraryFilterPreset[
       filterEngines: Array.isArray(source.filterEngines)
         ? source.filterEngines.filter((engine): engine is string => typeof engine === "string")
         : [],
+      filterThreadStates: [...new Set(stringList(source.filterThreadStates))].filter(
+        (value): value is LibraryFilterPreset["filterThreadStates"][number] =>
+          ["finished", "onhold", "abandoned", "ongoing"].includes(value),
+      ),
       filterTags: stringList(source.filterTags),
       filterExcludedSources: stringList(source.filterExcludedSources),
       filterExcludedEngines: stringList(source.filterExcludedEngines),

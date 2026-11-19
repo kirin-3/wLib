@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 def build_update_summary(
-    updated_titles: Sequence[str], completed_titles: Sequence[str]
+    updated_titles: Sequence[str],
+    completed_titles: Sequence[str],
+    abandoned_titles: Sequence[str] = (),
 ) -> tuple[str, str] | None:
     counts: list[str] = []
     if updated_titles:
@@ -27,9 +29,14 @@ def build_update_summary(
         counts.append(
             f"{len(completed_titles)} wishlist game{'s' if len(completed_titles) != 1 else ''} completed"
         )
+    if abandoned_titles:
+        counts.append(
+            f"{len(abandoned_titles)} game{'s' if len(abandoned_titles) != 1 else ''} abandoned"
+        )
     if not counts:
         return None
-    titles = [*updated_titles, *completed_titles]
+    # A game can be in two lists (a new build and the Abandoned prefix); name it once.
+    titles = list(dict.fromkeys([*updated_titles, *completed_titles, *abandoned_titles]))
     body = ", ".join(titles[:2])
     if len(titles) > 2:
         body += f" and {len(titles) - 2} more"

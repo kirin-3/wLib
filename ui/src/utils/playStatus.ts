@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Component } from "vue";
 import {
+  IconArchive,
   IconCalendarTime,
   IconCircleCheck,
-  IconCircleX,
   IconClockPause,
   IconDeviceGamepad2,
   IconForbid2,
@@ -18,7 +18,7 @@ export const PLAY_STATUSES = [
   "Waiting For Update",
   "On Hold",
   "Completed",
-  "Abandoned",
+  "Archived",
 ] as const;
 
 export type PlayStatus = string;
@@ -45,7 +45,8 @@ const LEGACY_PLAY_STATUS_MAP: Record<string, PlayStatus> = {
   in_progress: "Playing",
   replaying: "Playing",
   waiting_update: "Waiting For Update",
-  abandoned: "Abandoned",
+  // The play status "Abandoned" was renamed to "Archived".
+  abandoned: "Archived",
 };
 
 const LEGACY_RECOVERABLE_PLAY_STATUSES = new Set<string>([
@@ -65,7 +66,7 @@ const PLAY_STATUS_ICON_MAP: Record<PlayStatus, Component> = {
   "Waiting For Update": IconClockPause,
   "On Hold": IconPlayerPause,
   Completed: IconCircleCheck,
-  Abandoned: IconCircleX,
+  Archived: IconArchive,
 };
 
 const PLAY_STATUS_TONE_CLASS_MAP: Record<PlayStatus, string> = {
@@ -75,7 +76,7 @@ const PLAY_STATUS_TONE_CLASS_MAP: Record<PlayStatus, string> = {
   "Waiting For Update": "ui-status-tone-waiting",
   "On Hold": "ui-status-tone-on-hold",
   Completed: "ui-status-tone-completed",
-  Abandoned: "ui-status-tone-abandoned",
+  Archived: "ui-status-tone-archived",
 };
 
 export const PLAY_STATUS_META: Record<PlayStatus, PlayStatusOption> = PLAY_STATUSES.reduce(

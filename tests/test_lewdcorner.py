@@ -35,8 +35,62 @@ def test_active(mode, enabled, f95, expected):
 
 
 def test_prefixes():
-    assert lewdcorner.prefix_details(["DAZ", "Ren'Py", "Unity", "Completed"]) == ("Ren'Py", True)
-    assert lewdcorner.prefix_details(["AI", "Koikatsu"]) == ("", False)
+    from core.f95zone import ThreadPrefixFlags
+
+    assert lewdcorner.prefix_details(["DAZ", "Ren'Py", "Unity", "Completed"]) == (
+        "Ren'Py", ThreadPrefixFlags(completed=True)
+    )
+    assert lewdcorner.prefix_details(["AI", "Koikatsu"]) == ("", ThreadPrefixFlags())
+
+
+@pytest.mark.parametrize(("prefixes", "engine", "flags"), [
+    (["Abandoned", "Unity"], "Unity", (False, False, True)),
+    (["On Hold"], "", (False, True, False)),
+    (["Onhold"], "", (False, True, False)),
+    (["Complete", "VN"], "", (True, False, False)),
+    (["ABANDONED", "on hold"], "", (False, True, True)),
+    ([], "", (False, False, False)),
+    (["AI", "DAZ", "Hand Drawn", "HS2", "VN", "KN"], "", (False, False, False)),
+])
+def test_prefix_flags(prefixes, engine, flags):
+    assert lewdcorner.prefix_details(prefixes) == (engine, flags)
+
+
+@pytest.mark.parametrize(("prefixes", "engine"), [
+    ([lewdcorner.LcPrefix("Other", 29)], ""),
+    ([lewdcorner.LcPrefix("Other", 29), lewdcorner.LcPrefix("Ren'Py", 9)], "Ren'Py"),
+    ([lewdcorner.LcPrefix("Other", 22)], "Other"),
+    (["Other"], "Other"),
+    ([lewdcorner.LcPrefix("Other")], "Other"),
+])
+def test_render_other_prefix_id_sets_no_engine(prefixes, engine):
+    assert lewdcorner.prefix_details(prefixes)[0] == engine
+
+
+def test_thread_page_keeps_label_prefix_ids():
+    # The title labels of LC thread 623: the render "Other" (id 29), then Ren'Py.
+    page = """<html data-template="thread_view" data-logged-in="true"><body>
+        <h1 class="p-title-value"><span class="p-title-prefix"><a href="/forums/games.119/?prefix_id=29"
+        class="labelLink" rel="nofollow"><span class="label label--other" dir="auto">Other</span></a>
+        <span class="label-append">&nbsp;</span><a href="/forums/games.119/?prefix_id=9" class="labelLink"
+        rel="nofollow"><span class="label label--renpy" dir="auto">Ren'Py</span></a></span>Game</h1>
+        <dl data-field="version"><dt>Version</dt><dd>0.4</dd></dl></body></html>"""
+    parsed = lewdcorner.parse_thread_page(page, 200)
+    assert parsed.prefixes == (lewdcorner.LcPrefix("Other", 29), lewdcorner.LcPrefix("Ren'Py", 9))
+    assert lewdcorner.prefix_details(parsed.prefixes)[0] == "Ren'Py"
+
+
+def test_feed_badges_keep_prefix_ids():
+    import json
+
+    body = json.dumps({"status": "ok", "result": {"items": [{
+        "id": 5583, "node_id": 6, "version": "1.0", "timestamp": 1794991483,
+        "badges": [{"id": 29, "name": "Other"}, {"id": 17, "name": "Abandoned"}],
+    }], "hasMore": False}})
+    item = lewdcorner.parse_feed_page(body).items["5583"]
+    assert item.prefixes == (lewdcorner.LcPrefix("Other", 29), lewdcorner.LcPrefix("Abandoned", 17))
+    engine, flags = lewdcorner.prefix_details(item.prefixes)
+    assert engine == "" and flags.abandoned
 
 
 @pytest.mark.parametrize(("f95", "lc", "winner"), [
@@ -82,7 +136,7 @@ def test_feed_parser_uses_saved_responses():
     item = page.items["25050"]
     assert item.version == "0.2"
     assert item.at == lewdcorner.timestamp_iso(1794991483)
-    assert not item.premium and "Ren'Py" in item.prefixes
+    assert not item.premium and "Ren'Py" in [prefix.name for prefix in item.prefixes]
     payload = json.loads(body)
     payload["result"]["items"][0]["node_id"] = 42
     assert "25050" not in lewdcorner.parse_feed_page(json.dumps(payload)).items
@@ -111,7 +165,9 @@ def test_thread_parser_uses_saved_responses():
     with_prefixes = body.replace("<body>", """
         <body><h1 class="p-title-value"><a><span class="label label--green">Completed</span></a>
         <span class="label">Ren&#39;Py</span>Game</h1>""")
-    assert lewdcorner.parse_thread_page(with_prefixes, 200).prefixes == ("Completed", "Ren'Py")
+    assert [prefix.name for prefix in lewdcorner.parse_thread_page(with_prefixes, 200).prefixes] == [
+        "Completed", "Ren'Py"
+    ]
 
 
 def test_thread_parser_reads_live_lc_markup():
@@ -127,8 +183,10 @@ def test_thread_parser_reads_live_lc_markup():
             <dd>1.3.0</dd>
         </dl></body></html>"""
     parsed = lewdcorner.parse_thread_page(page, 200)
-    assert (parsed.version, parsed.prefixes) == ("1.3.0", ("Complete", "VN"))
-    assert lewdcorner.prefix_details(parsed.prefixes)[1] is True
+    assert (parsed.version, parsed.prefixes) == (
+        "1.3.0", (lewdcorner.LcPrefix("Complete", 14), lewdcorner.LcPrefix("VN", 18))
+    )
+    assert lewdcorner.prefix_details(parsed.prefixes)[1].completed is True
     denied = """<html lang="en-US" data-app="public" data-template="error" data-logged-in="true">
         <body><h1 class="p-title-value">Oops! We ran into some problems.</h1>
         <div class="blockMessage">You do not have permission to view this page or perform this action.</div>

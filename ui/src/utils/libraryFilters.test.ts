@@ -23,3 +23,9 @@ test('excluded values get "Not" chips after their included group', () => {
   const only = activeFilterChips({ statuses: [], install: '', sources: [], engines: [], tags: [], collection: 'All', excludedTags: ['netorare'], statusLabels: {}, sourceLabels: {} });
   assert.deepEqual(only.map(c => c.label), ['Not tag: netorare']);
 });
+
+test('thread state chips follow install state and name the state', () => {
+  const chips = activeFilterChips({ statuses: [], install: 'installed', threadStates: ['finished', 'onhold'], sources: [], engines: [], tags: [], collection: 'All', statusLabels: {}, sourceLabels: {} });
+  assert.deepEqual(chips.map(c => c.label), ['Install state: Installed', 'Thread state: Finished', 'Thread state: On hold']);
+  assert.deepEqual(chips.map(c => c.key), ['install:installed', 'thread:finished', 'thread:onhold']);
+});

@@ -64,6 +64,8 @@ class ScraperResponse(TypedDict, total=False):
     thread_main_post_last_edit_at: str
     thread_main_post_checked_at: str
     thread_completed: bool
+    thread_onhold: bool
+    thread_abandoned: bool
 
 
 class LaunchTargetRecord(TypedDict):
@@ -92,6 +94,9 @@ class GameRecord(TypedDict):
     latest_site: NotRequired[Literal["", "f95", "lc", "both"]]
     skipped_version: NotRequired[str]
     thread_completed: NotRequired[bool]
+    thread_onhold: NotRequired[int | None]
+    thread_abandoned: NotRequired[int | None]
+    play_status: NotRequired[str]
     launch_mode: NotRequired[str]
     launch_targets: NotRequired[list[LaunchTargetRecord]]
     thread_main_post_last_edit_at: NotRequired[str | None]

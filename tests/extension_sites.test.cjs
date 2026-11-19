@@ -186,6 +186,27 @@ test('LewdCorner thread widget sends the cover and the full-size screenshot URLs
     ]);
 });
 
+test('LewdCorner thread widget sends title prefixes as names with their label link ids beside them', () => {
+    const label = (name, href) => ({textContent: name, closest: selector => (selector === 'a.labelLink' && href ? {href} : null)});
+    const labels = [
+        label('Other', 'https://lewdcorner.com/forums/games.119/?prefix_id=29'),
+        label("Ren'Py", 'https://lewdcorner.com/forums/games.119/?prefix_id=9'),
+        label('Completed'),
+    ];
+    const heading = {cloneNode: () => ({textContent: 'Game', querySelectorAll: () => []}), querySelectorAll: selector => (selector === '.label' ? labels : [])};
+    let shown = null;
+    const context = vm.createContext({
+        location: {pathname: '/threads/game.623/'},
+        document: {title: 'Game', querySelector: selector => (selector === 'h1.p-title-value' ? heading : null), querySelectorAll: () => []},
+        WLibSiteWidget: {show: (_page, _extra, metadata) => { shown = metadata; }},
+        globalThis: {},
+    });
+    vm.runInContext(readFileSync(path.join(__dirname, '../extension/sites/lewdcorner.js'), 'utf8'), context);
+    // Plain strings, so an older wLib still reads the names.
+    assert.deepEqual(JSON.parse(JSON.stringify(shown.prefixes)), ['Other', "Ren'Py", 'Completed']);
+    assert.deepEqual(JSON.parse(JSON.stringify(shown.prefix_ids)), [29, 9, null]);
+});
+
 test('widget sizes are fixed px, so the host root font size does not change them', () => {
     const css = readFileSync(path.join(__dirname,'../extension/content.css'),'utf8');
     assert.doesNotMatch(css, /\d(\.\d+)?rem\b/);

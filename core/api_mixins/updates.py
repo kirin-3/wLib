@@ -47,13 +47,18 @@ class UpdatesMixin(ApiBase):
 
             f95_error: Mapping[str, object] | None = None
             f95_finished = False
+            f95_abandoned = False
             metadata_updated = 0
             version = str(current.get("latest_version") or "")
             if f95_url:
                 version_info = self._coerce_string_key_dict(
                     self.scraper.get_thread_version(f95_url, include_metadata=True)
                 ) or {}
-                finished_ids = self._update_thread_edit_metadata_for_url(f95_url, version_info)
+                abandoned_ids: list[int] = []
+                finished_ids = self._update_thread_edit_metadata_for_url(
+                    f95_url, version_info, abandoned_ids
+                )
+                f95_abandoned = isinstance(game_id, int) and game_id in abandoned_ids
                 f95_finished = isinstance(game_id, int) and game_id in finished_ids and not str(
                     current.get("exe_path") or ""
                 ).strip()
@@ -72,10 +77,14 @@ class UpdatesMixin(ApiBase):
                     if isinstance(game_id, int):
                         f95_id = extract_thread_id(f95_url)
                         catalog = f95_thread_entries([f95_id]).get(f95_id, {})
-                        stored = lewdcorner_updates.store_f95_version(game_id, f95_url, version, catalog)
+                        stored = lewdcorner_updates.store_f95_version(
+                            game_id, f95_url, version, catalog, fallback_states=lc_result.states,
+                            page_read=database.thread_states_from(version_info) is not None,
+                        )
                         if stored is not None:
-                            current = stored
-                            version = str(stored.get("latest_version") or "")
+                            current, stored_abandoned = stored
+                            f95_abandoned = f95_abandoned or stored_abandoned
+                            version = str(current.get("latest_version") or "")
                     else:
                         current = {"latest_site": "f95"}
                     metadata_updated = self._backfill_missing_metadata_for_url(f95_url, version_info)
@@ -94,7 +103,9 @@ class UpdatesMixin(ApiBase):
                 "latest_site": fields["latest_site"],
                 "has_update": fields["has_update"] if game else self._has_update("", version),
                 "skipped": fields["skipped"],
+                "archived": fields["archived"],
                 "newly_finished": lc_result.newly_finished or f95_finished,
+                "newly_abandoned": lc_result.newly_abandoned or f95_abandoned,
                 "metadata_updated": metadata_updated,
                 **({"note": note} if note else {}),
             }
@@ -116,6 +127,13 @@ class UpdatesMixin(ApiBase):
                 "delay_seconds": getattr(self, "_update_delay_seconds", 2),
                 "refresh_info": getattr(self, "_update_refresh_info", False),
             }
+
+    def take_abandoned_notices(self) -> list[dict[str, object]]:
+        """Games a catalog fill found newly abandoned since the last call, once each."""
+        with self._abandoned_notices_lock:
+            notices = list(self._abandoned_notices)
+            self._abandoned_notices.clear()
+        return notices
 
     def cancel_update_check(self) -> dict[str, bool]:
         """Cancel an in-progress bulk update check."""

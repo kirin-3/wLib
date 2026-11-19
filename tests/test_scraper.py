@@ -198,6 +198,8 @@ def test_thread_prefixes_choose_engine_and_completion(
     result = Scraper()._extract_page(html)
     assert result["engine"] == engine
     assert result["thread_completed"] is completed
+    assert result["thread_onhold"] is ("Onhold" in labels)
+    assert result["thread_abandoned"] is ("Abandoned" in labels)
     assert result["title"] == "Example & Game [v1.10] [Dev]"
 
 

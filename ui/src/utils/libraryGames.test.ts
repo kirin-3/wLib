@@ -563,3 +563,32 @@ test("LC source is independent of mode and supports inclusion and exclusion", ()
   assert.equal(matchesSourceFilter(game, [], ["lc"]), false);
   assert.equal(matchesSourceFilter({ f95_url: "F95" }, ["lc"]), false);
 });
+
+test("an Archived game hides its update until it is un-archived", () => {
+  const game = { exe_path: "/g", version: "0.5", latest_version: "0.6", skipped_version: "", play_status: "Archived" };
+  assert.equal(hasAvailableUpdate(game), false);
+  assert.equal(hasAvailableUpdate({ ...game, play_status: "Abandoned" }), false);
+  assert.equal(hasAvailableUpdate({ ...game, play_status: "Playing" }), true);
+});
+
+test("the Thread state section matches any checked recorded state", async () => {
+  const { matchesThreadStateFilter } = await import("./libraryGames.ts");
+  const thread = { f95_url: "https://f95zone.to/threads/1/", lc_url: "" };
+  const finished = { ...thread, thread_completed: true, thread_onhold: 0, thread_abandoned: 0 };
+  const onHold = { ...thread, thread_completed: false, thread_onhold: 1, thread_abandoned: 0 };
+  const abandoned = { ...thread, thread_completed: false, thread_onhold: 0, thread_abandoned: 1 };
+  const ongoing = { ...thread, thread_completed: false, thread_onhold: 0, thread_abandoned: 0 };
+  const unknown = { ...thread, thread_completed: false, thread_onhold: null, thread_abandoned: null };
+  const lcOnly = { f95_url: "", lc_url: "https://lewdcorner.com/threads/2/", thread_completed: false };
+  const noThread = { f95_url: "", lc_url: "", thread_completed: false };
+  const all = [finished, onHold, abandoned, ongoing, unknown, lcOnly, noThread];
+  const pick = (...values: ("finished" | "onhold" | "abandoned" | "ongoing")[]) =>
+    all.filter((game) => matchesThreadStateFilter(game, values));
+  assert.deepEqual(pick("finished"), [finished]);
+  assert.deepEqual(pick("onhold"), [onHold]);
+  assert.deepEqual(pick("abandoned"), [abandoned]);
+  assert.deepEqual(pick("ongoing"), [ongoing, unknown, lcOnly]);
+  // Several checked values match any of them; none checked matches every game.
+  assert.deepEqual(pick("finished", "abandoned"), [finished, abandoned]);
+  assert.deepEqual(pick(), all);
+});

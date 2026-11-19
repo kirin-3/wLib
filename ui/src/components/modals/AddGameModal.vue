@@ -26,6 +26,9 @@ interface AddGamePayload {
   lc_url: string;
   lc_dismissed: string;
   thread_completed?: boolean;
+  thread_onhold?: boolean;
+  thread_abandoned?: boolean;
+  thread_states_seen_at?: string;
   version: string;
   cover_image: string;
   tags: string;
@@ -60,6 +63,11 @@ const lcError = computed(() =>
 const lcSuggested = ref("");
 const lcSuggestedFor = ref("");
 const threadCompleted = ref<boolean>();
+// The thread's On Hold and Abandoned prefixes, when the page or catalog gave them.
+const threadOnhold = ref<boolean>();
+const threadAbandoned = ref<boolean>();
+// The catalog's read time of the two states; empty for an LC page read.
+const threadStatesSeenAt = ref("");
 const findingPartner = ref(false);
 let partnerRequest = 0;
 const version = ref("");
@@ -155,6 +163,11 @@ const lookupPartner = async (source: "f95" | "lc") => {
     engine.value ||= entry.engine || "";
     if (!links.value.length) links.value = readStoreLinks(entry.links);
     if (typeof entry.thread_completed === "boolean") threadCompleted.value = entry.thread_completed;
+    if (typeof entry.thread_onhold === "boolean" && typeof entry.thread_abandoned === "boolean") {
+      threadOnhold.value = entry.thread_onhold;
+      threadAbandoned.value = entry.thread_abandoned;
+      threadStatesSeenAt.value = entry.thread_states_seen_at || "";
+    }
   } catch (error) {
     console.error("Could not look up the LewdCorner partner", error);
   } finally {
@@ -200,6 +213,11 @@ watch(
       lcSuggestedFor.value = f95Url.value;
       const completed = readQueryValue(query.threadCompleted);
       threadCompleted.value = completed ? completed === "true" : undefined;
+      const onhold = readQueryValue(query.threadOnhold);
+      threadOnhold.value = onhold ? onhold === "true" : undefined;
+      const abandoned = readQueryValue(query.threadAbandoned);
+      threadAbandoned.value = abandoned ? abandoned === "true" : undefined;
+      threadStatesSeenAt.value = readQueryValue(query.threadStatesSeenAt);
       version.value = readQueryValue(query.version);
       coverImage.value = readQueryValue(query.coverImage);
       screenshots.value = readQueryScreenshots(query.screenshots);
@@ -231,6 +249,9 @@ watch(
     lcSuggested.value = "";
     lcSuggestedFor.value = "";
     threadCompleted.value = undefined;
+    threadOnhold.value = undefined;
+    threadAbandoned.value = undefined;
+    threadStatesSeenAt.value = "";
     findingPartner.value = false;
     partnerRequest++;
     version.value = "";
@@ -264,6 +285,9 @@ const installFromArchive = async () => {
     tags: tags.value, rating: rating.value,
     lcUrl: normalizeLcThreadUrl(lcUrl.value), lcDismissed: dismissedLc.value,
     ...(threadCompleted.value !== undefined ? { threadCompleted: threadCompleted.value } : {}),
+    ...(threadOnhold.value !== undefined ? { threadOnhold: threadOnhold.value } : {}),
+    ...(threadAbandoned.value !== undefined ? { threadAbandoned: threadAbandoned.value } : {}),
+    ...(threadStatesSeenAt.value ? { threadStatesSeenAt: threadStatesSeenAt.value } : {}),
   };
   isOpen.value = false;
   await router.replace({ query: {} });
@@ -326,6 +350,9 @@ const save = () => {
     lc_url: normalizeLcThreadUrl(lcUrl.value),
     lc_dismissed: dismissedLc.value,
     ...(threadCompleted.value !== undefined ? { thread_completed: threadCompleted.value } : {}),
+    ...(threadOnhold.value !== undefined ? { thread_onhold: threadOnhold.value } : {}),
+    ...(threadAbandoned.value !== undefined ? { thread_abandoned: threadAbandoned.value } : {}),
+    ...(threadStatesSeenAt.value ? { thread_states_seen_at: threadStatesSeenAt.value } : {}),
     version: version.value,
     cover_image: coverImage.value,
     tags: tags.value,

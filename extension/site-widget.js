@@ -22,7 +22,7 @@
     }
     const logo = () => image('icon.svg','wlib-logo',28,'wLib');
     const icon = name => image(icons[name],'wlib-icon',16);
-    const toneClasses = {'plan to play':'plan-to-play',playing:'playing','waiting for update':'waiting','on hold':'on-hold',completed:'completed',abandoned:'abandoned'};
+    const toneClasses = {'plan to play':'plan-to-play',playing:'playing','waiting for update':'waiting','on hold':'on-hold',completed:'completed',archived:'archived',abandoned:'archived'};
     const playStatusClass = status => `wlib-play-status--${toneClasses[String(status || '').trim().toLowerCase()] || 'not-started'}`;
     async function show(page, extra = [], metadata = {}) {
         if ((!page && !metadata.url) || showing || document.getElementById('wlib-store-widget')) return;
