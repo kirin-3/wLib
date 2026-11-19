@@ -751,12 +751,12 @@ async function bridgeGetCanFetch(origin = "https://f95zone.to/*") {
 function bridgeGetVersion() {
     try {
         if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) {
-            return String(chrome.runtime.getManifest().version || "1.2.10");
+            return String(chrome.runtime.getManifest().version || "1.2.11");
         }
     } catch (error) {
         console.warn("wLib extension: version read failed.", error);
     }
-    return "1.2.10";
+    return "1.2.11";
 }
 
 // Firefox suspends an idle event page after 30 seconds, and WebSocket traffic

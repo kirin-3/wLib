@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* wLib Extension Styles */
 .wlib-add-container {
-    --wlib-widget-left: 1.5rem;
-    --wlib-widget-top: 9rem;
-    --wlib-widget-bottom-gap: 1.5rem;
-    --wlib-widget-width: min(17.5rem, calc(100vw - (var(--wlib-widget-left) * 2)));
-    --wlib-widget-collapsed-size: 2.25rem;
+    --wlib-widget-left: 15px;
+    --wlib-widget-top: 90px;
+    --wlib-widget-bottom-gap: 15px;
+    --wlib-widget-width: min(185px, calc(100vw - (var(--wlib-widget-left) * 2)));
+    --wlib-widget-collapsed-size: 24px;
     --wlib-widget-current-width: var(--wlib-widget-width);
     box-sizing: border-box;
     position: fixed;
@@ -18,13 +18,13 @@
         radial-gradient(circle at top left, rgba(209, 82, 209, 0.16), transparent 52%);
     border: 1px solid rgba(166, 110, 196, 0.42);
     border-radius: 18px;
-    padding: 0.95rem;
+    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 0.85rem;
+    gap: 9px;
     color: #fff;
     font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-    box-shadow: 0 24px 50px rgba(8, 11, 19, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
     backdrop-filter: blur(16px);
     overflow: hidden;
     will-change: top, width, opacity, transform;
@@ -64,35 +64,36 @@
     transform: none;
 }
 
-/* Store sites (DLsite, VNDB, Ryuugames) style bare elements; keep their line
-   heights, margins and button resets out of the widget. */
-.wlib-site-widget,
-.wlib-site-widget * {
+/* Host sites style bare elements; keep their line heights, margins and button
+   resets out of the widget. All sizes are px, so the host's root font size
+   does not change the widget. */
+.wlib-add-container,
+.wlib-add-container * {
     box-sizing: border-box;
     line-height: 1.4;
     letter-spacing: normal;
     text-transform: none;
 }
 
-.wlib-site-widget p,
-.wlib-site-widget button,
-.wlib-site-widget img {
+.wlib-add-container p,
+.wlib-add-container button,
+.wlib-add-container img {
     margin: 0;
 }
 
-.wlib-site-widget button {
+.wlib-add-container button {
     font-family: inherit;
     min-width: 0;
     min-height: 0;
 }
 
-.wlib-site-widget .wlib-side-btn,
-.wlib-site-widget .wlib-collapse-btn,
-.wlib-site-widget .wlib-collapsed-toggle {
+.wlib-add-container .wlib-side-btn,
+.wlib-add-container .wlib-collapse-btn,
+.wlib-add-container .wlib-collapsed-toggle {
     padding: 0;
 }
 
-.wlib-site-widget img {
+.wlib-add-container img {
     max-width: none;
 }
 
@@ -100,9 +101,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    min-height: 1.75rem;
-    max-height: 2.5rem;
+    gap: 8px;
+    min-height: 18px;
+    max-height: 26px;
     transition:
         opacity 180ms ease,
         transform 220ms ease,
@@ -112,7 +113,7 @@
 
 .wlib-header-actions {
     display: inline-flex;
-    gap: 0.25rem;
+    gap: 3px;
 }
 
 .wlib-side-btn img, .wlib-collapse-btn img {
@@ -146,8 +147,8 @@
 
 .wlib-side-btn,
 .wlib-collapse-btn {
-    width: 1.9rem;
-    height: 1.9rem;
+    width: 20px;
+    height: 20px;
     flex: 0 0 auto;
 }
 
@@ -165,16 +166,16 @@
 }
 
 .wlib-icon {
-    width: 1rem;
-    height: 1rem;
+    width: 12px;
+    height: 12px;
     flex: 0 0 auto;
     display: block;
     filter: brightness(0) invert(1);
 }
 
 .wlib-logo {
-    width: 1.75rem;
-    height: 1.75rem;
+    width: 18px;
+    height: 18px;
     display: block;
     object-fit: contain;
 }
@@ -182,8 +183,8 @@
 .wlib-widget-body {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    max-height: 16rem;
+    gap: 8px;
+    max-height: 240px;
     transition:
         opacity 180ms ease,
         transform 220ms ease,
@@ -198,7 +199,7 @@
     max-height: 0;
     margin: 0;
     overflow: hidden;
-    transform: translateY(-0.4rem) scale(0.98);
+    transform: translateY(-4px) scale(0.98);
     pointer-events: none;
 }
 
@@ -206,14 +207,14 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.55rem;
+    gap: 6px;
     width: 100%;
     background: linear-gradient(135deg, #d152d1 0%, #a83aa8 100%);
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
-    padding: 0.78rem 0.95rem;
-    font-size: 0.92rem;
+    padding: 8px 10px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
     transition:
@@ -229,7 +230,7 @@
 .wlib-action-row {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 5px;
     width: 100%;
 }
 
@@ -290,7 +291,7 @@
 .wlib-library-status-block {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 5px;
 }
 
 .wlib-status-divider {
@@ -301,7 +302,7 @@
 
 .wlib-library-status-line {
     margin: 0;
-    font-size: 0.8rem;
+    font-size: 10px;
     color: #c6d0e0;
     text-align: center;
 }
@@ -339,19 +340,19 @@
 }
 
 .wlib-status {
-    font-size: 0.75rem;
+    font-size: 9.5px;
     color: #cbd5e1;
     text-align: center;
 }
 
 .wlib-outdated-warning {
     margin: 0;
-    padding: 0.5rem 0.65rem;
+    padding: 5px 7px;
     border-radius: 10px;
     border: 1px solid rgba(251, 191, 36, 0.55);
     background: rgba(251, 191, 36, 0.14);
     color: #fde68a;
-    font-size: 0.75rem;
+    font-size: 9.5px;
     line-height: 1.4;
     text-align: center;
 }
@@ -384,11 +385,11 @@
 
 @media (max-width: 720px) {
     .wlib-add-container {
-        --wlib-widget-left: 0.75rem;
-        --wlib-widget-top: 8rem;
-        --wlib-widget-bottom-gap: 1rem;
-        --wlib-widget-width: min(16.25rem, calc(100vw - (var(--wlib-widget-left) * 2)));
-        --wlib-widget-collapsed-size: 2.1rem;
+        --wlib-widget-left: 8px;
+        --wlib-widget-top: 80px;
+        --wlib-widget-bottom-gap: 10px;
+        --wlib-widget-width: min(185px, calc(100vw - (var(--wlib-widget-left) * 2)));
+        --wlib-widget-collapsed-size: 22px;
     }
 }
 

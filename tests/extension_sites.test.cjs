@@ -185,3 +185,14 @@ test('LewdCorner thread widget sends the cover and the full-size screenshot URLs
         'https://lewdcorner.com/data/attachments/1/1.jpg',
     ]);
 });
+
+test('widget sizes are fixed px, so the host root font size does not change them', () => {
+    const css = readFileSync(path.join(__dirname,'../extension/content.css'),'utf8');
+    assert.doesNotMatch(css, /\d(\.\d+)?rem\b/);
+    assert.doesNotMatch(css, /\.wlib-site-widget/);
+    const widths = [...css.matchAll(/--wlib-widget-width:\s*([^;]+);/g)].map(match=>match[1]);
+    assert.ok(widths.length >= 1);
+    widths.forEach(width=>assert.match(width, /^min\(185px,/));
+    const container = css.match(/^\.wlib-add-container \{([\s\S]*?)^\}/m)[1];
+    assert.match(container, /box-shadow: 0 4px 12px rgba\(0, 0, 0, 0\.35\), 0 0 0 1px rgba\(255, 255, 255, 0\.04\) inset;/);
+});

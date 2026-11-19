@@ -132,7 +132,7 @@ Lets a running browser retry a challenged or login-gated F95 request with its ow
 - **Protocol (JSON text messages):** the current extension sends protocol 2; the app also accepts protocol 1 for older clients.
   ```json
   // ext -> app (on connect, and on permission change)
-  {"type": "hello", "protocol": 2, "extension_version": "1.2.10", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
+  {"type": "hello", "protocol": 2, "extension_version": "1.2.11", "can_fetch": true, "can_fetch_lc": true, "can_resolve": true, "can_resolve_lc": true, "can_fetch_lc_images": true}
   {"type": "status", "can_fetch": false, "can_fetch_lc": true, "can_resolve_lc": false, "can_fetch_lc_images": true}
   {"type": "ping"}
   // app -> ext
@@ -177,7 +177,7 @@ Each returns a small static HTML completion page with `Cache-Control: no-store` 
 
 ## Installed Extension Files
 
-The bundled manifest is `1.2.10` and targets wLib `0.4.8`.
+The bundled manifest is `1.2.11` and targets wLib `0.4.8`.
 
 Extension version `1.1.0` adds the fetch-fallback bridge: `host_permissions` gains `https://f95zone.to/*` and `permissions` gains `alarms` (manifest `storage, alarms`; hosts `http://localhost:8183/*`, `https://f95zone.to/*`; no `tabs` or `cookies`). It keeps a WebSocket to `GET /api/bridge`, sends `hello` with `can_fetch` from `permissions.contains`, pings every 20 seconds, and reconnects on a 1-minute alarm with 5–60 second backoff. Firefox shows a host-permission prompt when updating from `1.0.x` to `1.1.0`; declining leaves `can_fetch=false`, so fallback reports `unavailable` with no errors on F95 pages. `MIN_APP_VERSION` stays `0.3.9`: older apps return 404 for `/api/bridge` and the extension backs off, with all other behavior unchanged.
 
