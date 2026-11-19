@@ -420,7 +420,17 @@ class CatalogStore:
     def upsert_f95_details(
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
     ) -> int:
+        """Store what F95's page gave. A page without details (`missing`,
+        `unreadable`) keeps stored `ok` details and only records the read."""
         with self.conn:
+            if details["status"] != "ok":
+                kept = self.conn.execute(
+                    "UPDATE f95_thread_details SET thread_ts = ?, fetched_at = ? "
+                    + "WHERE thread_id = ? AND status = 'ok'",
+                    (thread_ts, now, thread_id),
+                )
+                if kept.rowcount:
+                    return 1
             _ = self.conn.execute(
                 "INSERT OR REPLACE INTO f95_thread_details (thread_id, thread_ts, fetched_at, "
                 + "status, overview, original_title, aliases, language, languages, external_ids) "
@@ -467,7 +477,8 @@ class CatalogStore:
         self, thread_id: int, thread_ts: int, now: str, details: Mapping[str, object]
     ) -> int:
         """Store what LC's page gave. A page without details (`missing`,
-        `unreadable`) keeps imported Atlas values and only records the read."""
+        `unreadable`) keeps stored `ok` or imported Atlas values and only
+        records the read."""
         with self.conn:
             self._write_lc_details(thread_id, thread_ts, now, details)
         return 1
@@ -543,7 +554,7 @@ class CatalogStore:
         if details["status"] != "ok":
             kept = self.conn.execute(
                 "UPDATE lc_thread_details SET thread_ts = ?, fetched_at = ? "
-                + "WHERE thread_id = ? AND origin = ?",
+                + "WHERE thread_id = ? AND (origin = ? OR status = 'ok')",
                 (thread_ts, now, thread_id, IMPORT_ORIGIN),
             )
             if kept.rowcount:

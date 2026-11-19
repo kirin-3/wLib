@@ -238,6 +238,36 @@ def test_a_refused_lc_page_keeps_imported_details(tmp_path):
     assert catalog.lc_details_queue(0, 10) == [(1, 150)]
 
 
+def test_a_failed_lc_reread_keeps_stored_page_details(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 100)], now)
+    catalog.upsert_lc_details(1, 100, now, {"status": "ok", "overview": "LC text"})
+    for status in ("missing", "unreadable"):
+        catalog.upsert("lc_threads", "thread_id", [_lc_row(1, 150)], now)
+        catalog.upsert_lc_details(1, 150, now, {"status": status})
+        assert _lc_details(catalog, 1) == (150, "ok", "LC text", None)
+        assert catalog.lc_details_queue(0, 10) == []
+
+
+def test_a_failed_f95_reread_keeps_stored_details(tmp_path):
+    catalog = CatalogStore(str(tmp_path / "catalog.sqlite"))
+    now = "2026-01-01T00:00:00Z"
+    catalog.upsert_f95_details(1, 100, now, {"status": "ok", "overview": "F95 text"})
+    for status in ("missing", "unreadable"):
+        catalog.upsert_f95_details(1, 150, now, {"status": status})
+        row = catalog.conn.execute(
+            "SELECT thread_ts, status, overview FROM f95_thread_details WHERE thread_id = 1"
+        ).fetchone()
+        assert row == (150, "ok", "F95 text")
+    # A thread never read well still records the failed read.
+    catalog.upsert_f95_details(2, 100, now, {"status": "missing"})
+    row = catalog.conn.execute(
+        "SELECT thread_ts, status FROM f95_thread_details WHERE thread_id = 2"
+    ).fetchone()
+    assert row == (100, "missing")
+
+
 def test_old_catalogs_get_the_lc_details_origin_column(tmp_path):
     path = str(tmp_path / "catalog.sqlite")
     conn = sqlite3.connect(path)
