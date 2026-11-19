@@ -881,6 +881,9 @@ class ExtensionRequestHandler(BaseHTTPRequestHandler):
                             lc_url=str(payload.get("lc_url") or ""),
                             thread_completed=cast(bool | None, payload.get("thread_completed")),
                             screenshots=payload.get("screenshots"),
+                            thread_onhold=cast(bool | None, payload.get("thread_onhold")),
+                            thread_abandoned=cast(bool | None, payload.get("thread_abandoned")),
+                            thread_states_seen_at=str(payload.get("thread_states_seen_at") or ""),
                         )
                     if wishlist_response.get("attached") is True and not (
                         body.get("action") == "attach_lc" or wishlist_response.get("attached_lc")

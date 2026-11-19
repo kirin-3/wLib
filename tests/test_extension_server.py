@@ -1246,6 +1246,21 @@ def test_extension_lc_check_open_add_wishlist_and_attach(monkeypatch, tmp_path, 
     # F95 adds get screenshots from the thread scrape, not from the page.
     assert json.loads(database.get_game(game_id)["screenshots"] or "[]") == []
 
+    # An LC-only wishlist keeps the page's On Hold and Abandoned states.
+    status, on_hold = send("POST", "/api/wishlist", {
+        "url": "https://lewdcorner.com/threads/98/", "title": "Held Game", "prefixes": ["On Hold"],
+    })
+    assert status == 200
+    held = database.get_game(on_hold["id"])
+    assert (held["thread_onhold"], held["thread_abandoned"]) == (1, 0)
+    assert held["thread_states_at"]
+    status, dropped = send("POST", "/api/wishlist", {
+        "url": "https://lewdcorner.com/threads/97/", "title": "Dropped Game", "prefixes": ["Abandoned"],
+    })
+    assert status == 200
+    gone = database.get_game(dropped["id"])
+    assert (gone["thread_onhold"], gone["thread_abandoned"]) == (0, 1)
+
     partner = database.add_game("Existing game", "", "https://f95zone.to/threads/102/")
     status, available = send("GET", "/api/check?" + urlencode({"url": partner_lc}))
     assert status == 200 and available["gameId"] == partner and available["attach_lc_available"]
