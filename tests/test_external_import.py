@@ -12,10 +12,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from test_gamelist_hyperfile import gamelist_memo, gamelist_record, write_gamelist
 
 from core import host_platform
 from core.api import Api
-from core.database import add_game, get_all_games, init_db, update_setting
+from core.backup_format import BackupValidationError
+from core.database import (
+    add_game,
+    add_game_launch_target,
+    get_all_games,
+    init_db,
+    list_game_launch_targets,
+    update_setting,
+)
 from core.external_import import (
     apply_path_rule,
     locate_external_library,
@@ -58,6 +67,145 @@ def _fingerprints(folder):
         for p in folder.rglob("*")
         if p.is_file()
     }
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_gamelist_does_not_search_default_locations(monkeypatch, windows):
+    monkeypatch.setattr("core.external_import.is_windows", lambda: windows)
+    assert locate_external_library("gamelist") == {"source": "gamelist", "path": "", "checked": []}
+
+
+def test_gamelist_maps_store_and_thread_metadata_without_play_status(tmp_path):
+    path = write_gamelist(
+        tmp_path,
+        gamelist_record(
+            1,
+            name="Test RPG",
+            url="http://www.f95zone.to/threads/7005",
+            homepage="https://vndb.org/v1234",
+            version="Final",
+            memo_pointer=8,
+        ),
+        gamelist_record(
+            2,
+            name="Invalid date",
+            url="https://f95zone.to/threads/7006/",
+            homepage="https://www.patreon.com/example",
+            added=(8, 14, 2018, 0),
+            developer="",
+            version="",
+        ),
+        gamelist_record(3, name="Store only", url="", homepage="https://vndb.org/v2345"),
+        memo=gamelist_memo(b" [Completed];RPGM;Unity;3d game"),
+    )
+    backup, stats = read_external_library("gamelist", str(path))
+    games = {game["metadata"]["title"]: game for game in backup["games"]}
+    game = games["Test RPG"]
+    assert game == {
+        "metadata": {
+            "title": "Test RPG",
+            "f95_url": "https://f95zone.to/threads/7005/",
+            "version": "Final",
+            "developer": "Sample Studio",
+            "links": [{"source": "vndb", "id": "v1234", "url": "https://vndb.org/v1234"}],
+            "thread_completed": 1,
+            "engine": "RPGM",
+        },
+        "user_state": {"date_added": "2018-01-08T13:20:01"},
+    }
+    assert games["Invalid date"]["metadata"] == {
+        "title": "Invalid date", "f95_url": "https://f95zone.to/threads/7006/",
+    }
+    assert "user_state" not in games["Invalid date"]
+    assert "f95_url" not in games["Store only"]["metadata"]
+    assert stats == {
+        "skipped_no_identity": 0,
+        "skipped_unreadable": 0,
+        "dropped_paths": 0,
+        "schema_version": "hyperfile-7/2456",
+    }
+
+
+def test_gamelist_deduplicates_by_guid_and_normalized_thread(tmp_path):
+    guid = "abcd0000-0000-0000-0000-000000000001"
+    path = write_gamelist(
+        tmp_path,
+        gamelist_record(3, guid=guid, name="Middle"),
+        gamelist_record(1, guid=guid.upper(), url="https://f95zone.to/threads/7006/"),
+        gamelist_record(2, url="http://www.f95zone.to/threads/slug.1234/page-2"),
+        gamelist_record(4, name="Newest", url="https://f95zone.to/threads/7006/"),
+        gamelist_record(5, name="No identity", url=""),
+        gamelist_record(6, name="Deleted duplicate", state=2),
+    )
+    backup, stats = read_external_library("gamelist", str(path))
+    games = backup["games"]
+    assert len(games) == 1
+    assert games[0]["metadata"]["title"] == "Newest"
+    assert games[0]["metadata"]["f95_url"] == "https://f95zone.to/threads/7006/"
+    assert stats["skipped_no_identity"] == 1
+    assert stats["skipped_unreadable"] == 0
+
+
+def test_gamelist_refuses_wrong_layout_without_changing_library(tmp_path):
+    _ = add_game("Local", "", "https://f95zone.to/threads/1234/")
+    before = get_all_games()
+    row = gamelist_record()
+    path = write_gamelist(tmp_path, row[1975:] + row[:1975])
+    for operation in (inspect_external_library, import_external_library):
+        with pytest.raises(BackupValidationError, match="version is not supported"):
+            _ = operation("gamelist", str(path))
+    assert get_all_games() == before
+
+
+def test_gamelist_reports_unreadable_and_keeps_source_files_unchanged(tmp_path):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    path = write_gamelist(
+        source_dir,
+        gamelist_record(memo_pointer=8),
+        gamelist_record(2, state=2),
+        gamelist_record(3)[:100],
+        memo=gamelist_memo(b"Completed;RPGM"),
+    )
+    before = _fingerprints(source_dir)
+    preview = inspect_external_library("gamelist", str(path))
+    assert preview["counts"]["new_games"] == 1
+    assert preview["counts"]["skipped_unreadable"] == 1
+    assert get_all_games() == []
+    assert _fingerprints(source_dir) == before
+
+    result = import_external_library("gamelist", str(path))
+    assert result["created"] == 1
+    assert result["skipped_unreadable"] == 1
+    assert _fingerprints(source_dir) == before
+    game, = get_all_games()
+    assert game["thread_completed"] == 1
+    assert game["engine"] == "RPGM"
+    assert game["play_status"] == "Not Started"
+
+
+def test_gamelist_overwrite_keeps_local_executable_and_launch_targets(tmp_path):
+    game_id = add_game("Local", "/games/local/game.sh", "https://f95zone.to/threads/1234/")
+    _ = add_game_launch_target(game_id, "Bonus", "/games/local/bonus.sh")
+    path = write_gamelist(tmp_path, gamelist_record(name="Local"))
+    result = import_external_library(
+        "gamelist",
+        str(path),
+        {
+            "merge_mode": "overwrite",
+            "sections": ["user_state", "executable_paths", "launch_targets"],
+        },
+    )
+    assert result["updated"] == 1
+    game, = get_all_games()
+    assert game["exe_path"] == "/games/local/game.sh"
+    assert [target["label"] for target in list_game_launch_targets(game_id)] == ["Bonus"]
+
+
+def test_existing_source_defaults_unreadable_to_zero():
+    path = str(SMALL_PLAYNITE / "games.db")
+    assert inspect_external_library("playnite", path)["counts"]["skipped_unreadable"] == 0
+    assert import_external_library("playnite", path)["skipped_unreadable"] == 0
 
 
 @pytest.mark.parametrize("merge_mode", ["overwrite", "fill_missing"])

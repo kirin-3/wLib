@@ -108,6 +108,7 @@ const externalSources: { id: ExternalLibrarySource; label: string }[] = [
   { id: "xlibrary", label: "XLibrary" },
   { id: "f69", label: "f69" },
   { id: "playnite", label: "Playnite" },
+  { id: "gamelist", label: "Game-List" },
 ];
 const externalImportSectionIds: LibraryBackupSection[] = [
   "covers",
@@ -791,7 +792,7 @@ const runImport = async () => {
             <input
               v-model="externalPath"
               type="text"
-              placeholder="Path to the source library file"
+              :placeholder="externalSource === 'gamelist' ? 'Path to Games.fic' : 'Path to the source library file'"
               class="backup-input"
             />
             <button type="button" class="backup-secondary" @click="browseExternalFile">
@@ -819,6 +820,7 @@ const runImport = async () => {
             <span>Matched: {{ externalCounts?.matched_games ?? 0 }}</span>
             <span>Ambiguous: {{ externalCounts?.ambiguous_games ?? 0 }}</span>
             <span>Skipped: {{ externalCounts?.skipped_no_identity ?? 0 }}</span>
+            <span v-if="(externalCounts?.skipped_unreadable ?? 0) > 0">Unreadable: {{ externalCounts?.skipped_unreadable }}</span>
             <span>Paths dropped: {{ externalCounts?.dropped_paths ?? 0 }}</span>
             <span v-if="externalAvailableSections.includes('covers')">Covers to copy: {{ externalCoversToCopy }}</span>
           </div>
@@ -991,6 +993,7 @@ const runImport = async () => {
           </div>
           <div v-else-if="activeTab === 'external' && externalResult" class="backup-success">
             <p>{{ externalMessage }}</p>
+            <p v-if="(externalResult.skipped_unreadable ?? 0) > 0">Unreadable: {{ externalResult.skipped_unreadable }}</p>
             <router-link
               v-if="externalResult.metadata_check === 'started'"
               to="/updates"

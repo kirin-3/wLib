@@ -1006,8 +1006,9 @@ export class MockBackend {
       case "browse_runner_file":
       case "browse_backup_file":
       case "browse_archive_file":
-      case "browse_external_library_file":
         return "";
+      case "browse_external_library_file":
+        return args[0] === "gamelist" ? "/mock/game-list/tid/Games.fic" : "";
       case "browse_directory":
         // Preview helper: set localStorage "wlib-mock-browse-directory" to pick a folder.
         return localStorage.getItem("wlib-mock-browse-directory") || "";
@@ -1133,23 +1134,25 @@ export class MockBackend {
       }
       case "inspect_external_library": {
         const source = typeof args[0] === "string" ? args[0] : "";
+        const gameList = source === "gamelist";
         return {
           success: true,
           mock: true,
           source,
-          schema_version: "",
+          schema_version: gameList ? "hyperfile-7/2456" : "",
           available_sections: ["metadata", "user_state", "executable_paths", "launch_targets", ...(source === "playnite" ? ["covers"] : [])],
           counts: {
             ...(source === "playnite" ? { covers_to_copy: 2, covers_to_fill: 2 } : {}),
-            total_games: source === "playnite" ? 147 : 0,
+            total_games: gameList ? 49 : source === "playnite" ? 147 : 0,
             matched_games: 0,
-            new_games: source === "playnite" ? 146 : 0,
+            new_games: gameList ? 49 : source === "playnite" ? 146 : 0,
             ambiguous_games: 0,
             skipped_no_identity: source === "playnite" ? 1 : 0,
+            skipped_unreadable: gameList ? 1 : 0,
             dropped_paths: source === "playnite" ? 1 : 0,
-            warnings: 1,
+            warnings: gameList ? 0 : 1,
           },
-          warnings: [
+          warnings: gameList ? [] : [
             {
               type: "cover_references",
               scope: "library",
@@ -1161,6 +1164,7 @@ export class MockBackend {
         };
       }
       case "import_external_library": {
+        const source = typeof args[0] === "string" ? args[0] : "";
         const options = isRecord(args[2]) ? args[2] : {};
         const sections = Array.isArray(options.sections)
           ? (options.sections as LibraryBackupSection[])
@@ -1188,10 +1192,11 @@ export class MockBackend {
           created_ids: [],
           updated_ids: [],
           skipped_no_identity: 0,
+          skipped_unreadable: source === "gamelist" ? 1 : 0,
           dropped_paths: 0,
           metadata_check: "none" as const,
-          source: typeof args[0] === "string" ? args[0] : "",
-          schema_version: "",
+          source,
+          schema_version: source === "gamelist" ? "hyperfile-7/2456" : "",
         };
       }
       case "lookup_lc_partner":

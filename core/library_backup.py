@@ -2623,6 +2623,7 @@ def inspect_external_library(source: object, path: object) -> dict[str, object]:
             "covers_to_copy": len(cover_files),
             "covers_to_fill": len(fill_cover_files),
             "skipped_no_identity": int(str(stats.get("skipped_no_identity", 0))),
+            "skipped_unreadable": int(str(stats.get("skipped_unreadable", 0))),
             "dropped_paths": int(str(stats.get("dropped_paths", 0))),
             "warnings": len(warnings),
         },
@@ -2685,6 +2686,7 @@ def import_external_library(
     skipped_no_identity = int(str(stats.get("skipped_no_identity", 0)))
     result["skipped"] = int(str(result.get("skipped", 0))) + skipped_no_identity
     result["skipped_no_identity"] = skipped_no_identity
+    result["skipped_unreadable"] = int(str(stats.get("skipped_unreadable", 0)))
     result["dropped_paths"] = int(str(stats.get("dropped_paths", 0)))
     result["schema_version"] = stats.get("schema_version", "")
     result["source"] = str(source or "").strip().lower()

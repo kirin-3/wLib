@@ -22,7 +22,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, UTC
 from pathlib import Path
@@ -40,8 +40,10 @@ from core.f95zone import (
     extract_thread_id,
     normalize_thread_url,
     normalize_prefix_label,
+    thread_match_key,
 )
 from core.database import CANONICAL_PLAY_STATUSES
+from core.gamelist_hyperfile import GameListRecord, read_gamelist_table
 from core.litedb import LiteDBReader
 from core.store_links import StoreLink, coerce_store_links, link_from_id
 from core.game_scan import find_launcher
@@ -55,7 +57,7 @@ def _validation_error(
     return BackupValidationError(message, error_code)
 
 
-EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary", "f69", "playnite")
+EXTERNAL_SOURCES = ("f95checker", "atlas", "xlibrary", "f69", "playnite", "gamelist")
 
 SOURCE_LABELS = {
     "f95checker": "F95Checker",
@@ -63,6 +65,7 @@ SOURCE_LABELS = {
     "xlibrary": "XLibrary",
     "f69": "f69",
     "playnite": "Playnite",
+    "gamelist": "Game-List",
 }
 
 # pywebview rejects a filter whose patterns are not all "*.ext" (see
@@ -70,6 +73,7 @@ SOURCE_LABELS = {
 # raise on the Qt dialog path. The wildcard patterns still match the default
 # file names, and the Linux backends parse the same strings.
 EXTERNAL_IMPORT_FILE_FILTERS = {
+    "gamelist": ("Game-List Games (*.fic)", "All files (*.*)"),
     "playnite": ("Playnite Library (*.db)", "All files (*.*)"),
     "f95checker": (
         "F95Checker Databases (*.sqlite3;*.db)",
@@ -157,13 +161,16 @@ F69_ENGINE_MAP = {
     "webgl": "WebGL",
     "other": "Others",
 }
+THREAD_ENGINE_LABELS = {
+    normalize_prefix_label(label): label for label in F69_ENGINE_MAP.values()
+}
 
 
 def normalize_source(source: object) -> str:
     key = str(source or "").strip().lower()
     if key not in EXTERNAL_SOURCES:
         raise _validation_error(
-            f"Unknown library source: {source}. Choose F95Checker, Atlas, XLibrary, f69, or Playnite.",
+            f"Unknown library source: {source}. Choose F95Checker, Atlas, XLibrary, f69, Playnite, or Game-List.",
             "unknown_source",
         )
     return key
@@ -193,6 +200,15 @@ def _recognized_store_links(urls: list[object]) -> list[StoreLink]:
     """
     links = coerce_store_links([{"url": _as_str(url)} for url in urls])
     return [link for link in links if link["source"] != "other"]
+
+
+def _apply_thread_prefixes(metadata: dict[str, object], prefixes: Iterable[str]) -> None:
+    for prefix in prefixes:
+        normalized = normalize_prefix_label(prefix)
+        if normalized == "completed":
+            metadata["thread_completed"] = 1
+        if normalized in THREAD_ENGINE_LABELS and "engine" not in metadata:
+            metadata["engine"] = THREAD_ENGINE_LABELS[normalized]
 
 
 def _as_dict(value: object) -> dict[str, object]:
@@ -1445,20 +1461,12 @@ def _translate_playnite_game(
     version = _as_str(record.get("Version"))
     if version:
         metadata["version"] = version
-    engines = {
-        normalize_prefix_label(label): label for label in F69_ENGINE_MAP.values()
-    }
-    prefixes = (
+    _apply_thread_prefixes(
+        metadata,
         names("tags", "TagIds")
         + names("features", "FeatureIds")
-        + names("genres", "GenreIds")
+        + names("genres", "GenreIds"),
     )
-    for prefix in prefixes:
-        normalized = normalize_prefix_label(prefix)
-        if normalized == "completed":
-            metadata["thread_completed"] = 1
-        if normalized in engines and "engine" not in metadata:
-            metadata["engine"] = engines[normalized]
     state: dict[str, object] = {}
     status_name = (
         related.get("completionstatuses", {})
@@ -1660,6 +1668,67 @@ def _playnite_data_path_allowed(path: Path) -> bool:
     )
 
 
+def _unique_gamelist_records(records: list[GameListRecord]) -> list[tuple[GameListRecord, str]]:
+    """Keep the highest record ID in each group linked by GUID or F95 thread."""
+    ordered = [
+        (record, coerce_thread_url(record.url))
+        for record in sorted(records, key=lambda record: record.record_id, reverse=True)
+    ]
+    parents = list(range(len(ordered)))
+    owners: dict[tuple[str, str], int] = {}
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    for i, (record, url) in enumerate(ordered):
+        keys = [("guid", record.guid)]
+        if url:
+            keys.append(("thread", thread_match_key(url)))
+        for key in keys:
+            current = root(i)
+            previous = root(owners.setdefault(key, i))
+            parents[max(current, previous)] = min(current, previous)
+    return [entry for i, entry in enumerate(ordered) if parents[i] == i]
+
+
+def read_gamelist_library(path: str) -> tuple[dict[str, object], dict[str, object]]:
+    table = read_gamelist_table(Path(path))
+    games: list[dict[str, object]] = []
+    skipped = 0
+    for record, url in _unique_gamelist_records(table.records):
+        links = [
+            link for link in _recognized_store_links([record.homepage])
+            if link["source"] != "patreon"
+        ]
+        if not _has_import_identity(url, links, ""):
+            skipped += 1
+            continue
+        metadata = _title_metadata(record.name, url)
+        for key, value in (
+            ("f95_url", url), ("version", record.version), ("developer", record.developer)
+        ):
+            if value:
+                metadata[key] = value
+        if links:
+            metadata["links"] = links
+        _apply_thread_prefixes(metadata, record.memo_text.split(";"))
+        # Game-List records no executables, so the path sections are left out:
+        # an empty launch_targets list would clear a matched game's targets.
+        game: dict[str, object] = {"metadata": metadata}
+        if record.added:
+            game["user_state"] = {"date_added": record.added}
+        games.append(game)
+    return _external_backup("gamelist", games), {
+        "skipped_no_identity": skipped,
+        "skipped_unreadable": table.failed + table.partial,
+        "dropped_paths": 0,
+        "schema_version": "hyperfile-7/2456",
+    }
+
+
 def _external_backup(source: str, games: list[dict[str, object]]) -> dict[str, object]:
     from datetime import datetime as _datetime
 
@@ -1693,6 +1762,8 @@ def read_external_library(
         return read_f69_library(library_path)
     if key == "playnite":
         return read_playnite_library(library_path)
+    if key == "gamelist":
+        return read_gamelist_library(library_path)
     return read_xlibrary_library(library_path)
 
 
@@ -1720,6 +1791,8 @@ def _data_base() -> str:
 def locate_external_library(source: object) -> dict[str, object]:
     key = normalize_source(source)
     checked: list[str] = []
+    if key == "gamelist":
+        return {"source": key, "path": "", "checked": checked}
     if is_windows():
         appdata = os.environ.get("APPDATA", "").strip()
         program_files = (

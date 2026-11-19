@@ -908,7 +908,7 @@ export interface LibraryBackupImportResponse extends ApiBasicResponse {
   updated_ids?: number[];
 }
 
-export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary" | "f69" | "playnite";
+export type ExternalLibrarySource = "f95checker" | "atlas" | "xlibrary" | "f69" | "playnite" | "gamelist";
 export type ExternalLibraryMergeMode = "overwrite" | "fill_missing";
 
 export interface ExternalLibraryDetectResponse extends ApiBasicResponse {
@@ -926,6 +926,7 @@ export interface ExternalLibraryCounts {
   new_games: number;
   ambiguous_games: number;
   skipped_no_identity: number;
+  skipped_unreadable?: number;
   dropped_paths: number;
   warnings: number;
 }
@@ -951,6 +952,7 @@ export interface ExternalLibraryImportResponse extends LibraryBackupImportRespon
   source?: string;
   schema_version?: string | number;
   skipped_no_identity?: number;
+  skipped_unreadable?: number;
   dropped_paths?: number;
   metadata_check?: "started" | "busy" | "none";
 }
