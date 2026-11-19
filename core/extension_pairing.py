@@ -12,6 +12,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -19,8 +20,10 @@ from typing import Literal, TypedDict, cast
 from core.host_platform import get_data_dir
 
 PAIRING_FILE = "extension-pairing.json"
-# Unanswered requests kept at once; more are refused until one is answered.
+# Unanswered requests kept at once; more are refused until one is answered
+# or expires, so stale or spammed requests cannot block pairing until restart.
 MAX_PENDING = 3
+PENDING_TTL_SECONDS = 600
 MAX_PAIRED = 16
 _TOKEN_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -70,6 +73,7 @@ class PairingStore:
         self._lock: threading.Lock = threading.Lock()
         self._paired: dict[str, _StoredEntry] | None = None
         self._pending: dict[str, _StoredEntry] = {}
+        self._pending_since: dict[str, float] = {}
         self._denied: set[str] = set()
 
     def _load(self) -> dict[str, _StoredEntry]:
@@ -106,6 +110,17 @@ class PairingStore:
             json.dump({"paired": list(paired.values())}, stream)
         os.replace(temporary, self._path)
 
+    def _drop_expired(self) -> None:
+        """Forget unanswered requests older than PENDING_TTL_SECONDS (lock held)."""
+        cutoff = time.monotonic() - PENDING_TTL_SECONDS
+        for digest in [key for key, since in self._pending_since.items() if since <= cutoff]:
+            del self._pending_since[digest]
+            _ = self._pending.pop(digest, None)
+
+    def _forget_pending(self, digest: str) -> None:
+        del self._pending[digest]
+        _ = self._pending_since.pop(digest, None)
+
     def check(self, token: object, origin: str = "") -> tuple[PairingState, bool]:
         """State of a caller's token, and whether this call made a new request."""
         if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
@@ -116,6 +131,7 @@ class PairingStore:
                 return "paired", False
             if digest in self._denied:
                 return "denied", False
+            self._drop_expired()
             if digest in self._pending:
                 return "pending", False
             if len(self._pending) >= MAX_PENDING:
@@ -127,10 +143,12 @@ class PairingStore:
                 "origin": origin[:128],
                 "at": datetime.now(UTC).isoformat(timespec="seconds"),
             }
+            self._pending_since[digest] = time.monotonic()
             return "pending", True
 
     def snapshot(self) -> dict[str, list[PairingEntry]]:
         with self._lock:
+            self._drop_expired()
             return {
                 "pending": [_public(entry) for entry in self._pending.values()],
                 "paired": [_public(entry) for entry in self._load().values()],
@@ -139,6 +157,7 @@ class PairingStore:
     def resolve(self, request_id: str, allow: bool) -> bool:
         """Answer a pending request; False when it does not exist or cannot be saved."""
         with self._lock:
+            self._drop_expired()
             digest = next(
                 (key for key, entry in self._pending.items() if entry["id"] == request_id),
                 None,
@@ -146,7 +165,7 @@ class PairingStore:
             if digest is None:
                 return False
             if not allow:
-                del self._pending[digest]
+                self._forget_pending(digest)
                 self._denied.add(digest)
                 return True
             paired = dict(self._load())
@@ -157,7 +176,7 @@ class PairingStore:
                 self._save(paired)
             except OSError:
                 return False
-            del self._pending[digest]
+            self._forget_pending(digest)
             self._paired = paired
             return True
 

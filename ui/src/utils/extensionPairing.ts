@@ -21,7 +21,7 @@ interface PairingApi {
 
 const asked = new Set<string>();
 
-/** Ask the user about every pending request once; later calls skip ones already asked. */
+/** Ask the user about every pending request; calls made while a question is open skip it. */
 export const answerPairingRequests = async (
   api: PairingApi,
   confirm: (options: ConfirmOptions) => Promise<boolean>,
@@ -30,7 +30,12 @@ export const answerPairingRequests = async (
   for (const request of state.pending || []) {
     if (asked.has(request.id)) continue;
     asked.add(request.id);
-    const allow = await confirm(pairingQuestion(request));
-    await api.resolveExtensionPairing(request.id, allow);
+    try {
+      const allow = await confirm(pairingQuestion(request));
+      await api.resolveExtensionPairing(request.id, allow);
+    } finally {
+      // An expired or failed request can come back with the same code; ask again then.
+      asked.delete(request.id);
+    }
   }
 };

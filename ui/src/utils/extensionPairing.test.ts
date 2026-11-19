@@ -12,7 +12,7 @@ test("the question names the browser and the code", () => {
   assert.equal(question.confirmLabel, "Allow");
 });
 
-test("each pending request is asked once and answered with the user's choice", async () => {
+test("an open question is not asked twice, and a request that comes back is asked again", async () => {
   const answers: [string, boolean][] = [];
   let questions = 0;
   const api = {
@@ -23,8 +23,10 @@ test("each pending request is asked once and answered with the user's choice", a
     },
   };
   const refuse = async () => { questions++; return false; };
-  await answerPairingRequests(api, refuse);
-  await answerPairingRequests(api, refuse);
+  await Promise.all([answerPairingRequests(api, refuse), answerPairingRequests(api, refuse)]);
   assert.equal(questions, 1);
   assert.deepEqual(answers, [["AB12-CD34", false]]);
+  // The same code is pending again later (it expired and the extension asked again).
+  await answerPairingRequests(api, refuse);
+  assert.equal(questions, 2);
 });

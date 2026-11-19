@@ -1122,6 +1122,25 @@ def test_refused_pairing_stays_refused_and_requests_are_limited(tmp_path):
     assert store.check("e" * 64) == ("denied", False)
 
 
+def test_unanswered_pairing_requests_expire(tmp_path, monkeypatch):
+    from core import extension_pairing
+    from core.extension_pairing import MAX_PENDING, PENDING_TTL_SECONDS, PairingStore
+
+    now = [1000.0]
+    monkeypatch.setattr(extension_pairing.time, "monotonic", lambda: now[0])
+    store = PairingStore(str(tmp_path))
+    for index in range(MAX_PENDING):
+        assert store.check(f"{index:064x}")[0] == "pending"
+    real = "f" * 64
+    assert store.check(real) == ("denied", False)
+    now[0] += PENDING_TTL_SECONDS
+    assert store.snapshot()["pending"] == []
+    assert store.check(real) == ("pending", True)
+    request = store.snapshot()["pending"][0]
+    assert store.resolve(request["id"], True)
+    assert store.check(real) == ("paired", False)
+
+
 def test_unpaired_bridge_is_refused(extension_server):
     status, _headers, _body = _bridge_request(
         extension_server, origin="chrome-extension://other", token="b" * 64
